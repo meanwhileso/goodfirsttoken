@@ -20,10 +20,10 @@ test('listing issues filters by label, state, and assignee, and marks the pull r
   );
   const mergedAt = (n: number) => everything.body.find((i) => i.number === n)?.pull_request?.merged_at;
 
-  expect(numbers(tagged.body)).toEqual([25, 21, 12]);
-  expect(everything.body.filter((i) => i.pull_request).map((i) => i.number)).toEqual([58, 57, 52, 49]);
-  expect(Date.parse(mergedAt(49) ?? '')).toBeLessThan(Date.now());
-  expect(mergedAt(57)).toBeNull();
+  expect(numbers(tagged.body)).toEqual([925, 921, 912]);
+  expect(everything.body.filter((i) => i.pull_request).map((i) => i.number)).toEqual([958, 957, 952, 949]);
+  expect(Date.parse(mergedAt(949) ?? '')).toBeLessThan(Date.now());
+  expect(mergedAt(957)).toBeNull();
 });
 
 test('lists come in pages with a Link header, as on GitHub', async () => {
@@ -31,9 +31,9 @@ test('lists come in pages with a Link header, as on GitHub', async () => {
   const next = /<([^>]+)>; rel="next"/.exec(first.headers.get('link') ?? '')?.[1] ?? '';
   const second = await rest(fake, 'GET', next.slice(fake.apiUrl.length));
 
-  expect(numbers(first.body)).toEqual([58, 57, 52]);
+  expect(numbers(first.body)).toEqual([958, 957, 952]);
   expect(first.headers.get('link')).toContain('rel="last"');
-  expect(numbers(second.body)).toEqual([49, 25, 21]);
+  expect(numbers(second.body)).toEqual([949, 925, 921]);
 });
 
 test('a label list has the fields GitHub sends for each label', async () => {
@@ -54,10 +54,10 @@ test('search finds open tagged issues across repos with no PR linked to them', a
 
   const { body } = await rest<{ total_count: number; items: { html_url: string }[] }>(fake, 'GET', `/search/issues?q=${q}`);
 
-  // meanwhileso/goodfirsttoken#18 is tagged too, but PR #57 says it closes it.
+  // meanwhileso/goodfirsttoken#918 is tagged too, but PR #957 says it closes it.
   expect(body.items.map((i) => i.html_url).sort()).toEqual([
-    `${fake.webUrl}/cloudflare/vinext/issues/311`,
-    `${fake.webUrl}/harbor-dev/harbor/issues/88`,
+    `${fake.webUrl}/sample-owner/sample-app/issues/311`,
+    `${fake.webUrl}/sample-owner/sample-harbor/issues/88`,
   ]);
   expect(body.total_count).toBe(2);
 });
@@ -88,16 +88,16 @@ test('repository search filters by stars and push date, and leaves forks out', a
   const all = await rest<{ items: { fork: boolean }[] }>(fake, 'GET', `/search/repositories?q=${encodeURIComponent('stars:>=0')}`);
 
   expect(body.items.map((r) => r.full_name)).toEqual([
-    'vitejs/vite',
-    'omacom/omarchy',
-    'cloudflare/vinext',
-    'harbor-dev/harbor',
+    'sample-owner/sample-bundler',
+    'sample-owner/sample-desktop',
+    'sample-owner/sample-app',
+    'sample-owner/sample-harbor',
   ]);
   expect(all.body.items.some((r) => r.fork)).toBe(false);
 });
 
 test('search serves at most the first 1,000 results, as GitHub does', async () => {
-  const template = fake.state.repos['cloudflare/workers-sdk'];
+  const template = fake.state.repos['sample-owner/sample-tools'];
   if (!template) throw new Error('missing sample repo');
   for (let n = 0; n < 1005; n++) {
     fake.state.repos[`bulk/r${String(n)}`] = { ...template, id: 9_000_000 + n, owner: 'bulk', name: `r${String(n)}` };
@@ -119,7 +119,7 @@ test('file contents come back base64 encoded, and a folder as a list of its entr
   const file = await rest<{ content: string; encoding: string; path: string }>(fake, 'GET', `${UPSTREAM}/contents/AGENTS.md`);
   const folder = await rest<{ name: string; type: string }[]>(fake, 'GET', `${UPSTREAM}/contents/.github`);
   const missing = await rest(fake, 'GET', `${UPSTREAM}/contents/NOPE.md`);
-  const otherBranch = await rest(fake, 'GET', '/repos/harbor-dev/harbor/contents/justfile?ref=develop');
+  const otherBranch = await rest(fake, 'GET', '/repos/sample-owner/sample-harbor/contents/justfile?ref=develop');
 
   expect(file.body).toMatchObject({ type: 'file', encoding: 'base64', path: 'AGENTS.md' });
   expect(fromBase64(file.body.content)).toContain('# AGENTS.md');
@@ -141,8 +141,8 @@ test('one GraphQL query reads files from many repos, with an error for each repo
     fake.tokenFor('lena'),
     `{
       a: repository(owner: "meanwhileso", name: "goodfirsttoken") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
-      b: repository(owner: "harbor-dev", name: "harbor") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
-      c: repository(owner: "cloudflare", name: "workers-sdk") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
+      b: repository(owner: "sample-owner", name: "sample-harbor") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
+      c: repository(owner: "sample-owner", name: "sample-tools") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
       d: repository(owner: "nobody", name: "nothing") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
     }`,
   );
@@ -157,18 +157,18 @@ test('one GraphQL query reads files from many repos, with an error for each repo
 });
 
 test("a PR's reviews and review comments come back with who wrote them", async () => {
-  const reviews = await rest(fake, 'GET', `${UPSTREAM}/pulls/57/reviews`);
-  const comments = await rest(fake, 'GET', `${UPSTREAM}/pulls/57/comments`);
+  const reviews = await rest(fake, 'GET', `${UPSTREAM}/pulls/957/reviews`);
+  const comments = await rest(fake, 'GET', `${UPSTREAM}/pulls/957/comments`);
 
   expect(reviews.body).toMatchObject([
     {
       state: 'CHANGES_REQUESTED',
-      user: { login: 'jdconley' },
+      user: { login: 'octo-maintainer' },
       body: 'Can the formatter skip events with an empty text field? Otherwise looks good.',
     },
   ]);
   expect(comments.body).toMatchObject([
-    { path: 'apps/web/src/feed/format.ts', line: 2, side: 'RIGHT', user: { login: 'jdconley' } },
+    { path: 'apps/web/src/feed/format.ts', line: 2, side: 'RIGHT', user: { login: 'octo-maintainer' } },
   ]);
 });
 
@@ -185,14 +185,14 @@ test('no URL in a response leads off the fake, except links to GitHub docs', asy
   const token = fake.tokenFor('priya');
   const paths = [
     '/user',
-    '/users/jdconley',
+    '/users/octo-maintainer',
     UPSTREAM,
     `${UPSTREAM}/labels`,
     `${UPSTREAM}/issues?state=all`,
-    `${UPSTREAM}/issues/18/timeline`,
-    `${UPSTREAM}/pulls/57`,
-    `${UPSTREAM}/pulls/57/reviews`,
-    `${UPSTREAM}/pulls/57/comments`,
+    `${UPSTREAM}/issues/918/timeline`,
+    `${UPSTREAM}/pulls/957`,
+    `${UPSTREAM}/pulls/957/reviews`,
+    `${UPSTREAM}/pulls/957/comments`,
     `${UPSTREAM}/contents/README.md`,
     `${UPSTREAM}/branches/main`,
     '/repos/priya/goodfirsttoken',

@@ -14,7 +14,7 @@ test('every call records the token it carried and whose token that is', async ()
 
   await rest(fake, 'GET', '/repos/meanwhileso/goodfirsttoken', { token: priya });
   await graphql(fake, kenji, '{ viewer { login } }');
-  await rest(fake, 'GET', '/repos/cloudflare/vinext');
+  await rest(fake, 'GET', '/repos/sample-owner/sample-app');
 
   expect(fake.calls).toEqual([
     expect.objectContaining({ operation: 'GET /repos/{owner}/{repo}', token: priya, login: 'priya', status: 200 }),
@@ -36,7 +36,7 @@ test('a repo shows the permissions of the person whose token read it', async () 
     (await rest<{ permissions: unknown }>(fake, 'GET', '/repos/meanwhileso/goodfirsttoken', { token: fake.tokenFor(login) }))
       .body.permissions;
 
-  expect(await read('jdconley')).toEqual({ admin: true, maintain: true, push: true, triage: true, pull: true });
+  expect(await read('octo-maintainer')).toEqual({ admin: true, maintain: true, push: true, triage: true, pull: true });
   expect(await read('kenji')).toEqual({ admin: false, maintain: false, push: true, triage: true, pull: true });
   expect(await read('priya')).toEqual({ admin: false, maintain: false, push: false, triage: false, pull: true });
   expect((await rest(fake, 'GET', '/repos/meanwhileso/goodfirsttoken')).body).not.toHaveProperty('permissions');
@@ -77,7 +77,7 @@ test("writes need push access, so a donor's token cannot change a repo it can on
 
 test("a maintainer's token can write to their own repo", async () => {
   const reply = await rest(fake, 'POST', '/repos/meanwhileso/goodfirsttoken/labels', {
-    token: fake.tokenFor('jdconley'),
+    token: fake.tokenFor('octo-maintainer'),
     body: { name: 'agents welcome', color: '7057ff' },
   });
 

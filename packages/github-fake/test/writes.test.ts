@@ -155,9 +155,9 @@ test('a PR from a fork opens upstream as the token person, and the issue it name
 
   const pr = await rest<{ number: number }>(fake, 'POST', `${UPSTREAM}/pulls`, {
     token,
-    body: { title: 'Explain the tough badge on hover', head: 'sam:tough-badge', base: 'main', body: 'Closes #21' },
+    body: { title: 'Explain the tough badge on hover', head: 'sam:tough-badge', base: 'main', body: 'Closes #921' },
   });
-  const timeline = await rest<{ event: string }[]>(fake, 'GET', `${UPSTREAM}/issues/21/timeline`);
+  const timeline = await rest<{ event: string }[]>(fake, 'GET', `${UPSTREAM}/issues/921/timeline`);
 
   expect(pr.status).toBe(201);
   expect(pr.body).toMatchObject({
@@ -208,19 +208,19 @@ test('a repo that limits PR creation to collaborators refuses a PR from anyone e
 });
 
 test('merging a PR lands its changes and closes the issue it says it closes', async () => {
-  fake.mergePullRequest('meanwhileso/goodfirsttoken', 57, 'jdconley');
+  fake.mergePullRequest('meanwhileso/goodfirsttoken', 957, 'octo-maintainer');
 
-  const pr = await rest(fake, 'GET', `${UPSTREAM}/pulls/57`);
-  const issue = await rest(fake, 'GET', `${UPSTREAM}/issues/18`);
+  const pr = await rest(fake, 'GET', `${UPSTREAM}/pulls/957`);
+  const issue = await rest(fake, 'GET', `${UPSTREAM}/issues/918`);
   const file = await rest(fake, 'GET', `${UPSTREAM}/contents/apps/web/src/feed/format.ts`);
 
   expect(pr.body).toMatchObject({
     state: 'closed',
     merged: true,
-    merged_by: { login: 'jdconley' },
+    merged_by: { login: 'octo-maintainer' },
     changed_files: 1,
     additions: 3,
   });
-  expect(issue.body).toMatchObject({ state: 'closed', state_reason: 'completed', closed_by: { login: 'jdconley' } });
+  expect(issue.body).toMatchObject({ state: 'closed', state_reason: 'completed', closed_by: { login: 'octo-maintainer' } });
   expect(file.status).toBe(200);
 });

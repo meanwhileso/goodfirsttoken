@@ -64,7 +64,7 @@ test('the fake answers a whole donor flow with the network turned off', async ()
   );
   const pr = await rest(fake, 'POST', '/repos/meanwhileso/goodfirsttoken/pulls', {
     token,
-    body: { title: "Show each agent's name in the live lanes", head: 'arjun:agent-names', base: 'main', body: 'Closes #12' },
+    body: { title: "Show each agent's name in the live lanes", head: 'arjun:agent-names', base: 'main', body: 'Closes #912' },
   });
 
   expect(found.body.total_count).toBe(3);

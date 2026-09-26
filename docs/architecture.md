@@ -212,9 +212,13 @@ and Playwright run it as a local HTTP server.
   URLs, which default to hosts under `.test`, a domain that never resolves.
   Every URL in its responses, including avatars and raw files, points back
   at the fake.
-- **The sample data** in `src/sample-data.ts` is the prototype's people,
-  projects, issues, and PRs, and the one place later issues add to. It is
-  made up, and says nothing about the real projects that share a name.
+- **The sample data** in `src/sample-data.ts` takes the shapes of the
+  prototype's: donors and maintainers, a project with tagged issues, one
+  with nothing tagged, a popular repo that invites contributions, and a
+  registration waiting for an admin. It is the one place later issues add
+  to. Every account and repo in it is made up, under `sample-owner`, except
+  this project's own repo. That repo's sample issues and PRs are numbered
+  from 900 up, clear of its real ones.
 - **Local sign-in.** The fake's authorize page lists the sample people. Pick
   one, and the app gets that person's token through the same OAuth flow it
   uses with GitHub.

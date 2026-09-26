@@ -1,8 +1,13 @@
 // The sample people and repos, in one place. Tests, the local GitHub fake,
-// and `pnpm seed` all start from this. The names come from the prototype in
-// prototype/. Every ID, number, date, issue, and file below is made up for
-// tests and local development, and says nothing about the real accounts or
-// projects that share a name.
+// and `pnpm seed` all start from this. They take the shapes of the
+// prototype's sample data in prototype/: a project with tagged issues, one
+// with nothing tagged yet, a popular repo that invites contributions, and a
+// registration waiting for an admin.
+//
+// Every account and repo here is made up, except this project's own repo,
+// meanwhileso/goodfirsttoken, and its owner. Its sample issues and PRs are
+// numbered from 900 up, clear of its real ones. Every ID, number, date, and
+// file below is sample data.
 //
 // Times are written as how long ago they happened, like '2h' or '9y', so the
 // data stays recent whenever it is loaded.
@@ -93,6 +98,7 @@ const defaultLabels = [
   { name: 'help wanted', color: '008672', description: 'Extra attention is needed', default: true },
 ];
 
+
 export const people: SampleAccount[] = [
   // Donors: they spend tokens on other people's issues.
   { login: 'priya', id: 1001, name: 'Priya', created: '6y' },
@@ -102,16 +108,13 @@ export const people: SampleAccount[] = [
   { login: 'arjun', id: 1005, name: 'Arjun', created: '3y' },
   { login: 'lena', id: 1006, name: 'Lena', created: '7y' },
   // Maintainers: they register projects and tag issues.
-  { login: 'jdconley', id: 1007, name: 'JD Conley', created: '12y' },
   { login: 'octo-maintainer', id: 1008, name: 'Octo Maintainer', created: '10y' },
+  { login: 'sample-maintainer', id: 1009, name: 'Sample Maintainer', created: '9y' },
 ];
 
 export const orgs: SampleAccount[] = [
   { login: 'meanwhileso', id: 2001, name: 'Meanwhile', created: '1y' },
-  { login: 'cloudflare', id: 2002, name: 'Cloudflare', created: '14y' },
-  { login: 'omacom', id: 2003, name: 'omacom', created: '2y' },
-  { login: 'vitejs', id: 2004, name: 'Vite', created: '6y' },
-  { login: 'harbor-dev', id: 2005, name: 'Harbor', created: '9y' },
+  { login: 'sample-owner', id: 2002, name: 'Sample Owner', created: '9y' },
 ];
 
 // The OAuth app the fake knows. Local sign-in uses its client ID and secret.
@@ -124,6 +127,8 @@ export const localOAuthApp: SampleOAuthApp = {
 
 export const repos: SampleRepo[] = [
   {
+    // This project, with tagged issues, open PRs, and merged ones. kenji can
+    // push here, so his PRs come from branches in the repo.
     owner: 'meanwhileso',
     name: 'goodfirsttoken',
     description: 'The site, MCP server, and agent skills behind Good First Token.',
@@ -132,7 +137,7 @@ export const repos: SampleRepo[] = [
     stars: 240,
     created: '30d',
     pushed: '1h',
-    collaborators: { jdconley: 'admin', 'octo-maintainer': 'admin', kenji: 'write' },
+    collaborators: { 'octo-maintainer': 'admin', kenji: 'write' },
     labels: [
       ...defaultLabels,
       { name: 'goodfirsttoken', color: '7057ff', description: 'Tagged for agents through Good First Token' },
@@ -150,63 +155,63 @@ export const repos: SampleRepo[] = [
     },
     issues: [
       {
-        number: 12,
+        number: 912,
         title: "Show each agent's name in the live lanes",
         body: 'Each lane on an issue page should say which agent is working, next to the person.',
-        author: 'jdconley',
+        author: 'octo-maintainer',
         labels: ['goodfirsttoken'],
         created: '6d',
       },
       {
-        number: 18,
+        number: 918,
         title: 'Stream /live as NDJSON',
         body: 'The live feed has a plain-text stream at /live.txt. Programs would rather read JSON. Add /live.ndjson that emits one JSON object per event, with the same fields and the same ?since= backfill.',
-        author: 'jdconley',
+        author: 'octo-maintainer',
         labels: ['help wanted'],
         created: '5d',
       },
       {
-        number: 21,
+        number: 921,
         title: 'Explain the tough badge on hover',
         body: 'Say what the tough badge means when someone hovers over it.',
-        author: 'jdconley',
+        author: 'octo-maintainer',
         labels: ['goodfirsttoken'],
         created: '4d',
       },
       {
-        number: 25,
+        number: 925,
         title: 'Add Cursor to the install tabs',
         body: 'The setup list on the homepage has no tab for Cursor yet.',
-        author: 'jdconley',
+        author: 'octo-maintainer',
         labels: ['goodfirsttoken'],
         created: '4d',
       },
     ],
     pulls: [
       {
-        number: 49,
+        number: 949,
         title: 'Reduced-motion support for the feed',
         body: 'The live feed stops typing lines out when the reader asks for reduced motion.',
         author: 'ines',
         branch: 'reduced-motion',
         files: { 'apps/web/src/feed/motion.ts': 'export const typeLines = !reducedMotion;\n' },
         created: '3d',
-        merged: { by: 'jdconley', at: '3d' },
+        merged: { by: 'octo-maintainer', at: '3d' },
       },
       {
-        number: 52,
+        number: 952,
         title: 'Copy button on every command',
         body: 'Every command on the site gets a copy button.',
         author: 'kenji',
         branch: 'copy-buttons',
         files: { 'apps/web/src/copy.ts': 'export const copy = (text: string) => text;\n' },
         created: '2d',
-        merged: { by: 'jdconley', at: '1d' },
+        merged: { by: 'octo-maintainer', at: '1d' },
       },
       {
-        number: 57,
+        number: 957,
         title: 'Stream /live as NDJSON',
-        body: 'Closes #18\n\nAdds /live.ndjson, one JSON object per event.\n\nAssisted-by: Claude Code',
+        body: 'Closes #918\n\nAdds /live.ndjson, one JSON object per event.\n\nAssisted-by: Claude Code',
         author: 'priya',
         branch: 'live-ndjson',
         files: {
@@ -216,7 +221,7 @@ export const repos: SampleRepo[] = [
         created: '2h',
         reviews: [
           {
-            author: 'jdconley',
+            author: 'octo-maintainer',
             state: 'CHANGES_REQUESTED',
             body: 'Can the formatter skip events with an empty text field? Otherwise looks good.',
             comments: [{ path: 'apps/web/src/feed/format.ts', line: 2, body: 'This writes events with empty text too.' }],
@@ -225,9 +230,9 @@ export const repos: SampleRepo[] = [
         ],
       },
       {
-        number: 58,
+        number: 958,
         title: 'Add Cursor to the install tabs',
-        body: 'Closes #25\n\nAssisted-by: Cursor',
+        body: 'Closes #925\n\nAssisted-by: Cursor',
         author: 'arjun',
         branch: 'cursor-tab',
         files: { 'README.md': '# Good First Token\n\nSpend your spare tokens on open source. Works in Cursor.\n' },
@@ -236,22 +241,28 @@ export const repos: SampleRepo[] = [
     ],
   },
   {
-    owner: 'cloudflare',
-    name: 'vinext',
-    description: null,
-    language: null,
-    license: null,
+    // A project whose docs welcome agent PRs, with a tagged issue and a PR
+    // priya got merged.
+    owner: 'sample-owner',
+    name: 'sample-app',
+    description: 'A sample app for tests and local development.',
+    language: 'TypeScript',
+    license: 'MIT',
     stars: 5000,
     created: '1y',
     pushed: '3h',
+    collaborators: { 'sample-maintainer': 'admin' },
     labels: defaultLabels,
-    files: { 'README.md': '# vinext\n\nSample repo for tests.\n' },
+    files: {
+      'README.md': '# sample-app\n\nA sample app for tests and local development.\n',
+      'CONTRIBUTING.md': '# Contributing\n\n## AI\n\nThis app is built with AI. Agent pull requests are welcome.\n',
+    },
     issues: [
       {
         number: 311,
         title: 'Handle trailing slashes in rewrites',
-        body: 'Sample issue for tests.',
-        author: 'octo-maintainer',
+        body: 'A rewrite from /docs/ drops the trailing slash.',
+        author: 'sample-maintainer',
         labels: ['help wanted'],
         created: '9d',
       },
@@ -260,76 +271,103 @@ export const repos: SampleRepo[] = [
       {
         number: 309,
         title: 'Keep query strings on rewritten routes',
-        body: 'Sample pull request for tests.',
+        body: 'Rewrites keep the query string.',
         author: 'priya',
         branch: 'keep-query',
         files: { 'src/rewrite.ts': 'export const keepQuery = true;\n' },
         created: '2d',
-        merged: { by: 'octo-maintainer', at: '1d' },
+        merged: { by: 'sample-maintainer', at: '1d' },
       },
     ],
   },
   {
-    owner: 'omacom',
-    name: 'omarchy',
-    description: null,
-    language: null,
-    license: null,
+    // A project with its own label for work ready for outside help, and an
+    // agent skill that says how to contribute.
+    owner: 'sample-owner',
+    name: 'sample-desktop',
+    description: 'A sample desktop setup for tests and local development.',
+    language: 'Shell',
+    license: 'MIT',
     stars: 8000,
     created: '2y',
     pushed: '5h',
+    collaborators: { 'sample-maintainer': 'admin' },
     labels: [...defaultLabels, { name: 'ready', color: 'e244c0', description: null }],
-    files: { 'README.md': '# omarchy\n\nSample repo for tests.\n' },
+    files: {
+      'README.md': '# sample-desktop\n\nA sample desktop setup for tests and local development.\n',
+      'agents/skills/sample-desktop/contributing.md':
+        '# Contributing with an agent\n\nOpen the PR for a person to review.\n',
+    },
     issues: [
       {
         number: 1431,
         title: 'Suspend fails on the second resume',
-        body: 'Sample issue for tests.',
-        author: 'octo-maintainer',
+        body: 'The second resume after a suspend leaves the screen black.',
+        author: 'sample-maintainer',
         labels: ['ready'],
         created: '20d',
       },
       {
         number: 1440,
         title: 'Lock screen ignores the keyboard layout',
-        body: 'Sample issue for tests.',
-        author: 'octo-maintainer',
+        body: 'The lock screen switches to the default layout after a resume.',
+        author: 'sample-maintainer',
         labels: ['ready'],
         created: '12d',
       },
     ],
   },
   {
-    // Listed, with nothing tagged yet.
-    owner: 'cloudflare',
-    name: 'workers-sdk',
-    description: null,
-    language: null,
-    license: null,
+    // A project with nothing tagged yet.
+    owner: 'sample-owner',
+    name: 'sample-tools',
+    description: 'Sample tools for tests and local development.',
+    language: 'TypeScript',
+    license: 'MIT',
     stars: 3000,
     created: '6y',
     pushed: '2h',
+    collaborators: { 'sample-maintainer': 'admin' },
     labels: defaultLabels,
-    files: { 'README.md': '# workers-sdk\n\nSample repo for tests.\n' },
+    files: {
+      'README.md': '# sample-tools\n\nSample tools for tests and local development.\n',
+      '.github/pull_request_template.md': '## What changed\n\nAgents are welcome to open this PR.\n',
+    },
   },
   {
-    // Found by the crawler and waiting for an admin.
-    owner: 'vitejs',
-    name: 'vite',
-    description: null,
-    language: null,
-    license: null,
-    stars: 83000,
+    // A popular repo with its own label for outside help, and a CONTRIBUTING
+    // that allows AI help with conditions.
+    owner: 'sample-owner',
+    name: 'sample-bundler',
+    description: 'A sample bundler for tests and local development.',
+    language: 'TypeScript',
+    license: 'MIT',
+    stars: 12000,
     created: '6y',
     pushed: '2h',
+    collaborators: { 'sample-maintainer': 'admin' },
     labels: [...defaultLabels, { name: 'contribution welcome', color: 'a9fcd9', description: null }],
-    files: { 'README.md': '# vite\n\nSample repo for tests.\n' },
+    files: {
+      'README.md': '# sample-bundler\n\nA sample bundler for tests and local development.\n',
+      'CONTRIBUTING.md': '# Contributing\n\n## AI policy\n\nAI help is fine. Write the PR description yourself.\n',
+    },
+    issues: [
+      {
+        number: 120,
+        title: 'Warn when two plugins claim the same file type',
+        body: 'Two plugins can both claim .md files, and the second wins without a word.',
+        author: 'sample-maintainer',
+        labels: ['contribution welcome'],
+        created: '15d',
+      },
+    ],
   },
   {
-    // A registration waiting for an admin. Its default branch is not main.
-    owner: 'harbor-dev',
-    name: 'harbor',
-    description: 'A sample project for tests and local development.',
+    // A project its maintainer registered, waiting for an admin. Its default
+    // branch is develop.
+    owner: 'sample-owner',
+    name: 'sample-harbor',
+    description: 'A sample upload service for tests and local development.',
     language: 'Go',
     license: 'MIT',
     stars: 4200,
@@ -339,7 +377,7 @@ export const repos: SampleRepo[] = [
     collaborators: { 'octo-maintainer': 'admin' },
     labels: defaultLabels,
     files: {
-      'README.md': '# Harbor\n\nA sample project for tests and local development.\n',
+      'README.md': '# sample-harbor\n\nA sample upload service for tests and local development.\n',
       'CONTRIBUTING.md':
         '# Contributing\n\n## AI\n\nAI help is welcome. Say so in the PR, and write the PR description yourself.\n',
       justfile: 'test:\n\tgo test ./...\n',

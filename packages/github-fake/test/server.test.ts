@@ -33,7 +33,7 @@ function tempState(): string {
 async function createLabel(server: RunningFake, name: string) {
   return fetch(`${server.apiUrl}/repos/meanwhileso/goodfirsttoken/labels`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${server.fake.tokenFor('jdconley')}`, 'user-agent': 'test' },
+    headers: { authorization: `Bearer ${server.fake.tokenFor('octo-maintainer')}`, 'user-agent': 'test' },
     body: JSON.stringify({ name, color: '000000' }),
   });
 }

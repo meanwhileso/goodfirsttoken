@@ -23,16 +23,16 @@ interface Repo {
 
 test('a REST call reaches the configured GitHub as the person whose token it carries', async () => {
   const priya = github.tokenFor('priya');
-  const jdconley = github.tokenFor('jdconley');
+  const maintainer = github.tokenFor('octo-maintainer');
 
   const asDonor = await gitHubRest<Repo>(priya, 'GET', '/repos/meanwhileso/goodfirsttoken');
-  const asMaintainer = await gitHubRest<Repo>(jdconley, 'GET', '/repos/meanwhileso/goodfirsttoken');
+  const asMaintainer = await gitHubRest<Repo>(maintainer, 'GET', '/repos/meanwhileso/goodfirsttoken');
 
   expect(asDonor.permissions).toMatchObject({ admin: false, maintain: false, push: false, pull: true });
   expect(asMaintainer.permissions).toMatchObject({ admin: true, maintain: true, push: true });
   expect(github.calls.map((call) => [call.operation, call.login])).toEqual([
     ['GET /repos/{owner}/{repo}', 'priya'],
-    ['GET /repos/{owner}/{repo}', 'jdconley'],
+    ['GET /repos/{owner}/{repo}', 'octo-maintainer'],
   ]);
 });
 
@@ -46,7 +46,7 @@ test('a GraphQL call reaches the configured GitHub as the person whose token it 
         file: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } }
       }
     }`,
-    { owner: 'harbor-dev', name: 'harbor' },
+    { owner: 'sample-owner', name: 'sample-harbor' },
   );
 
   expect(result.errors).toEqual([]);
