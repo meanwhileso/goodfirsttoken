@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/meanwhileso/goodfirsttoken/discussions
+    about: Ask a question or talk through an idea before it becomes an issue.
+  - name: Report a vulnerability
+    url: https://github.com/meanwhileso/goodfirsttoken/security/advisories/new
+    about: Report security problems privately.

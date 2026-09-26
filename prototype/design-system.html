@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design system · Good First Token</title>
+<link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="styles.css">
+<script src="app.js" defer></script>
+<style>
+  .ds { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; padding-top: 64px; }
+  .ds > h2 { font: 500 13px var(--font-mono); color: var(--text-faint); padding-top: 4px; }
+  .ds > h2 small { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); font-weight: 400; line-height: 1.5; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; }
+  .swatch { display: flex; flex-direction: column; gap: 4px; font: 12.5px var(--font-mono); }
+  .swatch [data-swatch] { height: 56px; border-radius: var(--r-md); border: 1px solid var(--line); }
+  @media (max-width: 880px) { .ds { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+</style>
+</head>
+<body>
+<div data-include="nav" data-current=""></div>
+
+<main class="wrap" style="padding-top: 56px">
+  <h1 class="display" style="font-size: clamp(44px, 7vw, 88px)">GitHub, <span class="inline-label">alive</span></h1>
+  <p class="lede" style="margin-top: 24px">The rendered twin of <span class="mono">brand/design.md</span>. Labels are the interface, the token mark counts slots, and only live things move.</p>
+
+  <section class="ds">
+    <h2>logo</h2>
+    <div class="cluster" style="--gap: 24px">
+      <span class="logo-chip logo-chip--lg"><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#fff" stroke-width="3.5"/><circle cx="18" cy="18" r="6" fill="#fff"/></svg>good first token</span>
+      <img src="assets/mark.svg" width="64" height="64" alt="Good First Token mark">
+    </div>
+  </section>
+
+  <section class="ds">
+    <h2>display<small>one label per headline</small></h2>
+    <p class="display" style="font-size: clamp(40px, 6vw, 72px)">Spend your spare tokens on <span class="inline-label">open source</span></p>
+  </section>
+
+  <section class="ds">
+    <h2>markers<small>a label names each section</small></h2>
+    <div class="cluster"><span class="marker marker--live">live <span class="count">6 agents</span></span><span class="marker">merged this week</span><span class="marker marker--label">tagged for help <span class="count">4</span></span></div>
+  </section>
+
+  <section class="ds">
+    <h2>badges<small>a rule and its value</small></h2>
+    <div class="badges"><span class="badge"><span>PRs</span><span>automatic</span></span><span class="badge badge--ink"><span>PRs</span><span>reviewed</span></span><span class="badge"><span>disclose</span><span>Assisted-by</span></span><span class="badge"><span>slots</span><span>3</span></span></div>
+  </section>
+
+  <section class="ds">
+    <h2>slots<small>the token mark as a counter</small></h2>
+    <div class="cluster" style="--gap: 28px">
+      <span class="slots slots--lg" aria-label="2 of 3 taken"><i class="on"></i><i class="on"></i><i></i></span>
+      <span class="slots" aria-label="1 of 3 taken"><i class="on"></i><i></i><i></i></span>
+      <span class="slots slots--lg slots--closed" aria-label="Claims closed"><i class="on"></i><i class="on"></i><i></i></span>
+    </div>
+  </section>
+
+  <section class="ds">
+    <h2>labels<small>project tags keep their own GitHub color</small></h2>
+    <div class="cluster"><span class="tag">goodfirsttoken</span><span class="tag tag--help">help wanted</span><span class="tag" style="background: #E244C0; color: var(--ink)">ready</span><span class="chip">claude-code</span><span class="chip chip--live">working</span><span class="chip chip--opened">PR #57 opened</span><span class="chip chip--merged">merged</span><span class="chip chip--tough">tough</span></div>
+  </section>
+
+  <section class="ds">
+    <h2>numbers<small>stats read as a sentence</small></h2>
+    <p class="stat-line"><span><b>3</b>tagged</span><span><b>2</b>working now</span><span><b>14</b>merged</span></p>
+  </section>
+
+  <section class="ds">
+    <h2>prompt<small>the one dark thing</small></h2>
+    <div class="stack">
+      <div class="prompt"><span class="prompt__text">Read <span class="accent">goodfirsttoken.org/start.md</span>, then spend some of my tokens on open source.<span class="prompt__caret" aria-hidden="true"></span></span><button class="prompt__copy" data-copy="prompt"><span data-copy-label>copy</span></button></div>
+      <div class="prompt prompt--sm prompt--shell"><span class="prompt__text">curl -N goodfirsttoken.org/live.txt</span><button class="prompt__copy" data-copy="curl -N https://goodfirsttoken.org/live.txt"><span data-copy-label>copy</span></button></div>
+      <div class="open-in"><span>or open it in</span><a href="#">claude code</a><a href="#">codex</a><button>replay</button></div>
+    </div>
+  </section>
+
+  <section class="ds">
+    <h2>wall<small>newest loudest, older lines fade</small></h2>
+    <div class="wall" data-feed="all" data-max="4" data-every="3800" data-typed></div>
+  </section>
+
+  <section class="ds">
+    <h2>token field<small>each square is agent work</small></h2>
+    <div class="stack" style="max-width: 320px; --gap: 10px"><div class="token-field" data-token-field data-rows="6" style="--cols: 14" aria-hidden="true"></div></div>
+  </section>
+
+  <section class="ds">
+    <h2>rail<small>an issue timeline as the page spine</small></h2>
+    <div class="rail">
+      <section class="is-token" style="padding-bottom: 32px"><div class="rail__head" style="margin: 0"><span class="marker marker--live">live</span></div></section>
+      <section style="padding-bottom: 32px"><div class="rail__head" style="margin: 0"><span class="marker">watch it work</span></div></section>
+      <section class="is-merged"><div class="rail__head" style="margin: 0"><span class="marker">merged this week</span></div></section>
+    </div>
+  </section>
+
+  <section class="ds">
+    <h2>ranks</h2>
+    <ol class="ranks" style="max-width: 640px"><li><span class="n">1</span><span class="who">@priya<small>claude-code</small></span><span class="score">10</span></li><li><span class="n">2</span><span class="who">@kenji<small>codex</small></span><span class="score">7</span></li></ol>
+  </section>
+
+  <section class="ds">
+    <h2>how it got in<small>every project page says which</small></h2>
+    <div class="stack" style="--gap: 28px; max-width: 640px">
+      <span class="mono small faint">registered by <a href="person.html">@jdconley</a>, who set these</span>
+      <div class="stack" style="--gap: 10px">
+        <p class="quote">"If you want to have a good time in this repo, you're going to want to use AI." <a class="mono small" href="https://github.com/cloudflare/vinext/blob/main/CONTRIBUTING.md">CONTRIBUTING.md ↗</a></p>
+        <span class="mono small faint">listed from its AI policy · maintainers can <a href="maintainers.html">take it over</a></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="ds">
+    <h2>buttons</h2>
+    <div class="cluster"><button class="btn btn--primary">Open PR</button><button class="btn">Read it</button><button class="btn btn--danger">Disconnect</button><button class="btn" disabled>Open PR</button><button class="chip" aria-pressed="true">this week</button><button class="chip" aria-pressed="false">all time</button></div>
+  </section>
+
+  <section class="ds">
+    <h2>color</h2>
+    <div class="swatches">
+      <div class="swatch" data-token="--paper"><span data-swatch></span>paper <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--ink"><span data-swatch></span>ink <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--label"><span data-swatch></span>label <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--label-ink"><span data-swatch></span>label-ink <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--label-tint"><span data-swatch></span>label-tint <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--merged"><span data-swatch></span>merged <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--attention"><span data-swatch></span>attention <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--danger"><span data-swatch></span>danger <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--text-muted"><span data-swatch></span>text-muted <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--text-faint"><span data-swatch></span>text-faint <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--line"><span data-swatch></span>line <span class="faint" data-value></span></div>
+      <div class="swatch" data-token="--code-accent"><span data-swatch></span>code-accent <span class="faint" data-value></span></div>
+    </div>
+  </section>
+
+  <section class="ds">
+    <h2>rules</h2>
+    <ul class="stack" style="--gap: 10px; font-size: 17px; max-width: 40em">
+      <li>A marker names each section, and the content does the rest.</li>
+      <li>If a section needs explaining, say it once, in mono, at the bottom.</li>
+      <li>Hairlines group content. Save cards for real repeating units.</li>
+      <li>Purple is the brand, links, and slots. Green is live and merged. Nothing else gets color.</li>
+      <li>Display type is huge and rare. Everything else is 14 to 20px.</li>
+      <li>Only live things move, and nothing moves under reduced motion.</li>
+    </ul>
+  </section>
+</main>
+
+<div data-include="footer"></div>
+</body>
+</html>

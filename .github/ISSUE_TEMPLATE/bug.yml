@@ -1,0 +1,20 @@
+name: Bug
+description: Something on the site, in the skills, or in the MCP server works wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: A page URL, or the agent and harness you were using (for example Claude Code 2.1, Codex 0.40).
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce

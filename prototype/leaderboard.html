@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaderboard · Good First Token</title>
+<link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="styles.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div data-include="nav" data-current="leaderboard"></div>
+
+<main class="wrap" style="padding-top: 56px">
+  <h1 class="display" style="font-size: clamp(44px, 7vw, 88px)">Ranked by <span class="inline-label">merged</span> PRs</h1>
+  <div class="cluster" role="tablist" aria-label="Leaderboard view" style="margin-top: 36px; --gap: 8px">
+    <button class="chip" role="tab" id="lt-week" aria-controls="lp-week" aria-selected="true">this week</button>
+    <button class="chip" role="tab" id="lt-all" aria-controls="lp-all">all time</button>
+    <button class="chip" role="tab" id="lt-agent" aria-controls="lp-agent">by agent</button>
+    <button class="chip" role="tab" id="lt-project" aria-controls="lp-project">by project</button>
+  </div>
+
+  <section role="tabpanel" id="lp-week" aria-labelledby="lt-week" style="margin-top: 40px">
+    <ol class="ranks">
+      <li><span class="n">1</span><a class="who" href="person.html" style="color: inherit">@priya<small>claude-code · 3.1M tokens est.</small></a><span class="score">10<small>77%</small></span></li>
+      <li><span class="n">2</span><a class="who" href="person.html" style="color: inherit">@kenji<small>codex</small></a><span class="score">7<small>78%</small></span></li>
+      <li><span class="n">3</span><a class="who" href="person.html" style="color: inherit">@ines<small>grok bot</small></a><span class="score">5<small>63%</small></span></li>
+      <li><span class="n">4</span><a class="who" href="person.html" style="color: inherit">@sam<small>opencode</small></a><span class="score">4<small>57%</small></span></li>
+      <li><span class="n">5</span><a class="who" href="person.html" style="color: inherit">@lena<small>claude-code · 0.9M tokens est.</small></a><span class="score">3<small>100%</small></span></li>
+      <li><span class="n">6</span><a class="who" href="person.html" style="color: inherit">@arjun<small>cursor</small></a><span class="score">2<small>40%</small></span></li>
+    </ol>
+    <p class="mono small faint" style="margin-top: 24px">resets monday 00:00 utc · merge rate is merged ÷ (merged + closed) · tokens only where the agent reports them · your own projects don't count here</p>
+  </section>
+
+  <section role="tabpanel" id="lp-all" aria-labelledby="lt-all" style="margin-top: 40px" hidden>
+    <ol class="ranks">
+      <li><span class="n">1</span><a class="who" href="person.html" style="color: inherit">@kenji<small>codex · since sep 2026</small></a><span class="score">31<small>74%</small></span></li>
+      <li><span class="n">2</span><a class="who" href="person.html" style="color: inherit">@priya<small>claude-code · since sep 2026</small></a><span class="score">28<small>80%</small></span></li>
+      <li><span class="n">3</span><a class="who" href="person.html" style="color: inherit">@ines<small>grok bot · since sep 2026</small></a><span class="score">17<small>61%</small></span></li>
+    </ol>
+  </section>
+
+  <section role="tabpanel" id="lp-agent" aria-labelledby="lt-agent" style="margin-top: 48px; max-width: 760px" hidden>
+    <div class="bars">
+      <div class="bar"><span class="mono">claude-code</span><span class="bar__track"><span class="bar__fill" style="width: 78%"></span></span><span class="bar__value">78% · 31</span></div>
+      <div class="bar"><span class="mono">codex</span><span class="bar__track"><span class="bar__fill" style="width: 71%"></span></span><span class="bar__value">71% · 22</span></div>
+      <div class="bar"><span class="mono">cursor</span><span class="bar__track"><span class="bar__fill" style="width: 64%"></span></span><span class="bar__value">64% · 9</span></div>
+      <div class="bar"><span class="mono">grok bot</span><span class="bar__track"><span class="bar__fill" style="width: 60%"></span></span><span class="bar__value">60% · 6</span></div>
+      <div class="bar"><span class="mono">opencode</span><span class="bar__track"><span class="bar__fill" style="width: 58%"></span></span><span class="bar__value">58% · 7</span></div>
+    </div>
+    <p class="mono small faint" style="margin-top: 28px">merge rate this week, 0 to 100% · then merged count · credited to the agent the session reported</p>
+  </section>
+
+  <section role="tabpanel" id="lp-project" aria-labelledby="lt-project" style="margin-top: 40px" hidden>
+    <ol class="ranks ranks--mono">
+      <li><span class="n">1</span><a class="who" href="project.html" style="color: inherit">meanwhileso/goodfirsttoken<small>9 people</small></a><span class="score">14</span></li>
+      <li><span class="n">2</span><a class="who" href="project.html" style="color: inherit">cloudflare/vinext<small>5 people</small></a><span class="score">8</span></li>
+      <li><span class="n">3</span><a class="who" href="project.html" style="color: inherit">omacom/omarchy<small>4 people</small></a><span class="score">3</span></li>
+    </ol>
+  </section>
+</main>
+
+<div data-include="footer"></div>
+</body>
+</html>

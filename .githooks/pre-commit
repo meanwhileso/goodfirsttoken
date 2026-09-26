@@ -1,0 +1,11 @@
+#!/bin/sh
+# Blocks a commit that adds a secret or a Cloudflare-style ID. Install gitleaks
+# (https://github.com/gitleaks/gitleaks) to turn this on. CI runs the same scan.
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --redact --no-banner --config .gitleaks.toml || {
+    echo "gitleaks found something that looks like a secret or an ID. Move it to the environment." >&2
+    exit 1
+  }
+else
+  echo "pre-commit: gitleaks not installed, skipping the leak scan. CI will run it." >&2
+fi

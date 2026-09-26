@@ -1,0 +1,27 @@
+# gitleaks defaults, plus IDs that are not secret on their own but name our
+# own Cloudflare account and resources. Deployment values come from the
+# environment and never go in a file.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "cloudflare-id"
+description = "Cloudflare account, zone, or resource ID (32 hex characters)"
+regex = '''(?i)\b[0-9a-f]{32}\b'''
+
+[[rules]]
+id = "uuid"
+description = "UUID, such as a D1 database ID"
+regex = '''(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'''
+
+[[rules.allowlists]]
+description = "Design reference links, whose URLs carry the site's own IDs"
+regexTarget = "line"
+regexes = ['''https://mobbin\.com/''']
+
+[allowlist]
+description = "Lockfile integrity hashes and binary assets"
+paths = [
+  '''pnpm-lock\.yaml''',
+  '''\.(mp4|webp|png|woff2)$''',
+]

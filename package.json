@@ -1,0 +1,22 @@
+{
+  "name": "goodfirsttoken",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spend your spare AI tokens on open source issues that maintainers tagged for outside help.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
+    "prototype": "node scripts/serve.mjs prototype",
+    "test": "node --test 'scripts/**/*.test.mjs'",
+    "video:stills": "node video/capture.mjs stills",
+    "video:render": "node video/capture.mjs render"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

@@ -1,0 +1,21 @@
+name: Remove my project
+description: For maintainers who want their project off Good First Token.
+title: "Remove owner/repo"
+body:
+  - type: markdown
+    attributes:
+      value: We remove it and add it to the do-not-list, so it is never listed again unless you register it yourself.
+  - type: input
+    id: repo
+    attributes:
+      label: Repository
+      placeholder: owner/repo
+    validations:
+      required: true
+  - type: input
+    id: role
+    attributes:
+      label: Your role on the project
+      description: We check this against the repo's own permissions on GitHub.
+    validations:
+      required: true

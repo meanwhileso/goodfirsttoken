@@ -1,0 +1,17 @@
+name: Support another agent
+description: Ask for an agent or harness Good First Token doesn't support yet.
+labels: [enhancement]
+body:
+  - type: input
+    id: harness
+    attributes:
+      label: Agent or harness
+    validations:
+      required: true
+  - type: textarea
+    id: support
+    attributes:
+      label: What it supports
+      description: Remote MCP servers with OAuth, skills or plugins, deep links to open with a prompt. Link its docs.
+    validations:
+      required: true
