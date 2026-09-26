@@ -34,7 +34,7 @@ The repo is a pnpm workspace.
 
 `apps/web/wrangler.jsonc` is the config for local development. It declares
 every binding the Worker reads, under local names. Staging and production are
-not in the repo. The deploy workflow (#32) writes their config from the
+not in the repo. The deploy workflow (#32) will write their config from the
 GitHub environment's variables, including the resource names and IDs.
 
 | Binding | Kind | Used from |
@@ -53,8 +53,8 @@ limiters arrive with the issues that use them.
 
 The repo is public, so `wrangler.jsonc` holds bindings and settings only. The
 names of deployed resources, account IDs, resource IDs, custom domains, and
-secrets never go in a file. The deploy workflow (#32) writes them into the
-final config from the GitHub environment's variables. Where an ID is left
+secrets never go in a file. The deploy workflow (#32) will write them into
+the final config from the GitHub environment's variables. Where an ID is left
 out, Wrangler provisions the resource on the first deploy.
 
 Local development needs none of it. `pnpm dev` runs the Worker in Miniflare,
@@ -116,8 +116,11 @@ Branch protection requires `test` and `leaks` by name.
 
 - **One Worker for everything.** The site, the MCP server, and the background
   jobs share one deploy, one set of bindings, and one runtime to test in.
-- **Tests run in `workerd`,** the runtime production uses, so a test sees
-  the same `fetch`, streams, and crypto the Worker does.
+- **Tests run in `workerd`,** the Workers runtime, so a test sees the same
+  `fetch`, streams, and crypto the Worker does. The unit tests use the
+  `workerd` that `@cloudflare/vitest-pool-workers` pins, which can be older
+  than the one dev and preview use. That caps the compatibility date in
+  `wrangler.jsonc` at the newest date the pinned one supports.
 - **TypeScript 6.** typescript-eslint does not yet support TypeScript 7, and
   type-aware lint rules like `no-floating-promises` catch real bugs in
   Workers code.

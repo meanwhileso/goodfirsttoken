@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "wrangler types --strict-vars=false",
+    "types": "wrangler types --strict-vars=false",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",

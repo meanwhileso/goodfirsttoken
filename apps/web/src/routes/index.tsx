@@ -1,7 +1,7 @@
 import { productName } from '@goodfirsttoken/core';
 import { createFileRoute } from '@tanstack/react-router';
 
-// A placeholder until the homepage lands (#23). The design is in prototype/.
+// A placeholder until the homepage is built (#23). The design is in prototype/.
 export const Route = createFileRoute('/')({
   component: Home,
 });

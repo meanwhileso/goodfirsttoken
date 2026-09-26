@@ -33,7 +33,9 @@ describe the code as it is.
 - Commits, PRs, and issues never link to an agent's session. Session links
   are private.
 - `pnpm install` generates the Worker's types from apps/web/wrangler.jsonc.
-  Run it again after changing that file, or `pnpm typecheck` fails.
+  After changing that file, run `pnpm install` or
+  `pnpm --filter @goodfirsttoken/web types`, or `pnpm typecheck` fails. Plain
+  `wrangler types` writes the wrong variable types.
 - Words on the site and in docs, issues, PRs, and commits follow
   brand/voice.md. No em dashes.
 - Tests check behavior and must fail when the code is wrong. A bug fix

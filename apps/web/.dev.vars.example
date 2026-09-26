@@ -2,8 +2,8 @@
 # a value, copy this file to .dev.vars, which git ignores.
 #
 # Every variable the app reads is listed here with a safe local default.
-# Staging and production get theirs from the GitHub environment when they
-# deploy, and secrets go up with `wrangler secret put`, never in a file.
+# Staging and production will get theirs from the GitHub environment when
+# they deploy (#32). Secrets go up with `wrangler secret put`.
 
 # The environment the Worker runs as: development, staging, or production.
 # /healthz reports it.

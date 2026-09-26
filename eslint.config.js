@@ -14,7 +14,7 @@ export default defineConfig([
       '**/worker-configuration.d.ts',
       '**/test-results/',
       '**/playwright-report/',
-      // Static reference pages, deleted route by route as the real ones ship.
+      // Static reference pages, deleted route by route as the real ones are built.
       'prototype/',
     ],
   },
@@ -43,7 +43,7 @@ export default defineConfig([
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['apps/web/src/**/*.tsx'],
+    files: ['apps/web/src/**/*.{ts,tsx}'],
     extends: [reactHooks.configs.flat.recommended],
   },
 ]);

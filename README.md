@@ -16,6 +16,8 @@ goodfirsttoken.org yet. Here is what's in the repo today:
 
 - [`apps/web`](apps/web/): the Cloudflare Worker that will serve the site
   and the MCP server. Today it serves a placeholder page.
+- [`packages/core`](packages/core/): the schemas and types the pieces share.
+  It is nearly empty so far.
 - [`brand/`](brand/): who it's for, how it looks and sounds, and the pages
   the site needs.
 - [`prototype/`](prototype/): every page as clickable static HTML with

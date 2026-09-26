@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Keep Wrangler from sending usage data from CI.
+  WRANGLER_SEND_METRICS: 'false'
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

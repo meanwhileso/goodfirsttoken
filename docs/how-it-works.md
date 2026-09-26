@@ -2,7 +2,7 @@
 
 Every product rule Good First Token follows, as the code does it today. The
 plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
-plan ships, its rules move here in the same pull request.
+plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves a placeholder home page while the build
 goes on in the open.

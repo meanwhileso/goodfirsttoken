@@ -2,12 +2,16 @@
 //
 // This file holds bindings and settings only, with local names. The names of
 // deployed resources, account and resource IDs, custom domains, and secrets
-// never go here. The deploy workflow writes the staging and production config
-// from the GitHub environment, and local development needs none of it.
+// never go here. The deploy workflow (#32) will write the staging and
+// production config from the GitHub environment. Local development needs
+// none of it.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "web",
   "main": "src/server.ts",
+  // Unit tests run on the workerd that @cloudflare/vitest-pool-workers pins,
+  // which can be older than the one dev and preview use. A date newer than
+  // it supports makes `pnpm test` fail, so move this only as far as it allows.
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": { "ENVIRONMENT": "development" },
