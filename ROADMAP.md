@@ -106,116 +106,105 @@ Deploys, the static host, a security review, and the launch video.
 
 ## Dependency graph
 
-An arrow points from an item to the items it unblocks.
+An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness. Arrows that another path already implies are left out, so the tables above are the full list of blockers.
 
 ```mermaid
 flowchart TD
-  subgraph M1["M1 Foundation"]
-    n3["#3 Workspace, app, and CI"]
-    n4["#4 Core schemas"]
-    n5["#5 D1 schema"]
-    n6["#6 GitHub fake"]
-    n7["#7 Design system"]
-  end
-  subgraph M2["M2 Sign-in"]
-    n8["#8 Web sign-in"]
-    n9["#9 MCP server and OAuth"]
-  end
-  subgraph M3["M3 Projects"]
-    n10["#10 Maintainer tools"]
-    n11["#11 Admin queue"]
-    n12["#12 Issue and PR sync"]
-  end
-  subgraph M4["M4 Claims and live feeds"]
-    n13["#13 Issue room"]
-    n14["#14 Feeds and streams"]
-    n15["#15 Donor tools"]
-    n16["#16 Submit work"]
-    n17["#17 Follow PRs"]
-  end
-  subgraph M5["M5 Skills and harnesses"]
-    n18["#18 Skill build"]
-    n19["#19 Donor skills"]
-    n20["#20 Maintainer and admin skills"]
-    n21["#21 start.md and token hook"]
-    n22["#22 MCP Apps views"]
-  end
-  subgraph M6["M6 Public site"]
-    n23["#23 Homepage"]
-    n24["#24 Project pages"]
-    n25["#25 Issue page"]
-    n26["#26 People and leaderboard"]
-    n27["#27 /me and /maintainers"]
-    n28["#28 Markdown and JSON"]
-    n29["#29 Share cards"]
-  end
-  subgraph M7["M7 Policy crawler"]
-    n30["#30 Policy crawler"]
-    n31["#31 Re-crawls"]
-  end
-  subgraph M8["M8 Launch readiness"]
-    n32["#32 Deploy workflow"]
-    n33["#33 Static host"]
-    n34["#34 Security review"]
-    n35["#35 Launch video"]
-  end
+  classDef m1 fill:#F2F1FB,stroke:#57606A,color:#0E1116
+  classDef m2 fill:#E6F4EA,stroke:#57606A,color:#0E1116
+  classDef m3 fill:#FFF1E5,stroke:#57606A,color:#0E1116
+  classDef m4 fill:#DDF4FF,stroke:#57606A,color:#0E1116
+  classDef m5 fill:#FBEFFF,stroke:#57606A,color:#0E1116
+  classDef m6 fill:#FFF8C5,stroke:#57606A,color:#0E1116
+  classDef m7 fill:#FFEBE9,stroke:#57606A,color:#0E1116
+  classDef m8 fill:#EEF1F4,stroke:#57606A,color:#0E1116
+  n3["#3 Workspace, app, and CI"]:::m1
+  n4["#4 Core schemas"]:::m1
+  n5["#5 D1 schema"]:::m1
+  n6["#6 GitHub fake"]:::m1
+  n7["#7 Design system"]:::m1
+  n8["#8 Web sign-in"]:::m2
+  n9["#9 MCP server and OAuth"]:::m2
+  n10["#10 Maintainer tools"]:::m3
+  n11["#11 Admin queue"]:::m3
+  n12["#12 Issue and PR sync"]:::m3
+  n13["#13 Issue room"]:::m4
+  n14["#14 Feeds and streams"]:::m4
+  n15["#15 Donor tools"]:::m4
+  n16["#16 Submit work"]:::m4
+  n17["#17 Follow PRs"]:::m4
+  n18["#18 Skill build"]:::m5
+  n19["#19 Donor skills"]:::m5
+  n20["#20 Maintainer and admin skills"]:::m5
+  n21["#21 start.md and token hook"]:::m5
+  n22["#22 MCP Apps views"]:::m5
+  n23["#23 Homepage"]:::m6
+  n24["#24 Project pages"]:::m6
+  n25["#25 Issue page"]:::m6
+  n26["#26 People and leaderboard"]:::m6
+  n27["#27 /me and /maintainers"]:::m6
+  n28["#28 Markdown and JSON"]:::m6
+  n29["#29 Share cards"]:::m6
+  n30["#30 Policy crawler"]:::m7
+  n31["#31 Re-crawls"]:::m7
+  n32["#32 Deploy workflow"]:::m8
+  n33["#33 Static host"]:::m8
+  n34["#34 Security review"]:::m8
+  n35["#35 Launch video"]:::m8
   n3 --> n4
-  n4 --> n5
   n3 --> n6
   n3 --> n7
+  n3 --> n18
+  n3 --> n32
+  n4 --> n5
   n5 --> n8
+  n5 --> n13
   n6 --> n8
+  n7 --> n22
+  n7 --> n23
+  n7 --> n24
+  n7 --> n25
+  n7 --> n26
+  n7 --> n27
+  n7 --> n33
   n8 --> n9
   n9 --> n10
   n10 --> n11
   n10 --> n12
-  n5 --> n13
-  n13 --> n14
-  n9 --> n15
+  n11 --> n20
+  n11 --> n30
   n12 --> n15
+  n12 --> n24
+  n13 --> n14
   n13 --> n15
+  n14 --> n22
+  n14 --> n23
+  n14 --> n24
+  n14 --> n25
+  n14 --> n26
   n15 --> n16
   n16 --> n17
-  n3 --> n18
-  n18 --> n19
-  n17 --> n19
-  n18 --> n20
-  n11 --> n20
-  n19 --> n21
-  n7 --> n22
-  n14 --> n22
   n16 --> n22
-  n7 --> n23
-  n14 --> n23
-  n7 --> n24
-  n12 --> n24
-  n14 --> n24
-  n7 --> n25
-  n14 --> n25
-  n7 --> n26
-  n14 --> n26
-  n17 --> n26
-  n7 --> n27
-  n9 --> n27
   n16 --> n27
+  n17 --> n19
+  n17 --> n26
+  n18 --> n19
+  n18 --> n20
+  n19 --> n21
+  n21 --> n34
   n23 --> n28
+  n23 --> n35
   n24 --> n28
   n25 --> n28
-  n26 --> n28
-  n27 --> n28
-  n26 --> n29
-  n11 --> n30
-  n30 --> n31
-  n3 --> n32
-  n32 --> n33
-  n7 --> n33
-  n17 --> n34
-  n21 --> n34
-  n28 --> n34
-  n31 --> n34
-  n33 --> n34
-  n23 --> n35
   n25 --> n35
+  n26 --> n28
+  n26 --> n29
+  n27 --> n28
+  n28 --> n34
+  n30 --> n31
+  n31 --> n34
+  n32 --> n33
+  n33 --> n34
 ```
 
 ## Maintainer steps
