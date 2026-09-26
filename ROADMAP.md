@@ -11,102 +11,105 @@ cloud, and written so the session needs only this repo.
 2. Say you're on it, by assigning yourself or leaving a comment, so two sessions don't collide.
 3. Read the spec sections the issue links, then [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 4. Open one PR for the issue, with `Closes #<number>` in the description. The rules it builds move into
-   `docs/how-it-works.md` in the same PR.
+   `docs/how-it-works.md` in the same PR. Once the PR is open, add its number to the item's **Done in**
+   column below.
 
-Start with #3. Once it merges, #4, #6, #7, #18, and #32 can run at the same time.
+The **Done in** column links the PR that closed each finished item. Several items can usually run at the
+same time.
 
 ## M1 Foundation
 
-The workspace, shared schemas, database, GitHub fake, and design system every other issue builds on.
+The workspace, shared schemas, database, GitHub fake, design system, and security scans every other issue builds on.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#3](https://github.com/meanwhileso/goodfirsttoken/issues/3) | Scaffold the workspace, the Workers app, and CI | Nothing |
-| [#4](https://github.com/meanwhileso/goodfirsttoken/issues/4) | Define the core schemas and the claim state machine | #3 |
-| [#5](https://github.com/meanwhileso/goodfirsttoken/issues/5) | Add the D1 schema and data access | #4 |
-| [#6](https://github.com/meanwhileso/goodfirsttoken/issues/6) | Build the recorded GitHub fake and the sample data | #3 |
-| [#7](https://github.com/meanwhileso/goodfirsttoken/issues/7) | Build the design system in code and the /design page | #3 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#3](https://github.com/meanwhileso/goodfirsttoken/issues/3) | Scaffold the workspace, the Workers app, and CI | Nothing | [#37](https://github.com/meanwhileso/goodfirsttoken/pull/37) |
+| [#4](https://github.com/meanwhileso/goodfirsttoken/issues/4) | Define the core schemas and the claim state machine | #3 | |
+| [#5](https://github.com/meanwhileso/goodfirsttoken/issues/5) | Add the D1 schema and data access | #4 | |
+| [#6](https://github.com/meanwhileso/goodfirsttoken/issues/6) | Build the recorded GitHub fake and the sample data | #3 | |
+| [#7](https://github.com/meanwhileso/goodfirsttoken/issues/7) | Build the design system in code and the /design page | #3 | |
+| [#39](https://github.com/meanwhileso/goodfirsttoken/issues/39) | Run security scans on every PR and every week | #3 | |
 
 ## M2 Sign-in
 
 GitHub sign-in on the site and the MCP server with OAuth 2.1.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#8](https://github.com/meanwhileso/goodfirsttoken/issues/8) | Add GitHub sign-in on the site and the permission checks | #5, #6 |
-| [#9](https://github.com/meanwhileso/goodfirsttoken/issues/9) | Serve the MCP server with OAuth 2.1 and a connected-agents list | #8 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#8](https://github.com/meanwhileso/goodfirsttoken/issues/8) | Add GitHub sign-in on the site and the permission checks | #5, #6 | |
+| [#9](https://github.com/meanwhileso/goodfirsttoken/issues/9) | Serve the MCP server with OAuth 2.1 and a connected-agents list | #8 | |
 
 ## M3 Projects
 
 Maintainers register projects, admins approve them, and tagged issues sync from GitHub.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 |
-| [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 |
-| [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 | |
+| [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 | |
+| [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 | |
 
 ## M4 Claims and live feeds
 
 Claims, live updates, feeds, submitting work, and following PRs.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#13](https://github.com/meanwhileso/goodfirsttoken/issues/13) | Build the issue room: claims, updates, and live watchers | #5 |
-| [#14](https://github.com/meanwhileso/goodfirsttoken/issues/14) | Fan events out to repo, user, and homepage feeds, with text streams | #13 |
-| [#15](https://github.com/meanwhileso/goodfirsttoken/issues/15) | Add the donor tools for sessions, suggestions, and claims | #9, #12, #13 |
-| [#16](https://github.com/meanwhileso/goodfirsttoken/issues/16) | Submit work: branch or fork, a signed commit, and the PR | #15 |
-| [#17](https://github.com/meanwhileso/goodfirsttoken/issues/17) | Follow PRs to the end and bring review comments back | #16 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#13](https://github.com/meanwhileso/goodfirsttoken/issues/13) | Build the issue room: claims, updates, and live watchers | #5 | |
+| [#14](https://github.com/meanwhileso/goodfirsttoken/issues/14) | Fan events out to repo, user, and homepage feeds, with text streams | #13 | |
+| [#15](https://github.com/meanwhileso/goodfirsttoken/issues/15) | Add the donor tools for sessions, suggestions, and claims | #9, #12, #13 | |
+| [#16](https://github.com/meanwhileso/goodfirsttoken/issues/16) | Submit work: branch or fork, a signed commit, and the PR | #15 | |
+| [#17](https://github.com/meanwhileso/goodfirsttoken/issues/17) | Follow PRs to the end and bring review comments back | #16 | |
 
 ## M5 Skills and harnesses
 
 The skills and plugins, install for every harness, and MCP Apps views.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#18](https://github.com/meanwhileso/goodfirsttoken/issues/18) | Build every skill from one source, and publish the plugins | #3 |
-| [#19](https://github.com/meanwhileso/goodfirsttoken/issues/19) | Write the donor skills: give, work, and review | #18, #17 |
-| [#20](https://github.com/meanwhileso/goodfirsttoken/issues/20) | Write the maintainer and admin skills | #18, #11 |
-| [#21](https://github.com/meanwhileso/goodfirsttoken/issues/21) | Serve /start.md, document every harness, and add the token hook | #19 |
-| [#22](https://github.com/meanwhileso/goodfirsttoken/issues/22) | Add MCP Apps views for issue cards, the live feed, and the review queue | #7, #14, #16 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#18](https://github.com/meanwhileso/goodfirsttoken/issues/18) | Build every skill from one source, and publish the plugins | #3 | |
+| [#19](https://github.com/meanwhileso/goodfirsttoken/issues/19) | Write the donor skills: give, work, and review | #18, #17 | |
+| [#20](https://github.com/meanwhileso/goodfirsttoken/issues/20) | Write the maintainer and admin skills | #18, #11 | |
+| [#21](https://github.com/meanwhileso/goodfirsttoken/issues/21) | Serve /start.md, document every harness, and add the token hook | #19 | |
+| [#22](https://github.com/meanwhileso/goodfirsttoken/issues/22) | Add MCP Apps views for issue cards, the live feed, and the review queue | #7, #14, #16 | |
 
 ## M6 Public site
 
 Every public page, the markdown and JSON versions, and share cards.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#23](https://github.com/meanwhileso/goodfirsttoken/issues/23) | Build the homepage | #7, #14 |
-| [#24](https://github.com/meanwhileso/goodfirsttoken/issues/24) | Build the projects list and the project pages | #7, #12, #14 |
-| [#25](https://github.com/meanwhileso/goodfirsttoken/issues/25) | Build the issue page with live lanes | #7, #14 |
-| [#26](https://github.com/meanwhileso/goodfirsttoken/issues/26) | Build person pages, the leaderboard, and /live | #7, #14, #17 |
-| [#27](https://github.com/meanwhileso/goodfirsttoken/issues/27) | Build /me and /maintainers | #7, #9, #16 |
-| [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 |
-| [#29](https://github.com/meanwhileso/goodfirsttoken/issues/29) | Generate share cards | #26 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#23](https://github.com/meanwhileso/goodfirsttoken/issues/23) | Build the homepage | #7, #14 | |
+| [#24](https://github.com/meanwhileso/goodfirsttoken/issues/24) | Build the projects list and the project pages | #7, #12, #14 | |
+| [#25](https://github.com/meanwhileso/goodfirsttoken/issues/25) | Build the issue page with live lanes | #7, #14 | |
+| [#26](https://github.com/meanwhileso/goodfirsttoken/issues/26) | Build person pages, the leaderboard, and /live | #7, #14, #17 | |
+| [#27](https://github.com/meanwhileso/goodfirsttoken/issues/27) | Build /me and /maintainers | #7, #9, #16 | |
+| [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 | |
+| [#29](https://github.com/meanwhileso/goodfirsttoken/issues/29) | Generate share cards | #26 | |
 
 ## M7 Policy crawler
 
 Finding projects whose own docs welcome AI, and keeping listings current.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 |
-| [#31](https://github.com/meanwhileso/goodfirsttoken/issues/31) | Re-crawl listed projects and pause on negative signals | #30 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 | |
+| [#31](https://github.com/meanwhileso/goodfirsttoken/issues/31) | Re-crawl listed projects and pause on negative signals | #30 | |
 
 ## M8 Launch readiness
 
 Deploys, the static host, a security review, and the launch video.
 
-| Issue | Item | Blocked by |
-|---|---|---|
-| [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 |
-| [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 |
-| [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 |
-| [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 |
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | |
+| [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | |
+| [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
+| [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | |
 
 ## Dependency graph
 
-An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness. Arrows that another path already implies are left out, so the tables above are the full list of blockers.
+An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
 
 ```mermaid
 flowchart TD
@@ -118,11 +121,13 @@ flowchart TD
   classDef m6 fill:#FFF8C5,stroke:#57606A,color:#0E1116
   classDef m7 fill:#FFEBE9,stroke:#57606A,color:#0E1116
   classDef m8 fill:#EEF1F4,stroke:#57606A,color:#0E1116
+  classDef done stroke:#1A7F37,stroke-width:3px
   n3["#3 Workspace, app, and CI"]:::m1
   n4["#4 Core schemas"]:::m1
   n5["#5 D1 schema"]:::m1
   n6["#6 GitHub fake"]:::m1
   n7["#7 Design system"]:::m1
+  n39["#39 Security scans"]:::m1
   n8["#8 Web sign-in"]:::m2
   n9["#9 MCP server and OAuth"]:::m2
   n10["#10 Maintainer tools"]:::m3
@@ -156,6 +161,7 @@ flowchart TD
   n3 --> n7
   n3 --> n18
   n3 --> n32
+  n3 --> n39
   n4 --> n5
   n5 --> n8
   n5 --> n13
@@ -205,6 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
+  class n3 done
 ```
 
 ## Maintainer steps
