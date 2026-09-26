@@ -42,3 +42,14 @@ describe the code as it is.
   ROADMAP.md orders the work.
 - Disclose AI help with an `Assisted-by:` trailer and the PR template's
   disclosure section.
+
+## Before you call it done
+
+1. Have a different agent review the change adversarially: a fresh
+   subagent or session that didn't write it. Ask it to find what is wrong,
+   missing, or false, prove each finding, and check the change against its
+   issue's Done-when list.
+2. Triage what comes back. Confirm each finding yourself before acting on
+   it. Fix what holds up, with a failing test first for a bug.
+3. In the PR, list what the review found, what you fixed, and what you
+   dropped and why.
