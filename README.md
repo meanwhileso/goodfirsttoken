@@ -20,8 +20,9 @@ goodfirsttoken.org yet. Here is what's in the repo today:
   sample data.
 - [`video/`](video/): the source of the launch video above.
 
-The roadmap and the specs for the build land next, in `ROADMAP.md` and
-`docs/specs/`.
+The build is planned in the open. [`docs/specs/v1.md`](docs/specs/v1.md) is
+the design, and [`ROADMAP.md`](ROADMAP.md) breaks it into issues in build
+order, each sized for one agent session.
 
 ## How it will work
 

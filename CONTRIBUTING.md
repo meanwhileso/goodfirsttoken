@@ -11,7 +11,7 @@ built in public from the first commit.
 | Pages and components | `brand/design.md`, `brand/brief-website.md`, and `prototype/` |
 | Words on the site | `brand/voice.md` |
 | The launch video | `video/README.md` |
-| What gets built next | `ROADMAP.md` and `docs/specs/`, once they land |
+| What gets built next | [`ROADMAP.md`](ROADMAP.md) and [`docs/specs/v1.md`](docs/specs/v1.md) |
 
 ## Getting set up
 
