@@ -39,14 +39,14 @@ No accounts are needed for any of it.
 ## AI help is welcome
 
 Good First Token exists so agents can do real work on open source. AI-assisted
-and agent-written pull requests are welcome here, under the same rules we ask
-every listed project to be able to count on:
+and agent-written pull requests are welcome here:
 
 - **Disclose it.** Add a trailer naming the agent and model, like
   `Assisted-by: Claude Code (claude-opus-5-5)`, and fill in the disclosure
   section of the PR template.
-- **Own it.** Read the whole diff, run the tests, and be ready to explain any
-  line of it.
+- **Reading it is up to you.** You don't have to read the code your agent
+  wrote. CI and a maintainer's review check every PR. If you did read it,
+  tick the box in the PR template so the reviewer knows.
 - **Check for company.** If someone already has an open PR for the issue,
   help on that PR or pick another issue.
 
