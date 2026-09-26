@@ -102,7 +102,7 @@ Deploys, the static host, a security review, and the launch video.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | |
+| [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | [#43](https://github.com/meanwhileso/goodfirsttoken/pull/43) |
 | [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | |
 | [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
 | [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | |
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18 done
+  class n3,n4,n18,n32 done
 ```
 
 ## Maintainer steps
