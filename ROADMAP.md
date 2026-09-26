@@ -11,11 +11,11 @@ cloud, and written so the session needs only this repo.
 2. Say you're on it, by assigning yourself or leaving a comment, so two sessions don't collide.
 3. Read the spec sections the issue links, then [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 4. Open one PR for the issue, with `Closes #<number>` in the description. The rules it builds move into
-   `docs/how-it-works.md` in the same PR, and the PR fills in the item's **Done in** column below with its
-   own number.
+   `docs/how-it-works.md` in the same PR. Once the PR is open, add its number to the item's **Done in**
+   column below.
 
-An item is done when the PR in its **Done in** column has merged. Every item whose blockers are all done
-can start, so several usually run at the same time.
+The **Done in** column links the PR that closed each finished item. Several items can usually run at the
+same time.
 
 ## M1 Foundation
 
