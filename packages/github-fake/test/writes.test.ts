@@ -172,6 +172,32 @@ test('a PR from a fork opens upstream as the token person, and the issue it name
   ]);
 });
 
+test("a collaborator working on a branch in the repo is the commit's author and the PR's opener", async () => {
+  const kenji = fake.tokenFor('kenji');
+  const sha = await head('meanwhileso/goodfirsttoken', 'main');
+  await rest(fake, 'POST', `${UPSTREAM}/git/refs`, { token: kenji, body: { ref: 'refs/heads/kenji-921', sha } });
+
+  const commit = await graphql<CommitReply>(fake, kenji, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'meanwhileso/goodfirsttoken', branchName: 'kenji-921' },
+      expectedHeadOid: sha,
+      message: { headline: 'Explain the tough badge on hover' },
+      fileChanges: { additions: [{ path: 'apps/web/src/tough.ts', contents: toBase64('export {};\n') }] },
+    },
+  });
+  const pr = await rest(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: kenji,
+    body: { title: 'Explain the tough badge on hover', head: 'kenji-921', base: 'main', body: 'Closes #921' },
+  });
+
+  expect(commit.body.data?.createCommitOnBranch?.commit.author).toEqual({ user: { login: 'kenji' } });
+  expect(pr.status).toBe(201);
+  expect(pr.body).toMatchObject({
+    user: { login: 'kenji' },
+    head: { label: 'meanwhileso:kenji-921', repo: { full_name: 'meanwhileso/goodfirsttoken' } },
+  });
+});
+
 test('GitHub refuses a second open PR from the same branch, and a PR with no new commits', async () => {
   const { token } = await forkWithBranch('sam', 'twice');
   const open = () =>
