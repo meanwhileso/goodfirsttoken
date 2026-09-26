@@ -3,9 +3,14 @@
 export const productName = 'Good First Token';
 
 export * from './claims';
+export * from './crawl';
 export * from './feed';
+export * from './issues';
+export * from './people';
 export * from './primitives';
 export * from './projects';
+export * from './prs';
 export * from './refusals';
+export * from './sessions';
 export * from './tools';
 export * from './validation';

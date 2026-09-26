@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { httpsUrl, labelName, repoName, trimmedText, wholeNumber } from './primitives';
+import { epochMs, githubId, httpsUrl, labelName, repoName, trimmedText, wholeNumber } from './primitives';
 import type { Refusal } from './refusals';
 import { describeProblems, validate, type FieldProblem, type Validated } from './validation';
 
@@ -180,3 +180,76 @@ export function updateProjectSettings(
 export function invalidSettings(problems: readonly FieldProblem[]): Refusal {
   return { code: 'invalid_settings', message: `Settings not saved.\n${describeProblems(problems)}` };
 }
+
+/**
+ * The settings whose value differs between two saves, in the order of the
+ * settings table. With no earlier save, every setting counts as changed.
+ */
+export function changedSettings(before: ProjectSettings | null, after: ProjectSettings): SettingKey[] {
+  if (before === null) return [...settingKeys];
+  return settingKeys.filter((key) => canonicalJson(before[key]) !== canonicalJson(after[key]));
+}
+
+/** A value as JSON with every object's fields sorted, so equal values always match. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => a.localeCompare(b)))
+      : inner,
+  );
+}
+
+/** The longest reason for rejecting or pausing a project. */
+export const MAX_STATUS_REASON = 500;
+
+/**
+ * A stored project with its current settings. `settingsVersion` counts the
+ * saves of its settings, starting at 1, and every save is kept.
+ */
+export const projectRecordSchema = z
+  .object({
+    /** The code repo. */
+    repo: repoName,
+    status: projectStatusSchema,
+    /** Why it was rejected or paused. */
+    statusReason: trimmedText(MAX_STATUS_REASON).nullable(),
+    source: projectSourceSchema,
+    /** The policy it was listed from. Null for a registered project. */
+    policy: policySchema.nullable(),
+    /** The maintainer who registered it, or the admin who listed it. */
+    addedBy: githubId,
+    addedAt: epochMs,
+    settings: projectSettingsSchema,
+    settingsVersion: z.int().min(1),
+  })
+  .superRefine((project, ctx) => {
+    const problem = (field: string, message: string) => {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    };
+    if (project.source === 'policy' && project.policy === null) {
+      problem('policy', 'is required for a project listed from its policy');
+    }
+    if (project.source === 'registered' && project.policy !== null) {
+      problem('policy', 'must be null for a registered project');
+    }
+    if (project.status === 'rejected' && project.statusReason === null) {
+      problem('statusReason', 'is required for a rejected project');
+    }
+    if ((project.status === 'pending' || project.status === 'approved') && project.statusReason !== null) {
+      problem('statusReason', `must be null for a project that is ${project.status}`);
+    }
+  });
+export type ProjectRecord = z.infer<typeof projectRecordSchema>;
+
+/** One save of a project's settings: who saved them, when, and what changed. */
+export const settingsVersionSchema = z.object({
+  repo: repoName,
+  version: z.int().min(1),
+  /** The settings as this save left them. */
+  settings: projectSettingsSchema,
+  /** The settings this save changed from the one before. The first save sets every one. */
+  changed: z.array(settingKeySchema),
+  changedBy: githubId,
+  changedAt: epochMs,
+});
+export type SettingsVersion = z.infer<typeof settingsVersionSchema>;

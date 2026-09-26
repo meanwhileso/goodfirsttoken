@@ -10,8 +10,8 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
-| `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`, and holds the D1 schema and the functions that read and write it. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
+| `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
 | `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, and the deploy scripts, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
@@ -35,6 +35,9 @@ The repo is a pnpm workspace.
   build. It is committed, so a type check works without a build first.
 - **Bindings and variables come from `cloudflare:workers`,** imported as
   `env`, so any module can read them.
+- **Data access lives in `src/db/`,** one module per table, described under
+  [Database](#database). The migrations that make the tables are in
+  `migrations/`.
 
 ### packages/core
 
@@ -43,11 +46,14 @@ The repo is a pnpm workspace.
   and Cloudflare's `agents` package need zod 4, so the MCP server can register
   these schemas as they are.
 - **One module per concern.** `primitives.ts` holds the small shapes the
-  rest are built from: GitHub logins, repos, issues, labels, and PRs, and our
-  IDs, times, and links. `projects.ts` holds projects and their settings,
-  `claims.ts` the claim state machine and the stored claim, `feed.ts` feed
-  events, `refusals.ts` the refusal codes, and `validation.ts` the check that
-  names the field in every problem.
+  rest are built from: GitHub logins and numeric IDs, repos, issues, labels,
+  and PRs, and our IDs, times, and links. `projects.ts` holds projects, their
+  settings, and each saved version of the settings, `claims.ts` the claim
+  state machine and the stored claim, `prs.ts` a claim's PR, `issues.ts` a
+  cached tagged issue, `people.ts` people, their interests, and blocks,
+  `sessions.ts` donor sessions and budgets, `crawl.ts` crawl candidates and
+  the do-not-list, `feed.ts` feed events, `refusals.ts` the refusal codes, and
+  `validation.ts` the check that names the field in every problem.
 - **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
   maintainers, and admins: who sees it, a description for agents, input and
   output schemas, and a function that renders the output as text.
@@ -149,7 +155,7 @@ GitHub environment, as [Deploys](#deploys) describes.
 | `PRIMARY_DOMAIN`, `REDIRECT_DOMAINS` | Variables: the site's domain, and domains that redirect to it | Now, by `src/redirect.ts` |
 | `OAUTH_CLIENT_ID` | Variable: the GitHub OAuth app's client ID | #8 |
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | #8 |
-| `DB` | D1 | #5 |
+| `DB` | D1 | `src/db/`, from #8 on |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
 | `FEED_QUEUE` | Queue producer | #14 |
 | `CRAWL_QUEUE` | Queue producer | #30 |
@@ -157,6 +163,137 @@ GitHub environment, as [Deploys](#deploys) describes.
 The feed's dead-letter queue arrives with the feed consumer in #14, and the
 static host's R2 bucket with #33. Durable Objects, cron triggers, and rate
 limiters arrive with the issues that use them.
+
+## Database
+
+D1, bound as `DB`, holds the structured records that search and the
+leaderboard read: people, projects and their settings, the tagged-issue
+cache, claims, PRs, donor sessions, blocks, the do-not-list, and crawl
+candidates. GitHub is the source of truth for issues and PRs, and the issue
+room (#13) will be for claims, so those tables are caches and mirrors. Better
+Auth's own tables arrive with #8. No table holds a GitHub token. Tokens stay
+in the encrypted grant store.
+
+| Table | One row per | Key |
+|---|---|---|
+| `people` | Person who has signed in: login, interests, when they joined, and when GitHub last showed their login | `github_id` |
+| `projects` | Project: status and its reason, how it got in, with the policy quote, link, and tier for a policy listing, who added it and when, where its issues live, and its current settings version | `repo` |
+| `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
+| `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR, and sync time. Two projects that keep issues in one repo each have their own copy. | `project`, `issue_repo`, `number` |
+| `claims` | Claim, mirrored from its issue room: issue, project, claimant, agent, own-project flag, start commit, token estimate, state, times, release reason, and PR | `id` |
+| `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
+| `donor_sessions` | Donor session: harness, budget, start time, and issues claimed | `id` |
+| `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
+| `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, status, and the admin's decision | `id` |
+
+Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns
+both project tables. Its functions take the database first, so the Worker
+passes `env.DB` and a test passes its own. Every function checks what it
+writes with the core schema before the write, and checks every row it reads
+with the same schema, so a bad value never reaches the database and a bad
+row never reaches the caller. Either throws a `TypeError` that names the
+field. A settings change that breaks the settings rules returns the problems
+instead, because a maintainer can fix them.
+
+### Storage choices
+
+- **Times are INTEGER milliseconds since the epoch.** The claim state
+  machine and Durable Object alarms use that unit, so the issue room can
+  mirror a claim without converting it. Integers compare and sort as they
+  are, which a week's range on the leaderboard needs, and SQLite has no time
+  type. ISO 8601 stays the form on the wire, in tool results and feed events.
+- **Lists and small objects are JSON text:** settings, interests, labels,
+  budgets, suggested settings, and suggested tags. A PR is three columns,
+  repo, number, and link, so it can be found by number. So is a policy.
+- **Repo names and logins compare without case,** with `COLLATE NOCASE`, as
+  GitHub's do. A repo can't be listed twice under different case, and a
+  lookup finds it however it is typed.
+- **Tables are STRICT,** so SQLite refuses a value of the wrong type.
+- **No CHECK constraints.** The rules live in the core schemas, which every
+  read and write goes through. SQLite can only change a CHECK by rebuilding
+  the table, so a rule kept there would turn each rule change into a rebuild.
+- **Foreign keys** tie every row that names a person to `people`, settings
+  and cached issues to their project, and a PR to its claim. D1 enforces
+  them. A claim's project has none, so a claim's history can outlive a
+  listing.
+- **IDs** for sessions and candidates are made in `src/db/`: a prefix and 20
+  random URL-safe characters, like `s_2x8Qm0vT4kLp9aZr1yWc`. The issue room
+  makes claim IDs.
+
+### Settings history
+
+A project's row points at its current row in `project_settings` with
+`settings_version`. Every save adds a row holding the whole settings, who
+saved them by GitHub ID, and when, and no row is ever overwritten. What a
+save changed is worked out by comparing it with the save before, using
+`changedSettings` from core, so the history can't disagree with the
+settings.
+
+A save reads the current version, applies the change with core's
+`updateProjectSettings`, and writes the next version in one batch. Both
+statements in the batch check that the version is still the one read, and
+D1 runs a batch as one transaction. When another save landed first, neither
+statement applies, and the save reads again and reapplies its change, up to
+five times. So two maintainers changing different settings at once both
+keep their change, and each version names the person whose change it holds.
+
+### The claims mirror
+
+`saveClaim` inserts a claim, or updates what changes over its life: state,
+times, release reason, PR, and token estimate. What was fixed when it was
+made, the issue, project, claimant, agent, own-project flag, start commit,
+and claim time, is compared in the same statement, and a save that
+disagrees is refused. A save carries the whole claim, and the last save
+wins, so the issue room has to save each change in order, as it makes it.
+A queue that can deliver twice or out of order would need a revision number
+on the claim first.
+
+`claims` keeps the claim's PR as the room records it, and `prs` keeps what
+GitHub says about that PR afterwards. `addPr` refuses a PR that differs from
+the one the claim records, so the two agree.
+
+### Indexes
+
+Each index serves a query that a page, a tool, a job, or the leaderboard
+needs. The leaderboard isn't built yet. Its queries were checked with
+`EXPLAIN QUERY PLAN` against these indexes. The key of `tagged_issues` leads
+with the project, so it serves a project's issues, suggestions across
+approved projects through `projects_by_status`, and pruning after a sync,
+with no index of its own.
+
+| Index | Serves |
+|---|---|
+| `people_by_login` | A person by login, for `/@<login>` pages and admin blocks |
+| `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first |
+| `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync |
+| `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
+| `claims_by_person` | `my_work`, a person's page and leaderboard row, and issues worked per person this week, read in person order |
+| `claims_by_project` | A project's page and the leaderboard by project |
+| `prs_by_number` | A PR's claim, and one claim per PR |
+| `prs_open` | The open PRs the PR job follows, oldest first |
+| `prs_by_opened` | PRs opened this week |
+| `prs_by_closed` | PRs merged or closed this week, for merged PRs and merge rate |
+| `donor_sessions_by_person` | A donor's last session, for what merged since |
+| `crawl_candidates_waiting` | One waiting candidate per repo |
+| `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
+
+A merged PR has a close time, as on GitHub, so one index on `closed_at`
+answers both merged PRs this week and merge rate, merged over merged plus
+closed. The all-time views, by person, agent, or project, read every PR once
+and join each to its claim by key, and hiding blocked donors joins
+`donor_blocks` by key. At v1's size those need no index of their own.
+
+### Migrations
+
+Migrations live in `apps/web/migrations/`, Wrangler's default folder,
+numbered in order. `pnpm dev` applies new ones to the local database with
+`wrangler d1 migrations apply DB --local` before it starts Vite. In a
+terminal, Wrangler asks before it applies one. The database tests apply them
+in their setup, and a deploy applies them to the environment's database
+before the Worker goes up, as [Deploys](#deploys) describes. A schema change
+is a new migration. A migration that has run on a deployed database never
+changes.
 
 ## Configuration and secrets
 
@@ -172,10 +309,11 @@ key is absent. GitHub reserves names that start with
 `GITHUB_` for its own variables and secrets, so no variable or secret of the
 Worker can start with it.
 
-Local development needs none of it. `pnpm dev` runs the Worker in Miniflare,
-which simulates every binding and keeps D1 and KV data on disk under
-`apps/web/.wrangler/`. The variables the app reads, with safe local defaults,
-are listed in `apps/web/.dev.vars.example`.
+Local development needs none of it. `pnpm dev` applies the D1 migrations to
+the local database, then runs the Worker in Miniflare, which simulates every
+binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. The
+variables the app reads, with safe local defaults, are listed in
+`apps/web/.dev.vars.example`.
 
 ## Types
 
@@ -201,9 +339,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 
 - **Unit and integration tests** run with Vitest inside `workerd`, through
   `@cloudflare/vitest-pool-workers`, with the bindings from `wrangler.jsonc`.
-  They call the whole Worker through `exports.default.fetch` from
+  HTTP tests call the whole Worker through `exports.default.fetch` from
   `cloudflare:workers`, so a test sees the same routing and headers a
   browser does. They live in `apps/web/test/`.
+- **Database tests** call the functions in `src/db/` against a real local
+  D1. The Vitest config reads `migrations/`, and a setup file applies them
+  before each test file. Each test file gets its own storage, and the tests
+  in a file share it, so each database test starts by emptying every table.
+  They live in `apps/web/test/db/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
 - **The core package's tests** run with plain Vitest in Node, since the

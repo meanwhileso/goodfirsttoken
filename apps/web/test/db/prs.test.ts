@@ -1,0 +1,129 @@
+import { newClaim, type ClaimRecord } from '@goodfirsttoken/core';
+import { beforeEach, describe, expect, test } from 'vitest';
+import { addPr, getPr, listOpenPrs, saveClaim, setPrState } from '../../src/db';
+import { DAY, db, emptyDatabase, HOUR, priya, refusal, repo, sha, signIn, t0 } from './helpers';
+
+function prRef(number: number) {
+  return { repo, number, url: `https://github.com/${repo}/pull/${String(number)}` };
+}
+
+/** A claim the room holds as pr_opened, with its PR. */
+function openedClaim(claimId: string, number: number): ClaimRecord {
+  return {
+    id: claimId,
+    issue: `${repo}#${String(number - 40)}`,
+    project: repo,
+    githubId: priya.githubId,
+    login: priya.login,
+    agent: 'claude-code',
+    ownProject: false,
+    startCommit: sha,
+    tokenEstimate: null,
+    ...newClaim(t0),
+    state: 'pr_opened',
+    submittedAt: t0 + HOUR,
+    pr: prRef(number),
+  };
+}
+
+beforeEach(async () => {
+  await emptyDatabase();
+  await signIn(priya);
+  await saveClaim(db, openedClaim('c_1', 57));
+  await saveClaim(db, openedClaim('c_2', 58));
+});
+
+describe('PRs', () => {
+  test("a claim's PR is recorded as open", async () => {
+    const added = await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 2 * HOUR });
+
+    expect(added).toEqual({
+      claimId: 'c_1',
+      pr: prRef(57),
+      state: 'open',
+      openedAt: t0 + 2 * HOUR,
+      mergedAt: null,
+      closedAt: null,
+    });
+    expect(await getPr(db, 'c_1')).toEqual(added);
+    expect(await getPr(db, 'c_2')).toBeNull();
+  });
+
+  test('recording the same PR again keeps the first record', async () => {
+    const first = await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 2 * HOUR });
+
+    expect(await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 3 * HOUR })).toEqual(first);
+  });
+
+  test("a claim's PR is the one the claim records, and can't be swapped for another", async () => {
+    const message = await refusal(addPr(db, { claimId: 'c_1', pr: prRef(59), openedAt: t0 + 2 * HOUR }));
+    expect(message).toContain(`records ${repo}#57`);
+    expect(await getPr(db, 'c_1')).toBeNull();
+
+    await saveClaim(db, { ...openedClaim('c_3', 60), state: 'awaiting_review', pr: null });
+    await addPr(db, { claimId: 'c_3', pr: prRef(60), openedAt: t0 + 2 * HOUR });
+
+    await refusal(addPr(db, { claimId: 'c_3', pr: prRef(61), openedAt: t0 + 3 * HOUR }));
+    expect((await getPr(db, 'c_3'))?.pr).toEqual(prRef(60));
+  });
+
+  test('a PR belongs to one claim', async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 2 * HOUR });
+    await saveClaim(db, { ...openedClaim('c_3', 60), state: 'awaiting_review', pr: null });
+
+    const message = await refusal(addPr(db, { claimId: 'c_3', pr: prRef(57), openedAt: t0 + 2 * HOUR }));
+
+    expect(message).toContain('already recorded for claim c_1');
+    expect(await getPr(db, 'c_3')).toBeNull();
+  });
+
+  test('a merged PR records when it merged and when it closed, and stays merged', async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+
+    const merged = await setPrState(db, 'c_1', 'merged', t0 + DAY);
+
+    expect(merged).toMatchObject({ state: 'merged', mergedAt: t0 + DAY, closedAt: t0 + DAY });
+    expect(await setPrState(db, 'c_1', 'closed', t0 + 2 * DAY)).toEqual(merged);
+    expect(await setPrState(db, 'c_1', 'open', t0 + 2 * DAY)).toEqual(merged);
+    expect(await getPr(db, 'c_1')).toEqual(merged);
+  });
+
+  test("a PR's times change only when its state does", async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    await setPrState(db, 'c_1', 'closed', t0 + DAY);
+
+    const again = await setPrState(db, 'c_1', 'closed', t0 + 2 * DAY);
+
+    expect(again).toMatchObject({ state: 'closed', mergedAt: null, closedAt: t0 + DAY });
+  });
+
+  test('a reopened PR is open again, with no close time', async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    await setPrState(db, 'c_1', 'closed', t0 + DAY);
+
+    expect(await setPrState(db, 'c_1', 'open', t0 + 2 * DAY)).toMatchObject({ state: 'open', closedAt: null });
+  });
+
+  test('a merge or close time before the PR opened counts as the time it opened, since clocks differ', async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + DAY });
+
+    const merged = await setPrState(db, 'c_1', 'merged', t0);
+
+    expect(merged).toMatchObject({ state: 'merged', mergedAt: t0 + DAY, closedAt: t0 + DAY });
+  });
+
+  test('the job that follows PRs sees the open ones, oldest first', async () => {
+    await addPr(db, { claimId: 'c_2', pr: prRef(58), openedAt: t0 + HOUR });
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+
+    expect((await listOpenPrs(db)).map((p) => p.claimId)).toEqual(['c_1', 'c_2']);
+
+    await setPrState(db, 'c_1', 'merged', t0 + DAY);
+
+    expect((await listOpenPrs(db)).map((p) => p.claimId)).toEqual(['c_2']);
+  });
+
+  test('a claim with no PR has no state to set', async () => {
+    expect(await setPrState(db, 'c_1', 'merged', t0 + DAY)).toBeNull();
+  });
+});

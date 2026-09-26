@@ -270,9 +270,13 @@ describe('stored claims', () => {
   const record = {
     id: 'c_1',
     issue: 'meanwhileso/goodfirsttoken#18',
+    project: 'meanwhileso/goodfirsttoken',
+    githubId: 1001,
     login: 'priya',
     agent: 'claude-code',
+    ownProject: false,
     startCommit: '4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6',
+    tokenEstimate: null,
     ...newClaim(claimedAt),
   };
 
@@ -303,6 +307,8 @@ describe('stored claims', () => {
     ['pr', { state: 'pr_opened', submittedAt: claimedAt + HOUR }],
     ['pr', { state: 'awaiting_review', submittedAt: claimedAt + HOUR, pr }],
     ['login', { login: 'not a login' }],
+    ['githubId', { githubId: 'priya' }],
+    ['githubId', { githubId: 0 }],
     ['state', { state: 'done' }],
   ])('a stored claim with a bad %s is rejected, naming the field', (field, bad) => {
     const result = validate(claimRecordSchema, { ...record, ...bad });

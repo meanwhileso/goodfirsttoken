@@ -16,9 +16,10 @@ import {
   repoName,
   trimmedText,
   webUrl,
-  wholeNumber,
 } from '../primitives';
+import { interestsSchema, type Interests } from '../people';
 import { prModes, projectSettingsSchema } from '../projects';
+import { budgetSchema, type Budget } from '../sessions';
 import { defineTool } from './spec';
 import {
   claimantSchema,
@@ -31,32 +32,6 @@ import {
 import { indent, lines, numbered, plural, when } from './text';
 
 // The donor's tools (spec section 7).
-
-/** How much the donor wants to spend this session. */
-export const budgetSchema = z.discriminatedUnion(
-  'kind',
-  [
-    z.object({ kind: z.literal('issues'), count: wholeNumber(1, 100) }),
-    z.object({ kind: z.literal('time'), minutes: wholeNumber(1, 24 * 60) }),
-    z.object({ kind: z.literal('until_limit') }),
-  ],
-  { error: 'must be a number of issues, a number of minutes, or until_limit' },
-);
-export type Budget = z.infer<typeof budgetSchema>;
-
-const interestList = z
-  .array(trimmedText(50), { error: 'must be a list' })
-  .max(20, 'must list at most 20')
-  .default(() => []);
-
-/** What the donor likes to work on. Suggestions are ranked against it. */
-export const interestsSchema = z.object({
-  languages: interestList,
-  projects: interestList,
-  /** Kinds of work, like tests, docs, or bugs. */
-  kinds: interestList,
-});
-export type Interests = z.infer<typeof interestsSchema>;
 
 function describeBudget(budget: Budget): string {
   switch (budget.kind) {
