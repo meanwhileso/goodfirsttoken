@@ -1,0 +1,10 @@
+# Local settings for `pnpm dev`. pnpm dev works without this file. To change
+# a value, copy this file to .dev.vars, which git ignores.
+#
+# Every variable the app reads is listed here with a safe local default.
+# Staging and production will get theirs from the GitHub environment when
+# they deploy (#32). Secrets go up with `wrangler secret put`.
+
+# The environment the Worker runs as: development, staging, or production.
+# /healthz reports it.
+ENVIRONMENT=development

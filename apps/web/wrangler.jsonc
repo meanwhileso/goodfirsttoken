@@ -1,0 +1,26 @@
+// The Worker's config for local development.
+//
+// This file holds bindings and settings only, with local names. The names of
+// deployed resources, account and resource IDs, custom domains, and secrets
+// never go here. The deploy workflow (#32) will write the staging and
+// production config from the GitHub environment. Local development needs
+// none of it.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "web",
+  "main": "src/server.ts",
+  // Unit tests run on the workerd that @cloudflare/vitest-pool-workers pins,
+  // which can be older than the one dev and preview use. A date newer than
+  // it supports makes `pnpm test` fail, so move this only as far as it allows.
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "ENVIRONMENT": "development" },
+  "d1_databases": [{ "binding": "DB", "database_name": "db" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "queues": {
+    "producers": [
+      { "binding": "FEED_QUEUE", "queue": "feed" },
+      { "binding": "CRAWL_QUEUE", "queue": "crawl" }
+    ]
+  }
+}

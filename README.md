@@ -14,6 +14,10 @@ works it in the open, and gets it to a pull request. Anyone can watch.
 The design is done and the build is starting. Nothing is live at
 goodfirsttoken.org yet. Here is what's in the repo today:
 
+- [`apps/web`](apps/web/): the Cloudflare Worker that will serve the site
+  and the MCP server. Today it serves a placeholder page.
+- [`packages/core`](packages/core/): the schemas and types the pieces share.
+  It is nearly empty so far.
 - [`brand/`](brand/): who it's for, how it looks and sounds, and the pages
   the site needs.
 - [`prototype/`](prototype/): every page as clickable static HTML with
@@ -47,10 +51,13 @@ You need Node 24.
 ```bash
 corepack enable
 pnpm install
-pnpm prototype
+pnpm dev         # the site, at http://localhost:5173
+pnpm prototype   # the clickable prototype, at http://localhost:8943
 ```
 
-Then open http://localhost:8943. No accounts needed.
+Neither needs an account or a network connection. The site runs in the same
+Workers runtime as production, with local stand-ins for the database and
+queues.
 
 ## Contributing
 

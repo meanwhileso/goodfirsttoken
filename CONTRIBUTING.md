@@ -20,11 +20,16 @@ You need Node 24. pnpm comes through corepack.
 ```bash
 corepack enable
 pnpm install
-pnpm prototype   # http://localhost:8943
-pnpm test
+pnpm dev         # the site, at http://localhost:5173
+pnpm prototype   # the clickable prototype, at http://localhost:8943
+pnpm check       # lint and typecheck
+pnpm test        # unit tests, the Worker's inside the Workers runtime
+pnpm test:e2e    # browser tests against a production build
 ```
 
-No accounts are needed for any of it.
+Before the first `pnpm test:e2e`, run `pnpm exec playwright install chromium`.
+No accounts are needed for any of it. How the pieces fit is in
+[docs/architecture.md](docs/architecture.md).
 
 ## Making a change
 
@@ -43,7 +48,8 @@ and agent-written pull requests are welcome here:
 
 - **Disclose it.** Add a trailer naming the agent and model, like
   `Assisted-by: Claude Code (claude-opus-5-5)`, and fill in the disclosure
-  section of the PR template.
+  section of the PR template. Leave out links to the agent's session, which
+  are private.
 - **Reading it is up to you.** You don't have to read the code your agent
   wrote. CI and a maintainer's review check every PR. If you did read it,
   tick the box in the PR template so the reviewer knows.
@@ -72,9 +78,10 @@ no em dashes.
 
 ## Keeping the repo public-safe
 
-Secrets and Cloudflare account and resource IDs never go in a file, and
-deployment domains never go in config. They come from the environment.
-`pnpm install` turns on a pre-commit hook that scans staged changes with
+Secrets, Cloudflare account and resource IDs, and the names of deployed
+resources never go in a file, and deployment domains never go in config.
+They come from the environment. `pnpm install` turns on a pre-commit hook
+that scans staged changes with
 [gitleaks](https://github.com/gitleaks/gitleaks) when you have it installed.
 CI scans the full history on every PR.
 
