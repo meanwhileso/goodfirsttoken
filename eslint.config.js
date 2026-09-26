@@ -52,7 +52,7 @@ export default defineConfig([
         {
           patterns: [
             {
-              group: ['@goodfirsttoken/github-fake', '@goodfirsttoken/github-fake/*'],
+              group: ['@goodfirsttoken/github-fake', '@goodfirsttoken/github-fake/*', '**/packages/github-fake/**'],
               message: 'The GitHub fake is for tests and local development, and never ships in the Worker.',
             },
           ],
