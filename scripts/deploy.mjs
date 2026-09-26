@@ -22,7 +22,7 @@ const TOKEN = /^[\w.~+/=-]+$/;
 // Returns the Cloudflare API token for this job: the CLOUDFLARE_API_TOKEN
 // secret, or a short-lived token from the credential broker, traded for the
 // job's GitHub OIDC token.
-export async function getCredential({ env, fetch }) {
+export async function getCredential({ env, fetch, log }) {
   const secret = (env.CLOUDFLARE_API_TOKEN ?? '').trim();
   const broker = (env.CLOUDFLARE_CREDENTIAL_BROKER_URL ?? '').trim();
   if (secret && broker) {
@@ -52,8 +52,16 @@ export async function getCredential({ env, fetch }) {
   if (!oidc.ok) throw new Error(`GitHub answered ${oidc.status} to the request for an OIDC token.`);
   const { value: idToken } = await oidc.json().catch(() => ({}));
   if (typeof idToken !== 'string' || !idToken) throw new Error('GitHub answered with no OIDC token.');
+  log(`::add-mask::${idToken}`);
 
-  const answer = await fetch(broker, { method: 'POST', headers: { authorization: `Bearer ${idToken}` } });
+  // A redirect would carry the OIDC token to another URL, so it fails.
+  const answer = await fetch(broker, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${idToken}` },
+    redirect: 'error',
+  }).catch(() => {
+    throw new Error('The credential broker could not be reached, or it answered with a redirect.');
+  });
   if (!answer.ok) throw new Error(`The credential broker answered ${answer.status}.`);
   const body = await answer.json().catch(() => ({}));
   if (typeof body.token !== 'string' || !TOKEN.test(body.token)) {
@@ -65,7 +73,7 @@ export async function getCredential({ env, fetch }) {
 // Gets the credential, masks it, and hands it to the job's later steps.
 export async function exportCredential({ env, fetch, envFile, log }) {
   if (!envFile) throw new Error('GITHUB_ENV is not set, so there is nowhere to put the token.');
-  const { token, source } = await getCredential({ env, fetch });
+  const { token, source } = await getCredential({ env, fetch, log });
   log(`::add-mask::${token}`);
   appendFileSync(envFile, `CLOUDFLARE_API_TOKEN=${token}\n`);
   log(`Using a Cloudflare token from ${source}.`);

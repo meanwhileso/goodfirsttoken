@@ -21,7 +21,14 @@ test('every redirect domain in the list redirects, and so does every path, /heal
   expect(res.headers.get('location')).toBe('https://primary.example/healthz');
 });
 
-test('the primary domain and hosts that are not redirect domains are served, not redirected', async () => {
+test('a redirect domain written with the trailing dot of a fully qualified name still redirects', async () => {
+  const res = await get('https://second.example./healthz');
+
+  expect(res.status).toBe(301);
+  expect(res.headers.get('location')).toBe('https://primary.example/healthz');
+});
+
+test('the primary domain, workers.dev, and localhost are served without a redirect', async () => {
   for (const origin of ['https://primary.example', 'https://web.example.workers.dev', 'http://localhost']) {
     const res = await get(`${origin}/healthz`);
 

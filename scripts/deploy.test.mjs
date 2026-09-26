@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -22,7 +22,13 @@ const OIDC_URL = 'https://oidc.example/token?api-version=2.0';
 function fakeFetch(...handlers) {
   const calls = [];
   const fetch = async (url, init = {}) => {
-    calls.push({ url: String(url), method: init.method ?? 'GET', headers: init.headers ?? {}, body: init.body });
+    calls.push({
+      url: String(url),
+      method: init.method ?? 'GET',
+      headers: init.headers ?? {},
+      body: init.body,
+      redirect: init.redirect,
+    });
     const handler = handlers[calls.length - 1];
     if (!handler) throw new Error(`unexpected request to ${String(url)}`);
     return handler(String(url), init);
@@ -30,6 +36,13 @@ function fakeFetch(...handlers) {
   return { fetch, calls };
 }
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+
+// A temporary directory, deleted when the test ends.
+function tempDir(t) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'deploy-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 const brokerEnv = {
   CLOUDFLARE_CREDENTIAL_BROKER_URL: BROKER,
@@ -52,7 +65,7 @@ test('with a broker URL, the job trades its GitHub OIDC token for a short-lived 
     () => json({ token: 'short-lived' }),
   );
 
-  const { token } = await getCredential({ env: brokerEnv, fetch });
+  const { token } = await getCredential({ env: brokerEnv, fetch, log: () => {} });
 
   assert.equal(token, 'short-lived');
   const oidc = new URL(calls[0].url);
@@ -62,6 +75,30 @@ test('with a broker URL, the job trades its GitHub OIDC token for a short-lived 
   assert.equal(calls[1].url, BROKER);
   assert.equal(calls[1].method, 'POST');
   assert.equal(calls[1].headers.authorization, 'Bearer github-oidc-jwt');
+});
+
+test('the OIDC token is masked as soon as the job has it', async () => {
+  const lines = [];
+  const { fetch } = fakeFetch(
+    () => json({ value: 'github-oidc-jwt' }),
+    () => json({ token: 'short-lived' }),
+  );
+
+  await getCredential({ env: brokerEnv, fetch, log: (line) => lines.push(line) });
+
+  assert.equal(lines[0], '::add-mask::github-oidc-jwt');
+});
+
+test('the broker call never follows a redirect, so the OIDC token goes only to the broker URL', async () => {
+  const { fetch, calls } = fakeFetch(
+    () => json({ value: 'github-oidc-jwt' }),
+    () => json({ token: 'short-lived' }),
+  );
+
+  await getCredential({ env: brokerEnv, fetch, log: () => {} });
+
+  assert.equal(calls[1].url, BROKER);
+  assert.equal(calls[1].redirect, 'error');
 });
 
 test('the broker form needs the id-token: write permission', async () => {
@@ -92,12 +129,12 @@ test('a broker that refuses, or answers with something that is not a token, stop
     () => json({}),
     () => json({ token: 'short-lived\nNODE_OPTIONS=--require=/tmp/evil.js' }),
   ]) {
-    await assert.rejects(getCredential({ env: brokerEnv, fetch: fakeFetch(oidc, answer).fetch }), /credential broker/);
+    await assert.rejects(getCredential({ env: brokerEnv, fetch: fakeFetch(oidc, answer).fetch, log: () => {} }), /credential broker/);
   }
 });
 
-test('the token is masked first, then handed to later steps through GITHUB_ENV', async () => {
-  const envFile = path.join(mkdtempSync(path.join(tmpdir(), 'deploy-')), 'github-env');
+test('the token is masked first, then handed to later steps through GITHUB_ENV', async (t) => {
+  const envFile = path.join(tempDir(t), 'github-env');
   writeFileSync(envFile, '');
   const lines = [];
   const { fetch } = fakeFetch(
@@ -107,8 +144,8 @@ test('the token is masked first, then handed to later steps through GITHUB_ENV',
 
   await exportCredential({ env: brokerEnv, fetch, envFile, log: (line) => lines.push(line) });
 
-  assert.equal(lines[0], '::add-mask::short-lived');
-  assert.ok(lines.slice(1).every((line) => !line.includes('short-lived')));
+  const shown = lines.filter((line) => line.includes('short-lived'));
+  assert.deepEqual(shown, ['::add-mask::short-lived'], 'the token shows only in its mask');
   assert.equal(readFileSync(envFile, 'utf8'), 'CLOUDFLARE_API_TOKEN=short-lived\n');
 });
 
@@ -183,14 +220,14 @@ test('a Cloudflare error stops the deploy with its message', async () => {
 });
 
 // A repo root whose apps/web can hold migrations and a fake Wrangler.
-function sampleRoot() {
-  const root = mkdtempSync(path.join(tmpdir(), 'deploy-'));
+function sampleRoot(t) {
+  const root = tempDir(t);
   mkdirSync(path.join(root, 'apps', 'web'), { recursive: true });
   return root;
 }
 
-test('migrations are applied for each database that has a migrations folder', () => {
-  const root = sampleRoot();
+test('migrations are applied for each database that has a migrations folder', (t) => {
+  const root = sampleRoot(t);
   mkdirSync(path.join(root, 'apps', 'web', 'migrations'));
   mkdirSync(path.join(root, 'apps', 'web', 'db', 'crawl'), { recursive: true });
   const runs = [];
@@ -209,13 +246,13 @@ test('migrations are applied for each database that has a migrations folder', ()
   ]);
 });
 
-test('a database with no migrations folder yet is skipped, so deploys work before the first migration', () => {
+test('a database with no migrations folder yet is skipped, so deploys work before the first migration', (t) => {
   const runs = [];
   const lines = [];
 
   applyMigrations({
     config: { d1_databases: [{ binding: 'DB', database_name: 'site-db' }] },
-    root: sampleRoot(),
+    root: sampleRoot(t),
     wrangler: (args) => runs.push(args),
     log: (line) => lines.push(line),
   });
@@ -245,8 +282,8 @@ fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv
       .map((line) => JSON.parse(line));
 }
 
-test('each secret the Worker declares is put one at a time, its value only on stdin', () => {
-  const root = sampleRoot();
+test('each secret the Worker declares is put one at a time, its value only on stdin', (t) => {
+  const root = sampleRoot(t);
   const runs = recordingWrangler(root);
   const lines = [];
   const env = { SESSION_KEY: 'value-one', OAUTH_CLIENT_SECRET: 'value-two' };

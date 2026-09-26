@@ -39,6 +39,22 @@ test('docs/self-hosting.md lists every setting the deploy workflows read, and no
   assert.deepEqual([...inGuide].sort(), [...readByWorkflows].sort());
 });
 
+test('staging and production deploys each stay off until their repository variable is true', () => {
+  // deploy.yml split at each name indented two spaces, which includes every
+  // job.
+  const jobs = Object.fromEntries(
+    read('.github/workflows/deploy.yml')
+      .split(/\n(?= {2}\w[\w-]*:\n)/)
+      .slice(1)
+      .map((block) => [block.match(/^ {2}([\w-]+):/)[1], block]),
+  );
+  const condition = (job) => jobs[job]?.match(/^ {4}if: (.*)$/m)?.[1] ?? '';
+
+  assert.match(condition('staging'), /vars\.DEPLOY_STAGING == 'true'/);
+  assert.match(condition('production'), /vars\.DEPLOY_PRODUCTION == 'true'/);
+  assert.match(jobs.production, /^ {4}needs: staging$/m);
+});
+
 test('the deploy workflows never run on pull_request_target', () => {
   assert.equal(workflow.includes('pull_request_target'), false);
 });

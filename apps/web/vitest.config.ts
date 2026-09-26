@@ -23,5 +23,8 @@ export default defineConfig({
   ],
   test: {
     include: ['test/**/*.test.ts'],
+    // The first request in each test file compiles the Worker's routes, which
+    // takes seconds on a busy machine.
+    testTimeout: 20_000,
   },
 });

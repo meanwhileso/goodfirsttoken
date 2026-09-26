@@ -156,41 +156,51 @@ Branch protection requires `test` and `leaks` by name.
 ## Deploys
 
 `.github/workflows/deploy.yml` runs on every push to `main`, and by hand. It
-calls `deploy-environment.yml` for staging, and then for production when the
-`DEPLOY_PRODUCTION` repository variable is `true`. Each call is one job in the
-GitHub environment it deploys, and reads every deployment value from there.
-[self-hosting.md](self-hosting.md) lists the settings and the one-time setup.
+calls `deploy-environment.yml` for staging, and then for production. Each
+runs only when its repository variable, `DEPLOY_STAGING` or
+`DEPLOY_PRODUCTION`, is `true`, so `main` stays green before a deployment is
+set up. Each call is one job in the GitHub environment it deploys, and reads
+every deployment value from there. [self-hosting.md](self-hosting.md) lists
+the settings and the one-time setup.
 
 The job runs these steps. The scripts are in `scripts/`.
 
-1. `deploy-config.mjs` reads `wrangler.jsonc` and writes
-   `apps/web/wrangler.deploy.json`, which git ignores. It names the Worker
-   `WORKER_NAME` and every other resource `<WORKER_NAME>-<local name>`. It
-   copies in each ID that is set and leaves out each one that isn't. It sets
-   every variable from the setting of the same name, so no local value
-   reaches a deployed Worker, and sets `ENVIRONMENT` to the target. It
-   attaches `PRIMARY_DOMAIN` and `REDIRECT_DOMAINS` as custom domains and
-   turns workers.dev off when there is a domain. A key or binding it does not
-   know stops the deploy, so a new kind of binding never reaches Cloudflare
-   with its local name.
-2. The Vite build reads that file through
+1. `pnpm install --frozen-lockfile --ignore-scripts`. esbuild and workerd
+   run without their install scripts, and the deploy needs no generated
+   types or git hooks.
+2. `deploy-config.mjs` reads `wrangler.jsonc` and writes
+   `apps/web/wrangler.deploy.json`, which git ignores. It refuses to write
+   through a symlink there. It names the Worker `WORKER_NAME` and every other
+   resource `<WORKER_NAME>-<local name>`. It copies in each ID that is set
+   and leaves out each one that isn't. It sets every variable from the
+   setting of the same name, so no local value reaches a deployed Worker, and
+   sets `ENVIRONMENT` to the target. It attaches `PRIMARY_DOMAIN` and
+   `REDIRECT_DOMAINS` as custom domains and turns workers.dev off when there
+   is a domain. It masks the account ID, resource names and IDs, and the value
+   of every variable but `ENVIRONMENT` for the later steps, Wrangler's output
+   included. A
+   key or binding it does not know stops the deploy, so a new kind of binding
+   never reaches Cloudflare with its local name.
+3. The Vite build reads that file through
    `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and writes the config Wrangler
    deploys from.
-3. `deploy.mjs credential` puts a Cloudflare token in `$GITHUB_ENV` for the
+4. `deploy.mjs credential` puts a Cloudflare token in `$GITHUB_ENV` for the
    later steps: the `CLOUDFLARE_API_TOKEN` secret, or a short-lived token from
-   the credential broker, traded for the job's GitHub OIDC token.
-4. `deploy.mjs resources` creates each D1 database that has no ID, and each
+   the credential broker, traded for the job's GitHub OIDC token. It masks
+   the OIDC token as soon as it has it, and the broker call follows no
+   redirects.
+5. `deploy.mjs resources` creates each D1 database that has no ID, and each
    queue, dead-letter queues included, when missing. Wrangler would create a
    missing producer queue itself, but not a dead-letter queue, and a database
    has to exist before its migrations run.
-5. `deploy.mjs migrations` runs `wrangler d1 migrations apply --remote` for
+6. `deploy.mjs migrations` runs `wrangler d1 migrations apply --remote` for
    each database that has a migrations folder, and skips one that has none.
-6. `deploy.mjs secrets` puts each secret in `secrets.required` with
+7. `deploy.mjs secrets` puts each secret in `secrets.required` with
    `wrangler secret put`, one at a time, from the environment secret of the
    same name. The value reaches Wrangler on stdin only.
-7. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
+8. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
    when `OAUTH_KV_ID` is empty, and reuses it after that.
-8. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
+9. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
    workers.dev URL Wrangler reported, until it answers ok from the target
    environment. It fails at once if another environment answers, and after
    three minutes otherwise.
@@ -199,17 +209,17 @@ Choices:
 
 - **One setting names every resource.** New bindings get deployed names
   without new settings. Only IDs, which Cloudflare assigns, need one each.
-- **Each setting can be a variable or a secret.** The logs of a public repo
-  are public, and GitHub prints a variable in the log of the step that reads
-  it. So the config step reads each setting as `secrets.NAME || vars.NAME`,
-  and masks the account ID, resource names and IDs, and domains for every
-  later step, Wrangler's output included.
+- **Settings are read as `secrets.NAME || vars.NAME`,** so each can be
+  either. [self-hosting.md](self-hosting.md#settings) says which to use.
 - **One reusable workflow runs both environments,** so staging and production
   always run the same steps.
-- **The build runs before the job holds a Cloudflare token,** so build code
-  never sees it.
-- **Deploys run one at a time** and are never cancelled midway. Deploy jobs
-  have `id-token: write` for the broker and read-only contents.
+- **The build step runs before the credential step,** so the Cloudflare token
+  is not in the build step's environment. That is only the order of steps.
+  `id-token: write` covers the whole job, so any step could ask GitHub for an
+  OIDC token, and a step can change what later steps run.
+- **Deploys run one at a time** in one concurrency group, which never
+  cancels a deploy in progress. Deploy jobs have `id-token: write` for the
+  broker and read-only contents.
 
 ## Choices
 

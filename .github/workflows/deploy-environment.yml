@@ -34,11 +34,12 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: corepack enable
-      - run: pnpm install --frozen-lockfile
+      # No install scripts run. esbuild and workerd work without theirs, and
+      # the deploy needs no generated types or git hooks.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # Each setting is a variable or a secret. The logs of a public repo are
-      # public, and a variable shows in this step's log. This step masks every
-      # name, ID, and domain it writes, so later steps show *** in their place.
+      # Each setting is read as a secret or a variable. docs/self-hosting.md
+      # says which to use.
       - name: Write the Wrangler config
         env:
           TARGET: ${{ inputs.environment }}
@@ -52,7 +53,8 @@ jobs:
           ADMIN_GITHUB_IDS: ${{ secrets.ADMIN_GITHUB_IDS || vars.ADMIN_GITHUB_IDS }}
         run: node scripts/deploy-config.mjs "$TARGET"
 
-      # The build runs before the job holds a Cloudflare credential.
+      # The build runs before the credential step, so the Cloudflare token is
+      # not in its environment.
       - name: Build the Worker
         env:
           CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH: wrangler.deploy.json
@@ -61,7 +63,7 @@ jobs:
       - name: Get the Cloudflare credential
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ vars.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
+          CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ secrets.CLOUDFLARE_CREDENTIAL_BROKER_URL || vars.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
         run: node scripts/deploy.mjs credential
 
       - name: Create the D1 database and queues when missing

@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -77,6 +86,21 @@ test('no local value of a variable reaches a deployed Worker', () => {
 
   const set = deployConfig(local, 'production', { ...withLimiter, FAKE_GITHUB_URL: 'https://api.github.com' }).config;
   assert.equal(set.vars.FAKE_GITHUB_URL, 'https://api.github.com');
+});
+
+test('ADMIN_GITHUB_IDS takes numeric GitHub IDs separated by commas', () => {
+  const withAdmins = { ...local, vars: { ...local.vars, ADMIN_GITHUB_IDS: '' } };
+
+  const { config } = deployConfig(withAdmins, 'production', { ...withLimiter, ADMIN_GITHUB_IDS: ' 583231, 9919 ' });
+  assert.equal(config.vars.ADMIN_GITHUB_IDS, '583231,9919');
+
+  for (const bad of ['octocat', '583231,octocat', '12.5', '-1']) {
+    assert.throws(
+      () => deployConfig(withAdmins, 'production', { ...withLimiter, ADMIN_GITHUB_IDS: bad }),
+      /ADMIN_GITHUB_IDS/,
+      bad,
+    );
+  }
 });
 
 test('a primary domain serves the site there, turns workers.dev off, and attaches every redirect domain', () => {
@@ -190,12 +214,15 @@ test('the config script reads no setting beyond the ones it lists', () => {
   }
 });
 
-// A throwaway git repo with this repo's .gitignore and local config.
-function sampleRepo({ gitignore = readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8') } = {}) {
+// A throwaway git repo with this repo's .gitignore, local config, and a
+// tracked README. It is deleted when the test ends.
+function sampleRepo(t, { gitignore = readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8') } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'deploy-config-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(path.join(root, 'apps', 'web'), { recursive: true });
   copyFileSync(path.join(REPO_ROOT, LOCAL_CONFIG), path.join(root, LOCAL_CONFIG));
   writeFileSync(path.join(root, '.gitignore'), gitignore);
+  writeFileSync(path.join(root, 'README.md'), '# sample\n');
   execFileSync('git', ['init', '--quiet'], { cwd: root });
   execFileSync('git', ['add', '--all'], { cwd: root });
   return root;
@@ -208,10 +235,12 @@ const sentinels = {
   OAUTH_KV_ID: KV_ID,
   PRIMARY_DOMAIN: 'sentinel-primary.example',
   REDIRECT_DOMAINS: 'sentinel-second.example',
+  OAUTH_CLIENT_ID: 'Ov23sentinelclient',
+  ADMIN_GITHUB_IDS: '5550001,5550002',
 };
 
-test('no ID or deployed name is written to a file git tracks or would add', () => {
-  const root = sampleRepo();
+test('no ID or deployed name is written to a file git tracks or would add', (t) => {
+  const root = sampleRepo(t);
   writeDeployConfig({ root, target: 'production', env: sentinels, log: () => {} });
 
   const written = readFileSync(path.join(root, DEPLOY_CONFIG), 'utf8');
@@ -229,8 +258,8 @@ test('no ID or deployed name is written to a file git tracks or would add', () =
   }
 });
 
-test('the deploy config is not written where git would track it', () => {
-  const root = sampleRepo({ gitignore: 'node_modules/\n' });
+test('the deploy config is not written where git would track it', (t) => {
+  const root = sampleRepo(t, { gitignore: 'node_modules/\n' });
 
   assert.throws(
     () => writeDeployConfig({ root, target: 'production', env: sentinels, log: () => {} }),
@@ -239,13 +268,31 @@ test('the deploy config is not written where git would track it', () => {
   assert.equal(existsSync(path.join(root, DEPLOY_CONFIG)), false);
 });
 
-test('in GitHub Actions, every name, ID, and domain is masked before any line could print it', () => {
-  const root = sampleRepo();
+test('a symlink in place of the deploy config is refused, so nothing is written through it to a tracked file', (t) => {
+  const root = sampleRepo(t);
+  symlinkSync('../../README.md', path.join(root, DEPLOY_CONFIG));
+
+  assert.throws(
+    () => writeDeployConfig({ root, target: 'production', env: sentinels, log: () => {} }),
+    /symlink/,
+  );
+  assert.equal(readFileSync(path.join(root, 'README.md'), 'utf8'), '# sample\n');
+});
+
+test('in GitHub Actions, every setting the Worker gets is masked before any line could print it', (t) => {
+  const root = sampleRepo(t);
   const lines = [];
   writeDeployConfig({ root, target: 'staging', env: { ...sentinels, GITHUB_ACTIONS: 'true' }, log: (line) => lines.push(line) });
 
   const masks = lines.filter((line) => line.startsWith('::add-mask::')).map((line) => line.slice('::add-mask::'.length));
-  const values = [...Object.values(sentinels), 'sentinel-worker-db', 'sentinel-worker-feed', 'sentinel-worker-crawl'];
+  const values = [
+    ...Object.values(sentinels),
+    '5550001',
+    '5550002',
+    'sentinel-worker-db',
+    'sentinel-worker-feed',
+    'sentinel-worker-crawl',
+  ];
   for (const value of values) assert.ok(masks.includes(value), `${value} is masked`);
   const firstOther = lines.findIndex((line) => !line.startsWith('::add-mask::'));
   assert.equal(firstOther, masks.length, 'the masks come first');

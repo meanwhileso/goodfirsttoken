@@ -17,37 +17,40 @@ covers it.
 ## How a deploy works
 
 A push to `main` runs `.github/workflows/deploy.yml`. It deploys staging,
-checks that staging answers, and then deploys production when production
-deploys are on. Each deploy job runs in a GitHub environment, `staging` or
-`production`, and reads every deployment value from it. Nothing about your
-deployment goes in the repo. [architecture.md](architecture.md#deploys) has
-the details.
+checks that staging answers, and then deploys production. Each deploy job
+runs in a GitHub environment, `staging` or `production`, and reads every
+deployment value from it. Nothing about your deployment goes in the repo.
+[architecture.md](architecture.md#deploys) lists every step of a deploy.
 
 ## 1. Copy the repo
 
 Fork this repo, or push a copy of it to your own account. On a fork, open the
-Actions tab and turn workflows on. Until step 4 is done, a push to `main`
-starts a deploy that stops early and names the settings it is missing.
+Actions tab and turn workflows on. Nothing deploys until you turn staging on
+in step 5.
 
 ## 2. Set up Cloudflare
 
 1. **Find your account ID.** It is on the Workers & Pages overview page in
    the Cloudflare dashboard, and in the URL of every dashboard page:
    `dash.cloudflare.com/<account ID>/`.
-2. **Choose where the site lives.**
+2. **Pick a Worker name for each environment.** It becomes the
+   `WORKER_NAME` setting in step 4, and every other resource is named after
+   it. Use lowercase letters, digits, and dashes. If staging and production
+   share an account, give them different names.
+3. **Choose where each environment's site lives.**
    - On your own domain: add the domain to Cloudflare as a zone in the same
      account. Staging can use a subdomain, like `staging.example.org`. The
      deploy attaches each domain to the Worker, and Cloudflare creates its DNS
      record and certificate. If a hostname already has a DNS record, delete
      it first.
    - On workers.dev: open Workers & Pages once, so your account has a
-     workers.dev subdomain. The site is then at
-     `https://<WORKER_NAME>.<your subdomain>.workers.dev`.
-3. **Leave the resources to the deploy.** The deploy creates the D1 database
+     workers.dev subdomain, and note it. The site is then at
+     `<WORKER_NAME>.<your subdomain>.workers.dev`.
+4. **Leave the resources to the deploy.** The deploy creates the D1 database
    and the queues when they are missing. Wrangler creates the KV namespace on
    the first deploy and keeps using it. To use a D1 database or KV namespace
    you already have, set its ID in step 4.
-4. **Make a credential.** Use one of these two:
+5. **Make a credential.** Each environment uses one of these two forms:
    - **An API token.** In the dashboard, go to My Profile, API Tokens, and
      Create Token. Start from the Edit Cloudflare Workers template, and add
      two permissions: Account, D1, Edit, and Account, Queues, Edit. Under
@@ -59,12 +62,18 @@ starts a deploy that stops early and names the settings it is missing.
      long-lived token sits in GitHub. [The credential broker](#the-credential-broker)
      says what it has to do.
 
+   A broker URL set on the repository reaches both environments. An
+   environment that also has its own API token then has both forms, and its
+   deploy stops with "Keep only one". Set the broker URL on the repository
+   only when both environments use the broker.
+
 ## 3. Create the GitHub OAuth apps
 
 Sign-in uses one GitHub OAuth app per environment. GitHub has no API for
 creating them, so make each one by hand. In your GitHub settings, go to
 Developer settings, OAuth Apps, and New OAuth App. Fill it in with the
-environment's domain: its `PRIMARY_DOMAIN`, or its workers.dev hostname.
+environment's domain from step 2: its own domain, or its workers.dev
+hostname.
 
 | Field | Value |
 |---|---|
@@ -72,38 +81,41 @@ environment's domain: its `PRIMARY_DOMAIN`, or its workers.dev hostname.
 | Homepage URL | `https://<domain>` |
 | Authorization callback URL | `https://<domain>/auth/callback` |
 
-GitHub accepts any path under the callback URL, so sign-in on the site and
-sign-in from agents can share one app. Copy the app's client ID for
-`OAUTH_CLIENT_ID` in step 4.
+GitHub accepts any path under the callback URL, and
+[the plan](specs/v1.md#3-identity-permissions-and-token-storage) puts the
+site's login and the login from agents under this one. Copy the app's client
+ID for `OAUTH_CLIENT_ID` in step 4.
 
 The site does not sign anyone in yet. Sign-in (#8) also needs the app's
-client secret, and lists it under [the Worker's secrets](#the-workers-secrets)
-when it lands.
+client secret, and adds it to [the Worker's secrets](#the-workers-secrets).
 
 ## 4. Create the GitHub environments
 
 In your repo's settings, go to Environments and create `staging` and
-`production`. If a deploy has already run, GitHub created `staging` then, so
-open it. For each one:
+`production`. For each one:
 
 1. Under Deployment branches and tags, choose Selected branches and tags, and
    add `main`. Only `main` can then deploy to it.
 2. For `production`, you can add required reviewers, so each production
    deploy waits for a person to approve it.
-3. Add the settings below.
+3. Add the settings below to it.
 
 ### Settings
 
-Each setting is an environment variable or an environment secret, with the
-name shown. The logs of a public repo are public, and a variable shows in the
-log of the step that reads it. A secret is always masked. From that step on,
-the deploy masks the account ID, every resource name and ID, and the domains
-in its logs. To keep a value out of the logs entirely, make it a secret.
+Each setting goes in the environment it belongs to, as an environment secret
+or an environment variable with the name shown. A repository secret never
+reaches the deploy. A repository variable reaches both environments.
+
+The deploy logs of a public repo are public. GitHub prints every variable a
+step reads in that step's header, before anything can mask it, and a secret
+is always masked. **In a public repo, make every setting a secret.** Only the
+two on switches, `DEPLOY_STAGING` and `DEPLOY_PRODUCTION`, are fine as
+variables. In a private repo, either works.
 
 | Name | Needed | What it is |
 |---|---|---|
 | `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID. |
-| `WORKER_NAME` | Yes | The Worker's name, in lowercase letters, digits, and dashes. Every other resource is named after it: the D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed` and `<WORKER_NAME>-crawl`. If staging and production share an account, give them different names. |
+| `WORKER_NAME` | Yes | The environment's Worker name from step 2. The D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed` and `<WORKER_NAME>-crawl`. |
 | `DB_ID` | No | The ID of a D1 database to use. When it's empty, the deploy uses `<WORKER_NAME>-db`, and creates it if it's missing. |
 | `OAUTH_KV_ID` | No | The ID of a KV namespace for sign-in grants. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
@@ -116,7 +128,7 @@ in its logs. To keep a value out of the logs entirely, make it a secret.
 | Name | Kind | What it is |
 |---|---|---|
 | `CLOUDFLARE_API_TOKEN` | Environment secret | The API token from step 2. |
-| `CLOUDFLARE_CREDENTIAL_BROKER_URL` | Variable, in the environment or the repository | The broker's `https` URL. |
+| `CLOUDFLARE_CREDENTIAL_BROKER_URL` | Environment secret, or a repository variable for both environments | The broker's `https` URL. |
 
 Set one of the two for each environment. A deploy with both, or neither,
 stops before it changes anything.
@@ -127,51 +139,45 @@ The Worker reads no secrets yet. Each secret it reads is listed under
 `secrets.required` in `apps/web/wrangler.jsonc`, gets a row here, and goes in
 each environment as an environment secret with the same name.
 
-### Production switch
+### On switches
 
 | Name | Kind | What it is |
 |---|---|---|
-| `DEPLOY_PRODUCTION` | Repository variable | `true` turns production deploys on. Leave it unset until production is ready. |
+| `DEPLOY_STAGING` | Repository variable | `true` turns staging deploys on. |
+| `DEPLOY_PRODUCTION` | Repository variable | `true` turns production deploys on. Production deploys only after staging passes. |
 
 ## 5. Deploy staging
 
-Push to `main`, or open the Actions tab, pick Deploy, and click Run workflow
-on `main`. The staging job:
+In your repo's settings, go to Secrets and variables, Actions, and
+Variables, and add the repository variable `DEPLOY_STAGING` with the value
+`true`. Then push to `main`, or open the Actions tab, pick Deploy, and click
+Run workflow on `main`.
 
-1. Writes the Wrangler config from the environment's settings.
-2. Builds the Worker.
-3. Gets the Cloudflare credential.
-4. Creates the D1 database and the queues if they are missing.
-5. Applies the D1 migrations, once the repo has any.
-6. Puts the Worker's secrets, one at a time.
-7. Deploys the Worker. On the first deploy, Wrangler creates the KV namespace
-   and Cloudflare attaches the domains.
-8. Reads `/healthz` on `PRIMARY_DOMAIN`, or on workers.dev, and checks that it
-   answers `{"ok": true, "environment": "staging"}`. It keeps trying for
-   three minutes while a new domain gets its certificate.
-
-When a step fails, its log names what to fix. Fix it in the environment and
-run the workflow again.
+When the job passes, `/healthz` on the staging domain answers
+`{"ok": true, "environment": "staging"}`. The job checks this itself, and
+retries for a few minutes while a new domain gets its certificate. If it
+gives up first, run the workflow again. When a step fails, its log names what
+to fix.
 
 ## 6. Turn on production
 
 Fill in the `production` environment the same way, with its own
-`WORKER_NAME`, domain, and OAuth app. Then, in your repo's settings, go to
-Secrets and variables, Actions, and Variables, and add the repository variable
+`WORKER_NAME`, domain, and OAuth app. Then add the repository variable
 `DEPLOY_PRODUCTION` with the value `true`.
 
 From then on, every push to `main` deploys staging, checks it, and then
-deploys production and checks that too. To pause production deploys, delete
-`DEPLOY_PRODUCTION` or set it to anything else.
+deploys production and checks that too. To pause either one, delete its
+variable or set it to anything else.
 
 ## After the first deploy
 
-- Deploys run one at a time, in the order of the pushes. A deploy in progress
-  is never cancelled.
+- One deploy runs at a time, and a deploy in progress always finishes.
+  GitHub keeps at most one more waiting. When a newer push comes in, GitHub
+  cancels the waiting one, so the newest commit deploys next.
 - To change a setting, edit it in the environment and run the Deploy workflow
   by hand.
-- Nothing is lost when the deploy runs again. It reuses the database, the KV
-  namespace, and the queues it finds.
+- A deploy reuses the database, the KV namespace, and the queues it finds, so
+  running it again loses nothing.
 
 ## The credential broker
 
@@ -181,14 +187,23 @@ the broker allows. The job:
 1. Asks GitHub for an OIDC token whose audience is the broker URL. The deploy
    jobs have the `id-token: write` permission for this.
 2. Sends `POST <broker URL>` with the header `Authorization: Bearer <OIDC token>`
-   and no body.
+   and no body. It does not follow redirects.
 3. Expects `200` with the JSON `{"token": "<Cloudflare API token>"}`. Any
    other answer stops the deploy.
 
 Before it answers, the broker verifies the OIDC token's signature against
 GitHub's keys at `https://token.actions.githubusercontent.com/.well-known/jwks`,
-and checks its claims: `iss` is `https://token.actions.githubusercontent.com`,
-`aud` is the broker URL, `repository` is your repo, `ref` is `refs/heads/main`,
-and `environment` is `staging` or `production`. It then answers with a
-Cloudflare token for that environment, with the permissions from step 2, that
-expires soon after the deploy. It answers anything else with `403`.
+and checks its claims:
+
+| Claim | Value |
+|---|---|
+| `iss` | `https://token.actions.githubusercontent.com` |
+| `aud` | The broker URL |
+| `repository` and `repository_id` | Your repo's name and its numeric ID, which stays the same if the repo is renamed |
+| `ref` | `refs/heads/main` |
+| `job_workflow_ref` | `<owner>/<repo>/.github/workflows/deploy-environment.yml@refs/heads/main`, the workflow that runs the deploy job |
+| `environment` | `staging` or `production` |
+
+It then answers with a Cloudflare token for that environment, with the
+permissions from step 2, that expires soon after the deploy. It answers
+anything else with `403`.

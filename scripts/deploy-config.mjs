@@ -9,7 +9,7 @@
 //
 //   node scripts/deploy-config.mjs staging
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -49,6 +49,7 @@ const ACCOUNT_ID = /^[0-9a-f]{32}$/i;
 const KV_ID = /^[0-9a-f]{32}$/i;
 const D1_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NAMESPACE_ID = /^[1-9][0-9]*$/;
+const GITHUB_ID = /^[1-9][0-9]*$/;
 const WORKER_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const SETTING_NAME = /^[A-Z_][A-Z0-9_]*$/;
@@ -144,9 +145,20 @@ export function deployConfig(local, target, env) {
 
   // ENVIRONMENT names the target. Every other variable takes its value from
   // the setting of the same name, so no local value reaches a deployed Worker.
+  // Wrangler prints each value when it deploys, so each one is masked.
   config.vars = { ENVIRONMENT: target, PRIMARY_DOMAIN: primary, REDIRECT_DOMAINS: redirects.join(',') };
   for (const name of Object.keys(local.vars ?? {})) {
-    if (!(name in config.vars)) config.vars[name] = read(name);
+    if (name in config.vars) continue;
+    if (name === 'ADMIN_GITHUB_IDS') {
+      const ids = read(name).split(/[\s,]+/).filter(Boolean);
+      for (const id of ids) {
+        if (GITHUB_ID.test(id)) mask(id);
+        else problems.push(`ADMIN_GITHUB_IDS has "${id}", which is not a numeric GitHub ID.`);
+      }
+      config.vars[name] = mask(ids.join(','));
+    } else {
+      config.vars[name] = mask(read(name));
+    }
   }
 
   if (local.d1_databases) {
@@ -245,12 +257,28 @@ export function writeDeployConfig({ target, env = process.env, root = REPO_ROOT,
   if (!gitIgnores(root, out)) {
     throw new Error(`git has to ignore ${DEPLOY_CONFIG}, because it holds deployed names and IDs. Add it to .gitignore.`);
   }
+  // A symlink here would carry the config into whatever file it points to,
+  // tracked or not.
+  const notAFile = new Error(`${DEPLOY_CONFIG} is a symlink or a folder. Delete it and run the deploy again.`);
+  if (lstatSync(out, { throwIfNoEntry: false })?.isFile() === false) throw notAFile;
   // Mask before anything else can print a value. Later steps' logs, including
   // Wrangler's, then show *** in its place.
   if (env.GITHUB_ACTIONS === 'true') {
     for (const value of masked) log(`::add-mask::${value}`);
   }
-  writeFileSync(out, `${JSON.stringify(config, null, 2)}\n`);
+  // O_NOFOLLOW also refuses a symlink made after the check above.
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+  let fd;
+  try {
+    fd = openSync(out, flags, 0o600);
+  } catch (error) {
+    throw error?.code === 'ELOOP' ? notAFile : error;
+  }
+  try {
+    writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`);
+  } finally {
+    closeSync(fd);
+  }
   log(`Wrote ${DEPLOY_CONFIG} for ${target}.`);
   return out;
 }

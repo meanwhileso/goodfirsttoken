@@ -1,8 +1,8 @@
 name: Deploy
 
 # A push to main deploys staging, smoke-tests it, then deploys production.
-# Production deploys stay off until the DEPLOY_PRODUCTION repository variable
-# is true. docs/self-hosting.md has the setup.
+# Each stays off until its repository variable, DEPLOY_STAGING or
+# DEPLOY_PRODUCTION, is true. docs/self-hosting.md has the setup.
 on:
   push:
     branches: [main]
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   staging:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_STAGING == 'true'
     permissions:
       contents: read
       id-token: write # for the credential broker, which trades the job's OIDC token
