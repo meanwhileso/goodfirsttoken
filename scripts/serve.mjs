@@ -7,6 +7,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 const TYPES = {
@@ -34,6 +35,8 @@ export function contentType(file) {
 export function parseRange(header, size) {
   const match = /^bytes=(\d*)-(\d*)$/.exec(header ?? '');
   if (!match || (match[1] === '' && match[2] === '')) return null;
+  // A range that ends before it starts is invalid, so the header is ignored.
+  if (match[1] !== '' && match[2] !== '' && Number(match[1]) > Number(match[2])) return null;
   let start;
   let end;
   if (match[1] === '') {
@@ -83,12 +86,12 @@ export function createStaticServer(root) {
         'content-length': range.end - range.start + 1,
       });
       if (req.method === 'HEAD') return res.end();
-      createReadStream(file, range).pipe(res);
+      pipeline(createReadStream(file, range), res, () => {});
       return;
     }
     res.writeHead(200, { ...headers, 'content-length': info.size });
     if (req.method === 'HEAD') return res.end();
-    createReadStream(file).pipe(res);
+    pipeline(createReadStream(file), res, () => {});
   });
 }
 

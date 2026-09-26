@@ -19,9 +19,9 @@ plan for the build once they land.
 
 ## Easy to miss
 
-- This repo is public. Account IDs, resource IDs, domains, and secrets come
-  from the environment and never go in a file. The pre-commit hook and CI
-  scan for them.
+- This repo is public. Secrets, account IDs, and resource IDs never go in a
+  file, and deployment domains never go in config. They come from the
+  environment. The pre-commit hook and CI scan for secrets and IDs.
 - Words on the site and in docs, issues, PRs, and commits follow
   brand/voice.md. No em dashes.
 - Tests check behavior and must fail when the code is wrong. A bug fix

@@ -72,9 +72,9 @@ no em dashes.
 
 ## Keeping the repo public-safe
 
-Secrets, Cloudflare account and resource IDs, and deployment domains come
-from the environment and never go in a file. `pnpm install` turns on a
-pre-commit hook that scans staged changes with
+Secrets and Cloudflare account and resource IDs never go in a file, and
+deployment domains never go in config. They come from the environment.
+`pnpm install` turns on a pre-commit hook that scans staged changes with
 [gitleaks](https://github.com/gitleaks/gitleaks) when you have it installed.
 CI scans the full history on every PR.
 
