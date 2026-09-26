@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import { claimStateSchema, releaseReason } from '../claims';
-import { jobName, MAX_UPDATE_TEXT } from '../feed';
+import { jobName, updateText } from '../feed';
 import {
   agentName,
   commitSha,
   count,
   githubLogin,
+  httpsUrl,
   id,
   isoTime,
   issueRef,
@@ -27,7 +28,7 @@ import {
   renderClaimSummary,
   renderFollowUp,
 } from './shared';
-import { describeDisclosure, indent, lines, numbered, plural, when } from './text';
+import { indent, lines, numbered, plural, when } from './text';
 
 // The donor's tools (spec section 7).
 
@@ -137,9 +138,13 @@ export const setInterests = defineTool({
 
 const suggestionSchema = z.object({
   ...issueLinks,
+  /** The project's code repo. It differs from the issue's repo when the project keeps issues elsewhere. */
+  project: repoName,
   /** The project tag the issue carries. */
   tag: labelName,
   prMode: z.enum(prModes),
+  /** The project's CLA, which the donor confirms before claiming, or null. */
+  claUrl: httpsUrl.nullable(),
   /** Everyone holding a slot now, with their agents. */
   claimants: z.array(claimantSchema),
   /** The project's claims per issue. */
@@ -158,10 +163,13 @@ function renderSuggestion(s: Suggestion): string {
       : `${String(s.claimants.length)} of ${String(s.slots)} slots taken: ${s.claimants
           .map((c) => `@${c.login} (${c.agent})`)
           .join(', ')}`;
+  const issueRepo = s.issue.slice(0, s.issue.indexOf('#'));
   return lines(
     `${s.issue}  ${s.title}`,
+    issueRepo !== s.project && `project: ${s.project}`,
     `${s.tag} · ${who} · PRs ${s.prMode}`,
     s.tough && `tough: claimed ${plural(s.timesClaimed, 'time')} without a merged PR`,
+    s.claUrl && `CLA: ${s.claUrl}. Ask the donor to confirm they signed it before claiming.`,
     s.url,
   );
 }
@@ -214,16 +222,20 @@ export const claimIssue = defineTool({
   text: (out) => {
     const { settings } = out.project;
     return lines(
-      `Claimed ${out.claim.issue} · ${String(out.slotsTaken)} of ${String(out.slots)} slots taken`,
+      `Claimed ${out.claim.issue} as claim ${out.claim.claimId} · ${String(out.slotsTaken)} of ${String(out.slots)} slots taken`,
       out.claim.title,
       `Issue: ${out.claim.url}`,
       `Live: ${out.claim.liveUrl}`,
       '',
       `Clone ${out.clone.url} and start from commit ${out.clone.commit}.`,
       "Follow the repo's AGENTS.md and CONTRIBUTING. If either asks for a marker of unreviewed agent work, tell the donor and leave it in place.",
-      `PRs: ${settings.prMode}. Disclose AI use: ${describeDisclosure(settings)}.`,
+      `PRs: ${settings.prMode}.`,
+      settings.disclosure.trailer !== null &&
+        `Disclose AI use with the trailer ${settings.disclosure.trailer} on each commit.`,
+      settings.disclosure.prBody !== null &&
+        `Disclose AI use with this in the PR body, word for word:\n${indent(settings.disclosure.prBody, 2)}`,
       settings.personWrittenDescription &&
-        'The donor writes the PR description. Do not draft it.',
+        'Ask the donor to write the PR description, and pass it to open_pr word for word.',
       settings.agentNotes !== '' &&
         `Notes from the maintainers, word for word:\n${indent(settings.agentNotes, 2)}`,
       'Post an update with post_update after each code change, test run, or decision: at least every 10 minutes, at most every 10 seconds. Never post local paths, environment contents, tokens, or secrets.',
@@ -242,7 +254,7 @@ export const postUpdate = defineTool({
     'Post one short line about what you just did and where, like "fixed off-by-one in parseRange (src/range.ts)". Post after each code change, test run, or decision: at least every 10 minutes, at most every 10 seconds. Repo-relative paths are fine. Never post local paths, environment contents, tokens, or secrets.',
   input: z.object({
     claimId: id,
-    text: trimmedText(MAX_UPDATE_TEXT),
+    text: updateText,
     job: jobName.optional().describe("A subagent's job, like tests. Leave it out for the main agent."),
   }),
   output: z.object({
@@ -257,16 +269,18 @@ export const postUpdate = defineTool({
   text: (out) =>
     lines(
       out.posted
-        ? 'Posted.'
-        : `Not posted: too soon. Wait ${String(out.waitSeconds ?? 10)}s, then fold this line into your next update.`,
+        ? `Posted to claim ${out.claimId}.`
+        : `Not posted to claim ${out.claimId}: too soon. Wait ${String(out.waitSeconds ?? 10)}s, then fold this line into your next update.`,
       out.prOnIssue &&
         `A PR is open on this issue: ${out.prOnIssue.url}. Stop with release_claim, or finish and submit_work.`,
     ),
 });
 
+export const MAX_PATH = 4096;
+
 const repoPath = z
   .string({ error: 'must be a path in the repo, like src/index.ts' })
-  .max(4096)
+  .max(MAX_PATH, `must be at most ${MAX_PATH.toLocaleString('en-US')} characters`)
   .refine(
     (path) =>
       !path.startsWith('/') &&
@@ -275,6 +289,31 @@ const repoPath = z
       path.split('/').every((part) => part !== '' && part !== '.' && part !== '..' && part.toLowerCase() !== '.git'),
     'must be a path inside the repo, like src/index.ts',
   );
+
+/**
+ * The first pair of paths that can't both be files in one commit: the same
+ * path twice, two paths that differ only in case, or a file and a path under
+ * it. Case counts as the same because some filesystems ignore it.
+ */
+function firstClash(paths: readonly string[]): string | undefined {
+  const files = new Map<string, string>();
+  const dirs = new Map<string, string>();
+  for (const path of paths) {
+    const lower = path.toLowerCase();
+    const parts = lower.split('/');
+    const parents = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'));
+    const other =
+      files.get(lower) ??
+      dirs.get(lower) ??
+      parents.map((parent) => files.get(parent)).find((found) => found !== undefined);
+    if (other !== undefined) {
+      return other === path ? `lists ${path} twice` : `lists ${other} and ${path}, which can't both be files`;
+    }
+    files.set(lower, path);
+    for (const parent of parents) dirs.set(parent, path);
+  }
+  return undefined;
+}
 
 const changedFile = z.object({
   path: repoPath,
@@ -308,14 +347,8 @@ export const submitWork = defineTool({
       .min(1, 'must list at least one changed file')
       .max(300, 'must list at most 300 files')
       .superRefine((files, ctx) => {
-        const seen = new Set<string>();
-        for (const file of files) {
-          if (seen.has(file.path)) {
-            ctx.addIssue({ code: 'custom', message: `lists ${file.path} twice` });
-            return;
-          }
-          seen.add(file.path);
-        }
+        const clash = firstClash(files.map((file) => file.path));
+        if (clash) ctx.addIssue({ code: 'custom', message: clash });
       }),
     summary: trimmedText(2000),
     checks: trimmedText(2000).describe('What you checked, like tests and lint runs, in your own words.'),
@@ -335,7 +368,7 @@ export const submitWork = defineTool({
     reviewReason: z.enum(reviewReasons).nullable(),
   }),
   text: (out) => {
-    const committed = `Committed ${out.commit.sha.slice(0, 7)} to ${out.branch.repo}:${out.branch.name}.`;
+    const committed = `Committed ${out.commit.sha.slice(0, 7)} to ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`;
     if (out.pr) return lines(committed, `PR #${String(out.pr.number)}: ${out.pr.url}`);
     return lines(
       committed,
@@ -355,7 +388,7 @@ export const releaseClaim = defineTool({
     reason: releaseReason.describe('Why you stopped. It is public.'),
   }),
   output: z.object({ claimId: id, issue: issueRef, state: claimStateSchema }),
-  text: (out) => `Released ${out.issue}. The slot is open again.`,
+  text: (out) => `Released claim ${out.claimId} on ${out.issue}. The slot is open again.`,
 });
 
 const reviewItemSchema = z.object({
@@ -368,6 +401,10 @@ const reviewItemSchema = z.object({
   model: z.string(),
   summary: z.string(),
   checks: z.string(),
+  /** Why the work is waiting for the donor. */
+  reviewReason: z.enum(reviewReasons),
+  /** A PR already open on the issue, from anyone. The donor decides whether a second one helps. */
+  prOnIssue: prRefSchema.nullable(),
   /** When the work expires unless its PR is opened. */
   expiresAt: isoTime,
   /** The project asks the donor to write the PR description. */
@@ -378,10 +415,14 @@ type ReviewItem = z.infer<typeof reviewItemSchema>;
 function renderReviewItem(item: ReviewItem): string {
   return lines(
     `${item.issue}  ${item.title}`,
-    `+${String(item.additions)} -${String(item.deletions)} · ${item.agent} · expires ${when(item.expiresAt)}`,
+    `claim ${item.claimId} · +${String(item.additions)} -${String(item.deletions)} · ${item.agent} (${item.model}) · expires ${when(item.expiresAt)}`,
+    `waiting because ${describeReviewReason(item.reviewReason)}`,
+    `summary: ${item.summary}`,
     `checked: ${item.checks}`,
     `diff: ${item.diffUrl}`,
-    item.personWrittenDescription && 'The donor writes the PR description.',
+    item.prOnIssue &&
+      `A PR is already open on the issue: ${item.prOnIssue.url}. Ask the donor whether a second PR helps.`,
+    item.personWrittenDescription && 'Ask the donor to write the PR description.',
   );
 }
 
@@ -412,7 +453,7 @@ export const myWork = defineTool({
 export const openPr = defineTool({
   audience: 'donor',
   description:
-    "Open the PR for work in the donor's review queue, once the donor has read the diff. When the project asks for a person-written description, pass the donor's own words and never draft them.",
+    "Open the PR for work in the donor's review queue, once the donor has read the diff. When the project asks for a person-written description, pass the description the donor wrote, word for word.",
   input: z.object({
     claimId: id,
     description: trimmedText(65_536)
@@ -420,5 +461,6 @@ export const openPr = defineTool({
       .describe('The PR description, when the donor wrote one.'),
   }),
   output: z.object({ claimId: id, issue: issueRef, state: claimStateSchema, pr: prRefSchema }),
-  text: (out) => `Opened PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}: ${out.pr.url}`,
+  text: (out) =>
+    `Opened PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
 });

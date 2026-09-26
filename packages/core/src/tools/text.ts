@@ -57,10 +57,11 @@ const SETTING_LABELS: Record<SettingKey, string> = {
 };
 
 export function describeDisclosure(settings: ProjectSettings): string {
-  const { trailer, prBodyLine } = settings.disclosure;
-  if (trailer !== null && prBodyLine) return `${trailer} trailer on each commit, and one line in the PR body`;
+  const { trailer, prBody } = settings.disclosure;
+  const inBody = prBody === null ? null : `this in the PR body: "${prBody}"`;
+  if (trailer !== null && inBody !== null) return `${trailer} trailer on each commit, and ${inBody}`;
   if (trailer !== null) return `${trailer} trailer on each commit`;
-  return 'one line in the PR body';
+  return inBody ?? '';
 }
 
 function settingValue(settings: ProjectSettings, key: SettingKey): string {

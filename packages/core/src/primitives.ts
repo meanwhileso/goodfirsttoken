@@ -5,7 +5,8 @@ import { z } from 'zod';
 // for a wrong type and a wrong shape, so a problem always reads the same way.
 
 const LOGIN = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?';
-const REPO = `${LOGIN}/(?!\\.\\.?$)[A-Za-z0-9._-]{1,100}`;
+// A repo name can't be `.` or `..`, whatever follows it, like `#1` in an issue.
+const REPO = `${LOGIN}/(?!\\.\\.?(?![A-Za-z0-9._-]))[A-Za-z0-9._-]{1,100}`;
 
 function pattern(regex: RegExp, message: string) {
   return z.string({ error: message }).regex(regex, message);

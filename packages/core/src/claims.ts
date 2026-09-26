@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   agentName,
+  commitSha,
   epochMs,
   githubLogin,
   id,
@@ -19,6 +20,10 @@ import { describeProblems, validate, type FieldProblem } from './validation';
 // the whole issue, like the claim cap or a PR already open on the issue, and
 // rules about who is asking, like "only the claim's owner posts", belong to
 // the issue room that holds every claim on the issue.
+//
+// The machine has no fact about whether a claim's PR is still open. It lets
+// a `pr_opened` claim take updates and review fixes. The caller that tracks
+// PRs refuses those with `pr_closed` once the PR has merged or closed.
 
 export const claimStates = [
   'active',
@@ -99,13 +104,18 @@ function checkTimeline(claim: Timeline, ctx: z.RefinementCtx): void {
 export const claimTimelineSchema = z.object(timelineShape).superRefine(checkTimeline);
 export type ClaimTimeline = z.infer<typeof claimTimelineSchema>;
 
-/** A stored claim: who holds which issue, with its timeline. */
+/**
+ * A stored claim: who holds which issue, the commit the work starts from, and
+ * the timeline. `submit_work` sends files relative to `startCommit`, so the
+ * submit itself doesn't repeat it.
+ */
 export const claimRecordSchema = z
   .object({
     id,
     issue: issueRef,
     login: githubLogin,
     agent: agentName,
+    startCommit: commitSha,
     ...timelineShape,
   })
   .superRefine(checkTimeline);

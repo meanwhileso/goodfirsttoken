@@ -20,6 +20,15 @@ function problemFields(result: Validated<unknown>): string[] {
   return result.ok ? [] : result.problems.map((p) => p.field);
 }
 
+/** Every session, claim, and queue item ID anywhere in a result. */
+function idsIn(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(idsIn);
+  if (value === null || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, inner]) =>
+    ['sessionId', 'claimId', 'id'].includes(key) && typeof inner === 'string' ? [inner] : idsIn(inner),
+  );
+}
+
 describe('the tool list', () => {
   test('every tool in the spec has a schema', () => {
     expect(names.sort()).toEqual(
@@ -65,10 +74,19 @@ describe('tool results', () => {
   test.each(names)('a %s result carries plain text next to its structured data', (name) => {
     const { output, mentions } = samples[name];
     const result = toolResult(name, output as never);
-    expect(result.structuredContent).toEqual(tools[name].output.parse(output));
+    // Defaults fill in what a sample leaves out, so every field it gives must come back as given.
+    expect(result.structuredContent).toMatchObject(output);
     expect(result.content).toEqual([{ type: 'text', text: expect.any(String) as unknown }]);
     const text = textOf(result);
     for (const mention of mentions) expect(text).toContain(mention);
+  });
+
+  // Terminal harnesses show only the text, so an agent reads IDs from it.
+  test.each(names)('every ID a later call needs appears in the %s text', (name) => {
+    const result = toolResult(name, samples[name].output as never);
+    const ids = idsIn(result.structuredContent);
+    const text = textOf(result);
+    for (const value of ids) expect(text, `${name} text`).toContain(value);
   });
 
   test('a result drops any field its schema does not list', () => {
@@ -116,7 +134,7 @@ describe('what each result says', () => {
     expect(text).toContain(output.branch.url);
   });
 
-  test('a claim on a project that wants a person-written description tells the agent not to draft it', () => {
+  test('a claim on a project that wants a person-written description tells the agent to ask the donor for it', () => {
     const output = samples.claim_issue.output;
     const text = textOf(
       toolResult('claim_issue', {
@@ -124,7 +142,7 @@ describe('what each result says', () => {
         project: { ...output.project, settings: { ...output.project.settings, personWrittenDescription: true } },
       }),
     );
-    expect(text).toContain('The donor writes the PR description. Do not draft it.');
+    expect(text).toContain('Ask the donor to write the PR description, and pass it to open_pr word for word.');
   });
 
   test('an empty suggestion list says so', () => {
@@ -140,10 +158,25 @@ describe('tool inputs', () => {
     ]);
   });
 
-  test('an update is one short line of at most 200 characters', () => {
+  test('an update is at most 200 characters', () => {
     const post = (text: string) => validate(tools.post_update.input, { claimId: 'c_1', text });
     expect(post('x'.repeat(200)).ok).toBe(true);
     expect(problemFields(post('x'.repeat(201)))).toEqual(['text']);
+  });
+
+  test('an update with tabs or line breaks is posted as one line', () => {
+    const result = validate(tools.post_update.input, {
+      claimId: 'c_1',
+      text: 'tests: 3 failing\n\tall in the lock screen\r\n',
+    });
+    expect(result.ok && result.value.text).toBe('tests: 3 failing all in the lock screen');
+  });
+
+  test('an issue in a repo named . or .. is rejected', () => {
+    const claim = (issue: string) => validate(tools.claim_issue.input, { sessionId: 's_1', issue });
+    expect(problemFields(claim('octo/..#1'))).toEqual(['issue']);
+    expect(problemFields(claim('octo/.#1'))).toEqual(['issue']);
+    expect(claim('octo/.github#1').ok).toBe(true);
   });
 
   const submit = (paths: string[]) =>
@@ -167,9 +200,26 @@ describe('tool inputs', () => {
     expect(problemFields(submit(['src/a.ts', 'src/a.ts']))).toEqual(['files']);
   });
 
+  test('a submit can not list a file and a path under it', () => {
+    expect(problemFields(submit(['src', 'src/a.ts']))).toEqual(['files']);
+    expect(problemFields(submit(['src/a.ts', 'src']))).toEqual(['files']);
+    expect(submit(['src/a.ts', 'src/ab.ts', 'srcs/a.ts']).ok).toBe(true);
+  });
+
+  test('a submit can not list two paths that differ only in case', () => {
+    expect(problemFields(submit(['README.md', 'readme.md']))).toEqual(['files']);
+    expect(problemFields(submit(['Src/a.ts', 'src/a.ts/b.ts']))).toEqual(['files']);
+  });
+
   test('a rejection needs a reason', () => {
     expect(problemFields(validate(tools.admin_decide.input, { id: 'q_1', decision: 'reject' }))).toEqual(['reason']);
     expect(validate(tools.admin_decide.input, { id: 'q_1', decision: 'approve' }).ok).toBe(true);
+  });
+
+  test("an admin approving a crawler find can set its policy tier", () => {
+    const decide = (tier: string) => validate(tools.admin_decide.input, { id: 'q_1', decision: 'approve', tier });
+    expect(decide('invites_agents').ok).toBe(true);
+    expect(problemFields(decide('bans_agents'))).toEqual(['tier']);
   });
 
   test('an admin pause needs a reason', () => {

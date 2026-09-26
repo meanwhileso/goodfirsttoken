@@ -24,11 +24,14 @@ export type ProjectSource = z.infer<typeof projectSourceSchema>;
 
 /** What a project's own docs say about agent work, for a project listed from its policy. */
 export const policyTiers = ['invites_agents', 'allows_with_conditions'] as const;
+export const policyTierSchema = z.enum(policyTiers, {
+  error: 'must be invites_agents or allows_with_conditions',
+});
 
 export const policySchema = z.object({
   quote: trimmedText(2000),
   url: httpsUrl,
-  tier: z.enum(policyTiers, { error: 'must be invites_agents or allows_with_conditions' }),
+  tier: policyTierSchema,
 });
 export type Policy = z.infer<typeof policySchema>;
 
@@ -58,17 +61,23 @@ const trailerName = z
   .string({ error: 'must be a trailer name like Assisted-by, or null for none' })
   .regex(/^[A-Za-z][A-Za-z0-9-]{0,39}$/, 'must be a trailer name like Assisted-by, or null for none');
 
-/** How AI use is disclosed: a commit trailer, a line in the PR body, or both. */
+export const MAX_PR_BODY_DISCLOSURE = 1000;
+
+/**
+ * How AI use is disclosed: a commit trailer, text the PR body must carry, or
+ * both. The text is the project's own wording, like the line its PR template
+ * asks for.
+ */
 export const disclosureSchema = z
   .strictObject(
     {
       trailer: trailerName.nullable(),
-      prBodyLine: z.boolean({ error: 'must be true or false' }),
+      prBody: trimmedText(MAX_PR_BODY_DISCLOSURE).nullable(),
     },
-    { error: 'must be an object with trailer and prBodyLine' },
+    { error: 'must be an object with trailer and prBody' },
   )
-  .refine((d) => d.trailer !== null || d.prBodyLine, {
-    message: 'must use a commit trailer, a line in the PR body, or both',
+  .refine((d) => d.trailer !== null || d.prBody !== null, {
+    message: 'must use a commit trailer, text in the PR body, or both',
   });
 export type Disclosure = z.infer<typeof disclosureSchema>;
 
@@ -85,6 +94,7 @@ const settingFields = {
   claUrl: httpsUrl.nullable(),
   agentNotes: z
     .string({ error: 'must be text' })
+    .trim()
     .max(MAX_AGENT_NOTES, `must be at most ${MAX_AGENT_NOTES.toLocaleString('en-US')} characters`),
   claimsPerIssue: wholeNumber(1, 10),
   openPrsPerDonor: wholeNumber(1, 10),
@@ -94,7 +104,10 @@ export const settingKeys = Object.keys(settingFields) as (keyof typeof settingFi
 export const settingKeySchema = z.enum(settingKeys as [SettingKey, ...SettingKey[]]);
 export type SettingKey = keyof typeof settingFields;
 
-export const defaultDisclosure: Disclosure = { trailer: 'Assisted-by', prBodyLine: true };
+export const defaultDisclosure: Disclosure = {
+  trailer: 'Assisted-by',
+  prBody: 'Written with a coding agent through Good First Token.',
+};
 
 /**
  * A project's settings. Every one but `tags` has a default. `issueRepo` is

@@ -29,6 +29,14 @@ export type FeedEventKind = z.infer<typeof feedEventKindSchema>;
 /** The longest line an agent can post. */
 export const MAX_UPDATE_TEXT = 200;
 
+/** A posted line. Tabs and line breaks fold into single spaces, so a post is always one line. */
+export const updateText = z
+  .string({ error: 'must be text' })
+  .overwrite((text) => text.replace(/\s*[\t\r\n]+\s*/g, ' '))
+  .trim()
+  .min(1, 'must not be empty')
+  .max(MAX_UPDATE_TEXT, `must be at most ${String(MAX_UPDATE_TEXT)} characters`);
+
 /** A subagent's job, like `tests`, shown with the lines it posts. */
 export const jobName = z
   .string({ error: 'must be a short name for the job, like tests' })

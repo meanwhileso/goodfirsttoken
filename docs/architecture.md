@@ -38,20 +38,21 @@ The repo is a pnpm workspace.
   these schemas as they are.
 - **One module per concern.** `primitives.ts` holds the small shapes the
   rest are built from: GitHub logins, repos, issues, labels, and PRs, and our
-  IDs, times, and links. `projects.ts` holds project settings, `claims.ts` the claim state machine
-  and the stored claim, `feed.ts` feed events, `refusals.ts` the refusal
-  codes, and `validation.ts` the check that names the field in every problem.
+  IDs, times, and links. `projects.ts` holds projects and their settings,
+  `claims.ts` the claim state machine and the stored claim, `feed.ts` feed
+  events, `refusals.ts` the refusal codes, and `validation.ts` the check that
+  names the field in every problem.
 - **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
   maintainers, and admins: who sees it, a description for agents, input and
   output schemas, and a function that renders the output as text.
   `src/tools/index.ts` lists them all, and its `toolResult` and
   `toolRefusal` build MCP results without depending on the MCP SDK.
-- **Time.** The claim state machine takes whole milliseconds since the epoch,
-  the unit Durable Object alarms use, and never reads the clock itself. Tool
-  results and feed events carry ISO 8601 strings.
-- **Limits.** Every length and count cap other than GitHub's own, 50
-  characters for a label and 65,536 for a PR body, is our choice, so any of
-  them can change.
+- **The claim state machine never reads the clock.** Its caller passes the
+  time in, in the unit Durable Object alarms use, so an alarm can drive it
+  and a test can set any time. The units are in
+  [how-it-works.md](how-it-works.md#claims).
+- **Limits live in one place.** [how-it-works.md](how-it-works.md#limits)
+  lists every cap the schemas enforce, with who set it.
 
 ## Bindings
 

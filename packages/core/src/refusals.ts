@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * Why the server said no. A refusal is an answer, not a crash: the agent reads
- * the message and tells the donor or tries something else.
+ * Why the server said no. The agent reads the message, then tells the donor
+ * or tries something else.
  */
 export const refusalCodes = [
   // One claim's own rules (spec section 6), from nextClaimState.
@@ -10,6 +10,10 @@ export const refusalCodes = [
   'claim_released',
   'pr_already_opened',
   'not_submitted',
+  // The claim's PR merged or closed, so the claim takes no more updates or
+  // fixes. The code that tracks PRs decides this, since nextClaimState has no
+  // PR state.
+  'pr_closed',
   // Claiming an issue (spec section 6, eligible issues).
   'project_not_open',
   'issue_not_eligible',

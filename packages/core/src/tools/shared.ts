@@ -68,14 +68,14 @@ export function renderClaimSummary(claim: ClaimSummary): string {
   const expires = claim.expiresAt ? ` · expires ${when(claim.expiresAt)}` : '';
   return lines(
     `${claim.issue}  ${claim.title}`,
-    `${claimStateLabel(claim.state)}${expires} · live at ${claim.liveUrl}`,
+    `claim ${claim.claimId} · ${claimStateLabel(claim.state)}${expires} · live at ${claim.liveUrl}`,
   );
 }
 
 export function renderFollowUp(followUp: FollowUp): string {
   return lines(
     `${followUp.pr.repo}#${String(followUp.pr.number)}  ${followUp.title}`,
-    `@${followUp.reviewer} asked for changes: ${firstLine(followUp.comment)}`,
+    `claim ${followUp.claimId} · @${followUp.reviewer} asked for changes: ${firstLine(followUp.comment)}`,
     followUp.commentUrl,
   );
 }

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { count, githubLogin, id, isoTime, labelName, repoName, trimmedText } from '../primitives';
 import {
   policySchema,
+  policyTierSchema,
   projectSettingsSchema,
   projectSourceSchema,
   projectStatusSchema,
@@ -78,12 +79,15 @@ export const adminQueue = defineTool({
 export const adminDecide = defineTool({
   audience: 'admin',
   description:
-    'Approve or reject a queue item. A rejection needs a reason, which the maintainer sees. For a crawler find, pass the settings and tags you confirmed.',
+    'Approve or reject a queue item. A rejection needs a reason, which the maintainer sees. For a crawler find, pass the policy tier, settings, and tags you confirmed.',
   input: z
     .object({
       id,
       decision: z.enum(['approve', 'reject']),
       reason: trimmedText(500).optional(),
+      tier: policyTierSchema
+        .optional()
+        .describe("For a crawler find, the policy tier you confirmed or changed."),
       settings: projectSettingsSchema.optional(),
     })
     .superRefine((input, ctx) => {

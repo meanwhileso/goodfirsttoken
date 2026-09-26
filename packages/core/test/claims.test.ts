@@ -10,6 +10,7 @@ import {
   validate,
   type ClaimEvent,
   type ClaimTimeline,
+  type Validated,
 } from '../src/index';
 
 const MINUTE = 60_000;
@@ -30,6 +31,10 @@ function apply(claim: ClaimTimeline, event: ClaimEvent, now: number): ClaimTimel
   const result = nextClaimState(claim, event, now);
   if (!result.ok) throw new Error(`${event.kind} was refused: ${result.refusal.message}`);
   return result.claim;
+}
+
+function problemFieldsOf(result: Validated<unknown>): string[] {
+  return result.ok ? [] : result.problems.map((p) => p.field);
 }
 
 function stateAt(claim: ClaimTimeline, now: number) {
@@ -62,6 +67,12 @@ describe('working on a claim', () => {
     const claim = apply(newClaim(claimedAt), update, claimedAt + 20 * MINUTE);
     expect(stateAt(claim, claimedAt + 49 * MINUTE)).toBe('active');
     expect(stateAt(claim, claimedAt + 50 * MINUTE)).toBe('paused');
+  });
+
+  test('an update stamped earlier than the last one keeps the later 30 minutes', () => {
+    const claim = apply(newClaim(claimedAt), update, claimedAt + 20 * MINUTE);
+    const late = apply(claim, update, claimedAt + 10 * MINUTE);
+    expect(stateAt(late, claimedAt + 49 * MINUTE)).toBe('active');
   });
 
   test('a paused claim still holds its slot', () => {
@@ -261,8 +272,18 @@ describe('stored claims', () => {
     issue: 'meanwhileso/goodfirsttoken#18',
     login: 'priya',
     agent: 'claude-code',
+    startCommit: '4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6',
     ...newClaim(claimedAt),
   };
+
+  test('a stored claim records the commit its work starts from', () => {
+    const withoutStart: Partial<typeof record> = { ...record };
+    delete withoutStart.startCommit;
+    expect(problemFieldsOf(validate(claimRecordSchema, withoutStart))).toEqual(['startCommit']);
+    expect(problemFieldsOf(validate(claimRecordSchema, { ...record, startCommit: 'main' }))).toEqual([
+      'startCommit',
+    ]);
+  });
 
   test('a new claim is a valid stored claim', () => {
     expect(validate(claimRecordSchema, record).ok).toBe(true);
@@ -313,7 +334,7 @@ describe('stored claims', () => {
 });
 
 describe('bad input', () => {
-  test('a claim with a malformed time is refused, never treated as a working claim', () => {
+  test('a claim with a malformed time is refused as invalid input', () => {
     const broken = { ...newClaim(claimedAt), lastUpdateAt: Number.NaN };
     const result = nextClaimState(broken, tick, claimedAt + HOUR);
     expect(result.ok).toBe(false);

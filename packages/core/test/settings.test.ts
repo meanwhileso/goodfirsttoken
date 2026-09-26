@@ -30,6 +30,10 @@ describe('project settings', () => {
     expect(settings({ tags: ['help wanted'], prMode: 'automatic' }).prMode).toBe('automatic');
   });
 
+  test('notes for agents that are only spaces are saved as empty', () => {
+    expect(settings({ tags: ['help wanted'], agentNotes: '  \n\t ' }).agentNotes).toBe('');
+  });
+
   test('settings a project leaves out take the defaults in the settings table', () => {
     expect(settings({ tags: ['help wanted'] })).toEqual({
       tags: ['help wanted'],
@@ -37,13 +41,21 @@ describe('project settings', () => {
       issueRepo: null,
       prMode: 'reviewed',
       whoCanClaim: 'anyone',
-      disclosure: { trailer: 'Assisted-by', prBodyLine: true },
+      disclosure: {
+        trailer: 'Assisted-by',
+        prBody: 'Written with a coding agent through Good First Token.',
+      },
       personWrittenDescription: false,
       claUrl: null,
       agentNotes: '',
       claimsPerIssue: 3,
       openPrsPerDonor: 2,
     });
+  });
+
+  test('a project can ask for its own disclosure text in the PR body, with no trailer', () => {
+    const disclosure = { trailer: null, prBody: 'Fill in the AI section of the PR template.' };
+    expect(settings({ tags: ['help wanted'], disclosure }).disclosure).toEqual(disclosure);
   });
 
   test.each([
@@ -55,8 +67,10 @@ describe('project settings', () => {
     ['issueRepo', { issueRepo: 'not a repo' }],
     ['prMode', { prMode: 'yolo' }],
     ['whoCanClaim', { whoCanClaim: 'friends' }],
-    ['disclosure', { disclosure: { trailer: null, prBodyLine: false } }],
-    ['disclosure.trailer', { disclosure: { trailer: 'Assisted by', prBodyLine: true } }],
+    ['disclosure', { disclosure: { trailer: null, prBody: null } }],
+    ['disclosure.trailer', { disclosure: { trailer: 'Assisted by', prBody: null } }],
+    ['disclosure.prBody', { disclosure: { trailer: null, prBody: '   ' } }],
+    ['disclosure.prBodyLine', { disclosure: { trailer: 'Assisted-by', prBody: null, prBodyLine: true } }],
     ['personWrittenDescription', { personWrittenDescription: 'yes' }],
     ['claUrl', { claUrl: 'http://example.com/cla' }],
     ['claUrl', { claUrl: 'sign it please' }],
@@ -93,6 +107,11 @@ describe('changing settings', () => {
 
   test('a change keeps every setting it leaves out', () => {
     const result = updateProjectSettings(current, { openPrsPerDonor: 4 });
+    expect(result).toEqual({ ok: true, value: { ...current, openPrsPerDonor: 4 } });
+  });
+
+  test('a change that sends a setting as undefined keeps its value', () => {
+    const result = updateProjectSettings(current, { prMode: undefined, openPrsPerDonor: 4 });
     expect(result).toEqual({ ok: true, value: { ...current, openPrsPerDonor: 4 } });
   });
 
