@@ -18,7 +18,8 @@ describe the code as it is.
 - `pnpm dev` serves the site at http://localhost:5173, with no accounts and
   no network. It starts a fake GitHub with sample data beside it.
   `pnpm seed` resets that data.
-- `pnpm check` runs lint and typecheck.
+- `pnpm check` runs lint, typecheck, and `pnpm skills:check`.
+- `pnpm skills:build` builds the skills and plugins from skill-src/.
 - `pnpm test` runs the unit tests, the Worker's inside the Workers runtime.
 - `pnpm test:e2e` runs the Playwright tests against a production build. Run
   `pnpm exec playwright install chromium` once first.
@@ -37,6 +38,9 @@ describe the code as it is.
   After changing that file, run `pnpm install` or
   `pnpm --filter @goodfirsttoken/web types`, or `pnpm typecheck` fails. Plain
   `wrangler types` writes the wrong variable types.
+- skills/, .claude-plugin/, and the skills/ and .claude-plugin/ folders
+  inside each plugin under plugins/ are generated. Edit skill-src/ and
+  follow "Changing a skill or a plugin" in CONTRIBUTING.md.
 - Words on the site and in docs, issues, PRs, and commits follow
   brand/voice.md. No em dashes.
 - Tests check behavior and must fail when the code is wrong. A bug fix
