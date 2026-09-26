@@ -7,7 +7,7 @@
 //
 // It names only the package versions the pull request adds, which its diff
 // already shows. A vulnerable version already on main is never printed here.
-// The weekly scan files it in code scanning, where only maintainers can see it.
+// The scans of main file it in code scanning, where only maintainers can see it.
 import { readFileSync } from 'node:fs';
 
 // CVSS base scores of 7.0 and up are high or critical.
@@ -28,9 +28,6 @@ function isHighOrWorse(group, vulnerabilities) {
 // version and advisory, so a pair that is in both reports counts once.
 function highAdvisories(file) {
   const report = JSON.parse(readFileSync(file, 'utf8'));
-  if (!Array.isArray(report?.results)) {
-    throw new Error(`${file} is not an OSV-Scanner JSON report`);
-  }
   const found = new Map();
   for (const result of report.results) {
     for (const { package: pkg, groups = [], vulnerabilities = [] } of result.packages ?? []) {

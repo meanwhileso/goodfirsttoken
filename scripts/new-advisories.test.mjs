@@ -1,14 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { afterEach, beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./new-advisories.mjs', import.meta.url));
-const dir = mkdtempSync(path.join(tmpdir(), 'new-advisories-'));
+let dir;
 let files = 0;
+
+beforeEach(() => {
+  dir = mkdtempSync(path.join(tmpdir(), 'new-advisories-'));
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
 
 // Builds an OSV-Scanner JSON report in the shape `osv-scanner --format json`
 // writes for a pnpm lockfile.
