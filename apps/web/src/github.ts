@@ -4,9 +4,9 @@ import { env } from 'cloudflare:workers';
 // token of the person the call is for. There is no default token, so a call
 // can only act as the person it names.
 //
-// GitHub's base URLs come from config: GitHub itself in staging and
-// production, and the fake in packages/github-fake in local development and
-// tests.
+// GitHub's base URLs come from GH_API_URL and GH_WEB_URL. Local development
+// and tests point them at the fake in packages/github-fake. A deploy that
+// leaves them unset gets empty values, and then calls go to GitHub itself.
 
 // https://docs.github.com/en/rest/about-the-rest-api/api-versions
 const API_VERSION = '2022-11-28';
@@ -22,7 +22,11 @@ export class GitHubError extends Error {
 }
 
 export function gitHubUrls() {
-  return { api: env.GITHUB_API_URL, web: env.GITHUB_WEB_URL };
+  const vars: Partial<Pick<Env, 'GH_API_URL' | 'GH_WEB_URL'>> = env;
+  return {
+    api: vars.GH_API_URL || 'https://api.github.com',
+    web: vars.GH_WEB_URL || 'https://github.com',
+  };
 }
 
 // GitHub refuses API calls that carry no User-Agent.

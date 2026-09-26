@@ -35,8 +35,9 @@ The repo is a pnpm workspace.
 - **Bindings and variables come from `cloudflare:workers`,** imported as
   `env`, so any module can read them.
 - **`src/github.ts` makes every call to GitHub,** REST and GraphQL, at the
-  base URLs in `GITHUB_API_URL`. Each call takes the token it runs with as
-  an argument. There is no default token.
+  base URL in `GH_API_URL`, or `https://api.github.com` when that is empty.
+  Each call takes the token it runs with as an argument. There is no
+  default token.
 
 ### packages/core
 
@@ -144,12 +145,15 @@ its version did not go up.
 every binding the Worker reads, under local names. Staging and production are
 not in the repo. The deploy workflow (#32) will write their config from the
 GitHub environment's variables, including the resource names and IDs.
+GitHub reserves variable names that start with `GITHUB_`, so the GitHub URLs
+are `GH_API_URL` and `GH_WEB_URL`. A deploy that leaves them unset gets empty
+strings, and `src/github.ts` then calls GitHub itself.
 
 | Binding | Kind | Used from |
 |---|---|---|
 | `ENVIRONMENT` | Variable: `development`, `staging`, or `production` | Now, by `/healthz` |
-| `GITHUB_API_URL` | Variable: GitHub's REST and GraphQL API. `https://api.github.com` when deployed, the GitHub fake locally | Now, by `src/github.ts` |
-| `GITHUB_WEB_URL` | Variable: github.com itself, for OAuth sign-in. `https://github.com` when deployed, the GitHub fake locally | #8 |
+| `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
+| `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/github.ts`, for #8 |
 | `DB` | D1 | #5 |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
 | `FEED_QUEUE` | Queue producer | #14 |

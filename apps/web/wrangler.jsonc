@@ -16,11 +16,13 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "ENVIRONMENT": "development",
-    // GitHub's base URLs. Locally they point at the GitHub fake that
-    // `pnpm dev` starts (packages/github-fake). Staging and production use
-    // https://api.github.com and https://github.com.
-    "GITHUB_API_URL": "http://127.0.0.1:8944/api",
-    "GITHUB_WEB_URL": "http://127.0.0.1:8944"
+    // GitHub's base URLs, pointing at the GitHub fake that `pnpm dev`
+    // starts (packages/github-fake). The names avoid GITHUB_, which GitHub
+    // reserves, so a deploy can fill them from a GitHub environment. A
+    // deploy that leaves them empty calls https://api.github.com and
+    // https://github.com (src/github.ts).
+    "GH_API_URL": "http://127.0.0.1:8944/api",
+    "GH_WEB_URL": "http://127.0.0.1:8944"
   },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],

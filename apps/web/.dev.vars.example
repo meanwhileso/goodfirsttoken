@@ -10,7 +10,8 @@
 ENVIRONMENT=development
 
 # GitHub's REST and GraphQL API, and github.com itself for sign-in. The
-# defaults point at the GitHub fake that `pnpm dev` starts. Staging and
-# production use https://api.github.com and https://github.com.
-GITHUB_API_URL=http://127.0.0.1:8944/api
-GITHUB_WEB_URL=http://127.0.0.1:8944
+# defaults point at the GitHub fake that `pnpm dev` starts. Left empty, the
+# app calls https://api.github.com and https://github.com, which is what a
+# deploy gets when its GitHub environment doesn't set them.
+GH_API_URL=http://127.0.0.1:8944/api
+GH_WEB_URL=http://127.0.0.1:8944

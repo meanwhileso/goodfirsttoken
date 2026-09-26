@@ -17,8 +17,8 @@ export default defineConfig({
       miniflare: {
         bindings: {
           ENVIRONMENT: 'staging',
-          GITHUB_API_URL: 'https://api.github.test',
-          GITHUB_WEB_URL: 'https://github.test',
+          GH_API_URL: 'https://api.github.test',
+          GH_WEB_URL: 'https://github.test',
         },
       },
     }),
