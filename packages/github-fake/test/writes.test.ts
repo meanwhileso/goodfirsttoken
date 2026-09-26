@@ -198,6 +198,26 @@ test("a collaborator working on a branch in the repo is the commit's author and 
   });
 });
 
+test("a PR's head must come from the base repo or a fork of it", async () => {
+  const sam = fake.tokenFor('sam');
+  await rest(fake, 'POST', '/repos/sample-owner/sample-app/forks', { token: sam, body: {} });
+  await rest(fake, 'POST', '/repos/sam/sample-app/git/refs', {
+    token: sam,
+    body: { ref: 'refs/heads/elsewhere', sha: await head('sam/sample-app', 'main') },
+  });
+  await commitFile(sam, 'sam/sample-app', 'elsewhere', 'elsewhere.txt');
+
+  const reply = await rest<{ errors: { field?: string }[] }>(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: sam,
+    body: { title: 'Elsewhere', head: 'sam:elsewhere', head_repo: 'sam/sample-app', base: 'main' },
+  });
+  const open = await rest<unknown[]>(fake, 'GET', `${UPSTREAM}/pulls?head=sam:elsewhere`);
+
+  expect(reply.status).toBe(422);
+  expect(reply.body.errors).toMatchObject([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
+  expect(open.body).toEqual([]);
+});
+
 test('GitHub refuses a second open PR from the same branch, and a PR with no new commits', async () => {
   const { token } = await forkWithBranch('sam', 'twice');
   const open = () =>

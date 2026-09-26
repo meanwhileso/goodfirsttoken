@@ -406,6 +406,10 @@ export function openPull(state: FakeState, base: RepoRecord, input: OpenPullInpu
     : key(headOwner) === key(base.owner)
       ? base
       : forkOf(state, base, headOwner);
+  // The head must be the base repo or a fork in the same network.
+  if (input.headRepo && (!headRepo || networkRoot(state, headRepo) !== networkRoot(state, base))) {
+    throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
+  }
   const headSha = headRepo?.branches[branch];
   if (!headRepo || headSha === undefined) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head' }]);
