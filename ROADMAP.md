@@ -217,19 +217,28 @@ flowchart TD
 ## Maintainer steps
 
 These need access to accounts, so they are done by maintainers and have no issues.
+[docs/self-hosting.md](docs/self-hosting.md) has the details for each deploy step.
 
-Before the first staging deploy, once #32 lands:
+To start staging deploys, once #32 merges:
 
-- Create the staging and production GitHub OAuth apps. GitHub has no API for this.
-- Create the Cloudflare resources and the deploy credential, and fill the `staging` and `production`
-  GitHub environments.
-- Attach the static host's custom domain with cookie-free settings, and the redirect domain.
+- Create the staging and production GitHub OAuth apps, with the callback URL
+  `https://<domain>/auth/callback`. GitHub has no API for this.
+- Create the Cloudflare API token or the credential broker, and add each domain's zone to the
+  Cloudflare account. The deploy creates D1, the queues, and KV, and attaches the primary and redirect
+  domains itself.
+- Create the `staging` and `production` GitHub environments, limit each to `main`, and fill them with
+  their settings as secrets.
+- Set the repository variable `DEPLOY_STAGING` to `true`.
 
-Before launch, once #34 lands:
+Once #33 merges:
+
+- Attach the static host's custom domain with cookie-free settings.
+
+Before launch, once #34 merges:
 
 - Register `meanwhileso/goodfirsttoken` as project number one and tag its seed issues.
 - Run the real harnesses against staging. These runs spend real tokens, so they are never automatic.
-- Turn on production deploys. The first production deploy is the launch.
+- Set the repository variable `DEPLOY_PRODUCTION` to `true`. The first production deploy is the launch.
 
 ## After v1
 
