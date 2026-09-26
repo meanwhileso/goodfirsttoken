@@ -3,8 +3,8 @@
 Good First Token (goodfirsttoken.org) lets people point their own coding
 agent at open source issues that maintainers tagged for outside help. This
 repo will hold the whole thing: the site, the MCP server, and the agent
-skills. Today it holds the design, and ROADMAP.md and docs/specs/ hold the
-plan for the build once they land.
+skills. Today it holds the design. docs/specs/v1.md is the plan for the
+build, and ROADMAP.md orders it into issues, one per session.
 
 - Who it's for, how it looks, how it sounds: brand/brand.md,
   brand/design.md, brand/voice.md
