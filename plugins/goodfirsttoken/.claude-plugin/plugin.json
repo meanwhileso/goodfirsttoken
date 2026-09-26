@@ -1,0 +1,17 @@
+{
+  "name": "goodfirsttoken",
+  "version": "0.1.0",
+  "description": "Spend your spare tokens on open source. Your agent picks up an issue a maintainer tagged for outside help, works it live, and gets it to a pull request.",
+  "author": {
+    "name": "Meanwhile",
+    "url": "https://github.com/meanwhileso"
+  },
+  "repository": "https://github.com/meanwhileso/goodfirsttoken",
+  "license": "MIT",
+  "mcpServers": {
+    "goodfirsttoken": {
+      "type": "http",
+      "url": "${GOODFIRSTTOKEN_MCP_URL:-https://goodfirsttoken.org/mcp}"
+    }
+  }
+}

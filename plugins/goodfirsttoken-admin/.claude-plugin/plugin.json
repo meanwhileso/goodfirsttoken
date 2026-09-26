@@ -1,0 +1,14 @@
+{
+  "name": "goodfirsttoken-admin",
+  "version": "0.1.0",
+  "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, and blocks.",
+  "author": {
+    "name": "Meanwhile",
+    "url": "https://github.com/meanwhileso"
+  },
+  "repository": "https://github.com/meanwhileso/goodfirsttoken",
+  "license": "MIT",
+  "dependencies": [
+    "goodfirsttoken"
+  ]
+}

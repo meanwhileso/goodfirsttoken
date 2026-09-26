@@ -16,8 +16,10 @@
     "test:e2e": "pnpm --filter @goodfirsttoken/web test:e2e",
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
-    "check": "pnpm lint && pnpm typecheck",
+    "check": "pnpm lint && pnpm typecheck && pnpm skills:check",
     "prototype": "node scripts/serve.mjs prototype",
+    "skills:build": "node scripts/skills.mjs build",
+    "skills:check": "node scripts/skills.mjs check",
     "video:stills": "node video/capture.mjs stills",
     "video:render": "node video/capture.mjs render"
   },
