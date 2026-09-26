@@ -12,7 +12,11 @@ The repo is a pnpm workspace.
 |---|---|
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
-| `scripts/` | The static server behind `pnpm prototype`, with its tests. |
+| `scripts/` | The static server behind `pnpm prototype` and the skill build behind `pnpm skills:build`, with their tests. |
+| `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
+| `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
+| `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
+| `.claude-plugin/marketplace.json` | Makes the repo a Claude Code plugin marketplace that lists both plugins. Built from `skill-src/`. |
 | `brand/`, `prototype/`, `video/` | The brand docs, the clickable prototype the site is built from, and the launch video source. |
 
 ### apps/web
@@ -53,6 +57,82 @@ The repo is a pnpm workspace.
   [how-it-works.md](how-it-works.md#claims).
 - **Limits live in one place.** [how-it-works.md](how-it-works.md#limits)
   lists every cap the schemas enforce, with who set it.
+
+## Skills and plugins
+
+`scripts/skills.mjs` builds every skill from its one source file.
+`pnpm skills:build` writes the copies. `pnpm skills:check` fails when a
+committed copy is not what the build writes, or when a plugin changed and
+its version did not go up.
+
+| Source | Becomes |
+|---|---|
+| `skill-src/<name>.md` with `plugin: goodfirsttoken` | `skills/goodfirsttoken-<name>/SKILL.md`, and `plugins/goodfirsttoken/skills/<name>/SKILL.md` |
+| `skill-src/<name>.md` with `plugin: goodfirsttoken-admin` | `plugins/goodfirsttoken-admin/skills/<name>/SKILL.md` only |
+| `skill-src/plugins.json` | Each plugin's `.claude-plugin/plugin.json`, and `.claude-plugin/marketplace.json` |
+
+- **A source file** starts with frontmatter that sets `description` and
+  `plugin`, one top-level key per line. Other keys, like `argument-hint`,
+  are copied into both copies as written. The build sets `name`, and
+  `{{MCP_URL}}` in the body becomes the MCP server's URL.
+- **The copies are committed,** because installers read them straight from
+  GitHub. `skills/`, `.claude-plugin/`, and each plugin's `skills/` and
+  `.claude-plugin/` folders hold only what the build writes, and the build
+  removes anything else there.
+- **The MCP server URL is set once,** as `PRODUCTION_MCP_URL` in
+  `scripts/skills.mjs`. The plugin's server config is
+  `${GOODFIRSTTOKEN_MCP_URL:-<that URL>}`, which Claude Code expands when it
+  starts the server, so setting the variable points an installed plugin at
+  another server. Building with the variable set writes copies for that
+  server, such as `http://localhost:5173/mcp` for `pnpm dev`.
+  `pnpm skills:check` always compares with a production build, so those
+  copies fail CI.
+- **Versions.** Each plugin's version is in `skill-src/plugins.json`.
+  `pnpm skills:check` compares every file under `plugins/<name>/` with the
+  same files at a base commit, read with `git show`. An added or removed
+  file counts, and files git ignores are left out. When anything differs,
+  the version must be higher than the one the base published. A lower
+  version always fails. A plugin the base doesn't have can start at any
+  version. The rule covers hand-written files in a plugin folder, like a
+  hook, as well as built ones.
+- **The base** is `origin/main`, or the ref given with `--base <ref>` or
+  `SKILLS_BASE_REF`. A base that can't be found fails the check. Because the
+  base is the branch the work merges into, one raise covers every later
+  change in the same pull request.
+- **In CI** the `test` job checks out two commits and compares with
+  `HEAD^1`. For a pull request, the checkout is GitHub's merge commit, so
+  `HEAD^1` is the base branch's tip. On a push to main, `HEAD^1` is the
+  previous main, which holds for a squash merge and for a merge commit. A
+  rebase merge of a pull request with several commits compares only its
+  last commit, so it can fail on main after passing on the pull request.
+- **The admin plugin** lists `goodfirsttoken` as a dependency and has no MCP
+  server of its own. Installing it installs the donor plugin too, so an admin
+  connects to the server once.
+
+### What the installers read
+
+- **`npx skills add`** reads `skills/`. We checked version 1.7.0 of the
+  `skills` package. It also reads `.claude-plugin/marketplace.json` and
+  scans each listed plugin's `skills/` folder, so with nothing more it would
+  also offer the plugin copies, the admin skill among them. The plugin
+  copies carry `metadata.internal: true`, which it skips by default. So by
+  default it installs only `skills/`. Run from a local checkout, it lists
+  and installs exactly the four `goodfirsttoken-*` skills. This answers
+  [open question 2](specs/v1.md#open-questions).
+- **Two ways around that default** install a plugin copy: naming it with
+  `--skill`, like `--skill admin` or `--skill give`, and setting
+  `INSTALL_INTERNAL_SKILLS=1`. The admin skill holds nothing secret. The
+  server checks that the caller is an admin on every admin tool call, which
+  #11 builds.
+- **Claude Code** reads `.claude-plugin/marketplace.json` and each plugin's
+  `.claude-plugin/plugin.json`, and loads each plugin's `skills/` folder.
+  It ignores `metadata` in a skill. A plugin from a marketplace added as a
+  local folder loads from that folder at each session start. Everyone else
+  gets a cached copy, which Claude Code replaces only when the version
+  changed. That happens the next time the person updates the plugin or the
+  marketplace, or automatically if they turned on auto-update for it.
+  Auto-update is off by default for a marketplace added from GitHub, like
+  this one.
 
 ## Bindings
 
@@ -117,7 +197,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
 - **The core package's tests** run with plain Vitest in Node, since the
   package is pure. They live in `packages/core/test/`.
-- **The static server's tests** in `scripts/` use Node's own test runner.
+- **The tests for `scripts/`**, the static server and the skill build, use
+  Node's own test runner.
 
 `pnpm test` runs all of them but Playwright. `pnpm test:e2e` runs Playwright.
 
@@ -130,7 +211,7 @@ Every action is pinned to a commit SHA.
 
 | Job | What it runs |
 |---|---|
-| `test` | `pnpm test` |
+| `test` | `pnpm test`, then `pnpm skills:check` with `HEAD^1` as the base |
 | `lint` | `pnpm lint`: ESLint with type-aware rules from typescript-eslint |
 | `typecheck` | `pnpm typecheck` |
 | `e2e` | `pnpm test:e2e` in Chromium, keeping the report and traces when it fails |
@@ -157,3 +238,12 @@ Branch protection requires `test` and `leaks` by name.
   block. Ours holds a plain rendering of the result, because terminal
   harnesses show that text to the agent and the donor. The data is already in
   `structuredContent`.
+- **The production MCP URL is in the repo.** Installers read the plugin and
+  the skills from GitHub, with no environment to supply an address, so the
+  URL is part of what we publish. No deploy reads it. Deploy config still
+  never names a domain.
+- **The skill drift check runs in the `test` job,** which branch protection
+  requires, so a hand edit to a generated file blocks the merge.
+- **Plugin versions are compared with the base branch.** Nothing a pull
+  request edits can get around the rule, and one raise covers the whole
+  pull request.
