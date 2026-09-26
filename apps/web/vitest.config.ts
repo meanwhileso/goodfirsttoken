@@ -25,5 +25,8 @@ export default defineConfig({
   ],
   test: {
     include: ['test/**/*.test.ts'],
+    // A test file's first request loads the whole Worker, which takes a few
+    // seconds, and more when test files run side by side on a busy machine.
+    testTimeout: 15_000,
   },
 });
