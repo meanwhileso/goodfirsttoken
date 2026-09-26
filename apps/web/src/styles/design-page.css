@@ -1,0 +1,31 @@
+/* Layout for the /design page only. The components it shows are styled in
+   components.css. */
+
+.ds-main { padding-top: 56px; }
+.ds-title { font-size: clamp(44px, 7vw, 88px); }
+.ds-lede { margin-top: 24px; }
+
+.ds { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; padding-top: 64px; }
+.ds > h2 { font: 500 13px var(--font-mono); color: var(--text-faint); padding-top: 4px; }
+.ds > h2 small { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); font-weight: 400; line-height: 1.5; }
+@media (max-width: 880px) { .ds { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+
+.ds-headline { font-size: clamp(40px, 6vw, 72px); }
+.ds-token-field { max-width: 320px; }
+.ds-rail { --section: 32px; }
+.ds-rail .rail__head { margin: 0; }
+.ds-narrow { max-width: 640px; }
+.ds-tab-panel { margin-top: 24px; max-width: 640px; }
+
+/* The signed-in nav, framed as an example inside the page. */
+.ds-nav { border: 1px solid var(--line); border-radius: var(--r-lg); }
+.ds-nav .site-nav { border-radius: calc(var(--r-lg) - 1px); }
+.ds-nav .site-nav__inner { padding-inline: 20px; }
+@container site-nav (max-width: 880px) { .ds-nav .site-nav__links { padding-inline: 20px; } }
+
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; }
+.swatch { display: flex; flex-direction: column; gap: 4px; font: 12.5px var(--font-mono); }
+.swatch__color { height: 56px; border-radius: var(--r-md); border: 1px solid var(--line); }
+
+.ds-rules { font-size: 17px; max-width: 40em; }
+.ds-note { margin-top: 64px; }

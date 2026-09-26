@@ -1,0 +1,57 @@
+/* The page itself: reset, type defaults, layout helpers, and motion. */
+
+* { box-sizing: border-box; }
+
+/* An element with `hidden` is always hidden, whatever display its class sets. */
+[hidden] { display: none !important; }
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--text);
+  font: var(--body-md);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+p { margin: 0; text-wrap: pretty; }
+a { color: var(--label-ink); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-sm); }
+button { font: inherit; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+
+.mono { font-family: var(--font-mono); }
+.muted { color: var(--text-muted); }
+.faint { color: var(--text-faint); }
+.strong { font-weight: 600; color: var(--ink); }
+.small { font-size: 14px; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Nav, sections, and footer share the same edges. */
+.wrap { max-width: calc(var(--container) + 2 * var(--gutter)); margin: 0 auto; padding-inline: var(--gutter); }
+.cluster { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gap, 10px); }
+.stack { display: flex; flex-direction: column; gap: var(--gap, 16px); }
+
+/* Display type: a big jump, very little in between. */
+.display {
+  font: var(--display-xl); font-size: clamp(48px, 9vw, 112px); letter-spacing: var(--display-xl-tracking);
+}
+.lede { font-size: 20px; line-height: 1.5; color: var(--text-muted); max-width: 34em; }
+@media (max-width: 720px) { .lede { font-size: 18px; } }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { transform: none; } }
+@keyframes flash {
+  0% { transform: scale(1.35); box-shadow: 0 0 0 4px rgba(112, 87, 255, 0.25); }
+  100% { transform: none; box-shadow: none; }
+}
+
+/* Only live things move, and nothing moves under reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

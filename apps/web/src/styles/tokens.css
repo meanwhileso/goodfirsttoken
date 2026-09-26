@@ -1,0 +1,82 @@
+/* The tokens from the YAML at the top of brand/design.md, as CSS variables.
+   Change them there first, then here. An end-to-end test fails when the two
+   disagree. */
+
+:root {
+  /* colors */
+  --paper: #FBFBF9;
+  --surface: #FFFFFF;
+  --ink: #0E1116;
+  --text: #0E1116;
+  --text-body: #24292F;
+  --text-muted: #57606A;
+  --text-faint: #6A737D;
+  --line: #D8DEE4;
+  --line-soft: #EEF1F4;
+  --label: #7057FF;
+  --label-ink: #5B3FD9;
+  --label-tint: #F2F1FB;
+  --merged: #1A7F37;
+  --merged-tint: #E6F4EA;
+  --help: #008672;
+  --attention: #953800;
+  --attention-tint: #FFF1E5;
+  --danger: #CF222E;
+  --code-bg: #0E1116;
+  --code-surface: #161B22;
+  --code-line: #30363D;
+  --code-text: #E6EDF3;
+  --code-accent: #B7A8FF;
+  --on-label: #FFFFFF;
+  --on-ink: #FFFFFF;
+
+  /* typography: each token is a `font` shorthand, with tracking beside it */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --display-xl: 600 7rem/0.98 var(--font-sans);
+  --display-xl-tracking: -0.045em;
+  --display-lg: 600 4rem/1.02 var(--font-sans);
+  --display-lg-tracking: -0.035em;
+  --display-md: 600 1.75rem/1.15 var(--font-sans);
+  --display-md-tracking: -0.02em;
+  --display-sm: 600 1.375rem/1.25 var(--font-sans);
+  --display-sm-tracking: -0.01em;
+  --body-lg: 400 1.3125rem/1.5 var(--font-sans);
+  --body-md: 400 1rem/1.55 var(--font-sans);
+  --body-sm: 400 0.875rem/1.5 var(--font-sans);
+  --mono-md: 400 0.9375rem/1.45 var(--font-mono);
+  --mono-sm: 400 0.8125rem/1.4 var(--font-mono);
+  --logo: 600 1rem/1 var(--font-mono);
+  --button-label: 600 0.9375rem/1 var(--font-sans);
+
+  /* rounded */
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+  --space-4xl: 64px;
+  --space-5xl: 88px;
+
+  /* elevation */
+  --shadow-window: 0 30px 80px rgba(14, 17, 22, 0.10), 0 2px 6px rgba(14, 17, 22, 0.05);
+  --focus: 0 0 0 3px rgba(112, 87, 255, 0.35);
+
+  /* layout, from the Layout section of brand/design.md */
+  --container: 1120px;
+  --gutter: 80px;
+  --section: 96px;
+}
+
+@media (max-width: 880px) {
+  :root { --gutter: 20px; --section: 64px; }
+}

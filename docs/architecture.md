@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, the design system at `/design`, and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types. Today it holds only the product name. Other packages import its TypeScript source directly, with no build step. |
 | `scripts/` | The static server behind `pnpm prototype`, with its tests. |
 | `brand/`, `prototype/`, `video/` | The brand docs, the clickable prototype the site is built from, and the launch video source. |
@@ -29,6 +29,27 @@ The repo is a pnpm workspace.
   build. It is committed, so a type check works without a build first.
 - **Bindings and variables come from `cloudflare:workers`,** imported as
   `env`, so any module can read them.
+
+### The design system
+
+- **Components are React components in `src/components/`,** one file per
+  component, which any route imports. `/design` (`src/routes/design.tsx`)
+  shows every one of them with sample data. It replaced the prototype's
+  design-system page.
+- **Styles are plain CSS in `src/styles/`.** `tokens.css` holds the tokens
+  from the YAML in `brand/design.md` as CSS variables. `app.css` bundles it
+  with the fonts, the base styles, and every component's styles, and the
+  root route links it on every page. CSS for one page, like
+  `design-page.css`, is linked from that route's `head`. Class names follow
+  the prototype's.
+- **The fonts are self-hosted.** `src/fonts/` holds the Geist and Geist Mono
+  variable fonts from the `geist` npm package, version 1.7.2, under the SIL
+  Open Font License in `src/fonts/OFL.txt`. Vite gives each file a content
+  hash, the Worker's static assets serve it, and the root route preloads
+  both. #33 moves them to the static host.
+- **The nav folds on its own width,** with a container query, so the same
+  component works full width at the top of a page and inside a narrower
+  frame.
 
 ## Bindings
 
@@ -91,6 +112,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   browser does. They live in `apps/web/test/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
+- **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
+  with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
+  clock paused so the live wall holds still. Up to 2% of pixels may differ,
+  because Chromium builds draw text a little differently. A change in page
+  height always fails. After a deliberate visual change, run
+  `pnpm --filter @goodfirsttoken/web exec playwright test --update-snapshots=all`
+  and commit the new images.
 - **The static server's tests** in `scripts/` use Node's own test runner.
 
 `pnpm test` runs the first and last. `pnpm test:e2e` runs Playwright.

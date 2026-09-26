@@ -200,9 +200,13 @@ The organizing idea is **GitHub, alive**:
 - **Pages follow an issue timeline.** A thin rail with ring nodes runs down
   the homepage, the person page, and the queue.
 
-The living, rendered twin of this file is the prototype's
-[design-system page](../prototype/design-system.html). It reads these tokens
-from `prototype/styles.css`, which must match this file.
+The living, rendered twin of this file is the site's `/design` page, which
+shows every component in
+[`apps/web/src/components/`](../apps/web/src/components/). It reads these
+tokens from
+[`apps/web/src/styles/tokens.css`](../apps/web/src/styles/tokens.css), and an
+end-to-end test fails when the two stop matching. `prototype/styles.css` keeps
+its own copy for the prototype pages, and must match this file too.
 
 ## Colors
 
@@ -240,8 +244,8 @@ text chosen by contrast.
 
 ## Typography
 
-Two families from Google Fonts, both open-licensed: **Geist** for reading and
-**Geist Mono** for anything a machine says (feed lines, prompts, commands,
+Two open-licensed families, served by the site itself: **Geist** for reading
+and **Geist Mono** for anything a machine says (feed lines, prompts, commands,
 repo names, issue numbers, counts, timestamps, the logo).
 
 | Token | Size | Weight | Line height | Use |

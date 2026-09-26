@@ -1,0 +1,20 @@
+/* Geist and Geist Mono, served by the site itself so a page view makes no
+   third-party requests. They are the variable fonts from the `geist` npm
+   package, version 1.7.2, under the SIL Open Font License in
+   ../fonts/OFL.txt. Vite gives each file a content hash at build time. */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('../fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}

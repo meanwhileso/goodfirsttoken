@@ -8,7 +8,7 @@ built in public from the first commit.
 | To work on | Start from |
 |---|---|
 | The idea and the audience | `brand/brand.md` |
-| Pages and components | `brand/design.md`, `brand/brief-website.md`, and `prototype/` |
+| Pages and components | `brand/design.md`, the components in `apps/web/src/components/` (all shown at `/design`), `brand/brief-website.md`, and `prototype/` |
 | Words on the site | `brand/voice.md` |
 | The launch video | `video/README.md` |
 | What gets built next | [`ROADMAP.md`](ROADMAP.md) and [`docs/specs/v1.md`](docs/specs/v1.md) |

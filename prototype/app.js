@@ -84,7 +84,8 @@
       ['start.md', 'start.md'],
       ['#llms', 'llms.txt'],
       ['#projects-json', 'projects.json'],
-      ['design-system.html', 'design system'],
+      // The design system is the site's /design page now, built from brand/design.md.
+      ['https://github.com/meanwhileso/goodfirsttoken/blob/main/brand/design.md', 'design system'],
       ['https://github.com/meanwhileso/goodfirsttoken', 'MIT'],
     ];
     slot.replaceWith(
@@ -92,7 +93,7 @@
         h('div', { class: 'wrap' },
           h('span', null, 'good first token · a Meanwhile project'),
           h('nav', { 'aria-label': 'Footer' }, links.map(([href, label]) => h('a', { href }, label))))),
-      h('a', { class: 'proto-badge', href: 'design-system.html' }, 'prototype · sample data'));
+      h('span', { class: 'proto-badge' }, 'prototype · sample data'));
   }
 
   // ---------- Small helpers ----------

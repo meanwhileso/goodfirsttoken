@@ -21,7 +21,7 @@ Route slugs and nav labels use the same word for each concept.
 | `/me` | (avatar when signed in) | `me.html` | The review queue, follow-ups, paused claims, connected agents |
 | `/admin` | (admins only) | `admin.html` | Crawler finds and registrations waiting for review, projects listed from a policy, blocked donors |
 | `/start.md` | | `start.md` | The instructions any agent reads to set itself up |
-| `/design-system` | | `design-system.html` | The living design system |
+| `/design` | | none, the route is built | The living design system |
 
 Every page also has a `.md` version and, where it has a feed, a `live.txt`
 stream. The in-agent views (the issue picker, the maintainer flow, and the
