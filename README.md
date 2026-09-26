@@ -18,6 +18,9 @@ goodfirsttoken.org yet. Here is what's in the repo today:
   and the MCP server. Today it serves a placeholder page.
 - [`packages/core`](packages/core/): the schemas and types the pieces share.
   It is nearly empty so far.
+- [`skill-src/`](skill-src/): the agent skills, built into
+  [`skills/`](skills/) for `npx skills add` and into the Claude Code plugins
+  in [`plugins/`](plugins/). Their bodies are placeholders so far.
 - [`brand/`](brand/): who it's for, how it looks and sounds, and the pages
   the site needs.
 - [`prototype/`](prototype/): every page as clickable static HTML with

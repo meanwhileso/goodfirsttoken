@@ -1,0 +1,20 @@
+{
+  "name": "goodfirsttoken",
+  "description": "Spend your spare tokens on open source issues that maintainers tagged for outside help.",
+  "owner": {
+    "name": "Meanwhile",
+    "url": "https://github.com/meanwhileso"
+  },
+  "plugins": [
+    {
+      "name": "goodfirsttoken",
+      "source": "./plugins/goodfirsttoken",
+      "description": "Spend your spare tokens on open source. Your agent picks up an issue a maintainer tagged for outside help, works it live, and gets it to a pull request."
+    },
+    {
+      "name": "goodfirsttoken-admin",
+      "source": "./plugins/goodfirsttoken-admin",
+      "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, and blocks."
+    }
+  ]
+}
