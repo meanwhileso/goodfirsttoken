@@ -35,7 +35,11 @@ placeholders until #19 and #20 write them.
   the MCP server at `https://goodfirsttoken.org/mcp`. `goodfirsttoken-admin`
   holds only the admin skill, so donors never see it. Installing it also
   installs `goodfirsttoken`.
-- `npx skills add meanwhileso/goodfirsttoken` installs only the standalone
-  skills. The admin skill is never among them.
-- A plugin's version goes up with every change to its files, so Claude Code
-  users receive the change. A version never goes down.
+- By default, `npx skills add meanwhileso/goodfirsttoken` installs only the
+  standalone skills, and the admin skill is not among them. Naming a plugin
+  skill with `--skill`, or setting `INSTALL_INTERNAL_SKILLS=1`, installs its
+  plugin copy too. The admin skill holds nothing secret.
+- A plugin's version goes up with every change to its folder, and never goes
+  down. Claude Code users get a change the next time they update the plugin
+  or the marketplace, or automatically if they turned on auto-update for it.
+  The higher version is what lets an update find the change.

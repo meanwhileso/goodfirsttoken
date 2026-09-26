@@ -15,7 +15,7 @@ The repo is a pnpm workspace.
 | `scripts/` | The static server behind `pnpm prototype` and the skill build behind `pnpm skills:build`, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
-| `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Built from `skill-src/`. |
+| `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
 | `.claude-plugin/marketplace.json` | Makes the repo a Claude Code plugin marketplace that lists both plugins. Built from `skill-src/`. |
 | `brand/`, `prototype/`, `video/` | The brand docs, the clickable prototype the site is built from, and the launch video source. |
 
@@ -37,8 +37,9 @@ The repo is a pnpm workspace.
 ## Skills and plugins
 
 `scripts/skills.mjs` builds every skill from its one source file.
-`pnpm skills:build` writes the copies, and `pnpm skills:check` fails when a
-committed copy is not what the build writes.
+`pnpm skills:build` writes the copies. `pnpm skills:check` fails when a
+committed copy is not what the build writes, or when a plugin changed and
+its version did not go up.
 
 | Source | Becomes |
 |---|---|
@@ -62,33 +63,52 @@ committed copy is not what the build writes.
   server, such as `http://localhost:5173/mcp` for `pnpm dev`.
   `pnpm skills:check` always compares with a production build, so those
   copies fail CI.
-- **Versions.** Each plugin's version is in `skill-src/plugins.json`. The
-  build records the version and a SHA-256 of the files it writes into the
-  plugin, less the version itself, in `skill-src/plugins.lock.json`. When
-  those files change and the version does not go up, the build and the
-  check fail. A local build leaves the record alone. A plugin file the build
-  does not write, like a future hook, is not in the hash, so a change to it
-  needs the version raised by hand.
+- **Versions.** Each plugin's version is in `skill-src/plugins.json`.
+  `pnpm skills:check` compares every file under `plugins/<name>/` with the
+  same files at a base commit, read with `git show`. An added or removed
+  file counts, and files git ignores are left out. When anything differs,
+  the version must be higher than the one the base published. A lower
+  version always fails. A plugin the base doesn't have can start at any
+  version. The rule covers hand-written files in a plugin folder, like a
+  hook, as well as built ones.
+- **The base** is `origin/main`, or the ref given with `--base <ref>` or
+  `SKILLS_BASE_REF`. A base that can't be found fails the check. Because the
+  base is the branch the work merges into, one raise covers every later
+  change in the same pull request.
+- **In CI** the `test` job checks out two commits and compares with
+  `HEAD^1`. For a pull request, the checkout is GitHub's merge commit, so
+  `HEAD^1` is the base branch's tip. On a push to main, `HEAD^1` is the
+  previous main, which holds for a squash merge and for a merge commit. A
+  rebase merge of a pull request with several commits compares only its
+  last commit, so it can fail on main after passing on the pull request.
 - **The admin plugin** lists `goodfirsttoken` as a dependency and has no MCP
   server of its own. Installing it installs the donor plugin too, so an admin
   connects to the server once.
 
 ### What the installers read
 
-- **`npx skills add`** (the `skills` package, checked at 1.7.0) reads
-  `skills/`. It also reads `.claude-plugin/marketplace.json` and scans each
-  listed plugin's `skills/` folder, so with nothing more it would also offer
-  the plugin copies, the admin skill among them. The plugin copies set
-  `metadata.internal: true`, which it skips, so it installs only `skills/`.
-  Run from a local checkout, it lists and installs exactly the four
-  `goodfirsttoken-*` skills. This answers
-  [open question 2](specs/v1.md#open-questions). With
-  `INSTALL_INTERNAL_SKILLS=1` it lists the plugin copies as well.
+- **`npx skills add`** reads `skills/`. We checked version 1.7.0 of the
+  `skills` package. It also reads `.claude-plugin/marketplace.json` and
+  scans each listed plugin's `skills/` folder, so with nothing more it would
+  also offer the plugin copies, the admin skill among them. The plugin
+  copies carry `metadata.internal: true`, which it skips by default. So by
+  default it installs only `skills/`. Run from a local checkout, it lists
+  and installs exactly the four `goodfirsttoken-*` skills. This answers
+  [open question 2](specs/v1.md#open-questions).
+- **Two ways around that default** install a plugin copy: naming it with
+  `--skill`, like `--skill admin` or `--skill give`, and setting
+  `INSTALL_INTERNAL_SKILLS=1`. The admin skill holds nothing secret. The
+  server checks that the caller is an admin on every admin tool call, which
+  #11 builds.
 - **Claude Code** reads `.claude-plugin/marketplace.json` and each plugin's
   `.claude-plugin/plugin.json`, and loads each plugin's `skills/` folder.
   It ignores `metadata` in a skill. A plugin from a marketplace added as a
   local folder loads from that folder at each session start. Everyone else
-  gets a cached copy that changes only when the version does.
+  gets a cached copy, which Claude Code replaces only when the version
+  changed. That happens the next time the person updates the plugin or the
+  marketplace, or automatically if they turned on auto-update for it.
+  Auto-update is off by default for a marketplace added from GitHub, like
+  this one.
 
 ## Bindings
 
@@ -165,7 +185,7 @@ Every action is pinned to a commit SHA.
 
 | Job | What it runs |
 |---|---|
-| `test` | `pnpm test`, then `pnpm skills:check` |
+| `test` | `pnpm test`, then `pnpm skills:check` with `HEAD^1` as the base |
 | `lint` | `pnpm lint`: ESLint with type-aware rules from typescript-eslint |
 | `typecheck` | `pnpm typecheck` |
 | `e2e` | `pnpm test:e2e` in Chromium, keeping the report and traces when it fails |
@@ -193,3 +213,6 @@ Branch protection requires `test` and `leaks` by name.
   never names a domain.
 - **The skill drift check runs in the `test` job,** which branch protection
   requires, so a hand edit to a generated file blocks the merge.
+- **Plugin versions are compared with the base branch.** Nothing a pull
+  request edits can get around the rule, and one raise covers the whole
+  pull request.

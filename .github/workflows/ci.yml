@@ -25,14 +25,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The skills check compares with HEAD^1: the base branch's tip for
+          # a pull request's merge commit, and the previous main on a push.
+          fetch-depth: 2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
-      - name: Check the skills and plugins match skill-src/
+      - name: Check the skills and plugins match skill-src/ and their versions went up
         run: pnpm skills:check
+        env:
+          SKILLS_BASE_REF: HEAD^1
 
   lint:
     runs-on: ubuntu-latest

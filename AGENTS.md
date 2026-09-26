@@ -37,9 +37,9 @@ describe the code as it is.
   After changing that file, run `pnpm install` or
   `pnpm --filter @goodfirsttoken/web types`, or `pnpm typecheck` fails. Plain
   `wrangler types` writes the wrong variable types.
-- skills/, plugins/, and .claude-plugin/ are built from skill-src/. Edit
-  the source, raise the plugin's version in skill-src/plugins.json, and run
-  `pnpm skills:build`. CI fails on a hand edit to a built file.
+- skills/, .claude-plugin/, and the skills/ and .claude-plugin/ folders
+  inside each plugin under plugins/ are generated. Edit skill-src/ and
+  follow "Changing a skill or a plugin" in CONTRIBUTING.md.
 - Words on the site and in docs, issues, PRs, and commits follow
   brand/voice.md. No em dashes.
 - Tests check behavior and must fail when the code is wrong. A bug fix

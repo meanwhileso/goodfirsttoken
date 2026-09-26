@@ -44,20 +44,27 @@ No accounts are needed for any of it. How the pieces fit is in
 
 ## Changing a skill or a plugin
 
-Each skill has one source file in `skill-src/`. The copies in `skills/`,
-`plugins/`, and `.claude-plugin/` are built from it and committed, and CI
-fails when they are not what the build writes. To release a change:
+Each skill has one source file in `skill-src/`. The build writes
+`skills/`, `.claude-plugin/`, and the `skills/` and `.claude-plugin/`
+folders inside each plugin under `plugins/`. They are committed, and CI
+fails when they are not what the build writes. Anything else in a plugin
+folder is written by hand. To release a change:
 
-1. Edit the skill in `skill-src/`.
-2. Raise the plugin's version in `skill-src/plugins.json`. Every change to a
-   plugin's files needs a higher version, and so does a change to the MCP
-   tools its skills use. `pnpm skills:build` fails when a plugin's files
-   changed and its version did not go up.
+1. Edit the skill in `skill-src/`, or a hand-written file in a plugin
+   folder.
+2. Raise the plugin's version in `skill-src/plugins.json`, once per pull
+   request. Any change under `plugins/<name>/` needs a version higher than
+   main's, and so does a change to the MCP tools its skills use. If main
+   raised it meanwhile, go above main's. `pnpm check` compares with
+   `origin/main` and fails when a plugin changed and its version did not go
+   up. `pnpm skills:check --base <ref>` compares with another commit.
 3. Run `pnpm skills:build`, and commit the source with what it built.
 
-Claude Code users get the change once it merges, because the version went up.
+Claude Code users get the change the next time they update the plugin or
+the marketplace, or automatically if they turned on auto-update for it. The
+higher version is what lets an update find it.
 
-To try the skills against `pnpm dev`, run
+To try the skills against `pnpm dev` once #9 adds its MCP server, run
 `GOODFIRSTTOKEN_MCP_URL=http://localhost:5173/mcp pnpm skills:build`. Claude
 Code reads the same variable, so
 `GOODFIRSTTOKEN_MCP_URL=http://localhost:5173/mcp claude --plugin-dir plugins/goodfirsttoken`
@@ -103,7 +110,9 @@ no em dashes.
 
 Secrets, Cloudflare account and resource IDs, and the names of deployed
 resources never go in a file, and deployment domains never go in config.
-They come from the environment. `pnpm install` turns on a pre-commit hook
+They come from the environment. The one exception is the public MCP
+endpoint in the plugin manifest, which installers read from GitHub with no
+environment to supply it. `pnpm install` turns on a pre-commit hook
 that scans staged changes with
 [gitleaks](https://github.com/gitleaks/gitleaks) when you have it installed.
 CI scans the full history on every PR.

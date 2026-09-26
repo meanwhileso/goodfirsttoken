@@ -1,19 +1,23 @@
 // Builds every skill from its one source file in skill-src/ into the copies
 // that installers read, and checks that the committed copies match.
 //
-//   node scripts/skills.mjs build   # pnpm skills:build
-//   node scripts/skills.mjs check   # pnpm skills:check, part of pnpm check
+//   node scripts/skills.mjs build                  # pnpm skills:build
+//   node scripts/skills.mjs check [--base <ref>]   # pnpm skills:check, part of pnpm check
 //
 // skill-src/<name>.md becomes:
 //   skills/goodfirsttoken-<name>/SKILL.md          for npx skills add
 //   plugins/<plugin>/skills/<name>/SKILL.md        for the Claude Code plugin
-// The build also writes each plugin's .claude-plugin/plugin.json, the
-// marketplace in .claude-plugin/marketplace.json, and the version record in
-// skill-src/plugins.lock.json.
-import { createHash } from 'node:crypto';
+// The build also writes each plugin's .claude-plugin/plugin.json and the
+// marketplace in .claude-plugin/marketplace.json.
+//
+// The check also compares each plugin folder with a base commit, origin/main
+// unless --base or SKILLS_BASE_REF names another. When anything in the folder
+// changed, the plugin's version must be higher than it was there.
+import { execFile } from 'node:child_process';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 // The one place the MCP server's address is set. Committed output always uses
 // it. To point the copies somewhere else, such as pnpm dev, set
@@ -21,6 +25,8 @@ import { fileURLToPath } from 'node:url';
 // variable when it starts the plugin's server.
 export const PRODUCTION_MCP_URL = 'https://goodfirsttoken.org/mcp';
 export const MCP_URL_VARIABLE = 'GOODFIRSTTOKEN_MCP_URL';
+const BASE_VARIABLE = 'SKILLS_BASE_REF';
+const DEFAULT_BASE = 'origin/main';
 
 const PREFIX = 'goodfirsttoken';
 const OWNER = { name: 'Meanwhile', url: 'https://github.com/meanwhileso' };
@@ -38,7 +44,6 @@ const PLUGINS = {
 
 const SOURCE_DIR = 'skill-src';
 const PLUGINS_FILE = `${SOURCE_DIR}/plugins.json`;
-const LOCK_FILE = `${SOURCE_DIR}/plugins.lock.json`;
 const MARKETPLACE_FILE = '.claude-plugin/marketplace.json';
 // Folders that hold only what the build writes. Anything else in them is removed.
 const OWNED_DIRS = [
@@ -130,18 +135,11 @@ function renderSkill(source, name, body, { internal }) {
     `name: ${name}`,
     ...source.fields.map((field) => field.text),
   ];
-  // npx skills add skips skills marked internal, so it installs only skills/.
+  // By default npx skills add skips a skill whose metadata.internal is true,
+  // so it installs the copies in skills/.
   if (internal) lines.push('metadata:', '  internal: true');
   lines.push('---');
   return `${lines.join('\n')}\n${body}`;
-}
-
-function hashPlugin(files) {
-  const hash = createHash('sha256');
-  for (const [file, content] of [...files].sort(([a], [b]) => (a < b ? -1 : 1))) {
-    hash.update(`${file}\0${content}\0`);
-  }
-  return hash.digest('hex');
 }
 
 async function readSkillSources(root) {
@@ -173,11 +171,9 @@ async function readPluginSettings(root) {
 }
 
 // Returns every file the build writes, keyed by path from the repo root.
-// Throws when a source is invalid, or when a plugin's files changed and its
-// version did not go up.
+// Throws when a source is invalid.
 export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
   if (!URL.canParse(mcpUrl)) throw new Error(`${MCP_URL_VARIABLE} must be a URL, like http://localhost:5173/mcp.`);
-  const local = mcpUrl !== PRODUCTION_MCP_URL;
   const settings = await readPluginSettings(root);
   const sources = await readSkillSources(root);
   const files = new Map();
@@ -191,8 +187,6 @@ export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
     }
   }
 
-  const lock = (await readJson(root, LOCK_FILE)) ?? {};
-  const nextLock = {};
   for (const [name, plugin] of Object.entries(PLUGINS)) {
     const { version, description } = settings[name];
     const manifest = {
@@ -207,21 +201,7 @@ export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
         mcpServers: { [PREFIX]: { type: 'http', url: `\${${MCP_URL_VARIABLE}:-${mcpUrl}}` } },
       }),
     };
-    const dir = `plugins/${name}/`;
-    const pluginFiles = [...files].filter(([file]) => file.startsWith(dir)).map(([file, content]) => [file.slice(dir.length), content]);
-    const sha256 = hashPlugin([...pluginFiles, ['.claude-plugin/plugin.json', json({ ...manifest, version: undefined })]]);
-    const recorded = lock[name];
-    if (!local && recorded) {
-      const change = compareVersions(parseVersion(version, name), parseVersion(recorded.version, `The version of ${name} in ${LOCK_FILE}`));
-      if (change < 0) {
-        throw new Error(`The version of ${name} went down, from ${recorded.version} to ${version}. Set it above ${recorded.version} in ${PLUGINS_FILE}.`);
-      }
-      if (change === 0 && recorded.sha256 !== sha256) {
-        throw new Error(`${name} changed, so its version must go up. Raise it above ${recorded.version} in ${PLUGINS_FILE}, then run pnpm skills:build again.`);
-      }
-    }
-    nextLock[name] = { version, sha256 };
-    files.set(`${dir}.claude-plugin/plugin.json`, json(manifest));
+    files.set(`plugins/${name}/.claude-plugin/plugin.json`, json(manifest));
   }
 
   files.set(
@@ -237,9 +217,7 @@ export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
       })),
     }),
   );
-  // A local build leaves the version record alone, so it stays about production.
-  if (!local) files.set(LOCK_FILE, json(nextLock));
-  return { files, local };
+  return { files, local: mcpUrl !== PRODUCTION_MCP_URL };
 }
 
 async function listFiles(root, dir) {
@@ -260,9 +238,71 @@ export async function write(root, { files }) {
   }
 }
 
-// Compares the committed files with a production build. Returns one line per
-// problem, or an empty list when everything matches.
-export async function check(root) {
+// Runs git in root. Repo variables from the environment, such as GIT_DIR in a
+// git hook, would point it at another repo, so they are left out.
+const execFileAsync = promisify(execFile);
+async function git(root, args) {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !/^GIT_(DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|COMMON_DIR)$/.test(key)),
+  );
+  const { stdout } = await execFileAsync('git', args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return stdout;
+}
+const paths = (output) => output.split('\0').filter(Boolean);
+
+// Whether any file under dir differs from the base commit, counting files
+// added or removed. Files git ignores are left out.
+async function changedSince(root, commit, dir) {
+  const before = paths(await git(root, ['ls-tree', '-r', '-z', '--name-only', commit, '--', dir]));
+  const listed = paths(await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', dir]));
+  const now = new Map();
+  for (const file of new Set(listed)) {
+    const text = await readText(root, file);
+    if (text !== null) now.set(file, text);
+  }
+  if (before.length !== now.size || before.some((file) => !now.has(file))) return true;
+  for (const file of before) {
+    if (unixLines(await git(root, ['show', `${commit}:${file}`])) !== now.get(file)) return true;
+  }
+  return false;
+}
+
+// For each plugin that changed since the base, its version in plugins.json
+// must be higher than the version the base published. A lower version always
+// fails. A plugin the base doesn't have can start at any version.
+async function checkVersions(root, base) {
+  let commit;
+  try {
+    commit = (await git(root, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`])).trim();
+  } catch {
+    return [
+      `The base ref ${base} was not found, so the plugin versions can't be checked. Run git fetch origin main, or name another base with --base <ref> or ${BASE_VARIABLE}.`,
+    ];
+  }
+  const settings = await readPluginSettings(root);
+  const problems = [];
+  for (const name of Object.keys(PLUGINS)) {
+    const dir = `plugins/${name}/`;
+    let published;
+    try {
+      published = JSON.parse(await git(root, ['show', `${commit}:${dir}.claude-plugin/plugin.json`])).version;
+    } catch {
+      continue;
+    }
+    const version = settings[name].version;
+    const change = compareVersions(parseVersion(version, name), parseVersion(published, `The version of ${name} at ${base}`));
+    if (change < 0) {
+      problems.push(`The version of ${name} went down from ${published} at ${base} to ${version}. Set it higher than ${published} in ${PLUGINS_FILE}.`);
+    } else if (change === 0 && (await changedSince(root, commit, dir))) {
+      problems.push(`${dir} changed since ${base}, so its version in ${PLUGINS_FILE} must be higher than ${published}.`);
+    }
+  }
+  return problems;
+}
+
+// Compares the committed files with a production build, and each plugin's
+// version with the base. Returns one line per problem, or an empty list.
+export async function check(root, { base = DEFAULT_BASE } = {}) {
   let output;
   try {
     output = await build(root);
@@ -280,10 +320,10 @@ export async function check(root) {
       if (!output.files.has(file)) problems.push(`${file} is not written by the build.`);
     }
   }
-  return problems;
+  return [...problems, ...(await checkVersions(root, base))];
 }
 
-async function main(command, root) {
+async function main([command, ...args], root) {
   if (command === 'build') {
     const mcpUrl = process.env[MCP_URL_VARIABLE] || PRODUCTION_MCP_URL;
     const output = await build(root, { mcpUrl });
@@ -295,26 +335,28 @@ async function main(command, root) {
     return 0;
   }
   if (command === 'check') {
-    const problems = await check(root);
+    const flag = args.indexOf('--base');
+    const base = (flag === -1 ? process.env[BASE_VARIABLE] : args[flag + 1]) || DEFAULT_BASE;
+    const problems = await check(root, { base });
     if (problems.length === 0) {
-      console.log(`The skills and plugins match ${SOURCE_DIR}/.`);
+      console.log(`The skills and plugins match ${SOURCE_DIR}/, and every plugin that changed since ${base} has a higher version.`);
       return 0;
     }
     console.error(
       [
         ...problems.map((problem) => `- ${problem}`),
         '',
-        `The skills and plugins are built from ${SOURCE_DIR}/. Edit the source, then run pnpm skills:build.`,
+        'See "Changing a skill or a plugin" in CONTRIBUTING.md.',
       ].join('\n'),
     );
     return 1;
   }
-  console.error('Usage: node scripts/skills.mjs build|check');
+  console.error('Usage: node scripts/skills.mjs build | check [--base <ref>]');
   return 2;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main(process.argv[2], process.cwd()).then(
+  main(process.argv.slice(2), process.cwd()).then(
     (code) => {
       process.exitCode = code;
     },
