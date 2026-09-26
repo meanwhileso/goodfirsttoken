@@ -11,7 +11,7 @@ The repo is a pnpm workspace.
 | Path | What it is |
 |---|---|
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
-| `packages/core` | Shared schemas and types. Today it holds only the product name. Other packages import its TypeScript source directly, with no build step. |
+| `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
 | `scripts/` | The static server behind `pnpm prototype`, and the deploy scripts, with their tests. |
 | `.github/workflows/` | CI, and the deploy to staging and production. |
 | `brand/`, `prototype/`, `video/` | The brand docs, the clickable prototype the site is built from, and the launch video source. |
@@ -31,6 +31,30 @@ The repo is a pnpm workspace.
   build. It is committed, so a type check works without a build first.
 - **Bindings and variables come from `cloudflare:workers`,** imported as
   `env`, so any module can read them.
+
+### packages/core
+
+- **Zod 4 for every schema,** with the TypeScript types inferred from them.
+  The MCP TypeScript SDK's 1.x line takes zod 3.25 or 4, and its 2.x packages
+  and Cloudflare's `agents` package need zod 4, so the MCP server can register
+  these schemas as they are.
+- **One module per concern.** `primitives.ts` holds the small shapes the
+  rest are built from: GitHub logins, repos, issues, labels, and PRs, and our
+  IDs, times, and links. `projects.ts` holds projects and their settings,
+  `claims.ts` the claim state machine and the stored claim, `feed.ts` feed
+  events, `refusals.ts` the refusal codes, and `validation.ts` the check that
+  names the field in every problem.
+- **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
+  maintainers, and admins: who sees it, a description for agents, input and
+  output schemas, and a function that renders the output as text.
+  `src/tools/index.ts` lists them all, and its `toolResult` and
+  `toolRefusal` build MCP results without depending on the MCP SDK.
+- **The claim state machine never reads the clock.** Its caller passes the
+  time in, in the unit Durable Object alarms use, so an alarm can drive it
+  and a test can set any time. The units are in
+  [how-it-works.md](how-it-works.md#claims).
+- **Limits live in one place.** [how-it-works.md](how-it-works.md#limits)
+  lists every cap the schemas enforce, with who set it.
 
 ## Bindings
 
@@ -102,12 +126,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   browser does. They live in `apps/web/test/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
+- **The core package's tests** run with plain Vitest in Node, since the
+  package is pure. They live in `packages/core/test/`.
 - **The tests in `scripts/`,** for the static server and the deploy, use
   Node's own test runner. The deploy's tests fake Cloudflare's API, GitHub's
   OIDC endpoint, and Wrangler, and check the scripts, the deploy workflows,
   and [self-hosting.md](self-hosting.md) against each other.
 
-`pnpm test` runs the first and last. `pnpm test:e2e` runs Playwright.
+`pnpm test` runs all of them but Playwright. `pnpm test:e2e` runs Playwright.
 
 ## CI
 
@@ -198,4 +224,9 @@ Choices:
   type-aware lint rules like `no-floating-promises` catch real bugs in
   Workers code.
 - **Vitest 4.1.** It is the newest line `@cloudflare/vitest-pool-workers`
-  supports.
+  supports. `packages/core` uses the same version.
+- **One text block per tool result.** The MCP spec suggests that a tool
+  returning structured content also send it as serialized JSON in a text
+  block. Ours holds a plain rendering of the result, because terminal
+  harnesses show that text to the agent and the donor. The data is already in
+  `structuredContent`.
