@@ -14,3 +14,5 @@ playwright-report/
 .dev.vars.*
 !.dev.vars.example
 worker-configuration.d.ts
+# Written by scripts/deploy-config.mjs, with deployed names and IDs.
+wrangler.deploy.json
