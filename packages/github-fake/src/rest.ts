@@ -81,11 +81,18 @@ const str = (value: unknown): string | undefined => (typeof value === 'string' ?
 const byDate = (field: 'createdAt' | 'updatedAt', direction: string) => (a: IssueRecord, b: IssueRecord) =>
   (Date.parse(a[field]) - Date.parse(b[field]) || a.number - b.number) * (direction === 'asc' ? 1 : -1);
 
-// GitHub serves at most 1,000 results for any search.
-function searchPage<T>(req: RestRequest, results: T[], shape: (item: T) => unknown): Response {
+// GitHub serves the first 1,000 results of any search, and refuses a page
+// that starts past them.
+function searchPage<T>(
+  req: RestRequest,
+  results: T[],
+  shape: (item: T) => unknown,
+  extra: Record<string, unknown> = {},
+): Response {
   const page = paginate(req.url, results.slice(0, 1000));
+  if (page.start >= 1000) throw new FakeError('invalid', 'Only the first 1000 search results are available');
   return json(
-    { total_count: results.length, incomplete_results: false, items: page.items.map(shape) },
+    { total_count: results.length, incomplete_results: false, ...extra, items: page.items.map(shape) },
     200,
     page.headers,
   );
@@ -212,7 +219,10 @@ const routes: Route[] = [
       const results = searchIssues(req.ctx.state, q).sort((a, b) =>
         byDate(sort, req.url.searchParams.get('order') ?? 'desc')(a.issue, b.issue),
       );
-      return searchPage(req, results, ({ repo, issue }) => ({ ...issueShape(req.ctx, repo, issue), score: 1 }));
+      // search_type is required here. The fake always searches the lexical way.
+      return searchPage(req, results, ({ repo, issue }) => ({ ...issueShape(req.ctx, repo, issue), score: 1 }), {
+        search_type: 'lexical',
+      });
     },
   },
   {

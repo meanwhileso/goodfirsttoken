@@ -52,7 +52,11 @@ test('a label list has the fields GitHub sends for each label', async () => {
 test('search finds open tagged issues across repos with no PR linked to them', async () => {
   const q = encodeURIComponent('is:issue is:open label:"help wanted" -linked:pr');
 
-  const { body } = await rest<{ total_count: number; items: { html_url: string }[] }>(fake, 'GET', `/search/issues?q=${q}`);
+  const { body } = await rest<{ total_count: number; search_type: string; items: { html_url: string }[] }>(
+    fake,
+    'GET',
+    `/search/issues?q=${q}`,
+  );
 
   // meanwhileso/goodfirsttoken#918 is tagged too, but PR #957 says it closes it.
   expect(body.items.map((i) => i.html_url).sort()).toEqual([
@@ -60,9 +64,11 @@ test('search finds open tagged issues across repos with no PR linked to them', a
     `${fake.webUrl}/sample-owner/sample-harbor/issues/88`,
   ]);
   expect(body.total_count).toBe(2);
+  // https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests lists it as required.
+  expect(body.search_type).toBe('lexical');
 });
 
-test('issue search needs is:issue or is:pull-request, as GitHub requires', async () => {
+test('the fake refuses an issue search that names neither is:issue nor is:pull-request', async () => {
   const reply = await rest(fake, 'GET', `/search/issues?q=${encodeURIComponent('label:bug')}`);
 
   expect(reply.status).toBe(422);
@@ -96,7 +102,7 @@ test('repository search filters by stars and push date, and leaves forks out', a
   expect(all.body.items.some((r) => r.fork)).toBe(false);
 });
 
-test('search serves at most the first 1,000 results, as GitHub does', async () => {
+test('search serves only the first 1,000 results, and refuses a page past them as GitHub does', async () => {
   const template = fake.state.repos['sample-owner/sample-tools'];
   if (!template) throw new Error('missing sample repo');
   for (let n = 0; n < 1005; n++) {
@@ -109,10 +115,13 @@ test('search serves at most the first 1,000 results, as GitHub does', async () =
       'GET',
       `/search/repositories?q=${encodeURIComponent('org:bulk')}&per_page=100&page=${String(n)}`,
     );
+  const last = await page(10);
+  const past = await page(11);
 
-  expect((await page(10)).body).toMatchObject({ total_count: 1005 });
-  expect((await page(10)).body.items).toHaveLength(100);
-  expect((await page(11)).body.items).toHaveLength(0);
+  expect(last.body).toMatchObject({ total_count: 1005 });
+  expect(last.body.items).toHaveLength(100);
+  expect(past.status).toBe(422);
+  expect(past.body).toMatchObject({ message: 'Only the first 1000 search results are available' });
 });
 
 test('file contents come back base64 encoded, and a folder as a list of its entries', async () => {
