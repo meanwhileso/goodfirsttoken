@@ -22,9 +22,10 @@ corepack enable
 pnpm install
 pnpm dev         # the site, at http://localhost:5173
 pnpm prototype   # the clickable prototype, at http://localhost:8943
-pnpm check       # lint and typecheck
+pnpm check       # lint, typecheck, and a check that the skills match skill-src/
 pnpm test        # unit tests, the Worker's inside the Workers runtime
 pnpm test:e2e    # browser tests against a production build
+pnpm skills:build  # the skills and plugins, from skill-src/
 ```
 
 Before the first `pnpm test:e2e`, run `pnpm exec playwright install chromium`.
@@ -40,6 +41,28 @@ No accounts are needed for any of it. How the pieces fit is in
 - Keep a PR to one change, and say how you checked it. For a page change,
   add screenshots at phone and desktop widths.
 - Write commit messages in the imperative, and say why as well as what.
+
+## Changing a skill or a plugin
+
+Each skill has one source file in `skill-src/`. The copies in `skills/`,
+`plugins/`, and `.claude-plugin/` are built from it and committed, and CI
+fails when they are not what the build writes. To release a change:
+
+1. Edit the skill in `skill-src/`.
+2. Raise the plugin's version in `skill-src/plugins.json`. Every change to a
+   plugin's files needs a higher version, and so does a change to the MCP
+   tools its skills use. `pnpm skills:build` fails when a plugin's files
+   changed and its version did not go up.
+3. Run `pnpm skills:build`, and commit the source with what it built.
+
+Claude Code users get the change once it merges, because the version went up.
+
+To try the skills against `pnpm dev`, run
+`GOODFIRSTTOKEN_MCP_URL=http://localhost:5173/mcp pnpm skills:build`. Claude
+Code reads the same variable, so
+`GOODFIRSTTOKEN_MCP_URL=http://localhost:5173/mcp claude --plugin-dir plugins/goodfirsttoken`
+connects the plugin to `pnpm dev` with no build. Run `pnpm skills:build`
+without the variable before you commit.
 
 ## AI help is welcome
 

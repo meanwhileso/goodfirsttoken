@@ -12,7 +12,11 @@ The repo is a pnpm workspace.
 |---|---|
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types. Today it holds only the product name. Other packages import its TypeScript source directly, with no build step. |
-| `scripts/` | The static server behind `pnpm prototype`, with its tests. |
+| `scripts/` | The static server behind `pnpm prototype` and the skill build behind `pnpm skills:build`, with their tests. |
+| `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
+| `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
+| `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Built from `skill-src/`. |
+| `.claude-plugin/marketplace.json` | Makes the repo a Claude Code plugin marketplace that lists both plugins. Built from `skill-src/`. |
 | `brand/`, `prototype/`, `video/` | The brand docs, the clickable prototype the site is built from, and the launch video source. |
 
 ### apps/web
@@ -29,6 +33,62 @@ The repo is a pnpm workspace.
   build. It is committed, so a type check works without a build first.
 - **Bindings and variables come from `cloudflare:workers`,** imported as
   `env`, so any module can read them.
+
+## Skills and plugins
+
+`scripts/skills.mjs` builds every skill from its one source file.
+`pnpm skills:build` writes the copies, and `pnpm skills:check` fails when a
+committed copy is not what the build writes.
+
+| Source | Becomes |
+|---|---|
+| `skill-src/<name>.md` with `plugin: goodfirsttoken` | `skills/goodfirsttoken-<name>/SKILL.md`, and `plugins/goodfirsttoken/skills/<name>/SKILL.md` |
+| `skill-src/<name>.md` with `plugin: goodfirsttoken-admin` | `plugins/goodfirsttoken-admin/skills/<name>/SKILL.md` only |
+| `skill-src/plugins.json` | Each plugin's `.claude-plugin/plugin.json`, and `.claude-plugin/marketplace.json` |
+
+- **A source file** starts with frontmatter that sets `description` and
+  `plugin`, one top-level key per line. Other keys, like `argument-hint`,
+  are copied into both copies as written. The build sets `name`, and
+  `{{MCP_URL}}` in the body becomes the MCP server's URL.
+- **The copies are committed,** because installers read them straight from
+  GitHub. `skills/`, `.claude-plugin/`, and each plugin's `skills/` and
+  `.claude-plugin/` folders hold only what the build writes, and the build
+  removes anything else there.
+- **The MCP server URL is set once,** as `PRODUCTION_MCP_URL` in
+  `scripts/skills.mjs`. The plugin's server config is
+  `${GOODFIRSTTOKEN_MCP_URL:-<that URL>}`, which Claude Code expands when it
+  starts the server, so setting the variable points an installed plugin at
+  another server. Building with the variable set writes copies for that
+  server, such as `http://localhost:5173/mcp` for `pnpm dev`.
+  `pnpm skills:check` always compares with a production build, so those
+  copies fail CI.
+- **Versions.** Each plugin's version is in `skill-src/plugins.json`. The
+  build records the version and a SHA-256 of the files it writes into the
+  plugin, less the version itself, in `skill-src/plugins.lock.json`. When
+  those files change and the version does not go up, the build and the
+  check fail. A local build leaves the record alone. A plugin file the build
+  does not write, like a future hook, is not in the hash, so a change to it
+  needs the version raised by hand.
+- **The admin plugin** lists `goodfirsttoken` as a dependency and has no MCP
+  server of its own. Installing it installs the donor plugin too, so an admin
+  connects to the server once.
+
+### What the installers read
+
+- **`npx skills add`** (the `skills` package, checked at 1.7.0) reads
+  `skills/`. It also reads `.claude-plugin/marketplace.json` and scans each
+  listed plugin's `skills/` folder, so with nothing more it would also offer
+  the plugin copies, the admin skill among them. The plugin copies set
+  `metadata.internal: true`, which it skips, so it installs only `skills/`.
+  Run from a local checkout, it lists and installs exactly the four
+  `goodfirsttoken-*` skills. This answers
+  [open question 2](specs/v1.md#open-questions). With
+  `INSTALL_INTERNAL_SKILLS=1` it lists the plugin copies as well.
+- **Claude Code** reads `.claude-plugin/marketplace.json` and each plugin's
+  `.claude-plugin/plugin.json`, and loads each plugin's `skills/` folder.
+  It ignores `metadata` in a skill. A plugin from a marketplace added as a
+  local folder loads from that folder at each session start. Everyone else
+  gets a cached copy that changes only when the version does.
 
 ## Bindings
 
@@ -91,7 +151,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   browser does. They live in `apps/web/test/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
-- **The static server's tests** in `scripts/` use Node's own test runner.
+- **The tests for `scripts/`**, the static server and the skill build, use
+  Node's own test runner.
 
 `pnpm test` runs the first and last. `pnpm test:e2e` runs Playwright.
 
@@ -104,7 +165,7 @@ Every action is pinned to a commit SHA.
 
 | Job | What it runs |
 |---|---|
-| `test` | `pnpm test` |
+| `test` | `pnpm test`, then `pnpm skills:check` |
 | `lint` | `pnpm lint`: ESLint with type-aware rules from typescript-eslint |
 | `typecheck` | `pnpm typecheck` |
 | `e2e` | `pnpm test:e2e` in Chromium, keeping the report and traces when it fails |
@@ -126,3 +187,9 @@ Branch protection requires `test` and `leaks` by name.
   Workers code.
 - **Vitest 4.1.** It is the newest line `@cloudflare/vitest-pool-workers`
   supports.
+- **The production MCP URL is in the repo.** Installers read the plugin and
+  the skills from GitHub, with no environment to supply an address, so the
+  URL is part of what we publish. No deploy reads it. Deploy config still
+  never names a domain.
+- **The skill drift check runs in the `test` job,** which branch protection
+  requires, so a hand edit to a generated file blocks the merge.

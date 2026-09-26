@@ -17,7 +17,8 @@ describe the code as it is.
 - `corepack enable && pnpm install`
 - `pnpm dev` serves the site at http://localhost:5173, with no accounts and
   no network.
-- `pnpm check` runs lint and typecheck.
+- `pnpm check` runs lint, typecheck, and `pnpm skills:check`.
+- `pnpm skills:build` builds the skills and plugins from skill-src/.
 - `pnpm test` runs the unit tests, the Worker's inside the Workers runtime.
 - `pnpm test:e2e` runs the Playwright tests against a production build. Run
   `pnpm exec playwright install chromium` once first.
@@ -36,6 +37,9 @@ describe the code as it is.
   After changing that file, run `pnpm install` or
   `pnpm --filter @goodfirsttoken/web types`, or `pnpm typecheck` fails. Plain
   `wrangler types` writes the wrong variable types.
+- skills/, plugins/, and .claude-plugin/ are built from skill-src/. Edit
+  the source, raise the plugin's version in skill-src/plugins.json, and run
+  `pnpm skills:build`. CI fails on a hand edit to a built file.
 - Words on the site and in docs, issues, PRs, and commits follow
   brand/voice.md. No em dashes.
 - Tests check behavior and must fail when the code is wrong. A bug fix
