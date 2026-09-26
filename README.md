@@ -57,7 +57,8 @@ pnpm prototype   # the clickable prototype, at http://localhost:8943
 
 Neither needs an account or a network connection. The site runs in the same
 Workers runtime as production, with local stand-ins for the database and
-queues.
+queues. To run your own copy on Cloudflare, follow
+[docs/self-hosting.md](docs/self-hosting.md).
 
 ## Contributing
 

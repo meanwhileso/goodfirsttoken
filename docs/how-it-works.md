@@ -16,3 +16,16 @@ goes on in the open.
   or GitHub is down.
 - It is sent with `Cache-Control: no-store`, so every check reaches the Worker
   that is live now.
+
+## Domains
+
+- The site is served on one primary domain. A deployment can also have
+  redirect domains.
+- A request to a redirect domain answers `301` with the same path and query
+  on the primary domain, over https. Every path redirects, `/healthz`
+  included.
+- Any other host is served as it is, such as workers.dev when a deployment
+  has no domain.
+- The domains come from the deployment's settings, listed in
+  [self-hosting.md](self-hosting.md). With no primary domain, as in local
+  development, nothing redirects.

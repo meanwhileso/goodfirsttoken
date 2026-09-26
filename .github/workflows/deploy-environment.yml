@@ -1,0 +1,89 @@
+name: Deploy an environment
+
+# Called by deploy.yml, once for staging and once for production. The job
+# runs in the GitHub environment it deploys and takes every deployment value
+# from there. docs/self-hosting.md lists them.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: The GitHub environment to deploy, staging or production.
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  # Keep Wrangler from sending usage data from CI.
+  WRANGLER_SEND_METRICS: 'false'
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write # for the credential broker, which trades the job's OIDC token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      # Each setting is a variable or a secret. The logs of a public repo are
+      # public, and a variable shows in this step's log. This step masks every
+      # name, ID, and domain it writes, so later steps show *** in their place.
+      - name: Write the Wrangler config
+        env:
+          TARGET: ${{ inputs.environment }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_NAME: ${{ secrets.WORKER_NAME || vars.WORKER_NAME }}
+          DB_ID: ${{ secrets.DB_ID || vars.DB_ID }}
+          OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID || vars.OAUTH_KV_ID }}
+          PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN || vars.PRIMARY_DOMAIN }}
+          REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS || vars.REDIRECT_DOMAINS }}
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID || vars.OAUTH_CLIENT_ID }}
+          ADMIN_GITHUB_IDS: ${{ secrets.ADMIN_GITHUB_IDS || vars.ADMIN_GITHUB_IDS }}
+        run: node scripts/deploy-config.mjs "$TARGET"
+
+      # The build runs before the job holds a Cloudflare credential.
+      - name: Build the Worker
+        env:
+          CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH: wrangler.deploy.json
+        run: pnpm --filter @goodfirsttoken/web build
+
+      - name: Get the Cloudflare credential
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ vars.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
+        run: node scripts/deploy.mjs credential
+
+      - name: Create the D1 database and queues when missing
+        run: node scripts/deploy.mjs resources
+
+      - name: Apply D1 migrations
+        run: node scripts/deploy.mjs migrations
+
+      # Each secret in secrets.required in apps/web/wrangler.jsonc gets a line
+      # in this step's env, from the environment secret of the same name. The
+      # Worker reads none yet.
+      - name: Put the Worker's secrets
+        run: node scripts/deploy.mjs secrets
+
+      - name: Deploy the Worker
+        working-directory: apps/web
+        env:
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: pnpm exec wrangler deploy
+
+      - name: Smoke-test /healthz
+        env:
+          TARGET: ${{ inputs.environment }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: node scripts/deploy.mjs smoke-test "$TARGET"

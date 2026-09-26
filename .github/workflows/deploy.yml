@@ -1,0 +1,37 @@
+name: Deploy
+
+# A push to main deploys staging, smoke-tests it, then deploys production.
+# Production deploys stay off until the DEPLOY_PRODUCTION repository variable
+# is true. docs/self-hosting.md has the setup.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# One deploy at a time, in push order. A deploy in progress is never
+# cancelled.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write # for the credential broker, which trades the job's OIDC token
+    uses: ./.github/workflows/deploy-environment.yml # zizmor: ignore[self-repository] actionlint rejects $/
+    with:
+      environment: staging
+
+  production:
+    needs: staging
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_PRODUCTION == 'true'
+    permissions:
+      contents: read
+      id-token: write # for the credential broker, which trades the job's OIDC token
+    uses: ./.github/workflows/deploy-environment.yml # zizmor: ignore[self-repository] actionlint rejects $/
+    with:
+      environment: production
