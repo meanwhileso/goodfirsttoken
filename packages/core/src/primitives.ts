@@ -71,3 +71,16 @@ export function wholeNumber(min: number, max: number) {
 
 /** A count of things, zero or more. */
 export const count = z.int().min(0);
+
+/** A time as whole milliseconds since the epoch, the way a Durable Object alarm takes it. */
+export const epochMs = z
+  .int({ error: 'must be a time in whole milliseconds since the epoch' })
+  .min(0, 'must be a time in whole milliseconds since the epoch');
+
+/** A pull request on GitHub. */
+export const prRefSchema = z.object({
+  repo: repoName,
+  number: z.int({ error: 'must be a PR number' }).min(1, 'must be a PR number'),
+  url: webUrl,
+});
+export type PrRef = z.infer<typeof prRefSchema>;

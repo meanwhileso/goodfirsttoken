@@ -95,5 +95,5 @@ export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
 export { budgetSchema, interestsSchema, reviewReasons } from './donor';
 export type { Budget, Interests, Suggestion } from './donor';
-export { claimStateLabel, prRefSchema } from './shared';
-export type { ClaimSummary, FollowUp, PrRef } from './shared';
+export { claimStateLabel } from './shared';
+export type { ClaimSummary, FollowUp } from './shared';

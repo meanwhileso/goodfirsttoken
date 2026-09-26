@@ -51,10 +51,13 @@ describe('the tool list', () => {
     expect(forAdmins.sort()).toEqual(names.filter((name) => name.startsWith('admin_')).sort());
   });
 
-  test.each(names)('%s can be listed over MCP, with JSON Schema objects for input and output', (name) => {
-    const { input, output } = tools[name];
-    expect(z.toJSONSchema(input, { io: 'input' })).toMatchObject({ type: 'object' });
-    expect(z.toJSONSchema(output)).toMatchObject({ type: 'object' });
+  // MCP declares a tool's inputSchema and outputSchema as JSON Schema objects.
+  test.each(names)('the %s input is an object schema MCP can declare', (name) => {
+    expect(z.toJSONSchema(tools[name].input, { io: 'input' })).toMatchObject({ type: 'object' });
+  });
+
+  test.each(names)('the %s output is an object schema MCP can declare', (name) => {
+    expect(z.toJSONSchema(tools[name].output)).toMatchObject({ type: 'object' });
   });
 });
 
@@ -63,6 +66,7 @@ describe('tool results', () => {
     const { output, mentions } = samples[name];
     const result = toolResult(name, output as never);
     expect(result.structuredContent).toEqual(tools[name].output.parse(output));
+    expect(result.content).toEqual([{ type: 'text', text: expect.any(String) as unknown }]);
     const text = textOf(result);
     for (const mention of mentions) expect(text).toContain(mention);
   });
@@ -70,10 +74,10 @@ describe('tool results', () => {
   test('a result drops any field its schema does not list', () => {
     const result = toolResult('release_claim', {
       ...samples.release_claim.output,
-      githubToken: 'gho_not_for_the_agent',
+      githubToken: 'not-sent',
     } as never);
     expect(result.structuredContent).not.toHaveProperty('githubToken');
-    expect(JSON.stringify(result)).not.toContain('gho_not_for_the_agent');
+    expect(JSON.stringify(result)).not.toContain('not-sent');
   });
 
   test('a result that breaks its tool schema is never sent', () => {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { claimStateSchema, type ClaimState } from '../claims';
-import { agentName, githubLogin, id, isoTime, issueRef, repoName, webUrl } from '../primitives';
+import { agentName, githubLogin, id, isoTime, issueRef, prRefSchema, webUrl } from '../primitives';
 import { lines, when } from './text';
 
 // Pieces that more than one tool returns.
@@ -14,13 +14,6 @@ export const issueLinks = {
   /** The issue's live page on the site. */
   liveUrl: webUrl,
 };
-
-export const prRefSchema = z.object({
-  repo: repoName,
-  number: z.int().min(1),
-  url: webUrl,
-});
-export type PrRef = z.infer<typeof prRefSchema>;
 
 /** Someone holding a slot on an issue. */
 export const claimantSchema = z.object({

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { claimStateSchema } from '../claims';
+import { claimStateSchema, releaseReason } from '../claims';
 import { jobName, MAX_UPDATE_TEXT } from '../feed';
 import {
   agentName,
@@ -11,6 +11,7 @@ import {
   issueRef,
   labelName,
   modelName,
+  prRefSchema,
   repoName,
   trimmedText,
   webUrl,
@@ -23,7 +24,6 @@ import {
   claimSummarySchema,
   followUpSchema,
   issueLinks,
-  prRefSchema,
   renderClaimSummary,
   renderFollowUp,
 } from './shared';
@@ -352,7 +352,7 @@ export const releaseClaim = defineTool({
   description: 'Give up a claim, with a short public reason. The slot opens for someone else.',
   input: z.object({
     claimId: id,
-    reason: trimmedText(200).describe('Why you stopped. It is public.'),
+    reason: releaseReason.describe('Why you stopped. It is public.'),
   }),
   output: z.object({ claimId: id, issue: issueRef, state: claimStateSchema }),
   text: (out) => `Released ${out.issue}. The slot is open again.`,

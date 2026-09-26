@@ -28,6 +28,8 @@ export const refusalCodes = [
   'invalid_settings',
   'not_admin',
   'not_found',
+  // A malformed claim, event, or time reached the claim state machine.
+  'invalid_input',
 ] as const;
 
 export const refusalCodeSchema = z.enum(refusalCodes);
