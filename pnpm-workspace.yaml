@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Dependencies whose install scripts may run. pnpm skips the rest.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

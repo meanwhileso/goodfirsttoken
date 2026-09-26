@@ -11,12 +11,23 @@
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
+    "dev": "pnpm --filter @goodfirsttoken/web dev",
+    "test": "node --test 'scripts/**/*.test.mjs' && pnpm -r test",
+    "test:e2e": "pnpm --filter @goodfirsttoken/web test:e2e",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r typecheck",
+    "check": "pnpm lint && pnpm typecheck",
     "prototype": "node scripts/serve.mjs prototype",
-    "test": "node --test 'scripts/**/*.test.mjs'",
     "video:stills": "node video/capture.mjs stills",
     "video:render": "node video/capture.mjs render"
   },
   "devDependencies": {
-    "playwright": "^1.63.0"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "playwright": "^1.63.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1"
   }
 }

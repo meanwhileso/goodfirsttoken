@@ -11,3 +11,6 @@ video/frames/
 video/stills/
 test-results/
 playwright-report/
+.dev.vars.*
+!.dev.vars.example
+worker-configuration.d.ts

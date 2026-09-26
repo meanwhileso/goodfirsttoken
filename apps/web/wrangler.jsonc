@@ -1,0 +1,22 @@
+// The Worker's config for local development.
+//
+// This file holds bindings and settings only, with local names. The names of
+// deployed resources, account and resource IDs, custom domains, and secrets
+// never go here. The deploy workflow writes the staging and production config
+// from the GitHub environment, and local development needs none of it.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "web",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "ENVIRONMENT": "development" },
+  "d1_databases": [{ "binding": "DB", "database_name": "db" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "queues": {
+    "producers": [
+      { "binding": "FEED_QUEUE", "queue": "feed" },
+      { "binding": "CRAWL_QUEUE", "queue": "crawl" }
+    ]
+  }
+}
