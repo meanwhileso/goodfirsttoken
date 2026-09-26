@@ -1,7 +1,7 @@
 // Git objects for the fake: blobs, trees, and commits, kept by object ID in
 // one store that every repo shares, the way a fork shares its parent's
-// objects on GitHub. IDs are 40 hex characters like Git's, from a fast hash
-// of the content. They are not Git's SHA-1, so they never match a real repo.
+// objects on GitHub. IDs are 40 hex characters like Git's, made with an FNV
+// hash of the content, so they never match an object in a real repo.
 
 export type Oid = string;
 

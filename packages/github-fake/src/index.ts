@@ -194,7 +194,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     calls,
     fetch,
     tokenFor: (login, scopes = ['public_repo']) => {
-      if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization, not a person`);
+      if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization. Tokens belong to people.`);
       return mintToken(login, scopes, null);
     },
     reset: () => {
