@@ -278,9 +278,9 @@ placeholders until #19 and #20 write them.
 
 ## Calls to GitHub
 
-- Every call to GitHub names the token it runs with, the token of the person
-  the call is for. There is no default token, so a call can act only as the
-  person it names. Nothing calls GitHub yet. Sign-in (#8) is the first.
+- Every call to GitHub names the token it runs with. There is no default
+  token. A call made for a person runs with that person's own token, so it
+  can act only as them. Nothing calls GitHub yet. Sign-in (#8) is the first.
 - When GitHub refuses a call, the refusal comes back with GitHub's status
   and message.
 - In local development, GitHub is the GitHub fake, and its sign-in page

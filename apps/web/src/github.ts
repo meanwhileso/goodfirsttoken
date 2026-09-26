@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:workers';
 
-// Calls to GitHub. Every call names the token it runs with, which is the
-// token of the person the call is for. There is no default token, so a call
-// can only act as the person it names.
+// Calls to GitHub. Every call names the token it runs with, and there is no
+// default token. A call made for a person passes that person's own token.
+// Reads that act for no one, like issue sync, will pass the read-only
+// service token.
 //
 // GitHub's base URLs come from GH_API_URL and GH_WEB_URL. Local development
 // and tests point them at the fake in packages/github-fake. A deploy that

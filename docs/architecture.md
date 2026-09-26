@@ -200,13 +200,27 @@ and Playwright run it as a local HTTP server.
   returns the same fork. `createCommitOnBranch` refuses a stale expected
   head, makes the caller the author, and GitHub signs the commit. A PR that
   mentions an issue adds a `cross-referenced` event to that issue's
-  timeline, and merging it closes the issues it says it closes. Search
-  serves at most 1,000 results. API calls need a User-Agent.
-- **Where it differs.** A search qualifier it doesn't know gets a 422
-  naming the file to add it to, where GitHub would read it as text. It
-  treats a `localhost` OAuth callback like GitHub's `127.0.0.1` loopback
-  rule, so any port works. Git object IDs are 40 hex characters from a fast
-  hash, not Git's SHA-1. It cannot be cloned with `git`.
+  timeline, and merging it closes the issues it says it closes. A PR's head
+  must be the base repo or a fork of it. Search serves the first 1,000
+  results and answers a page past them with a 422. API calls need a
+  User-Agent.
+- **Where it differs.** Tests that depend on any of these need the fake
+  changed first.
+  - Forks are ready at once. GitHub makes them in the background.
+  - OAuth scopes are recorded and sent back in `x-oauth-scopes`, and
+    nothing checks them. A token with no scopes can fork and commit.
+  - An archived repo accepts writes.
+  - `maintainer_can_modify` is kept and sent back, and the base repo's
+    maintainers still can't push to the PR's branch.
+  - Issue search refuses a query that names neither `is:issue` nor
+    `is:pull-request`, a rule stricter than GitHub's.
+  - A search qualifier it doesn't know gets a 422 naming the file to add it
+    to. GitHub would read it as text.
+  - A `localhost` OAuth callback allows any port, like GitHub's rule for
+    `127.0.0.1`.
+  - Git object IDs are 40 hex characters made with an FNV hash of the
+    content, so they never match a real repo's. The fake can't be cloned
+    with `git`.
 - **Nothing in it touches the network.** In a test, `fake.fetch` stands in
   for the global `fetch` and throws for any URL outside the fake's two base
   URLs, which default to hosts under `.test`, a domain that never resolves.
@@ -225,7 +239,9 @@ and Playwright run it as a local HTTP server.
 - **Local state.** The server `pnpm dev` starts keeps its state in
   `apps/web/.wrangler/github-fake/state.json`, next to Miniflare's, so forks
   and commits survive a restart. `pnpm seed` resets it to the sample data.
-  The Playwright server starts fresh every time.
+  In CI, Playwright starts a fresh fake with the sample data. Locally it
+  reuses a fake that is already running, like the one `pnpm dev` started,
+  with whatever state that one has.
 - **It never ships.** `apps/web` lists it as a dev dependency, and a lint
   rule refuses an import of it from `apps/web/src`.
 
