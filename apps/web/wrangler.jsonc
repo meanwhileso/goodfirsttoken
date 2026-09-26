@@ -14,7 +14,14 @@
   // it supports makes `pnpm test` fail, so move this only as far as it allows.
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "ENVIRONMENT": "development" },
+  "vars": {
+    "ENVIRONMENT": "development",
+    // GitHub's base URLs. Locally they point at the GitHub fake that
+    // `pnpm dev` starts (packages/github-fake). Staging and production use
+    // https://api.github.com and https://github.com.
+    "GITHUB_API_URL": "http://127.0.0.1:8944/api",
+    "GITHUB_WEB_URL": "http://127.0.0.1:8944"
+  },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "queues": {

@@ -6,13 +6,21 @@ import { defineConfig } from 'vitest/config';
 // bindings from wrangler.jsonc. ENVIRONMENT is pinned to a value local
 // development never uses, so a test can tell a value read from the binding
 // from a hard-coded one, and a local .dev.vars can't change the result.
-// Browser tests are in e2e/ and use Playwright.
+// GitHub's URLs are under .test, a domain that never resolves. Tests answer
+// them with the in-process GitHub fake. Browser tests are in e2e/ and use
+// Playwright.
 export default defineConfig({
   plugins: [
     tanstackStart(),
     cloudflareTest({
       wrangler: { configPath: './wrangler.jsonc' },
-      miniflare: { bindings: { ENVIRONMENT: 'staging' } },
+      miniflare: {
+        bindings: {
+          ENVIRONMENT: 'staging',
+          GITHUB_API_URL: 'https://api.github.test',
+          GITHUB_WEB_URL: 'https://github.test',
+        },
+      },
     }),
   ],
   test: {

@@ -20,7 +20,8 @@ You need Node 24. pnpm comes through corepack.
 ```bash
 corepack enable
 pnpm install
-pnpm dev         # the site, at http://localhost:5173
+pnpm dev         # the site, at http://localhost:5173, and a fake GitHub
+pnpm seed        # reset the fake GitHub to the sample data
 pnpm prototype   # the clickable prototype, at http://localhost:8943
 pnpm check       # lint and typecheck
 pnpm test        # unit tests, the Worker's inside the Workers runtime

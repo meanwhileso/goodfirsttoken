@@ -16,3 +16,13 @@ goes on in the open.
   or GitHub is down.
 - It is sent with `Cache-Control: no-store`, so every check reaches the Worker
   that is live now.
+
+## Calls to GitHub
+
+- Every call to GitHub names the token it runs with, the token of the person
+  the call is for. There is no default token, so a call can act only as the
+  person it names. Nothing calls GitHub yet. Sign-in (#8) is the first.
+- When GitHub refuses a call, the refusal comes back with GitHub's status
+  and message.
+- In local development, GitHub is the GitHub fake, and its sign-in page
+  lets you pick any sample person to be.

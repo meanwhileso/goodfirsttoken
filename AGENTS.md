@@ -16,7 +16,8 @@ describe the code as it is.
 
 - `corepack enable && pnpm install`
 - `pnpm dev` serves the site at http://localhost:5173, with no accounts and
-  no network.
+  no network. It starts a fake GitHub with sample data beside it.
+  `pnpm seed` resets that data.
 - `pnpm check` runs lint and typecheck.
 - `pnpm test` runs the unit tests, the Worker's inside the Workers runtime.
 - `pnpm test:e2e` runs the Playwright tests against a production build. Run

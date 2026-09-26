@@ -1,0 +1,29 @@
+{
+  "name": "@goodfirsttoken/github-fake",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A fake GitHub for tests and local development that records whose token made each call.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./local": "./src/local.ts",
+    "./sample-data": "./src/sample-data.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "start": "node src/serve.ts",
+    "dev": "node src/serve.ts --state ../../apps/web/.wrangler/github-fake/state.json",
+    "seed": "node src/seed.ts --state ../../apps/web/.wrangler/github-fake/state.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "graphql": "^17.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "~6.0.3",
+    "vitest": "~4.1.11"
+  }
+}

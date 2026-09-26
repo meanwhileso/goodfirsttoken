@@ -1,0 +1,212 @@
+import { beforeEach, expect, test } from 'vitest';
+import { createGitHubFake, type GitHubFake } from '../src/index.ts';
+import { fromBase64, graphql, rest } from './call.ts';
+
+let fake: GitHubFake;
+
+beforeEach(() => {
+  fake = createGitHubFake();
+});
+
+const UPSTREAM = '/repos/meanwhileso/goodfirsttoken';
+const numbers = (items: unknown) => (items as { number: number }[]).map((i) => i.number);
+
+test('listing issues filters by label, state, and assignee, and marks the pull requests it lists', async () => {
+  const tagged = await rest(fake, 'GET', `${UPSTREAM}/issues?labels=goodfirsttoken&assignee=none`);
+  const everything = await rest<{ number: number; pull_request?: { merged_at: string | null } }[]>(
+    fake,
+    'GET',
+    `${UPSTREAM}/issues?state=all`,
+  );
+  const mergedAt = (n: number) => everything.body.find((i) => i.number === n)?.pull_request?.merged_at;
+
+  expect(numbers(tagged.body)).toEqual([25, 21, 12]);
+  expect(everything.body.filter((i) => i.pull_request).map((i) => i.number)).toEqual([58, 57, 52, 49]);
+  expect(Date.parse(mergedAt(49) ?? '')).toBeLessThan(Date.now());
+  expect(mergedAt(57)).toBeNull();
+});
+
+test('lists come in pages with a Link header, as on GitHub', async () => {
+  const first = await rest(fake, 'GET', `${UPSTREAM}/issues?state=all&per_page=3`);
+  const next = /<([^>]+)>; rel="next"/.exec(first.headers.get('link') ?? '')?.[1] ?? '';
+  const second = await rest(fake, 'GET', next.slice(fake.apiUrl.length));
+
+  expect(numbers(first.body)).toEqual([58, 57, 52]);
+  expect(first.headers.get('link')).toContain('rel="last"');
+  expect(numbers(second.body)).toEqual([49, 25, 21]);
+});
+
+test('a label list has the fields GitHub sends for each label', async () => {
+  const { body } = await rest<Record<string, unknown>[]>(fake, 'GET', `${UPSTREAM}/labels`);
+  const label = body.find((l) => l.name === 'goodfirsttoken');
+
+  // https://docs.github.com/en/rest/issues/labels#list-labels-for-a-repository
+  expect(Object.keys(label ?? {}).sort()).toEqual(['color', 'default', 'description', 'id', 'name', 'node_id', 'url']);
+  expect(label).toMatchObject({
+    url: `${fake.apiUrl}/repos/meanwhileso/goodfirsttoken/labels/goodfirsttoken`,
+    color: '7057ff',
+    default: false,
+  });
+});
+
+test('search finds open tagged issues across repos with no PR linked to them', async () => {
+  const q = encodeURIComponent('is:issue is:open label:"help wanted" -linked:pr');
+
+  const { body } = await rest<{ total_count: number; items: { html_url: string }[] }>(fake, 'GET', `/search/issues?q=${q}`);
+
+  // meanwhileso/goodfirsttoken#18 is tagged too, but PR #57 says it closes it.
+  expect(body.items.map((i) => i.html_url).sort()).toEqual([
+    `${fake.webUrl}/cloudflare/vinext/issues/311`,
+    `${fake.webUrl}/harbor-dev/harbor/issues/88`,
+  ]);
+  expect(body.total_count).toBe(2);
+});
+
+test('issue search needs is:issue or is:pull-request, as GitHub requires', async () => {
+  const reply = await rest(fake, 'GET', `/search/issues?q=${encodeURIComponent('label:bug')}`);
+
+  expect(reply.status).toBe(422);
+  expect(reply.body).toMatchObject({ message: "Query must include 'is:issue' or 'is:pull-request'" });
+});
+
+test('search refuses a qualifier the fake does not know, so a test never passes on a misread query', async () => {
+  const reply = await rest<{ errors: { message: string }[] }>(
+    fake,
+    'GET',
+    `/search/issues?q=${encodeURIComponent('is:issue reactions:>5')}`,
+  );
+
+  expect(reply.status).toBe(422);
+  expect(reply.body.errors[0]?.message).toContain('packages/github-fake/src/search.ts');
+});
+
+test('repository search filters by stars and push date, and leaves forks out', async () => {
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const q = encodeURIComponent(`stars:>=4000 pushed:>=${since}`);
+
+  const { body } = await rest<{ items: { full_name: string }[] }>(fake, 'GET', `/search/repositories?q=${q}`);
+  const all = await rest<{ items: { fork: boolean }[] }>(fake, 'GET', `/search/repositories?q=${encodeURIComponent('stars:>=0')}`);
+
+  expect(body.items.map((r) => r.full_name)).toEqual([
+    'vitejs/vite',
+    'omacom/omarchy',
+    'cloudflare/vinext',
+    'harbor-dev/harbor',
+  ]);
+  expect(all.body.items.some((r) => r.fork)).toBe(false);
+});
+
+test('search serves at most the first 1,000 results, as GitHub does', async () => {
+  const template = fake.state.repos['cloudflare/workers-sdk'];
+  if (!template) throw new Error('missing sample repo');
+  for (let n = 0; n < 1005; n++) {
+    fake.state.repos[`bulk/r${String(n)}`] = { ...template, id: 9_000_000 + n, owner: 'bulk', name: `r${String(n)}` };
+  }
+
+  const page = (n: number) =>
+    rest<{ total_count: number; items: unknown[] }>(
+      fake,
+      'GET',
+      `/search/repositories?q=${encodeURIComponent('org:bulk')}&per_page=100&page=${String(n)}`,
+    );
+
+  expect((await page(10)).body).toMatchObject({ total_count: 1005 });
+  expect((await page(10)).body.items).toHaveLength(100);
+  expect((await page(11)).body.items).toHaveLength(0);
+});
+
+test('file contents come back base64 encoded, and a folder as a list of its entries', async () => {
+  const file = await rest<{ content: string; encoding: string; path: string }>(fake, 'GET', `${UPSTREAM}/contents/AGENTS.md`);
+  const folder = await rest<{ name: string; type: string }[]>(fake, 'GET', `${UPSTREAM}/contents/.github`);
+  const missing = await rest(fake, 'GET', `${UPSTREAM}/contents/NOPE.md`);
+  const otherBranch = await rest(fake, 'GET', '/repos/harbor-dev/harbor/contents/justfile?ref=develop');
+
+  expect(file.body).toMatchObject({ type: 'file', encoding: 'base64', path: 'AGENTS.md' });
+  expect(fromBase64(file.body.content)).toContain('# AGENTS.md');
+  expect(folder.body.map((e) => [e.name, e.type])).toEqual([
+    ['pull_request_template.md', 'file'],
+    ['workflows', 'dir'],
+  ]);
+  expect(missing.status).toBe(404);
+  expect(missing.body).toMatchObject({
+    message: 'Not Found',
+    documentation_url: 'https://docs.github.com/en/rest/repos/contents#get-repository-content',
+  });
+  expect(otherBranch.status).toBe(200);
+});
+
+test('one GraphQL query reads files from many repos, with an error for each repo that is not there', async () => {
+  const reply = await graphql<Record<string, { contributing: { text: string } | null } | null>>(
+    fake,
+    fake.tokenFor('lena'),
+    `{
+      a: repository(owner: "meanwhileso", name: "goodfirsttoken") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
+      b: repository(owner: "harbor-dev", name: "harbor") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
+      c: repository(owner: "cloudflare", name: "workers-sdk") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
+      d: repository(owner: "nobody", name: "nothing") { contributing: object(expression: "HEAD:CONTRIBUTING.md") { ... on Blob { text } } }
+    }`,
+  );
+
+  expect(reply.body.data?.a?.contributing?.text).toContain('AI help is welcome');
+  expect(reply.body.data?.b?.contributing?.text).toContain('write the PR description yourself');
+  expect(reply.body.data?.c).toEqual({ contributing: null });
+  expect(reply.body.data?.d).toBeNull();
+  expect(reply.body.errors).toMatchObject([
+    { type: 'NOT_FOUND', path: ['d'], message: "Could not resolve to a Repository with the name 'nobody/nothing'." },
+  ]);
+});
+
+test("a PR's reviews and review comments come back with who wrote them", async () => {
+  const reviews = await rest(fake, 'GET', `${UPSTREAM}/pulls/57/reviews`);
+  const comments = await rest(fake, 'GET', `${UPSTREAM}/pulls/57/comments`);
+
+  expect(reviews.body).toMatchObject([
+    {
+      state: 'CHANGES_REQUESTED',
+      user: { login: 'jdconley' },
+      body: 'Can the formatter skip events with an empty text field? Otherwise looks good.',
+    },
+  ]);
+  expect(comments.body).toMatchObject([
+    { path: 'apps/web/src/feed/format.ts', line: 2, side: 'RIGHT', user: { login: 'jdconley' } },
+  ]);
+});
+
+// Every URL a client might follow stays on the fake. Only the docs links
+// point elsewhere.
+function urlsIn(value: unknown, found: string[] = []): string[] {
+  if (typeof value === 'string' && /^https?:\/\//.test(value)) found.push(value);
+  else if (Array.isArray(value)) for (const item of value) urlsIn(item, found);
+  else if (value && typeof value === 'object') for (const item of Object.values(value)) urlsIn(item, found);
+  return found;
+}
+
+test('no URL in a response leads off the fake, except links to GitHub docs', async () => {
+  const token = fake.tokenFor('priya');
+  const paths = [
+    '/user',
+    '/users/jdconley',
+    UPSTREAM,
+    `${UPSTREAM}/labels`,
+    `${UPSTREAM}/issues?state=all`,
+    `${UPSTREAM}/issues/18/timeline`,
+    `${UPSTREAM}/pulls/57`,
+    `${UPSTREAM}/pulls/57/reviews`,
+    `${UPSTREAM}/pulls/57/comments`,
+    `${UPSTREAM}/contents/README.md`,
+    `${UPSTREAM}/branches/main`,
+    '/repos/priya/goodfirsttoken',
+    `/search/issues?q=${encodeURIComponent('is:pr author:priya')}`,
+    `${UPSTREAM}/contents/NOPE.md`,
+  ];
+
+  const urls: string[] = [];
+  for (const path of paths) urlsIn((await rest(fake, 'GET', path, { token })).body, urls);
+  const avatar = await fake.fetch(urls.find((u) => u.includes('/avatars/')) ?? '');
+  const raw = await fake.fetch(urls.find((u) => u.includes('/raw/')) ?? '');
+
+  expect(urls.length).toBeGreaterThan(100);
+  expect(urls.filter((u) => ![fake.apiUrl, fake.webUrl, 'https://docs.github.com/'].some((b) => u.startsWith(b)))).toEqual([]);
+  expect(avatar.headers.get('content-type')).toBe('image/svg+xml');
+  expect(await raw.text()).toContain('Good First Token');
+});

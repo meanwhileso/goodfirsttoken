@@ -25,6 +25,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.60.2",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@goodfirsttoken/github-fake": "workspace:*",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",
