@@ -47,12 +47,21 @@ function everyAsset(dir: string): Plugin {
   };
 }
 
+// Where the local D1, Durable Objects, KV, and queues keep their data. By
+// default .wrangler/state, which `pnpm dev` uses. The end-to-end tests set
+// LOCAL_STATE_DIR to a folder of their own (playwright.config.ts), so data
+// seeded into `pnpm dev` never reaches them. scripts/migrate-local.mjs reads
+// the same setting.
+function localState(dir = ''): true | { path: string } {
+  return dir.trim() ? { path: dir.trim() } : true;
+}
+
 export default defineConfig({
   base: base(process.env.STATIC_ORIGIN),
   server: { port: 5173, strictPort: true },
   preview: { port: 4173, strictPort: true },
   plugins: [
-    cloudflare({ viteEnvironment: { name: 'ssr' } }),
+    cloudflare({ viteEnvironment: { name: 'ssr' }, persistState: localState(process.env.LOCAL_STATE_DIR) }),
     tanstackStart(),
     react(),
     everyAsset(fileURLToPath(new URL('./src/assets/', import.meta.url))),

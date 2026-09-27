@@ -1,5 +1,6 @@
 import {
   changedSettings,
+  CLAIM_LIFETIME_MS,
   count,
   githubId,
   mustParse,
@@ -10,6 +11,7 @@ import {
   projectStatusChangeSchema,
   projectStatusSchema,
   repoName,
+  REVIEW_WINDOW_MS,
   settingsVersionSchema,
   updateProjectSettings,
   type FieldProblem,
@@ -202,24 +204,32 @@ export async function listProjects(db: D1Database, status: ProjectStatus): Promi
 export interface ProjectAskingForHelp {
   project: ProjectRecord;
   /**
-   * Its cached issues that carry one of its tags, none of its excluded tags,
-   * and no linked open PR.
+   * Its cached issues a new agent could claim now: they carry one of its
+   * tags and none of its excluded tags, have no open PR, and have fewer
+   * claims holding a slot than its claims per issue.
    */
   waiting: number;
 }
 
 /**
- * The projects asking for help: every approved project, paused ones left
- * out, and any whose repo or issue repo is on the do-not-list. The ones with
- * the most issues waiting for an agent come first, then the most recently
- * added, then by repo. `total` is how many there are, and `projects` the
- * first `limit` of them.
+ * The projects asking for help at `now`: every approved project, paused
+ * ones left out, and any whose repo or issue repo is on the do-not-list.
+ * The ones with the most issues waiting for an agent come first, then the
+ * most recently added, then by repo. `total` is how many there are, and
+ * `projects` the first `limit` of them.
  */
 export async function listProjectsAskingForHelp(
   db: D1Database,
   limit: number,
+  now: number,
 ): Promise<{ total: number; projects: ProjectAskingForHelp[] }> {
-  // Labels compare without case. SQLite's lower() folds ASCII letters.
+  // Labels compare without case. SQLite's lower() folds ASCII letters. An
+  // issue has an open PR when the sync saw one linked to it, or when a claim
+  // on it opened one that the PRs table doesn't show merged or closed, as
+  // the issue's room counts it. A claim holds a slot as core's holdsSlot
+  // says: working or paused until 24 hours after it was made, and awaiting
+  // review until 7 days after its first submit, whether or not the room's
+  // timer has run yet.
   const { results } = await db
     .prepare(
       `SELECT p.*, s.settings, COUNT(*) OVER () AS total,
@@ -228,15 +238,23 @@ export async function listProjectsAskingForHelp(
             AND EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.tags') g
                         WHERE lower(l.value) = lower(g.value))
             AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x
-                            WHERE lower(l.value) = lower(x.value))) AS waiting
+                            WHERE lower(l.value) = lower(x.value))
+            AND NOT EXISTS (SELECT 1 FROM claims c LEFT JOIN prs pr ON pr.claim_id = c.id
+                            WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
+                              AND c.pr_number IS NOT NULL AND (pr.state IS NULL OR pr.state = 'open'))
+            AND (SELECT COUNT(*) FROM claims c
+                 WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
+                   AND ((c.state IN ('active', 'paused') AND c.claimed_at + ?2 > ?4)
+                     OR (c.state = 'awaiting_review' AND c.submitted_at + ?3 > ?4)))
+                < json_extract(s.settings, '$.claimsPerIssue')) AS waiting
        FROM projects p
        JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
        WHERE p.status = 'approved'
          AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))
        ORDER BY waiting DESC, p.added_at DESC, p.repo
-       LIMIT ?`,
+       LIMIT ?1`,
     )
-    .bind(mustParse(count, limit, 'limit'))
+    .bind(mustParse(count, limit, 'limit'), CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS, checkTime(now))
     .all<ProjectRow & { total: number; waiting: number }>();
   return {
     total: mustParse(count, results[0]?.total ?? 0, 'total'),

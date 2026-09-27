@@ -6,8 +6,11 @@ import { SAMPLE_CLAIMS, SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleClaim } from 
 
 // POST /dev/seed, in local development only: gives the local site the sample
 // projects and work in ./sample-work.ts, so `pnpm dev` shows a homepage with
-// something on it. `pnpm seed` calls it. Outside development the route
-// doesn't exist, the same check the dev sign-in uses (src/auth/settings.ts).
+// something on it. `pnpm seed` calls it. The route exists only in
+// development, the check the dev sign-in uses (src/auth/settings.ts), and
+// only for a request to this machine by a loopback hostname. The seed never
+// calls GitHub, so a Worker deployed with the local config would pass the
+// first check. The second keeps it from answering on a public hostname.
 //
 // The work goes through the issue rooms, the way the MCP tools will make it,
 // so the claims, their lines, and the feeds come out as they would for real.
@@ -29,9 +32,11 @@ function prUrl(repo: string, number: number): string {
   return `https://github.com/${repo}/pull/${String(number)}`;
 }
 
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
 /** Answers every request to /dev/seed. */
 export async function handleDevSeed(request: Request): Promise<Response> {
-  if (!isDevelopment()) return text(404, 'Not Found');
+  if (!isDevelopment() || !LOOPBACK.has(new URL(request.url).hostname)) return text(404, 'Not Found');
   if (request.method !== 'POST') return text(405, 'Seed with POST.');
   // A page on another site can't seed someone's local site.
   const origin = request.headers.get('origin');

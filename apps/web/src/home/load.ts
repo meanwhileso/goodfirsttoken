@@ -86,9 +86,9 @@ async function readMerged(now: number): Promise<HomeData['merged']> {
   }
 }
 
-async function readHelp(): Promise<HomeData['help']> {
+async function readHelp(now: number): Promise<HomeData['help']> {
   try {
-    const { total, projects } = await listProjectsAskingForHelp(env.DB, HELP_SHOWN);
+    const { total, projects } = await listProjectsAskingForHelp(env.DB, HELP_SHOWN, now);
     return {
       total,
       projects: projects.map(({ project, waiting }) => ({
@@ -107,6 +107,6 @@ async function readHelp(): Promise<HomeData['help']> {
 /** Everything the homepage shows when it loads, as of `now`. */
 export async function loadHome(request: Request, now = Date.now()): Promise<HomeData> {
   const day = utcDay(now);
-  const [live, merged, help] = await Promise.all([readLive(day), readMerged(now), readHelp()]);
+  const [live, merged, help] = await Promise.all([readLive(day), readMerged(now), readHelp(now)]);
   return { site: siteAddress(request), day, live, merged, help };
 }

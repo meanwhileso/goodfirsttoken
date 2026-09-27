@@ -1,5 +1,6 @@
 import type { FeedEvent } from '@goodfirsttoken/core';
 import { people as fakePeople, repos as fakeRepos } from '@goodfirsttoken/github-fake/sample-data';
+import { runInDurableObject } from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, getProject, listProjectsAskingForHelp, startOfWeek, topMergers } from '../../src/db';
@@ -124,6 +125,31 @@ describe('the homepage', () => {
     expect(home.help).toBeNull();
     warnings.mockRestore();
   });
+
+  test("leaves the wall and the count out when the homepage's feed can't say who is blocked", async () => {
+    const now = nextDay();
+    await homeFeed(env.FEED).deliver([{ event: event(now, kenji, 'while D1 is down for the feed'), githubId: kenji.githubId }]);
+    const down = { prepare: () => { throw new Error('D1 is down.'); } } as unknown as D1Database;
+    await runInDurableObject(homeFeed(env.FEED), (instance) => {
+      const live = instance as unknown as { env: Env };
+      live.env = { ...live.env, DB: down };
+    });
+    restore = () => undefined;
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const home = await loadHome(request, now);
+
+      expect(home.live).toBeNull();
+      // The Worker's own D1 still answers.
+      expect(home.merged).toEqual([]);
+    } finally {
+      await runInDurableObject(homeFeed(env.FEED), (instance) => {
+        (instance as unknown as { env: Env }).env = env;
+      });
+      warnings.mockRestore();
+    }
+  });
 });
 
 describe('the token field', () => {
@@ -166,7 +192,7 @@ describe('the dev-only seed', () => {
     expect(first.status).toBe(200);
     expect(await first.json()).toEqual({ projects: 5, claims: 10, lines: 10, merged: 5 });
 
-    const help = await listProjectsAskingForHelp(env.DB, 5);
+    const help = await listProjectsAskingForHelp(env.DB, 5, Date.now());
     expect(help.projects.map(({ project, waiting }) => [project.repo, waiting])).toEqual([
       ['sample-owner/sample-desktop', 2],
       ['sample-owner/sample-app', 1],
@@ -208,6 +234,16 @@ describe('the dev-only seed', () => {
       }
     }
     for (const claim of SAMPLE_CLAIMS) expect(repo(claim.project), claim.project).toBeDefined();
+  });
+
+  test('in development, on a host that is not this machine, does not exist and seeds nothing', async () => {
+    restore = runAsDevelopment();
+
+    for (const host of ['gft.example', 'gft.workers.test', '192.0.2.10:5173']) {
+      const res = await exports.default.fetch(`http://${host}/dev/seed`, { method: 'POST' });
+      expect(res.status, host).toBe(404);
+    }
+    expect(await getProject(env.DB, 'sample-owner/sample-app')).toBeNull();
   });
 
   test('refuses a POST from a page on another site', async () => {
