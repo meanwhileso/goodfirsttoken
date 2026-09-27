@@ -6,7 +6,7 @@ import { siteAddress } from '../home/load';
 import { issueRoom } from '../rooms/issue-room';
 import { findIssue } from './find';
 import { issueFromPath } from './path';
-import { foldEvents, samePr, type IssueView, type PrLink } from './view';
+import { foldEvents, samePr, slotsTaken, type IssueView, type PrLink } from './view';
 
 export { issueFromPath } from './path';
 
@@ -104,26 +104,30 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   if (glance === null) throw new Error('The room could not say which donors are blocked.');
   const view = foldEvents(glance.events);
 
-  // Each project that keeps its issues in the repo judges its own copy, as
-  // the homepage does. The page follows the oldest whose copy waits for an
-  // agent, then the oldest that would but for a PR the sync saw, then the
-  // oldest.
-  const issueRepo = splitIssue(asked).repo;
-  const judged = await Promise.all(
-    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(copy.project, copy, issueRepo) })),
-  );
-  const tagged =
-    judged.find((copy) => copy.closed === null && copy.copy.linkedPr === null) ??
-    judged.find((copy) => copy.closed === null) ??
-    judged[0];
-  const latest = glance.claims.at(-1) ?? mirrored.at(-1);
-  const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
-
   // Blocked donors' claims have no event the page may see, so no lane. One
   // that holds a slot still takes it.
   const visible = new Set(view.lanes.map((lane) => lane.claim));
   const hidden = glance.claims.filter((claim) => !visible.has(claim.id));
   view.hidden = { claims: hidden.length, holding: hidden.filter((claim) => HOLDS_SLOT.has(claim.state)).length };
+
+  // Each project that keeps its issues in the repo judges its own copy, as
+  // the homepage does. The page follows the oldest whose copy waits for an
+  // agent, with a free slot under its claims per issue, then the oldest that
+  // would but for a PR the sync saw or a full cap, then the oldest.
+  const issueRepo = splitIssue(asked).repo;
+  const judged = await Promise.all(
+    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(copy.project, copy, issueRepo) })),
+  );
+  const taken = slotsTaken(view);
+  const tagged =
+    judged.find(
+      (copy) =>
+        copy.closed === null && copy.copy.linkedPr === null && taken < copy.project.settings.claimsPerIssue,
+    ) ??
+    judged.find((copy) => copy.closed === null) ??
+    judged[0];
+  const latest = glance.claims.at(-1) ?? mirrored.at(-1);
+  const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
 
   // Each lane, and the timeline, names its claimant by their login now,
   // since a login can change and a freed one can go to someone else. One

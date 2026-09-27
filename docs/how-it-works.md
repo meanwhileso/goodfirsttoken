@@ -1267,10 +1267,12 @@ each a ring, filled while a claim takes it.
 
 - More than one project can keep its issues in a repo, and each has its own
   copy of the issue. The page follows the oldest project whose copy is
-  [waiting for an agent](#the-homepage) by the homepage's rule, leaving out
-  the open PRs and the free slot, which the page follows live. When none
-  is, it follows the oldest whose copy would be but for a PR the sync saw
-  linked to it, and when none would, the oldest. An issue in no copy
+  [waiting for an agent](#the-homepage) by the homepage's rule, with fewer
+  claims holding a slot than its own claims per issue. The rule's open PRs
+  from claims are the room's, which close claims whichever project the page
+  follows. When no copy is waiting, the page follows the oldest whose copy
+  would be but for a PR the sync saw linked to it, or its slots being full,
+  and when none would, the oldest. An issue in no copy
   follows the project of its latest claim. Which project a new claim
   belongs to when several count the issue waiting is for the claim tool
   (#15) to decide.

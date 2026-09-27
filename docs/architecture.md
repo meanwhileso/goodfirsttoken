@@ -1074,13 +1074,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   neither gets a `404` from the page and from the stream, and that no room
   is made. The one difference is the path, under The site's own paths.
 - **Whether it takes claims** follows the homepage's rule for an issue
-  waiting for an agent, in `listProjectsAskingForHelp`, less the open PRs
-  and the free slot, which the page follows live: an approved project, not
-  on the do-not-list, and a cached copy with one of its tags and none of its
-  excluded ones, folding ASCII letters as SQLite's `lower()` does. Each
-  copy is judged with its own project, and `read` in `src/issue/load.ts`
-  picks the copy the page follows, as how-it-works says. That copy's
-  linked PR joins the room's open PRs.
+  waiting for an agent, in `listProjectsAskingForHelp`. `closedBecause` in
+  `src/issue/load.ts` judges each copy with its own project, less the open
+  PRs and the free slot, which the page follows live: an approved project,
+  not on the do-not-list, and a cached copy with one of its tags and none of
+  its excluded ones, folding ASCII letters as SQLite's `lower()` does. `read`
+  then picks the copy the page follows, as how-it-works says, checking the
+  slots taken against each copy's own claims per issue. That copy's linked
+  PR joins the room's open PRs.
 - **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
   OAuth routes before any page or stream. The page also answers `404` for
   `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in

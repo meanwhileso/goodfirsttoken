@@ -365,6 +365,54 @@ describe('the slots', () => {
     expect(page.view.openPrs).toEqual([]);
   });
 
+  test('with two projects keeping issues in one repo, the page follows the one with a free slot, as the homepage does', async () => {
+    const web = 'sample-owner/sample-web';
+    await changeSettings(db, repo, { claimsPerIssue: 1 }, maintainer.githubId, t0);
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo, claimsPerIssue: 3 }, web);
+    await saveIssues(db, [
+      { issue, project: repo, title: 'As sample-app cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+      { issue, project: web, title: 'As sample-web cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+    await claim(priya, 'claude-code', 1);
+
+    // sample-app's one slot is taken. sample-web has two free.
+    expect([await waitingOnHomepage(repo), await waitingOnHomepage(web)]).toEqual([0, 1]);
+    const page = await load();
+    expect(page).toMatchObject({ closedBecause: null, slots: 3, title: 'As sample-web cached it' });
+    expect(slotsTaken(page.view)).toBe(1);
+    expect(await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text()).toContain(
+      `/goodfirsttoken:work ${issue}`,
+    );
+  });
+
+  test('with no copy waiting, the page follows the oldest that would be but for a PR the sync saw, and shows that PR', async () => {
+    const web = 'sample-owner/sample-web';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, web);
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'taking a break', changedBy: maintainer.githubId }, t0);
+    await saveIssues(db, [
+      { issue, project: repo, title: 'As sample-app cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+      { issue, project: web, title: 'As sample-web cached it', labels: ['help wanted'], linkedPr: prRef(91), syncedAt: t0 },
+    ]);
+
+    expect(await waitingOnHomepage(web)).toBe(0);
+    const page = await load();
+    expect(page).toMatchObject({ closedBecause: null, title: 'As sample-web cached it' });
+    expect(page.view.openPrs).toEqual([prLink(91)]);
+  });
+
+  test('with no copy that would be waiting, the page follows the oldest', async () => {
+    const web = 'sample-owner/sample-web';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, web);
+    await setProjectStatus(db, web, { status: 'paused', reason: 'taking a break', changedBy: maintainer.githubId }, t0);
+    await saveIssues(db, [
+      { issue, project: repo, title: 'As sample-app cached it', labels: ['question'], linkedPr: null, syncedAt: t0 },
+      { issue, project: web, title: 'As sample-web cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+
+    expect([await waitingOnHomepage(repo), await waitingOnHomepage(web)]).toEqual([0, undefined]);
+    expect(await load()).toMatchObject({ closedBecause: 'issue', title: 'As sample-app cached it' });
+  });
+
   test('a PR the last sync saw linked to the issue is open, so the slots close and every lane says so', async () => {
     await tag({ linkedPr: prRef(70) });
     await claim(priya);
