@@ -8,7 +8,7 @@
 .ds { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; padding-top: 64px; }
 .ds > h2 { font: 500 13px var(--font-mono); color: var(--text-faint); padding-top: 4px; }
 .ds > h2 small { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); font-weight: 400; line-height: 1.5; }
-@media (max-width: 880px) { .ds { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+@container page (max-width: 880px) { .ds { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
 
 .ds-headline { font-size: clamp(40px, 6vw, 72px); }
 .ds-token-field { max-width: 320px; }

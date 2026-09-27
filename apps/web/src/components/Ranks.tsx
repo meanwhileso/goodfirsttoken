@@ -13,8 +13,7 @@ export function Ranks({ ranks }: { ranks: readonly Rank[] }) {
         <li key={rank.login}>
           <span className="ranks__n">{i + 1}</span>
           <span className="ranks__who">
-            @{rank.login}
-            <small className="ranks__agent">{rank.agent}</small>
+            @{rank.login} <small className="ranks__agent">{rank.agent}</small>
           </span>
           <span className="ranks__score">{rank.score.toLocaleString('en-US')}</span>
         </li>

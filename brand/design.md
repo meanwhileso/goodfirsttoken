@@ -110,7 +110,7 @@ spacing:
 elevation:
   none: "none"
   window: "0 30px 80px rgba(14, 17, 22, 0.10), 0 2px 6px rgba(14, 17, 22, 0.05)"
-  focus: "0 0 0 3px rgba(112, 87, 255, 0.35)"
+  focus: "0 0 0 2px #FBFBF9, 0 0 0 5px #7057FF"
 components:
   button-primary:
     backgroundColor: "{colors.ink}"
@@ -126,12 +126,12 @@ components:
     typography: "{typography.button-label}"
     rounded: "{rounded.pill}"
     height: 44px
-    padding: 0 16px
+    padding: 0 18px
   button-danger:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.danger}"
     borderColor: "{colors.line}"
-    rounded: "{rounded.md}"
+    rounded: "{rounded.pill}"
   logo-chip:
     backgroundColor: "{colors.label}"
     textColor: "{colors.on-label}"
@@ -140,9 +140,11 @@ components:
     padding: 5px 14px 5px 8px
   tag:
     textColor: "#FFFFFF"
-    typography: "{typography.mono-sm}"
+    fontFamily: Geist Mono
+    fontSize: 12.5px
+    fontWeight: 500
     rounded: "{rounded.pill}"
-    height: 26px
+    height: 24px
     padding: 0 10px
   card:
     backgroundColor: "{colors.surface}"
@@ -152,13 +154,18 @@ components:
   prompt-box:
     backgroundColor: "{colors.code-bg}"
     textColor: "{colors.code-text}"
-    typography: "{typography.mono-md}"
+    fontFamily: Geist Mono
+    fontSize: 19px
+    fontWeight: 400
+    lineHeight: 1.5
     rounded: "{rounded.xl}"
     padding: 22px 22px 22px 26px
   marker:
     backgroundColor: "{colors.surface}"
     borderColor: "{colors.line}"
-    typography: "{typography.mono-sm}"
+    fontFamily: Geist Mono
+    fontSize: 13px
+    fontWeight: 500
     rounded: "{rounded.pill}"
     height: 28px
   badge:
@@ -166,7 +173,8 @@ components:
     keyColor: "{colors.text-muted}"
     valueBackground: "{colors.label-tint}"
     valueColor: "{colors.label-ink}"
-    typography: "{typography.mono-sm}"
+    fontFamily: Geist Mono
+    fontSize: 12.5px
     rounded: 6px
     height: 24px
 ---
@@ -202,11 +210,12 @@ The organizing idea is **GitHub, alive**:
 
 The living, rendered twin of this file is the site's `/design` page, which
 shows every component in
-[`apps/web/src/components/`](../apps/web/src/components/). It reads these
-tokens from
-[`apps/web/src/styles/tokens.css`](../apps/web/src/styles/tokens.css), and an
-end-to-end test fails when the two stop matching. `prototype/styles.css` keeps
-its own copy for the prototype pages, and must match this file too.
+[`apps/web/src/components/`](../apps/web/src/components/). The site's CSS is
+the source for how they look. Its tokens are in
+[`apps/web/src/styles/tokens.css`](../apps/web/src/styles/tokens.css).
+End-to-end tests fail when those tokens, or the components in the YAML
+above, stop matching this file. `prototype/` is a frozen reference, and its
+pages are deleted as the real routes ship.
 
 ## Colors
 
@@ -285,7 +294,8 @@ heading. Markers do that job. On phones, `display-xl` scales down to 48px and
 
 Flat. Cards use a 1px `line` border and no shadow. The only shadow is
 `window`, used when we draw an agent or browser window inside a page or video.
-Focus is a 3px purple ring (`focus`) on every interactive element.
+Focus is a 3px purple ring set 2px out from the element (`focus`), on every
+interactive element. It has at least 3:1 contrast on paper and on the prompt.
 
 ## Shapes
 
@@ -318,7 +328,8 @@ Focus is a 3px purple ring (`focus`) on every interactive element.
   purple for live work, green for merged, gray otherwise.
 - **Wall**: the live feed. Mono 17px, one line per event (time, `@user`,
   agent label, issue link, text). The newest line types itself out, and each
-  older line is dimmer than the one above.
+  older line is dimmer than the one above, down to `text-faint` and no
+  lighter.
 - **Stat line**: numbers at up to 48px with their words in muted 18px, as one
   sentence.
 - **Ranks**: huge rank numerals (the first in purple), name with the agent in

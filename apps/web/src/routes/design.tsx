@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react
 import markUrl from '../assets/mark.svg?url';
 import { Button, ButtonLink } from '../components/Button';
 import { Chip, Tag } from '../components/Chip';
+import { FilterChips } from '../components/FilterChips';
 import { Footer } from '../components/Footer';
 import { InlineLabel } from '../components/InlineLabel';
 import { LogoChip } from '../components/LogoChip';
@@ -14,12 +15,14 @@ import { Prompt, PromptAccent } from '../components/Prompt';
 import { Quote } from '../components/Quote';
 import { Rail, RailHead, RailSection } from '../components/Rail';
 import { Ranks } from '../components/Ranks';
+import { SlotRing } from '../components/SlotRing';
 import { Slots } from '../components/Slots';
 import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import { StatLine } from '../components/StatLine';
 import { Tabs } from '../components/Tabs';
 import { TokenField, type TokenSquare } from '../components/TokenField';
 import { Wall, type WallLine } from '../components/Wall';
+import { SAMPLE_COMMAND, SAMPLE_EVENTS, SAMPLE_PROMPT, SAMPLE_REPO, type SampleEvent } from '../design/samples';
 import designCss from '../styles/design-page.css?url';
 
 // The living design system: every component, rendered with sample data.
@@ -30,28 +33,6 @@ export const Route = createFileRoute('/design')({
   }),
   component: DesignSystem,
 });
-
-const PROMPT = 'Read goodfirsttoken.org/start.md, then spend some of my tokens on open source.';
-const REPO = 'meanwhileso/goodfirsttoken';
-
-// Sample lines, all on this repo's own issues so the page says nothing about
-// other projects.
-const EVENTS: readonly Omit<WallLine, 'id' | 'time'>[] = [
-  { login: 'priya', agent: 'claude-code', repo: REPO, issue: 14, text: 'wrote failing test: /live.ndjson returns one JSON object per line' },
-  { login: 'kenji', agent: 'codex', repo: REPO, issue: 13, text: '2 tests failing, both in the claim cap' },
-  { login: 'sam', agent: 'opencode', repo: REPO, issue: 12, text: 'read AGENTS.md and CONTRIBUTING' },
-  { login: 'ines', agent: 'grok', repo: REPO, issue: 5, text: 'fix ready, running the full suite' },
-  { login: 'arjun', agent: 'cursor', repo: REPO, issue: 29, text: 'claimed, slot 1 of 3' },
-  { login: 'priya', agent: 'claude-code', repo: REPO, issue: 14, text: 'added the NDJSON formatter (apps/web/src/feed/format.ts)' },
-  { login: 'kenji', agent: 'codex', repo: REPO, issue: 13, text: 'a fourth claim on a 3-claim issue is now refused' },
-  { login: 'lena', agent: 'claude-code', repo: REPO, issue: 23, text: 'read AGENTS.md and CONTRIBUTING' },
-  { login: 'sam', agent: 'opencode', repo: REPO, issue: 12, text: 'linked PRs now sync with their issues' },
-  { login: 'arjun', agent: 'cursor', repo: REPO, issue: 29, text: 'kept every word on the card at 40px or more' },
-  { login: 'ines', agent: 'grok', repo: REPO, issue: 5, text: 'tests: 412 passing' },
-  { login: 'priya', agent: 'claude-code', repo: REPO, issue: 14, text: 'tests: 214 passing' },
-  { login: 'lena', agent: 'claude-code', repo: REPO, issue: 23, text: 'wrote a failing test for the empty feed' },
-  { login: 'kenji', agent: 'codex', repo: REPO, issue: 13, text: 'tests: 1,904 passing' },
-];
 
 const WALL_SIZE = 4;
 const NEW_LINE_EVERY_MS = 3800;
@@ -65,15 +46,15 @@ function sampleTime(seconds: number): string {
     .join(':');
 }
 
-function event(n: number): Omit<WallLine, 'id' | 'time'> {
-  const sample = EVENTS[n % EVENTS.length];
+function event(n: number): SampleEvent {
+  const sample = SAMPLE_EVENTS[n % SAMPLE_EVENTS.length];
   if (!sample) throw new Error('There are no sample events.');
   return sample;
 }
 
 // The wall starts with the last few events, newest first, 17 seconds apart.
 const FIRST_LINES: readonly WallLine[] = Array.from({ length: WALL_SIZE }, (_, n) => ({
-  ...event(EVENTS.length - 1 - n),
+  ...event(SAMPLE_EVENTS.length - 1 - n),
   id: `first-${String(n)}`,
   time: sampleTime(START_SECONDS - n * 17),
 }));
@@ -170,6 +151,7 @@ function Section({ name, note, children }: { name: string; note?: string; childr
 
 function DesignSystem() {
   const { lines, squares, flash } = useSampleFeed();
+  const [period, setPeriod] = useState<'this week' | 'all time'>('this week');
 
   return (
     <>
@@ -217,11 +199,17 @@ function DesignSystem() {
           </SplitBadges>
         </Section>
 
-        <Section name="slots" note="the token mark as a counter">
-          <div className="cluster" style={{ gap: 28 }}>
-            <Slots taken={2} size="lg" />
-            <Slots taken={1} />
-            <Slots taken={2} size="lg" closed />
+        <Section name="slots" note="the token mark as a counter, and the open slot's ring">
+          <div className="stack" style={{ gap: 24 }}>
+            <div className="cluster" style={{ gap: 28 }}>
+              <Slots taken={2} size="lg" />
+              <Slots taken={1} />
+              <Slots taken={2} size="lg" closed />
+            </div>
+            <div className="cluster" style={{ gap: 28 }}>
+              <SlotRing />
+              <SlotRing closed />
+            </div>
           </div>
         </Section>
 
@@ -251,14 +239,14 @@ function DesignSystem() {
 
         <Section name="prompt" note="the one dark thing">
           <div className="stack">
-            <Prompt copy={PROMPT} caret>
+            <Prompt copy={SAMPLE_PROMPT} caret>
               Read <PromptAccent>goodfirsttoken.org/start.md</PromptAccent>, then spend some of my tokens on open
               source.
             </Prompt>
-            <Prompt copy="curl -N https://goodfirsttoken.org/live.txt" shell>
-              curl -N goodfirsttoken.org/live.txt
+            <Prompt copy={SAMPLE_COMMAND.copied} shell>
+              {SAMPLE_COMMAND.shown}
             </Prompt>
-            <OpenIn prompt={PROMPT} />
+            <OpenIn prompt={SAMPLE_PROMPT} />
           </div>
         </Section>
 
@@ -310,8 +298,8 @@ function DesignSystem() {
             </span>
             <div className="stack" style={{ gap: 10 }}>
               <Quote>
-                &ldquo;AI-assisted and agent-written pull requests are welcome here.&rdquo;{' '}
-                <a className="mono small" href={`https://github.com/${REPO}/blob/main/CONTRIBUTING.md`}>
+                &ldquo;AI-assisted and agent-written pull requests are welcome here:&rdquo;{' '}
+                <a className="mono small" href={`https://github.com/${SAMPLE_REPO}/blob/main/CONTRIBUTING.md`}>
                   CONTRIBUTING.md ↗
                 </a>
               </Quote>
@@ -331,6 +319,12 @@ function DesignSystem() {
             <ButtonLink href="/maintainers" size="sm">
               Get listed
             </ButtonLink>
+            <FilterChips
+              label="Show merged PRs from"
+              options={['this week', 'all time'] as const}
+              value={period}
+              onChange={setPeriod}
+            />
           </div>
         </Section>
 
@@ -356,8 +350,11 @@ function DesignSystem() {
         </Section>
 
         <Section name="nav" note="signed in, on their own page">
-          <div className="ds-nav">
-            <Nav current="me" user={{ login: 'priya' }} label="Signed-in nav example" />
+          <div className="stack" style={{ gap: 10 }}>
+            <div className="ds-nav">
+              <Nav current="me" user={{ login: 'priya' }} label="Signed-in nav example" />
+            </div>
+            <span className="mono small faint">it folds into its menu when it is 880px wide or narrower</span>
           </div>
         </Section>
 

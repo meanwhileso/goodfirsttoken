@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { SAMPLE_COMMAND, SAMPLE_EVENTS, SAMPLE_PROMPT } from '../src/design/samples';
 
 // The /design page shows every component in the design system with sample
 // data. Its wall adds a sample line every 3.8 seconds.
@@ -31,6 +32,57 @@ async function nextWallLine(page: Page) {
   return page.locator('.wall-line').filter({ has: page.locator('.wall-line__time', { hasText: time ?? '' }) });
 }
 
+declare global {
+  // Installed in the page by installContrast.
+  var contrastOnPage: (el: Element) => number;
+  var contrastOn: (color: string, over: Element) => number;
+}
+
+// Adds two WCAG contrast helpers to the page. contrastOnPage(el) is the
+// contrast of el's text on what is painted behind it, with the opacity of
+// every element above it applied. contrastOn(color, el) is a color's
+// contrast on what is painted behind el.
+async function installContrast(page: Page) {
+  await page.evaluate(() => {
+    type Rgba = [number, number, number, number];
+    const parse = (color: string): Rgba => {
+      const parts = (/rgba?\(([^)]+)\)/.exec(color)?.[1] ?? '').split(/[\s,/]+/).filter(Boolean).map(Number);
+      return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0, parts[3] ?? 1];
+    };
+    const over = (top: Rgba, bottom: Rgba): Rgba => [
+      top[0] * top[3] + bottom[0] * (1 - top[3]),
+      top[1] * top[3] + bottom[1] * (1 - top[3]),
+      top[2] * top[3] + bottom[2] * (1 - top[3]),
+      1,
+    ];
+    // Every background from the page down to el, painted in order.
+    const backdrop = (el: Element): Rgba => {
+      const chain: Element[] = [];
+      for (let e: Element | null = el; e; e = e.parentElement) chain.unshift(e);
+      return chain.reduce<Rgba>((color, e) => over(parse(getComputedStyle(e).backgroundColor), color), [255, 255, 255, 1]);
+    };
+    const luminance = (color: Rgba) => {
+      const [r = 0, g = 0, b = 0] = color.slice(0, 3).map((c) => {
+        const v = c / 255;
+        return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a: Rgba, b: Rgba) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    globalThis.contrastOn = (color, el) => ratio(over(parse(color), backdrop(el)), backdrop(el));
+    globalThis.contrastOnPage = (el) => {
+      let opacity = 1;
+      for (let e: Element | null = el; e; e = e.parentElement) opacity *= Number(getComputedStyle(e).opacity);
+      const [r, g, b, a] = parse(getComputedStyle(el).color);
+      const behind = backdrop(el);
+      return ratio(over([r, g, b, a * opacity], behind), behind);
+    };
+  });
+}
+
 test.describe('the design page', () => {
   for (const width of [360, 390, 768, 1024, 1280]) {
     test(`fits the screen at ${String(width)}px and matches its screenshot`, async ({ page }) => {
@@ -41,11 +93,12 @@ test.describe('the design page', () => {
       const [scrollWidth, innerWidth] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
       expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
 
-      // Chromium builds draw text a little differently. Full Chromium and the
-      // headless shell of one build differ on up to 1.8% of this page's
-      // pixels with no layout change, so up to 2% may differ here. A change
-      // in page height always fails, and so does a shift of whole sections,
-      // like a wider label column, which changes 3 to 4%.
+      // The baselines come from the Playwright build CI runs. Other Chromium
+      // builds draw text a little differently, and at phone widths that can
+      // wrap a line and change the page height. Up to 2% of pixels may
+      // differ, for antialiasing. A change in page height always fails, and
+      // so does a shift of whole sections, like a wider label column, which
+      // changes 3 to 4%.
       await expect(page).toHaveScreenshot(`design-${String(width)}.png`, {
         fullPage: true,
         animations: 'disabled',
@@ -65,25 +118,37 @@ test('an element with hidden stays hidden, whatever display its class sets', asy
   await openDesign(page);
 
   const result = await page.evaluate(() => {
-    // Every class that a rule on its own gives a display value, including
-    // rules inside media and container queries.
-    const classes = new Set<string>();
-    const collect = (rules: CSSRuleList) => {
-      for (const rule of rules) {
-        if (rule instanceof CSSStyleRule) {
-          const display = rule.style.getPropertyValue('display');
-          if (!display || display === 'none') continue;
-          for (const selector of rule.selectorText.split(',')) {
-            const match = /^\s*\.([\w-]+)\s*$/.exec(selector);
-            if (match?.[1]) classes.add(match[1]);
-          }
-        } else if (rule instanceof CSSGroupingRule) {
-          collect(rule.cssRules);
-        }
+    // Every style rule in every stylesheet, including rules nested in media,
+    // container, and supports queries.
+    const rules: CSSStyleRule[] = [];
+    const walk = (list: CSSRuleList) => {
+      for (const rule of list) {
+        if (rule instanceof CSSStyleRule) rules.push(rule);
+        if (rule instanceof CSSGroupingRule || rule instanceof CSSStyleRule) walk(rule.cssRules);
       }
     };
-    for (const sheet of document.styleSheets) collect(sheet.cssRules);
+    for (const sheet of document.styleSheets) walk(sheet.cssRules);
 
+    // The hidden rule wins over any class because it is !important. Only
+    // another !important display could beat it.
+    const hiddenRule = rules.filter((rule) => rule.selectorText === '[hidden]').map((rule) => ({
+      display: rule.style.getPropertyValue('display'),
+      priority: rule.style.getPropertyPriority('display'),
+    }));
+    const rivals = rules
+      .filter((rule) => rule.selectorText !== '[hidden]' && rule.style.getPropertyPriority('display') === 'important')
+      .map((rule) => rule.selectorText);
+
+    // And a probe for each class a rule of its own gives a display value.
+    const classes = new Set<string>();
+    for (const rule of rules) {
+      const display = rule.style.getPropertyValue('display');
+      if (!display || display === 'none') continue;
+      for (const selector of rule.selectorText.split(',')) {
+        const match = /^\s*\.([\w-]+)\s*$/.exec(selector);
+        if (match?.[1]) classes.add(match[1]);
+      }
+    }
     const shown: string[] = [];
     for (const name of classes) {
       const el = document.createElement('div');
@@ -93,9 +158,11 @@ test('an element with hidden stays hidden, whatever display its class sets', asy
       if (getComputedStyle(el).display !== 'none') shown.push(name);
       el.remove();
     }
-    return { checked: [...classes], shown };
+    return { hiddenRule, rivals, checked: [...classes], shown };
   });
 
+  expect(result.hiddenRule).toEqual([{ display: 'none', priority: 'important' }]);
+  expect(result.rivals).toEqual([]);
   expect(result.checked).toEqual(expect.arrayContaining(['btn', 'chip', 'cluster', 'stack', 'marker', 'wall-line']));
   expect(result.shown).toEqual([]);
 });
@@ -116,9 +183,9 @@ test('every token in brand/design.md is a CSS variable with the same value', asy
   for (const [name, expected] of values('colors')) checks.push({ variable: `--${name}`, property: 'color', expected });
   for (const [name, expected] of values('rounded')) checks.push({ variable: `--r-${name}`, property: 'border-top-left-radius', expected });
   for (const [name, expected] of values('spacing')) checks.push({ variable: `--space-${name}`, property: 'width', expected });
-  const elevation = group('elevation');
-  checks.push({ variable: '--shadow-window', property: 'box-shadow', expected: value(elevation.window) ?? '' });
-  checks.push({ variable: '--focus', property: 'box-shadow', expected: value(elevation.focus) ?? '' });
+  for (const [name, expected] of values('elevation')) {
+    checks.push({ variable: name === 'focus' ? '--focus' : `--shadow-${name}`, property: 'box-shadow', expected });
+  }
 
   const fonts: { variable: string; family: string; size?: string; weight?: string; lineHeight?: string; tracking?: string }[] = [];
   for (const [name, spec] of Object.entries(group('typography'))) {
@@ -190,6 +257,114 @@ test('every token in brand/design.md is a CSS variable with the same value', asy
   expect(mismatches).toEqual([]);
 });
 
+test('every component in brand/design.md looks the way its YAML says', async ({ page }) => {
+  const tokens = frontMatter(await readFile(new URL('../../../brand/design.md', import.meta.url), 'utf8'));
+  const components = tokens.components;
+  if (typeof components !== 'object') throw new Error('brand/design.md has no components');
+
+  // A value like "{colors.ink}" points at another token.
+  const resolve = (ref: string | Tree | undefined): string | Tree | undefined => {
+    const match = typeof ref === 'string' ? /^\{([\w-]+)\.([\w-]+)\}$/.exec(ref) : null;
+    if (!match) return ref;
+    const group = tokens[match[1] ?? ''];
+    return typeof group === 'object' ? group[match[2] ?? ''] : undefined;
+  };
+  const text = (ref: string | Tree | undefined) => {
+    const resolved = resolve(ref);
+    return typeof resolved === 'string' ? resolved : undefined;
+  };
+
+  // Where each component is on /design, and which part carries each key.
+  const where: Record<string, Record<string, string>> = {
+    'button-primary': { '*': '.btn--primary' },
+    'button-secondary': { '*': '.btn:not(.btn--primary):not(.btn--danger):not(.btn--sm):not([disabled])' },
+    'button-danger': { '*': '.btn--danger' },
+    'logo-chip': { '*': '.site-nav .logo-chip' },
+    tag: { '*': '.tag' },
+    'prompt-box': { '*': '.prompt:not(.prompt--sm)' },
+    marker: { '*': '.marker:not(.marker--live):not(.marker--label)' },
+    badge: {
+      '*': '.badge__rule',
+      rounded: '.badge',
+      valueBackground: '.badge__value',
+      valueColor: '.badge__value',
+    },
+  };
+  const css: Record<string, string> = {
+    backgroundColor: 'background-color',
+    keyBackground: 'background-color',
+    valueBackground: 'background-color',
+    textColor: 'color',
+    keyColor: 'color',
+    valueColor: 'color',
+    borderColor: 'border-top-color',
+    rounded: 'border-top-left-radius',
+    height: 'height',
+    padding: 'padding',
+    fontFamily: 'font-family',
+    fontSize: 'font-size',
+    fontWeight: 'font-weight',
+    lineHeight: 'line-height',
+  };
+
+  const checks: { component: string; selector: string; property: string; expected: string }[] = [];
+  for (const [component, spec] of Object.entries(components)) {
+    const place = where[component];
+    if (!place || typeof spec !== 'object') continue;
+    const add = (key: string, expected: string | undefined) => {
+      const property = css[key];
+      if (property && expected !== undefined) {
+        checks.push({ component, selector: place[key] ?? place['*'] ?? '', property, expected });
+      }
+    };
+    for (const [key, ref] of Object.entries(spec)) {
+      if (key === 'typography') {
+        const type = resolve(ref);
+        if (typeof type !== 'object') continue;
+        for (const [typeKey, typeValue] of Object.entries(type)) add(typeKey, text(typeValue));
+      } else {
+        add(key, text(ref));
+      }
+    }
+  }
+  // Every component on the page, with every key the list above knows.
+  expect(new Set(checks.map((check) => check.component)).size).toBe(Object.keys(where).length);
+
+  await openDesign(page);
+  const mismatches = await page.evaluate((checks) => {
+    const out: string[] = [];
+    for (const { component, selector, property, expected } of checks) {
+      const el = document.querySelector(selector);
+      if (!el) {
+        out.push(`${component}: nothing matches ${selector}`);
+        continue;
+      }
+      const actual = getComputedStyle(el);
+      if (property === 'font-family') {
+        const first = actual.fontFamily.split(',')[0]?.trim().replaceAll(/["']/g, '');
+        if (first !== expected) out.push(`${component} font-family: ${String(first)} is not ${expected}`);
+        continue;
+      }
+      // A probe with the same font size turns the YAML value into what the
+      // browser computes, so rem, unitless line heights, and hex compare.
+      const probe = document.createElement('div');
+      probe.style.fontSize = actual.fontSize;
+      probe.style.setProperty(property, expected);
+      document.body.append(probe);
+      const wanted = getComputedStyle(probe);
+      const longhands = property === 'padding' ? ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'] : [property];
+      for (const longhand of longhands) {
+        if (actual.getPropertyValue(longhand) !== wanted.getPropertyValue(longhand)) {
+          out.push(`${component} ${longhand}: ${actual.getPropertyValue(longhand)} is not ${wanted.getPropertyValue(longhand)}`);
+        }
+      }
+      probe.remove();
+    }
+    return out;
+  }, checks);
+  expect(mismatches).toEqual([]);
+});
+
 test('a page view loads Geist and Geist Mono from the site itself, and nothing from anywhere else', async ({ page, baseURL }) => {
   const origins = new Set<string>();
   page.on('request', (request) => {
@@ -207,6 +382,9 @@ test('a page view loads Geist and Geist Mono from the site itself, and nothing f
 });
 
 test.describe('the wall', () => {
+  // The first line to arrive is the first sample event.
+  const firstArrival = SAMPLE_EVENTS[0]?.text ?? '';
+
   test('types out its newest line, then shows it in full', async ({ page }) => {
     await openDesignPaused(page);
     const newest = await nextWallLine(page);
@@ -215,57 +393,81 @@ test.describe('the wall', () => {
     // The clock is paused, so the line has only just started typing.
     await expect(newest.locator('.cursor')).toHaveCount(1);
     const typedSoFar = (await text.textContent()) ?? '';
+    expect(typedSoFar.length).toBeLessThan(firstArrival.length);
 
     await page.clock.resume();
     await expect(newest.locator('.cursor')).toHaveCount(0);
-    const full = (await text.textContent()) ?? '';
-    expect(full.length).toBeGreaterThan(typedSoFar.length);
-    expect(full.startsWith(typedSoFar)).toBe(true);
+    await expect(text).toHaveText(firstArrival);
   });
 
-  test('makes each older line dimmer than the one above it', async ({ page }) => {
+  test('rises in a line that arrives, and only that line', async ({ page }) => {
     await openDesignPaused(page);
-    const opacities = await page
-      .locator('.wall-line')
-      .evaluateAll((lines) => lines.map((line) => Number(getComputedStyle(line).opacity)));
-
-    expect(opacities.length).toBeGreaterThan(2);
-    for (let i = 1; i < opacities.length; i++) {
-      expect(opacities[i]).toBeLessThan(opacities[i - 1] ?? 0);
+    for (const line of await page.locator('.wall-line').all()) {
+      expect(await line.evaluate((el) => getComputedStyle(el).animationName)).toBe('none');
     }
+
+    const newest = await nextWallLine(page);
+
+    expect(await newest.evaluate((el) => getComputedStyle(el).animationName)).toBe('rise');
   });
 
-  test('under reduced motion, shows its newest line in full at once, without moving it', async ({ page }) => {
+  test('fades each older line, but never below text-faint', async ({ page }) => {
+    await openDesignPaused(page);
+    await installContrast(page);
+    const ratios = await page.locator('.wall-line__text').evaluateAll((texts) => texts.map((text) => contrastOnPage(text)));
+    const faint = await page.evaluate(() => {
+      const probe = document.createElement('p');
+      probe.style.color = 'var(--text-faint)';
+      probe.textContent = 'x';
+      document.querySelector('main')?.append(probe);
+      const ratio = contrastOnPage(probe);
+      probe.remove();
+      return ratio;
+    });
+
+    expect(ratios.length).toBeGreaterThan(2);
+    for (let i = 1; i < ratios.length; i++) {
+      expect(ratios[i]).toBeLessThanOrEqual(ratios[i - 1] ?? 0);
+    }
+    expect(ratios.at(-1)).toBeLessThan(ratios[0] ?? 0);
+    for (const ratio of ratios) expect(ratio).toBeGreaterThanOrEqual(faint - 0.01);
+  });
+
+  test('under reduced motion, shows its newest line in full at once, and nothing on the page moves', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await openDesignPaused(page);
     const newest = await nextWallLine(page);
-    const text = newest.locator('.wall-line__text');
 
     await expect(newest.locator('.cursor')).toHaveCount(0);
-    const atOnce = (await text.textContent()) ?? '';
-    expect(atOnce).not.toBe('');
-    expect(await newest.evaluate((line) => getComputedStyle(line).animationName)).toBe('none');
-
-    // Long after typing would have finished, the text is the same.
-    await page.clock.resume();
-    await page.waitForTimeout(1500);
-    await expect(text).toHaveText(atOnce);
+    await expect(newest.locator('.wall-line__text')).toHaveText(firstArrival);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
   });
 });
 
 test.describe('the prompt', () => {
-  test('its copy button puts exactly what the box shows on the clipboard, and says copied in place', async ({ page, context }) => {
+  test("the prompt's copy button puts the prompt on the clipboard, and says copied in place", async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await openDesign(page);
-    const prompt = page.locator('.prompt').first();
-    const button = prompt.getByRole('button');
+    const button = page.getByRole('button', { name: 'Copy prompt' });
 
     await button.click();
 
     await expect(button).toHaveText('copied');
-    const shown = await prompt.locator('.prompt__text').textContent();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(SAMPLE_PROMPT);
+    await expect(page.locator('.prompt__text').first()).toHaveText(SAMPLE_PROMPT);
     await expect(button).toHaveText('copy');
+  });
+
+  test("a command's copy button puts its full form on the clipboard, even when the box shows a shorter one", async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await openDesign(page);
+    const button = page.getByRole('button', { name: 'Copy command' });
+
+    await button.click();
+
+    await expect(button).toHaveText('copied');
+    await expect(page.locator('.prompt--shell .prompt__text')).toHaveText(SAMPLE_COMMAND.shown);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(SAMPLE_COMMAND.copied);
   });
 
   test('its copy button says select it when the browser refuses to copy', async ({ page }) => {
@@ -275,7 +477,7 @@ test.describe('the prompt', () => {
       });
     });
     await openDesign(page);
-    const button = page.locator('.prompt').first().getByRole('button');
+    const button = page.getByRole('button', { name: 'Copy prompt' });
 
     await button.click();
 
@@ -284,32 +486,30 @@ test.describe('the prompt', () => {
 
   test('each open-in link opens its harness with the prompt filled in', async ({ page }) => {
     await openDesign(page);
-    const prompt = await page.locator('.prompt__text').first().textContent();
     const link = async (name: string) => new URL((await page.locator('.open-in').getByRole('link', { name }).getAttribute('href')) ?? '');
 
     const claude = await link('claude code');
     expect(`${claude.protocol}//${claude.host}${claude.pathname}`).toBe('claude://code/new');
-    expect(claude.searchParams.get('q')).toBe(prompt);
+    expect(claude.searchParams.get('q')).toBe(SAMPLE_PROMPT);
 
     const codex = await link('codex');
     expect(`${codex.protocol}//${codex.host}${codex.pathname}`).toBe('codex://new');
-    expect(codex.searchParams.get('prompt')).toBe(prompt);
+    expect(codex.searchParams.get('prompt')).toBe(SAMPLE_PROMPT);
 
     const cursor = await link('cursor');
     expect(`${cursor.protocol}//${cursor.host}${cursor.pathname}`).toBe('cursor://anysphere.cursor-deeplink/prompt');
-    expect(cursor.searchParams.get('text')).toBe(prompt);
+    expect(cursor.searchParams.get('text')).toBe(SAMPLE_PROMPT);
   });
 
   test('the t3 code button copies the prompt before it opens T3 Code, which takes no prompt', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     // Paused, so the page never leaves for T3 Code during the test.
     await openDesignPaused(page);
-    const prompt = await page.locator('.prompt__text').first().textContent();
 
     await page.locator('.open-in').getByRole('button', { name: 't3 code' }).click();
 
     await expect(page.locator('.open-in').getByRole('status')).toHaveText('Prompt copied. Opening T3 Code, paste it in.');
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(prompt);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(SAMPLE_PROMPT);
   });
 });
 
@@ -324,6 +524,33 @@ test.describe('the nav', () => {
     await nav.locator('.site-nav__menu').click();
     await expect(live).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Good First Token on GitHub' })).toBeVisible();
+  });
+
+  test('opens its phone menu with no script running', async ({ browser }) => {
+    const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 800 } });
+    const page = await context.newPage();
+    await page.goto('/design');
+    const nav = page.getByRole('navigation', { name: 'Primary' });
+    const live = nav.getByRole('link', { name: 'live' });
+
+    await expect(live).toBeHidden();
+    await nav.locator('.site-nav__menu').click();
+    await expect(live).toBeVisible();
+    await context.close();
+  });
+
+  test('folds at the same width the page gutter narrows, even with a scrollbar taking room', async ({ page }) => {
+    // A classic 15px scrollbar leaves the page 875px wide in an 890px
+    // window. Headless Chromium hides scrollbars, so the page is narrowed
+    // the same way by hand.
+    await page.setViewportSize({ width: 890, height: 800 });
+    await openDesign(page);
+    await page.addStyleTag({ content: 'body { width: 875px; }' });
+    const nav = page.getByRole('navigation', { name: 'Primary' });
+
+    await expect(nav.locator('.site-nav__menu')).toBeVisible();
+    await expect(page.locator('main')).toHaveCSS('padding-left', '20px');
+    await expect(nav).toHaveCSS('padding-left', '20px');
   });
 
   test('on a wide screen shows every link and no menu button', async ({ page }) => {
@@ -348,7 +575,7 @@ test.describe('the nav', () => {
   });
 });
 
-test('tabs show one panel at a time, and the arrow keys move between them', async ({ page }) => {
+test('tabs show one panel at a time, and the arrow keys, Home, and End move between them', async ({ page }) => {
   await openDesign(page);
   const tabs = page.getByRole('tablist', { name: 'Leaderboard view' }).getByRole('tab');
   const shownPanel = page.getByRole('tabpanel');
@@ -369,8 +596,103 @@ test('tabs show one panel at a time, and the arrow keys move between them', asyn
   await expect(tabs.nth(2)).toBeFocused();
   await expect(shownPanel).toHaveAccessibleName('by agent');
 
-  await tabs.nth(0).click();
+  await page.keyboard.press('Home');
+  await expect(tabs.nth(0)).toBeFocused();
   await expect(shownPanel).toHaveAccessibleName('this week');
+
+  await page.keyboard.press('End');
+  await expect(tabs.nth(2)).toBeFocused();
+  await expect(shownPanel).toHaveAccessibleName('by agent');
+
+  await tabs.nth(1).click();
+  await expect(shownPanel).toHaveAccessibleName('all time');
+});
+
+test('a toggle chip shows whether it is pressed, and pressing one lets go of the other', async ({ page }) => {
+  await openDesign(page);
+  const group = page.getByRole('group', { name: 'Show merged PRs from' });
+  const week = group.getByRole('button', { name: 'this week' });
+  const all = group.getByRole('button', { name: 'all time' });
+
+  await expect(week).toHaveAttribute('aria-pressed', 'true');
+  await expect(all).toHaveAttribute('aria-pressed', 'false');
+  await expect(week).toHaveCSS('background-color', 'rgb(14, 17, 22)');
+
+  await all.click();
+
+  await expect(all).toHaveAttribute('aria-pressed', 'true');
+  await expect(week).toHaveAttribute('aria-pressed', 'false');
+  await expect(all).toHaveCSS('background-color', 'rgb(14, 17, 22)');
+  await expect(week).not.toHaveCSS('background-color', 'rgb(14, 17, 22)');
+});
+
+test.describe('accessibility', () => {
+  test('all text has at least 4.5:1 contrast on its background, or 3:1 when large', async ({ page }) => {
+    await openDesignPaused(page);
+    await installContrast(page);
+    const failures = await page.evaluate(() => {
+      const out: string[] = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const seen = new Set<Element>();
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const el = node.parentElement;
+        const text = node.textContent?.trim() ?? '';
+        if (!el || seen.has(el) || !text) continue;
+        seen.add(el);
+        // A project's label takes its color from GitHub, and its text is
+        // whichever of white or ink reads better. WCAG exempts disabled
+        // controls. Visually hidden text has no color to read.
+        if (el.closest('.tag, [disabled], .visually-hidden')) continue;
+        if (!el.checkVisibility({ visibilityProperty: true })) continue;
+        const style = getComputedStyle(el);
+        const size = parseFloat(style.fontSize);
+        const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+        const ratio = contrastOnPage(el);
+        if (ratio < (large ? 3 : 4.5)) out.push(`${text.slice(0, 40)}: ${ratio.toFixed(2)}`);
+      }
+      return out;
+    });
+    expect(failures).toEqual([]);
+  });
+
+  test('the focus ring has at least 3:1 contrast on paper and on the dark prompt', async ({ page }) => {
+    await openDesign(page);
+    await installContrast(page);
+    const ringContrast = async (target: Locator) => {
+      await page.keyboard.press('Tab');
+      await target.focus();
+      return target.evaluate((el) => {
+        if (!el.matches(':focus-visible')) return 0;
+        // The outermost ring is the last shadow, and it meets the backdrop.
+        const colors = getComputedStyle(el).boxShadow.match(/rgba?\([^)]+\)/g) ?? [];
+        return contrastOn(colors.at(-1) ?? '', el.parentElement ?? document.body);
+      });
+    };
+
+    expect(await ringContrast(page.getByRole('link', { name: 'Good First Token home' }).first())).toBeGreaterThanOrEqual(3);
+    expect(await ringContrast(page.getByRole('button', { name: 'Copy prompt' }))).toBeGreaterThanOrEqual(3);
+  });
+
+  test('the copy buttons are named for what they copy, and every button and link has a name', async ({ page }) => {
+    await openDesign(page);
+
+    await expect(page.getByRole('button', { name: 'Copy prompt', exact: true })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Copy command', exact: true })).toHaveCount(1);
+    for (const control of [...(await page.getByRole('button').all()), ...(await page.getByRole('link').all())]) {
+      await expect(control).toHaveAccessibleName(/\S/);
+    }
+  });
+
+  test('numbers and ranked names read with spaces between their parts', async ({ page }) => {
+    await openDesign(page);
+
+    await expect(page.locator('.stat-line')).toMatchAriaSnapshot('- paragraph: 3 tagged 2 working now 14 merged');
+    await expect(page.locator('.ranks').first()).toMatchAriaSnapshot(`
+      - list:
+        - listitem: 1 @priya claude-code 10
+        - listitem: 2 @kenji codex 7
+    `);
+  });
 });
 
 test('a project label keeps its GitHub color, with white or ink text, whichever reads better on it', async ({ page }) => {

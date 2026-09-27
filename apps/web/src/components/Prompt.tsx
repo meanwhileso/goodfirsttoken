@@ -5,18 +5,22 @@ import { cx } from './cx';
 /**
  * The prompt box, the one dark surface, with a copy button. `children` is
  * what the box shows and `copy` is the exact text the button copies. A
- * `shell` prompt is a small one-line command with a `$`.
+ * `shell` prompt is a small one-line command with a `$`. `copyName` is what
+ * a screen reader calls the button, `Copy prompt` or `Copy command` unless
+ * set.
  */
 export function Prompt({
   children,
   copy,
   shell = false,
   caret = false,
+  copyName = shell ? 'Copy command' : 'Copy prompt',
 }: {
   children: ReactNode;
   copy: string;
   shell?: boolean;
   caret?: boolean;
+  copyName?: string;
 }) {
   return (
     <div className={cx('prompt', shell && 'prompt--sm prompt--shell')}>
@@ -24,7 +28,7 @@ export function Prompt({
         {children}
         {caret && <span className="prompt__caret" aria-hidden="true" />}
       </span>
-      <CopyButton text={copy} />
+      <CopyButton text={copy} name={copyName} />
     </div>
   );
 }

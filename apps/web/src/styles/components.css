@@ -36,7 +36,9 @@
   content: ''; width: 7px; height: 7px; border-radius: 99px; background: var(--merged); animation: pulse 2.4s ease-in-out infinite;
 }
 .marker--label { background: var(--label); border-color: var(--label); color: var(--on-label); }
-.marker--label .marker__count { color: rgba(255, 255, 255, 0.75); }
+/* White like the label, told apart by weight, since a lighter count would
+   fall under 4.5:1 on purple. */
+.marker--label .marker__count { color: var(--on-label); font-weight: 400; }
 
 /* ---------- Tags: a project's own GitHub label, in that label's color ---------- */
 
@@ -56,15 +58,18 @@ a.chip:hover { text-decoration: none; }
 .chip--tint { background: var(--label-tint); border-color: transparent; color: var(--label-ink); }
 .chip--merged { background: var(--merged); border-color: var(--merged); color: var(--on-label); }
 .chip--opened { background: var(--label); border-color: var(--label); color: var(--on-label); }
-.chip--live { background: var(--merged-tint); border-color: transparent; color: var(--merged); }
+/* Ink text, since green text on the green tint is under 4.5:1. The dot
+   carries the green. */
+.chip--live { background: var(--merged-tint); border-color: transparent; color: var(--ink); }
 .chip--live::before {
-  content: ''; width: 6px; height: 6px; border-radius: 99px; background: currentColor; animation: pulse 2.4s ease-in-out infinite;
+  content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--merged); animation: pulse 2.4s ease-in-out infinite;
 }
 .chip--tough { background: var(--attention-tint); border-color: transparent; color: var(--attention); }
 button.chip { cursor: pointer; font-size: 13px; min-height: 30px; padding: 4px 12px; border-radius: 15px; }
 button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
   background: var(--ink); border-color: var(--ink); color: var(--on-ink);
 }
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 /* ---------- Split badge: a rule and its value ---------- */
 
@@ -81,13 +86,23 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 /* ---------- Slots: the token mark as a counter ---------- */
 
 .slots { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
-.slots i { width: 15px; height: 15px; border-radius: 99px; border: 2px solid #C5CCD3; position: relative; }
-.slots i.on { border-color: var(--label); }
-.slots i.on::after { content: ''; position: absolute; inset: 2.5px; border-radius: 99px; background: var(--label); }
-.slots--lg i { width: 22px; height: 22px; border-width: 3px; }
-.slots--lg i.on::after { inset: 4px; }
-.slots--closed i, .slots--closed i.on { border-color: #C5CCD3; }
-.slots--closed i.on::after { background: #C5CCD3; }
+.slots__slot { width: 15px; height: 15px; border-radius: 99px; border: 2px solid #C5CCD3; position: relative; }
+.slots__slot--taken { border-color: var(--label); }
+.slots__slot--taken::after { content: ''; position: absolute; inset: 2.5px; border-radius: 99px; background: var(--label); }
+.slots--lg .slots__slot { width: 22px; height: 22px; border-width: 3px; }
+.slots--lg .slots__slot--taken::after { inset: 4px; }
+.slots--closed .slots__slot { border-color: #C5CCD3; }
+.slots--closed .slots__slot--taken::after { background: #C5CCD3; }
+
+/* The large ring in an issue page's open slot, and its closed state */
+.slot-ring {
+  display: inline-block; flex: none; width: 56px; height: 56px; border-radius: 99px; border: 3px dashed var(--label);
+}
+.slot-ring--closed { position: relative; border: 3px solid #C5CCD3; }
+.slot-ring--closed::after {
+  content: ''; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 3px; background: #C5CCD3;
+  transform: translateX(-50%) rotate(45deg);
+}
 
 /* ---------- Stat line: numbers as the headline ---------- */
 
@@ -95,7 +110,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 28px; font-size: 18px; color: var(--text-muted);
 }
 .stat-line b {
-  font-size: clamp(32px, 4.5vw, 48px); font-weight: 600; letter-spacing: -0.03em; color: var(--ink); margin-right: 8px;
+  font-size: clamp(32px, 4.5vw, 48px); font-weight: 600; letter-spacing: -0.03em; color: var(--ink); margin-right: 3px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -203,15 +218,15 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 }
 .wall-line__time { color: var(--text-faint); font-size: 14px; padding-top: 3px; }
 .wall-line__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
-.wall-line__who { font-weight: 600; color: var(--ink); }
+.wall-line__who { font-weight: 600; color: var(--wall-ink, var(--ink)); }
 .wall-line__issue { font-size: 14px; }
-.wall-line__text { flex-basis: 100%; color: var(--text-body); overflow-wrap: anywhere; }
-.wall-line:nth-child(1) .wall-line__text { color: var(--ink); }
-.wall-line:nth-child(2) { opacity: 0.86; }
-.wall-line:nth-child(3) { opacity: 0.72; }
-.wall-line:nth-child(4) { opacity: 0.58; }
-.wall-line:nth-child(5) { opacity: 0.44; }
-.wall-line:nth-child(n+6) { opacity: 0.32; }
+.wall-line__text { flex-basis: 100%; color: var(--wall-ink, var(--ink)); overflow-wrap: anywhere; }
+.wall-line .chip { color: var(--wall-chip, var(--text-muted)); }
+/* Each older line is dimmer than the one above, stepping down the text
+   colors and stopping at text-faint, the lightest text the brand allows. */
+.wall-line:nth-child(2) { --wall-ink: var(--text-body); }
+.wall-line:nth-child(3) { --wall-ink: var(--text-muted); --wall-chip: var(--text-faint); }
+.wall-line:nth-child(n+4) { --wall-ink: var(--text-faint); --wall-chip: var(--text-faint); }
 .wall-line--new { animation: rise 0.45s ease-out; }
 @media (max-width: 720px) {
   .wall { font-size: 15px; }
@@ -226,13 +241,13 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 /* ---------- The token field: every square is agent work ---------- */
 
 .token-field { display: grid; gap: 5px; }
-.token-field i { aspect-ratio: 1; border-radius: 3px; background: var(--line-soft); transition: background 0.6s ease; }
-.token-field i[data-level="1"] { background: #D9D3FF; }
-.token-field i[data-level="2"] { background: #B1A3FF; }
-.token-field i[data-level="3"] { background: #8F7BFF; }
-.token-field i[data-level="4"] { background: var(--label); }
-.token-field i[data-level="merged"] { background: var(--merged); }
-.token-field i.flash { animation: flash 1.2s ease-out; }
+.token-field__square { aspect-ratio: 1; border-radius: 3px; background: var(--line-soft); transition: background 0.6s ease; }
+.token-field__square[data-level="1"] { background: #D9D3FF; }
+.token-field__square[data-level="2"] { background: #B1A3FF; }
+.token-field__square[data-level="3"] { background: #8F7BFF; }
+.token-field__square[data-level="4"] { background: var(--label); }
+.token-field__square[data-level="merged"] { background: var(--merged); }
+.token-field__square--flash { animation: flash 1.2s ease-out; }
 
 /* ---------- Ranks: numerals as the design ---------- */
 
@@ -246,7 +261,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 }
 .ranks > li:first-child .ranks__n { color: var(--label); }
 .ranks__who { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; min-width: 0; overflow-wrap: anywhere; }
-.ranks__agent { font: 13px var(--font-mono); color: var(--text-muted); margin-left: 10px; letter-spacing: 0; }
+.ranks__agent { font: 13px var(--font-mono); color: var(--text-muted); margin-left: 5px; letter-spacing: 0; }
 .ranks__score { font: 600 28px/1 var(--font-sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) {
   .ranks > li { grid-template-columns: 40px minmax(0, 1fr) auto; }

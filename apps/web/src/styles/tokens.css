@@ -68,15 +68,14 @@
   --space-5xl: 88px;
 
   /* elevation */
+  --shadow-none: none;
   --shadow-window: 0 30px 80px rgba(14, 17, 22, 0.10), 0 2px 6px rgba(14, 17, 22, 0.05);
-  --focus: 0 0 0 3px rgba(112, 87, 255, 0.35);
+  /* A paper gap, then a solid purple ring: 4.5:1 on paper, 4:1 on the dark prompt. */
+  --focus: 0 0 0 2px #FBFBF9, 0 0 0 5px #7057FF;
 
-  /* layout, from the Layout section of brand/design.md */
+  /* layout, from the Layout section of brand/design.md. base.css switches
+     the gutter and section space to their phone sizes. */
   --container: 1120px;
   --gutter: 80px;
   --section: 96px;
-}
-
-@media (max-width: 880px) {
-  :root { --gutter: 20px; --section: 64px; }
 }

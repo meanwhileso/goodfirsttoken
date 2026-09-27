@@ -6,12 +6,19 @@
 [hidden] { display: none !important; }
 
 html { -webkit-text-size-adjust: 100%; }
+/* The page is a container, so the gutter switches on the page's own width,
+   the same width the nav folds on. A media query would count the scrollbar
+   and switch at a different point. */
 body {
   margin: 0;
   background: var(--paper);
   color: var(--text);
   font: var(--body-md);
   -webkit-font-smoothing: antialiased;
+  container: page / inline-size;
+}
+@container page (max-width: 880px) {
+  body > * { --gutter: 20px; --section: 64px; }
 }
 h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
 p { margin: 0; text-wrap: pretty; }

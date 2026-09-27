@@ -24,7 +24,7 @@ export function Slots({
       aria-label={label}
     >
       {Array.from({ length: total }, (_, i) => (
-        <i key={i} className={i < taken ? 'on' : undefined} />
+        <i key={i} className={cx('slots__slot', i < taken && 'slots__slot--taken')} />
       ))}
     </span>
   );

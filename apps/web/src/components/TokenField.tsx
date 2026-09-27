@@ -1,3 +1,5 @@
+import { cx } from './cx';
+
 /** How much work a square stands for: 0 for none up to 4, or a merge. */
 export type TokenSquare = 0 | 1 | 2 | 3 | 4 | 'merged';
 
@@ -23,7 +25,7 @@ export function TokenField({
           <i
             key={flashing ? `${String(i)}-${String(flash.count)}` : i}
             data-level={level}
-            className={flashing ? 'flash' : undefined}
+            className={cx('token-field__square', flashing && 'token-field__square--flash')}
           />
         );
       })}

@@ -15,23 +15,28 @@ const RESET_AFTER_MS = 1600;
 
 /**
  * A `copy` button that says `copied` in place, or `select it` when the
- * browser refuses, then goes back to `copy`.
+ * browser refuses, then goes back to `copy`. `name` is what a screen reader
+ * calls it, like `Copy prompt`, and a status beside it says what happened.
  */
-export function CopyButton({ text, className }: { text: string; className?: string }) {
-  const [label, setLabel] = useState<'copy' | 'copied' | 'select it'>('copy');
+export function CopyButton({ text, name, className }: { text: string; name: string; className?: string }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'refused'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => { clearTimeout(timer.current); }, []);
 
   async function copy() {
-    const ok = await copyText(text);
-    setLabel(ok ? 'copied' : 'select it');
+    setState((await copyText(text)) ? 'copied' : 'refused');
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => { setLabel('copy'); }, RESET_AFTER_MS);
+    timer.current = setTimeout(() => { setState('idle'); }, RESET_AFTER_MS);
   }
 
   return (
-    <button type="button" className={cx('copy-btn', className)} onClick={() => void copy()}>
-      <span aria-live="polite">{label}</span>
-    </button>
+    <>
+      <button type="button" className={cx('copy-btn', className)} aria-label={name} onClick={() => void copy()}>
+        {{ idle: 'copy', copied: 'copied', refused: 'select it' }[state]}
+      </button>
+      <span className="visually-hidden" role="status">
+        {{ idle: '', copied: 'Copied.', refused: 'The browser would not copy. Select the text and copy it.' }[state]}
+      </span>
+    </>
   );
 }
