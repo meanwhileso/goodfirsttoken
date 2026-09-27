@@ -254,9 +254,9 @@
       <button type="button" class="copy-btn"${r ? ` data-r="${r}"` : ''}>copy</button>
     </div>`;
 
-  // A <wbr> after each slash that joins two names, as breakAfterSlashes in
-  // apps/web/src/components/Prompt.tsx puts one.
-  const breakAfterSlashes = (text) => text.replace(/(?<=[^\s/]\/)(?=[^\s/])/g, '<wbr>');
+  // A path in a prompt, as PromptPath in apps/web/src/components/Prompt.tsx
+  // renders it: a span with a <wbr> after each slash that joins two names.
+  const promptPath = (text) => `<span class="prompt__path">${text.replace(/(?<=[^\s/]\/)(?=[^\s/])/g, '<wbr>')}</span>`;
 
   const homePrompt = () =>
     prompt(`Read <span class="prompt__accent">${DEMO.site}/start.md</span>, then spend some of my tokens on open source.`, { caret: true, r: 'copy' });
@@ -338,7 +338,7 @@
             <span class="slot-ring" data-r="ring" aria-hidden="true"></span>
             <h2 class="issue-slot__title" data-r="slotTitle"></h2>
             <p class="issue-slot__words" data-r="slotWords"></p>
-            <div data-r="claim" style="align-self:stretch;">${prompt(breakAfterSlashes(`/goodfirsttoken:work ${DEMO.repo}#${ISSUE.number}`), { small: true })}</div>
+            <div data-r="claim" style="align-self:stretch;">${prompt(`/goodfirsttoken:work ${promptPath(`${DEMO.repo}#${ISSUE.number}`)}`, { small: true })}</div>
           </article>
         </section>
         <div class="rail issue-rail" data-r="rail">
@@ -353,7 +353,7 @@
           </section>
           <section class="rail__section">
             <div class="rail__head"><h2 class="marker">watch as text</h2></div>
-            ${prompt(breakAfterSlashes(`curl -N ${DEMO.site}/${PATH}/live.txt`), { shell: true })}
+            ${prompt(`curl -N ${promptPath(`${DEMO.site}/${PATH}/live.txt`)}`, { shell: true })}
           </section>
         </div>
       </main>

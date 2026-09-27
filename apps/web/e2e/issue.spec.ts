@@ -15,8 +15,9 @@ import { SITE } from './hosts';
 // what they expect. Every person, repo, and line here is made up.
 
 const REPO = 'sample-owner/sample-app';
-// A sample project's repo with no hyphen in its name for a line to break at.
-const UNHYPHENATED_REPO = 'sample-owner/samplenotes';
+// A sample project's repo with no hyphen in its owner or name for a line to
+// break at, so only the page decides where owner/name#n wraps.
+const UNHYPHENATED_REPO = 'sampleorg/samplenotes';
 
 /** An issue in a sample project's repo that no earlier run has touched. */
 function freshIssue(repo = REPO): { issue: string; path: string; number: number } {
@@ -280,7 +281,11 @@ test('fits the screen from 360 to 1280px, with long lines in every lane', async 
   }
 });
 
-/** Each line of an element's text as the browser broke it on the screen, trimmed. */
+/**
+ * Each line of an element's text as the browser broke it on the screen. A
+ * character the browser draws nowhere, like a space at the end of a line,
+ * stays with the line before it.
+ */
 async function screenLines(locator: Locator): Promise<string[]> {
   return locator.evaluate((element) => {
     const lines: { top: number; text: string }[] = [];
@@ -292,13 +297,12 @@ async function screenLines(locator: Locator): Promise<string[]> {
         range.setStart(node, i);
         range.setEnd(node, i + 1);
         const box = range.getClientRects()[0];
-        if (!box) continue;
         const line = lines.at(-1);
-        if (line && Math.abs(line.top - box.top) < 1) line.text += text.charAt(i);
-        else lines.push({ top: box.top, text: text.charAt(i) });
+        if (line && (!box || Math.abs(line.top - box.top) < 1)) line.text += text.charAt(i);
+        else lines.push({ top: box?.top ?? 0, text: text.charAt(i) });
       }
     }
-    return lines.map((line) => line.text.trim());
+    return lines.map((line) => line.text);
   });
 }
 
@@ -311,40 +315,64 @@ async function selectedText(locator: Locator): Promise<string> {
   });
 }
 
+test('a claim command keeps owner/repo#n whole on a line when it fits on one', async ({ page, request }) => {
+  const { issue, path } = freshIssue(UNHYPHENATED_REPO);
+  await work(request, issue, 'priya', { action: 'claim', agent: 'claude-code' });
+  // At 480px the slot is under the lane, and a line fits 41 characters:
+  // the first line has room for owner/ at its end, and the next for all 32
+  // of owner/repo#n.
+  await page.setViewportSize({ width: 480, height: 900 });
+  await page.goto(path);
+  await page.evaluate(() => document.fonts.ready);
+
+  const text = page.locator('.issue-slot .prompt__text');
+  await expect(text).toHaveText(`/goodfirsttoken:work ${issue}`);
+  expect(await screenLines(text)).toEqual(['/goodfirsttoken:work ', issue]);
+});
+
 test('a claim command too wide for its slot wraps after the slash, and keeps the repo name and number on one line', async ({ page, context, request }) => {
   const { issue, path, number } = freshIssue(UNHYPHENATED_REPO);
   await work(request, issue, 'priya', { action: 'claim', agent: 'claude-code' });
   // At 1200px, the open slot beside one lane fits 24 characters a line.
   await page.setViewportSize({ width: 1200, height: 900 });
-  await page.goto(path);
+  await openIssue(page, path);
   await page.evaluate(() => document.fonts.ready);
 
   const command = `/goodfirsttoken:work ${issue}`;
   const text = page.locator('.issue-slot .prompt__text');
   await expect(text).toHaveText(command);
-  expect(await screenLines(text)).toEqual(['/goodfirsttoken:work', 'sample-owner/', `samplenotes#${String(number)}`]);
+  expect(await screenLines(text)).toEqual(['/goodfirsttoken:work ', 'sampleorg/', `samplenotes#${String(number)}`]);
 
   // The place to break adds nothing to what a person selects, hears, or copies.
   expect(await selectedText(text)).toBe(command);
   await expect(page.locator('.issue-slot .prompt')).toMatchAriaSnapshot(`- text: › ${command}`);
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  await page.getByRole('button', { name: 'Copy the claim command' }).click();
+  const copy = page.getByRole('button', { name: 'Copy the claim command' });
+  await copy.click();
+  await expect(copy).toHaveText('copied');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(command);
 });
 
-test('on a phone, the command to watch as text wraps after slashes, with no name broken in the middle', async ({ page, request }) => {
-  const { issue, path, number } = freshIssue(UNHYPHENATED_REPO);
+test('the command to watch as text keeps its URL whole on a line when it fits, and otherwise wraps it only after slashes', async ({ page, request }) => {
+  const { issue, path } = freshIssue(UNHYPHENATED_REPO);
   await work(request, issue, 'priya', { action: 'claim', agent: 'claude-code' });
-  await page.setViewportSize({ width: 390, height: 900 });
+  const url = `${SITE}${path}/live.txt`;
+  const text = page.locator('.issue-rail .prompt__text');
+
+  // At 780px a line fits 74 characters: all 70 of the URL, and not the 80
+  // of `$ curl -N ` and the URL.
+  await page.setViewportSize({ width: 780, height: 900 });
   await page.goto(path);
   await page.evaluate(() => document.fonts.ready);
+  await expect(text).toHaveText(`curl -N ${url}`);
+  expect(await screenLines(text)).toEqual(['curl -N ', url]);
 
-  const text = page.locator('.issue-rail .prompt__text');
-  await expect(text).toHaveText(`curl -N ${SITE}${path}/live.txt`);
-  expect(await screenLines(text)).toEqual([
-    'curl -N',
-    `${SITE}/`,
-    'sample-owner/samplenotes/',
-    `issues/${String(number)}/live.txt`,
-  ]);
+  // On a phone, every line ends at a space or a slash, or ends the command.
+  // At 390px a line fits 26 characters, and the longest part between two
+  // slashes, http://localhost:4173/, is 22.
+  await page.setViewportSize({ width: 390, height: 900 });
+  const lines = await screenLines(text);
+  expect(lines.length).toBeGreaterThan(2);
+  expect(lines.join('')).toBe(`curl -N ${url}`);
+  for (const line of lines.slice(0, -1)) expect(line, JSON.stringify(lines)).toMatch(/[ /]$/);
 });

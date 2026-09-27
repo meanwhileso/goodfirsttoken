@@ -42,13 +42,14 @@ export function PromptAccent({ children }: { children: ReactNode }) {
 }
 
 /**
- * A command or path for a prompt, with a place to break the line after each
- * slash that joins two names, like the one in `owner/repo`. So
- * `owner/repo#18` wraps after `owner/` when it has to, and a name breaks in
+ * A path in a prompt, like `owner/repo#18` or a URL. It keeps to one line
+ * when it fits on one, and starts a new line to do so. When it is wider than
+ * the box, it wraps after a slash that joins two names, and a name breaks in
  * the middle only when it can't fit on a line of its own. A `<wbr>` adds no
  * character, so a screen reader, and a person who selects the text and
  * copies it, get the text as it is.
  */
-export function breakAfterSlashes(text: string): ReactNode[] {
-  return text.split(/(?<=[^\s/]\/)(?=[^\s/])/).flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]));
+export function PromptPath({ children }: { children: string }) {
+  const parts = children.split(/(?<=[^\s/]\/)(?=[^\s/])/);
+  return <span className="prompt__path">{parts.flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]))}</span>;
 }

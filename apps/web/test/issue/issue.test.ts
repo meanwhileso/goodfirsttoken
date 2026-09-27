@@ -55,11 +55,17 @@ afterEach(() => {
 });
 
 /**
- * The claim command as the page's HTML holds it, with a `<wbr>` after the
- * owner's slash, where the line can break.
+ * A path as the page's HTML holds it, in its span, with a `<wbr>` after each
+ * slash between two names, where the line can break.
  */
+function shownPath(...names: string[]): string {
+  return `<span class="prompt__path">${names.join('/<wbr/>')}</span>`;
+}
+
+/** The claim command as the page's HTML holds it. */
 function claimCommand(): string {
-  return `/goodfirsttoken:work sample-owner/<wbr/>sample-app#${number}`;
+  const [owner = '', name = ''] = repo.split('/');
+  return `/goodfirsttoken:work ${shownPath(owner, `${name}#${number}`)}`;
 }
 
 function at(time: number): void {
@@ -611,7 +617,7 @@ describe('the page, through the Worker', () => {
     expect(html).toContain('wrote failing test: a rewrite from /docs/ keeps its slash');
     expect(html).toContain('1 of 3 slots taken');
     expect(html).toContain(claimCommand());
-    expect(html).toContain(`curl -N primary.example/<wbr/>sample-owner/<wbr/>sample-app/<wbr/>issues/<wbr/>${number}/<wbr/>live.txt`);
+    expect(html).toContain(`curl -N ${shownPath('primary.example', ...repo.split('/'), 'issues', number, 'live.txt')}`);
   });
 
   test('offers the claim command only for an issue that takes claims', async () => {
