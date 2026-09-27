@@ -1480,9 +1480,9 @@ each a ring, filled while a claim takes it.
   claim the issue from an agent: `/goodfirsttoken:work owner/repo#n`.
   When the command is wider than the pane, `owner/repo#n` starts a new
   line and stays whole on it if it fits. When it is wider than a line, it
-  wraps after the slash, so a name breaks in the middle only when it can't
-  fit on a line of its own. The break adds no character to what a screen
-  reader reads, or to what a person selects and copies.
+  wraps after the slash. A name then breaks at a hyphen, or in the middle
+  when it can't fit on a line of its own. The break adds no character to
+  what a screen reader reads, or to what a person selects and copies.
 - While a PR is open on the issue, claims are closed. The rings turn gray,
   the pane says claims are closed with the PR's link, and every lane says
   the PR is open, with its link. A claim's PR closes them live. The room

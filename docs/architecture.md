@@ -1176,7 +1176,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   a `<wbr>` after each slash between two names, so the path starts a new
   line whole when it fits there, and wraps after a slash when it doesn't.
   It is a part of the prompt, like `PromptAccent`, and `/design` doesn't
-  show it on its own.
+  show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
   timeline names every claimant, and two for the do-not-list when the issue
