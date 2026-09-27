@@ -301,6 +301,14 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   with the fonts, the base styles, and every component's styles, and the
   root route links it on every page. CSS for one page, like
   `design-page.css`, is linked from that route's `head`.
+- **The launch video uses the same styles.** `video/index.html` links
+  `app.css`, `home-page.css`, and `issue-page.css` from `src/styles/`, and
+  draws the homepage and the issue page with their routes' classes, so a
+  re-render shows the site as its CSS stands. The markup is copied from the
+  routes by hand, so a route whose markup or words change needs the same
+  change there. The video turns the site's CSS animations off and drives the
+  live dots' pulse and the prompt's caret from its one time value, so every
+  frame renders the same way.
 - **Class names are BEM-style:** a block like `wall-line`, its parts like
   `wall-line__time`, and its variants like `chip--live`. State lives in
   attributes, like `aria-pressed`, `aria-current`, and the token field's

@@ -17,15 +17,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const { chromium } = await import('playwright');
 
 const FPS = 30;
-const POSTER_AT = 23.9;
+const POSTER_AT = 23;
 const assets = path.resolve(here, '../apps/web/src/assets');
 const [mode = 'stills', ...rest] = process.argv.slice(2);
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
 await page.goto(pathToFileURL(path.join(here, 'index.html')).href);
-await page.evaluate(() => document.fonts.ready);
-await page.waitForTimeout(300);
+await page.evaluate(() => window.__ready);
 
 async function shoot(t, file) {
   await page.evaluate((x) => window.__setTime(x), t);
@@ -50,9 +49,13 @@ if (mode === 'stills') {
   await browser.close();
 
   mkdirSync(assets, { recursive: true });
+  // The exhaustive motion search follows a page as it scrolls, and a
+  // keyframe at most every 15 seconds, besides the ones x264 puts at each
+  // cut, keeps them out of the busiest scenes. Both keep the MP4 near 1.2 MB.
   execFileSync('ffmpeg', [
     '-y', '-loglevel', 'error', '-framerate', String(FPS), '-i', path.join(frames, '%05d.png'),
-    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'slow', '-movflags', '+faststart',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '21', '-preset', 'slow', '-g', String(15 * FPS),
+    '-x264-params', 'me=tesa:merange=48', '-movflags', '+faststart',
     path.join(assets, 'good-first-token-launch.mp4'),
   ], { stdio: 'inherit' });
   execFileSync('cwebp', ['-quiet', '-q', '82', path.join(frames, 'poster.png'), '-o', path.join(assets, 'launch-poster.webp')], { stdio: 'inherit' });

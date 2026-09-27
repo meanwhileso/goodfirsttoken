@@ -8,7 +8,6 @@ dist/
 .DS_Store
 *.log
 video/frames/
-video/stills/
 test-results/
 playwright-report/
 .dev.vars.*
