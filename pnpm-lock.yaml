@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  sharp@<0.35.4: ^0.35.4
+  miniflare@5.20260815.0-alpha>sharp: 0.35.4
 
 importers:
 
