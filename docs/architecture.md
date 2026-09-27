@@ -13,7 +13,7 @@ The repo is a pnpm workspace.
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
-| `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, and the deploy scripts, with their tests. |
+| `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
 | `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
@@ -293,11 +293,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   package is pure. They live in `packages/core/test/`.
 - **The GitHub fake's own tests** run with Vitest in Node, in
   `packages/github-fake/test/`.
-- **The tests for `scripts/`**, the static server, the skill build, and the
-  deploy, use Node's own test runner. The deploy's tests fake Cloudflare's
-  API, GitHub's OIDC endpoint, and Wrangler, and check the scripts, the
-  deploy workflows, and [self-hosting.md](self-hosting.md) against each
-  other.
+- **The tests for `scripts/`** cover the static server, the skill build, the
+  deploy, and the check for advisories a pull request adds. They use Node's
+  own test runner. The deploy's tests fake Cloudflare's API, GitHub's OIDC
+  endpoint, and Wrangler, and check the scripts, the deploy workflows, and
+  [self-hosting.md](self-hosting.md) against each other.
 
 `pnpm test` runs all of them but Playwright. `pnpm test:e2e` runs Playwright.
 
@@ -318,6 +318,105 @@ Every action is pinned to a commit SHA.
 | `actionlint` | actionlint over every workflow, with shellcheck on their `run:` scripts |
 
 Branch protection requires `test` and `leaks` by name.
+
+### Security scans
+
+`.github/workflows/security.yml` runs on every pull request under the same
+rules as CI. Each tool a job downloads itself is checked against a published
+checksum that the workflow pins, and the Semgrep image is pinned by digest.
+The CodeQL action brings the CodeQL version its commit names. Semgrep's rules
+come from the Semgrep Registry at scan time, since their license doesn't allow
+copying them here. A job names a finding only when it sits in code the pull
+request adds or edits, which the diff already shows. Findings elsewhere on
+`main` stay in code scanning.
+
+| Job | What it scans | What it blocks | Where findings go |
+|---|---|---|---|
+| `semgrep` | Code and workflows, with Semgrep's TypeScript, React, and GitHub Actions rules | A high-severity finding the pull request adds or edits | Code scanning |
+| `codeql` | JavaScript and TypeScript, with CodeQL's default queries | An alert at `error` level, or of high or critical security severity, on a line the pull request changes, through the `Code scanning results / CodeQL` check | Code scanning |
+| `zizmor` | Every workflow and action | A high-severity finding in any of them | Code scanning |
+| `osv-scanner` | `pnpm-lock.yaml` before and after the pull request, against osv.dev | A package version with a high or critical advisory, or a known-malicious package, that the pull request adds | The job log, naming only what the pull request adds |
+| `dependency-review` | The dependency graph before and after the pull request, against the GitHub Advisory Database | A package version with a high or critical advisory that the pull request adds | The job log and summary, naming only what the pull request adds |
+
+Each tool uploads under one fixed category, the same on pull requests and on
+`main`: `semgrep`, `/language:javascript-typescript` for CodeQL, and
+`zizmor`. OSV-Scanner uploads as `osv-scanner`, from `main` only.
+
+Code scanning accepts uploads from a pull request's read-only token, from a
+fork too. On the pull request it shows a finding as an annotation only when
+the finding sits on a line the pull request changes. The rest stays in the
+Security and quality tab, which only people with write access can see. The
+`semgrep` and `zizmor` jobs fail with a short message that points there.
+Every job but `zizmor` fails only on what the pull request adds or edits.
+zizmor's check runs offline with a pinned version, so a high finding in any
+workflow can only come from a workflow change, and it blocks every pull
+request until it is fixed.
+
+The pull request jobs get `contents: read` and no `security-events` access.
+So the CodeQL action warns that it can't read its feature flags, and a job
+can't check whether GitHub processed the SARIF it uploaded. If GitHub can't
+process a pull request's SARIF, the job still passes. The same SARIF fails
+the upload on `main`, where the job can check, and the ruleset keeps waiting
+for pull request results that never arrive.
+
+OSV-Scanner's SARIF carries no line numbers, which GitHub's SARIF reference
+lists as required. Nothing documented keeps code scanning from annotating an
+advisory already on `main` on a pull request that touches the lockfile, so
+pull requests don't upload it. Expect a warning on each pull request's code
+scanning results that one configuration on `main`, `osv-scanner`, was not
+found. The `osv-scanner` job is the lockfile's gate.
+
+A pull request can switch off its own checks with a `nosemgrep` comment, a
+`.semgrepignore` file, a zizmor ignore comment or config file, or an edit to
+`scripts/new-advisories.mjs` or these workflows, since each job runs from the
+pull request's checkout. Reviewers watch for changes to any of them.
+
+`.github/workflows/security-main.yml` runs Semgrep, CodeQL, zizmor, and
+OSV-Scanner on `main` on every push, every Monday at 05:23 UTC, and by hand
+from the Actions tab. The push runs give each pull request a fresh analysis
+of its base to compare with, and close an alert soon after its fix merges.
+The Monday run catches new advisories and new rules for code that hasn't
+changed. It uploads every finding to code scanning. Its jobs fail when a scan
+or an upload breaks, and findings leave them green. It is the only scan
+workflow that can write, and it writes only `security-events`, which the
+upload needs.
+
+Code scanning matches each finding to the alert it already has, so a second
+run files nothing new. Matching can slip in three ways. OSV-Scanner's
+fingerprint holds the lockfile's absolute path on the runner and the package
+version, so a new path, or a bump to another vulnerable version, files a new
+alert. A Semgrep rule that gets a new ID files a new alert. And when the
+content of a flagged line changes, code scanning can file its finding again.
+
+Dependabot alerts tell maintainers about new dependency advisories. Code
+scanning tells no one, so a maintainer checks the Security and quality tab
+each week. [SECURITY.md](../SECURITY.md) says what happens next.
+
+Two habits keep findings out of public logs. SARIF files are never kept as
+workflow artifacts, which anyone signed in can download. And a CodeQL job is
+never re-run with debug logging, because CodeQL then keeps its results as an
+artifact.
+
+#### Turning the scans on
+
+A required tool that has never uploaded blocks every merge. So the first
+time, a maintainer goes in this order:
+
+1. Turn CodeQL default setup off before the pull request that adds these
+   workflows runs its checks. Code scanning refuses CodeQL results from a
+   workflow while default setup is on.
+2. Merge that pull request.
+3. Run "Security on main" by hand from the Actions tab.
+4. Check that all four categories above show up under code scanning in the
+   Security and quality tab.
+5. Only then add the required checks and the code scanning ruleset.
+
+After that, these settings stay on: private vulnerability reporting,
+Dependabot alerts, branch protection that requires the five security jobs above, and a
+ruleset that requires code scanning results. In the ruleset, CodeQL gets
+"Security alerts: High or higher" and "Alerts: Errors". Semgrep OSS and zizmor
+get "Alerts: Errors", since their SARIF carries no security severity. CodeQL
+default setup and Dependabot security updates stay off.
 
 ## Deploys
 
@@ -429,3 +528,18 @@ Choices:
 - **graphql-js runs the fake's GraphQL.** A slice of GitHub's schema, with
   GitHub's names and types, means aliases, fragments, variables, and
   validation errors behave as they do on GitHub.
+- **Code scanning holds security findings.** Alerts on `main` are visible
+  only to people with write access, code scanning matches repeat findings by
+  fingerprint, and a workflow can file into it. Issues and pull request
+  comments are public.
+- **Semgrep and CodeQL both.** CodeQL follows data across functions and
+  files, such as a token that reaches a log. Semgrep's free rules match
+  patterns within a file, cover GitHub Actions, and run in seconds.
+- **Dependabot alerts on, security updates off.** Dependabot alerts are
+  private too, and GitHub tells maintainers when one is filed, which code
+  scanning never does. A dependency advisory can then show up in both places.
+  A security update pull request is public and names its advisory before a
+  maintainer has looked at it.
+- **No OpenSSF Scorecard.** Its workflow checks repeat zizmor's, and its other
+  checks grade practices this repo doesn't have yet, such as fuzzing and
+  signed releases, so it would file alerts nobody fixes.
