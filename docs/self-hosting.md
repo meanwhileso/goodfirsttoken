@@ -219,22 +219,23 @@ Cloudflare account. Set it up once for each environment:
 5. **Set `STATIC_ORIGIN`** in the environment to `https://` and the
    hostname, like `https://static.example.org`, and deploy.
 
-The end-to-end tests check the files, their headers, and the cookie rules
-against a stand-in on your machine. Only a real deployment can show what
-Cloudflare adds. After the first deploy with the static host, and after any
-change to the zone's settings, check it by hand. Open the site, find the URL
-of a file under `/assets/` in the page source, and run:
+Each deploy asks the static host for one file of each kind before the new
+Worker goes live. If an answer is missing, lacks its type, its caching, or
+`Access-Control-Allow-Origin: *`, or comes with a cookie, the deploy stops,
+names what is wrong, and the Worker already live stays. If a new hostname's
+certificate isn't ready yet, run the deploy again in a few minutes.
+
+Byte ranges, which Safari needs to play the video, are checked by hand. No
+page links to the launch video yet. Its name starts with
+`good-first-token-launch-`, and the deploy's build step lists it. After the
+first deploy with the static host, run:
 
 ```bash
-curl -sI https://static.example.org/assets/<file>
+curl -s -o /dev/null -D - -H 'Range: bytes=0-99' https://static.example.org/assets/<video file>
 ```
 
-It answers `200`, with `cache-control: public, max-age=31536000, immutable`,
-the file's `content-type`, `access-control-allow-origin: *`, and no
-`set-cookie`. No page links to the launch video yet. Its name starts with
-`good-first-token-launch-`, and the deploy's build step lists it. Check it
-with `-H 'Range: bytes=0-99'` added. It answers `206`, with no `set-cookie`
-either.
+It answers `206`, with `content-range: bytes 0-99/` and the file's size, and
+no `set-cookie`.
 
 ## The credential broker
 

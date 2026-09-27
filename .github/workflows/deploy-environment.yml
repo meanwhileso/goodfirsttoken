@@ -84,9 +84,10 @@ jobs:
         run: node scripts/deploy.mjs secrets
 
       # Before the Worker deploys, so its pages never link to a file the
-      # static host doesn't have yet. With STATIC_ORIGIN empty, it does
-      # nothing.
-      - name: Upload the built files to the static host
+      # static host doesn't have yet. It then asks the static host for one
+      # file of each kind, and stops the deploy if one comes back wrong or
+      # with a cookie. With STATIC_ORIGIN empty, it does nothing.
+      - name: Upload the built files to the static host, and check it
         env:
           STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
         run: node scripts/deploy.mjs static-assets

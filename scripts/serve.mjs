@@ -30,6 +30,10 @@ export function contentType(file) {
   return TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
 }
 
+export function knownType(file) {
+  return Object.hasOwn(TYPES, path.extname(file).toLowerCase());
+}
+
 // Returns { start, end } for a satisfiable single range, { unsatisfiable: true }
 // for one past the end, or null when the header is missing or malformed.
 export function parseRange(header, size) {

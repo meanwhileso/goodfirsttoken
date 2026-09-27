@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   applyMigrations,
+  checkStaticHost,
   ensureResources,
   exportCredential,
   getCredential,
@@ -429,11 +430,85 @@ test('a missing bucket stops the deploy before anything is uploaded, and says ho
   assert.deepEqual(r2.state.puts, []);
 });
 
+test('a built file of a type the static host has no content type for stops the upload before anything goes up', async (t) => {
+  const r2 = fakeR2();
+  const clientDir = sampleBuild(t);
+  writeFileSync(path.join(clientDir, 'assets', 'engine-Mn34Op56.wasm'), Buffer.from([0, 97, 115, 109]));
+
+  await assert.rejects(upload(t, r2.fetch, { clientDir }), /assets\/engine-Mn34Op56\.wasm.*scripts\/serve\.mjs/);
+  assert.deepEqual(r2.state.puts, []);
+});
+
 test('an upload with no built files stops the deploy', async (t) => {
   const r2 = fakeR2();
 
   await assert.rejects(upload(t, r2.fetch, { clientDir: tempDir(t) }), /has no files\. Build the Worker first/);
   assert.deepEqual(r2.state.puts, []);
+});
+
+// The static host as a browser sees it, serving the fake bucket's objects.
+// `change` edits each answer's headers.
+function fakeStaticHost(r2, change = () => {}) {
+  const requests = [];
+  const fetch = async (url, init = {}) => {
+    const { origin, pathname } = new URL(url);
+    if (origin !== 'https://static.example') return r2.fetch(url, init);
+    requests.push(pathname);
+    const object = r2.state.objects.get(pathname.slice(1));
+    if (!object) return new Response('Not found', { status: 404 });
+    const headers = new Headers({ ...object.headers, 'access-control-allow-origin': '*' });
+    change(headers, pathname);
+    return new Response(object.body, { headers });
+  };
+  return { fetch, requests };
+}
+const check = (t, fetch, options = {}) =>
+  checkStaticHost({ staticOrigin: 'https://static.example', clientDir: sampleBuild(t), fetch, log: () => {}, ...options });
+
+test('before the Worker goes live, the static host answers one file of each kind with its type, a year of caching, and no cookie', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const host = fakeStaticHost(r2);
+
+  await check(t, host.fetch);
+
+  assert.deepEqual(host.requests.sort(), [
+    '/assets/app-Ab12Cd34.css',
+    '/assets/good-first-token-launch-Ij90Kl12.mp4',
+    '/assets/nested/chunk-Ef56Gh78.js',
+  ]);
+});
+
+test('a cookie from the static host stops the deploy before the Worker goes live', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const host = fakeStaticHost(r2, (headers) => headers.append('set-cookie', '__cf_bm=abc; Path=/; Secure; HttpOnly'));
+
+  await assert.rejects(check(t, host.fetch), /the Worker was not deployed[\s\S]*assets\/app-Ab12Cd34\.css set a cookie/);
+});
+
+test('a static host that lacks a file, the caching, the type, or Access-Control-Allow-Origin stops the deploy', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const cases = [
+    [(headers) => headers.set('cache-control', 'public, max-age=14400'), /cache-control/],
+    [(headers) => headers.set('content-type', 'application/octet-stream'), /content-type/],
+    [(headers) => headers.delete('access-control-allow-origin'), /access-control-allow-origin/],
+  ];
+  for (const [change, problem] of cases) {
+    await assert.rejects(check(t, fakeStaticHost(r2, change).fetch), problem);
+  }
+
+  const empty = fakeR2();
+  await assert.rejects(check(t, fakeStaticHost(empty).fetch), /answered 404/);
+});
+
+test('with STATIC_ORIGIN empty, the static host is not checked', async (t) => {
+  const { fetch, calls } = fakeFetch();
+
+  await check(t, fetch, { staticOrigin: '' });
+
+  assert.equal(calls.length, 0);
 });
 
 test('the smoke test reads /healthz on the primary domain, or else on the workers.dev URL Wrangler reported', () => {

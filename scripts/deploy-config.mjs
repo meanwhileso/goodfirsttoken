@@ -161,6 +161,9 @@ export function deployConfig(local, target, env) {
     } else if (host === primary || redirects.includes(host)) {
       problems.push(`${STATIC_ORIGIN} is on a domain the site uses. The static host needs a hostname of its own.`);
     }
+    // Masks are case-sensitive, and the build and upload steps read the
+    // setting as it is.
+    mask(read(STATIC_ORIGIN));
     mask(staticOrigin);
     mask(host);
     named(STATIC_BUCKET);

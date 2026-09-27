@@ -11,7 +11,7 @@ import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { contentType, notFound, resolvePath, sendFile } from './serve.mjs';
+import { contentType, knownType, notFound, resolvePath, sendFile } from './serve.mjs';
 
 // Where the Vite build writes the files a browser loads, and the folder in it
 // whose files carry a content hash in their names.
@@ -30,10 +30,12 @@ export function objectHeaders(file) {
 // Every file the deploy uploads: each file under assets/ in the build, keyed
 // by its path from the build's root, which is its path on the static host.
 // Nothing outside assets/ goes, since only those names change with content.
+// A file keeps the headers it was first uploaded with, so a file of a type
+// with no known content type stops the upload before anything goes up.
 export function staticObjects(clientDir) {
   const dir = path.join(clientDir, ASSETS_DIR);
   if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return [];
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
+  const objects = readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => {
       const file = path.join(entry.parentPath, entry.name);
@@ -41,6 +43,13 @@ export function staticObjects(clientDir) {
       return { key, file, headers: objectHeaders(file) };
     })
     .sort((a, b) => (a.key < b.key ? -1 : 1));
+  const unknown = objects.filter((object) => !knownType(object.file)).map((object) => object.key);
+  if (unknown.length) {
+    throw new Error(
+      `The static host has no content type for ${unknown.join(', ')}. Add each extension to TYPES in scripts/serve.mjs.`,
+    );
+  }
+  return objects;
 }
 
 // Answers the way the static host does: each file under assets/ with the

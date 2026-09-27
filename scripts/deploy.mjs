@@ -213,6 +213,53 @@ export async function uploadStaticAssets({ config, staticOrigin, clientDir, toke
   log(`Uploaded ${uploaded} new files to the static host. ${objects.length - uploaded} were there already.`);
 }
 
+// Asks the static host itself for one uploaded file of each kind, the way a
+// browser would, before the Worker that links to them goes live. Each has to
+// answer 200 with the headers the upload stored, Access-Control-Allow-Origin
+// set to *, and no cookie. So a hostname that isn't attached, a missing
+// header rule, or a Cloudflare feature that sets a cookie stops the deploy
+// while the pages that would break are not live yet. Byte ranges are left to
+// the check by hand in docs/self-hosting.md.
+export async function checkStaticHost({ staticOrigin, clientDir, fetch, log }) {
+  if (!staticOrigin) return;
+  const kinds = new Map();
+  for (const object of staticObjects(clientDir)) {
+    const kind = path.extname(object.key);
+    if (!kinds.has(kind)) kinds.set(kind, object);
+  }
+  const problems = [];
+  for (const { key, headers } of kinds.values()) {
+    let answer;
+    try {
+      answer = await fetch(`${staticOrigin.replace(/\/$/, '')}/${key}`, {
+        redirect: 'manual',
+        headers: { 'user-agent': 'goodfirsttoken-deploy' },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      problems.push(`${key} could not be fetched from the static host.`);
+      continue;
+    }
+    await answer.body?.cancel();
+    if (answer.status !== 200) {
+      problems.push(`${key} answered ${answer.status}.`);
+      continue;
+    }
+    if (answer.headers.getSetCookie().length) problems.push(`${key} set a cookie.`);
+    const expected = { ...headers, 'access-control-allow-origin': '*' };
+    for (const [name, value] of Object.entries(expected)) {
+      const actual = answer.headers.get(name);
+      if (actual !== value) problems.push(`${key} has ${name} ${actual === null ? 'missing' : `"${actual}"`}, not "${value}".`);
+    }
+  }
+  if (problems.length) {
+    throw new Error(
+      `The static host does not serve the built files the way the site needs, so the Worker was not deployed. docs/self-hosting.md says how to set it up.\n${problems.map((p) => `- ${p}`).join('\n')}`,
+    );
+  }
+  log(`The static host serves each kind of built file with its type, a year of caching, and no cookie.`);
+}
+
 // The Worker's /healthz URL: on the primary domain, or else the workers.dev
 // URL Wrangler reported when it deployed.
 export function smokeTestUrl({ config, wranglerOutput }) {
@@ -296,15 +343,18 @@ async function main([step, target]) {
       return applyMigrations({ config: readDeployConfig(root), root, wrangler: wranglerIn(root), log });
     case 'secrets':
       return putSecrets({ config: readDeployConfig(root), env, wrangler: wranglerIn(root), log });
-    case 'static-assets':
-      return uploadStaticAssets({
+    case 'static-assets': {
+      const options = {
         config: readDeployConfig(root),
         staticOrigin: (env[STATIC_ORIGIN] ?? '').trim(),
         clientDir: path.join(root, CLIENT_DIR),
         token: env.CLOUDFLARE_API_TOKEN,
         fetch,
         log,
-      });
+      };
+      await uploadStaticAssets(options);
+      return checkStaticHost(options);
+    }
     case 'smoke-test': {
       if (!TARGETS.includes(target)) throw new Error('Name the environment to check: staging or production.');
       const output = env.WRANGLER_OUTPUT_FILE_PATH;

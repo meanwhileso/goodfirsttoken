@@ -235,19 +235,32 @@ A deployment without one serves the same files from the Worker.
   own.
 - **What goes there.** Everything under `dist/client/assets/`, which holds
   only files Vite names after their content. A plugin in `vite.config.ts`
-  adds every file in `src/assets/` to the build, so the launch video and
-  its poster are there before a page links to them. A page that imports one
-  with `?url` gets the same file. The Worker's static assets hold the same
-  files, so emptying `STATIC_ORIGIN` again needs nothing else.
+  adds every file in `src/assets/` but hidden ones to the build, so the
+  launch video and its poster are there before a page links to them. A page
+  that imports one with `?url` gets the same file. The Worker's static
+  assets hold the same files, so emptying `STATIC_ORIGIN` again needs
+  nothing else.
 - **The upload.** `scripts/deploy.mjs static-assets` runs after the build
   and before `wrangler deploy`, with Cloudflare's API. It checks that the
   bucket, `<WORKER_NAME>-static`, exists. Then it asks R2 for each file by
   its path and uploads each one R2 doesn't have, with its content type and
   `Cache-Control: public, max-age=31536000, immutable`. R2 sends both back
   with the file. `scripts/static-host.mjs` lists the files and their
-  headers for the upload and for the tests' stand-in alike. The upload
-  never deletes a file, and never creates the bucket, whose custom domain
-  is attached by hand.
+  headers for the upload and for the tests' stand-in alike. A file keeps
+  the headers it first went up with, so a file whose type
+  `scripts/serve.mjs` doesn't know stops the upload before anything goes
+  up. The upload never deletes a file, and never creates the bucket, whose
+  custom domain is attached by hand.
+- **The check.** The same step then asks the static host itself for one
+  file of each kind. Each has to answer `200` with the headers the upload
+  stored, `Access-Control-Allow-Origin: *`, and no `Set-Cookie`, or the
+  deploy stops before the Worker whose pages need them goes live. So a
+  hostname that isn't attached, a missing header rule, or a Cloudflare
+  feature that sets a cookie never ships a broken site. Byte ranges are
+  left to the check by hand in
+  [self-hosting.md](self-hosting.md#the-static-host). How Cloudflare's
+  cache answers a range for a file it doesn't hold yet couldn't be
+  confirmed while building this, and a wrong guess would block deploys.
 - **Fonts and scripts load across origins.** A browser fetches fonts and
   module scripts in CORS mode, so the static host has to send
   `Access-Control-Allow-Origin`. A response header rule on its hostname
@@ -366,19 +379,23 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   show that pages load every built file from the static origin and still
   work, and that the upload's files and headers are right. They can't show
   what only Cloudflare does: that R2 and its cache send those headers and
-  byte ranges, and that nothing on the hostname adds a cookie.
-  [self-hosting.md](self-hosting.md#the-static-host) has the check for a
-  real deployment.
+  byte ranges, and that nothing on the hostname adds a cookie. Each deploy
+  checks the headers and cookies against the real static host, and
+  [self-hosting.md](self-hosting.md#the-static-host) has the check by hand
+  for byte ranges.
 - **Every cookie the tests see is checked** by `apps/web/e2e/fixtures.ts`.
   Every spec takes `test` from it, which a lint rule enforces. It reads each
   `Set-Cookie` header on every response in every browser context and from
-  the `request` fixture, and the cookie jar of each context still open when
-  a test ends, which catches a cookie set from a script. A cookie from the
-  site that is not host-only, `Secure`, and `Path=/` with the `__Host-`
-  prefix fails the test, and so does any cookie from the static host.
-  Other origins, like the GitHub fake, are not checked. The site sets no
-  cookies yet, so a test checks that the fixture sees the responses of
-  pages and requests from both hosts.
+  the `request` fixture. When a test ends, it also reads the cookie jar of
+  the `request` fixture and of each browser context still open, which
+  catches a cookie set from a script or on a redirect the `request` fixture
+  followed. A cookie from the site that is not host-only, `Secure`, and
+  `Path=/` with the `__Host-` prefix fails the test, and so does any cookie
+  from the static host. So does a response from either whose headers can't
+  be read, unless the test closed its context first. Other origins, like
+  the GitHub fake, are not checked. The site sets no cookies yet, so a test
+  checks that the fixture sees the responses of pages and requests from
+  both hosts.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
   clock paused so the live wall holds still. Up to 2% of pixels may differ,
@@ -568,8 +585,9 @@ The job runs these steps. The scripts are in `scripts/`.
    `wrangler secret put`, one at a time, from the environment secret of the
    same name. The value reaches Wrangler on stdin only.
 8. `deploy.mjs static-assets` uploads the built files the static host
-   doesn't have yet, as [The static host](#the-static-host) describes. It
-   does nothing when `STATIC_ORIGIN` is empty.
+   doesn't have yet, then checks that the static host serves one of each
+   kind right, as [The static host](#the-static-host) describes. It does
+   nothing when `STATIC_ORIGIN` is empty.
 9. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
    when `OAUTH_KV_ID` is empty, and reuses it after that.
 10. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the

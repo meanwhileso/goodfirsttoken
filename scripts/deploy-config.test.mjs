@@ -344,7 +344,7 @@ test('a symlink in place of the deploy config is refused, so nothing is written 
 test('in GitHub Actions, every setting the Worker gets is masked before any line could print it', (t) => {
   const root = sampleRepo(t);
   const lines = [];
-  const env = { ...sentinels, STATIC_ORIGIN: 'https://sentinel-static.example', GITHUB_ACTIONS: 'true' };
+  const env = { ...sentinels, STATIC_ORIGIN: 'https://Sentinel-Static.example/', GITHUB_ACTIONS: 'true' };
   writeDeployConfig({ root, target: 'staging', env, log: (line) => lines.push(line) });
 
   const masks = lines.filter((line) => line.startsWith('::add-mask::')).map((line) => line.slice('::add-mask::'.length));
@@ -355,6 +355,8 @@ test('in GitHub Actions, every setting the Worker gets is masked before any line
     'sentinel-worker-db',
     'sentinel-worker-feed',
     'sentinel-worker-crawl',
+    // Masks are case-sensitive, so the value as the setting holds it too.
+    'https://Sentinel-Static.example/',
     'https://sentinel-static.example',
     'sentinel-static.example',
     'sentinel-worker-static',

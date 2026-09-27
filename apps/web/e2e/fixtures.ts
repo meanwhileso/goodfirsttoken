@@ -1,17 +1,24 @@
-import { test as base, expect, type APIRequestContext, type APIResponse, type BrowserContext } from '@playwright/test';
+import {
+  test as base,
+  expect,
+  type APIRequestContext,
+  type APIResponse,
+  type BrowserContext,
+  type Cookie,
+} from '@playwright/test';
 import { SITE, STATIC_HOST } from './hosts';
 
 // Every test imports `test` from here, and a lint rule holds the spec files
 // to it. Its fixtures read each Set-Cookie header on every response the tests
-// see, from every browser context and from the `request` fixture. A cookie
-// from the site has to be host-only with the __Host- prefix, so a browser
-// never sends it to the static host. The static host sets none. Any other
-// cookie fails the test that saw it. Responses from other origins, like the
-// GitHub fake, are GitHub's, and not checked.
+// see, from every browser context and from the `request` fixture, and the
+// cookie jars those keep. A cookie from the site has to be host-only with the
+// __Host- prefix, so a browser never sends it to the static host. The static
+// host sets none. Any other cookie fails the test that saw it. Responses from
+// other origins, like the GitHub fake, are GitHub's, and not checked.
 export { expect };
 
 // `setCookies` is null when the browser could not give the headers.
-export type SeenResponse = { url: string; setCookies: string[] | null };
+export type SeenResponse = { url: string; setCookies: string[] | null; contextClosed?: () => boolean };
 
 // What is wrong with one Set-Cookie header from the given origin.
 export function cookieProblems(origin: string, setCookie: string): string[] {
@@ -29,6 +36,18 @@ export function cookieProblems(origin: string, setCookie: string): string[] {
   return problems;
 }
 
+// What is wrong with the cookies a jar holds for the site's host.
+function jarProblems(cookies: Cookie[], jar: string): string[] {
+  const site = new URL(SITE).hostname;
+  return cookies
+    .filter((cookie) => cookie.domain.replace(/^\./, '') === site)
+    .filter(
+      (cookie) =>
+        !cookie.name.startsWith('__Host-') || !cookie.secure || cookie.path !== '/' || cookie.domain.startsWith('.'),
+    )
+    .map((cookie) => `${jar} holds ${cookie.name} from the site, which is not a host-only __Host- cookie`);
+}
+
 // The responses seen in the current test. A worker runs one test at a time.
 let seen: Promise<SeenResponse>[] = [];
 
@@ -36,17 +55,23 @@ const setCookies = (headers: { name: string; value: string }[]) =>
   headers.filter((header) => header.name.toLowerCase() === 'set-cookie').map((header) => header.value);
 
 function watchContext(context: BrowserContext) {
+  let closed = false;
+  context.on('close', () => {
+    closed = true;
+  });
   context.on('response', (response) => {
     seen.push(
       response.headersArray().then(
         (headers) => ({ url: response.url(), setCookies: setCookies(headers) }),
-        () => ({ url: response.url(), setCookies: null }),
+        () => ({ url: response.url(), setCookies: null, contextClosed: () => closed }),
       ),
     );
   });
 }
 
-// Wraps each method of a request context that answers with a response.
+// Wraps each method of a request context that answers with a response. It
+// follows redirects, so the Set-Cookie headers of a redirect are read from
+// its cookie jar at the end of the test.
 function watchRequests(request: APIRequestContext) {
   const recorded = new WeakSet<APIResponse>();
   for (const method of ['fetch', 'get', 'post', 'put', 'patch', 'delete', 'head'] as const) {
@@ -87,29 +112,28 @@ export const test = base.extend<TestFixtures, { watchContexts: undefined }>({
     await use(watchRequests(request));
   },
 
-  // Checks the cookies after each test. It depends on the context, so it
-  // finishes while the context is still open and its cookies can be read.
+  // Checks the cookies after each test. It depends on the context and the
+  // request fixture, so it finishes while both are open and their cookie
+  // jars can be read.
   responses: [
-    async ({ context }, use) => {
+    async ({ context, request }, use) => {
       seen = [];
       await use(() => Promise.all(seen));
-      const problems = (await Promise.all(seen)).flatMap(({ url, setCookies }) => {
+      const problems = (await Promise.all(seen)).flatMap(({ url, setCookies, contextClosed }) => {
         const origin = new URL(url).origin;
         if (setCookies) return setCookies.flatMap((header) => cookieProblems(origin, header));
-        // A response whose headers can't be read can't pass the check.
+        // A context a test closed while a response was on its way takes the
+        // headers with it, and nothing can send that cookie anywhere after.
+        // Otherwise a response whose headers can't be read can't pass.
+        if (contextClosed?.()) return [];
         return origin === SITE || origin === STATIC_HOST ? [`the headers of ${url} could not be read`] : [];
       });
-      // A cookie set from a script has no Set-Cookie header, so the cookie
-      // jars are read too.
-      const site = new URL(SITE).hostname;
+      // A cookie set from a script, or on a redirect, has no Set-Cookie
+      // header here, so the cookie jars are read too.
       for (const open of context.browser()?.contexts() ?? [context]) {
-        for (const cookie of await open.cookies()) {
-          if (cookie.domain.replace(/^\./, '') !== site) continue;
-          const bad =
-            !cookie.name.startsWith('__Host-') || !cookie.secure || cookie.path !== '/' || cookie.domain.startsWith('.');
-          if (bad) problems.push(`the site's cookie jar holds ${cookie.name}, which is not a host-only __Host- cookie`);
-        }
+        problems.push(...jarProblems(await open.cookies(), "a browser's cookie jar"));
       }
+      problems.push(...jarProblems((await request.storageState()).cookies, "the request fixture's cookie jar"));
       expect(problems, 'every cookie from the site is a host-only __Host- cookie, and the static host sets none').toEqual(
         [],
       );
