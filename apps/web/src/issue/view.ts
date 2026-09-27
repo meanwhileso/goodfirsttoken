@@ -13,8 +13,8 @@ export const LANE_LINES = 20;
 export type LaneState = 'active' | 'paused' | 'awaiting_review' | 'pr_opened' | 'released' | 'expired';
 
 /**
- * A PR, by its repo and number. The page links it to GitHub with prUrl, and
- * never to a link stored with it.
+ * A PR, by its repo and number. prUrl builds its link to GitHub from those
+ * two, whatever link was stored with it.
  */
 export interface PrLink {
   repo: string;

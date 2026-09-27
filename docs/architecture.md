@@ -1056,12 +1056,15 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   timeline. The server folds the history, and the page folds in each event
   from the socket with `applyEvent`, so a page that follows the room and one
   that loads later agree. A lane's state follows the events, the same moves
-  `nextClaimState` makes. The snapshot adds what the events can't say: the
-  open PRs with their links, and the claims that have no event the page may
-  see.
+  `nextClaimState` makes. The glance adds what the events can't say: the
+  open PRs, as repos and numbers, and the claims that have no event the page
+  may see.
 - **Blocked donors.** Their events are left out of the history, so they have
-  no lane. The snapshot still holds their claims, so the page counts the
-  ones holding a slot, and each claim, without naming them.
+  no lane. The glance still holds their claims, so the page counts the ones
+  holding a slot, and each claim, without naming them. When the room's D1
+  can't say who is blocked, the glance is null and the page answers `503`.
+  Tests make the room's block check throw, and hold it while a PR opens,
+  through `loadIssue`.
 - **Which issues have a page** is the rule for which issues have a stream,
   in one place: `findIssue` in `src/issue/find.ts`, which `sourceFor` in
   `src/feed/streams.ts` calls too. It reads the claims table and the
@@ -1069,21 +1072,20 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   one's cached copy. The page uses the claims and copies it found, for the
   project, the title, and the linked PR. Tests check that an issue with
   neither gets a `404` from the page and from the stream, and that no room
-  is made. The one difference is the path: the page answers `404` for the
-  owners `auth`, `mcp`, and `oauth`, with `issueFromPath` in
-  `src/issue/path.ts`. `src/server.ts` answers `/auth` and `/mcp` paths
-  before any stream, but a stream on an `/oauth/...` path answers as any
-  other.
+  is made. The one difference is the path, under The site's own paths.
 - **Whether it takes claims** follows the homepage's rule for an issue
   waiting for an agent, in `listProjectsAskingForHelp`, less the open PRs
   and the free slot, which the page follows live: an approved project, not
   on the do-not-list, and a cached copy with one of its tags and none of its
-  excluded ones, folding ASCII letters as SQLite's `lower()` does. The copy's
+  excluded ones, folding ASCII letters as SQLite's `lower()` does. Each
+  copy is judged with its own project, and `read` in `src/issue/load.ts`
+  picks the copy the page follows, as how-it-works says. That copy's
   linked PR joins the room's open PRs.
 - **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
-  OAuth routes before any page, and the route answers `404` for `auth`,
-  `mcp`, and `oauth` as owners too, so a path like `/oauth/<repo>/issues/1`
-  never shows an issue.
+  OAuth routes before any page or stream. The page also answers `404` for
+  `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in
+  `src/issue/path.ts`, so a path like `/oauth/<repo>/issues/1` never shows
+  an issue. A stream on an `/oauth/...` path answers as any other.
 - **Logins now.** Events carry the login a claimant had when they claimed.
   Each lane, and the timeline, shows the login in `people` for the claim's
   GitHub ID, since a renamed login can later belong to someone else.
@@ -1409,8 +1411,7 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   room's socket and sends a pause shaped like the room's. Their events
   reach the homepage's feed, so they run in the `rooms` project, which
   depends on the `chromium` project, once the rest are done, and the
-  homepage's tests see only what they expect. A run that starts the preview
-  empties its data first.
+  homepage's tests see only what they expect.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is

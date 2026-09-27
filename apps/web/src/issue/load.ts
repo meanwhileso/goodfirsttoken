@@ -104,7 +104,18 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   if (glance === null) throw new Error('The room could not say which donors are blocked.');
   const view = foldEvents(glance.events);
 
-  const tagged = copies[0];
+  // Each project that keeps its issues in the repo judges its own copy, as
+  // the homepage does. The page follows the oldest whose copy waits for an
+  // agent, then the oldest that would but for a PR the sync saw, then the
+  // oldest.
+  const issueRepo = splitIssue(asked).repo;
+  const judged = await Promise.all(
+    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(copy.project, copy, issueRepo) })),
+  );
+  const tagged =
+    judged.find((copy) => copy.closed === null && copy.copy.linkedPr === null) ??
+    judged.find((copy) => copy.closed === null) ??
+    judged[0];
   const latest = glance.claims.at(-1) ?? mirrored.at(-1);
   const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
 
@@ -147,7 +158,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
-    closedBecause: await closedBecause(project, tagged, repo),
+    closedBecause: tagged ? tagged.closed : await closedBecause(project, undefined, issueRepo),
     view,
   };
 }

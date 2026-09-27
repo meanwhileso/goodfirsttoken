@@ -7,6 +7,7 @@ import {
   blockDonor,
   changeSettings,
   getProject,
+  listProjectsAskingForHelp,
   saveIssues,
   savePerson,
   setProjectStatus,
@@ -103,6 +104,44 @@ function prRef(n: number): PrRef {
 /** A PR as the page holds it: its repo and number, and no link. */
 function prLink(n: number): { repo: string; number: number } {
   return { repo, number: n };
+}
+
+/**
+ * Puts a stand-in for D1 in the running room, made from the real one. Until
+ * the returned function runs, or the room restarts, the stand-in is its D1.
+ */
+async function swapRoomDb(make: (real: D1Database) => D1Database): Promise<() => Promise<void>> {
+  await runInDurableObject(room(), (instance) => {
+    const live = instance as unknown as { env: Env };
+    const stand = make(live.env.DB);
+    live.env = new Proxy(live.env, { get: (target, key) => (key === 'DB' ? stand : (Reflect.get(target, key) as unknown)) });
+  });
+  return () =>
+    runInDurableObject(room(), (instance) => {
+      (instance as unknown as { env: Env }).env = env;
+    });
+}
+
+/** A gate: `reached` resolves when something waits at it, and it opens with `open`. */
+function gate() {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  let reach: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => { reach = resolve; });
+  return {
+    open,
+    reached,
+    async wait(): Promise<void> {
+      reach();
+      await opened;
+    },
+  };
+}
+
+/** How many of the project's issues the homepage counts waiting for an agent, now. */
+async function waitingOnHomepage(project: string): Promise<number | undefined> {
+  const help = await listProjectsAskingForHelp(db, 5, Date.now());
+  return help.projects.find((row) => row.project.repo === project)?.waiting;
 }
 
 /** Caches the test's issue as the project's open tagged issue, as a sync would. */
@@ -296,6 +335,36 @@ describe('the slots', () => {
     expect((await load()).closedBecause).toBe('project');
   });
 
+  test("with two projects keeping issues in one repo, the issue takes claims when either counts it waiting, by that project's copy and slots", async () => {
+    const web = 'sample-owner/sample-web';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo, claimsPerIssue: 2 }, web);
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'taking a break', changedBy: maintainer.githubId }, t0);
+    await saveIssues(db, [
+      { issue, project: repo, title: 'As sample-app cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+      { issue, project: web, title: 'As sample-web cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+
+    // The homepage counts it waiting for sample-web, and not for the paused
+    // sample-app, which is older.
+    expect(await waitingOnHomepage(web)).toBe(1);
+    expect(await waitingOnHomepage(repo)).toBeUndefined();
+    expect(await load()).toMatchObject({ closedBecause: null, slots: 2, title: 'As sample-web cached it' });
+
+    // When both count it, the oldest does.
+    await setProjectStatus(db, repo, { status: 'approved', reason: null, changedBy: admin.githubId }, t0);
+    expect(await load()).toMatchObject({ closedBecause: null, slots: 3, title: 'As sample-app cached it' });
+
+    // A PR the sync saw in the older one's copy only: the homepage counts it
+    // waiting for the other, and so does the page.
+    await saveIssues(db, [
+      { issue, project: repo, title: 'As sample-app cached it', labels: ['help wanted'], linkedPr: prRef(90), syncedAt: t0 },
+    ]);
+    expect([await waitingOnHomepage(repo), await waitingOnHomepage(web)]).toEqual([0, 1]);
+    const page = await load();
+    expect(page).toMatchObject({ closedBecause: null, slots: 2, title: 'As sample-web cached it' });
+    expect(page.view.openPrs).toEqual([]);
+  });
+
   test('a PR the last sync saw linked to the issue is open, so the slots close and every lane says so', async () => {
     await tag({ linkedPr: prRef(70) });
     await claim(priya);
@@ -322,6 +391,31 @@ describe('the slots', () => {
     expect((await load()).closedBecause).toBe('issue');
   });
 
+  test('labels compare as the homepage compares them, folding only ASCII letters', async () => {
+    await changeSettings(db, repo, { tags: ['Été'] }, maintainer.githubId, t0);
+
+    for (const label of ['ÉTÉ', 'été', 'Été']) {
+      await tag({ labels: [label] });
+      const waiting = await waitingOnHomepage(repo);
+      expect(waiting, label).toBe(label === 'Été' ? 1 : 0);
+      expect((await load()).closedBecause, label).toBe(waiting === 1 ? null : 'issue');
+    }
+  });
+
+  test("a project whose issue repo is on the do-not-list takes no claims, whatever its code repo", async () => {
+    const web = 'sample-owner/sample-web';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, web);
+    await saveIssues(db, [
+      { issue, project: web, title: 'Handle trailing slashes in rewrites', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+    expect((await load()).closedBecause).toBeNull();
+
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    expect(await waitingOnHomepage(web)).toBeUndefined();
+    expect((await load()).closedBecause).toBe('project');
+  });
+
   test('a project on the do-not-list takes no claims', async () => {
     await tag();
     await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
@@ -329,7 +423,7 @@ describe('the slots', () => {
     expect((await load()).closedBecause).toBe('project');
   });
 
-  test('a PR is linked to GitHub by its repo and number, never by a link stored with it', async () => {
+  test("a PR's link is built from its repo and number, whatever link was stored with it", async () => {
     const elsewhere = (n: number) => ({ repo, number: n, url: `https://elsewhere.example/${repo}/pull/${String(n)}` });
     await tag({ linkedPr: elsewhere(80) });
     const p = await claim(priya);
@@ -508,51 +602,103 @@ describe('the page, through the Worker', () => {
 });
 
 describe("the room's glance, which the page loads with", () => {
+  test('the page loads a PR that opens while it loads with its event, or without both', async () => {
+    const p = await claim(priya);
+    await claim(kenji, 'codex');
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    // kenji's claim pauses when the page loads, so the room saves it to D1
+    // as it answers. That save waits at the gate, and the PR opens then.
+    at(start + 30 * MINUTE);
+    const held = gate();
+    let first = true;
+    const restore = await swapRoomDb((real) => ({
+      prepare: (sql: string) => {
+        if (!sql.includes('INSERT INTO claims') || !first) return real.prepare(sql);
+        first = false;
+        return {
+          bind: (...values: unknown[]) => ({
+            run: async () => {
+              await held.wait();
+              return real.prepare(sql).bind(...values).run();
+            },
+          }),
+        };
+      },
+    }) as unknown as D1Database);
+    try {
+      const loading = load();
+      await held.reached;
+      const opened = await room().openPr({ claimId: p.id, githubId: priya.githubId, pr: prRef(57) });
+      if (!opened.ok) throw new Error(opened.refusal.message);
+      held.open();
+      const page = await loading;
+
+      const hasEvent = page.view.timeline.some((entry) => entry.kind === 'pr_opened');
+      expect(page.view.openPrs.length > 0, 'the open PRs agree with the events').toBe(hasEvent);
+    } finally {
+      held.open();
+      await restore();
+    }
+  });
+
+  test("when the room's D1 can't say who is blocked, the glance is turned away, and the page answers 503 with no one's lines", async () => {
+    await claim(priya);
+    const k = await claim(kenji, 'codex');
+    await post(k, 'a line nobody should see');
+    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0);
+    const restore = await swapRoomDb((real) => ({
+      prepare: (sql: string) =>
+        sql.includes('donor_blocks')
+          ? { bind: () => ({ all: () => Promise.reject(new Error('D1 is down.')) }) }
+          : real.prepare(sql),
+    }) as unknown as D1Database);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect(await room().glance()).toBeNull();
+      expect(await loadIssue(request, 'sample-owner', 'sample-app', number)).toEqual({ state: 'unavailable', issue });
+      const res = await exports.default.fetch(`http://localhost/${repo}/issues/${number}`);
+      expect(res.status).toBe(503);
+      expect(await res.text()).not.toContain('nobody should see');
+    } finally {
+      await restore();
+    }
+  });
+
   test('holds a PR that opens while the page loads exactly when it holds the PR\'s event', async () => {
     const p = await claim(priya);
     const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
     if (!submitted.ok) throw new Error(submitted.refusal.message);
-    // The room's check for blocked donors waits until the test lets it go,
-    // and says when it starts.
-    let release: () => void = () => undefined;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let started: () => void = () => undefined;
-    const asked = new Promise<void>((resolve) => { started = resolve; });
-    await runInDurableObject(room(), (instance) => {
-      const live = instance as unknown as { env: Env };
-      const real = live.env.DB;
-      const slow = {
-        prepare: (sql: string) =>
-          sql.includes('donor_blocks')
-            ? {
-                bind: (...values: unknown[]) => ({
-                  all: async () => {
-                    started();
-                    await held;
-                    return real.prepare(sql).bind(...values).all();
-                  },
-                }),
-              }
-            : real.prepare(sql),
-      } as unknown as D1Database;
-      live.env = new Proxy(live.env, { get: (target, key) => (key === 'DB' ? slow : (Reflect.get(target, key) as unknown)) });
-    });
+    // The room's check for blocked donors waits at a gate.
+    const held = gate();
+    const restore = await swapRoomDb((real) => ({
+      prepare: (sql: string) =>
+        sql.includes('donor_blocks')
+          ? {
+              bind: (...values: unknown[]) => ({
+                all: async () => {
+                  await held.wait();
+                  return real.prepare(sql).bind(...values).all();
+                },
+              }),
+            }
+          : real.prepare(sql),
+    }) as unknown as D1Database);
     try {
       const loading = room().glance();
-      await asked;
+      await held.reached;
       const opened = await room().openPr({ claimId: p.id, githubId: priya.githubId, pr: prRef(57) });
       if (!opened.ok) throw new Error(opened.refusal.message);
-      release();
+      held.open();
       const glance = await loading;
 
       // It read the room before the PR opened, all at once.
       expect(glance?.prs).toEqual([]);
       expect(glance?.events.map((event) => event.kind)).toEqual(['claimed', 'submitted']);
     } finally {
-      release();
-      await runInDurableObject(room(), (instance) => {
-        (instance as unknown as { env: Env }).env = env;
-      });
+      held.open();
+      await restore();
     }
     // A glance after it has both.
     const after = await room().glance();

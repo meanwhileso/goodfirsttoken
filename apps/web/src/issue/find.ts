@@ -6,7 +6,7 @@ import { getIssue, listIssueClaims, listProjectsByIssueRepo } from '../db';
 // claim, or when it is among the tagged issues of a project that keeps its
 // issues in that repo. Anything else would make an issue room that nothing
 // could fill, so the streams (src/feed/streams.ts) and the issue page
-// (./load.ts) answer 404 for it, and never touch a room.
+// (./load.ts) answer 404 for it without touching a room.
 
 /** What D1 holds about an issue on the site. */
 export interface IssueOnSite {

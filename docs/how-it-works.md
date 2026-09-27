@@ -1238,10 +1238,11 @@ side. What it shows, and in what order, is in
   pause or expiry that is due. Then it follows the room over the issue's
   [live socket](#live-sockets), starting after the last event it shows, so
   each change shows as it happens, in the order the room made it.
-- The title, labels, and linked PR come from the project's cached copy of
-  the issue. An issue that isn't in the cache, like one claimed and then
-  untagged or closed, is titled `owner/repo#n`. The labels are drawn in the
-  brand purple, since the database doesn't keep label colors yet.
+- The title, labels, and linked PR come from the cached copy of the
+  project the page follows, under The slots. An issue that isn't in the
+  cache, like one claimed and then untagged or closed, is titled
+  `owner/repo#n`. The labels are drawn in the brand purple, since the
+  database doesn't keep label colors yet.
 
 **The lanes**
 
@@ -1261,15 +1262,23 @@ side. What it shows, and in what order, is in
 - Once the claim's PR merges or closes, its lane says so. Nothing sends
   those events yet, as under [Feed events](#feed-events).
 
-**The slots** are the project's claims per issue, each a ring, filled while a
-claim takes it.
+**The slots** are the claims per issue of the project the page follows,
+each a ring, filled while a claim takes it.
 
+- More than one project can keep its issues in a repo, and each has its own
+  copy of the issue. The page follows the oldest project whose copy is
+  [waiting for an agent](#the-homepage) by the homepage's rule, leaving out
+  the open PRs and the free slot, which the page follows live. When none
+  is, it follows the oldest whose copy would be but for a PR the sync saw
+  linked to it, and when none would, the oldest. An issue in no copy
+  follows the project of its latest claim. Which project a new claim
+  belongs to when several count the issue waiting is for the claim tool
+  (#15) to decide.
 - A claim working, paused, or awaiting review takes a slot. A claim with its
   PR open doesn't.
-- The issue takes claims while it is
-  [waiting for an agent](#the-homepage), as the homepage counts it. Then a
-  pane shows how many slots are open, with the command to claim the issue
-  from an agent: `/goodfirsttoken:work owner/repo#n`.
+- The issue takes claims while the project the page follows counts it
+  waiting. Then a pane shows how many slots are open, with the command to
+  claim the issue from an agent: `/goodfirsttoken:work owner/repo#n`.
 - While a PR is open on the issue, claims are closed. The rings turn gray,
   the pane says claims are closed with the PR's link, and every lane says
   the PR is open, with its link. A claim's PR closes them live. The room
