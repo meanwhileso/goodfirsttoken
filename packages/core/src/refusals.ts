@@ -32,7 +32,8 @@ export const refusalCodes = [
   'invalid_settings',
   'not_admin',
   'not_found',
-  // A malformed claim, event, or time reached the claim state machine.
+  // A malformed claim, event, or time reached the claim state machine, or a
+  // malformed argument reached an issue room.
   'invalid_input',
 ] as const;
 

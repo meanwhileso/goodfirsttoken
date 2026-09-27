@@ -57,8 +57,8 @@ A claim is one person's hold on an issue while their agent works it. The
 rules for a single claim are one pure function in `packages/core`,
 `nextClaimState(claim, event, now)`. It returns the claim after the event, or
 a refusal with its reason. The same claim, event, and time always give the
-same answer. No issue room holds claims or runs their timers yet. The
-database can store them, as below.
+same answer. Each issue's room holds its claims and runs their timers, as
+[the issue room](#the-issue-room) describes, and the database keeps a copy.
 
 | State | Meaning | Holds a slot |
 |---|---|---|
@@ -131,7 +131,7 @@ token estimate, and the facts its state needs.
 
 The claim cap, the rule that a PR on the issue stops new claims, and who may
 post to a claim depend on every claim on the issue, so they are outside this
-function.
+function. The issue room applies them.
 
 **The claims table.** The database keeps a copy of each claim for the
 leaderboard and for queries across issues. Each save carries a revision, a
@@ -149,6 +149,154 @@ number the issue room raises with every change.
   room may not have the PR yet.
 - An issue's claims come back in the order they were made. A person's come
   back newest first, and stay theirs when their login changes.
+
+## The issue room
+
+Each issue has one room, which holds every claim on the issue. A claim
+changes only there. The room runs the claims' timers, takes the claimants'
+updates, streams events to the people watching, and saves each claim to the
+[claims table](#claims). Nothing calls a room yet. The MCP tools will, once
+they are served.
+
+**Claiming**
+
+- A claim names the issue, the project, the claimant by GitHub ID with their
+  login, the agent, whether it is own-project work, the commit the work
+  starts from, and the issue's slots, which is the project's claims per
+  issue. The room takes these as given. Checking the project, the issue,
+  and the donor on GitHub and in the database is up to its caller.
+- A claim is refused with `pr_exists` while an open PR is linked to the
+  issue, and with `issue_full` when every slot is taken. A claim holds a slot
+  while it is `active`, `paused`, or `awaiting_review`.
+- The room is the lock for the cap. Claims that arrive at the same moment
+  are decided one at a time, so an issue never has more claims holding slots
+  than it has slots.
+- A claim past its deadline frees its slot at once, even before its timer
+  runs.
+- Claiming an issue you already hold gives back that claim, with the commit
+  it started from, and takes no second slot.
+- A new claim is `active`, with an ID the room makes and no token estimate.
+- Every spelling of an issue reaches the same room, since repo names compare
+  without case.
+- A malformed argument to the room, like a claim with no full commit SHA, is
+  refused with `invalid_input`, naming the field, and nothing changes.
+
+**Updates**
+
+- Only the claimant can post to a claim. Anyone else is refused with
+  `not_claim_owner`, and a claim the room doesn't hold is refused with
+  `not_found`.
+- A claim takes at most one post every 10 seconds, counted from its last
+  post. Making the claim is no post, so the first line can follow at once. A
+  post that comes sooner is not stored, and the answer says how many seconds
+  to wait, rounded up. Of two posts at the same moment, one is stored and the
+  other waits.
+- Every post that is stored is a check-in. It restarts the claim's 30
+  minutes and wakes a paused claim. The agent is asked to post at least every
+  10 minutes, and the room pauses a claim only after 30 minutes with no post,
+  so a claim whose agent keeps to the 10 minutes never pauses.
+- A post to an expired or released claim is refused, as under
+  [Claims](#claims).
+- While an open PR is linked to the issue, the answer to each claimant's
+  post carries its link, unless the PR is the claimant's own.
+- A subagent's post carries its job, under the same claim.
+
+**Keys and tokens.** Before the room stores or sends a post, a subagent's
+job, or a release reason, it replaces each of these with `[redacted]`:
+
+- GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` followed by 20
+  or more letters and digits, and `github_pat_` followed by 20 or more
+  letters, digits, and underscores.
+- `sk-` followed by 20 or more letters, digits, underscores, and hyphens,
+  the form of OpenAI and Anthropic keys.
+- Stripe keys: `sk_live_`, `sk_test_`, `rk_live_`, or `rk_test_` followed by
+  16 or more letters and digits.
+- AWS access key IDs: `AKIA` or `ASIA` followed by 16 capital letters and
+  digits.
+- Google API keys: `AIza` followed by 35 letters, digits, underscores, and
+  hyphens.
+- Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxo-`, `xoxp-`, `xoxr-`, or
+  `xoxs-` followed by 10 or more letters, digits, and hyphens.
+- npm tokens: `npm_` followed by 36 letters and digits.
+- JSON Web Tokens: `eyJ` and 8 or more base64url characters, a dot, `eyJ`
+  and 8 or more, a dot, and 8 or more.
+- A private key's `-----BEGIN ... PRIVATE KEY-----` line and everything
+  after it.
+- The credentials after `Bearer` or `Basic`, ignoring case, when they are
+  16 or more characters. The word before them stays.
+- The password in a link, like `https://user:password@host`. The user and
+  the host stay.
+- A value of 8 or more characters after `=` or `:`, when the name before it
+  ends in `token`, `secret`, `password`, `passwd`, `apikey`, `api_key`,
+  `api-key`, `_key`, or `-key`, ignoring case. That covers
+  `GITHUB_TOKEN=...`, `"password": "..."`, and `?token=...` in a link. The
+  name stays, and a shorter value stays, so `token: 3 failing` reads as it
+  was written.
+
+Everything else stays as it was, like paths, links, and commit SHAs. A
+replacement can be longer than what it replaces, so after the replacements,
+a post, a job, or a reason longer than its limit is cut to the limit.
+
+**Timers**
+
+- The room sets its alarm for the earliest time any claim pauses or
+  expires, as `claimDeadlines` gives it. When the alarm runs, each claim past
+  a deadline moves on, and the room announces the change.
+- Every call to the room applies the timers that are due before anything
+  else, so a late alarm never changes an answer.
+- A room with no claim left to pause or expire, and nothing waiting to save,
+  sets no alarm.
+
+**Submitting, opening the PR, and releasing**
+
+- Only the claimant can submit, open the PR, or release. The rules for each
+  are under [Claims](#claims).
+- A submit can carry the tokens its work took. The claim's token estimate is
+  the sum over its submits, and stays null until a submit carries one.
+- Opening the claim's PR links it to the issue, so the issue takes no new
+  claims from then on.
+
+**PRs linked to the issue.** The room keeps the open PRs linked to the issue
+on GitHub, whoever opened them, as the code that reads GitHub tells it. A
+claim's own PR is added when it opens. Nothing reads them from GitHub yet.
+Once none is open, the issue takes claims again.
+
+**Events.** Each post and each change of a claim's state is a
+[feed event](#feed-events), stored in the room and sent to its watchers. The
+history survives a restart.
+
+| Kind | Text |
+|---|---|
+| `claimed` | `claimed the issue` |
+| `update` | The line the agent posted, with its keys and tokens replaced |
+| `paused` | `paused: no update for 30 minutes` |
+| `submitted` | `submitted the work`, then `submitted more work` for each submit after the first |
+| `pr_opened` | `opened PR owner/name#57` |
+| `released` | `released: ` and the reason |
+| `expired` | `expired: no submit within 24 hours`, or `expired: no PR within 7 days of the submit` |
+
+**Watchers**
+
+- A watcher connects to a room over a WebSocket and gets each event as it
+  happens, one feed event as JSON per message.
+- A watcher that reconnects sends the ID of the last event it saw as
+  `since`, and first gets every event after that one. With no `since`, or
+  one the room never sent, it first gets the whole history.
+- A room can sleep with watchers connected. They stay connected, and get the
+  next event.
+- What a watcher sends is ignored, and its close is answered. A request that
+  isn't a WebSocket upgrade is answered `426`.
+- No page or stream connects to a room yet.
+
+**Saving to the database**
+
+- Each change to a claim is saved to the claims table with a revision one
+  higher than the last, so the table follows every change.
+- A save that fails is tried again a minute later, at the claim's latest
+  revision, until it lands. A claimant has to be recorded under
+  [People](#people) for their claim to save.
+- The room stores claim facts and public events only. It takes who is
+  asking as a GitHub ID, and no token ever reaches it.
 
 ## PRs
 
@@ -337,8 +485,9 @@ a description for agents. No tool is served yet.
 
 ## Refusals
 
-The codes are defined in `packages/core`. Today only `nextClaimState` returns
-any: the first four and `invalid_input`.
+The codes are defined in `packages/core`. `nextClaimState` returns the first
+four and `invalid_input`. The issue room returns those, and `pr_exists`,
+`issue_full`, `not_claim_owner`, and `not_found`.
 
 | Code | When |
 |---|---|
@@ -362,7 +511,7 @@ any: the first four and `invalid_input`.
 | `invalid_settings` | Settings failed their checks |
 | `not_admin` | The caller isn't a Good First Token admin |
 | `not_found` | The claim, issue, project, or queue item doesn't exist |
-| `invalid_input` | A malformed claim, event, or time reached the claim state machine |
+| `invalid_input` | A malformed claim, event, or time reached the claim state machine, or a malformed argument reached an issue room |
 
 ## Feed events
 
@@ -374,6 +523,8 @@ claim ID, a kind, the text, and for a subagent's line, its job.
   mark a claim's state changes.
 - `pr_merged` and `pr_closed` are the outcome of the claim's PR. They are PR
   facts, and the claim stays `pr_opened`.
+- The issue room makes every kind but `pr_merged` and `pr_closed`, with the
+  texts [the issue room](#the-issue-room) lists. Nothing makes those two yet.
 
 ## Limits
 

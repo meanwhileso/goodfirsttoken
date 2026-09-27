@@ -37,12 +37,15 @@ export const updateText = z
   .min(1, 'must not be empty')
   .max(MAX_UPDATE_TEXT, `must be at most ${String(MAX_UPDATE_TEXT)} characters`);
 
+/** The longest name of a subagent's job. */
+export const MAX_JOB_NAME = 40;
+
 /** A subagent's job, like `tests`, shown with the lines it posts. */
 export const jobName = z
   .string({ error: 'must be a short name for the job, like tests' })
   .trim()
   .min(1, 'must not be empty')
-  .max(40, 'must be at most 40 characters');
+  .max(MAX_JOB_NAME, `must be at most ${String(MAX_JOB_NAME)} characters`);
 
 export const feedEventSchema = z.object({
   /** Unique across the whole site, so a feed can drop an event it already has. */
