@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, sign-in with GitHub, the design system at `/design`, and `/healthz`, and holds the D1 schema and the functions that read and write it. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, and `/healthz`, and holds the D1 schema and the functions that read and write it. Queue consumers and scheduled jobs join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -27,10 +27,13 @@ The repo is a pnpm workspace.
   server side inside `workerd`, the Workers runtime, in development, in
   tests, and in production.
 - **`src/server.ts` is the Worker's entry point.** It answers a request to a
-  redirect domain itself, with `src/redirect.ts`, sends every request under
-  `/auth` to `src/auth/routes.ts`, and hands every other request to TanStack
-  Start. Queue consumers, cron handlers, and Durable Object classes are
-  exported from it as they arrive.
+  redirect domain itself, with `src/redirect.ts`, and an agent's sign-in over
+  the sign-in limit. It hands everything else to the MCP server's OAuth
+  provider, which answers `/mcp` and the OAuth routes and passes the rest
+  back. Of those, it sends every request under `/auth` to
+  `src/auth/routes.ts`, answers the form on `/oauth/authorize`, and hands
+  every other request to TanStack Start. Queue consumers, cron handlers, and
+  Durable Object classes are exported from it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -47,6 +50,8 @@ The repo is a pnpm workspace.
   in its place. Sign-in trades codes for tokens at github.com itself, in
   `src/auth/auth.ts`.
 - **Sign-in lives in `src/auth/`,** described under [Sign-in](#sign-in).
+- **The MCP server lives in `src/mcp/`,** described under
+  [The MCP server](#the-mcp-server).
 
 ### Sign-in
 
@@ -55,7 +60,8 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
 | File | What it does |
 |---|---|
 | `src/auth/auth.ts` | Sets up Better Auth with its GitHub provider and D1 |
-| `src/auth/routes.ts` | Answers every request under `/auth`: the allowed routes, the rate limit, the same-site check on forms, sign-out's revocation, and the dev sign-in |
+| `src/auth/routes.ts` | Answers every request under `/auth`: the allowed routes, the same-site check on forms, sign-out's revocation, the dev sign-in, and the routes an agent's sign-in and Disconnect use |
+| `src/auth/rate-limit.ts` | The sign-in rate limit, counted by client address |
 | `src/auth/session.ts` | Reads who is signed in from a request |
 | `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav |
 | `src/auth/SiteNav.tsx` | The nav with the signed-in person in it |
@@ -112,8 +118,8 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   router handles. Our form routes check it themselves, before the rate
   limit. Better Auth skips its own check when `NODE_ENV` is `test`, so it is
   turned on outright and the tests see it.
-- **Cloudflare rate limiting,** through the `SIGN_IN_LIMITER` binding,
-  counted per `cf-connecting-ip`, with an IPv6 address cut to its /64, and
+- **Cloudflare rate limiting,** through the `SIGN_IN_LIMITER` binding
+  (`src/auth/rate-limit.ts`), counted per `cf-connecting-ip`, with an IPv6 address cut to its /64, and
   an IPv4 address written as IPv6 read as the IPv4 address.
   Better Auth's own limiter is off, since it counts in each isolate's memory.
 - **Development** is checked in `src/auth/settings.ts`: `ENVIRONMENT` and a
@@ -121,6 +127,89 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   the secrets depend on it.
 - **Also off in Better Auth:** its IP address tracking, so no session stores
   an address, ID token sign-in, and telemetry.
+
+### The MCP server
+
+The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
+
+| File | What it does |
+|---|---|
+| `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries |
+| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and `start_session` |
+| `src/mcp/authorize.ts` | An agent's sign-in: the checks before the page renders, the answer to its form, and GitHub's return |
+| `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
+| `src/routes/oauth/authorize.tsx` | That page |
+| `src/mcp/connections.ts` | The `connected_agents` table, and Disconnect |
+| `src/mcp/agents.ts` | The server function that lists a person's agents on `/me` |
+| `src/mcp/paths.ts` | The paths, with no imports, so pages can use them |
+
+- **`@cloudflare/workers-oauth-provider` 1.1.0, pinned,** set up the way
+  Cloudflare's `remote-mcp-github-oauth` example does it: one Worker is both
+  the authorization server and the MCP server, with GitHub as the upstream
+  sign-in. The library answers the protected-resource and
+  authorization-server metadata, dynamic client registration at
+  `/oauth/register`, and `/oauth/token`, and checks the access token on every
+  request to `/mcp`. Every other request goes on to the site. The example is
+  written for the library's 0.x releases and builds its own consent page and
+  state cookies. The 1.x library has helpers for both, `beginConsent` through
+  `finishUpstream`, which this uses.
+- **One provider per origin.** The library needs the resource's full URL,
+  `<origin>/mcp`, when it starts, and the site's origin comes from the
+  request when there is no primary domain. So `src/mcp/provider.ts` keeps one
+  provider for each origin, like Better Auth's instances.
+- **What a grant carries.** The grant's props hold the connection's ID, the
+  person's numeric GitHub ID, their login when the agent signed in, and the
+  GitHub token. Its user ID is the GitHub ID, and its metadata holds the
+  connection's ID, so Disconnect can find it. The library encrypts the props
+  with a key it wraps with each of the agent's tokens, and keeps only hashes
+  of those tokens.
+- **A second copy of the GitHub token, in D1.** Disconnect has to revoke a
+  grant's GitHub token without the agent, and the props open only with the
+  agent's own tokens. So `connected_agents` keeps a copy, encrypted with
+  `AUTH_SECRET` through Better Auth's `symmetricEncrypt`, the way the site's
+  own token is stored. [The spec](specs/v1.md#3-identity-permissions-and-token-storage)
+  says the server can act for a donor only while the donor's agent calls it.
+  With this copy that holds for everything but revoking.
+- **A tool call needs its row.** Before a request reaches the MCP server,
+  the handler updates the connection's last use in `connected_agents`, and
+  answers `401` when there is no row. Deleting the row cuts the agent off at
+  once, while a KV delete can take up to a minute to reach every location.
+- **The MCP TypeScript SDK 2.1.0, pinned.** `@modelcontextprotocol/server`'s
+  `createMcpHandler` serves both the 2026-07-28 protocol and 2025 clients,
+  with a new `McpServer` for each request, so nothing is kept between
+  requests and no Durable Object is needed. The example's `McpAgent` needs
+  one. The tests use `@modelcontextprotocol/client` 2.1.0 as the agent.
+- **The page is a TanStack route.** A rendered page always answers `200`, so
+  `src/server.ts` checks the request before the page renders, and answers a
+  bad one itself: a redirect back to the agent, or an error with its own
+  status. The server function starts the consent and sets the library's
+  headers: the cookie, `no-store`, and the two that keep the page out of
+  frames.
+- **The upstream callback is `/auth/callback/mcp`,** under the same OAuth
+  app's callback URL as the site's sign-in, as the spec plans.
+  [self-hosting.md](self-hosting.md#3-create-the-github-oauth-apps) says how
+  one app serves both.
+- **Lifetimes.** Access tokens last the library's default hour. Grants use
+  `refreshTokenTTL` and `refreshTokenIdleTTL` of 30 days, so a refresh
+  extends one. Dynamically registered clients last the library's default 90
+  days, and a client that keeps trading tokens keeps its registration.
+- **No scopes.** The server declares none and grants none. What a caller may
+  do is `requirePermission`'s to decide.
+- **Client ID metadata documents are off.** The issue asked for dynamic
+  registration, and the documents need the `global_fetch_strictly_public`
+  compatibility flag, which changes how every outbound fetch from the Worker
+  is routed. The library logs a warning that they are off when the Worker
+  starts.
+- **Cookies** are the library's, with the prefix `__Host-gft.oauth-`, which
+  it requires to start with `__Host-`. It sets them `Secure`, `HttpOnly`,
+  `SameSite=Lax`, and `Path=/`.
+- **Rate limiting.** `MCP_LIMITER` counts each request to `/mcp` that has a
+  valid token, by the person's GitHub ID, since agents on a shared host, like
+  Grok Bot's, can share an address. An agent's sign-in counts against
+  `SIGN_IN_LIMITER`, by address: `src/server.ts` counts registration and the
+  page before the library sees them, and the form and GitHub's return count
+  where they are answered. The token endpoint is not limited here. It needs
+  a code or a refresh token.
 
 ### The design system
 
@@ -272,15 +361,15 @@ that leaves their settings empty gives them empty strings, and
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
-| `DB` | D1 | Now, by `src/db/` and Better Auth |
-| `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/routes.ts` |
-| `OAUTH_KV` | KV, for OAuth grants | #9 |
+| `DB` | D1 | Now, by `src/db/`, Better Auth, and `src/mcp/connections.ts` |
+| `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
+| `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
+| `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer | #14 |
 | `CRAWL_QUEUE` | Queue producer | #30 |
 
 The feed's dead-letter queue arrives with the feed consumer in #14. Durable
-Objects, cron triggers, and the tool endpoint's rate limiter arrive with the
-issues that use them. The static host's R2 bucket is not a binding, since the
+Objects and cron triggers arrive with the issues that use them. The static host's R2 bucket is not a binding, since the
 Worker never reads it. [The static host](#the-static-host) covers it.
 
 ## Database
@@ -296,7 +385,18 @@ People through Crawl candidates.
 
 It also holds Better Auth's four tables for signing in, described under
 [Better Auth's tables](#better-auths-tables). The one GitHub token they store,
-in `account`, is encrypted.
+in `account`, is encrypted. And it holds `connected_agents`, the agents each
+person connected to the MCP server, described under
+[The MCP server](#the-mcp-server). Each row keeps its agent's GitHub token,
+encrypted the same way.
+
+| Table | One row per | Key |
+|---|---|---|
+| `connected_agents` | Agent a person connected: the client it registered as and the name it gave itself, its GitHub token, encrypted, when it connected, and when it last called a tool | `id` |
+
+Migration `0003_connected_agents.sql` makes it. `src/mcp/connections.ts`
+reads and writes it, with no core schema, like Better Auth's tables. A row
+goes when its agent is disconnected. Its person must be in `people`.
 
 | Table | One row per | Key |
 |---|---|---|
@@ -464,6 +564,7 @@ pruning after a sync, with no index of its own.
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
 | `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |
 | `verification_by_identifier` | A sign-in in progress, by the state GitHub sends back |
+| `connected_agents_by_person` | A person's agents on `/me`, and the earlier connections a new sign-in from the same client replaces |
 
 A merged PR always has a close time, as on GitHub, and only `closed_at` is
 indexed. So merged PRs this week filter on `closed_at` with
@@ -500,14 +601,15 @@ the deploy or Wrangler creates the resource on the first deploy.
 
 Each secret the Worker reads goes by name under `secrets.required` in
 `wrangler.jsonc`, and the deploy puts it. There are two, `OAUTH_CLIENT_SECRET`
-and `AUTH_SECRET`, for sign-in. GitHub reserves names that start with
-`GITHUB_` for its own variables and secrets, so no variable or secret of the
-Worker can start with it.
+and `AUTH_SECRET`, for sign-in. `AUTH_SECRET` also encrypts the copy of each
+connected agent's GitHub token. The OAuth library needs no secret of its
+own. GitHub reserves names that start with `GITHUB_` for its own variables
+and secrets, so no variable or secret of the Worker can start with it.
 
-The rate limiter's namespace ID is the one ID `wrangler.jsonc` has to carry,
-since Wrangler refuses a limiter without one. It is a placeholder that local
-development simulates, and a deploy replaces it with the
-`SIGN_IN_LIMITER_NAMESPACE_ID` setting.
+The rate limiters' namespace IDs are the only IDs `wrangler.jsonc` has to
+carry, since Wrangler refuses a limiter without one. Each is a placeholder
+that local development simulates, and a deploy replaces them with the
+`SIGN_IN_LIMITER_NAMESPACE_ID` and `MCP_LIMITER_NAMESPACE_ID` settings.
 
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
@@ -586,7 +688,10 @@ and Playwright run it as a local HTTP server.
   `object(expression:)` across many repos in one query, and
   `createCommitOnBranch`. The OAuth web flow: the authorize page and the
   token endpoint, with PKCE, and an OAuth app revoking one of its tokens with
-  its client ID and secret. Each route in `src/rest.ts` names its page on
+  its client ID and secret. GitHub's cap of 10 tokens for one person, app,
+  and set of scopes: an 11th revokes the oldest one never used and over a
+  minute old, or else the least recently used, or else the oldest. So the
+  fake keeps when each token was made and last used. Each route in `src/rest.ts` names its page on
   docs.github.com, and GitHub's errors come back in GitHub's shape.
 - **It records whose token made each call.** `fake.calls` lists every call
   with its endpoint, the token it carried, the login that token belongs to,
@@ -616,6 +721,10 @@ and Playwright run it as a local HTTP server.
     `127.0.0.1`.
   - Revoking a token answers 404 when the app's credentials are wrong or
     another app issued the token. GitHub's docs name only its 204 and 422.
+  - GitHub's limit of 10 new tokens an hour for one person, app, and scope
+    isn't kept. Tokens don't expire, and the fake gives no refresh tokens.
+  - An app has one callback URL, and any path under it is allowed, the way
+    GitHub matches with wildcard matching on.
   - Git object IDs are 40 hex characters made with an FNV hash of the
     content, so they never match a real repo's. The fake can't be cloned
     with `git`.
@@ -684,6 +793,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   by hand, and the GitHub fake in-process. Each browser has its own client
   address, so the sign-in rate limit counts it alone. The Vitest config sets
   the two secrets, as a deploy does. They live in `apps/web/test/auth/`.
+- **MCP tests** connect agents with the MCP client SDK, as a harness does,
+  and drive the person's side with the same small browser, against the whole
+  Worker and the GitHub fake. They read the `OAUTH_KV` namespace directly to
+  check what it holds. They live in `apps/web/test/mcp/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. The web server applies the D1 migrations first. They live in
@@ -715,7 +828,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   from the static host. So does a response from either whose headers can't
   be read, unless the test closed its context first. Other origins, like
   the GitHub fake, are not checked. The site's own cookies come from
-  sign-in, which `sign-in.spec.ts` runs through the fixture.
+  sign-in, which `sign-in.spec.ts` runs through the fixture, and from an
+  agent's sign-in, which `mcp.spec.ts` runs.
   `cookies.spec.ts` checks that the fixture sees the responses of pages and
   requests from both hosts. It also runs two servers of its own that answer
   with bad cookies, one of them on a redirect the `request` fixture

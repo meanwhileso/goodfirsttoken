@@ -89,6 +89,40 @@ export async function revokeGitHubToken(app: OAuthApp, token: string): Promise<v
   if (!response.ok) throw await refusal(response);
 }
 
+// Trades the code GitHub sent back to an OAuth sign-in for the person's
+// token, at github.com itself, with the PKCE verifier the sign-in started
+// with. GitHub answers a refused code with 200 and an `error` field, which
+// comes back as a GitHubError with GitHub's description. Nothing here puts
+// GitHub's answer in an error, since a good one holds the token. The site's
+// own sign-in trades codes through Better Auth, in src/auth/auth.ts.
+// https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#2-users-are-redirected-back-to-your-site-by-github
+export async function exchangeGitHubCode(
+  app: OAuthApp,
+  input: { code: string; redirectUri: string; codeVerifier: string },
+): Promise<string> {
+  const response = await fetch(`${gitHubUrls().web}/login/oauth/access_token`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+      'user-agent': 'goodfirsttoken',
+    },
+    body: new URLSearchParams({
+      client_id: app.clientId,
+      client_secret: app.clientSecret,
+      code: input.code,
+      redirect_uri: input.redirectUri,
+      code_verifier: input.codeVerifier,
+    }),
+    redirect: 'manual',
+  });
+  if (!response.ok) throw new GitHubError(response.status, response.statusText);
+  const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (typeof data?.access_token === 'string' && data.error === undefined) return data.access_token;
+  const reason = typeof data?.error === 'string' ? data.error : 'no token';
+  throw new GitHubError(response.status, `GitHub gave no token: ${reason}`);
+}
+
 export interface GraphQLError {
   type?: string;
   message: string;

@@ -169,3 +169,82 @@ test('cancelling sign-in sends the person back with access_denied and no code', 
   expect(back.location.searchParams.get('state')).toBe('xyz');
   expect(back.location.searchParams.get('code')).toBeNull();
 });
+
+// GitHub's cap: 10 tokens per app, person, and scopes. The fake's clock is
+// moved by hand.
+function fakeWithClock() {
+  let time = Date.UTC(2026, 8, 1, 12, 0, 0);
+  const clocked = createGitHubFake({ now: () => new Date(time) });
+  return {
+    clocked,
+    tick: (ms: number) => {
+      time += ms;
+    },
+  };
+}
+
+async function tokenFrom(target: GitHubFake, login: string, scope = 'public_repo'): Promise<string> {
+  const back = await target.fetch(`${target.webUrl}/login/oauth/authorize`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: localOAuthApp.clientId, scope, login }),
+  });
+  const code = new URL(back.headers.get('location') ?? '').searchParams.get('code') ?? '';
+  const reply = await target.fetch(`${target.webUrl}/login/oauth/access_token`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: localOAuthApp.clientId, client_secret: localOAuthApp.clientSecret, code }),
+  });
+  return ((await reply.json()) as { access_token: string }).access_token;
+}
+
+async function works(target: GitHubFake, token: string): Promise<boolean> {
+  return (await rest(target, 'GET', '/user', { token })).status === 200;
+}
+
+test('an eleventh token for the same app, person, and scopes revokes the least recently used one', async () => {
+  const { clocked, tick } = fakeWithClock();
+  const tokens: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    tokens.push(await tokenFrom(clocked, 'priya'));
+    tick(1000);
+  }
+  // Every token gets used, the first one last, so the second is the least
+  // recently used.
+  for (const token of [...tokens.slice(1), tokens[0] ?? '']) {
+    await works(clocked, token);
+    tick(1000);
+  }
+
+  const eleventh = await tokenFrom(clocked, 'priya');
+
+  expect(await works(clocked, tokens[1] ?? '')).toBe(false);
+  for (const token of [tokens[0] ?? '', ...tokens.slice(2), eleventh]) expect(await works(clocked, token)).toBe(true);
+});
+
+test('past the cap, a token never used and over a minute old goes before any used one', async () => {
+  const { clocked, tick } = fakeWithClock();
+  const tokens: string[] = [];
+  for (let i = 0; i < 10; i++) tokens.push(await tokenFrom(clocked, 'kenji'));
+  for (const token of tokens.filter((_, i) => i !== 4)) await works(clocked, token);
+  tick(61_000);
+
+  await tokenFrom(clocked, 'kenji');
+
+  expect(await works(clocked, tokens[4] ?? '')).toBe(false);
+  for (const token of tokens.filter((_, i) => i !== 4)) expect(await works(clocked, token)).toBe(true);
+});
+
+test('the cap counts each person, app, and set of scopes apart', async () => {
+  const { clocked } = fakeWithClock();
+  const first = await tokenFrom(clocked, 'lena');
+  for (let i = 0; i < 9; i++) await tokenFrom(clocked, 'lena');
+  const others = [
+    await tokenFrom(clocked, 'lena', 'public_repo read:org'),
+    await tokenFrom(clocked, 'priya'),
+    clocked.tokenFor('lena'),
+  ];
+
+  for (const token of [first, ...others]) expect(await works(clocked, token)).toBe(true);
+});

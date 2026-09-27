@@ -51,6 +51,7 @@ const withLimiter = {
   ...required,
   LOGIN_LIMITER_NAMESPACE_ID: '1001',
   SIGN_IN_LIMITER_NAMESPACE_ID: '1002',
+  MCP_LIMITER_NAMESPACE_ID: '1003',
   OAUTH_CLIENT_ID: 'Ov23sampleclient',
 };
 
@@ -299,6 +300,7 @@ const sentinels = {
   DB_ID: D1_ID,
   OAUTH_KV_ID: KV_ID,
   SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
+  MCP_LIMITER_NAMESPACE_ID: '5550004',
   PRIMARY_DOMAIN: 'sentinel-primary.example',
   REDIRECT_DOMAINS: 'sentinel-second.example',
   OAUTH_CLIENT_ID: 'Ov23sentinelclient',
@@ -340,6 +342,7 @@ test("a deploy's GitHub URLs come from the settings or are empty, and never from
     CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
     WORKER_NAME: 'sentinel-worker',
     SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
+    MCP_LIMITER_NAMESPACE_ID: '5550004',
     OAUTH_CLIENT_ID: 'Ov23sentinelclient',
   });
   const set = written(sentinels);

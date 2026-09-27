@@ -66,12 +66,14 @@ Claude Code users get the change the next time they update the plugin or
 the marketplace, or automatically if they turned on auto-update for it. The
 higher version is what lets an update find it.
 
-To try the skills against `pnpm dev` once #9 adds its MCP server, run
+To try the skills against the MCP server in `pnpm dev`, run
 `GOODFIRSTTOKEN_MCP_URL=http://localhost:5173/mcp pnpm skills:build`. Claude
 Code reads the same variable, so
 `GOODFIRSTTOKEN_MCP_URL=http://localhost:5173/mcp claude --plugin-dir plugins/goodfirsttoken`
-connects the plugin to `pnpm dev` with no build. Run `pnpm skills:build`
-without the variable before you commit.
+connects the plugin to `pnpm dev` with no build. When the agent connects, the
+browser opens on the site's page to approve it, then on the fake GitHub's
+page, where you pick a sample person. Run `pnpm skills:build` without the
+variable before you commit.
 
 ## AI help is welcome
 

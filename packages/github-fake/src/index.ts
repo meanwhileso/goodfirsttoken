@@ -25,7 +25,7 @@ import {
   type RepoRecord,
   type ReviewInput,
 } from './state.ts';
-import { handleWeb } from './web.ts';
+import { handleWeb, revokeOverTheCap } from './web.ts';
 
 export type { FakeState, ReviewInput } from './state.ts';
 export type { SampleData } from './sample-data.ts';
@@ -136,7 +136,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
 
   const mintToken = (login: string, scopes: string[], clientId: string | null) => {
     const token = newToken();
-    state.tokens[token] = { login: getAccount(state, login).login, scopes, clientId };
+    const issued = now();
+    state.tokens[token] = { login: getAccount(state, login).login, scopes, clientId, createdAt: issued.toISOString(), lastUsedAt: null };
+    if (clientId !== null) revokeOverTheCap(state, token, issued);
     return token;
   };
 
@@ -144,6 +146,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     const token = tokenFrom(request.headers.get('authorization'));
     const grant = token === null ? undefined : state.tokens[token];
     const login = grant?.login ?? null;
+    // GitHub keeps when each token was last used, which decides the one it
+    // revokes past the cap (web.ts).
+    if (grant) grant.lastUsedAt = now().toISOString();
     const done = (response: Response, operation: string) => {
       response.headers.set('x-github-api-version-selected', '2022-11-28');
       if (grant) response.headers.set('x-oauth-scopes', grant.scopes.join(', '));

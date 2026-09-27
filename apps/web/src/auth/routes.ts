@@ -1,22 +1,29 @@
 import { githubLogin } from '@goodfirsttoken/core';
 import { symmetricDecrypt } from 'better-auth/crypto';
-import { env } from 'cloudflare:workers';
 import { revokeGitHubToken } from '../github';
+import { finishConnecting, MCP_CALLBACK_PATH } from '../mcp/authorize';
+import { disconnect } from '../mcp/connections';
 import { AUTH_BASE_PATH, failureReason, getAuth, type Auth } from './auth';
-import { gitHubAccount } from './session';
+import { tooManySignIns, underSignInLimit } from './rate-limit';
+import { gitHubAccount, readSignedIn } from './session';
 import { SignInNotSetUp, isDevelopment, oauthApp, siteOrigin } from './settings';
 
 // Every request under /auth comes here. Only the routes below answer, and
 // every other path under /auth is a 404, so none of Better Auth's other
 // endpoints, like email sign-up or account linking, can be reached.
 //
-//   POST /auth/sign-in           starts GitHub sign-in (a form on /sign-in)
-//   GET  /auth/callback/github   where GitHub sends the person back
-//   POST /auth/sign-out          signs out and revokes the GitHub token
-//   POST /auth/dev/sign-in       development only: signs in as a sample person
+//   POST /auth/sign-in              starts GitHub sign-in (a form on /sign-in)
+//   GET  /auth/callback/github      where GitHub sends the person back
+//   POST /auth/sign-out             signs out and revokes the GitHub token
+//   POST /auth/dev/sign-in          development only: signs in as a sample person
+//   GET  /auth/callback/mcp         where GitHub sends someone connecting an
+//                                   agent back (src/mcp/authorize.ts)
+//   POST /auth/agents/disconnect    disconnects one of the person's agents
+//                                   (a form on /me)
 
 const SIGN_IN_PAGE = '/sign-in';
 const AFTER_SIGN_IN = '/me';
+const AFTER_DISCONNECT = '/me';
 const AFTER_SIGN_OUT = '/';
 const CALLBACK_PATH = `${AUTH_BASE_PATH}/callback/github`;
 
@@ -47,63 +54,20 @@ function fromThisSite(request: Request, origin: string): boolean {
   return request.headers.get('origin') === origin;
 }
 
-const DOTTED_TAIL = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-
-// The eight 16-bit groups of an IPv6 address, or null when it isn't one. An
-// IPv4 address at its end, as in ::ffff:198.51.100.7, becomes its last two
-// groups.
-function ipv6Groups(address: string): number[] | null {
-  let hex = address;
-  const dotted = DOTTED_TAIL.exec(address);
-  if (dotted) {
-    const [a = 256, b = 256, c = 256, d = 256] = dotted.slice(1).map(Number);
-    if ([a, b, c, d].some((byte) => byte > 255)) return null;
-    hex = `${address.slice(0, dotted.index)}${(a * 256 + b).toString(16)}:${(c * 256 + d).toString(16)}`;
-  }
-  const halves = hex.split('::');
-  if (halves.length > 2) return null;
-  const parse = (part: string) => (part === '' ? [] : part.split(':'));
-  const left = parse(halves[0] ?? '');
-  const right = halves.length === 2 ? parse(halves[1] ?? '') : [];
-  const missing = 8 - left.length - right.length;
-  // A :: stands for at least one group of zeros, and without one there are eight.
-  if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
-  const groups = [...left, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...right];
-  if (!groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return null;
-  return groups.map((group) => parseInt(group, 16));
-}
-
-/**
- * Whom the rate limiter counts a request against: an IPv4 address, or the
- * /64 an IPv6 address is in, since one IPv6 client can pick any address in
- * its /64. An IPv4 address written as IPv6, in any form, counts as the IPv4
- * address. Cloudflare sets cf-connecting-ip on every request that reaches
- * the Worker.
- */
-function limiterKey(address: string | null): string {
-  if (!address) return 'unknown';
-  const lower = address.trim().toLowerCase();
-  if (!lower.includes(':')) return lower;
-  const groups = ipv6Groups(lower);
-  // An address that can't be read counts on its own.
-  if (!groups) return lower;
-  const [g0, g1, g2, g3, g4, g5, g6 = 0, g7 = 0] = groups;
-  if ([g0, g1, g2, g3, g4].every((group) => group === 0) && g5 === 0xffff) {
-    return [g6 >> 8, g6 & 255, g7 >> 8, g7 & 255].join('.');
-  }
-  return `${groups
-    .slice(0, 4)
-    .map((group) => group.toString(16))
-    .join(':')}::/64`;
-}
-
-async function underLimit(request: Request): Promise<boolean> {
-  const { success } = await env.SIGN_IN_LIMITER.limit({ key: limiterKey(request.headers.get('cf-connecting-ip')) });
-  return success;
-}
-
-const TOO_MANY = () => text(429, 'Too many sign-ins from here. Try again in a minute.', { 'retry-after': '60' });
 const OTHER_SITE = () => text(403, 'Refused: this form was sent from another site.');
+
+// Disconnects one of the signed-in person's agents, named by the form's
+// `agent` field: the agent's next tool call gets a 401, and its GitHub token
+// is revoked. An agent that isn't theirs, or is already gone, is left as it
+// is, and they land on /me either way.
+async function disconnectAgent(request: Request, origin: string): Promise<Response> {
+  const { signedIn, setCookies } = await readSignedIn(request);
+  if (!signedIn) return seeOther(SIGN_IN_PAGE, setCookies);
+  const form = await request.formData().catch(() => null);
+  const agent = form?.get('agent');
+  if (typeof agent === 'string') await disconnect(origin, signedIn.githubId, agent);
+  return seeOther(AFTER_DISCONNECT, setCookies);
+}
 
 // Starts sign-in the way Better Auth does: it keeps the state and the PKCE
 // verifier in a row that lasts 10 minutes, sets a cookie that ties them to
@@ -207,17 +171,17 @@ async function route(request: Request): Promise<Response> {
     // Outside development this route doesn't exist.
     if (!isDevelopment()) return text(404, 'Not Found');
     if (!fromThisSite(request, origin)) return OTHER_SITE();
-    if (!(await underLimit(request))) return TOO_MANY();
+    if (!(await underSignInLimit(request))) return tooManySignIns();
     return devSignIn(getAuth(origin), request, origin);
   }
   if (endpoint === `POST ${AUTH_BASE_PATH}/sign-in`) {
     if (!fromThisSite(request, origin)) return OTHER_SITE();
-    if (!(await underLimit(request))) return TOO_MANY();
+    if (!(await underSignInLimit(request))) return tooManySignIns();
     const { url, setCookies } = await startSignIn(getAuth(origin), request);
     return seeOther(url, setCookies);
   }
   if (endpoint === `GET ${CALLBACK_PATH}`) {
-    if (!(await underLimit(request))) return TOO_MANY();
+    if (!(await underSignInLimit(request))) return tooManySignIns();
     const response = await getAuth(origin).handler(request);
     const answer = new Response(response.body, response);
     answer.headers.set('cache-control', 'no-store');
@@ -226,6 +190,11 @@ async function route(request: Request): Promise<Response> {
   if (endpoint === `POST ${AUTH_BASE_PATH}/sign-out`) {
     if (!fromThisSite(request, origin)) return OTHER_SITE();
     return signOut(getAuth(origin), request);
+  }
+  if (endpoint === `GET ${MCP_CALLBACK_PATH}`) return finishConnecting(request);
+  if (endpoint === `POST ${AUTH_BASE_PATH}/agents/disconnect`) {
+    if (!fromThisSite(request, origin)) return OTHER_SITE();
+    return disconnectAgent(request, origin);
   }
   return text(404, 'Not Found');
 }

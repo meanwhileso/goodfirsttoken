@@ -8,3 +8,6 @@
 .account__note { margin-top: 12px; max-width: 34em; }
 .account__error { margin-top: 20px; color: var(--danger); }
 .account form { margin-top: 32px; }
+.account__agents { list-style: none; padding: 0; margin: 0; max-width: 34em; }
+.account__agent { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.account__agent form { margin-top: 0; }

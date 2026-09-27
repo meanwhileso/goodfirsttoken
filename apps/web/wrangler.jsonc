@@ -35,10 +35,13 @@
   },
   // The Worker's secrets, which a deploy puts with `wrangler secret put`.
   // OAUTH_CLIENT_SECRET is the GitHub OAuth app's client secret. AUTH_SECRET
-  // signs the sign-in cookies and encrypts the GitHub tokens Better Auth
-  // stores. Local development needs neither (src/auth/settings.ts).
+  // signs the sign-in cookies and encrypts the GitHub tokens the site stores,
+  // from its own sign-in and from each agent's. Local development needs
+  // neither (src/auth/settings.ts).
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
+  // The OAuth library's clients, grants, and token hashes, for the MCP
+  // server (src/mcp/provider.ts).
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "queues": {
     "producers": [
@@ -46,9 +49,14 @@
       { "binding": "CRAWL_QUEUE", "queue": "crawl" }
     ]
   },
-  // Cloudflare rate limiting on the sign-in endpoints (src/auth/routes.ts).
-  // Wrangler needs a namespace ID, so this one is a placeholder that local
-  // development simulates. A deploy replaces it with the
-  // SIGN_IN_LIMITER_NAMESPACE_ID setting.
-  "ratelimits": [{ "name": "SIGN_IN_LIMITER", "namespace_id": "1", "simple": { "limit": 20, "period": 60 } }]
+  // Cloudflare rate limiting. SIGN_IN_LIMITER counts sign-ins on the site and
+  // agents' sign-ins to the MCP server, per client address
+  // (src/auth/rate-limit.ts). MCP_LIMITER counts calls to the MCP server, per
+  // person (src/mcp/server.ts). Wrangler needs a namespace ID for each, so
+  // these are placeholders that local development simulates. A deploy
+  // replaces each with the <name>_NAMESPACE_ID setting.
+  "ratelimits": [
+    { "name": "SIGN_IN_LIMITER", "namespace_id": "1", "simple": { "limit": 20, "period": 60 } },
+    { "name": "MCP_LIMITER", "namespace_id": "2", "simple": { "limit": 120, "period": 60 } }
+  ]
 }
