@@ -12,11 +12,12 @@ The repo is a pnpm workspace.
 |---|---|
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, the design system at `/design`, and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
-| `scripts/` | The static server behind `pnpm prototype` and the skill build behind `pnpm skills:build`, with their tests. |
+| `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, and the deploy scripts, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
 | `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
 | `.claude-plugin/marketplace.json` | Makes the repo a Claude Code plugin marketplace that lists both plugins. Built from `skill-src/`. |
+| `.github/workflows/` | CI, and the deploy to staging and production. |
 | `brand/`, `prototype/`, `video/` | The brand docs, the clickable prototype the site is built from, and the launch video source. |
 
 ### apps/web
@@ -24,9 +25,10 @@ The repo is a pnpm workspace.
 - **TanStack Start on Vite**, with `@cloudflare/vite-plugin` running the
   server side inside `workerd`, the Workers runtime, in development, in
   tests, and in production.
-- **`src/server.ts` is the Worker's entry point.** It hands every request to
-  TanStack Start. Queue consumers, cron handlers, and Durable Object classes
-  are exported from it as they arrive.
+- **`src/server.ts` is the Worker's entry point.** It answers a request to a
+  redirect domain itself, with `src/redirect.ts`, and hands every other
+  request to TanStack Start. Queue consumers, cron handlers, and Durable
+  Object classes are exported from it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -166,13 +168,16 @@ its version did not go up.
 ## Bindings
 
 `apps/web/wrangler.jsonc` is the config for local development. It declares
-every binding the Worker reads, under local names. Staging and production are
-not in the repo. The deploy workflow (#32) will write their config from the
-GitHub environment's variables, including the resource names and IDs.
+every binding and variable the Worker reads, under local names. Staging and
+production are not in the repo. The deploy writes their config from the
+GitHub environment, as [Deploys](#deploys) describes.
 
 | Binding | Kind | Used from |
 |---|---|---|
 | `ENVIRONMENT` | Variable: `development`, `staging`, or `production` | Now, by `/healthz` |
+| `PRIMARY_DOMAIN`, `REDIRECT_DOMAINS` | Variables: the site's domain, and domains that redirect to it | Now, by `src/redirect.ts` |
+| `OAUTH_CLIENT_ID` | Variable: the GitHub OAuth app's client ID | #8 |
+| `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | #8 |
 | `DB` | D1 | #5 |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
 | `FEED_QUEUE` | Queue producer | #14 |
@@ -186,9 +191,15 @@ limiters arrive with the issues that use them.
 
 The repo is public, so `wrangler.jsonc` holds bindings and settings only. The
 names of deployed resources, account IDs, resource IDs, custom domains, and
-secrets never go in a file. The deploy workflow (#32) will write them into
-the final config from the GitHub environment's variables. Where an ID is left
-out, Wrangler provisions the resource on the first deploy.
+secrets never go in a file. The deploy reads them from the GitHub environment
+and writes them into a config file that git ignores. Where an ID is left out,
+the deploy or Wrangler creates the resource on the first deploy.
+
+Each secret the Worker reads goes by name under `secrets.required` in
+`wrangler.jsonc`, and the deploy puts it. The Worker reads none yet, so the
+key is absent. GitHub reserves names that start with
+`GITHUB_` for its own variables and secrets, so no variable or secret of the
+Worker can start with it.
 
 Local development needs none of it. `pnpm dev` runs the Worker in Miniflare,
 which simulates every binding and keeps D1 and KV data on disk under
@@ -236,8 +247,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   baselines.
 - **The core package's tests** run with plain Vitest in Node, since the
   package is pure. They live in `packages/core/test/`.
-- **The tests for `scripts/`**, the static server and the skill build, use
-  Node's own test runner.
+- **The tests for `scripts/`**, the static server, the skill build, and the
+  deploy, use Node's own test runner. The deploy's tests fake Cloudflare's
+  API, GitHub's OIDC endpoint, and Wrangler, and check the scripts, the
+  deploy workflows, and [self-hosting.md](self-hosting.md) against each
+  other.
 
 `pnpm test` runs all of them but Playwright. `pnpm test:e2e` runs Playwright.
 
@@ -255,8 +269,77 @@ Every action is pinned to a commit SHA.
 | `typecheck` | `pnpm typecheck` |
 | `e2e` | `pnpm test:e2e` in Chromium, keeping the report and traces when it fails |
 | `leaks` | gitleaks over the full history, with the rules in `.gitleaks.toml` |
+| `actionlint` | actionlint over every workflow, with shellcheck on their `run:` scripts |
 
 Branch protection requires `test` and `leaks` by name.
+
+## Deploys
+
+`.github/workflows/deploy.yml` runs on every push to `main`, and by hand. It
+calls `deploy-environment.yml` for staging, and then for production. Each
+runs only when its repository variable, `DEPLOY_STAGING` or
+`DEPLOY_PRODUCTION`, is `true`, so `main` stays green before a deployment is
+set up. Each call is one job in the GitHub environment it deploys, and reads
+every deployment value from there. [self-hosting.md](self-hosting.md) lists
+the settings and the one-time setup.
+
+The job runs these steps. The scripts are in `scripts/`.
+
+1. `pnpm install --frozen-lockfile --ignore-scripts`. esbuild and workerd
+   run without their install scripts, and the deploy needs no generated
+   types or git hooks.
+2. `deploy-config.mjs` reads `wrangler.jsonc` and writes
+   `apps/web/wrangler.deploy.json`, which git ignores. It refuses to write
+   through a symlink there. It names the Worker `WORKER_NAME` and every other
+   resource `<WORKER_NAME>-<local name>`. It copies in each ID that is set
+   and leaves out each one that isn't. It sets every variable from the
+   setting of the same name, so no local value reaches a deployed Worker, and
+   sets `ENVIRONMENT` to the target. It attaches `PRIMARY_DOMAIN` and
+   `REDIRECT_DOMAINS` as custom domains and turns workers.dev off when there
+   is a domain. It masks the account ID, resource names and IDs, and the value
+   of every variable but `ENVIRONMENT` for the later steps, Wrangler's output
+   included. A
+   key or binding it does not know stops the deploy, so a new kind of binding
+   never reaches Cloudflare with its local name.
+3. The Vite build reads that file through
+   `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and writes the config Wrangler
+   deploys from.
+4. `deploy.mjs credential` puts a Cloudflare token in `$GITHUB_ENV` for the
+   later steps: the `CLOUDFLARE_API_TOKEN` secret, or a short-lived token from
+   the credential broker, traded for the job's GitHub OIDC token. It masks
+   the OIDC token as soon as it has it, and the broker call follows no
+   redirects.
+5. `deploy.mjs resources` creates each D1 database that has no ID, and each
+   queue, dead-letter queues included, when missing. Wrangler would create a
+   missing producer queue itself, but not a dead-letter queue, and a database
+   has to exist before its migrations run.
+6. `deploy.mjs migrations` runs `wrangler d1 migrations apply --remote` for
+   each database that has a migrations folder, and skips one that has none.
+7. `deploy.mjs secrets` puts each secret in `secrets.required` with
+   `wrangler secret put`, one at a time, from the environment secret of the
+   same name. The value reaches Wrangler on stdin only.
+8. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
+   when `OAUTH_KV_ID` is empty, and reuses it after that.
+9. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
+   workers.dev URL Wrangler reported, until it answers ok from the target
+   environment. It fails at once if another environment answers, and after
+   three minutes otherwise.
+
+Choices:
+
+- **One setting names every resource.** New bindings get deployed names
+  without new settings. Only IDs, which Cloudflare assigns, need one each.
+- **Settings are read as `secrets.NAME || vars.NAME`,** so each can be
+  either. [self-hosting.md](self-hosting.md#settings) says which to use.
+- **One reusable workflow runs both environments,** so staging and production
+  always run the same steps.
+- **The build step runs before the credential step,** so the Cloudflare token
+  is not in the build step's environment. That is only the order of steps.
+  `id-token: write` covers the whole job, so any step could ask GitHub for an
+  OIDC token, and a step can change what later steps run.
+- **Deploys run one at a time** in one concurrency group, which never
+  cancels a deploy in progress. Deploy jobs have `id-token: write` for the
+  broker and read-only contents.
 
 ## Choices
 
