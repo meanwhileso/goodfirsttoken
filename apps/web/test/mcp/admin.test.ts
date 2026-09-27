@@ -151,6 +151,20 @@ describe('who sees the admin tools', () => {
     expect(names.filter((name) => name.startsWith('admin_'))).toEqual([]);
   });
 
+  test("the GitHub fake's sample admin is no admin outside development", async () => {
+    // The tests run the Worker as staging, with GitHub on https hosts.
+    env.ADMIN_GITHUB_IDS = '';
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const names = (await admin.client.listTools()).tools.map((tool) => tool.name);
+    const refused = await adminQueue({ ...ADMIN, gitHubToken: () => Promise.resolve(null) }, { kind: 'all' }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(names.filter((name) => name.startsWith('admin_'))).toEqual([]);
+    expect(refused).toMatchObject({ code: 'not_admin' });
+  });
+
   test.each(ADMIN_TOOLS)("a non-admin's call to %s is refused, and nothing is read or written", async (name) => {
     await registerHarbor();
     const donor = await connectAgent(github, 'priya');
@@ -185,11 +199,7 @@ describe('who sees the admin tools', () => {
     [
       'admin_add_project',
       (caller: Caller) =>
-        adminAddProject(
-          caller,
-          { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } as never },
-          Date.now(),
-        ),
+        adminAddProject(caller, { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } }, Date.now()),
     ],
     ['admin_block_donor', (caller: Caller) => adminBlockDonor(caller, { login: 'priya', blocked: true }, Date.now())],
     ['admin_pause_project', (caller: Caller) => adminPauseProject(caller, { repo: HARBOR, paused: true, reason: 'x' }, Date.now())],
@@ -234,6 +244,7 @@ describe('admin_queue', () => {
             pushedAt: new Date(repo.pushedAt).toISOString(),
             ownerCreatedAt: new Date(github.state.accounts['sample-owner']?.createdAt ?? '').toISOString(),
           },
+          factsMissing: null,
           settings: expect.objectContaining({ tags: ['help wanted'], agentNotes: 'Run just test.' }) as unknown,
           policy: null,
           suggestedTags: [],
@@ -280,8 +291,47 @@ describe('admin_queue', () => {
 
     const result = await call(admin, 'admin_queue', {});
 
-    expect(result.structuredContent).toMatchObject({ items: [{ repo: HARBOR, facts: null }] });
+    expect(result.structuredContent).toMatchObject({ items: [{ repo: HARBOR, facts: null, factsMissing: 'not_public' }] });
     expect(textOf(result)).toContain(`GitHub showed no public repo named ${HARBOR} when asked.`);
+  });
+
+  test("a registration whose facts GitHub didn't give, as on a rate limit, says GitHub didn't answer, and never that the repo isn't public", async () => {
+    await registerHarbor();
+    const admin = await connectAgent(github, ADMIN.login);
+    const fake = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/users/sample-owner')) {
+        return Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0' } });
+      }
+      return fake(request);
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await call(admin, 'admin_queue', {});
+
+    expect(result.structuredContent).toMatchObject({ items: [{ repo: HARBOR, facts: null, factsMissing: 'no_answer' }] });
+    expect(textOf(result)).toContain(`GitHub didn't answer when asked about ${HARBOR}. Read the queue again for its facts.`);
+    expect(textOf(result)).not.toContain('no public repo');
+  });
+
+  test("a registration whose repo GitHub showed, but not its owner, says GitHub didn't answer, since the repo is public", async () => {
+    await registerHarbor();
+    const admin = await connectAgent(github, ADMIN.login);
+    const fake = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/users/sample-owner')) {
+        return Response.json({ message: 'Not Found' }, { status: 404 });
+      }
+      return fake(request);
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await call(admin, 'admin_queue', {});
+
+    expect(result.structuredContent).toMatchObject({ items: [{ repo: HARBOR, facts: null, factsMissing: 'no_answer' }] });
+    expect(textOf(result)).not.toContain('no public repo');
   });
 });
 
@@ -458,6 +508,34 @@ describe('admin_add_project', () => {
     ]);
   });
 
+  test('listing a repo again changes only the settings sent, and the rest keep the listing\'s values', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', {
+      repo: BUNDLER,
+      policy: POLICY,
+      settings: { tags: ['contribution welcome'], prMode: 'automatic', agentNotes: 'Write the description yourself.' },
+    });
+
+    const result = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['help wanted'] } });
+
+    expect(result.structuredContent).toMatchObject({ updated: true });
+    expect((await getProject(env.DB, BUNDLER))?.settings).toMatchObject({
+      tags: ['help wanted'],
+      prMode: 'automatic',
+      agentNotes: 'Write the description yourself.',
+    });
+  });
+
+  test('a new listing needs its tags, and the settings left out take their defaults', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const noTags = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { prMode: 'automatic' } });
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(noTags)).toBe('Refused (invalid_settings): Settings not saved.\ntags: is required');
+    expect((await getProject(env.DB, BUNDLER))?.settings).toMatchObject({ tags: ['help wanted'], prMode: 'reviewed', claimsPerIssue: 3 });
+  });
+
   test('a repo its maintainers registered is refused, and keeps their settings', async () => {
     await registerHarbor();
     const admin = await connectAgent(github, ADMIN.login);
@@ -586,6 +664,23 @@ describe('admin_pause_project', () => {
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: ADMIN.githubId });
   });
 
+  test("an admin's resume decided on a paused project doesn't land over a removal that came first, so the project stays removed", async () => {
+    await approvedHarbor();
+    await connectAgent(github, ADMIN.login);
+    await setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'Spam reports.', changedBy: ADMIN.githubId }, Date.now());
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+      // Another admin removes the project between this admin's read and write.
+      await adminRemoveProject(adminCaller(), { repo: HARBOR }, Date.now());
+      return batch(statements);
+    });
+
+    const result = await adminPauseProject(adminCaller(), { repo: HARBOR, paused: false }, Date.now());
+
+    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected', changed: false } });
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
+  });
+
   test("a pause Good First Token made on its own, like a delisting, stays until an admin lifts it", async () => {
     const maintainer = await approvedHarbor();
     await setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'The repo went private.', changedBy: null }, Date.now());
@@ -643,7 +738,62 @@ describe('the do-not-list', () => {
     expect(await getProject(env.DB, BUNDLER)).toBeNull();
   });
 
-  test('a maintainer who registers a removed listing puts it back in the queue, and approving it takes the repo off the do-not-list', async () => {
+  test("a removal that lands while an admin lists the same repo by hand leaves no project listed, and the listing is refused", async () => {
+    await connectAgent(github, ADMIN.login);
+    const fake = globalThis.fetch;
+    let removed = false;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (!removed && new URL(request.url).pathname.endsWith(`/repos/${BUNDLER}`)) {
+        removed = true;
+        // Another admin removes the repo while this listing waits on GitHub.
+        await adminRemoveProject(adminCaller(), { repo: BUNDLER }, Date.now());
+      }
+      return fake(request);
+    });
+
+    const result = await adminAddProject(
+      adminCaller(),
+      { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } },
+      Date.now(),
+    );
+
+    expect(removed).toBe(true);
+    expect(result).toMatchObject({ ok: false, refusal: { code: 'repo_not_eligible' } });
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+    expect(await getDoNotListEntry(env.DB, BUNDLER)).not.toBeNull();
+  });
+
+  test("a removal that lands while an admin lists a listed repo again leaves the listing as the removal left it", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } });
+    const fake = globalThis.fetch;
+    let removed = false;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (!removed && new URL(request.url).pathname.endsWith(`/repos/${BUNDLER}`)) {
+        removed = true;
+        await adminRemoveProject(adminCaller(), { repo: BUNDLER }, Date.now());
+      }
+      return fake(request);
+    });
+
+    const result = await adminAddProject(
+      adminCaller(),
+      { repo: BUNDLER, policy: { ...POLICY, tier: 'invites_agents' }, settings: { tags: ['contribution welcome'], prMode: 'automatic' } },
+      Date.now(),
+    );
+
+    expect(result).toMatchObject({ ok: false, refusal: { code: 'repo_not_eligible' } });
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({
+      status: 'rejected',
+      policy: POLICY,
+      settings: { prMode: 'reviewed' },
+      settingsVersion: 1,
+    });
+  });
+
+  test('a maintainer who registers a removed listing puts it back in the queue, and takes the repo off the do-not-list', async () => {
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } });
     await call(admin, 'admin_remove_project', { repo: BUNDLER });
@@ -654,9 +804,78 @@ describe('the do-not-list', () => {
     const approved = await call(admin, 'admin_decide', { id: await queueId(admin, BUNDLER), decision: 'approve' });
 
     expect(registered.structuredContent).toMatchObject({ status: 'pending' });
-    expect(queue.structuredContent).toMatchObject({ items: [{ repo: BUNDLER, kind: 'registration', onDoNotList: true }] });
+    expect(queue.structuredContent).toMatchObject({ items: [{ repo: BUNDLER, kind: 'registration', onDoNotList: false }] });
     expect(approved.structuredContent).toMatchObject({ status: 'approved' });
     expect(await getDoNotListEntry(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('a maintainer who registers a removed registration again puts it back in the queue, off the do-not-list, and a second registration is refused', async () => {
+    const maintainer = await registerHarbor();
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_remove_project', { repo: HARBOR });
+
+    const again = await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'], claimsPerIssue: 2 } });
+    const twice = await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+
+    expect(again.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({
+      status: 'pending',
+      statusReason: null,
+      statusChangedBy: 1008,
+      settings: { claimsPerIssue: 2 },
+    });
+    expect(await getDoNotListEntry(env.DB, HARBOR)).toBeNull();
+    expect(textOf(twice)).toMatch(/^Refused \(already_registered\)/);
+  });
+
+  test("a maintainer who registers a repo that was on the do-not-list, and no project, takes it off the list", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_remove_project', { repo: TOOLS });
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+
+    const registered = await call(maintainer, 'register_project', { repo: TOOLS, settings: { tags: ['help wanted'] } });
+
+    expect(registered.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(await getDoNotListEntry(env.DB, TOOLS)).toBeNull();
+  });
+
+  test("a removal that lands just after a maintainer registers the repo again leaves it rejected and on the do-not-list", async () => {
+    const maintainer = await registerHarbor();
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_remove_project', { repo: HARBOR });
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+      const results = await batch(statements);
+      // The maintainers ask again, right after the registration's write.
+      await adminRemoveProject(adminCaller(), { repo: HARBOR }, Date.now());
+      return results;
+    });
+
+    await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
+    expect(await getDoNotListEntry(env.DB, HARBOR)).not.toBeNull();
+  });
+
+  test("a registration that lands while a removal rejects the project doesn't leave it off the do-not-list", async () => {
+    const maintainer = await registerHarbor();
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_decide', { id: await queueId(admin, HARBOR), decision: 'reject', reason: 'Not ready yet.' });
+    const batch = env.DB.batch.bind(env.DB);
+    let again: Result | undefined;
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+      // The maintainer registers again after the removal put the repo on the
+      // list and read the project, and before its rejection lands.
+      again = await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+      return batch(statements);
+    });
+
+    const removed = await adminRemoveProject(adminCaller(), { repo: HARBOR }, Date.now());
+
+    expect(again?.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(removed).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected' } });
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
+    expect(await getDoNotListEntry(env.DB, HARBOR)).not.toBeNull();
   });
 
   test("removing a repo that isn't a project puts it on the do-not-list alone", async () => {

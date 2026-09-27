@@ -224,6 +224,7 @@ export const samples: Samples = {
           requestedBy: null,
           requestedAt: at,
           facts: { stars: 1200, createdAt: at, pushedAt: at, ownerCreatedAt: at },
+          factsMissing: null,
           settings: { prMode: 'reviewed' },
           policy: {
             quote: 'Agent pull requests are welcome once a person has read the diff.',
@@ -240,6 +241,7 @@ export const samples: Samples = {
           requestedBy: 'octo-maintainer',
           requestedAt: later,
           facts: null,
+          factsMissing: 'not_public',
           settings: { ...settings, tags: ['help wanted'] },
           policy: null,
           suggestedTags: [],

@@ -54,10 +54,13 @@ describe('donor blocks', () => {
     expect(await blockedAmong(db, [])).toEqual(new Set());
   });
 
-  test('blocked donors are listed most recently blocked first', async () => {
+  test('blocked donors are listed most recently blocked first, each with their login', async () => {
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, t0);
-    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0 + HOUR);
+    await blockDonor(db, { githubId: kenji.githubId, reason: 'Spam.', blockedBy: admin.githubId }, t0 + HOUR);
 
-    expect((await listBlocks(db)).map((b) => b.githubId)).toEqual([kenji.githubId, priya.githubId]);
+    expect(await listBlocks(db)).toEqual([
+      { githubId: kenji.githubId, login: kenji.login, reason: 'Spam.', blockedBy: admin.githubId, blockedAt: t0 + HOUR },
+      { githubId: priya.githubId, login: priya.login, reason: null, blockedBy: admin.githubId, blockedAt: t0 },
+    ]);
   });
 });

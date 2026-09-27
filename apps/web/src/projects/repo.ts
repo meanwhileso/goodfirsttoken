@@ -114,19 +114,15 @@ export async function readRepo(token: string, repo: string): Promise<ListedRepo 
 /**
  * The repo's stars, when it was made, its last push, and when its owner's
  * account was made, from two reads with the token given: the repo, and its
- * owner. Null when GitHub shows no public repo by that name, or no owner.
+ * owner. Null when GitHub shows no public repo by that name. Every other
+ * failure goes on up, even a 404 for the owner the repo named, so a read
+ * that failed never passes for a repo that isn't public.
  */
 // https://docs.github.com/en/rest/users/users#get-a-user
 export async function readStanding(token: string, repo: string): Promise<{ repo: ListedRepo; standing: Standing } | null> {
   const found = await readRepo(token, repo);
   if (found === null) return null;
-  let owner: { created_at: string };
-  try {
-    owner = await gitHubRest<{ created_at: string }>(token, 'GET', `/users/${encodeURIComponent(found.owner.login)}`);
-  } catch (error) {
-    if (error instanceof GitHubError && error.status === 404) return null;
-    throw error;
-  }
+  const owner = await gitHubRest<{ created_at: string }>(token, 'GET', `/users/${encodeURIComponent(found.owner.login)}`);
   const createdAt = Date.parse(found.created_at);
   const pushedAt = found.pushed_at === null ? createdAt : Date.parse(found.pushed_at);
   const standing = { stars: found.stargazers_count, createdAt, pushedAt, ownerCreatedAt: Date.parse(owner.created_at) };

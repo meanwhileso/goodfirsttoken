@@ -5,7 +5,7 @@ import {
   type CrawlCandidate,
   type Policy,
   type ProjectRecord,
-  type ProjectSettings,
+  type ProjectSettingsPatch,
   type ProjectStatus,
   type Refusal,
   type RefusalCode,
@@ -20,6 +20,7 @@ import {
   blockDonor,
   createProject,
   decideCandidate,
+  doNotListWhenRejected,
   findPersonByLogin,
   getCandidate,
   getDoNotListEntry,
@@ -30,7 +31,6 @@ import {
   listCandidates,
   listPendingProjects,
   relistFromPolicy,
-  removeFromDoNotList,
   setProjectStatusFrom,
   statusHistory,
   unblockDonor,
@@ -70,37 +70,41 @@ function iso(time: number): string {
 
 type QueueItem = ToolOutputInput<'admin_queue'>['items'][number];
 
-function factsOf(standing: Standing | null): QueueItem['facts'] {
-  return (
-    standing && {
-      stars: standing.stars,
-      createdAt: iso(standing.createdAt),
-      pushedAt: iso(standing.pushedAt),
-      ownerCreatedAt: iso(standing.ownerCreatedAt),
-    }
-  );
+function factsOf(standing: Standing): QueueItem['facts'] {
+  return {
+    stars: standing.stars,
+    createdAt: iso(standing.createdAt),
+    pushedAt: iso(standing.pushedAt),
+    ownerCreatedAt: iso(standing.ownerCreatedAt),
+  };
 }
 
+/** A registration's facts, or why they are missing. */
+type Facts = { standing: Standing } | { missing: 'not_public' | 'no_answer' };
+
 /**
- * The repo's facts from GitHub, read with the admin's own token. Null when
- * there is no token, or GitHub shows no public repo by that name, or GitHub
- * fails. A 401 goes on up, since it means GitHub stopped taking the token.
+ * The repo's facts from GitHub, read with the admin's own token. Missing as
+ * `not_public` when GitHub shows no public repo by that name, and as
+ * `no_answer` when there is no token or GitHub fails another way, like a
+ * rate limit, so a failed read never passes for a repo that isn't public. A
+ * 401 goes on up, since it means GitHub stopped taking the token.
  */
-async function standingOf(token: string | null, repo: string): Promise<Standing | null> {
-  if (token === null) return null;
+async function factsFromGitHub(token: string | null, repo: string): Promise<Facts> {
+  if (token === null) return { missing: 'no_answer' };
   try {
-    return (await readStanding(token, repo))?.standing ?? null;
+    const read = await readStanding(token, repo);
+    return read === null ? { missing: 'not_public' } : { standing: read.standing };
   } catch (error) {
     if (error instanceof GitHubError && error.status === 401) throw error;
     console.warn(`GitHub didn't give the facts of ${repo} for the admin queue.`, error);
-    return null;
+    return { missing: 'no_answer' };
   }
 }
 
 async function registrationItem(token: string | null, project: ProjectRecord, changeId: number): Promise<QueueItem> {
-  const [maintainer, standing, doNotList] = await Promise.all([
+  const [maintainer, facts, doNotList] = await Promise.all([
     getPerson(env.DB, project.addedBy),
-    standingOf(token, project.repo),
+    factsFromGitHub(token, project.repo),
     getDoNotListEntry(env.DB, project.repo),
   ]);
   if (maintainer === null) throw new Error(`${project.repo} was added by someone who isn't recorded.`);
@@ -110,7 +114,8 @@ async function registrationItem(token: string | null, project: ProjectRecord, ch
     repo: project.repo,
     requestedBy: maintainer.login,
     requestedAt: iso(project.statusChangedAt),
-    facts: factsOf(standing),
+    facts: 'standing' in facts ? factsOf(facts.standing) : null,
+    factsMissing: 'missing' in facts ? facts.missing : null,
     settings: project.settings,
     policy: project.policy,
     suggestedTags: [],
@@ -127,6 +132,7 @@ async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
     requestedBy: null,
     requestedAt: iso(candidate.foundAt),
     facts: factsOf(candidate.facts),
+    factsMissing: null,
     settings: candidate.settings,
     policy: candidate.policy,
     suggestedTags: candidate.suggestedTags,
@@ -160,27 +166,33 @@ function definedEntries(patch: Record<string, unknown> | undefined): Record<stri
   return Object.fromEntries(Object.entries(patch ?? {}).filter(([, value]) => value !== undefined));
 }
 
+function onTheList(repo: string): { ok: false; refusal: Refusal } {
+  return refuse(
+    'repo_not_eligible',
+    `${repo} is on the do-not-list, because its maintainers asked to be removed. Only they can list it again, by registering it.`,
+  );
+}
+
 /**
  * Lists a repo from its written policy, or lists it again when it is already
  * listed that way, after checking it on GitHub with the admin's own token:
  * it has to be public, not archived, and take pull requests from anyone.
  * Its issue repo, when it has one of its own, has to be public and not
- * archived. A repo on the do-not-list, or one its maintainers registered, is
- * refused. The caller has checked `list_from_policy`.
+ * archived. A new listing takes the settings sent, with the rest at their
+ * defaults, and a listing again changes only the settings sent. A repo on the
+ * do-not-list, or one its maintainers registered, is refused. The
+ * do-not-list is checked again in the same statement as each write, so a
+ * removal that lands while this reads GitHub keeps the repo unlisted. The
+ * caller has checked `list_from_policy`.
  */
 async function listFromPolicy(
   caller: Caller,
   repo: string,
   policy: Policy,
-  settings: ProjectSettings,
+  settings: ProjectSettingsPatch,
   now: number,
 ): Promise<Outcome<'admin_add_project'>> {
-  if ((await getDoNotListEntry(env.DB, repo)) !== null) {
-    return refuse(
-      'repo_not_eligible',
-      `${repo} is on the do-not-list, because its maintainers asked to be removed. Only they can list it again, by registering it.`,
-    );
-  }
+  if ((await getDoNotListEntry(env.DB, repo)) !== null) return onTheList(repo);
   const token = await caller.gitHubToken();
   if (token === null) {
     return refuse('repo_not_eligible', `Good First Token holds no GitHub token for you, so it can't check ${repo}. Sign in again.`);
@@ -191,19 +203,22 @@ async function listFromPolicy(
   if (problem !== null) return refuse('repo_not_eligible', problem);
   const name = found.full_name;
 
-  let issueRepo: string | null = null;
-  if (settings.issueRepo !== null && settings.issueRepo.toLowerCase() !== name.toLowerCase()) {
-    const issues = await readRepo(token, settings.issueRepo);
-    if (issues === null) {
-      return refuse('repo_not_eligible', `GitHub shows no public repo named ${settings.issueRepo} to keep the issues in.`);
+  const patch: ProjectSettingsPatch = { ...settings };
+  if (typeof settings.issueRepo === 'string') {
+    patch.issueRepo = null;
+    if (settings.issueRepo.toLowerCase() !== name.toLowerCase()) {
+      const issues = await readRepo(token, settings.issueRepo);
+      if (issues === null) {
+        return refuse('repo_not_eligible', `GitHub shows no public repo named ${settings.issueRepo} to keep the issues in.`);
+      }
+      const notIssueRepo = whyNotIssueRepo(repoFacts(issues));
+      if (notIssueRepo !== null) return refuse('repo_not_eligible', notIssueRepo);
+      if (issues.full_name.toLowerCase() !== name.toLowerCase()) patch.issueRepo = issues.full_name;
     }
-    const notIssueRepo = whyNotIssueRepo(repoFacts(issues));
-    if (notIssueRepo !== null) return refuse('repo_not_eligible', notIssueRepo);
-    issueRepo = issues.full_name.toLowerCase() === name.toLowerCase() ? null : issues.full_name;
   }
-  const listing = { policy, settings: { ...settings, issueRepo } };
 
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
+    if ((await getDoNotListEntry(env.DB, name)) !== null) return onTheList(name);
     const existing = await getProject(env.DB, name);
     if (existing?.source === 'registered') {
       return refuse(
@@ -212,15 +227,18 @@ async function listFromPolicy(
       );
     }
     if (existing !== null) {
-      const relisted = await relistFromPolicy(env.DB, existing.repo, listing, caller.githubId, now);
-      if (relisted !== null) {
+      const relisted = await relistFromPolicy(env.DB, existing.repo, { policy, settings: patch }, caller.githubId, now);
+      if (relisted?.ok === false) return { ok: false, refusal: invalidSettings(relisted.problems) };
+      if (relisted?.ok) {
         const { project } = relisted;
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: true } };
       }
     } else {
+      const full = validate(projectSettingsSchema, definedEntries(patch), 'settings');
+      if (!full.ok) return { ok: false, refusal: invalidSettings(full.problems) };
       const project = await createProject(
         env.DB,
-        { repo: name, status: 'approved', source: 'policy', ...listing, addedBy: caller.githubId },
+        { repo: name, status: 'approved', source: 'policy', policy, settings: full.value, addedBy: caller.githubId },
         now,
       );
       if (project !== null) {
@@ -231,7 +249,11 @@ async function listFromPolicy(
   throw new Error(`${name} kept changing while it was listed.`);
 }
 
-/** Lists a project from its written policy, with the quote, its link, the tier, the settings, and its tags. */
+/**
+ * Lists a project from its written policy, with the quote, its link, the
+ * tier, the settings, and its tags, or lists it again with the settings that
+ * change.
+ */
 export async function adminAddProject(
   caller: Caller,
   input: ToolInput<'admin_add_project'>,
@@ -267,8 +289,6 @@ async function decideRegistration(
     if (pending === null) return nothingWaits(input.id);
     const decided = await setProjectStatusFrom(env.DB, pending.project, { ...change, changedBy: caller.githubId }, now);
     if (decided === null) continue;
-    // Its maintainer registered it, so a request to be removed no longer holds.
-    if (decided.status === 'approved' && decided.source === 'registered') await removeFromDoNotList(env.DB, decided.repo);
     return { ok: true, value: { repo: decided.repo, kind: 'registration', status: decided.status } };
   }
   throw new Error(`${input.id} kept changing while it was decided.`);
@@ -383,9 +403,12 @@ export async function adminPauseProject(
 
 /**
  * Removes a repo at its maintainers' request. It goes on the do-not-list
- * first, so nothing lists it while the rest happens. Its project is
- * rejected, with a reason its maintainers see, and a crawler find for it
- * waiting in the queue is rejected too.
+ * first. Every listing checks the list in the same statement as its write,
+ * so from then on nothing lists the repo unless its maintainers register it.
+ * A crawler find for it waiting in the queue is rejected, and its project is
+ * rejected, with a reason its maintainers see. The rejection puts the repo on
+ * the list again in the same transaction, so a registration that took it off
+ * before the rejection landed leaves it on.
  */
 export async function adminRemoveProject(
   caller: Caller,
@@ -395,7 +418,8 @@ export async function adminRemoveProject(
   await requirePermission(caller, 'review_projects');
   const known = await getProject(env.DB, input.repo);
   const repo = known?.repo ?? input.repo;
-  await addToDoNotList(env.DB, { repo, reason: input.note ?? null, addedBy: caller.githubId }, now);
+  const entry = { repo, reason: input.note ?? null, addedBy: caller.githubId };
+  await addToDoNotList(env.DB, entry, now);
   const waiting = await getWaitingCandidate(env.DB, repo);
   if (waiting !== null) {
     await decideCandidate(env.DB, waiting.id, { status: 'rejected', decidedBy: caller.githubId, reason: REMOVED_REASON }, now);
@@ -407,7 +431,9 @@ export async function adminRemoveProject(
       return { ok: true, value: { repo: project.repo, status: project.status } };
     }
     const change = { status: 'rejected' as const, reason: REMOVED_REASON, changedBy: caller.githubId };
-    const updated = await setProjectStatusFrom(env.DB, project, change, now);
+    const updated = await setProjectStatusFrom(env.DB, project, change, now, [
+      doNotListWhenRejected(env.DB, { ...entry, repo: project.repo }, now),
+    ]);
     if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status } };
   }
   throw new Error(`${repo} kept changing status while it was removed.`);

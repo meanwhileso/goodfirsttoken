@@ -12,7 +12,7 @@ import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller } from '../auth/permissions';
 import { readSignedIn, siteCaller } from '../auth/session';
 import { authSecret, siteOrigin } from '../auth/settings';
-import { getPerson, listBlocks, listPolicyListings } from '../db';
+import { listBlocks, listPolicyListings } from '../db';
 import { GitHubError } from '../github';
 import { ADMIN_PATH } from './paths';
 import {
@@ -161,10 +161,8 @@ async function readListings(caller: Caller): Promise<PolicyListing[]> {
 
 async function readBlocked(caller: Caller): Promise<BlockedDonor[]> {
   if (!(await holds(caller, 'block_donors'))) return [];
-  const blocks = await listBlocks(env.DB);
-  const people = await Promise.all(blocks.map((block) => getPerson(env.DB, block.githubId)));
-  return blocks.map((block, i) => ({
-    login: people[i]?.login ?? String(block.githubId),
+  return (await listBlocks(env.DB)).map((block) => ({
+    login: block.login,
     reason: block.reason,
     blockedAt: block.blockedAt,
   }));

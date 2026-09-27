@@ -346,7 +346,15 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   the call hands back is the one stored, and the save retries like
   `changeSettings`. A new registration uses `createProject`,
   whose insert does nothing when the repo became a project meanwhile, so
-  the tool reads again and takes over or refuses.
+  the tool reads again and takes over or refuses. A rejected registration
+  registered again is `reopenRegistration`, which checks the row the same
+  way, against the rejection read.
+- **The do-not-list changes with the status.** A registration that makes
+  a project `pending` ends its batch with `leaveDoNotListWhenRegistered`
+  from `src/db/do-not-list.ts`, a delete that applies only when the row
+  is a registered project that this maintainer made `pending` at this
+  time. So the list and the status change in one transaction, and a
+  registration that lost its compare-and-set takes nothing off.
 - **A pause or resume is a compare-and-set.** `setProjectStatusFrom` writes
   the new status only while the project's status, reason, who set it, and
   when are the ones read, the way `changeSettings` checks the settings
@@ -395,16 +403,32 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   the admin's token, `GET /repos/{owner}/{repo}` and `GET /users/{owner}`,
   in `readStanding` in `src/projects/repo.ts`. Every registration's are
   read at once, so the queue costs two GitHub calls for each registration,
-  on every read of the queue. A `404` gives no facts. A `401` goes on up,
-  so an agent's connection ends, and the page reads the queue again with no
-  token and says to sign in again.
+  on every read of the queue. Only a `404` for the repo gives
+  `factsMissing: 'not_public'`. Any other failure, the owner's `404`
+  included, gives `no_answer`, logged with `console.warn`, in
+  `factsFromGitHub`. A `401` goes on up, so an agent's connection ends,
+  and the page reads the queue again with no token and says to sign in
+  again.
 - **Every status change is a compare-and-set,** through
   `setProjectStatusFrom`, retried up to five times, as for the maintainer's
   pause. So a maintainer's pause or resume that lands at the same moment as
   an admin's never undoes it.
 - **Editing a listing** is `relistFromPolicy` in `src/db/projects.ts`,
-  which checks the listing's source and settings version in the same
-  statements as its writes, the way `takeOverListing` does.
+  which applies the settings sent over the listing's, with
+  `updateProjectSettings`, and checks the listing's source and settings
+  version in the same statements as its writes, the way `takeOverListing`
+  does.
+- **The do-not-list is checked in SQL.** A listing from a policy reads the
+  list before it asks GitHub, and again before each write, and the writes
+  check it too: `createProject`'s insert and `relistFromPolicy`'s
+  statements carry `NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)`,
+  so the check and the write are one step. A removal adds the entry on its own, before
+  anything else, and its rejection runs `doNotListWhenRejected` in the same
+  batch, through `setProjectStatusFrom`'s `alongside`, which adds the entry
+  again only when that rejection landed. So a registration that took the
+  repo off the list between them can't leave a removed project off it.
+- **Blocked donors** come from `listBlocks`, one query that joins
+  `donor_blocks` to `people` for each login.
 - **Forms, with no script.** The page's forms post to `/admin`, which the
   route answers with a `server.handlers.POST`, and TanStack Start leaves
   `GET` to the page. The handler checks `Origin` first, then the session
@@ -1041,9 +1065,8 @@ streams' in [Text streams](how-it-works.md#text-streams).
   as one JSON array the same way. An event names its issue, and a feed
   reads the issue's repo from the event's JSON in SQL, so no stored event
   needed rewriting. The do-not-list names code repos, so the query also
-  covers the issue repo of each project whose code repo is on it. A feed's
-  day counts are kept by claimant alone, so they still count those
-  events. The `history()` RPC of a room and of a feed
+  covers the issue repo of each project whose code repo is on it. The
+  `history()` RPC of a room and of a feed
   leaves blocked donors out too, and throws when D1 can't say who they are.
   Tests read what is stored straight from the object's SQLite.
 - **The Worker holds each stream.** It connects to the feed or room over the

@@ -72,7 +72,13 @@ function tierName(tier: PolicyListing['policy']['tier']): string {
 function Facts({ item, now }: { item: QueueItem; now: number }) {
   const facts = item.facts;
   if (facts === null) {
-    return <p className="admin-item__warning">GitHub showed no public repo named {item.repo} just now.</p>;
+    return item.factsMissing === 'no_answer' ? (
+      <p className="admin-item__warning">
+        GitHub didn't answer when asked about {item.repo}. Load the page again for its facts.
+      </p>
+    ) : (
+      <p className="admin-item__warning">GitHub showed no public repo named {item.repo} just now.</p>
+    );
   }
   return (
     <SplitBadges>
@@ -126,7 +132,7 @@ function ReasonField({ label, placeholder }: { label: string; placeholder: strin
 function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? (
     <p className="admin-item__warning">
-      Its maintainers asked to be removed before, so it is on the do-not-list. Approving their registration takes it off.
+      Its maintainers asked to be removed, so it is on the do-not-list. Only they can list it again, by registering it.
     </p>
   ) : null;
 }

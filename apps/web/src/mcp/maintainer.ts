@@ -22,6 +22,7 @@ import {
   createProject,
   getProject,
   listIssues,
+  reopenRegistration,
   setProjectStatusFrom,
   statusHistory,
   takeOverListing,
@@ -130,6 +131,14 @@ function registered(project: ProjectRecord, createdLabels: string[]): Answer {
   );
 }
 
+/**
+ * Whether the repo is registered already: waiting for an admin, approved, or
+ * paused. A rejected registration can be registered again.
+ */
+function registeredAlready(project: ProjectRecord): boolean {
+  return project.source === 'registered' && project.status !== 'rejected';
+}
+
 function alreadyRegistered(project: ProjectRecord): Answer {
   return refuse(
     'already_registered',
@@ -152,7 +161,7 @@ export async function registerProject(
   const repo = facts.fullName;
 
   const existing = await getProject(env.DB, repo);
-  if (existing?.source === 'registered') return alreadyRegistered(existing);
+  if (existing !== null && registeredAlready(existing)) return alreadyRegistered(existing);
 
   if (input.settings === undefined) {
     const [labels, docs] = await Promise.all([readLabels(token, repo), readDocs(token, repo)]);
@@ -170,13 +179,16 @@ export async function registerProject(
 
   for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
     const current = attempt === 0 ? existing : await getProject(env.DB, repo);
-    if (current?.source === 'registered') return alreadyRegistered(current);
+    if (current !== null && registeredAlready(current)) return alreadyRegistered(current);
     if (current === null) {
       const project = await createProject(
         env.DB,
         { repo, status: 'pending', source: 'registered', policy: null, settings, addedBy: caller.githubId },
         now,
       );
+      if (project !== null) return registered(project, created);
+    } else if (current.source === 'registered') {
+      const project = await reopenRegistration(env.DB, current.repo, settings, caller.githubId, now);
       if (project !== null) return registered(project, created);
     } else {
       const takeover = await takeOverListing(env.DB, current.repo, settings, caller.githubId, now);

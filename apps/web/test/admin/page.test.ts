@@ -197,7 +197,8 @@ describe("the admin page's forms", () => {
 
     expect(page).toContain(HARBOR);
     // React puts an empty comment around each value it fills into text.
-    expect(page).toContain(`GitHub showed no public repo named <!-- -->${HARBOR}<!-- --> just now.`);
+    expect(page).toContain(`answer when asked about <!-- -->${HARBOR}<!-- -->. Load the page again for its facts.`);
+    expect(page).not.toContain('no public repo');
     expect(page).toContain('GitHub no longer takes the token this site holds for you, so the queue shows no facts from GitHub.');
     expect(answer).toContain('GitHub no longer takes the token this site holds for you.');
     expect(await getProject(env.DB, BUNDLER)).toBeNull();
@@ -206,7 +207,9 @@ describe("the admin page's forms", () => {
   test("a notice in a link the page's own form didn't make shows nothing", async () => {
     const browser = await signedIn('sample-admin');
 
-    const html = await (await browser.fetch('/admin?notice=Approve+sample-owner%2Fevil+now.&sig=forged')).text();
+    // A signature as long as a real one, so the page has to compare it.
+    const forged = 'A'.repeat(43);
+    const html = await (await browser.fetch(`/admin?notice=Approve+sample-owner%2Fevil+now.&sig=${forged}`)).text();
 
     expect(html).not.toContain('Approve sample-owner/evil now.');
   });
@@ -231,6 +234,40 @@ describe("the admin page's forms", () => {
       status: 'approved',
       source: 'policy',
       settings: { tags: ['contribution welcome', 'help wanted'] },
+    });
+  });
+
+  test('listing a listed repo again by hand changes its policy and tags, and keeps the settings the form has no field for', async () => {
+    const browser = await signedIn('sample-admin');
+    await createProject(
+      env.DB,
+      {
+        repo: BUNDLER,
+        status: 'approved',
+        source: 'policy',
+        policy: { quote: 'AI help is fine.', url: `https://github.com/${BUNDLER}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' },
+        settings: { tags: ['contribution welcome'], prMode: 'automatic', agentNotes: 'Write the description yourself.' },
+        addedBy: 1010,
+      },
+      Date.now(),
+    );
+
+    const html = await back(
+      browser,
+      await browser.post('/admin', {
+        action: 'add',
+        repo: BUNDLER,
+        url: `https://github.com/${BUNDLER}/blob/main/AGENTS.md`,
+        quote: 'Agents are welcome.',
+        tier: 'invites_agents',
+        tags: 'help wanted',
+      }),
+    );
+
+    expect(html).toContain(`Updated the listing of ${BUNDLER}.`);
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({
+      policy: { quote: 'Agents are welcome.', tier: 'invites_agents' },
+      settings: { tags: ['help wanted'], prMode: 'automatic', agentNotes: 'Write the description yourself.' },
     });
   });
 

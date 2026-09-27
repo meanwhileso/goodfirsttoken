@@ -38,8 +38,14 @@ const queueItemSchema = z.object({
   /** The maintainer who registered it, or null for a crawler find. */
   requestedBy: githubLogin.nullable(),
   requestedAt: isoTime,
-  /** The repo's facts from GitHub, or null when GitHub showed no public repo by that name when asked. */
+  /** The repo's facts from GitHub, or null when GitHub didn't give them. */
   facts: repoFactsSchema.nullable(),
+  /**
+   * Why the facts are null: `not_public` when GitHub showed no public repo by
+   * that name, and `no_answer` when GitHub didn't answer, as on a rate limit.
+   * Null when the facts are there.
+   */
+  factsMissing: z.enum(['not_public', 'no_answer']).nullable(),
   /**
    * The settings the maintainer chose, or the ones the crawler suggests. A
    * crawler find can leave out any setting, tags included, and the admin
@@ -78,9 +84,11 @@ function renderQueueItem(item: QueueItem): string {
       : `found on ${when(item.requestedAt)}`,
     facts
       ? `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`
-      : `GitHub showed no public repo named ${item.repo} when asked.`,
+      : item.factsMissing === 'no_answer'
+        ? `GitHub didn't answer when asked about ${item.repo}. Read the queue again for its facts.`
+        : `GitHub showed no public repo named ${item.repo} when asked.`,
     item.onDoNotList &&
-      'Its maintainers asked to be removed before, so it is on the do-not-list. Approving their registration takes it off.',
+      'Its maintainers asked to be removed, so it is on the do-not-list. Only they can list it again, by registering it.',
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
       `labels that could mean ready for help: ${item.suggestedTags
@@ -147,13 +155,19 @@ export const adminDecide = defineTool({
 export const adminAddProject = defineTool({
   audience: 'admin',
   description:
-    "List a public repo from its written AI policy, with the quote, its link, the tier, the settings, and the project's own tags. It is listed at once. Listing a repo already listed from its policy replaces that listing's policy and settings and keeps its status. A repo its maintainers registered, or one on the do-not-list, is refused.",
-  input: z.object({ repo: repoName, policy: policySchema, settings: projectSettingsSchema }),
+    "List a public repo from its written AI policy, with the quote, its link, the tier, the settings, and the project's own tags. It is listed at once, with the settings sent and the rest at their defaults, and it needs its tags. Listing a repo already listed from its policy replaces that listing's policy, changes only the settings sent, and keeps its status. A repo its maintainers registered, or one on the do-not-list, is refused.",
+  input: z.object({
+    repo: repoName,
+    policy: policySchema,
+    settings: projectSettingsPatchSchema.describe(
+      'The settings to list it with. A new listing needs its tags. Listing it again, settings left out keep their value.',
+    ),
+  }),
   output: z.object({
     repo: repoName,
     status: projectStatusSchema,
     source: projectSourceSchema,
-    /** True when it replaced an earlier listing's policy and settings. */
+    /** True when it listed the repo again, over an earlier listing from its policy. */
     updated: z.boolean(),
   }),
   text: (out) =>

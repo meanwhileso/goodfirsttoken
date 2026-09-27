@@ -211,6 +211,17 @@ describe('what each result says', () => {
     expect(text).toMatch(/Claims per issue +3/);
   });
 
+  test("a registration with no facts says whether GitHub showed no public repo or didn't answer", () => {
+    const registration = samples.admin_queue.output.items[1];
+    if (registration === undefined) throw new Error('missing sample');
+    const queue = (factsMissing: 'not_public' | 'no_answer') =>
+      textOf(toolResult('admin_queue', { items: [{ ...registration, factsMissing }] }));
+    const { repo } = registration;
+    expect(queue('not_public')).toContain(`GitHub showed no public repo named ${repo} when asked.`);
+    expect(queue('no_answer')).toContain(`GitHub didn't answer when asked about ${repo}. Read the queue again for its facts.`);
+    expect(queue('no_answer')).not.toContain('no public repo');
+  });
+
   test("a rejection says who sees its reason: a registration's maintainers, and no one for a crawler find", () => {
     const decide = (kind: 'registration' | 'candidate') =>
       textOf(toolResult('admin_decide', { repo: repoName, kind, status: 'rejected' }));
@@ -309,6 +320,14 @@ describe('tool inputs', () => {
     expect(decide({ tags: ['ready for help'] }).ok).toBe(true);
     expect(decide({}).ok).toBe(true);
     expect(problemFields(decide({ claimsPerIssue: 0 }))).toEqual(['settings.claimsPerIssue']);
+  });
+
+  test('a listing from a policy can send only the settings that change', () => {
+    const policy = samples.admin_queue.output.items[0]?.policy;
+    const add = (settings: unknown) => validate(tools.admin_add_project.input, { repo: repoName, policy, settings });
+    expect(add({ prMode: 'automatic' }).ok).toBe(true);
+    expect(add({ tags: ['ready for help'] }).ok).toBe(true);
+    expect(problemFields(add({ claimsPerIssue: 0 }))).toEqual(['settings.claimsPerIssue']);
   });
 
   test('an admin pause needs a reason', () => {

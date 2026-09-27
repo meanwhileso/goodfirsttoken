@@ -892,9 +892,15 @@ out take their defaults. An admin approves or rejects it, under
 [The admin queue](#the-admin-queue), and the maintainer's agent reads a
 rejection's reason with `project_status`.
 
-- A repo that is already a registered project, whatever its status, is
-  refused with `already_registered`, proposal or not. Its settings change
-  with `update_project`.
+- A repo that is already a registered project, `pending`, `approved`, or
+  `paused`, is refused with `already_registered`, proposal or not. Its
+  settings change with `update_project`.
+- A rejected registration can be registered again, with a proposal first
+  or not. The maintainer's settings replace the project's, whole, as a new
+  save in the settings history made by them, and it goes back to
+  `pending`, changed by them, so an admin reviews it again. It names them
+  as who added it, and keeps the time it was first added. The status
+  history keeps the rejection.
 - A repo an admin listed from its AI policy is taken over. The maintainer's
   settings replace the listing's, whole, as a new save in the settings
   history made by them. The project becomes registered: its policy quote
@@ -905,6 +911,10 @@ rejection's reason with `project_status`.
   change of status that lands while the takeover saves stays. A rejected
   listing goes back to `pending`, changed by the maintainer, so an admin
   reviews it again.
+- A registration that makes the project `pending` takes the repo off the
+  [do-not-list](#crawl-candidates), in the same write, since a maintainer
+  asked for it to be listed: a new one, a takeover of a rejected listing,
+  or a rejected registration registered again.
 - A crawler find still waiting in the admin queue doesn't stop a
   registration, and the registration doesn't change it.
 
@@ -1032,8 +1042,10 @@ waited longest first, each with an ID that `admin_decide` takes.
   push, and when its owner's account was made. For a registration they are
   read from GitHub when the queue is read, with the admin's own token: the
   repo, and its owner's account. When GitHub shows no public repo by that
-  name, the item still waits, with no facts, and says so. A crawler find
-  has the facts the crawler read.
+  name, the item still waits, with no facts, and says so. When GitHub
+  doesn't answer, as on a rate limit, the item says that instead, and
+  never that the repo isn't public. `factsMissing` tells the two apart. A
+  crawler find has the facts the crawler read.
 - An item says when the repo is on the do-not-list.
 
 **Deciding.** `admin_decide` approves or rejects an item.
@@ -1043,9 +1055,7 @@ waited longest first, each with an ID that `admin_decide` takes.
   crawler find's reason stays with the find, and no one else sees it.
 - Approving a registration makes its project `approved`, with the settings
   its maintainer chose. Settings or a tier sent with it are refused with
-  `invalid_settings`, and nothing changes. When the repo is on the
-  do-not-list, approving the registration takes it off, since a maintainer
-  asked for it to be listed.
+  `invalid_settings`, and nothing changes.
 - Approving a crawler find lists it from its policy, as `admin_add_project`
   does below, with the tier the admin confirms and the settings they send.
   A setting they leave out takes the crawler's suggestion, then its
@@ -1065,13 +1075,18 @@ the project's own tags. It is `approved` at once, listed by the admin.
   is saved under the name GitHub gives it.
 - An issue repo other than the code repo has to be public and not archived,
   read the same way.
-- A repo on the do-not-list is refused with `repo_not_eligible`.
+- A repo on the do-not-list is refused with `repo_not_eligible`. The list
+  is checked again in the same write that lists the repo, so a removal
+  that lands while the listing reads GitHub leaves it unlisted.
 - A repo its maintainers registered is refused with `already_registered`,
   and their settings stay.
+- A new listing takes the settings sent, with the rest at their defaults.
+  It needs its tags, and without them it is refused with
+  `invalid_settings`.
 - Listing a repo already listed from its policy replaces that listing's
-  policy and settings, as a new save of its settings made by the admin. It
-  keeps its status, who added it, and when. This is how an admin edits a
-  listing.
+  policy, and changes only the settings sent, as a new save of its settings
+  made by the admin. The rest keep the listing's values. It keeps its
+  status, who added it, and when. This is how an admin edits a listing.
 
 **Pausing.** `admin_pause_project` pauses an approved project, with a
 reason its maintainers read with `project_status`, or resumes any paused
@@ -1099,17 +1114,16 @@ how they asked, and only admins see it.
 - The repo goes on the [do-not-list](#crawl-candidates) first.
 - Its project, when it has one, is `rejected`, with the reason
   `Removed at its maintainers' request.`, which its maintainers read with
-  `project_status`.
+  `project_status`. The rejection puts the repo back on the list in the
+  same write, in case a registration took it off while the removal ran.
 - A crawler find for it waiting in the queue is rejected with the same
   reason.
 - Nothing lists it again unless a maintainer registers it: the crawler
   can't add it, and an admin can't list it from its policy. A maintainer
-  who registers a removed listing takes it over, which puts it back in the
-  queue as `pending`, under [Registering a project](#registering-a-project),
-  and approving that registration takes the repo off the list. A project
-  its maintainers registered stays `rejected` once removed, since
-  `register_project` refuses a repo already registered, whatever its
-  status.
+  who registers it takes it off the list, under
+  [Registering a project](#registering-a-project). A removed listing is
+  taken over, and a removed registration is registered again, and either
+  waits in the queue as `pending`.
 - The events on its issues leave the live feeds, as
   [Live feeds](#live-feeds) says.
 
@@ -1125,13 +1139,16 @@ is in [brand/brief-website.md](../brand/brief-website.md).
 - The nav links `/admin` for admins only.
 - The page shows the crawler's finds and the registrations waiting, each
   with the repo's facts from GitHub, read with the token from the admin's
-  own sign-in on the site. When GitHub no longer takes that token, the
-  queue shows no facts, a form that asks GitHub changes nothing, and the
-  page says to sign in again. Beside them are
+  own sign-in on the site. When GitHub doesn't answer about a repo, its
+  item says so, and to load the page again. When GitHub no longer takes
+  that token, the queue shows no facts, a form that asks GitHub changes
+  nothing, and the page says to sign in again. Beside them are
   the projects listed from a policy, a form to list one by hand, and the
   blocked donors, with a form to block one and a button to lift each block.
 - A crawler find's form takes its tags, separated by commas, starting with
-  the ones suggested, and its tier. A registration's form takes a reason.
+  the ones suggested, and its tier. The form to list a repo by hand takes
+  its policy and tags. Listing a repo that is listed already changes those
+  and keeps its other settings. A registration's form takes a reason.
   Rejecting or skipping needs the reason, and the form refuses to send
   without one. Approving doesn't.
 - Every form posts to `/admin`. It has to come from the site itself, by its
@@ -1186,8 +1203,9 @@ crawls yet.
 **The do-not-list** holds repos whose maintainers asked to be removed, with
 the admin who added each one, when, and an optional note. A repo is found on
 it without case. Adding a repo again keeps its first entry. An admin adds a
-repo by removing it, under [The admin queue](#the-admin-queue), and
-approving its maintainer's registration takes it off.
+repo by removing it, under [The admin queue](#the-admin-queue), and a
+maintainer's registration takes it off, under
+[Registering a project](#registering-a-project).
 
 - It covers the repo itself, and the issue repo of a project whose code
   repo is on it now.
@@ -1612,9 +1630,10 @@ side. What it shows, and in what order, is in
   [Text streams](#text-streams). Any other issue is `404`, and the page says
   no project tagged it and no one claimed it. Asking makes no room.
 - A path whose owner, repo, or number GitHub couldn't have, or whose owner
-  is `auth`, `mcp`, or `oauth`, since those paths belong to sign-in and the
-  MCP server, names no issue. It is `404`, and the page says only that there
-  is no issue page there, since the issue can have a claim all the same.
+  is `admin`, `auth`, `mcp`, or `oauth`, since those paths belong to
+  sign-in, the MCP server, and the admin pages, names no issue. It is
+  `404`, and the page says only that there is no issue page there, since
+  the issue can have a claim all the same.
 - When the database or the room can't answer, the page says so, with `503`.
 - It is public, and sets no cookie for a visitor who isn't signed in.
 - It loads with what the issue's room holds, once the room has applied any

@@ -1,6 +1,7 @@
 import { settingKeys } from '@goodfirsttoken/core';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
+  addToDoNotList,
   changeSettings,
   createProject,
   getPendingProject,
@@ -40,6 +41,10 @@ const policy = {
 beforeEach(async () => {
   await emptyDatabase();
   await signIn(maintainer, coMaintainer, admin);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('projects', () => {
@@ -569,21 +574,67 @@ describe('the admin queue and the listings', () => {
     expect(await listPendingProjects(db)).toHaveLength(1);
   });
 
-  test('listing a repo again from its policy replaces the policy and settings, keeps its status, and records who changed the settings', async () => {
+  test('listing a repo again from its policy replaces the policy, changes only the settings sent, keeps its status, and records who changed the settings', async () => {
     await createProject(
       db,
-      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'], agentNotes: 'Run make test.' }, addedBy: admin.githubId },
       t0,
     );
     await setProjectStatus(db, repo, { status: 'paused', reason: 'Checking.', changedBy: admin.githubId }, t0 + HOUR);
     const next = { ...policy, quote: 'Agents are welcome.', tier: 'invites_agents' as const };
 
-    const relisted = await relistFromPolicy(db, repo, { policy: next, settings: { tags: ['ready'], prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+    const relisted = await relistFromPolicy(db, repo, { policy: next, settings: { prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
 
+    if (!relisted?.ok) throw new Error('not listed again');
     expect(relisted).toMatchObject({ changed: ['prMode'], project: { status: 'paused', policy: next } });
-    expect(await getProject(db, repo)).toEqual(relisted?.project);
-    expect(await listPolicyListings(db)).toEqual([relisted?.project]);
+    expect(relisted.project.settings).toMatchObject({ tags: ['ready'], agentNotes: 'Run make test.', prMode: 'automatic' });
+    expect(await getProject(db, repo)).toEqual(relisted.project);
+    expect(await listPolicyListings(db)).toEqual([relisted.project]);
     expect(await settingsHistory(db, repo)).toMatchObject([{ version: 2, changedBy: admin.githubId }, { version: 1 }]);
+  });
+
+  test('a repo on the do-not-list is never listed from its policy, new or again', async () => {
+    const other = 'sample-owner/sample-harbor';
+    await createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0,
+    );
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0 + HOUR);
+    await addToDoNotList(db, { repo: other, reason: null, addedBy: admin.githubId }, t0 + HOUR);
+
+    const relisted = await relistFromPolicy(db, repo, { policy, settings: { prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+    const created = await createProject(
+      db,
+      { repo: other, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0 + 2 * HOUR,
+    );
+
+    expect(relisted).toBeNull();
+    expect((await getProject(db, repo))?.settings.prMode).toBe('reviewed');
+    expect(created).toBeNull();
+    expect(await getProject(db, other)).toBeNull();
+    expect(await statusHistory(db, other)).toEqual([]);
+    expect(await settingsHistory(db, other)).toEqual([]);
+  });
+
+  test('a removal that lands between the read and the write of a listing again leaves the listing as it was', async () => {
+    await createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0,
+    );
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0 + HOUR);
+      return batch(statements);
+    });
+
+    const relisted = await relistFromPolicy(db, repo, { policy, settings: { prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+
+    expect(relisted).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ settingsVersion: 1, settings: { prMode: 'reviewed' } });
+    expect(await settingsHistory(db, repo)).toHaveLength(1);
   });
 
   test('a registered project is never listed again from a policy', async () => {

@@ -1,4 +1,4 @@
-import { doNotListEntrySchema, mustParse, repoName, type DoNotListEntry } from '@goodfirsttoken/core';
+import { doNotListEntrySchema, githubId, mustParse, repoName, type DoNotListEntry } from '@goodfirsttoken/core';
 import { checkTime } from './shared';
 
 // The do_not_list table: repos whose maintainers asked to be removed.
@@ -39,6 +39,44 @@ export async function addToDoNotList(
   const stored = await getDoNotListEntry(db, input.repo);
   if (stored === null) throw new Error(`${input.repo} was not added to the do-not-list.`);
   return stored;
+}
+
+// The two statements below go in the batch of a status change, and apply
+// only when that change landed: the project has the status, and was given it
+// by that person at that time. So the list and the status change together,
+// and a change that lands between them can't split them.
+
+/**
+ * Puts the repo on the do-not-list, keeping an entry already there, when its
+ * project was just rejected by `addedBy` at `now`.
+ */
+export function doNotListWhenRejected(
+  db: D1Database,
+  entry: { repo: string; reason: string | null; addedBy: number },
+  now: number,
+): D1PreparedStatement {
+  const input = mustParse(entryInput, entry, 'do-not-list entry');
+  return db
+    .prepare(
+      `INSERT INTO do_not_list (repo, reason, added_by, added_at)
+       SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM projects WHERE repo = ?1 AND status = 'rejected'
+         AND status_changed_by = ?3 AND status_changed_at = ?4)
+       ON CONFLICT (repo) DO NOTHING`,
+    )
+    .bind(input.repo, input.reason, input.addedBy, checkTime(now));
+}
+
+/**
+ * Takes the repo off the do-not-list when its maintainer `by` just
+ * registered it at `now`, so it waits for an admin as a registered project.
+ */
+export function leaveDoNotListWhenRegistered(db: D1Database, repo: string, by: number, now: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `DELETE FROM do_not_list WHERE repo = ?1 AND EXISTS (SELECT 1 FROM projects WHERE repo = ?1
+         AND source = 'registered' AND status = 'pending' AND status_changed_by = ?2 AND status_changed_at = ?3)`,
+    )
+    .bind(mustParse(repoName, repo, 'repo'), mustParse(githubId, by, 'by'), checkTime(now));
 }
 
 /** Takes a repo off the do-not-list. False when it wasn't on it. */
