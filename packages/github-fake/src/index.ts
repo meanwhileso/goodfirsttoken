@@ -105,6 +105,22 @@ function tokenFrom(header: string | null): string | null {
   return match?.[1] ?? null;
 }
 
+// An OAuth app's client ID and secret, sent with Basic authentication, as
+// GitHub's endpoints for an app's own tokens take them.
+function appCredentialsFrom(header: string | null): { clientId: string; clientSecret: string } | null {
+  const match = /^basic\s+(\S+)$/i.exec(header?.trim() ?? '');
+  if (!match?.[1]) return null;
+  let decoded: string;
+  try {
+    decoded = atob(match[1]);
+  } catch {
+    return null;
+  }
+  const colon = decoded.indexOf(':');
+  if (colon < 0) return null;
+  return { clientId: decoded.slice(0, colon), clientSecret: decoded.slice(colon + 1) };
+}
+
 const USER_AGENT_REQUIRED =
   'Request forbidden by administrative rules. Please make sure your request has a User-Agent header (https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required). Check https://developer.github.com for other possible causes.';
 
@@ -154,7 +170,8 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       if (!grant) return done(errorResponse(401, 'This endpoint requires you to be authenticated.', docs), name);
       return done(json(await runGraphQL(ctx, body, now().toISOString())), name);
     }
-    const rest = handleRest({ ctx, method: request.method, url, body, now: now().toISOString() }, path);
+    const app = appCredentialsFrom(request.headers.get('authorization'));
+    const rest = handleRest({ ctx, method: request.method, url, body, app, now: now().toISOString() }, path);
     return done(rest.response, rest.operation);
   }
 

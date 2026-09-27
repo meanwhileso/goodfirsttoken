@@ -3,9 +3,10 @@ import type { AddressInfo } from 'node:net';
 import { cookieProblems, expect, test } from './fixtures';
 import { SITE, STATIC_HOST } from './hosts';
 
-// The cookie check in fixtures.ts runs after every test. The site sets no
-// cookies yet, so these tests show that it sees the responses and that a bad
-// cookie fails the test that saw it.
+// The cookie check in fixtures.ts runs after every test. The site's own
+// cookies come from sign-in, which sign-in.spec.ts runs through the check.
+// These tests show that it sees the responses and that a bad cookie fails the
+// test that saw it.
 
 test('the cookie check reads the responses of every page and request, from the site and the static host', async ({
   page,

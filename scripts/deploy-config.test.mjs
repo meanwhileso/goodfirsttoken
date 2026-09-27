@@ -45,7 +45,14 @@ const local = {
   },
   ratelimits: [{ name: 'LOGIN_LIMITER', namespace_id: '1', simple: { limit: 10, period: 60 } }],
 };
-const withLimiter = { ...required, LOGIN_LIMITER_NAMESPACE_ID: '1001' };
+// The sample config's limiter, and the real config's, with the OAuth app's
+// client ID the real config needs.
+const withLimiter = {
+  ...required,
+  LOGIN_LIMITER_NAMESPACE_ID: '1001',
+  SIGN_IN_LIMITER_NAMESPACE_ID: '1002',
+  OAUTH_CLIENT_ID: 'Ov23sampleclient',
+};
 
 const realLocal = () => readLocalConfig(readFileSync(path.join(REPO_ROOT, LOCAL_CONFIG), 'utf8'));
 
@@ -78,6 +85,37 @@ test('the Worker reports the environment it was deployed as, whatever the settin
     assert.equal(config.vars.ENVIRONMENT, target);
   }
   assert.throws(() => deployConfig(local, 'development', withLimiter), /staging or production/);
+});
+
+// The dev sign-in, and the stand-ins for the sign-in secrets, work only when
+// ENVIRONMENT is development (apps/web/src/auth/settings.ts).
+test('no deploy runs the Worker as development, so the dev sign-in is never on in staging or production', () => {
+  const real = realLocal();
+
+  assert.equal(real.vars.ENVIRONMENT, 'development');
+  assert.equal(
+    settingsFor(real).some(({ name }) => name === 'ENVIRONMENT'),
+    false,
+  );
+  for (const target of ['staging', 'production']) {
+    const { config } = deployConfig(real, target, { ...withLimiter, ENVIRONMENT: 'development' });
+    assert.equal(config.vars.ENVIRONMENT, target);
+  }
+  assert.throws(() => deployConfig(real, 'development', withLimiter), /staging or production/);
+});
+
+test('a deploy needs OAUTH_CLIENT_ID, since no one can sign in without it', () => {
+  const real = realLocal();
+
+  assert.equal(settingsFor(real).find(({ name }) => name === 'OAUTH_CLIENT_ID')?.required, true);
+  for (const missing of [{}, { OAUTH_CLIENT_ID: '' }, { OAUTH_CLIENT_ID: '  ' }]) {
+    assert.throws(
+      () => deployConfig(real, 'staging', { ...withLimiter, OAUTH_CLIENT_ID: undefined, ...missing }),
+      /OAUTH_CLIENT_ID is not set/,
+    );
+  }
+  const { config } = deployConfig(real, 'staging', { ...withLimiter, OAUTH_CLIENT_ID: 'Ov23sampleclient' });
+  assert.equal(config.vars.OAUTH_CLIENT_ID, 'Ov23sampleclient');
 });
 
 test('no local value of a variable reaches a deployed Worker', () => {
@@ -212,7 +250,7 @@ test("every Durable Object the Worker binds is deployed with the migration that 
   const bindings = real.durable_objects?.bindings ?? [];
   assert.ok(bindings.length > 0, 'the Worker binds a Durable Object');
 
-  const { config } = deployConfig(real, 'production', required);
+  const { config } = deployConfig(real, 'production', withLimiter);
 
   assert.deepEqual(config.durable_objects, real.durable_objects);
   assert.deepEqual(config.migrations, real.migrations);
@@ -275,6 +313,7 @@ const sentinels = {
   WORKER_NAME: 'sentinel-worker',
   DB_ID: D1_ID,
   OAUTH_KV_ID: KV_ID,
+  SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
   PRIMARY_DOMAIN: 'sentinel-primary.example',
   REDIRECT_DOMAINS: 'sentinel-second.example',
   OAUTH_CLIENT_ID: 'Ov23sentinelclient',
@@ -312,7 +351,12 @@ test("a deploy's GitHub URLs come from the settings or are empty, and never from
   assert.match(realLocal().vars.GH_API_URL, /127\.0\.0\.1/);
   assert.match(realLocal().vars.GH_WEB_URL, /127\.0\.0\.1/);
 
-  const unset = written({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, WORKER_NAME: 'sentinel-worker' });
+  const unset = written({
+    CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
+    WORKER_NAME: 'sentinel-worker',
+    SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
+    OAUTH_CLIENT_ID: 'Ov23sentinelclient',
+  });
   const set = written(sentinels);
 
   assert.equal(JSON.parse(unset).vars.GH_API_URL, '');

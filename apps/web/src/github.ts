@@ -1,9 +1,10 @@
 import { env } from 'cloudflare:workers';
 
-// Calls to GitHub. Every call names the token it runs with, and there is no
-// default token. A call made for a person passes that person's own token.
-// Reads that act for no one, like issue sync, will pass the read-only
-// service token.
+// Calls to GitHub's API. Every call names the token it runs with, and there
+// is no default token. A call made for a person passes that person's own
+// token. Reads that act for no one, like issue sync, will pass the read-only
+// service token. Revoking a token runs as the OAuth app, with its client ID
+// and secret.
 //
 // GitHub's base URLs come from GH_API_URL and GH_WEB_URL. Local development
 // and tests point them at the fake in packages/github-fake. A deploy that
@@ -32,9 +33,13 @@ export function gitHubUrls() {
 
 // GitHub refuses API calls that carry no User-Agent.
 function headers(token: string, json: boolean): Record<string, string> {
+  return apiHeaders(`Bearer ${token}`, json);
+}
+
+function apiHeaders(authorization: string, json: boolean): Record<string, string> {
   return {
     accept: 'application/vnd.github+json',
-    authorization: `Bearer ${token}`,
+    authorization,
     'user-agent': 'goodfirsttoken',
     'x-github-api-version': API_VERSION,
     ...(json ? { 'content-type': 'application/json' } : {}),
@@ -62,6 +67,26 @@ export async function gitHubRest<T>(
   if (!response.ok) throw await refusal(response);
   const text = await response.text();
   return (text ? JSON.parse(text) : undefined) as T;
+}
+
+export interface OAuthApp {
+  clientId: string;
+  clientSecret: string;
+}
+
+// Revokes one token the OAuth app issued, so it stops working at once. This
+// call runs as the app, with its client ID and secret, and names the token to
+// revoke in the body. It acts on that token only, so a person's other tokens
+// from the same app, like their agents', keep working. Throws a GitHubError
+// when GitHub refuses.
+// https://docs.github.com/en/rest/apps/oauth-applications#delete-an-app-token
+export async function revokeGitHubToken(app: OAuthApp, token: string): Promise<void> {
+  const response = await fetch(`${gitHubUrls().api}/applications/${encodeURIComponent(app.clientId)}/token`, {
+    method: 'DELETE',
+    headers: apiHeaders(`Basic ${btoa(`${app.clientId}:${app.clientSecret}`)}`, true),
+    body: JSON.stringify({ access_token: token }),
+  });
+  if (!response.ok) throw await refusal(response);
 }
 
 export interface GraphQLError {

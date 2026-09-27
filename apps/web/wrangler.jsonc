@@ -23,7 +23,8 @@
     "ENVIRONMENT": "development",
     "PRIMARY_DOMAIN": "",
     "REDIRECT_DOMAINS": "",
-    "OAUTH_CLIENT_ID": "",
+    // The GitHub fake's OAuth app. A deploy sets the environment's own.
+    "OAUTH_CLIENT_ID": "goodfirsttoken-local",
     "ADMIN_GITHUB_IDS": "",
     // GitHub's API and github.com, pointing at the GitHub fake that
     // `pnpm dev` starts (packages/github-fake). A deploy that leaves them
@@ -32,6 +33,11 @@
     "GH_API_URL": "http://127.0.0.1:8944/api",
     "GH_WEB_URL": "http://127.0.0.1:8944"
   },
+  // The Worker's secrets, which a deploy puts with `wrangler secret put`.
+  // OAUTH_CLIENT_SECRET is the GitHub OAuth app's client secret. AUTH_SECRET
+  // signs the sign-in cookies and encrypts the GitHub tokens Better Auth
+  // stores. Local development needs neither (src/auth/settings.ts).
+  "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   // One issue room per issue, named by the issue (src/rooms/issue-room.ts).
   // Class names are code, so they may be here. Each class gets its storage
@@ -45,5 +51,10 @@
       { "binding": "FEED_QUEUE", "queue": "feed" },
       { "binding": "CRAWL_QUEUE", "queue": "crawl" }
     ]
-  }
+  },
+  // Cloudflare rate limiting on the sign-in endpoints (src/auth/routes.ts).
+  // Wrangler needs a namespace ID, so this one is a placeholder that local
+  // development simulates. A deploy replaces it with the
+  // SIGN_IN_LIMITER_NAMESPACE_ID setting.
+  "ratelimits": [{ "name": "SIGN_IN_LIMITER", "namespace_id": "1", "simple": { "limit": 20, "period": 60 } }]
 }

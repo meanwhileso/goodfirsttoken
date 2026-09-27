@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, the design system at `/design`, and `/healthz`, and holds the D1 schema, the functions that read and write it, and the issue room. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, sign-in with GitHub, the design system at `/design`, and `/healthz`, and holds the D1 schema, the functions that read and write it, and the issue room. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -27,9 +27,10 @@ The repo is a pnpm workspace.
   server side inside `workerd`, the Workers runtime, in development, in
   tests, and in production.
 - **`src/server.ts` is the Worker's entry point.** It answers a request to a
-  redirect domain itself, with `src/redirect.ts`, and hands every other
-  request to TanStack Start. Queue consumers, cron handlers, and Durable
-  Object classes are exported from it as they arrive.
+  redirect domain itself, with `src/redirect.ts`, sends every request under
+  `/auth` to `src/auth/routes.ts`, and hands every other request to TanStack
+  Start. Queue consumers, cron handlers, and Durable Object classes are
+  exported from it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -41,10 +42,87 @@ The repo is a pnpm workspace.
   `migrations/`.
 - **Durable Objects live in `src/rooms/`.** `issue-room.ts` is the issue
   room, described under [The issue room](#the-issue-room).
-- **`src/github.ts` makes every call to GitHub,** REST and GraphQL, at the
-  base URL in `GH_API_URL`, or `https://api.github.com` when that is empty.
-  Each call takes the token it runs with as an argument. There is no
-  default token.
+- **`src/github.ts` makes every call to GitHub's API,** REST and GraphQL, at
+  the base URL in `GH_API_URL`, or `https://api.github.com` when that is
+  empty. Each call takes the token it runs with as an argument. There is no
+  default token. Revoking a token takes the OAuth app's client ID and secret
+  in its place. Sign-in trades codes for tokens at github.com itself, in
+  `src/auth/auth.ts`.
+- **Sign-in lives in `src/auth/`,** described under [Sign-in](#sign-in).
+
+### Sign-in
+
+The rules are in [how-it-works.md](how-it-works.md#signing-in).
+
+| File | What it does |
+|---|---|
+| `src/auth/auth.ts` | Sets up Better Auth with its GitHub provider and D1 |
+| `src/auth/routes.ts` | Answers every request under `/auth`: the allowed routes, the rate limit, the same-site check on forms, sign-out's revocation, and the dev sign-in |
+| `src/auth/session.ts` | Reads who is signed in from a request |
+| `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav |
+| `src/auth/SiteNav.tsx` | The nav with the signed-in person in it |
+| `src/auth/permissions.ts` | `requirePermission` and the named permissions |
+| `src/auth/settings.ts` | Reads the settings sign-in needs, with the development stand-ins |
+
+- **Better Auth 1.7.6, pinned,** with its GitHub provider and
+  `encryptOAuthTokens` on. It talks to D1 through its Kysely adapter, which
+  has a D1 dialect. At its first request in each isolate, Better Auth checks
+  that the tables have every column it expects. So one instance is kept per
+  origin and settings.
+- **A half-written sign-in.** D1 has no interactive transactions, so Better
+  Auth writes a new user and their GitHub account one after the other, and a
+  failure between them leaves a user with no account. Account linking is on
+  for GitHub alone, as a trusted provider, with no need for a verified email.
+  So the next sign-in finds that user by email and attaches the GitHub
+  account. Each email is the placeholder made from the numeric GitHub ID, and
+  GitHub is the one way in, so an email matches only the same GitHub account.
+- **Replacing a token.** Better Auth writes each new token over the stored
+  one. Our `getUserInfo` runs just before that write, so it looks up the
+  person's GitHub account and revokes the stored token when the new one is
+  different. Better Auth also calls `getUserInfo` with the stored token
+  itself, for its account info, and that has to revoke nothing. It reads
+  Better Auth's context from a small plugin that keeps it.
+- **Sign-out** lists the person's sessions before it revokes anything, and
+  ends only those. It forgets the token with one update through Better
+  Auth's adapter that matches the account and the encrypted token it
+  revoked. A sign-in in another browser meanwhile stores a token that
+  doesn't match and a session that wasn't listed, so both stay.
+- **GitHub's URLs come from `GH_WEB_URL` and `GH_API_URL`.** Better Auth's
+  GitHub provider names github.com and api.github.com itself. The provider's
+  options move the authorize page to `GH_WEB_URL`, reading the person goes
+  through `src/github.ts`, and a small Better Auth plugin moves the code
+  trade to `GH_WEB_URL`. With both settings empty, that is GitHub.
+- **No email.** Sign-in asks for `public_repo` only, so reading `/user` is
+  the one GitHub call it makes for a person. Better Auth's provider would
+  also read `/user/emails`, which needs `user:email`, so we read the person
+  ourselves. Better Auth's `user` row needs an email, so it gets a
+  placeholder under `.invalid`.
+- **Who is signed in** comes from Better Auth's session, then its user's
+  GitHub account, whose `account_id` is the numeric GitHub ID, then that
+  person in `people`. A request with no session cookie reads nothing, and
+  with a sign-in setting missing, no one is signed in.
+- **Cookies.** Better Auth puts `__Secure-` in front of cookie names over
+  https. The `__Host-` prefix asks for more, so `useSecureCookies` is off and
+  the names start with `__Host-gft`. better-call, which Better Auth builds
+  on, sets `Secure` and `Path=/` and drops any `Domain` on every cookie named
+  that way.
+- **Forms, with no script.** The sign-in and sign-out buttons are plain
+  forms, so they work before any script runs, like the nav. They post to our
+  routes, which call Better Auth's API. Better Auth's own endpoints take JSON
+  only, and every one of them but the callback answers 404.
+- **Same-site forms.** Better Auth checks `Origin` only on the requests its
+  router handles. Our form routes check it themselves, before the rate
+  limit. Better Auth skips its own check when `NODE_ENV` is `test`, so it is
+  turned on outright and the tests see it.
+- **Cloudflare rate limiting,** through the `SIGN_IN_LIMITER` binding,
+  counted per `cf-connecting-ip`, with an IPv6 address cut to its /64, and
+  an IPv4 address written as IPv6 read as the IPv4 address.
+  Better Auth's own limiter is off, since it counts in each isolate's memory.
+- **Development** is checked in `src/auth/settings.ts`: `ENVIRONMENT` and a
+  loopback `http` `GH_WEB_URL` both. The dev sign-in and the stand-ins for
+  the secrets depend on it.
+- **Also off in Better Auth:** its IP address tracking, so no session stores
+  an address, ID token sign-in, and telemetry.
 
 ### The design system
 
@@ -193,20 +271,22 @@ that leaves their settings empty gives them empty strings, and
 |---|---|---|
 | `ENVIRONMENT` | Variable: `development`, `staging`, or `production` | Now, by `/healthz` |
 | `PRIMARY_DOMAIN`, `REDIRECT_DOMAINS` | Variables: the site's domain, and domains that redirect to it | Now, by `src/redirect.ts` |
-| `OAUTH_CLIENT_ID` | Variable: the GitHub OAuth app's client ID | #8 |
-| `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | #8 |
+| `OAUTH_CLIENT_ID` | Variable: the GitHub OAuth app's client ID. The GitHub fake's app locally | Now, by `src/auth/` |
+| `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
-| `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/github.ts`, for #8 |
-| `DB` | D1 | `src/db/`, from #8 on, and the issue room |
+| `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
+| `DB` | D1 | Now, by `src/db/`, Better Auth, and the issue room |
+| `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/routes.ts` |
 | `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | The MCP tools, from #15 on |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
 | `FEED_QUEUE` | Queue producer | #14 |
 | `CRAWL_QUEUE` | Queue producer | #30 |
 
 The feed's dead-letter queue arrives with the feed consumer in #14. The feed
-Durable Object, cron triggers, and rate limiters arrive with the issues that
-use them. The static host's R2 bucket is not a binding, since the Worker never
-reads it. [The static host](#the-static-host) covers it.
+Durable Object, cron triggers, and the tool endpoint's rate limiter arrive
+with the issues that use them. The static host's R2 bucket is not a binding,
+since the Worker never reads it. [The static host](#the-static-host) covers
+it.
 
 A Durable Object class gets its storage from an entry under `migrations` in
 `wrangler.jsonc`. `IssueRoom` is under `new_sqlite_classes`, so its storage
@@ -222,10 +302,13 @@ leaderboard read: people, projects with their settings and status changes,
 the tagged-issue cache, claims, PRs, donor sessions, blocks, the
 do-not-list, and crawl candidates. GitHub is the source of truth for issues
 and PRs, and the issue room is for claims, so those tables are caches and
-mirrors. Better Auth's own tables arrive with #8. No table holds a
-GitHub token. Tokens stay in the encrypted grant store. The rules these
-records follow are in [how-it-works.md](how-it-works.md#people), under
+mirrors. None of these tables holds a GitHub token. The rules these records
+follow are in [how-it-works.md](how-it-works.md#people), under
 People through Crawl candidates.
+
+It also holds Better Auth's four tables for signing in, described under
+[Better Auth's tables](#better-auths-tables). The one GitHub token they store,
+in `account`, is encrypted.
 
 | Table | One row per | Key |
 |---|---|---|
@@ -293,6 +376,30 @@ rejecting a registration reaches the maintainer's agent.
 These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
 `donor_blocks.reason`, and `do_not_list.reason`.
+
+Better Auth's tables are for signing in, and no page shows them. The
+`session.user_agent` column keeps the browser's user agent string, as Better
+Auth does by default.
+
+### Better Auth's tables
+
+Migration `0002_sign_in.sql` makes them, with the tables and columns Better
+Auth 1.7.6's CLI generates for SQLite, renamed to snake_case in
+`src/auth/auth.ts`. Better Auth reads and writes them, and no module in
+`src/db/` does.
+
+| Table | One row per | Key |
+|---|---|---|
+| `user` | Person who has signed in on the site: their login as the name, their avatar, and a placeholder email | `id` |
+| `session` | Signed-in browser: its token, the user, and when it ends | `id` |
+| `account` | User's GitHub account: the numeric GitHub ID in `account_id`, the token from their last sign-in, encrypted, and its scope | `id` |
+| `verification` | Sign-in in progress: its state, PKCE verifier, and where to go after | `id` |
+
+They differ from the tables above where Better Auth needs it. Times are ISO
+8601 text and true or false is 1 or 0, the way Better Auth writes them to
+SQLite. The core schemas don't check the rows. Better Auth checks at start
+that the tables have every column it expects. The tables are STRICT, like
+the others. A session and a GitHub account go when their user goes.
 
 ### Settings history
 
@@ -366,6 +473,10 @@ pruning after a sync, with no index of its own.
 | `donor_sessions_by_person` | A donor's last session, for what merged since |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
+| `session_by_user` | A person's sessions, which signing out ends |
+| `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
+| `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |
+| `verification_by_identifier` | A sign-in in progress, by the state GitHub sends back |
 
 A merged PR always has a close time, as on GitHub, and only `closed_at` is
 indexed. So merged PRs this week filter on `closed_at` with
@@ -386,7 +497,8 @@ before it starts Vite. The script runs `wrangler d1 migrations apply DB
 only when both its input and output are a terminal, so it applies new ones
 without asking, whether `pnpm dev` runs from the root, where pnpm runs the
 GitHub fake beside it, or in `apps/web`. It needs no network and no account.
-The database tests apply the migrations in their setup, and a deploy applies
+Playwright's web server runs it too, before it builds the app. The database
+tests apply the migrations in their setup, and a deploy applies
 them to the environment's database before the Worker goes up, as
 [Deploys](#deploys) describes. A schema change is a new migration. A
 migration that has run on a deployed database never changes.
@@ -490,17 +602,25 @@ and writes them into a config file that git ignores. Where an ID is left out,
 the deploy or Wrangler creates the resource on the first deploy.
 
 Each secret the Worker reads goes by name under `secrets.required` in
-`wrangler.jsonc`, and the deploy puts it. The Worker reads none yet, so the
-key is absent. GitHub reserves names that start with
+`wrangler.jsonc`, and the deploy puts it. There are two, `OAUTH_CLIENT_SECRET`
+and `AUTH_SECRET`, for sign-in. GitHub reserves names that start with
 `GITHUB_` for its own variables and secrets, so no variable or secret of the
 Worker can start with it.
+
+The rate limiter's namespace ID is the one ID `wrangler.jsonc` has to carry,
+since Wrangler refuses a limiter without one. It is a placeholder that local
+development simulates, and a deploy replaces it with the
+`SIGN_IN_LIMITER_NAMESPACE_ID` setting.
 
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
 binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. It
 also starts the GitHub fake at `http://127.0.0.1:8944`, which
 `wrangler.jsonc` points the Worker at. The variables the app reads, with
-safe local defaults, are listed in `apps/web/.dev.vars.example`.
+safe local defaults, are listed in `apps/web/.dev.vars.example`. With no
+secrets set, sign-in uses the stand-ins in `src/auth/settings.ts`, and only
+in development. Wrangler warns that the two secrets are missing, and locally
+that is expected.
 
 ## The static host
 
@@ -568,7 +688,8 @@ and Playwright run it as a local HTTP server.
   and review comments. GraphQL: `repository`, `viewer`, file reads with
   `object(expression:)` across many repos in one query, and
   `createCommitOnBranch`. The OAuth web flow: the authorize page and the
-  token endpoint, with PKCE. Each route in `src/rest.ts` names its page on
+  token endpoint, with PKCE, and an OAuth app revoking one of its tokens with
+  its client ID and secret. Each route in `src/rest.ts` names its page on
   docs.github.com, and GitHub's errors come back in GitHub's shape.
 - **It records whose token made each call.** `fake.calls` lists every call
   with its endpoint, the token it carried, the login that token belongs to,
@@ -596,6 +717,8 @@ and Playwright run it as a local HTTP server.
     to. GitHub would read it as text.
   - A `localhost` OAuth callback allows any port, like GitHub's rule for
     `127.0.0.1`.
+  - Revoking a token answers 404 when the app's credentials are wrong or
+    another app issued the token. GitHub's docs name only its 204 and 422.
   - Git object IDs are 40 hex characters made with an FNV hash of the
     content, so they never match a real repo's. The fake can't be cloned
     with `git`.
@@ -613,7 +736,8 @@ and Playwright run it as a local HTTP server.
   from 900 up, clear of its real ones.
 - **Local sign-in.** The fake's authorize page lists the sample people. Pick
   one, and the app gets that person's token through the same OAuth flow it
-  uses with GitHub.
+  uses with GitHub. The app's dev sign-in posts the same form for you, with
+  the person's login in its `login` field.
 - **Local state.** The server `pnpm dev` starts keeps its state in
   `apps/web/.wrangler/github-fake/state.json`, next to Miniflare's, so forks
   and commits survive a restart. `pnpm seed` resets it to the sample data.
@@ -665,9 +789,15 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   before each test file. Each test file gets its own storage, and the tests
   in a file share it, so each database test starts by emptying every table.
   They live in `apps/web/test/db/`.
+- **Sign-in tests** drive the whole flow through the Worker, with a small
+  browser in `test/auth/helpers.ts` that keeps cookies and follows redirects
+  by hand, and the GitHub fake in-process. Each browser has its own client
+  address, so the sign-in rate limit counts it alone. The Vitest config sets
+  the two secrets, as a deploy does. They live in `apps/web/test/auth/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
-  server. They live in `apps/web/e2e/`.
+  server. The web server applies the D1 migrations first. They live in
+  `apps/web/e2e/`.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has
@@ -694,7 +824,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `Path=/` with the `__Host-` prefix fails the test, and so does any cookie
   from the static host. So does a response from either whose headers can't
   be read, unless the test closed its context first. Other origins, like
-  the GitHub fake, are not checked. The site sets no cookies yet, so
+  the GitHub fake, are not checked. The site's own cookies come from
+  sign-in, which `sign-in.spec.ts` runs through the fixture.
   `cookies.spec.ts` checks that the fixture sees the responses of pages and
   requests from both hosts. It also runs two servers of its own that answer
   with bad cookies, one of them on a redirect the `request` fixture
