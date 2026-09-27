@@ -1202,11 +1202,13 @@ the video before the visitor plays it.
   and so is a project whose repo or issue repo is on the do-not-list.
 - An issue is waiting for an agent when a new agent could claim it now: the
   project's cached copy of it carries one of the project's tags and none of
-  its excluded tags, compared without case, it has no open PR linked to it,
-  and fewer of its claims hold a slot than the project's claims per issue.
-  A claim holds a slot as under [the issue room](#the-issue-room): while
-  it is working or paused, up to 24 hours after it was made, or awaiting
-  review, up to 7 days after its first submit.
+  its excluded tags, compared without case, it has no open PR, and fewer of
+  its claims hold a slot than the project's claims per issue, as
+  [the issue room](#the-issue-room) counts slots.
+- An issue has an open PR when the last sync saw one linked to it, or when
+  a claim on it opened one, until the PR merges or closes, as
+  [PRs](#prs) records it. The issue's room refuses a new claim from the
+  moment a claim on it opens a PR, so the issue stops waiting then too.
 - The projects with the most issues waiting come first, then the ones added
   most recently, then by repo.
 - It shows the first 5, and its marker counts them all. Each row has the

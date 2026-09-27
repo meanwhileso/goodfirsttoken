@@ -205,8 +205,8 @@ export interface ProjectAskingForHelp {
   project: ProjectRecord;
   /**
    * Its cached issues a new agent could claim now: they carry one of its
-   * tags and none of its excluded tags, have no linked open PR, and have
-   * fewer claims holding a slot than its claims per issue.
+   * tags and none of its excluded tags, have no open PR, and have fewer
+   * claims holding a slot than its claims per issue.
    */
   waiting: number;
 }
@@ -223,10 +223,13 @@ export async function listProjectsAskingForHelp(
   limit: number,
   now: number,
 ): Promise<{ total: number; projects: ProjectAskingForHelp[] }> {
-  // Labels compare without case. SQLite's lower() folds ASCII letters. A
-  // claim holds a slot as core's holdsSlot says: working or paused until 24
-  // hours after it was made, and awaiting review until 7 days after its
-  // first submit, whether or not the room's timer has run yet.
+  // Labels compare without case. SQLite's lower() folds ASCII letters. An
+  // issue has an open PR when the sync saw one linked to it, or when a claim
+  // on it opened one that the PRs table doesn't show merged or closed, as
+  // the issue's room counts it. A claim holds a slot as core's holdsSlot
+  // says: working or paused until 24 hours after it was made, and awaiting
+  // review until 7 days after its first submit, whether or not the room's
+  // timer has run yet.
   const { results } = await db
     .prepare(
       `SELECT p.*, s.settings, COUNT(*) OVER () AS total,
@@ -236,6 +239,9 @@ export async function listProjectsAskingForHelp(
                         WHERE lower(l.value) = lower(g.value))
             AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x
                             WHERE lower(l.value) = lower(x.value))
+            AND NOT EXISTS (SELECT 1 FROM claims c LEFT JOIN prs pr ON pr.claim_id = c.id
+                            WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
+                              AND c.pr_number IS NOT NULL AND (pr.state IS NULL OR pr.state = 'open'))
             AND (SELECT COUNT(*) FROM claims c
                  WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
                    AND ((c.state IN ('active', 'paused') AND c.claimed_at + ?2 > ?4)

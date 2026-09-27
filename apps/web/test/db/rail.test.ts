@@ -150,6 +150,29 @@ describe('merged this week', () => {
     expect((await topMergers(db, week)).map((rank) => rank.login)).toEqual(['kenji']);
   });
 
+  test("a PR on a project whose issues have moved since to a repo on the do-not-list does not count", async () => {
+    // The claim was made while the project kept its issues in old-issues.
+    // It keeps them in new-issues now.
+    await createProject(
+      db,
+      {
+        repo: 'sample-owner/moved-app',
+        status: 'approved',
+        source: 'registered',
+        policy: null,
+        settings: { tags: ['help wanted'], issueRepo: 'sample-owner/new-issues' },
+        addedBy: maintainer.githubId,
+      },
+      t0,
+    );
+    await pr(priya, t0 - HOUR, { project: 'sample-owner/moved-app', issueRepo: 'sample-owner/old-issues' });
+    await pr(kenji, t0 - HOUR);
+
+    await addToDoNotList(db, { repo: 'sample-owner/new-issues', reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await topMergers(db, week)).map((rank) => rank.login)).toEqual(['kenji']);
+  });
+
   test('a tie goes to whoever reached the count first', async () => {
     await pr(sam, t0 - 3 * HOUR);
     await pr(priya, t0 - 5 * HOUR);
@@ -196,6 +219,32 @@ describe('projects asking for help', () => {
         syncedAt: t0 + synced,
       };
     });
+  }
+
+  let claims = 0;
+
+  /** Stores a claim on `repo`'s issue `number`, made an hour before t0 unless `changes` say otherwise. */
+  async function claimOn(number: number, person: { githubId: number; login: string }, changes: Partial<ClaimRecord> = {}) {
+    claims += 1;
+    const claim: ClaimRecord = {
+      id: `c_slot${String(claims)}`,
+      issue: `${repo}#${String(number)}`,
+      project: repo,
+      githubId: person.githubId,
+      login: person.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      tokenEstimate: null,
+      ...newClaim(t0 - HOUR),
+      ...changes,
+    };
+    await saveClaim(db, claim, 1);
+    return claim;
+  }
+
+  async function waiting(): Promise<number | undefined> {
+    return (await listProjectsAskingForHelp(db, 5, t0)).projects.find(({ project: p }) => p.repo === repo)?.waiting;
   }
 
   async function project(name: string, addedAt: number, settings: ProjectSettingsInput = { tags: ['help wanted'] }) {
@@ -261,27 +310,6 @@ describe('projects asking for help', () => {
     await registeredProject({ tags: ['help wanted'], claimsPerIssue: 3 });
     await signIn(maintainer, { githubId: 1004, login: 'ines' });
     await saveIssues(db, issues(repo, [['help wanted'], ['help wanted'], ['help wanted'], ['help wanted']]));
-    let claims = 0;
-    const claimOn = async (number: number, person: { githubId: number; login: string }, changes: Partial<ClaimRecord> = {}) => {
-      claims += 1;
-      await saveClaim(
-        db,
-        {
-          id: `c_slot${String(claims)}`,
-          issue: `${repo}#${String(number)}`,
-          project: repo,
-          githubId: person.githubId,
-          login: person.login,
-          agent: 'claude-code',
-          ownProject: false,
-          startCommit: sha,
-          tokenEstimate: null,
-          ...newClaim(t0 - HOUR),
-          ...changes,
-        },
-        1,
-      );
-    };
     // #1: every slot taken, by claims working, paused, and awaiting review.
     await claimOn(1, priya);
     await claimOn(1, kenji, { state: 'paused' });
@@ -299,6 +327,45 @@ describe('projects asking for help', () => {
     const help = await listProjectsAskingForHelp(db, 5, t0);
 
     expect(help.projects.map(({ project: p, waiting }) => [p.repo, waiting])).toEqual([[repo, 3]]);
+  });
+
+  test('count a claim awaiting review as holding its slot up to 7 days after its first submit, and not from then on', async () => {
+    await registeredProject({ tags: ['help wanted'], claimsPerIssue: 1 });
+    await saveIssues(db, issues(repo, [['help wanted'], ['help wanted']]));
+    const awaiting = (submittedAt: number) => ({
+      ...newClaim(submittedAt - HOUR),
+      state: 'awaiting_review' as const,
+      submittedAt,
+    });
+
+    // #1: first submitted 7 days before t0, so its slot is free at t0.
+    await claimOn(1, priya, awaiting(t0 - 7 * DAY));
+    // #2: first submitted 1 ms later, so it still holds the one slot.
+    await claimOn(2, kenji, awaiting(t0 - 7 * DAY + 1));
+
+    expect(await waiting()).toBe(1);
+  });
+
+  test("leave out an issue once a claim on it has opened a PR, until GitHub says the PR merged or closed, as the issue's room does", async () => {
+    await registeredProject({ tags: ['help wanted'], claimsPerIssue: 3 });
+    await saveIssues(db, issues(repo, [['help wanted'], ['help wanted'], ['help wanted'], ['help wanted']]));
+    const opened = async (number: number, person: { githubId: number; login: string }, state?: 'open' | 'merged' | 'closed') => {
+      const pr = { repo, number: 700 + number, url: `https://github.com/${repo}/pull/${String(700 + number)}` };
+      const claim = await claimOn(number, person, { state: 'pr_opened', submittedAt: t0 - HOUR, pr });
+      if (state === undefined) return;
+      await addPr(db, { claimId: claim.id, pr, openedAt: t0 - HOUR });
+      if (state !== 'open') await setPrState(db, claim.id, state, t0 - HOUR);
+    };
+
+    // #1: its PR is open.
+    await opened(1, priya, 'open');
+    // #2: the claim names its PR, and the PRs table has no row for it yet.
+    await opened(2, kenji);
+    // #3: its PR closed without merging, so the issue takes claims again.
+    await opened(3, sam, 'closed');
+    // #4: nobody on it.
+
+    expect(await waiting()).toBe(2);
   });
 
   test('come in order of issues waiting, then the newest added, and the total counts past the limit', async () => {
