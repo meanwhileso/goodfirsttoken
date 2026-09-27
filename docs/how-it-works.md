@@ -765,8 +765,9 @@ reads PRs from GitHub yet.
   when. Adding the project is the first change, made by whoever added it.
 - Only a pause can name no person, for when Good First Token pauses a
   project on its own. Nothing does that yet. An approval or a rejection
-  always names the admin who made it, and a resume names the maintainer who
-  resumed.
+  always names the admin who made it. A resume, or a rejected listing's
+  return to `pending` when its maintainer takes it over, names the
+  maintainer.
 - A change to the status and reason the project already has adds nothing.
 - The project keeps who set its current status, and when.
 
@@ -828,10 +829,12 @@ same token, and refuses with `repo_not_eligible` a repo that:
 - lets only collaborators open pull requests, so its
   `pull_request_creation_policy` is anything but `all`.
 
-When GitHub leaves out whether a repo takes pull requests, or who can open
-them, the repo is refused too, so no repo gets in on a guess. The project is
-saved under the repo's name as GitHub gives it, so `Sample-Owner/App`
-registers as `sample-owner/app` when that is GitHub's spelling.
+GitHub documents whether a repo takes pull requests, and who can open them,
+but doesn't promise to send either. A repo it says nothing about on one of
+them is refused too, with a refusal that says GitHub didn't say, so no repo
+gets in on a guess. The project is saved under the repo's name as GitHub
+gives it, so `Sample-Owner/App` registers as `sample-owner/app` when that is
+GitHub's spelling.
 
 **The proposal.** With no settings, it reads the repo and proposes settings,
 each with the reason it differs from its default. It saves nothing, and
@@ -852,7 +855,9 @@ table, and each takes its value from the first file that gives one:
 - **Tags** are the repo's labels that mean ready for outside help, compared
   without case: `help wanted`, `contributor friendly`,
   `contribution welcome`, `goodfirsttoken`, and any label starting with
-  `.contrib/`. `good first issue` is not one of them. With none of them, the
+  `.contrib/`, up to 20, the most a project can have. The plan's crawler
+  also counts `good first issue`, but the plan names it as a label projects
+  keep for people, so the proposal leaves it out. With none of them, the
   tag is `goodfirsttoken`, which is created if the maintainer keeps it.
 - **Disclosure** uses the trailer a file names for AI help, `Assisted-by` or
   `Generated-by` followed by a colon, spelled as the file spells it. A name
@@ -862,13 +867,14 @@ table, and each takes its value from the first file that gives one:
   description or pull request description with `yourself`, `by hand`, or
   `in your own words` after it in the same sentence.
 - **CLA** is the first https link on a line that says `CLA` or
-  `Contributor License Agreement`.
+  `Contributor License Agreement`, without the punctuation that ends the
+  sentence around it.
 - Every other setting keeps its default. So the proposal's PR mode is always
   `reviewed`, and the maintainer chooses `automatic` if they want it.
 
 **Saving.** With settings, it checks them as a whole, and saves the project
-as `pending`, registered by the caller, then. The settings they left out
-take their defaults. An admin approves or rejects it, which #11 builds.
+as `pending`, registered by the caller at that time. The settings they left
+out take their defaults. An admin approves or rejects it, which #11 builds.
 
 - A repo that is already a registered project, whatever its status, is
   refused with `already_registered`, proposal or not. Its settings change
@@ -876,16 +882,26 @@ take their defaults. An admin approves or rejects it, which #11 builds.
 - A repo an admin listed from its AI policy is taken over. The maintainer's
   settings replace the listing's, whole, as a new save in the settings
   history made by them. The project becomes registered: its policy quote
-  goes, and it names the maintainer as who added it, then. Its status stays
-  as it was, since an admin already approved it. So an approved listing
-  stays listed, and a paused one stays paused.
+  goes, and it names the maintainer as who added it, and when. An approved
+  or paused listing keeps its status, since an admin already approved it. A
+  rejected listing goes back to `pending`, changed by the maintainer, so an
+  admin reviews it again.
 - A crawler find still waiting in the admin queue doesn't stop a
   registration, and the registration doesn't change it.
 
+**The issue repo.** Tagged issues in another repo become work for agents
+under the project's settings. So an `issueRepo` other than the code repo
+needs the caller to be an admin or maintainer of that repo too, asked of
+GitHub with their own token, the same way as the code repo. Without it,
+`register_project` and `update_project` refuse with `not_maintainer`, naming
+the issue repo, and nothing saves. The plan says nothing about who may name
+an issue repo. This rule fills that gap.
+
 **The goodfirsttoken label.** When the saved tags include `goodfirsttoken`,
-in any case, the repo needs the label. `register_project` and
-`update_project` ask GitHub for it with the maintainer's token, before
-anything saves.
+in any case, the repo where the issues live needs the label: the issue repo,
+or the code repo when there is none. `register_project` and
+`update_project` ask GitHub for it there with the maintainer's token, after
+the settings pass their checks and before anything saves.
 
 - When the repo has a label of that name in any case, nothing is created.
 - When it doesn't, it is created with the maintainer's own token, named
@@ -897,7 +913,8 @@ anything saves.
   OAuth app access restrictions block Good First Token, nothing saves. The
   refusal is `label_not_created`, with GitHub's status and message, and says
   to create the label on GitHub or pick another tag.
-- Only `update_project` calls that send `tags` ask for the label.
+- `update_project` asks for the label only when it sends `tags` or
+  `issueRepo`.
 
 ## Managing a project
 
@@ -907,11 +924,12 @@ a project is `not_found`.
 
 - **`update_project`** sends only the settings it changes, under
   [Project settings](#project-settings). The change applies at once, and the
-  history records who made it. It works on a listing made from a policy too:
-  the maintainer's values replace the listing's for the settings they send,
-  and the project stays a listing. Settings that break a rule are refused
-  with `invalid_settings`, each problem naming its field, before GitHub is
-  asked to make a label.
+  history records who made it. Settings that break a rule are refused with
+  `invalid_settings`, each problem naming its field, before GitHub is asked
+  anything more.
+- A listing made from a policy is refused with `listed_from_policy`, since
+  replacing its settings takes it over, which `register_project` does. The
+  refusal says to take it over with `register_project` first.
 - **`project_status`** answers with the project's status, how it got in, the
   reason for a rejection or a pause, its settings, and four counts: the
   cached tagged issues that carry one of its tags and none of its excluded
@@ -927,10 +945,17 @@ a project is `not_found`.
   `pending`. So a resume never approves a project an admin hasn't. Resuming
   a project that isn't paused changes nothing.
 - A pause Good First Token made, or one made by someone who is one of its
-  admins now, stays until an admin lifts it. A maintainer who isn't an admin
-  and tries is refused with `not_admin`. Who is an admin is read from
-  `ADMIN_GITHUB_IDS` at the time, so a pause by someone no longer an admin
-  counts as a maintainer's.
+  admins, stays until an admin lifts it, under
+  [Permissions](#permissions). A maintainer who isn't an admin and tries is
+  refused with `not_admin`. Who is an admin is read from `ADMIN_GITHUB_IDS`
+  at the time, so a pause by someone no longer an admin counts as a
+  maintainer's.
+- The answer says whether the call changed anything, and for a paused
+  project, whether its maintainers or only the admins can resume it.
+- A pause or resume lands only on the status it was decided on. When
+  someone else changes the status first, like an admin pausing the project
+  at the same moment, the call decides again on the new status. So a
+  maintainer's call never undoes a change it didn't see.
 
 ## Tagged issues
 
@@ -1049,8 +1074,8 @@ four and `invalid_input`. The issue room returns those, and `pr_exists`,
 `issue_full`, `not_claim_owner`, and `not_found`. `requirePermission` returns
 `not_claim_owner`, `not_maintainer`, and `not_admin`. The maintainer's tools
 return `not_maintainer`, `repo_not_eligible`, `already_registered`,
-`label_not_created`, `invalid_settings`, `project_not_open`, `not_admin`, and
-`not_found`.
+`listed_from_policy`, `label_not_created`, `invalid_settings`,
+`project_not_open`, `not_admin`, and `not_found`.
 
 | Code | When |
 |---|---|
@@ -1072,7 +1097,8 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
 | `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators |
 | `already_registered` | Registering a repo that is already a registered project |
-| `label_not_created` | GitHub refused to create the `goodfirsttoken` label with the maintainer's token, so nothing saved |
+| `listed_from_policy` | Changing the settings of a listing made from a policy with `update_project`, which takes `register_project` first |
+| `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
 | `invalid_settings` | Settings failed their checks |
 | `not_admin` | The caller isn't a Good First Token admin |
 | `not_found` | The claim, issue, project, or queue item doesn't exist |
@@ -1368,8 +1394,10 @@ A deployment can serve them from a static host, on a hostname of its own.
   same, with a PKCE verifier. `start_session` reads the person with the
   connection's token. The `manage_project` permission reads the repo with
   the caller's token. Registering a project reads the repo again, its
-  labels, and its files, and creates the `goodfirsttoken` label, all with
-  the maintainer's token.
+  labels, and its files. Registering or updating one reads an issue repo
+  other than the code repo for the caller's permission, and creates the
+  `goodfirsttoken` label where the issues live. All of these use the
+  maintainer's token.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
   names the one token to revoke. Signing out, Disconnect, and an agent's
   sign-in that replaces an earlier one each revoke this way.

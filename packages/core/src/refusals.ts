@@ -30,6 +30,7 @@ export const refusalCodes = [
   'not_maintainer',
   'repo_not_eligible',
   'already_registered',
+  'listed_from_policy',
   'label_not_created',
   'invalid_settings',
   'not_admin',

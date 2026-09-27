@@ -5,6 +5,7 @@ import {
   updateProjectSettings,
   type ProjectRecord,
   type ProjectSettings,
+  type ProjectStatus,
   type Refusal,
   type RefusalCode,
   type ToolInput,
@@ -22,7 +23,7 @@ import {
   createProject,
   getProject,
   listIssues,
-  setProjectStatus,
+  setProjectStatusFrom,
   statusHistory,
   takeOverListing,
 } from '../db';
@@ -58,6 +59,23 @@ async function tokenOf(caller: Caller): Promise<string> {
 
 function picksOurTag(tags: readonly string[] | undefined): boolean {
   return tags?.some((tag) => tag.toLowerCase() === OUR_LABEL.name) ?? false;
+}
+
+/** The repo where a project's tagged issues live: its issue repo, or the code repo. */
+function issueRepoOf(repo: string, settings: ProjectSettings): string {
+  return settings.issueRepo ?? repo;
+}
+
+/**
+ * Tagged issues in another repo become work for agents under this project's
+ * settings, so the caller must manage that repo too, asked of GitHub with
+ * their own token. requirePermission throws PermissionRefused, which the
+ * server answers as the tool's refusal, naming the issue repo.
+ */
+async function requireIssueRepo(caller: Caller, repo: string, issueRepo: string | null | undefined): Promise<void> {
+  if (issueRepo && issueRepo.toLowerCase() !== repo.toLowerCase()) {
+    await requirePermission(caller, 'manage_project', { repo: issueRepo });
+  }
 }
 
 /**
@@ -130,7 +148,8 @@ export async function registerProject(
   }
 
   const settings: ProjectSettings = input.settings;
-  const created = await labelsFor(token, repo, settings.tags, 'register_project');
+  await requireIssueRepo(caller, repo, settings.issueRepo);
+  const created = await labelsFor(token, issueRepoOf(repo, settings), settings.tags, 'register_project');
   if (!Array.isArray(created)) return answer(toolRefusal(created));
 
   for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
@@ -155,10 +174,22 @@ export async function updateProject(caller: Caller, input: ToolInput<'update_pro
   await requirePermission(caller, 'manage_project', { repo: input.repo });
   const project = await getProject(env.DB, input.repo);
   if (project === null) return notAProject(input.repo);
-  // Checked before GitHub is asked to make a label, so bad settings change nothing there.
+  // Replacing a listing's settings takes it over, which register_project does.
+  if (project.source === 'policy') {
+    return refuse(
+      'listed_from_policy',
+      `${project.repo} is listed from its AI policy. Take it over with register_project and your settings, then change them with update_project.`,
+    );
+  }
+  // Checked before GitHub is asked anything more, so bad settings change nothing there.
   const checked = updateProjectSettings(project.settings, input.settings);
   if (!checked.ok) return answer(toolRefusal(invalidSettings(checked.problems)));
-  const created = await labelsFor(await tokenOf(caller), project.repo, input.settings.tags, 'update_project');
+  await requireIssueRepo(caller, project.repo, input.settings.issueRepo);
+  // The label goes where the issues will live, when the change picks the tag or moves the issues.
+  const moves = input.settings.tags !== undefined || input.settings.issueRepo !== undefined;
+  const created = moves
+    ? await labelsFor(await tokenOf(caller), issueRepoOf(project.repo, checked.value), checked.value.tags, 'update_project')
+    : [];
   if (!Array.isArray(created)) return answer(toolRefusal(created));
 
   const change = await changeSettings(env.DB, project.repo, input.settings, caller.githubId, now);
@@ -208,57 +239,66 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
   );
 }
 
-function paused(project: ProjectRecord): Answer {
-  return answer(toolResult('pause_project', { repo: project.repo, status: project.status }));
+/** Who can lift the project's pause, or null when it isn't paused. */
+function resumableBy(project: ProjectRecord): 'maintainers' | 'admins' | null {
+  if (project.status !== 'paused') return null;
+  const by = project.statusChangedBy;
+  return by === null || adminGithubIds().has(by) ? 'admins' : 'maintainers';
 }
+
+function pauseAnswer(project: ProjectRecord, changed: boolean): Answer {
+  return answer(
+    toolResult('pause_project', { repo: project.repo, status: project.status, changed, resumableBy: resumableBy(project) }),
+  );
+}
+
+function notOpen(project: ProjectRecord): Answer {
+  const why =
+    project.status === 'rejected'
+      ? `${project.repo} was rejected, so agents can't claim its issues.`
+      : `${project.repo} is pending, so agents can't claim its issues yet.`;
+  return refuse('project_not_open', `${why} Only an approved project can be paused.`);
+}
+
+/** How many times a pause or resume is decided again when the status changed while it ran. */
+const STATUS_ATTEMPTS = 5;
 
 /**
  * Pauses an approved project, or resumes a paused one. A resume goes back to
  * the status the project had before the pause, so it never approves a
  * project. A pause Good First Token or one of its admins made stays until an
- * admin lifts it.
+ * admin lifts it. Each change lands only on the status it was decided on, so
+ * an admin's change that lands meanwhile is never overwritten. The call then
+ * decides again on the new status.
  */
 export async function pauseProject(caller: Caller, input: ToolInput<'pause_project'>, now: number): Promise<Answer> {
   await requirePermission(caller, 'manage_project', { repo: input.repo });
-  const project = await getProject(env.DB, input.repo);
-  if (project === null) return notAProject(input.repo);
-
-  if (input.paused) {
-    // Pausing again changes nothing, so a maintainer can't take over an admin's pause.
-    if (project.status === 'paused') return paused(project);
-    if (project.status !== 'approved') {
-      return refuse(
-        'project_not_open',
-        `${project.repo} is ${project.status}, so agents can't claim its issues yet. Only an approved project can be paused.`,
-      );
+  for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
+    const project = await getProject(env.DB, input.repo);
+    if (project === null) return notAProject(input.repo);
+    let change: { status: ProjectStatus; reason: string | null };
+    if (input.paused) {
+      // Pausing again changes nothing, so a maintainer never takes over someone else's pause.
+      if (project.status === 'paused') return pauseAnswer(project, false);
+      if (project.status !== 'approved') return notOpen(project);
+      change = { status: 'paused', reason: input.reason ?? null };
+    } else {
+      if (project.status !== 'paused') return pauseAnswer(project, false);
+      if (resumableBy(project) === 'admins') {
+        try {
+          await requirePermission(caller, 'pause_any_project');
+        } catch (error) {
+          if (!(error instanceof PermissionRefused)) throw error;
+          const who = project.statusChangedBy === null ? 'Good First Token' : 'A Good First Token admin';
+          return refuse(error.code, `${who} paused ${project.repo}. Only Good First Token's admins can resume it.`);
+        }
+      }
+      // The status before this pause, from the history, newest first.
+      const before = (await statusHistory(env.DB, project.repo)).find((c) => c.status !== 'paused');
+      change = { status: before?.status ?? 'pending', reason: before?.reason ?? null };
     }
-    const updated = await setProjectStatus(
-      env.DB,
-      project.repo,
-      { status: 'paused', reason: input.reason ?? null, changedBy: caller.githubId },
-      now,
-    );
-    return updated === null ? notAProject(input.repo) : paused(updated);
+    const updated = await setProjectStatusFrom(env.DB, project, { ...change, changedBy: caller.githubId }, now);
+    if (updated !== null) return pauseAnswer(updated, true);
   }
-
-  if (project.status !== 'paused') return paused(project);
-  const pausedBy = project.statusChangedBy;
-  if (pausedBy === null || adminGithubIds().has(pausedBy)) {
-    try {
-      await requirePermission(caller, 'pause_any_project');
-    } catch (error) {
-      if (!(error instanceof PermissionRefused)) throw error;
-      const who = pausedBy === null ? 'Good First Token' : 'A Good First Token admin';
-      return refuse(error.code, `${who} paused ${project.repo}. Only Good First Token's admins can resume it.`);
-    }
-  }
-  // The status before this pause, from the history, newest first.
-  const before = (await statusHistory(env.DB, project.repo)).find((change) => change.status !== 'paused');
-  const updated = await setProjectStatus(
-    env.DB,
-    project.repo,
-    { status: before?.status ?? 'pending', reason: before?.reason ?? null, changedBy: caller.githubId },
-    now,
-  );
-  return updated === null ? notAProject(input.repo) : paused(updated);
+  throw new Error(`${input.repo} kept changing status while it was paused or resumed.`);
 }

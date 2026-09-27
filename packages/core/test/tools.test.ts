@@ -6,11 +6,13 @@ import {
   tools,
   validate,
   type ToolName,
+  type ToolOutput,
   type Validated,
 } from '../src/index';
 import { samples } from './samples';
 
 const names = Object.keys(tools) as ToolName[];
+const repoName = samples.pause_project.output.repo;
 
 function textOf(result: { content: { text: string }[] }): string {
   return result.content.map((c) => c.text).join('\n');
@@ -148,8 +150,8 @@ describe('what each result says', () => {
   test('a saved registration says it waits for an admin, and names the label it created', () => {
     const saved = { ...samples.register_project.output, saved: true, status: 'pending' as const, createdLabels: ['goodfirsttoken'] };
     const text = textOf(toolResult('register_project', saved));
-    expect(text).toContain('Status: pending. A Good First Token admin reviews every new project.');
-    expect(text).toContain('Created 1 label in the repo: goodfirsttoken.');
+    expect(text).toContain('Status: pending. A Good First Token admin reviews it before agents can claim its issues.');
+    expect(text).toContain('Created 1 label in the issue repo: goodfirsttoken.');
     expect(text).not.toContain('Nothing is saved yet');
   });
 
@@ -158,6 +160,30 @@ describe('what each result says', () => {
     const text = textOf(toolResult('register_project', saved));
     expect(text).toContain('Status: approved. Your settings replace the ones it was listed with, and apply now.');
     expect(text).not.toContain('admin reviews');
+  });
+
+  test('taking over a paused listing says the settings wait for the pause to lift', () => {
+    const saved = { ...samples.register_project.output, saved: true, status: 'paused' as const };
+    const text = textOf(toolResult('register_project', saved));
+    expect(text).toContain('Status: paused. Your settings replace the ones it was listed with. Agents get no new claims on it until the pause is lifted.');
+    expect(text).not.toContain('apply now');
+  });
+
+  test("a pause says who can lift it, and a call that changed nothing says so", () => {
+    const pause = (output: Partial<ToolOutput<'pause_project'>>) =>
+      textOf(toolResult('pause_project', { ...samples.pause_project.output, ...output }));
+
+    expect(pause({})).toBe(
+      `Paused ${repoName}. Agents get no new claims on it until you resume it with pause_project and paused: false.`,
+    );
+    expect(pause({ changed: false, resumableBy: 'admins' })).toBe(
+      `${repoName} was already paused. Agents get no new claims on it until one of Good First Token's admins resumes it.`,
+    );
+    expect(pause({ changed: false })).toContain('was already paused.');
+    expect(pause({ status: 'approved', changed: true, resumableBy: null })).toBe(`Resumed ${repoName}. Status: approved.`);
+    expect(pause({ status: 'pending', changed: false, resumableBy: null })).toBe(
+      `${repoName} isn't paused, so nothing changed. Status: pending.`,
+    );
   });
 
   test('an empty suggestion list says so', () => {

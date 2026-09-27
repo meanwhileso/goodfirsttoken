@@ -6,6 +6,7 @@ import {
   projectSourceSchema,
   projectStatusSchema,
   settingKeySchema,
+  type ProjectStatus,
 } from '../projects';
 import { defineTool } from './spec';
 import { lines, plural, renderSettings } from './text';
@@ -14,13 +15,29 @@ import { lines, plural, renderSettings } from './text';
 // the caller is an admin or maintainer of the repo.
 
 function createdText(labels: readonly string[]): string | false {
-  return labels.length > 0 && `Created ${plural(labels.length, 'label')} in the repo: ${labels.join(', ')}.`;
+  return labels.length > 0 && `Created ${plural(labels.length, 'label')} in the issue repo: ${labels.join(', ')}.`;
 }
+
+function registeredText(repo: string, status: ProjectStatus): string {
+  switch (status) {
+    case 'pending':
+      return `Registered ${repo}. Status: pending. A Good First Token admin reviews it before agents can claim its issues. See the result with project_status.`;
+    case 'approved':
+      return `Registered ${repo}. Status: approved. Your settings replace the ones it was listed with, and apply now.`;
+    case 'paused':
+      return `Registered ${repo}. Status: paused. Your settings replace the ones it was listed with. Agents get no new claims on it until the pause is lifted.`;
+    case 'rejected':
+      return `Registered ${repo}. Status: rejected. See the reason with project_status.`;
+  }
+}
+
+/** Who can lift a pause. */
+const resumers = ['maintainers', 'admins'] as const;
 
 export const registerProject = defineTool({
   audience: 'maintainer',
   description:
-    "Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it. A repo listed from its AI policy takes your settings in place of the listing's and keeps its status. Pick the goodfirsttoken tag and the label is created in the repo with your GitHub account.",
+    "Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it. Registering a repo listed from its AI policy replaces the listing's settings with yours, and keeps its status, except that a rejected listing waits for an admin again. Set issueRepo only to a repo you also maintain. Pick the goodfirsttoken tag and the label is created in the issue repo with your GitHub account.",
   input: z.object({
     repo: repoName,
     settings: projectSettingsSchema
@@ -31,20 +48,22 @@ export const registerProject = defineTool({
     repo: repoName,
     /** False for a proposal. Nothing is saved until the settings come back. */
     saved: z.boolean(),
-    /** `pending` once saved, null for a proposal. */
+    /**
+     * The status once saved: `pending` for a new registration, or the status a
+     * listing made from a policy keeps when its maintainer takes it over. Null
+     * for a proposal.
+     */
     status: projectStatusSchema.nullable(),
     settings: projectSettingsSchema,
     /** Why the server proposed a value, from what it read in the repo. */
     reasons: z.array(z.object({ setting: settingKeySchema, reason: z.string() })),
-    /** Labels created in the repo with the maintainer's own login. */
+    /** Labels created in the issue repo with the maintainer's own login. */
     createdLabels: z.array(labelName),
   }),
   text: (out) =>
     out.saved
       ? lines(
-          (out.status ?? 'pending') === 'pending'
-            ? `Registered ${out.repo}. Status: pending. A Good First Token admin reviews every new project. See the result with project_status.`
-            : `Registered ${out.repo}. Status: ${out.status ?? 'pending'}. Your settings replace the ones it was listed with, and apply now.`,
+          registeredText(out.repo, out.status ?? 'pending'),
           createdText(out.createdLabels),
           renderSettings(out.settings),
         )
@@ -58,7 +77,7 @@ export const registerProject = defineTool({
 export const updateProject = defineTool({
   audience: 'maintainer',
   description:
-    "Change some of a project's settings. Settings left out keep their value. Changes apply at once and show on the project page with who made them. Pick the goodfirsttoken tag and the label is created in the repo with your GitHub account.",
+    "Change some of a registered project's settings. Settings left out keep their value. Changes apply at once and show on the project page with who made them. Set issueRepo only to a repo you also maintain. Pick the goodfirsttoken tag and the label is created in the issue repo with your GitHub account. A project listed from its AI policy is refused: take it over with register_project first.",
   input: z.object({ repo: repoName, settings: projectSettingsPatchSchema }),
   output: z.object({
     repo: repoName,
@@ -66,7 +85,7 @@ export const updateProject = defineTool({
     settings: projectSettingsSchema,
     /** The settings whose value changed. */
     changed: z.array(settingKeySchema),
-    /** Labels created in the repo with the maintainer's own login. */
+    /** Labels created in the issue repo with the maintainer's own login. */
     createdLabels: z.array(labelName),
   }),
   text: (out) =>
@@ -123,9 +142,28 @@ export const pauseProject = defineTool({
     paused: z.boolean().default(true),
     reason: trimmedText(500).optional().describe('Why, shown on the project page.'),
   }),
-  output: z.object({ repo: repoName, status: projectStatusSchema }),
-  text: (out) =>
-    out.status === 'paused'
-      ? `Paused ${out.repo}. Agents get no new claims on it until you resume it with pause_project and paused: false.`
-      : `Resumed ${out.repo}. Status: ${out.status}.`,
+  output: z.object({
+    repo: repoName,
+    status: projectStatusSchema,
+    /** Whether this call paused or resumed the project. False when it was already as asked. */
+    changed: z.boolean(),
+    /**
+     * Who can resume a paused project: its maintainers, or only Good First
+     * Token's admins, for a pause an admin or Good First Token made. Null
+     * when the project isn't paused.
+     */
+    resumableBy: z.enum(resumers).nullable(),
+  }),
+  text: (out) => {
+    if (out.status !== 'paused') {
+      return out.changed
+        ? `Resumed ${out.repo}. Status: ${out.status}.`
+        : `${out.repo} isn't paused, so nothing changed. Status: ${out.status}.`;
+    }
+    const until =
+      out.resumableBy === 'admins'
+        ? "Agents get no new claims on it until one of Good First Token's admins resumes it."
+        : 'Agents get no new claims on it until you resume it with pause_project and paused: false.';
+    return `${out.changed ? `Paused ${out.repo}.` : `${out.repo} was already paused.`} ${until}`;
+  },
 });

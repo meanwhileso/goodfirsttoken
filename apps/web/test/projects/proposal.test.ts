@@ -106,3 +106,29 @@ test('the first https link on a line about the CLA is the CLA link', () => {
 test('a CLA line with no https link sets no CLA', () => {
   expect(proposeSettings(['help wanted'], docs({ contributing: 'No CLA is needed.' })).settings).not.toHaveProperty('claUrl');
 });
+
+test('a CLA link ending in punctuation loses the punctuation', () => {
+  const { settings } = proposeSettings(['help wanted'], docs({ contributing: 'Sign the CLA at https://cla.example.org/sample-app...' }));
+
+  expect(settings.claUrl).toBe('https://cla.example.org/sample-app');
+});
+
+test('a file of one long line with no period is read in time that grows with its length alone', () => {
+  // About 105 KB of the phrase over and over, once with the words after it
+  // only at the end and once with no words at all, and a CLA line of 100 KB
+  // whose link ends in a run of dots and a letter.
+  const phrases = 'PR description '.repeat(7_000);
+  const link = `https://cla.example.org/${'.'.repeat(100_000)}x`;
+  const started = performance.now();
+
+  const found = proposeSettings(['help wanted'], docs({ contributing: `${phrases}by hand`, agents: `CLA ${link}` }));
+  const none = proposeSettings(['help wanted'], docs({ contributing: phrases }));
+
+  // Read in one pass, all three take a few milliseconds. Read by a pattern
+  // that tries every start position again, the ones that find nothing took
+  // most of a second or more each.
+  expect(performance.now() - started).toBeLessThan(200);
+  expect(found.settings.personWrittenDescription).toBe(true);
+  expect(found.settings.claUrl).toBe(link);
+  expect(none.settings).not.toHaveProperty('personWrittenDescription');
+});

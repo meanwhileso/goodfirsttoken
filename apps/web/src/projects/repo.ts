@@ -13,9 +13,9 @@ export interface RepoFacts {
   /** `public`, `private`, or `internal`, when GitHub says. */
   visibility: string | null;
   archived: boolean;
-  /** Whether the repo takes pull requests at all. */
-  hasPullRequests: boolean;
-  /** Who can open a pull request: `all` or `collaborators_only`. */
+  /** Whether the repo takes pull requests at all, or null when GitHub didn't say. */
+  hasPullRequests: boolean | null;
+  /** Who can open a pull request, `all` or `collaborators_only`, or null when GitHub didn't say. */
   pullRequestCreationPolicy: string | null;
 }
 
@@ -36,23 +36,30 @@ export async function readRepo(token: string, repo: string): Promise<RepoFacts> 
     private: found.private,
     visibility: found.visibility ?? null,
     archived: found.archived,
-    hasPullRequests: found.has_pull_requests === true,
+    hasPullRequests: typeof found.has_pull_requests === 'boolean' ? found.has_pull_requests : null,
     pullRequestCreationPolicy: found.pull_request_creation_policy ?? null,
   };
 }
 
 /**
  * Why the repo can't be registered, or null when it can: it must be public,
- * not archived, and take pull requests from anyone. A setting GitHub leaves
- * out counts against the repo, so a repo is never let in on a guess.
+ * not archived, and take pull requests from anyone. GitHub documents both
+ * pull request fields for a repo, but its schema doesn't promise them, so a
+ * repo GitHub says nothing about on either is refused. A repo is never let in
+ * on a guess.
  */
 export function whyNotEligible(facts: RepoFacts): string | null {
   const name = facts.fullName;
+  const fromAnyone = 'Only a repo that takes pull requests from anyone can be registered.';
   if (facts.private || (facts.visibility !== null && facts.visibility !== 'public')) {
     return `${name} is not public. Only public repos can be registered.`;
   }
   if (facts.archived) return `${name} is archived on GitHub. Only a repo that takes changes can be registered.`;
+  if (facts.hasPullRequests === null) return `GitHub didn't say whether ${name} takes pull requests. ${fromAnyone}`;
   if (!facts.hasPullRequests) return `${name} has pull requests turned off on GitHub. Turn them on to register it.`;
+  if (facts.pullRequestCreationPolicy === null) {
+    return `GitHub didn't say who can open pull requests on ${name}. ${fromAnyone}`;
+  }
   if (facts.pullRequestCreationPolicy !== 'all') {
     return `${name} lets only collaborators open pull requests. Let anyone open them on GitHub to register it.`;
   }

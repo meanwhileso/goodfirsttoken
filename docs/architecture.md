@@ -300,7 +300,9 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   reads the repo a second time for what it checks: visibility, archived,
   and who can open PRs. `requirePermission` returns nothing, and changing it
   to hand back the repo would tie every permission to one tool's needs. The
-  second read costs one call to GitHub for each registration.
+  second read costs one call to GitHub for each registration. An issue repo
+  other than the code repo goes through the same check, once more, with
+  that repo.
 - **Refusals and lost tokens.** `asCaller` in `src/mcp/server.ts` runs every
   tool. It turns a `PermissionRefused` into the tool's refusal, and a GitHub
   `401` from any call into the end of the connection, as `start_session`
@@ -319,21 +321,28 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   case, and the rules match these names without it, so the listing is
   matched in code. Labels come from the REST API, 100 to a page.
 - **The label is read before it is made.** `createOurLabel` asks for the
-  label by name, which GitHub matches without case, and creates it only on
-  a `404`. A `422` on the create means someone made it meanwhile, which a
-  second read confirms. It runs before the save, so a refusal from GitHub
-  leaves nothing saved, and only after the settings passed their checks.
+  label by name and creates it only on a `404`, and a `422` on the create
+  is read again. When it runs, and what it does on a refusal, is under
+  [the goodfirsttoken label](how-it-works.md#registering-a-project).
 - **Taking over a listing** is `takeOverListing` in `src/db/projects.ts`. In
-  one batch it adds the new settings version, when the settings changed,
-  and sets the project's source, policy, and who added it. Both statements
-  check that the row is still a policy listing at the version read, and the
-  save retries like `changeSettings`. A new registration uses
-  `createProject`, whose insert does nothing when the repo became a project
-  meanwhile, so the tool reads again and takes over or refuses.
+  one batch it adds the new settings version, when the settings changed, a
+  status change for a rejected listing, and sets the project's source,
+  policy, who added it, and status. Every statement checks that the row is
+  still a policy listing at the version and status read, and the save
+  retries like `changeSettings`. A new registration uses `createProject`,
+  whose insert does nothing when the repo became a project meanwhile, so
+  the tool reads again and takes over or refuses.
+- **A pause or resume is a compare-and-set.** `setProjectStatusFrom` writes
+  the new status only while the project's status, reason, who set it, and
+  when are the ones read, the way `changeSettings` checks the settings
+  version. On a mismatch it writes nothing, and `pause_project` reads the
+  project again and decides again, up to five times. `setProjectStatus`, for
+  the admin's tools, still writes whenever the status or reason differs.
 - **Resuming reads the status history,** newest first, for the change
-  before the pause. The project's row holds only its current status.
-  Whether the pause was an admin's is read from `ADMIN_GITHUB_IDS` when the
-  maintainer resumes, since a status change keeps who made it and no role.
+  before the pause. The project's row holds only its current status. A
+  status change keeps who made it and no role, so whether a pause was an
+  admin's is worked out when the maintainer resumes, as
+  [Managing a project](how-it-works.md#managing-a-project) says.
 
 ### The design system
 

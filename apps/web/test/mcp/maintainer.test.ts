@@ -5,6 +5,7 @@ import {
   addPr,
   createProject,
   getProject,
+  listProjectsByIssueRepo,
   savePerson,
   saveClaim,
   saveIssues,
@@ -30,6 +31,8 @@ const configuredAdmins = env.ADMIN_GITHUB_IDS;
 const admin = { githubId: 9001, login: 'sample-admin' };
 const HARBOR = 'sample-owner/sample-harbor';
 const APP_REPO = 'sample-owner/sample-app';
+const TOOLS = 'sample-owner/sample-tools';
+const BUNDLER = 'sample-owner/sample-bundler';
 
 beforeEach(async () => {
   await emptyDatabase();
@@ -77,7 +80,7 @@ function hasLabel(name: string, label: string): boolean {
 }
 
 /** A listing an admin made from the repo's AI policy. */
-async function policyListing(repo: string, status: 'approved' | 'paused' = 'approved') {
+async function policyListing(repo: string, status: 'approved' | 'paused' | 'rejected' = 'approved') {
   await savePerson(env.DB, admin, Date.now());
   await createProject(
     env.DB,
@@ -98,6 +101,39 @@ async function policyListing(repo: string, status: 'approved' | 'paused' = 'appr
   if (status === 'paused') {
     await setProjectStatus(env.DB, repo, { status: 'paused', reason: 'Checking the policy.', changedBy: admin.githubId }, Date.now());
   }
+  if (status === 'rejected') {
+    await setProjectStatus(env.DB, repo, { status: 'rejected', reason: 'The policy changed.', changedBy: admin.githubId }, Date.now());
+  }
+}
+
+/** GitHub's answer for the repo itself, changed the way GitHub could send it. */
+function repoAnswer(repo: string, change: (body: Record<string, unknown>) => void): void {
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const response = await github.fetch(request);
+    if (request.method !== 'GET' || new URL(request.url).pathname !== `/repos/${repo}`) return response;
+    const body = await response.json<Record<string, unknown>>();
+    change(body);
+    return Response.json(body, { status: response.status });
+  });
+}
+
+/** GitHub refusing to create labels, as an organization's OAuth app access restrictions do. */
+function refuseLabels(): void {
+  vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/labels')) {
+      return Promise.resolve(
+        Response.json({ message: 'the sample-owner organization has enabled OAuth App access restrictions' }, { status: 403 }),
+      );
+    }
+    return github.fetch(request);
+  });
+}
+
+async function approve(repo: string): Promise<void> {
+  await savePerson(env.DB, admin, Date.now());
+  await setProjectStatus(env.DB, repo, { status: 'approved', reason: null, changedBy: admin.githubId }, Date.now());
 }
 
 describe('register_project', () => {
@@ -134,7 +170,7 @@ describe('register_project', () => {
     });
 
     expect(result.structuredContent).toMatchObject({ repo: HARBOR, saved: true, status: 'pending', createdLabels: [] });
-    expect(textOf(result)).toContain('A Good First Token admin reviews every new project.');
+    expect(textOf(result)).toContain('A Good First Token admin reviews it before agents can claim its issues.');
     expect(await getProject(env.DB, HARBOR)).toMatchObject({
       status: 'pending',
       source: 'registered',
@@ -243,7 +279,7 @@ describe('register_project', () => {
     const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['goodfirsttoken'] } });
 
     expect(result.structuredContent).toMatchObject({ saved: true, createdLabels: ['goodfirsttoken'] });
-    expect(textOf(result)).toContain('Created 1 label in the repo: goodfirsttoken.');
+    expect(textOf(result)).toContain('Created 1 label in the issue repo: goodfirsttoken.');
     expect(sampleRepo(APP_REPO).labels.find((l) => l.name === 'goodfirsttoken')).toMatchObject({
       color: '7057ff',
       description: 'Tagged for outside help through Good First Token',
@@ -276,16 +312,7 @@ describe('register_project', () => {
 
   test('when GitHub refuses to create the label with the caller\'s token, nothing is saved and the refusal says why', async () => {
     const agent = await connectAgent(github, 'sample-maintainer');
-    // An organization's OAuth app access restrictions refuse writes this way.
-    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
-      const request = new Request(input, init);
-      if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/labels')) {
-        return Promise.resolve(
-          Response.json({ message: 'the sample-owner organization has enabled OAuth App access restrictions' }, { status: 403 }),
-        );
-      }
-      return github.fetch(request);
-    });
+    refuseLabels();
 
     const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['goodfirsttoken'] } });
 
@@ -293,6 +320,65 @@ describe('register_project', () => {
       'Refused (label_not_created): GitHub refused to create the goodfirsttoken label in sample-owner/sample-app with your token (403: the sample-owner organization has enabled OAuth App access restrictions). Nothing was saved. Create the label in the repo on GitHub, or pick another tag, then call register_project again.',
     );
     expect(await getProject(env.DB, APP_REPO)).toBeNull();
+  });
+
+  test('a repo GitHub describes without saying whether it takes pull requests, or who can open them, is refused', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    repoAnswer(APP_REPO, (body) => Reflect.deleteProperty(body, 'has_pull_requests'));
+    const noPulls = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+    repoAnswer(APP_REPO, (body) => Reflect.deleteProperty(body, 'pull_request_creation_policy'));
+    const noPolicy = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(noPulls)).toBe(
+      `Refused (repo_not_eligible): GitHub didn't say whether ${APP_REPO} takes pull requests. Only a repo that takes pull requests from anyone can be registered.`,
+    );
+    expect(textOf(noPolicy)).toBe(
+      `Refused (repo_not_eligible): GitHub didn't say who can open pull requests on ${APP_REPO}. Only a repo that takes pull requests from anyone can be registered.`,
+    );
+    expect(await getProject(env.DB, APP_REPO)).toBeNull();
+  });
+
+  test('a repo GitHub gives a visibility other than public is refused, even when it says the repo is not private', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    repoAnswer(APP_REPO, (body) => {
+      body.visibility = 'internal';
+    });
+
+    const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(result)).toBe(`Refused (repo_not_eligible): ${APP_REPO} is not public. Only public repos can be registered.`);
+    expect(await getProject(env.DB, APP_REPO)).toBeNull();
+  });
+
+  test('an issue repo the caller does not maintain is refused, and nothing is saved or created', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const result = await call(agent, 'register_project', {
+      repo: APP_REPO,
+      settings: { tags: ['goodfirsttoken'], issueRepo: HARBOR },
+    });
+
+    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can do this.`);
+    expect(await getProject(env.DB, APP_REPO)).toBeNull();
+    expect(hasLabel(HARBOR, 'goodfirsttoken')).toBe(false);
+    expect(hasLabel(APP_REPO, 'goodfirsttoken')).toBe(false);
+  });
+
+  test('a caller who maintains both repos can keep issues in the other one, and the label goes there', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    const start = github.calls.length;
+
+    const result = await call(agent, 'register_project', {
+      repo: APP_REPO,
+      settings: { tags: ['goodfirsttoken'], issueRepo: TOOLS },
+    });
+
+    expect(result.structuredContent).toMatchObject({ saved: true, createdLabels: ['goodfirsttoken'], settings: { issueRepo: TOOLS } });
+    expect(hasLabel(TOOLS, 'goodfirsttoken')).toBe(true);
+    expect(hasLabel(APP_REPO, 'goodfirsttoken')).toBe(false);
+    // The issue repo's permission is asked of GitHub with the caller's token too.
+    const reads = github.calls.slice(start).filter((c) => c.operation === 'GET /repos/{owner}/{repo}');
+    expect(reads.map((c) => [new URL(c.url).pathname, c.login])).toContainEqual([`/repos/${TOOLS}`, 'sample-maintainer']);
   });
 
   test('a repo already registered is refused, and keeps its settings', async () => {
@@ -332,7 +418,26 @@ describe('register_project', () => {
     const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
 
     expect(result.structuredContent).toMatchObject({ status: 'paused' });
+    expect(textOf(result)).toContain('Agents get no new claims on it until the pause is lifted.');
+    expect(textOf(result)).not.toContain('apply now');
     expect(await getProject(env.DB, APP_REPO)).toMatchObject({ status: 'paused', statusChangedBy: admin.githubId });
+  });
+
+  test('a rejected listing taken over by its maintainer goes back to pending, so an admin reviews it again', async () => {
+    await policyListing(APP_REPO, 'rejected');
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+
+    expect(result.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(textOf(result)).toContain('A Good First Token admin reviews it before agents can claim its issues.');
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({
+      source: 'registered',
+      status: 'pending',
+      statusReason: null,
+      statusChangedBy: 1009,
+    });
+    expect((await statusHistory(env.DB, APP_REPO))[0]).toMatchObject({ status: 'pending', reason: null, changedBy: 1009 });
   });
 });
 
@@ -374,17 +479,66 @@ describe('update_project', () => {
     expect(await settingsHistory(env.DB, HARBOR)).toHaveLength(1);
   });
 
-  test("a maintainer's update to a listing made from its policy replaces those settings, recorded as theirs", async () => {
+  test('a listing made from a policy is refused, and the refusal says to take it over with register_project', async () => {
     await policyListing(APP_REPO);
     const agent = await connectAgent(github, 'sample-maintainer');
 
-    const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { prMode: 'reviewed', agentNotes: '' } });
+    const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { prMode: 'reviewed' } });
 
-    expect(result.structuredContent).toMatchObject({ changed: ['prMode', 'agentNotes'], status: 'approved' });
-    expect(await getProject(env.DB, APP_REPO)).toMatchObject({
-      settings: { tags: ['contribution welcome'], prMode: 'reviewed', agentNotes: '' },
+    expect(textOf(result)).toBe(
+      `Refused (listed_from_policy): ${APP_REPO} is listed from its AI policy. Take it over with register_project and your settings, then change them with update_project.`,
+    );
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ source: 'policy', settings: { prMode: 'automatic' } });
+    expect(await settingsHistory(env.DB, APP_REPO)).toHaveLength(1);
+  });
+
+  test('an issue repo the caller does not maintain is refused in an update, and the project keeps its own', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+    await approve(APP_REPO);
+
+    const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { issueRepo: HARBOR } });
+
+    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can do this.`);
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ settings: { issueRepo: null } });
+    expect(await listProjectsByIssueRepo(env.DB, HARBOR)).toEqual([]);
+  });
+
+  test('moving the issues to another repo the caller maintains creates the label there when the tags pick it', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['goodfirsttoken'], issueRepo: TOOLS } });
+
+    const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { issueRepo: BUNDLER } });
+
+    expect(result.structuredContent).toMatchObject({ changed: ['issueRepo'], createdLabels: ['goodfirsttoken'] });
+    expect(hasLabel(BUNDLER, 'goodfirsttoken')).toBe(true);
+    expect((await listProjectsByIssueRepo(env.DB, BUNDLER)).map((p) => p.repo)).toEqual([APP_REPO]);
+  });
+
+  test('when GitHub refuses to create the label in an update, nothing is saved', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+    refuseLabels();
+
+    const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { tags: ['goodfirsttoken'] } });
+
+    expect(textOf(result)).toMatch(/^Refused \(label_not_created\): .* then call update_project again\.$/);
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ settingsVersion: 1, settings: { tags: ['help wanted'] } });
+  });
+
+  test('settings that break a rule are refused before GitHub is asked for a label', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+    const start = github.calls.length;
+
+    const result = await call(agent, 'update_project', {
+      repo: APP_REPO,
+      settings: { tags: ['goodfirsttoken'], excludedTags: ['GoodFirstToken'] },
     });
-    expect((await settingsHistory(env.DB, APP_REPO))[0]).toMatchObject({ changedBy: 1009, changed: ['prMode', 'agentNotes'] });
+
+    expect(textOf(result)).toMatch(/^Refused \(invalid_settings\)/);
+    expect(github.calls.slice(start).filter((c) => c.operation.includes('/labels'))).toEqual([]);
+    expect(hasLabel(APP_REPO, 'goodfirsttoken')).toBe(false);
   });
 
   test('picking the goodfirsttoken tag in an update creates the label', async () => {
@@ -557,8 +711,7 @@ describe('project_status', () => {
 describe('pause_project', () => {
   async function approved(agent: ConnectedAgent, repo = HARBOR) {
     await call(agent, 'register_project', { repo, settings: { tags: ['help wanted'] } });
-    await savePerson(env.DB, admin, Date.now());
-    await setProjectStatus(env.DB, repo, { status: 'approved', reason: null, changedBy: admin.githubId }, Date.now());
+    await approve(repo);
   }
 
   test('a maintainer pauses an approved project with a reason, and resuming makes it approved again', async () => {
@@ -568,8 +721,8 @@ describe('pause_project', () => {
     const paused = await call(agent, 'pause_project', { repo: HARBOR, reason: 'Release week.' });
     const resumed = await call(agent, 'pause_project', { repo: HARBOR, paused: false });
 
-    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused' });
-    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'approved' });
+    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, resumableBy: 'maintainers' });
+    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, resumableBy: null });
     expect(await statusHistory(env.DB, HARBOR)).toMatchObject([
       { status: 'approved', reason: null, changedBy: 1008 },
       { status: 'paused', reason: 'Release week.', changedBy: 1008 },
@@ -590,6 +743,33 @@ describe('pause_project', () => {
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'pending' });
   });
 
+  test('pausing a rejected project is refused, and says it was rejected', async () => {
+    const agent = await connectAgent(github, 'octo-maintainer');
+    await call(agent, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+    await savePerson(env.DB, admin, Date.now());
+    await setProjectStatus(env.DB, HARBOR, { status: 'rejected', reason: 'Spam.', changedBy: admin.githubId }, Date.now());
+
+    const result = await call(agent, 'pause_project', { repo: HARBOR });
+
+    expect(textOf(result)).toBe(
+      `Refused (project_not_open): ${HARBOR} was rejected, so agents can't claim its issues. Only an approved project can be paused.`,
+    );
+  });
+
+  test("someone who isn't a maintainer of the repo can neither pause nor resume it, and its status stays", async () => {
+    const owner = await connectAgent(github, 'octo-maintainer');
+    await approved(owner);
+    const donor = await connectAgent(github, 'priya');
+
+    const pause = await call(donor, 'pause_project', { repo: HARBOR });
+    await call(owner, 'pause_project', { repo: HARBOR, reason: 'Release week.' });
+    const resume = await call(donor, 'pause_project', { repo: HARBOR, paused: false });
+
+    expect([pause, resume].map((r) => textOf(r).slice(0, 25))).toEqual(['Refused (not_maintainer):', 'Refused (not_maintainer):']);
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusReason: 'Release week.', statusChangedBy: 1008 });
+    expect(await statusHistory(env.DB, HARBOR)).toHaveLength(3);
+  });
+
   test('resuming goes back to the status before the pause, so it never approves a project', async () => {
     const agent = await connectAgent(github, 'octo-maintainer');
     await call(agent, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
@@ -597,7 +777,7 @@ describe('pause_project', () => {
 
     const resumed = await call(agent, 'pause_project', { repo: HARBOR, paused: false });
 
-    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'pending' });
+    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'pending', changed: true, resumableBy: null });
   });
 
   test("a pause an admin or Good First Token made stays until an admin lifts it, and pausing again doesn't take it over", async () => {
@@ -611,7 +791,8 @@ describe('pause_project', () => {
     await setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'The repo was archived.', changedBy: null }, Date.now());
     const byGoodFirstToken = await call(agent, 'pause_project', { repo: HARBOR, paused: false });
 
-    expect(repause.structuredContent).toEqual({ repo: HARBOR, status: 'paused' });
+    expect(repause.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: false, resumableBy: 'admins' });
+    expect(textOf(repause)).not.toContain('paused: false');
     expect(textOf(byAdmin)).toBe(
       `Refused (not_admin): A Good First Token admin paused ${HARBOR}. Only Good First Token's admins can resume it.`,
     );
@@ -627,7 +808,48 @@ describe('pause_project', () => {
 
     const result = await call(agent, 'pause_project', { repo: HARBOR, paused: false });
 
-    expect(result.structuredContent).toEqual({ repo: HARBOR, status: 'approved' });
+    expect(result.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: false, resumableBy: null });
+    expect(textOf(result)).not.toContain('Resumed');
     expect(await statusHistory(env.DB, HARBOR)).toHaveLength(2);
+  });
+
+  /** Runs `meanwhile` just before the first write to the database, as if it landed between the tool's read and write. */
+  function beforeTheWrite(meanwhile: () => Promise<unknown>): void {
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+      await meanwhile();
+      return batch(statements);
+    });
+  }
+
+  test("a pause that lands while a maintainer's pause is on its way stays the admin's", async () => {
+    const agent = await connectAgent(github, 'octo-maintainer');
+    await approved(agent);
+    env.ADMIN_GITHUB_IDS = String(admin.githubId);
+    beforeTheWrite(() =>
+      setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'Spam reports.', changedBy: admin.githubId }, Date.now()),
+    );
+
+    const result = await call(agent, 'pause_project', { repo: HARBOR, reason: 'Release week.' });
+
+    expect(result.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: false, resumableBy: 'admins' });
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ statusReason: 'Spam reports.', statusChangedBy: admin.githubId });
+  });
+
+  test("an admin's pause that lands while a maintainer's resume is on its way is not lifted", async () => {
+    const agent = await connectAgent(github, 'octo-maintainer');
+    await approved(agent);
+    env.ADMIN_GITHUB_IDS = String(admin.githubId);
+    await call(agent, 'pause_project', { repo: HARBOR, reason: 'Release week.' });
+    beforeTheWrite(() =>
+      setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'Spam reports.', changedBy: admin.githubId }, Date.now()),
+    );
+
+    const result = await call(agent, 'pause_project', { repo: HARBOR, paused: false });
+
+    expect(textOf(result)).toBe(
+      `Refused (not_admin): A Good First Token admin paused ${HARBOR}. Only Good First Token's admins can resume it.`,
+    );
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: admin.githubId });
   });
 });

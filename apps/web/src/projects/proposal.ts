@@ -29,9 +29,30 @@ function meansReady(label: string): boolean {
 // A trailer the files name for AI help, followed by a colon, as in
 // "Disclose it with an Assisted-by: trailer".
 const TRAILER = /(?<![A-Za-z0-9-])(assisted-by|generated-by):/i;
-const PERSON_WRITTEN = /\b(?:PR|pull request) description\b[^.\n]*\b(?:yourself|by hand|in your own words)\b/i;
+// Each pattern below is matched once per sentence or line, and none of them
+// can try a start again after it fails, so the time a file takes grows with
+// its length alone.
+const DESCRIPTION = /\b(?:PR|pull request) description\b/i;
+const BY_THE_CONTRIBUTOR = /\b(?:yourself|by hand|in your own words)\b/i;
 const CLA = /\bCLA\b|contributor license agreement/i;
 const LINK = /https:\/\/[^\s<>()[\]"'`]+/;
+const CLOSING = '.,;:!?';
+
+/** Whether a sentence names the PR description, then says the contributor writes it. */
+function personWritten(text: string): true | null {
+  for (const sentence of text.split(/[.\n]/)) {
+    const named = DESCRIPTION.exec(sentence);
+    if (named && BY_THE_CONTRIBUTOR.test(sentence.slice(named.index + named[0].length))) return true;
+  }
+  return null;
+}
+
+/** The link without the punctuation that closes the sentence around it. */
+function trimClosing(link: string): string {
+  let end = link.length;
+  while (end > 0 && CLOSING.includes(link.charAt(end - 1))) end--;
+  return link.slice(0, end);
+}
 
 /** The first file, in the order the rules read them, whose text gives a match. */
 function firstMatch<T>(files: RepoFile[], find: (text: string) => T | null): { file: RepoFile; found: T } | null {
@@ -45,7 +66,8 @@ function firstMatch<T>(files: RepoFile[], find: (text: string) => T | null): { f
 function claLink(text: string): string | null {
   for (const line of text.split('\n')) {
     if (!CLA.test(line)) continue;
-    const link = LINK.exec(line)?.[0].replace(/[.,;:!?]+$/, '');
+    const found = LINK.exec(line)?.[0];
+    const link = found === undefined ? undefined : trimClosing(found);
     if (link !== undefined && httpsUrl.safeParse(link).success) return link;
   }
   return null;
@@ -75,12 +97,12 @@ export function proposeSettings(labels: readonly string[], docs: RepoDocs): Prop
     reasons.push({ setting: 'disclosure', reason: `${trailer.file.path} names the ${trailer.found} trailer` });
   }
 
-  const personWritten = firstMatch(files, (text) => (PERSON_WRITTEN.test(text) ? true : null));
-  if (personWritten !== null) {
+  const written = firstMatch(files, personWritten);
+  if (written !== null) {
     settings.personWrittenDescription = true;
     reasons.push({
       setting: 'personWrittenDescription',
-      reason: `${personWritten.file.path} asks contributors to write the PR description themselves`,
+      reason: `${written.file.path} asks contributors to write the PR description themselves`,
     });
   }
 
