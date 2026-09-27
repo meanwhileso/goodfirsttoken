@@ -1,5 +1,6 @@
 // A slice of GitHub's GraphQL API: reading files from many repos in one
-// query, and createCommitOnBranch. The schema below copies the names and
+// query, issues with the open PRs that close them, pull requests, and
+// createCommitOnBranch. The schema below copies the names and
 // types of GitHub's own, so a query that works here works on GitHub. Queries
 // run through graphql-js, so aliases, fragments, variables, and validation
 // errors behave as they do on GitHub.
@@ -12,20 +13,26 @@
 // https://docs.github.com/en/graphql/reference/git#object-ref
 // https://docs.github.com/en/graphql/reference/commits#object-commit
 // https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch
+// https://docs.github.com/en/graphql/reference/issues#object-issue
+// https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
-import { base64ToBytes, blobText, lookupPath, type GitPerson, type Oid } from './git.ts';
+import { base64ToBytes, blobText, bytesToBase64, lookupPath, type GitPerson, type Oid } from './git.ts';
 import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
 import {
   FakeError,
   canPush,
   canSee,
+  closingPulls,
   commitOnBranch,
   findAccount,
+  findIssue,
   findRepo,
   findRepoByFullName,
   fullName,
   roleOf,
+  type IssueRecord,
+  type PullData,
   type RepoRecord,
 } from './state.ts';
 
@@ -47,6 +54,24 @@ const schema = buildSchema(/* GraphQL */ `
   enum GitSignatureState {
     VALID
     INVALID
+  }
+
+  enum IssueState {
+    OPEN
+    CLOSED
+  }
+
+  enum PullRequestState {
+    OPEN
+    CLOSED
+    MERGED
+  }
+
+  type PageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
   }
 
   interface Node {
@@ -99,6 +124,51 @@ const schema = buildSchema(/* GraphQL */ `
     defaultBranchRef: Ref
     ref(qualifiedName: String!): Ref
     object(expression: String, oid: GitObjectID): GitObject
+    issue(number: Int!): Issue
+    pullRequest(number: Int!): PullRequest
+  }
+
+  type Issue implements Node {
+    id: ID!
+    databaseId: Int
+    number: Int!
+    title: String!
+    url: URI!
+    state: IssueState!
+    createdAt: DateTime!
+    repository: Repository!
+    closedByPullRequestsReferences(
+      after: String
+      before: String
+      first: Int
+      last: Int
+      includeClosedPrs: Boolean = false
+      orderByState: Boolean = false
+      userLinkedOnly: Boolean = false
+      excludeUserLinked: Boolean = false
+    ): PullRequestConnection
+  }
+
+  type PullRequest implements Node {
+    id: ID!
+    databaseId: Int
+    number: Int!
+    title: String!
+    url: URI!
+    state: PullRequestState!
+    isDraft: Boolean!
+    merged: Boolean!
+    mergedAt: DateTime
+    closedAt: DateTime
+    createdAt: DateTime!
+    baseRefName: String!
+    repository: Repository!
+  }
+
+  type PullRequestConnection {
+    totalCount: Int!
+    nodes: [PullRequest]
+    pageInfo: PageInfo!
   }
 
   type Ref implements Node {
@@ -298,6 +368,100 @@ function repositoryNode(ctx: Ctx, repo: RepoRecord) {
     ref: ({ qualifiedName }: { qualifiedName: string }) => refNode(ctx, repo, qualifiedName.replace(/^refs\/heads\//, '')),
     object: ({ expression, oid }: { expression?: string; oid?: string }) =>
       oid !== undefined ? objectNode(ctx, repo, resolveRev(ctx, repo, oid), '') : objectAt(ctx, repo, expression ?? ''),
+    // A number that belongs to a PR is no issue, and one that belongs to an
+    // issue is no PR, as on GitHub.
+    issue: ({ number }: { number: number }) => {
+      const issue = findIssue(repo, number);
+      if (!issue || issue.pull) throw fail('NOT_FOUND', `Could not resolve to an Issue with the number of ${String(number)}.`);
+      return issueNode(ctx, repo, issue);
+    },
+    pullRequest: ({ number }: { number: number }) => {
+      const issue = findIssue(repo, number);
+      if (!issue?.pull) throw fail('NOT_FOUND', `Could not resolve to a PullRequest with the number of ${String(number)}.`);
+      return pullRequestNode(ctx, repo, issue as IssueRecord & { pull: PullData });
+    },
+  };
+}
+
+// GitHub asks for first or last on every connection, at most 100.
+function pageOf<T>(items: T[], args: { first?: number | null; last?: number | null; after?: string | null; before?: string | null }, field: string) {
+  if (args.last != null || args.before != null) {
+    throw fail('UNPROCESSABLE', `The GitHub fake pages ${field} with first and after only.`);
+  }
+  if (args.first == null) {
+    throw fail('MISSING_PAGINATION_BOUNDARIES', `You must provide a \`first\` or \`last\` value to properly paginate the \`${field}\` connection.`);
+  }
+  if (args.first < 0 || args.first > 100) {
+    throw fail('EXCESSIVE_PAGINATION', `Requesting ${String(args.first)} records on the \`${field}\` connection exceeds the \`first\` limit of 100 records.`);
+  }
+  const start = args.after == null ? 0 : Number(new TextDecoder().decode(base64ToBytes(args.after)).replace(/^cursor:/, ''));
+  const page = items.slice(start, start + args.first);
+  const cursor = (index: number) => bytesToBase64(new TextEncoder().encode(`cursor:${String(index)}`));
+  return {
+    totalCount: items.length,
+    nodes: page,
+    pageInfo: {
+      hasNextPage: start + page.length < items.length,
+      hasPreviousPage: start > 0,
+      startCursor: page.length > 0 ? cursor(start) : null,
+      endCursor: page.length > 0 ? cursor(start + page.length) : null,
+    },
+  };
+}
+
+function issueNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord) {
+  return {
+    __typename: 'Issue',
+    id: nodeId('I', issue.id),
+    databaseId: issue.id,
+    number: issue.number,
+    title: issue.title,
+    url: `${ctx.webUrl}/${fullName(repo)}/issues/${String(issue.number)}`,
+    state: issue.state === 'open' ? 'OPEN' : 'CLOSED',
+    createdAt: issue.createdAt,
+    repository: () => repositoryNode(ctx, repo),
+    // The PRs a closing keyword links to the issue. The fake has no PRs
+    // linked by hand, so userLinkedOnly finds none.
+    closedByPullRequestsReferences: (args: {
+      first?: number | null;
+      last?: number | null;
+      after?: string | null;
+      before?: string | null;
+      includeClosedPrs?: boolean;
+      userLinkedOnly?: boolean;
+    }) => {
+      const pulls = args.userLinkedOnly
+        ? []
+        : closingPulls(ctx.state, repo, issue, {
+            includeClosed: args.includeClosedPrs === true,
+            visible: (r) => canSee(r, ctx.viewer, ctx.scopes),
+          });
+      return pageOf(
+        pulls.map((found) => pullRequestNode(ctx, found.repo, found.pull)),
+        args,
+        'closedByPullRequestsReferences',
+      );
+    },
+  };
+}
+
+function pullRequestNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull: PullData }) {
+  const merged = issue.pull.mergedAt !== null;
+  return {
+    __typename: 'PullRequest',
+    id: nodeId('PR', issue.pull.id),
+    databaseId: issue.pull.id,
+    number: issue.number,
+    title: issue.title,
+    url: `${ctx.webUrl}/${fullName(repo)}/pull/${String(issue.number)}`,
+    state: merged ? 'MERGED' : issue.state === 'open' ? 'OPEN' : 'CLOSED',
+    isDraft: issue.pull.draft,
+    merged,
+    mergedAt: issue.pull.mergedAt,
+    closedAt: issue.closedAt,
+    createdAt: issue.createdAt,
+    baseRefName: issue.pull.base.ref,
+    repository: () => repositoryNode(ctx, repo),
   };
 }
 
