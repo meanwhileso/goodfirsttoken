@@ -12,9 +12,9 @@ shows after a re-render. A change to a page's markup or words needs the same
 change in `index.html` first.
 
 - Open `index.html?play` in a browser to watch it loop.
-- `pnpm video:stills 2.8 11.9 13.3 23 24.6 27 29.5 35` writes one frame from
-  each scene to `stills/`, for a layout check. A PR that changes the video
-  commits these, so a reviewer can see each scene in the PR's files.
+- `pnpm video:stills 2.8 11.9 13.3 23 24.6 27 29.5 35` writes the frames at
+  these times to `stills/`, for a layout check. A PR that changes the video
+  commits them, so a reviewer can see every scene in the PR's files.
 - `pnpm video:render` writes all 1,080 frames, encodes
   `apps/web/src/assets/good-first-token-launch.mp4`, and writes the WebP
   poster beside it, for the homepage and the repo's README. It needs `ffmpeg`

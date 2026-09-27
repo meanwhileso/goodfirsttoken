@@ -1,6 +1,6 @@
 // Renders index.html (a scene driven by one time value) into the launch video.
 //
-//   pnpm video:stills 2.5 12.8 24.2
+//   pnpm video:stills 2.8 23
 //       writes video/stills/t-<seconds>.png for a quick layout check
 //   pnpm video:render
 //       writes every frame at 30 fps, encodes the MP4 with ffmpeg, and writes
@@ -49,9 +49,10 @@ if (mode === 'stills') {
   await browser.close();
 
   mkdirSync(assets, { recursive: true });
-  // The exhaustive motion search follows a page as it scrolls, and a
-  // keyframe at most every 15 seconds, besides the ones x264 puts at each
-  // cut, keeps them out of the busiest scenes. Both keep the MP4 near 1.2 MB.
+  // These keep the MP4 near 1.2 MB with small text still sharp. The
+  // exhaustive motion search follows a page as it scrolls. Up to 15 seconds
+  // between keyframes, besides the ones x264 puts at each cut, keeps a forced
+  // keyframe out of the busy issue page.
   execFileSync('ffmpeg', [
     '-y', '-loglevel', 'error', '-framerate', String(FPS), '-i', path.join(frames, '%05d.png'),
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '21', '-preset', 'slow', '-g', String(15 * FPS),
