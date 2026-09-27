@@ -2,7 +2,15 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'c
 import { env } from 'cloudflare:workers';
 import type { ClaimRecord, FeedEvent, FeedMessage, PrRef } from '@goodfirsttoken/core';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, getClaim, listIssueClaims, savePerson, unblockDonor } from '../../src/db';
+import {
+  addToDoNotList,
+  blockDonor,
+  getClaim,
+  listIssueClaims,
+  removeFromDoNotList,
+  savePerson,
+  unblockDonor,
+} from '../../src/db';
 import { issueRoom, type ClaimRequest, type ClaimResult, type IssueRoom } from '../../src/rooms/issue-room';
 import { db, repo, sha } from '../db/helpers';
 import { storedEvents } from '../feed/helpers';
@@ -1164,6 +1172,31 @@ describe('a blocked donor', () => {
     expect((await room.history()).map((e) => e.user)).toEqual(['kenji', 'kenji', 'kenji']);
     // The tests after this one post as her.
     await unblockDonor(db, priya.githubId);
+  });
+});
+
+describe("an issue whose repo is on the do-not-list", () => {
+  test("has every event hidden from the room's watchers, its history, and its glance, and the room still stores them", async () => {
+    const priyas = await claim(priya);
+    at(t0 + MINUTE);
+    await post(priyas, 'priya before');
+
+    await addToDoNotList(db, { repo: repo.toUpperCase(), reason: null, addedBy: admin.githubId }, t0 + MINUTE);
+
+    const watcher = await watch();
+    at(t0 + 2 * MINUTE);
+    await post(priyas, 'priya after');
+    expect(await room.history()).toEqual([]);
+    expect((await room.glance())?.events).toEqual([]);
+    expect((await storedEvents(room)).map((e) => e.text)).toEqual(['claimed the issue', 'priya before', 'priya after']);
+    // Off the list again, a new watcher gets the whole history, and the
+    // watcher who was connected gets what comes next.
+    await removeFromDoNotList(db, repo);
+    const later = await watch();
+    expect((await later.received(3)).map(([, text]) => text)).toEqual(['claimed the issue', 'priya before', 'priya after']);
+    at(t0 + 3 * MINUTE);
+    await post(priyas, 'priya last');
+    expect(await watcher.received(1)).toEqual([['update', 'priya last']]);
   });
 });
 

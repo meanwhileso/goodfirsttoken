@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The rest of the site, other queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The rest of the site, other queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -73,7 +73,10 @@ The repo is a pnpm workspace.
   [The MCP server](#the-mcp-server).
 - **What registering a project reads from GitHub, and the proposal's rules,
   live in `src/projects/`,** described under
-  [The maintainer's tools](#the-maintainers-tools).
+  [The maintainer's tools](#the-maintainers-tools), with the rules for who
+  may change a project's status.
+- **The admin's actions and the admin pages live in `src/admin/`,**
+  described under [The admin's tools and pages](#the-admins-tools-and-pages).
 
 ### Sign-in
 
@@ -84,11 +87,11 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
 | `src/auth/auth.ts` | Sets up Better Auth with its GitHub provider and D1 |
 | `src/auth/routes.ts` | Answers every request under `/auth`: the allowed routes, the same-site check on forms, sign-out's revocation, the dev sign-in, and the routes an agent's sign-in and Disconnect use |
 | `src/auth/rate-limit.ts` | The sign-in rate limit and the MCP server's token endpoint limit, each counted by client address |
-| `src/auth/session.ts` | Reads who is signed in from a request |
-| `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav |
+| `src/auth/session.ts` | Reads who is signed in from a request, and makes them the caller a permission check takes, with the token from their sign-in |
+| `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav, with whether the person is an admin |
 | `src/auth/SiteNav.tsx` | The nav with the signed-in person in it |
 | `src/auth/permissions.ts` | `requirePermission` and the named permissions |
-| `src/auth/settings.ts` | Reads the settings sign-in needs, with the development stand-ins |
+| `src/auth/settings.ts` | Reads the settings sign-in needs, with the development stand-ins, and the admins' GitHub IDs |
 
 - **Better Auth 1.7.6, pinned,** with its GitHub provider and
   `encryptOAuthTokens` on. It talks to D1 through its Kysely adapter, which
@@ -158,8 +161,9 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | File | What it does |
 |---|---|
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
-| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, `start_session`, and the tools it serves, each run as the caller |
+| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, `start_session`, and the tools it serves, each run as the caller, the admin's to admins only |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
+| `src/mcp/admin.ts` | The admin's tools, under [The admin's tools and pages](#the-admins-tools-and-pages) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
 | `src/routes/oauth/authorize.tsx` | That page |
@@ -302,6 +306,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, and `pause_project` |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
+| `src/projects/status.ts` | Who can lift a pause, and the status a resume puts back, for the maintainer's tools and the admin's alike |
 
 - **One permission check, one read.** Every tool starts with
   `requirePermission(caller, 'manage_project', { repo })`, which reads the
@@ -346,13 +351,85 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   the new status only while the project's status, reason, who set it, and
   when are the ones read, the way `changeSettings` checks the settings
   version. On a mismatch it writes nothing, and `pause_project` reads the
-  project again and decides again, up to five times. `setProjectStatus`, for
-  the admin's tools, still writes whenever the status or reason differs.
+  project again and decides again, up to five times. The admin's tools make
+  every status change the same way. A change to the status and reason
+  already there writes nothing when the same person set them, and is a
+  change of its own when someone else did, so an admin's pause over a
+  maintainer's names the admin. `setProjectStatus` writes whenever the
+  status or reason differs, and only the tests use it now.
 - **Resuming reads the status history,** newest first, for the change
   before the pause. The project's row holds only its current status. A
   status change keeps who made it and no role, so whether a pause was an
   admin's is worked out when the maintainer resumes, as
   [Managing a project](how-it-works.md#managing-a-project) says.
+
+### The admin's tools and pages
+
+The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
+
+| File | What it does |
+|---|---|
+| `src/admin/actions.ts` | The admin's actions: the queue, deciding, listing from a policy, blocking, pausing, and removing |
+| `src/mcp/admin.ts` | The admin's MCP tools, each an action's answer as a tool result |
+| `src/admin/page.ts` | What `/admin` reads, and the answer to its forms |
+| `src/admin/data.ts` | `getAdminPage`, the server function the route's loader calls |
+| `src/admin/paths.ts` | The page's path, with no imports, so pages can use it |
+| `src/routes/admin.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler |
+| `src/styles/admin-page.css` | The page's layout and its form fields |
+
+- **One set of actions.** The MCP tools and the page's forms call the same
+  functions in `src/admin/actions.ts`, with a `Caller`: the agent's grant,
+  or the web session through `siteCaller` in `src/auth/session.ts`. Each
+  action calls `requirePermission` before it reads or writes anything, and
+  answers with the tool's output from core or a refusal.
+- **Listed for admins only.** `buildServer` is async and asks
+  `requirePermission` for `review_projects` on every request, and registers
+  the admin tools only when it passes. A tool that isn't registered is one
+  the SDK refuses to call.
+- **Queue IDs.** A crawler find's ID is its candidate ID. A registration's
+  is `reg_` and the ID of its latest row in `project_status_changes`, which
+  `listPendingProjects` reads with each pending project, so the queue needs
+  no table of its own, and `getPendingProject` finds the project only while
+  that change is still its latest.
+- **The repo's facts** for a registration come from two REST calls with
+  the admin's token, `GET /repos/{owner}/{repo}` and `GET /users/{owner}`,
+  in `readStanding` in `src/projects/repo.ts`. Every registration's are
+  read at once, so the queue costs two GitHub calls for each registration,
+  on every read of the queue. A `404` gives no facts. A `401` goes on up,
+  so an agent's connection ends, and the page reads the queue again with no
+  token and says to sign in again.
+- **Every status change is a compare-and-set,** through
+  `setProjectStatusFrom`, retried up to five times, as for the maintainer's
+  pause. So a maintainer's pause or resume that lands at the same moment as
+  an admin's never undoes it.
+- **Editing a listing** is `relistFromPolicy` in `src/db/projects.ts`,
+  which checks the listing's source and settings version in the same
+  statements as its writes, the way `takeOverListing` does.
+- **Forms, with no script.** The page's forms post to `/admin`, which the
+  route answers with a `server.handlers.POST`, and TanStack Start leaves
+  `GET` to the page. The handler checks `Origin` first, then the session
+  and `review_projects`, and sends the admin back to `/admin` with `303`.
+  Rejecting needs a reason, which the textarea's `required` asks for, and
+  the approve button skips with `formnovalidate`. The handler checks it
+  too, through the tool's input schema from core.
+- **Notices in the address.** The page says what a form did with a notice
+  in the address it sends the admin back to, beside an HMAC-SHA256 of it
+  keyed with `AUTH_SECRET`. The server function shows the notice only when
+  the signature matches, so a link made elsewhere can't put words on the
+  page. The notice's dismiss link is a router link, so it reads the page's
+  data again through the server function.
+- **The server function** runs `loadAdminPage`, which reads the session
+  and checks the permission before anything else, and answers
+  `signed_out` or `not_found` with no data. The route turns those into a
+  redirect to `/sign-in` and a `404`. So calling the server function on its
+  own, under `/_serverFn/`, gives a non-admin nothing, which an end-to-end
+  test checks by replaying the page's own call as someone else.
+- **The nav's admin link** comes from `getViewer`, which checks
+  `review_projects` with no token and reads nothing more.
+- **A sample admin in development.** `adminGithubIds` adds the GitHub
+  fake's `@sample-admin` when `isDevelopment()` holds, the check the dev
+  sign-in and the secret stand-ins use. So `pnpm dev` and the end-to-end
+  tests have an admin, and `wrangler.jsonc` names none.
 
 ### The design system
 
@@ -475,8 +552,8 @@ its version did not go up.
 - **Two ways around that default** install a plugin copy: naming it with
   `--skill`, like `--skill admin` or `--skill give`, and setting
   `INSTALL_INTERNAL_SKILLS=1`. The admin skill holds nothing secret. The
-  server checks that the caller is an admin on every admin tool call, which
-  #11 builds.
+  server lists the admin tools only to admins, and checks that the caller
+  is an admin on every admin tool call.
 - **Claude Code** reads `.claude-plugin/marketplace.json` and each plugin's
   `.claude-plugin/plugin.json`, and loads each plugin's `skills/` folder.
   It ignores `metadata` in a skill. A plugin from a marketplace added as a
@@ -615,7 +692,9 @@ The spec says everything the site shows is public GitHub data or the public
 live feed. It says crawl results stay in the deployment's database, and only
 listed projects and their policy quotes are public, so `crawl_candidates`
 stays private, a rejection's reason included. The reason an admin gives for
-rejecting a registration reaches the maintainer's agent.
+rejecting a registration reaches the maintainer's agent, and so does the
+reason a removed project is rejected with. The note an admin keeps with a
+do-not-list entry reaches no one else.
 
 These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
@@ -706,7 +785,7 @@ pruning after a sync, with no index of its own.
 | `people_by_login` | A person by login, for `/@<login>` pages and admin blocks |
 | `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first |
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync |
-| `project_status_changes_by_repo` | A project's status changes, newest first |
+| `project_status_changes_by_repo` | A project's status changes, newest first, and its latest, which names a registration in the admin queue |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
 | `claims_by_person` | One person's claims, newest first: `my_work`, their page, and their leaderboard row |
 | `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project. Its claims working now, for `project_status` |
@@ -732,6 +811,8 @@ Merge rate reads the same index.
 Some views have no index of their own. Issues worked per person this week
 scans every claim. The all-time views scan `claims` or `prs` and look up the
 other by key, and hiding blocked donors looks up `donor_blocks` by key.
+Hiding what the do-not-list covers looks up `do_not_list` by key, and the
+projects whose issues live in each repo through `projects_by_issue_repo`.
 
 ### Migrations
 
@@ -928,19 +1009,21 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **Watchers and the block check.** Each watcher's socket carries, as its
   attachment, the place of the last event it was sent, which survives
   hibernation. Events go out after the call that stored them, with an await
-  for D1's `donor_blocks` in between, so calls can finish out of order. Each
-  send reads the events after the lowest place among the sockets, asks D1
-  which of their claimants are blocked, and sends each socket what it hasn't
+  for D1's `donor_blocks` and `do_not_list` in between, so calls can finish
+  out of order. Each send reads the events after the lowest place among the
+  sockets, asks D1 which of their claimants are blocked and which of their
+  issues' repos the do-not-list covers, and sends each socket what it hasn't
   had, up to the last event it read before the await. An event stored
   during the await goes out with the send of the call that stored it. So
   each watcher gets each event once, in order. A send returns the lowest
   place a watcher is at once it is done, so a room can tell whether it
   reached the last event stored.
 - **A new watcher's history.** The feed or room is told which donors are
-  known to be blocked, and reads only the events it will send: a feed with
-  no `since` reads its newest 100 of the others, in one query. D1 is asked
-  about any claimant in them not yet asked about, and the read repeats until
-  none is new. Then the socket is accepted, sent its history, and given its
+  known to be blocked and which repos the do-not-list is known to cover,
+  and reads only the events it will send: a feed with no `since` reads its
+  newest 100 of the others, in one query. D1 is asked about any claimant or
+  repo in them not yet asked about, and the read repeats until none is
+  new. Then the socket is accepted, sent its history, and given its
   place, with no await in between, so no event falls between its history
   and the live ones.
 - **When D1 can't say who is blocked,** a feed sets its alarm a minute
@@ -950,7 +1033,15 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **The block check runs as events go out.** So a block covers the history
   a feed already stores, and lifting it shows that history again.
   `blockedAmong` passes the IDs as one JSON array, since D1 binds at most
-  100 values in a statement. The `history()` RPC of a room and of a feed
+  100 values in a statement.
+- **The do-not-list check runs beside it,** in `src/rooms/watchers.ts`,
+  with `doNotListedAmong` in `src/db/do-not-list.ts`, which takes the repos
+  as one JSON array the same way. An event names its issue, and a feed
+  reads the issue's repo from the event's JSON in SQL, so no stored event
+  needed rewriting. The do-not-list names code repos, so the query also
+  covers the issue repo of each project whose code repo is on it. A feed's
+  day counts are kept by claimant alone, so they still count those
+  events. The `history()` RPC of a room and of a feed
   leaves blocked donors out too, and throws when D1 can't say who they are.
   Tests read what is stored straight from the object's SQLite.
 - **The Worker holds each stream.** It connects to the feed or room over the
@@ -987,11 +1078,12 @@ streams' in [Text streams](how-it-works.md#text-streams).
   Each open stream holds a Worker request and a hibernating WebSocket on a
   feed or room, for up to an hour. Opening one reads D1 to find its feed or
   room: once for a person or a project, and for an issue, the reads
-  `findIssue` makes, under [The issue page](#the-issue-page). Then once for
-  each round of the block check. It
+  `findIssue` makes, under [The issue page](#the-issue-page). Then twice for
+  each round of the block check, once for blocked donors and once for the
+  do-not-list, at the same time. It
   sends at most 100 events from a feed with no `since`, at most 1,000 with
   one, and an issue room's whole history. Each line costs the feed or room
-  one D1 read per batch it sends, shared by its watchers, and each stream a
+  two D1 reads per batch it sends, shared by its watchers, and each stream a
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
   hour ends it. Nothing limits how many streams a client opens.
@@ -1148,10 +1240,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   slots taken against each copy's own claims per issue. That copy's linked
   PR joins the room's open PRs.
 - **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
-  OAuth routes before any page or stream. The page also answers `404` for
-  `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in
-  `src/issue/path.ts`, so a path like `/oauth/<repo>/issues/1` never shows
-  an issue. A stream on an `/oauth/...` path answers as any other.
+  OAuth routes before any page or stream. The admin pages are `/admin`, one
+  segment, which no project page, `/<owner>/<repo>`, and no stream path can
+  be. The page also answers `404` for `admin`, `auth`, `mcp`, and `oauth` as
+  owners, with `issueFromPath` in `src/issue/path.ts`, so a path like
+  `/oauth/<repo>/issues/1` never shows an issue. A stream on an
+  `/oauth/...` path answers as any other.
 - **Logins now.** Events carry the login a claimant had when they claimed.
   Each lane, and the timeline, shows the login in `people` for the claim's
   GitHub ID, since a renamed login can later belong to someone else.
@@ -1221,7 +1315,9 @@ end-to-end tests. The rules are in
   made-up repos under `sample-owner`.
 - **The end-to-end tests seed their own preview.** `home.spec.ts` checks
   the empty homepage first, then posts to `/dev/seed` and checks the page
-  with its ranks and projects. The preview keeps its data apart from
+  with its ranks and projects. `admin.spec.ts` seeds too, and works the
+  admin queue the sample work leaves: two registrations and a crawler
+  find, which `addCandidate` adds. The preview keeps its data apart from
   `pnpm dev`'s, as [Tests](#tests) describes, so seeding `pnpm dev` changes
   nothing there.
 - **`/dev/work` adds what an action needs.** It records the person, and the
@@ -1380,9 +1476,10 @@ and Playwright run it as a local HTTP server.
   Every URL in its responses, including avatars and raw files, points back
   at the fake.
 - **The sample data** in `src/sample-data.ts` takes the shapes of the
-  prototype's: donors and maintainers, a project with tagged issues, one
-  with nothing tagged, a popular repo that invites contributions, and a
-  registration waiting for an admin. It is the one place later issues add
+  prototype's: donors, maintainers, and an admin, a project with tagged
+  issues, one with nothing tagged, a popular repo that invites
+  contributions, two registrations waiting for an admin, and a repo whose
+  AGENTS.md invites agents, for a crawler find. It is the one place later issues add
   to. Every account and repo in it is made up, under `sample-owner`, except
   this project's own repo. That repo's sample issues and PRs are numbered
   from 900 up, clear of its real ones.
@@ -1470,7 +1567,16 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **MCP tests** connect agents with the MCP client SDK, as a harness does,
   and drive the person's side with the same small browser, against the whole
   Worker and the GitHub fake. They read the `OAUTH_KV` namespace directly to
-  check what it holds. They live in `apps/web/test/mcp/`.
+  check what it holds. They live in `apps/web/test/mcp/`. The admin's tools
+  are tested there too, and their actions are also called directly, with a
+  spy on D1 and `fetch`, to show each checks the permission before it reads
+  anything.
+- **Admin page tests** fetch `/admin` and post its forms through the Worker
+  with the same small browser, signed in with the GitHub fake, and call
+  `loadAdminPage` on its own for the server function's side. They live in
+  `apps/web/test/admin/`. Server functions have no URL in the unit tests,
+  since the Vitest build sets no base for them, so the end-to-end tests
+  call the page's own.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. The web server applies the D1 migrations first. They live in
@@ -1485,7 +1591,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   room's socket and sends a pause shaped like the room's. Their events
   reach the homepage's feed, so they run in the `rooms` project, which
   depends on the `chromium` project, once the rest are done, and the
-  homepage's tests see only what they expect.
+  homepage's tests see only what they expect. `admin.spec.ts` signs in as
+  the fake's sample admin, approves and rejects the seeded registrations,
+  and replays the admin page's server function call as a donor. Approving
+  lists a project on the homepage, so it runs last, in the `admin` project,
+  which depends on `rooms`. It signs in three times, since every dev
+  sign-in counts toward the sign-in limit of 20 a minute from one
+  address.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is

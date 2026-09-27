@@ -6,9 +6,9 @@ plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves the homepage, each issue's page,
 sign-in with GitHub, the MCP server's sign-in for agents with
-`start_session` and the maintainer's tools, the design system at
-`/design`, and the live feeds as text streams and sockets, while the build
-goes on in the open.
+`start_session`, the maintainer's tools, and the admins' tools, the admin
+pages, the design system at `/design`, and the live feeds as text streams
+and sockets, while the build goes on in the open.
 
 ## Health check
 
@@ -145,6 +145,10 @@ every sample person.
   only fills in the fake's page, and the session still comes from the
   callback, with a code from the configured GitHub. Real GitHub has no page
   it could fill in.
+- The fake's sample admin, `@sample-admin`, is one of Good First Token's
+  admins in development, besides anyone in `ADMIN_GITHUB_IDS`, so the
+  [admin pages](#the-admin-pages) can be tried locally. Outside development
+  that account is no one special.
 
 ## Connecting an agent
 
@@ -277,6 +281,8 @@ hold one token for the site, and one for each connected agent.
   `project_status`, and `pause_project`, are under
   [Registering a project](#registering-a-project) and
   [Managing a project](#managing-a-project).
+- The admins' tools are under [The admin queue](#the-admin-queue). An agent
+  lists them only when its person is an admin, read on every request.
 - Each person gets 120 calls to `/mcp` a minute, across all their agents,
   counted with Cloudflare rate limiting. The next gets `429` with
   `Retry-After: 60`. Other people's agents keep theirs.
@@ -343,12 +349,13 @@ Every action goes through one named check, `requirePermission(caller,
 permission, resource)`. It returns, or refuses with a
 [refusal](#refusals) code. The maintainer's tools call it with
 `manage_project`, and resuming a pause an admin made calls it with
-`pause_any_project`. The other tools and pages that need it arrive with the
-issues that build them.
+`pause_any_project`. The admins' tools and the admin pages call it with
+the admin permissions below before they read or write anything. The other
+tools and pages that need it arrive with the issues that build them.
 
 | Permission | Allows | Who holds it | Refusal |
 |---|---|---|---|
-| `review_projects` | Seeing the admin queue, and approving or rejecting what waits in it | Admins | `not_admin` |
+| `review_projects` | Seeing the admin queue, approving or rejecting what waits in it, and removing a project at its maintainers' request | Admins | `not_admin` |
 | `list_from_policy` | Listing a project from its written policy, or editing any such listing | Admins | `not_admin` |
 | `block_donors` | Blocking a donor, or lifting a block | Admins | `not_admin` |
 | `pause_any_project` | Pausing any project, or resuming one that an admin or Good First Token paused | Admins | `not_admin` |
@@ -387,9 +394,11 @@ The database records the people who sign in.
   connected agent's, under [Connecting an agent](#connecting-an-agent), all
   encrypted.
 
-**Blocks.** An admin can block a donor, with an optional reason. Blocking
-them again records the new reason, admin, and time. Lifting the block
-removes it. Nothing refuses a blocked donor yet. The live feeds and streams
+**Blocks.** An admin can block a donor, found by their login now, from
+their agent or the [admin pages](#the-admin-pages), with an optional
+reason. Blocking them again records the new reason, admin, and time.
+Lifting the block removes it. Someone who never signed in can't be
+blocked, and is `not_found`. Nothing refuses a blocked donor yet. The live feeds and streams
 hide their events, as [Live feeds](#live-feeds) says.
 
 ## Claims
@@ -683,7 +692,8 @@ survives a restart.
 - A watcher that reconnects sends the ID of the last event it saw as
   `since`, and first gets every event after that one. With no `since`, or
   one the room never sent, it first gets the whole history.
-- A blocked donor's events are left out, as [Live feeds](#live-feeds) says.
+- A blocked donor's events are left out, and every event while the
+  do-not-list covers the issue's repo, as [Live feeds](#live-feeds) says.
 - A room can sleep with watchers connected. They stay connected, and get the
   next event.
 - What a watcher sends is ignored, and its close is answered. A request that
@@ -770,7 +780,9 @@ reads PRs from GitHub yet.
   always names the admin who made it. A resume, or a rejected listing's
   return to `pending` when its maintainer takes it over, names the
   maintainer.
-- A change to the status and reason the project already has adds nothing.
+- A change to the status and reason the project already has adds nothing,
+  except an admin's pause over a pause its maintainers made, which names the
+  admin, as under [The admin queue](#the-admin-queue).
 - The project keeps who set its current status, and when.
 
 ## Project settings
@@ -876,7 +888,9 @@ table, and each takes its value from the first file that gives one:
 
 **Saving.** With settings, it checks them as a whole, and saves the project
 as `pending`, registered by the caller at that time. The settings they left
-out take their defaults. An admin approves or rejects it, which #11 builds.
+out take their defaults. An admin approves or rejects it, under
+[The admin queue](#the-admin-queue), and the maintainer's agent reads a
+rejection's reason with `project_status`.
 
 - A repo that is already a registered project, whatever its status, is
   refused with `already_registered`, proposal or not. Its settings change
@@ -972,7 +986,7 @@ a project is `not_found`.
   issues live in another repo needs that repo too, under the issue repo in
   [Registering a project](#registering-a-project).
 - A pause Good First Token made, or one made by someone who is one of its
-  admins, stays until an admin lifts it, under
+  admins, stays until an admin lifts it with `admin_pause_project`, under
   [Permissions](#permissions). A maintainer who isn't an admin and tries is
   refused with `not_admin`. Who is an admin is read from `ADMIN_GITHUB_IDS`
   at the time, so a pause by someone no longer an admin counts as a
@@ -983,6 +997,150 @@ a project is `not_found`.
   someone else changes the status first, like an admin pausing the project
   at the same moment, the call decides again on the new status. So a
   maintainer's call never undoes a change it didn't see.
+
+## The admin queue
+
+Good First Token's admins approve and reject what waits for them, list
+projects from their written AI policies, pause projects, block donors, and
+remove projects at their maintainers' request, from their agent with six
+tools listed only for admins, or from the [admin pages](#the-admin-pages).
+Both go through the same actions, so the rules below hold for both.
+
+- Every action first checks the caller's admin permission, under
+  [Permissions](#permissions), before it reads or writes anything. Anyone
+  else is refused with `not_admin`.
+- An agent's tool list has the admin tools only when its person is an
+  admin. Who is an admin is read on every request, so someone taken off
+  `ADMIN_GITHUB_IDS` loses them at once. A call to one from anyone else is
+  refused, and changes nothing.
+- Every status change an admin makes lands only on the status it was
+  decided on, the way a maintainer's pause does. When someone else changed
+  the status first, the action decides again on the new status.
+
+**What waits.** `admin_queue` lists two kinds of item, the one that has
+waited longest first, each with an ID that `admin_decide` takes.
+
+- A **registration** is a pending project, with the maintainer who
+  registered it, the settings they chose, and their notes for agents in
+  full. Its ID names the status change that made it pending, so once its
+  status changes, the ID names nothing, and a decision on it is `not_found`.
+- A **crawler find** is a waiting [candidate](#crawl-candidates), with its
+  policy quote, link, and tier, the settings the crawler suggests, and the
+  labels that could mean ready for help. Nothing makes one yet but the
+  sample data. The crawler (#30) will.
+- Each item has the repo's facts: its stars, when it was made, its last
+  push, and when its owner's account was made. For a registration they are
+  read from GitHub when the queue is read, with the admin's own token: the
+  repo, and its owner's account. When GitHub shows no public repo by that
+  name, the item still waits, with no facts, and says so. A crawler find
+  has the facts the crawler read.
+- An item says when the repo is on the do-not-list.
+
+**Deciding.** `admin_decide` approves or rejects an item.
+
+- A rejection needs a reason. A registration's reason is its project's
+  status reason, which its maintainers read with `project_status`. A
+  crawler find's reason stays with the find, and no one else sees it.
+- Approving a registration makes its project `approved`, with the settings
+  its maintainer chose. Settings or a tier sent with it are refused with
+  `invalid_settings`, and nothing changes. When the repo is on the
+  do-not-list, approving the registration takes it off, since a maintainer
+  asked for it to be listed.
+- Approving a crawler find lists it from its policy, as `admin_add_project`
+  does below, with the tier the admin confirms and the settings they send.
+  A setting they leave out takes the crawler's suggestion, then its
+  default. The tags are required, from the suggestion or from the admin,
+  and without them it is refused with `invalid_settings`.
+- Approving a crawler find for a repo its maintainers registered is refused
+  with `already_registered`. Their settings and status stay, and the find
+  keeps waiting until an admin rejects it.
+
+**Listing from a policy.** `admin_add_project` lists a repo from its
+written AI policy, with the quote, its link, the tier, the settings, and
+the project's own tags. It is `approved` at once, listed by the admin.
+
+- The repo is read from GitHub with the admin's own token. It has to be
+  public, not archived, and take pull requests from anyone, as a
+  registration does, and is refused with `repo_not_eligible` otherwise. It
+  is saved under the name GitHub gives it.
+- An issue repo other than the code repo has to be public and not archived,
+  read the same way.
+- A repo on the do-not-list is refused with `repo_not_eligible`.
+- A repo its maintainers registered is refused with `already_registered`,
+  and their settings stay.
+- Listing a repo already listed from its policy replaces that listing's
+  policy and settings, as a new save of its settings made by the admin. It
+  keeps its status, who added it, and when. This is how an admin edits a
+  listing.
+
+**Pausing.** `admin_pause_project` pauses an approved project, with a
+reason its maintainers read with `project_status`, or resumes any paused
+project with `paused: false`.
+
+- A pause needs a reason. A project that is pending or rejected is refused
+  with `project_not_open`.
+- An admin's pause stays until an admin lifts it, under
+  [Managing a project](#managing-a-project).
+- Pausing a project its maintainers paused makes the pause the admin's,
+  even with the same reason, so they can no longer lift it. Pausing a
+  project an admin or Good First Token paused, with the reason it has,
+  changes nothing.
+- Resuming puts back the status the project had before the pause, as a
+  maintainer's resume does, whoever paused it, Good First Token included.
+- The answer says whether the call changed anything.
+
+**Blocking.** `admin_block_donor` blocks a donor, or lifts a block with
+`blocked: false`, under [People](#people).
+
+**Removing at the maintainers' request.** `admin_remove_project` removes a
+repo whose maintainers asked to be removed. An optional note says where and
+how they asked, and only admins see it.
+
+- The repo goes on the [do-not-list](#crawl-candidates) first.
+- Its project, when it has one, is `rejected`, with the reason
+  `Removed at its maintainers' request.`, which its maintainers read with
+  `project_status`.
+- A crawler find for it waiting in the queue is rejected with the same
+  reason.
+- Nothing lists it again unless a maintainer registers it: the crawler
+  can't add it, and an admin can't list it from its policy. A maintainer
+  who registers a removed listing takes it over, which puts it back in the
+  queue as `pending`, under [Registering a project](#registering-a-project),
+  and approving that registration takes the repo off the list. A project
+  its maintainers registered stays `rejected` once removed, since
+  `register_project` refuses a repo already registered, whatever its
+  status.
+- The events on its issues leave the live feeds, as
+  [Live feeds](#live-feeds) says.
+
+## The admin pages
+
+`/admin` is the admin queue on the site. What it shows, and in what order,
+is in [brand/brief-website.md](../brand/brief-website.md).
+
+- Someone who isn't signed in is sent to `/sign-in`. Anyone signed in who
+  isn't an admin gets `404`, and the page reads nothing for them. The
+  page's data also loads from a server function at a URL of its own, under
+  `/_serverFn/`, which anyone can call, and it gives the same nothing.
+- The nav links `/admin` for admins only.
+- The page shows the crawler's finds and the registrations waiting, each
+  with the repo's facts from GitHub, read with the token from the admin's
+  own sign-in on the site. When GitHub no longer takes that token, the
+  queue shows no facts, a form that asks GitHub changes nothing, and the
+  page says to sign in again. Beside them are
+  the projects listed from a policy, a form to list one by hand, and the
+  blocked donors, with a form to block one and a button to lift each block.
+- A crawler find's form takes its tags, separated by commas, starting with
+  the ones suggested, and its tier. A registration's form takes a reason.
+  Rejecting or skipping needs the reason, and the form refuses to send
+  without one. Approving doesn't.
+- Every form posts to `/admin`. It has to come from the site itself, by its
+  `Origin`, like the site's other forms, and anything else is refused with
+  `403`. A form from someone who isn't an admin gets `404` and changes
+  nothing.
+- After a form, the page says what it did, or why nothing changed. The
+  words ride in the address back to the page, signed with `AUTH_SECRET`,
+  so a link someone else made shows none of its words.
 
 ## Tagged issues
 
@@ -1027,24 +1185,32 @@ crawls yet.
 
 **The do-not-list** holds repos whose maintainers asked to be removed, with
 the admin who added each one, when, and an optional note. A repo is found on
-it without case. Adding a repo again keeps its first entry.
+it without case. Adding a repo again keeps its first entry. An admin adds a
+repo by removing it, under [The admin queue](#the-admin-queue), and
+approving its maintainer's registration takes it off.
+
+- It covers the repo itself, and the issue repo of a project whose code
+  repo is on it now.
+- The homepage's lists, the live feeds, and the issue pages leave out what
+  it covers.
 
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves five of them so far:
+a description for agents. The MCP server serves eleven of them so far:
 `start_session`, which takes the input defined here and answers with who is
-signed in, under [Connecting an agent](#connecting-an-agent), and the
+signed in, under [Connecting an agent](#connecting-an-agent), the
 maintainer's four tools, under
 [Registering a project](#registering-a-project) and
-[Managing a project](#managing-a-project), with the inputs, outputs, and
+[Managing a project](#managing-a-project), and the admins' six, under
+[The admin queue](#the-admin-queue), with the inputs, outputs, and
 descriptions defined here.
 
 | Who | Tools |
 |---|---|
 | Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `set_interests` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project` |
-| Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project` |
+| Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project` |
 
 **Results**
 
@@ -1092,7 +1258,8 @@ descriptions defined here.
   content is its full new text, or null to delete it.
 - `register_project` with no settings returns a proposal and saves nothing.
 - Rejecting a queue item needs a reason, and so does an admin pause. An admin
-  approving a crawler find can confirm or change its policy tier.
+  approving a crawler find can confirm or change its policy tier, and sends
+  only the settings they change from the crawler's suggestion.
 
 ## Refusals
 
@@ -1102,7 +1269,9 @@ four and `invalid_input`. The issue room returns those, and `pr_exists`,
 `not_claim_owner`, `not_maintainer`, and `not_admin`. The maintainer's tools
 return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 `listed_from_policy`, `label_not_created`, `invalid_settings`,
-`project_not_open`, `not_admin`, and `not_found`.
+`project_not_open`, `not_admin`, and `not_found`. The admins' tools return
+`not_admin`, `not_found`, `repo_not_eligible`, `already_registered`,
+`invalid_settings`, `project_not_open`, and `invalid_input`.
 
 | Code | When |
 |---|---|
@@ -1122,14 +1291,14 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
-| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators |
-| `already_registered` | Registering a repo that is already a registered project |
+| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list |
+| `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |
 | `listed_from_policy` | Changing the settings of a listing made from a policy with `update_project`, which takes `register_project` first |
 | `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
-| `invalid_settings` | Settings failed their checks |
+| `invalid_settings` | Settings failed their checks, or came with the approval of a registration, which keeps its maintainer's |
 | `not_admin` | The caller isn't a Good First Token admin |
-| `not_found` | The claim, issue, project, or queue item doesn't exist |
-| `invalid_input` | A malformed claim, event, or time reached the claim state machine, or a malformed argument reached an issue room |
+| `not_found` | The claim, issue, project, queue item, or person to block doesn't exist, or the queue item no longer waits |
+| `invalid_input` | A malformed claim, event, or time reached the claim state machine, a malformed argument reached an issue room, or a rejection came with no reason |
 
 ## Feed events
 
@@ -1231,6 +1400,22 @@ out of what they send watchers, and so of every stream.
   watcher is turned away with `503`. New events wait, and the feed or room
   tries again a minute later, and with each new event.
 
+**The do-not-list.** Every event on an issue in a repo the
+[do-not-list](#crawl-candidates) covers is hidden the same way: feeds and
+rooms leave it out of what they send watchers, and so of every stream and
+live socket, and of a room's or feed's history read directly.
+
+- What the list covers is read from the database each time events go out,
+  and each time a watcher connects, with who is blocked. So removing a
+  project hides the events already stored on its issues, and new ones, from
+  then on. Feeds and rooms still store them, and a watcher that connects
+  after the repo comes off the list gets them again.
+- An event is judged by the repo its issue is in, as the event names it.
+- A feed counts its events by day and claimant, so a day's count still
+  counts events on issues the list covers.
+- When the database can't say what the list covers, nothing goes out, as
+  for blocked donors.
+
 ## Text streams
 
 Every feed has a plain-text live stream, readable with `curl -N`:
@@ -1300,7 +1485,8 @@ and an [issue's page](#the-issue-page) uses its issue's.
   First come the events after `?since=<event ID>`. With no `since`, or one
   it doesn't know, a feed sends its newest 100 first, and an issue's room its
   whole history. Then each new event, as it arrives.
-- Blocked donors' events are left out, as for every watcher.
+- Blocked donors' events, and events on issues the do-not-list covers, are
+  left out, as for every watcher.
 - It stays open while the feed sleeps, and has no hour limit. It closes when
   the feed closes it, as a deploy can.
 - It is public and read-only. It sets no cookie and reads none, so any page
@@ -1501,6 +1687,10 @@ its slot, and counts in how many times the issue was claimed. Their changes
 never reach the page, so a slot their claim frees shows taken until the page
 loads again.
 
+**An issue the do-not-list covers** shows no lane, no line, and no
+timeline, the same way, since every event on it is hidden. Its claims still
+take their slots, and the pane says the project isn't taking claims.
+
 **Watch as text** shows the `curl -N` command for the issue's text stream,
 with a copy button.
 
@@ -1514,8 +1704,9 @@ GitHub fake's sample people and its made-up repos under `sample-owner`.
   [dev sign-in](#signing-in) does, and only for a request to this machine
   by `localhost`, `127.0.0.1`, or `[::1]`. Anywhere else, every request to
   it is `404`. A `POST` whose `Origin` is another site's is `403`.
-- It records the sample people, approves four sample projects, leaves a
-  fifth pending, and caches their tagged issues. Then it makes the sample
+- It records the sample people, approves four sample projects, leaves two
+  more pending for an admin, and caches their tagged issues. It puts a
+  crawler find in the admin queue. Then it makes the sample
   claims through their issue rooms, with a line each, so their events reach
   the feeds as real ones do. Five of the claims open a PR that merges at
   once, so they count as merged in the week they were seeded.
@@ -1693,6 +1884,10 @@ A deployment can serve them from a static host, on a hostname of its own.
   repo for the caller's permission, and registering or updating creates the
   `goodfirsttoken` label where the issues live. All of these use the
   maintainer's token.
+- The admin queue reads each registration's repo and its owner's account,
+  and listing a project from its policy reads the repo and its issue repo.
+  These use the admin's own token: their agent's, or on the admin pages,
+  the one from their sign-in on the site.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
   names the one token to revoke. Signing out, Disconnect, and an agent's
   sign-in that replaces an earlier one each revoke this way.

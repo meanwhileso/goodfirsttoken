@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { addToDoNotList, getDoNotListEntry } from '../../src/db';
-import { admin, db, emptyDatabase, HOUR, repo, signIn, t0 } from './helpers';
+import { addToDoNotList, createProject, doNotListedAmong, getDoNotListEntry, removeFromDoNotList } from '../../src/db';
+import { admin, db, emptyDatabase, HOUR, maintainer, repo, signIn, t0 } from './helpers';
 
 beforeEach(async () => {
   await emptyDatabase();
@@ -38,5 +38,41 @@ describe('the do-not-list', () => {
     );
 
     expect(again).toEqual(first);
+  });
+
+  test('a repo comes off the list whatever the case of its name', async () => {
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    expect(await removeFromDoNotList(db, 'SAMPLE-OWNER/Sample-App')).toBe(true);
+    expect(await getDoNotListEntry(db, repo)).toBeNull();
+    expect(await removeFromDoNotList(db, repo)).toBe(false);
+  });
+
+  test("covers a repo on it, and the issue repo of a project whose code repo is on it, and nothing else", async () => {
+    await signIn(maintainer);
+    await createProject(
+      db,
+      {
+        repo: 'sample-owner/sample-code',
+        status: 'approved',
+        source: 'registered',
+        policy: null,
+        settings: { tags: ['help wanted'], issueRepo: 'sample-owner/sample-issues' },
+        addedBy: maintainer.githubId,
+      },
+      t0,
+    );
+    await addToDoNotList(db, { repo: 'Sample-Owner/Sample-Code', reason: null, addedBy: admin.githubId }, t0);
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    const covered = await doNotListedAmong(db, [
+      'sample-owner/SAMPLE-APP',
+      'sample-owner/sample-issues',
+      'sample-owner/sample-code',
+      'sample-owner/sample-tools',
+    ]);
+
+    expect(covered).toEqual(new Set(['sample-owner/sample-app', 'sample-owner/sample-issues', 'sample-owner/sample-code']));
+    expect(await doNotListedAmong(db, [])).toEqual(new Set());
   });
 });

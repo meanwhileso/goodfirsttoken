@@ -554,7 +554,7 @@ describe('which issues have a page', () => {
     await claim(priya);
     // Accounts named like the site's own paths could exist on GitHub, and
     // even with a claim, their issues get no page.
-    for (const owner of ['mcp', 'oauth', 'auth']) await claimUnder(owner);
+    for (const owner of ['mcp', 'oauth', 'auth', 'admin']) await claimUnder(owner);
     for (const [owner, name, n] of [
       ['sample-owner', 'sample-app', '0'],
       ['sample-owner', 'sample-app', `0${number}`],
@@ -562,6 +562,7 @@ describe('which issues have a page', () => {
       ['mcp', 'sample-app', number],
       ['OAuth', 'sample-app', number],
       ['auth', 'sample-app', number],
+      ['Admin', 'sample-app', number],
     ] as const) {
       expect(await loadIssue(request, owner, name, n), `${owner}/${name}#${n}`).toEqual({ state: 'not_found' });
     }
@@ -641,9 +642,12 @@ describe('the page, through the Worker', () => {
     }
   });
 
-  test("leaves the site's own paths to the site: sign-in, the MCP server, and the OAuth routes", async () => {
+  test("leaves the site's own paths to the site: sign-in, the MCP server, the OAuth routes, and the admin pages", async () => {
     // Accounts named like the site's own paths, with a claim each.
-    for (const owner of ['auth', 'mcp', 'oauth']) await claimUnder(owner);
+    for (const owner of ['auth', 'mcp', 'oauth', 'admin']) await claimUnder(owner);
+    const admin = await page(`/admin/sample-app/issues/${number}`);
+    expect(admin.status).toBe(404);
+    expect(await admin.text()).toContain('There is no issue page at this address.');
 
     const auth = await page(`/auth/sample-app/issues/${number}`);
     expect(auth.status).toBe(404);

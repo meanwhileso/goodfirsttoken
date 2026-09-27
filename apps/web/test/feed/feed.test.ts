@@ -1,7 +1,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, unblockDonor } from '../../src/db';
+import { addToDoNotList, blockDonor, createProject, removeFromDoNotList, unblockDonor } from '../../src/db';
 import { repoFeed, type Feed, type FeedEntry } from '../../src/rooms/feed';
 import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0 } from '../db/helpers';
 import { feedEvent, storedEvents, watchSocket } from './helpers';
@@ -229,6 +229,65 @@ describe('a blocked donor', () => {
     const watcher = await watchSocket(feed);
 
     expect(await watcher.received(100)).toEqual(kenjis.map((e) => e.event.text));
+  });
+});
+
+describe('a repo on the do-not-list', () => {
+  function on(issue: string, text: string): FeedEntry {
+    return { event: feedEvent({ issue, text }), githubId: kenji.githubId };
+  }
+
+  test("has the events on its issues hidden from the feed's watchers, the history stored before included, and they stay stored", async () => {
+    await feed.deliver([on('sample-owner/sample-app#1', 'app before'), on('sample-owner/sample-tools#2', 'tools before')]);
+
+    await addToDoNotList(db, { repo: 'Sample-Owner/Sample-App', reason: null, addedBy: admin.githubId }, Date.now());
+
+    const watcher = await watchSocket(feed);
+    expect(await watcher.received(1)).toEqual(['tools before']);
+    await feed.deliver([on('sample-owner/sample-app#3', 'app during'), on('sample-owner/sample-tools#4', 'tools during')]);
+    expect(await watcher.received(2)).toEqual(['tools before', 'tools during']);
+    expect(await texts()).toEqual(['tools before', 'tools during']);
+    expect((await storedEvents(feed)).map((e) => e.text)).toEqual(['app before', 'tools before', 'app during', 'tools during']);
+
+    // Taking the repo off the list, as approving its maintainer's
+    // registration does, shows them to a new watcher again.
+    await removeFromDoNotList(db, 'sample-owner/sample-app');
+    const later = await watchSocket(feed);
+    expect(await later.received(4)).toEqual(['app before', 'tools before', 'app during', 'tools during']);
+  });
+
+  test('covers the issues of a project whose code repo is on it, where the project keeps them in another repo', async () => {
+    await createProject(
+      db,
+      {
+        repo: 'sample-owner/sample-code',
+        status: 'approved',
+        source: 'registered',
+        policy: null,
+        settings: { tags: ['help wanted'], issueRepo: 'sample-owner/sample-issues' },
+        addedBy: kenji.githubId,
+      },
+      Date.now(),
+    );
+    await addToDoNotList(db, { repo: 'sample-owner/sample-code', reason: null, addedBy: admin.githubId }, Date.now());
+    await feed.deliver([on('sample-owner/sample-issues#5', 'elsewhere'), on('sample-owner/sample-tools#6', 'tools')]);
+
+    const watcher = await watchSocket(feed);
+
+    expect(await watcher.received(1)).toEqual(['tools']);
+  });
+
+  test('a watcher who gives no last event ID still gets the newest events it may see, and a glance leaves them out', async () => {
+    const tools = Array.from({ length: 100 }, (_, i) => on('sample-owner/sample-tools#1', `tools ${String(i)}`));
+    const app = Array.from({ length: 30 }, (_, i) => on('sample-owner/sample-app#1', `app ${String(i)}`));
+    await feed.deliver([...tools, ...app]);
+    await addToDoNotList(db, { repo: 'sample-owner/sample-app', reason: null, addedBy: admin.githubId }, Date.now());
+
+    const watcher = await watchSocket(feed);
+    const glance = await feed.glance({ count: 5, day: '2100-01-04' });
+
+    expect(await watcher.received(100)).toEqual(tools.map((e) => e.event.text));
+    expect(glance?.events.map((e) => e.text)).toEqual(tools.slice(-5).map((e) => e.event.text));
   });
 });
 

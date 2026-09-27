@@ -3,9 +3,13 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import {
   changeSettings,
   createProject,
+  getPendingProject,
   getProject,
+  listPendingProjects,
+  listPolicyListings,
   listProjects,
   listProjectsByIssueRepo,
+  relistFromPolicy,
   setProjectStatus,
   settingsHistory,
   statusHistory,
@@ -504,10 +508,89 @@ describe('a status change decided on what was read', () => {
     expect(await statusHistory(db, repo)).toHaveLength(2);
   });
 
-  test('a change to the status and reason it already has writes nothing', async () => {
+  test('a change to the status and reason it already has, by the person who set them, writes nothing', async () => {
     const project = await registeredProject({ tags: ['help wanted'] });
 
-    expect(await setProjectStatusFrom(db, project, { status: 'approved', reason: null, changedBy: coMaintainer.githubId }, t0 + HOUR)).toEqual(project);
+    expect(await setProjectStatusFrom(db, project, { status: 'approved', reason: null, changedBy: maintainer.githubId }, t0 + HOUR)).toEqual(project);
     expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
+  test("the same status and reason from someone else is a change of its own, so an admin's pause over a maintainer's names the admin", async () => {
+    await registeredProject({ tags: ['help wanted'] });
+    const read = await setProjectStatus(db, repo, { status: 'paused', reason: null, changedBy: maintainer.githubId }, t0 + HOUR);
+    if (read === null) throw new Error('no project');
+
+    const paused = await setProjectStatusFrom(db, read, { status: 'paused', reason: null, changedBy: admin.githubId }, t0 + 2 * HOUR);
+
+    expect(paused).toMatchObject({ status: 'paused', statusReason: null, statusChangedBy: admin.githubId, statusChangedAt: t0 + 2 * HOUR });
+    expect(await getProject(db, repo)).toEqual(paused);
+    expect(await statusHistory(db, repo)).toMatchObject([
+      { status: 'paused', changedBy: admin.githubId },
+      { status: 'paused', changedBy: maintainer.githubId },
+      { status: 'approved' },
+    ]);
+  });
+});
+
+describe('the admin queue and the listings', () => {
+  test('pending projects wait oldest first, each named by the status change that put it in the queue', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+    const other = 'sample-owner/sample-tools';
+    await createProject(
+      db,
+      { repo: other, status: 'pending', source: 'registered', policy: null, settings: { tags: ['bug'] }, addedBy: maintainer.githubId },
+      t0 + HOUR,
+    );
+    await setProjectStatus(db, repo, { status: 'pending', reason: null, changedBy: admin.githubId }, t0 + 2 * HOUR);
+
+    const pending = await listPendingProjects(db);
+
+    expect(pending.map((p) => p.project.repo)).toEqual([other, repo]);
+    const [first, second] = pending;
+    expect(await getPendingProject(db, first?.changeId ?? 0)).toEqual(first);
+    expect(await getPendingProject(db, second?.changeId ?? 0)).toEqual(second);
+  });
+
+  test("a status change gives a pending project's wait a new ID, so an older ID names nothing", async () => {
+    await createProject(
+      db,
+      { repo, status: 'pending', source: 'registered', policy: null, settings: { tags: ['bug'] }, addedBy: maintainer.githubId },
+      t0,
+    );
+    const [waiting] = await listPendingProjects(db);
+    if (waiting === undefined) throw new Error('nothing pending');
+
+    await setProjectStatus(db, repo, { status: 'rejected', reason: 'Spam.', changedBy: admin.githubId }, t0 + HOUR);
+    const rejectedStill = await getPendingProject(db, waiting.changeId);
+    await setProjectStatus(db, repo, { status: 'pending', reason: null, changedBy: maintainer.githubId }, t0 + 2 * HOUR);
+
+    expect(rejectedStill).toBeNull();
+    expect(await getPendingProject(db, waiting.changeId)).toBeNull();
+    expect(await listPendingProjects(db)).toHaveLength(1);
+  });
+
+  test('listing a repo again from its policy replaces the policy and settings, keeps its status, and records who changed the settings', async () => {
+    await createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0,
+    );
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'Checking.', changedBy: admin.githubId }, t0 + HOUR);
+    const next = { ...policy, quote: 'Agents are welcome.', tier: 'invites_agents' as const };
+
+    const relisted = await relistFromPolicy(db, repo, { policy: next, settings: { tags: ['ready'], prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+
+    expect(relisted).toMatchObject({ changed: ['prMode'], project: { status: 'paused', policy: next } });
+    expect(await getProject(db, repo)).toEqual(relisted?.project);
+    expect(await listPolicyListings(db)).toEqual([relisted?.project]);
+    expect(await settingsHistory(db, repo)).toMatchObject([{ version: 2, changedBy: admin.githubId }, { version: 1 }]);
+  });
+
+  test('a registered project is never listed again from a policy', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+
+    expect(await relistFromPolicy(db, repo, { policy, settings: { tags: ['ready'] } }, admin.githubId, t0 + HOUR)).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ source: 'registered', policy: null, settings: { tags: ['help wanted'] } });
+    expect(await listPolicyListings(db)).toEqual([]);
   });
 });

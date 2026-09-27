@@ -1,14 +1,18 @@
 import { z } from 'zod';
-import { suggestedTagSchema } from '../crawl';
+import { MAX_CRAWL_REASON, suggestedTagSchema } from '../crawl';
 import { MAX_BLOCK_REASON } from '../people';
 import { count, githubLogin, id, isoTime, repoName, trimmedText } from '../primitives';
 import {
+  MAX_STATUS_REASON,
   policySchema,
   policyTierSchema,
+  projectSettingsPatchSchema,
   projectSettingsSchema,
   projectSourceSchema,
   projectStatusSchema,
   type Policy,
+  type ProjectSettings,
+  type ProjectSettingsPatch,
 } from '../projects';
 import { defineTool } from './spec';
 import { indent, lines, numbered, renderSettings, when } from './text';
@@ -16,6 +20,15 @@ import { indent, lines, numbered, renderSettings, when } from './text';
 // The admin tools (spec section 4), listed only for admins.
 
 const queueItemKinds = ['registration', 'candidate'] as const;
+
+/** What GitHub says about a repo, for an admin to weigh. */
+const repoFactsSchema = z.object({
+  stars: count,
+  createdAt: isoTime,
+  pushedAt: isoTime,
+  /** When the repo owner's account was made. */
+  ownerCreatedAt: isoTime,
+});
 
 const queueItemSchema = z.object({
   id,
@@ -25,18 +38,20 @@ const queueItemSchema = z.object({
   /** The maintainer who registered it, or null for a crawler find. */
   requestedBy: githubLogin.nullable(),
   requestedAt: isoTime,
-  facts: z.object({
-    stars: count,
-    createdAt: isoTime,
-    pushedAt: isoTime,
-    ownerCreatedAt: isoTime,
-  }),
-  /** The settings the maintainer chose, or the ones the crawler suggests. */
-  settings: projectSettingsSchema,
+  /** The repo's facts from GitHub, or null when GitHub showed no public repo by that name when asked. */
+  facts: repoFactsSchema.nullable(),
+  /**
+   * The settings the maintainer chose, or the ones the crawler suggests. A
+   * crawler find can leave out any setting, tags included, and the admin
+   * picks the tags.
+   */
+  settings: projectSettingsPatchSchema,
   /** The policy text that welcomes agent work, when there is one. */
   policy: policySchema.nullable(),
   /** Labels that could mean "ready for outside help", with their open issue counts. */
   suggestedTags: z.array(suggestedTagSchema),
+  /** True when the repo is on the do-not-list, because its maintainers asked to be removed. */
+  onDoNotList: z.boolean(),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -45,25 +60,42 @@ function describePolicy(policy: Policy): string {
   return `policy (${tier}): "${policy.quote}" ${policy.url}`;
 }
 
+/** Suggested settings with every one left out at its default, and no tags when none were suggested. */
+function withDefaults(settings: ProjectSettingsPatch): ProjectSettings {
+  const defaults = projectSettingsSchema.parse({ tags: ['none'] });
+  // A setting sent as undefined keeps its default, like one left out.
+  const entries: [string, unknown][] = Object.entries(settings);
+  const given = Object.fromEntries(entries.filter(([, value]) => value !== undefined));
+  return { ...defaults, tags: [], ...given };
+}
+
 function renderQueueItem(item: QueueItem): string {
+  const facts = item.facts;
   return lines(
     `${item.kind} · ${item.repo} · id ${item.id}`,
     item.requestedBy
       ? `from @${item.requestedBy} on ${when(item.requestedAt)}`
       : `found on ${when(item.requestedAt)}`,
-    `${item.facts.stars.toLocaleString('en-US')} stars · created ${item.facts.createdAt.slice(0, 10)} · last push ${item.facts.pushedAt.slice(0, 10)} · owner account since ${item.facts.ownerCreatedAt.slice(0, 10)}`,
+    facts
+      ? `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`
+      : `GitHub showed no public repo named ${item.repo} when asked.`,
+    item.onDoNotList &&
+      'Its maintainers asked to be removed before, so it is on the do-not-list. Approving their registration takes it off.',
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
       `labels that could mean ready for help: ${item.suggestedTags
         .map((tag) => `${tag.name} (${tag.openIssues.toLocaleString('en-US')} open)`)
         .join(', ')}`,
-    indent(renderSettings(item.settings), 2),
+    item.kind === 'candidate'
+      ? lines('suggested settings, the rest at their defaults:', indent(renderSettings(withDefaults(item.settings)), 2))
+      : indent(renderSettings(withDefaults(item.settings)), 2),
   );
 }
 
 export const adminQueue = defineTool({
   audience: 'admin',
-  description: "List maintainers' registrations and crawler finds waiting for an admin.",
+  description:
+    "List maintainers' registrations and crawler finds waiting for an admin, with each repo's facts from GitHub.",
   input: z.object({
     kind: z.enum(['all', ...queueItemKinds]).default('all'),
   }),
@@ -74,43 +106,60 @@ export const adminQueue = defineTool({
       : lines(
           `${String(out.items.length)} waiting:`,
           numbered(out.items, renderQueueItem),
-          'Decide each with admin_decide. A rejection needs a reason, which the maintainer sees.',
+          'Decide each with admin_decide. A rejection needs a reason, which a registering maintainer sees.',
         ),
 });
 
 export const adminDecide = defineTool({
   audience: 'admin',
   description:
-    'Approve or reject a queue item. A rejection needs a reason, which the maintainer sees. For a crawler find, pass the policy tier, settings, and tags you confirmed.',
+    "Approve or reject a queue item by its id. A rejection needs a reason, which the maintainer sees with project_status. A registration keeps the settings its maintainer chose. For a crawler find, pass the policy tier and the settings you confirmed: settings left out take the crawler's suggestion, then their default, and the tags are required.",
   input: z
     .object({
       id,
       decision: z.enum(['approve', 'reject']),
-      reason: trimmedText(500).optional(),
+      reason: trimmedText(MAX_STATUS_REASON).optional(),
       tier: policyTierSchema
         .optional()
-        .describe("For a crawler find, the policy tier you confirmed or changed."),
-      settings: projectSettingsSchema.optional(),
+        .describe('For a crawler find, the policy tier you confirmed or changed.'),
+      settings: projectSettingsPatchSchema
+        .optional()
+        .describe("For a crawler find, the settings you confirmed. Left out, a setting takes the crawler's suggestion."),
     })
     .superRefine((input, ctx) => {
       if (input.decision === 'reject' && input.reason === undefined) {
         ctx.addIssue({ code: 'custom', path: ['reason'], message: 'is required to reject' });
       }
     }),
-  output: z.object({ repo: repoName, status: projectStatusSchema }),
-  text: (out) =>
-    out.status === 'approved'
+  output: z.object({ repo: repoName, kind: z.enum(queueItemKinds), status: projectStatusSchema }),
+  text: (out) => {
+    if (out.status === 'rejected') {
+      return out.kind === 'registration'
+        ? `Rejected ${out.repo}. Its maintainers see the reason with project_status.`
+        : `Rejected the crawler find ${out.repo}. It leaves the queue.`;
+    }
+    return out.status === 'approved'
       ? `Approved ${out.repo}. It is listed now.`
-      : `${out.repo} is ${out.status}. The reason is kept with it.`,
+      : `Approved ${out.repo}. Its listing is ${out.status}.`;
+  },
 });
 
 export const adminAddProject = defineTool({
   audience: 'admin',
   description:
-    "List a project from its written AI policy, with the quote, its link, the tier, the settings, and the project's own tags.",
+    "List a public repo from its written AI policy, with the quote, its link, the tier, the settings, and the project's own tags. It is listed at once. Listing a repo already listed from its policy replaces that listing's policy and settings and keeps its status. A repo its maintainers registered, or one on the do-not-list, is refused.",
   input: z.object({ repo: repoName, policy: policySchema, settings: projectSettingsSchema }),
-  output: z.object({ repo: repoName, status: projectStatusSchema, source: projectSourceSchema }),
-  text: (out) => `Listed ${out.repo} from its AI policy. Status: ${out.status}.`,
+  output: z.object({
+    repo: repoName,
+    status: projectStatusSchema,
+    source: projectSourceSchema,
+    /** True when it replaced an earlier listing's policy and settings. */
+    updated: z.boolean(),
+  }),
+  text: (out) =>
+    out.updated
+      ? `Updated the listing of ${out.repo} from its AI policy. Status: ${out.status}.`
+      : `Listed ${out.repo} from its AI policy. Status: ${out.status}.`,
 });
 
 export const adminBlockDonor = defineTool({
@@ -131,21 +180,55 @@ export const adminBlockDonor = defineTool({
 
 export const adminPauseProject = defineTool({
   audience: 'admin',
-  description: 'Pause any project, with a reason its maintainers see, or resume it with paused: false.',
+  description:
+    'Pause an approved project, with a reason its maintainers see, or resume any paused project with paused: false. A pause by an admin stays until an admin lifts it, and pausing a project its maintainers paused makes it yours.',
   input: z
     .object({
       repo: repoName,
       paused: z.boolean().default(true),
-      reason: trimmedText(500).optional(),
+      reason: trimmedText(MAX_STATUS_REASON).optional(),
     })
     .superRefine((input, ctx) => {
       if (input.paused && input.reason === undefined) {
         ctx.addIssue({ code: 'custom', path: ['reason'], message: 'is required to pause' });
       }
     }),
-  output: z.object({ repo: repoName, status: projectStatusSchema }),
+  output: z.object({
+    repo: repoName,
+    status: projectStatusSchema,
+    /** Whether this call paused or resumed the project. False when it was already as asked. */
+    changed: z.boolean(),
+  }),
+  text: (out) => {
+    if (out.status === 'paused') {
+      return out.changed
+        ? `Paused ${out.repo}. Agents get no new claims on it until an admin resumes it.`
+        : `${out.repo} was already paused by an admin, with that reason. Nothing changed.`;
+    }
+    return out.changed
+      ? `Resumed ${out.repo}. Status: ${out.status}.`
+      : `${out.repo} isn't paused, so nothing changed. Status: ${out.status}.`;
+  },
+});
+
+export const adminRemoveProject = defineTool({
+  audience: 'admin',
+  description:
+    "Remove a repo at its maintainers' request. It goes on the do-not-list, its project is rejected with a reason its maintainers see, and a crawler find for it waiting in the queue is rejected. Nothing lists it again unless a maintainer registers it.",
+  input: z.object({
+    repo: repoName,
+    note: trimmedText(MAX_CRAWL_REASON)
+      .optional()
+      .describe('Where and how the maintainers asked, for the record. Only admins see it.'),
+  }),
+  output: z.object({
+    repo: repoName,
+    /** The project's status now, or null when the repo wasn't a project. */
+    status: projectStatusSchema.nullable(),
+  }),
   text: (out) =>
-    out.status === 'paused'
-      ? `Paused ${out.repo}. Agents get no new claims on it.`
-      : `Resumed ${out.repo}. Status: ${out.status}.`,
+    lines(
+      `Removed ${out.repo} at its maintainers' request. It is on the do-not-list, so nothing lists it again unless a maintainer registers it.`,
+      out.status === null && `${out.repo} wasn't a project, so the do-not-list is all that changed.`,
+    ),
 });

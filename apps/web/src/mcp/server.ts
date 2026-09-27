@@ -1,10 +1,11 @@
 import { githubId, productName, toolRefusal, tools, type ToolSpec } from '@goodfirsttoken/core';
 import { createMcpHandler, McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
-import { PermissionRefused, type Caller } from '../auth/permissions';
+import { PermissionRefused, requirePermission, type Caller } from '../auth/permissions';
 import { siteOrigin } from '../auth/settings';
 import { savePerson } from '../db';
 import { GitHubError, gitHubRest } from '../github';
+import { adminTools } from './admin';
 import { disconnect, markConnectionUsed } from './connections';
 import { pauseProject, projectStatus, registerProject, updateProject } from './maintainer';
 import { MCP_PATH } from './paths';
@@ -69,7 +70,21 @@ function specOf<I extends ToolSpec['input'], O extends ToolSpec['output']>(spec:
   return { description: spec.description, inputSchema: spec.input, outputSchema: spec.output };
 }
 
-function buildServer(props: AgentProps, origin: string): McpServer {
+/**
+ * True when the caller is one of Good First Token's admins, by the
+ * permission check the admin's tools make, read on each request.
+ */
+async function isAdmin(caller: Caller): Promise<boolean> {
+  try {
+    await requirePermission(caller, 'review_projects');
+    return true;
+  } catch (error) {
+    if (error instanceof PermissionRefused) return false;
+    throw error;
+  }
+}
+
+async function buildServer(props: AgentProps, origin: string): Promise<McpServer> {
   const server = new McpServer({ name: productName, version: '0.1.0' });
   const caller = callerOf(props);
   const run = (tool: () => Promise<Answer>) => asCaller(props, origin, tool);
@@ -97,6 +112,28 @@ function buildServer(props: AgentProps, origin: string): McpServer {
   server.registerTool('pause_project', specOf(tools.pause_project), (input) =>
     run(() => pauseProject(caller, input, Date.now())),
   );
+  // The admin's tools are listed only for admins. Each also checks the
+  // caller's permission first, whenever it runs.
+  if (await isAdmin(caller)) {
+    server.registerTool('admin_queue', specOf(tools.admin_queue), (input) =>
+      run(() => adminTools.admin_queue(caller, input)),
+    );
+    server.registerTool('admin_decide', specOf(tools.admin_decide), (input) =>
+      run(() => adminTools.admin_decide(caller, input, Date.now())),
+    );
+    server.registerTool('admin_add_project', specOf(tools.admin_add_project), (input) =>
+      run(() => adminTools.admin_add_project(caller, input, Date.now())),
+    );
+    server.registerTool('admin_block_donor', specOf(tools.admin_block_donor), (input) =>
+      run(() => adminTools.admin_block_donor(caller, input, Date.now())),
+    );
+    server.registerTool('admin_pause_project', specOf(tools.admin_pause_project), (input) =>
+      run(() => adminTools.admin_pause_project(caller, input, Date.now())),
+    );
+    server.registerTool('admin_remove_project', specOf(tools.admin_remove_project), (input) =>
+      run(() => adminTools.admin_remove_project(caller, input, Date.now())),
+    );
+  }
   return server;
 }
 

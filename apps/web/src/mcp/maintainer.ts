@@ -15,7 +15,6 @@ import {
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller, type ManagedRepo } from '../auth/permissions';
-import { adminGithubIds } from '../auth/settings';
 import {
   changeSettings,
   countProjectPrs,
@@ -38,6 +37,7 @@ import {
   whyNotEligible,
   whyNotIssueRepo,
 } from '../projects/repo';
+import { resumableBy, statusBeforePause } from '../projects/status';
 
 // The maintainer's tools: register_project, update_project, project_status,
 // and pause_project. Each one first asks GitHub, with the caller's own token,
@@ -260,13 +260,6 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
   );
 }
 
-/** Who can lift the project's pause, or null when it isn't paused. */
-function resumableBy(project: ProjectRecord): 'maintainers' | 'admins' | null {
-  if (project.status !== 'paused') return null;
-  const by = project.statusChangedBy;
-  return by === null || adminGithubIds().has(by) ? 'admins' : 'maintainers';
-}
-
 function pauseAnswer(project: ProjectRecord, changed: boolean): Answer {
   return answer(
     toolResult('pause_project', { repo: project.repo, status: project.status, changed, resumableBy: resumableBy(project) }),
@@ -318,9 +311,7 @@ export async function pauseProject(caller: Caller, input: ToolInput<'pause_proje
       // that repo too. A pause only stops work, so it needs the code repo alone.
       const place = await checkIssueRepo(caller, project.repo, project.settings.issueRepo);
       if (!place.ok) return place.answer;
-      // The status before this pause, from the history, newest first.
-      const before = (await statusHistory(env.DB, project.repo)).find((c) => c.status !== 'paused');
-      change = { status: before?.status ?? 'pending', reason: before?.reason ?? null };
+      change = statusBeforePause(await statusHistory(env.DB, project.repo));
     }
     const updated = await setProjectStatusFrom(env.DB, project, { ...change, changedBy: caller.githubId }, now);
     if (updated !== null) return pauseAnswer(updated, true);

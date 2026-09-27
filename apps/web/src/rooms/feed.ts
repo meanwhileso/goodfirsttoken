@@ -1,7 +1,17 @@
 import { DurableObject } from 'cloudflare:workers';
 import { feedEventSchema, githubId, mustParse, repoName, utcDay, wholeNumber, type FeedEvent } from '@goodfirsttoken/core';
-import { blockedAmong } from '../db/blocks';
-import { answerClose, openWatcher, sendToWatchers, type StoredEvent } from './watchers';
+import {
+  answerClose,
+  askedOf,
+  hiddenFor,
+  learnHidden,
+  noneHidden,
+  openWatcher,
+  sendToWatchers,
+  shows,
+  type Hidden,
+  type StoredEvent,
+} from './watchers';
 
 // A live feed (spec section 8). One class serves three kinds of feed: the
 // homepage's, each repo's, and each person's. The feed queue's consumer
@@ -78,10 +88,15 @@ export interface FeedGlance {
   dayCount: number;
 }
 
-type EventRow = { seq: number; github_id: number; event: string };
+type EventRow = { seq: number; github_id: number; repo: string; event: string };
+
+// Each event's columns, with the repo its issue is in, in lower case, read
+// from the event. Repo names are ASCII, which SQLite's lower() folds.
+const EVENT_COLUMNS = `seq, github_id, event,
+  lower(substr(json_extract(event, '$.issue'), 1, instr(json_extract(event, '$.issue'), '#') - 1)) AS repo`;
 
 function toStored(row: EventRow): StoredEvent {
-  return { seq: row.seq, githubId: row.github_id, json: row.event };
+  return { seq: row.seq, githubId: row.github_id, repo: row.repo, json: row.event };
 }
 
 export class Feed extends DurableObject<Env> {
@@ -146,57 +161,61 @@ export class Feed extends DurableObject<Env> {
 
   /**
    * The events the feed keeps after the one with ID `since`, oldest first,
-   * without blocked donors' events. With no `since`, or one the feed doesn't
-   * keep, every event it keeps. Throws when D1 can't say who is blocked.
+   * without blocked donors' events or events in repos the do-not-list
+   * covers. With no `since`, or one the feed doesn't keep, every event it
+   * keeps. Throws when D1 can't say what to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const at = typeof since === 'string' ? this.placeOf(since) : null;
     const events = this.after(at ?? 0);
-    const blocked = await blockedAmong(
-      this.env.DB,
-      events.map((event) => event.githubId),
-    );
+    const hidden = await hiddenFor(this.env.DB, events);
     return events
-      .filter((event) => !blocked.has(event.githubId))
+      .filter((event) => shows(event, hidden))
       .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
   }
 
   /**
    * The newest `count` events a watcher may see, up to 100, oldest first,
    * and how many events happened on `day`, a UTC day like 2026-09-27. Blocked
-   * donors' events are left out of both. A page shows these first, then
+   * donors' events are left out of both, and events in repos the
+   * do-not-list covers out of the events. The day's count is kept by
+   * claimant, so it still counts those. A page shows these first, then
    * opens a watcher's socket with the newest event's ID as `since`. Null
-   * when D1 can't say who is blocked, so nothing that should be hidden
-   * shows. The runtime reports an error thrown in a Durable Object as
-   * uncaught, so this answers null in its place.
+   * when D1 can't say what to hide, so nothing that should be hidden shows.
+   * The runtime reports an error thrown in a Durable Object as uncaught, so
+   * this answers null in its place.
    */
   async glance({ count, day }: { count: number; day: string }): Promise<FeedGlance | null> {
     const size = mustParse(wholeNumber(1, FEED_TAIL), count, 'count');
     if (!UTC_DAY.test(day)) throw new TypeError('day must be a UTC day, like 2026-09-27.');
-    // As for a new watcher: D1 is asked about each donor not asked about
-    // yet, and the feed is read again, until no donor in it is new.
-    const known = new Set<number>();
-    const blocked = new Set<number>();
+    // As for a new watcher: D1 is asked about each donor and repo not asked
+    // about yet, and the feed is read again, until none in it is new.
+    const known = noneHidden();
+    const hidden = noneHidden();
     for (;;) {
-      const events = this.newest(size, blocked);
+      const events = this.newest(size, hidden);
       const counts = this.sql
         .exec<{ github_id: number; events: number }>('SELECT github_id, events FROM day_counts WHERE day = ?', day)
         .toArray();
-      const ids = [...events.map((event) => event.githubId), ...counts.map((row) => row.github_id)];
-      const unknown = [...new Set(ids)].filter((id) => !known.has(id));
-      if (unknown.length === 0) {
-        return {
-          events: events.map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event')),
-          dayCount: counts.reduce((sum, row) => (blocked.has(row.github_id) ? sum : sum + row.events), 0),
-        };
-      }
+      const asked = askedOf(events);
+      let learned: boolean;
       try {
-        for (const id of await blockedAmong(this.env.DB, unknown)) blocked.add(id);
+        learned = await learnHidden(
+          this.env.DB,
+          { donors: [...asked.donors, ...counts.map((row) => row.github_id)], repos: asked.repos },
+          known,
+          hidden,
+        );
       } catch (error) {
-        console.warn('A glance at a feed was turned away, because D1 could not say which donors are blocked.', error);
+        console.warn('A glance at a feed was turned away, because D1 could not say which events to hide.', error);
         return null;
       }
-      for (const id of unknown) known.add(id);
+      if (!learned) {
+        return {
+          events: events.map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event')),
+          dayCount: counts.reduce((sum, row) => (hidden.donors.has(row.github_id) ? sum : sum + row.events), 0),
+        };
+      }
     }
   }
 
@@ -205,7 +224,8 @@ export class Feed extends DurableObject<Env> {
    * message. `?since=<event ID>` of an event the feed keeps, or got in the
    * last week, sends every event it keeps after that one first. Without it,
    * or with any other ID, the newest 100 come first. Then every new event, as
-   * it arrives. A blocked donor's events are left out.
+   * it arrives. A blocked donor's events are left out, and so are events in
+   * repos the do-not-list covers.
    */
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -215,8 +235,8 @@ export class Feed extends DurableObject<Env> {
     const resumes = since !== null && this.remembers(since);
     return openWatcher(this.ctx, this.env.DB, {
       // Only the events it sends are read: every one after `since`, or the
-      // newest 100 of donors not known to be blocked.
-      history: (blocked) => (resumes ? this.after(this.placeOf(since) ?? 0) : this.newest(FEED_TAIL, blocked)),
+      // newest 100 of those not known to be hidden.
+      history: (hidden) => (resumes ? this.after(this.placeOf(since) ?? 0) : this.newest(FEED_TAIL, hidden)),
       last: () => this.last(),
     });
   }
@@ -255,18 +275,19 @@ export class Feed extends DurableObject<Env> {
 
   private after(seq: number): StoredEvent[] {
     return this.sql
-      .exec<EventRow>('SELECT seq, github_id, event FROM events WHERE seq > ? ORDER BY seq', seq)
+      .exec<EventRow>(`SELECT ${EVENT_COLUMNS} FROM events WHERE seq > ? ORDER BY seq`, seq)
       .toArray()
       .map(toStored);
   }
 
-  /** The newest `count` events, oldest first, leaving out the donors in `skip`. */
-  private newest(count: number, skip: ReadonlySet<number>): StoredEvent[] {
+  /** The newest `count` events, oldest first, leaving out the donors and repos in `skip`. */
+  private newest(count: number, skip: Hidden): StoredEvent[] {
     return this.sql
       .exec<EventRow>(
-        `SELECT seq, github_id, event FROM events
-         WHERE github_id NOT IN (SELECT value FROM json_each(?)) ORDER BY seq DESC LIMIT ?`,
-        JSON.stringify([...skip]),
+        `SELECT * FROM (SELECT ${EVENT_COLUMNS} FROM events WHERE github_id NOT IN (SELECT value FROM json_each(?)))
+         WHERE repo NOT IN (SELECT value FROM json_each(?)) ORDER BY seq DESC LIMIT ?`,
+        JSON.stringify([...skip.donors]),
+        JSON.stringify([...skip.repos]),
         count,
       )
       .toArray()

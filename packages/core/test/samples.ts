@@ -218,36 +218,53 @@ export const samples: Samples = {
     output: {
       items: [
         {
-          id: 'q_1',
+          id: 'cand_1',
           kind: 'candidate',
           repo: 'sample-owner/sample-app',
           requestedBy: null,
           requestedAt: at,
           facts: { stars: 1200, createdAt: at, pushedAt: at, ownerCreatedAt: at },
-          settings: { tags: ['ready for help'] },
+          settings: { prMode: 'reviewed' },
           policy: {
             quote: 'Agent pull requests are welcome once a person has read the diff.',
             url: 'https://github.com/sample-owner/sample-app/blob/main/CONTRIBUTING.md',
             tier: 'allows_with_conditions',
           },
           suggestedTags: [{ name: 'ready for help', openIssues: 8 }],
+          onDoNotList: false,
+        },
+        {
+          id: 'reg_7',
+          kind: 'registration',
+          repo: 'sample-owner/sample-harbor',
+          requestedBy: 'octo-maintainer',
+          requestedAt: later,
+          facts: null,
+          settings: { ...settings, tags: ['help wanted'] },
+          policy: null,
+          suggestedTags: [],
+          onDoNotList: true,
         },
       ],
     },
     mentions: [
       'sample-owner/sample-app',
-      'q_1',
+      'cand_1',
       '1,200 stars',
       'Agent pull requests are welcome once a person has read the diff.',
       'ready for help (8 open)',
+      'reg_7',
+      'from @octo-maintainer',
+      'GitHub showed no public repo named sample-owner/sample-harbor when asked.',
+      'on the do-not-list',
     ],
   },
   admin_decide: {
-    output: { repo, status: 'approved' },
+    output: { repo, kind: 'registration', status: 'approved' },
     mentions: ['Approved', repo],
   },
   admin_add_project: {
-    output: { repo, status: 'approved', source: 'policy' },
+    output: { repo, status: 'approved', source: 'policy', updated: false },
     mentions: ['AI policy', repo],
   },
   admin_block_donor: {
@@ -255,7 +272,11 @@ export const samples: Samples = {
     mentions: ['@spammer', 'hidden'],
   },
   admin_pause_project: {
-    output: { repo, status: 'paused' },
-    mentions: ['Paused', repo],
+    output: { repo, status: 'paused', changed: true },
+    mentions: ['Paused', repo, 'until an admin resumes it'],
+  },
+  admin_remove_project: {
+    output: { repo, status: 'rejected' },
+    mentions: ['Removed', repo, 'do-not-list'],
   },
 };

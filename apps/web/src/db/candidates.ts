@@ -3,6 +3,7 @@ import {
   crawlCandidateSchema,
   id,
   mustParse,
+  repoName,
   type CandidateStatus,
   type CrawlCandidate,
   type Policy,
@@ -123,6 +124,15 @@ export async function getCandidate(db: D1Database, candidateId: string): Promise
   const row = await db
     .prepare('SELECT * FROM crawl_candidates WHERE id = ?')
     .bind(mustParse(id, candidateId, 'candidateId'))
+    .first<CandidateRow>();
+  return row === null ? null : toCandidate(row);
+}
+
+/** The repo's candidate waiting in the admin queue, compared without case, or null. */
+export async function getWaitingCandidate(db: D1Database, repo: string): Promise<CrawlCandidate | null> {
+  const row = await db
+    .prepare("SELECT * FROM crawl_candidates WHERE repo = ? AND status = 'waiting'")
+    .bind(mustParse(repoName, repo, 'repo'))
     .first<CandidateRow>();
   return row === null ? null : toCandidate(row);
 }

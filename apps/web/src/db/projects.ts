@@ -321,7 +321,9 @@ export async function setProjectStatus(
  * when. So a change decided on what was read never lands over a change
  * someone made since. The project after the change, or null when its status
  * changed since the read or the project is gone. A change to the status and
- * reason it already has writes nothing and returns `read`.
+ * reason it already has, by the person who set them, writes nothing and
+ * returns `read`. The same status and reason from someone else is a change of
+ * its own, so an admin's pause over a maintainer's names the admin.
  */
 export async function setProjectStatusFrom(
   db: D1Database,
@@ -335,7 +337,9 @@ export async function setProjectStatusFrom(
     { repo: was.repo, status: change.status, reason: change.reason, changedBy: change.changedBy, changedAt: now },
     'status change',
   );
-  if (next.status === was.status && next.reason === was.statusReason) return was;
+  if (next.status === was.status && next.reason === was.statusReason && next.changedBy === was.statusChangedBy) {
+    return was;
+  }
   const unchanged = `repo = ?1 AND status = ?6 AND status_reason IS ?7 AND status_changed_by IS ?8
     AND status_changed_at = ?9`;
   const values = [
@@ -565,4 +569,117 @@ export async function settingsHistory(db: D1Database, repo: string): Promise<Set
     before = settings;
   }
   return history.reverse();
+}
+
+/** A project waiting for an admin, with the ID of the status change that put it in the queue. */
+export interface PendingProject {
+  project: ProjectRecord;
+  /** The project's latest status change, which made it pending. */
+  changeId: number;
+}
+
+/**
+ * Every pending project, the one that has waited longest first, each with
+ * the ID of the status change that made it pending. A new status change
+ * gives it a new ID, so an ID names one wait in the queue.
+ */
+export async function listPendingProjects(db: D1Database): Promise<PendingProject[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.*, s.settings,
+         (SELECT MAX(c.id) FROM project_status_changes c WHERE c.repo = p.repo) AS change_id
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       WHERE p.status = 'pending'
+       ORDER BY p.status_changed_at, p.repo`,
+    )
+    .all<ProjectRow & { change_id: number }>();
+  return results.map((row) => ({ project: toProject(row), changeId: mustParse(count, row.change_id, 'changeId') }));
+}
+
+/**
+ * The pending project whose latest status change is `changeId`, or null when
+ * there is none: no such change, a project that isn't pending, or one whose
+ * status changed since.
+ */
+export async function getPendingProject(db: D1Database, changeId: number): Promise<PendingProject | null> {
+  const change = mustParse(count, changeId, 'changeId');
+  const row = await db
+    .prepare(
+      `${SELECT_PROJECT}
+       WHERE p.status = 'pending'
+         AND p.repo = (SELECT repo FROM project_status_changes WHERE id = ?1)
+         AND ?1 = (SELECT MAX(c.id) FROM project_status_changes c WHERE c.repo = p.repo)`,
+    )
+    .bind(change)
+    .first<ProjectRow>();
+  return row === null ? null : { project: toProject(row), changeId: change };
+}
+
+/** Every project listed from its written AI policy, whatever its status, the oldest listing first. */
+export async function listPolicyListings(db: D1Database): Promise<ProjectRecord[]> {
+  const { results } = await db
+    .prepare(`${SELECT_PROJECT} WHERE p.source = 'policy' ORDER BY p.added_at, p.repo`)
+    .all<ProjectRow>();
+  return results.map(toProject);
+}
+
+/**
+ * An admin lists a repo from its policy again, when it is already listed
+ * that way: the new policy replaces the old, and the new settings are saved
+ * as a new version by `by` at `now`, with settings left out at their
+ * defaults. Its status, who added it, and when stay. Settings the same as
+ * the listing's save no new version. Null when the repo isn't a project
+ * listed from its policy when it saves.
+ */
+export async function relistFromPolicy(
+  db: D1Database,
+  repo: string,
+  listing: { policy: Policy; settings: ProjectSettingsInput },
+  by: number,
+  now: number,
+): Promise<{ project: ProjectRecord; changed: SettingKey[] } | null> {
+  const policy = mustParse(policySchema, listing.policy, 'policy');
+  const next = mustParse(projectSettingsSchema, listing.settings, 'settings');
+  const changedBy = mustParse(githubId, by, 'by');
+  const at = checkTime(now);
+  for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
+    const current = await getProject(db, repo);
+    if (current?.source !== 'policy') return null;
+    const changed = changedSettings(current.settings, next);
+    const version = changed.length > 0 ? current.settingsVersion + 1 : current.settingsVersion;
+    const project = mustParse(
+      projectRecordSchema,
+      { ...current, policy, settings: next, settingsVersion: version },
+      'project',
+    );
+    // Both statements check that the project is still the listing read,
+    // with no other save since, and the batch runs as one transaction. The
+    // update runs last, since it changes what they check.
+    const read = [current.repo, current.settingsVersion];
+    const statements: D1PreparedStatement[] = [];
+    if (changed.length > 0) {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
+             SELECT ?1, ?3, ?4, ?5, ?6
+             WHERE EXISTS (SELECT 1 FROM projects WHERE repo = ?1 AND source = 'policy' AND settings_version = ?2)`,
+          )
+          .bind(...read, version, JSON.stringify(next), changedBy, at),
+      );
+    }
+    statements.push(
+      db
+        .prepare(
+          `UPDATE projects SET policy_quote = ?3, policy_url = ?4, policy_tier = ?5, settings_version = ?6,
+             issue_repo = ?7
+           WHERE repo = ?1 AND source = 'policy' AND settings_version = ?2`,
+        )
+        .bind(...read, policy.quote, policy.url, policy.tier, version, issueRepoOf(current.repo, next)),
+    );
+    const results = await db.batch(statements);
+    if (results.at(-1)?.meta.changes === 1) return { project, changed };
+  }
+  throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }

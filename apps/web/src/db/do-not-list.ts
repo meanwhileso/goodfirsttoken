@@ -41,6 +41,36 @@ export async function addToDoNotList(
   return stored;
 }
 
+/** Takes a repo off the do-not-list. False when it wasn't on it. */
+export async function removeFromDoNotList(db: D1Database, repo: string): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM do_not_list WHERE repo = ?')
+    .bind(mustParse(repoName, repo, 'repo'))
+    .run();
+  return result.meta.changes > 0;
+}
+
+/**
+ * Which of these repos the do-not-list covers, as the repos where issues
+ * live: a repo on the list, or the issue repo of a project whose code repo
+ * is on it now. Each comes back in lower case. The repos go in as one JSON
+ * array, so any number of them takes one query, under D1's limit on bound
+ * values.
+ */
+export async function doNotListedAmong(db: D1Database, repos: Iterable<string>): Promise<Set<string>> {
+  const checked = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
+  if (checked.length === 0) return new Set();
+  const { results } = await db
+    .prepare(
+      `SELECT j.value AS repo FROM json_each(?) j
+       WHERE EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = j.value)
+          OR EXISTS (SELECT 1 FROM projects p JOIN do_not_list d ON d.repo = p.repo WHERE p.issue_repo = j.value)`,
+    )
+    .bind(JSON.stringify(checked))
+    .all<{ repo: string }>();
+  return new Set(results.map((row) => row.repo.toLowerCase()));
+}
+
 /** The repo's entry on the do-not-list, compared without case, or null. */
 export async function getDoNotListEntry(db: D1Database, repo: string): Promise<DoNotListEntry | null> {
   const row = await db
