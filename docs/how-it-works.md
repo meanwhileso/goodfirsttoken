@@ -993,8 +993,10 @@ a project is `not_found`.
   tool, and it reads nothing for a project that isn't approved, or whose
   repo or issue repo is on the do-not-list.
   - It reads at most once every 10 minutes for a project. Only earlier
-    refreshes count, so a refresh right after a scheduled run reads.
-    Within the 10 minutes, the answer says a refresh read them already.
+    refreshes count, so a refresh right after a scheduled run reads. A
+    refresh that asked GitHub counts even when it read no issue. Within the
+    10 minutes, the answer says a refresh ran already, and this one read
+    nothing.
   - It never reads a project while a scheduled run reads it, and a
     scheduled run leaves a project a refresh reads. While one does, a
     refresh reads nothing, the answer says the sync is busy with it, and it
@@ -1071,8 +1073,9 @@ do-not-list.
 open in the project's code repo or its issue repo, that GitHub links to the
 issue in either of two ways. The sync reads both for every issue it reads.
 A PR from a fork counts when it is aimed at one of those repos. A PR in any
-other repo links nothing, whatever it says, like one in a project
-downstream that works around the issue.
+other repo links nothing, whatever it says, as
+[spec §6](specs/v1.md#6-issues-and-claims) decides and explains. A PR in
+a renamed or moved repo still counts, under Delisting below.
 
 - A closing reference: a PR whose description closes the issue with a
   keyword, like `Closes #12`, aimed at its repo's default branch, or one
@@ -1119,6 +1122,12 @@ project, with the reason, like `sample-owner/app is archived on GitHub.`
   [Managing a project](#managing-a-project) says.
 - It lands only on the approved status the sync read, so a change someone
   made at the same moment stays.
+- GitHub answers a renamed or moved repo from its new name, so the sync
+  reads it and pauses nothing. The project and its copies of issues keep
+  the old name, since nothing renames them yet. GitHub gives the repo's PRs
+  under the new name, and they count as the project's: the sync compares a
+  PR's repo, without case, with the names the project keeps and the names
+  GitHub gave its code repo and issue repo in the same run.
 
 **The budget.** GitHub gives the service token's account 5,000 REST calls
 and 5,000 GraphQL points an hour, whichever of its tokens makes them, and the
@@ -1142,8 +1151,9 @@ the first question included.
 - When GitHub refuses a read about one project alone, like a label it can't
   list issues by, the run skips that project and goes on.
 - Each run of the sync logs one line: what it read, what is left of the
-  budget, why it stopped, and every open PR it found linked to the issues it
-  read, each counted once for each issue, by a closing reference only, a
+  budget, why it stopped, the projects it left because another run held
+  them, and every open PR it found linked to the issues it read, each
+  counted once for each issue, by a closing reference only, a
   cross-reference only, or both ways, with the PRs in other repos counted
   apart.
 

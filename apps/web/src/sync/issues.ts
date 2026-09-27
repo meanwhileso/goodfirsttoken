@@ -177,36 +177,37 @@ function notGitHub(repo: string): SyncStopped {
 }
 
 /**
- * Why GitHub no longer shows the repo as one Good First Token lists, or null
- * when it does. The service token reads public repos only, so GitHub
- * answers 404 alike for a repo that went private and one that was deleted.
- * A renamed or moved repo answers from its new name, and stays listed.
+ * What GitHub shows of a repo: the name GitHub gives it now, or why it no
+ * longer shows it as one Good First Token lists. The service token reads
+ * public repos only, so GitHub answers 404 alike for a repo that went
+ * private and one that was deleted. A renamed or moved repo answers from
+ * its new name, and stays listed.
  *
  * Only an answer in GitHub's own form pauses a project: its JSON 404, Not
  * Found, a 451 with its JSON body, or a repo that says it is private or
  * archived. Any other 404 or 451, or a repo in a form GitHub doesn't send,
  * stops the run, so a proxy or a wrong GH_API_URL never pauses a project.
  */
-async function whyUnlisted(github: ServiceGitHub, repo: string): Promise<string | null> {
+async function readRepo(github: ServiceGitHub, repo: string): Promise<{ name: string } | { unlisted: string }> {
   let found: RestRepo;
   try {
     found = (await github.read<RestRepo>(`/repos/${repo}`)).data;
   } catch (error) {
     if (!(error instanceof GitHubError) || (error.status !== 404 && error.status !== 451)) throw error;
     if (error.status === 404 && error.bodyMessage === 'Not Found') {
-      return `GitHub shows no public repo named ${repo}. It went private or was deleted.`;
+      return { unlisted: `GitHub shows no public repo named ${repo}. It went private or was deleted.` };
     }
-    if (error.status === 451 && error.bodyMessage !== null) return `GitHub blocked access to ${repo}.`;
+    if (error.status === 451 && error.bodyMessage !== null) return { unlisted: `GitHub blocked access to ${repo}.` };
     throw notGitHub(repo);
   }
   if (typeof found.full_name !== 'string' || typeof found.private !== 'boolean' || typeof found.archived !== 'boolean') {
     throw notGitHub(repo);
   }
   if (found.private || (typeof found.visibility === 'string' && found.visibility !== 'public')) {
-    return `${repo} is no longer public on GitHub.`;
+    return { unlisted: `${repo} is no longer public on GitHub.` };
   }
-  if (found.archived) return `${repo} is archived on GitHub.`;
-  return null;
+  if (found.archived) return { unlisted: `${repo} is archived on GitHub.` };
+  return { name: found.full_name };
 }
 
 /**
@@ -433,15 +434,19 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
   const { db, github, now } = deps;
   const issueRepo = project.settings.issueRepo ?? project.repo;
   // A PR links an issue only when it is aimed at the project: opened in its
-  // code repo or its issue repo, from a branch there or a fork.
-  const ours = (pr: PrRef) => lower(pr.repo) === lower(project.repo) || lower(pr.repo) === lower(issueRepo);
+  // code repo or its issue repo, from a branch there or a fork. Each is
+  // known by the name the project keeps and the name GitHub gives it now,
+  // which differ after a rename, and GitHub gives each PR under the new one.
+  const projectRepos = new Set([lower(project.repo), lower(issueRepo)]);
+  const ours = (pr: PrRef) => projectRepos.has(lower(pr.repo));
   try {
     for (const repo of lower(issueRepo) === lower(project.repo) ? [project.repo] : [project.repo, issueRepo]) {
-      const reason = await whyUnlisted(github, repo);
-      if (reason !== null) {
-        await pauseForGitHub(db, project, reason, now());
-        return { outcome: 'paused', reason };
+      const found = await readRepo(github, repo);
+      if ('unlisted' in found) {
+        await pauseForGitHub(db, project, found.unlisted, now());
+        return { outcome: 'paused', reason: found.unlisted };
       }
+      projectRepos.add(lower(found.name));
     }
 
     const passStart = await beginPass(db, project.repo, now());
@@ -555,7 +560,7 @@ export async function syncTaggedIssues(deps: SyncDeps): Promise<SyncRun> {
   // One line a run. The linked PRs it counts say how often each way finds
   // a PR the other misses.
   console.log(
-    `The tagged-issue sync read issues: ${String(run.issues)}, projects started: ${String(run.projects)}, finished: ${String(run.finished)}, calls to GitHub: ${String(run.calls)}. Linked PRs found by a closing reference only: ${String(run.linked.closing)}, by a cross-reference only: ${String(run.linked.cross)}, both ways: ${String(run.linked.both)}, in another repo: ${String(run.linked.elsewhere)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The tagged-issue sync read issues: ${String(run.issues)}, projects started: ${String(run.projects)}, finished: ${String(run.finished)}, calls to GitHub: ${String(run.calls)}. Linked PRs found by a closing reference only: ${String(run.linked.closing)}, by a cross-reference only: ${String(run.linked.cross)}, both ways: ${String(run.linked.both)}, in another repo: ${String(run.linked.elsewhere)}. Left: ${JSON.stringify(deps.github.left())}.${run.held.length === 0 ? '' : ` Not read, held by another run: ${run.held.join(', ')}.`}${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

@@ -1288,16 +1288,18 @@ read-only service token. The rules are in
   joining `prs` to `claims`, since the PR job closes it there and nowhere
   else. The PR job calls `prClosed` before it writes the table, for the same
   reason.
-- **Which PRs count.** A PR counts only when its repo, as GitHub gives it,
-  is the project's code repo or its issue repo. GitHub gives a PR's base
+- **Which PRs count** is under Linked PRs in
+  [how-it-works.md](how-it-works.md#tagged-issues), and why is in
+  [spec §6](specs/v1.md#6-issues-and-claims). GitHub gives a PR's base
   repo, where it is open, so a PR from a fork counts when it is aimed at the
-  project.
+  project. The read of each repo before a pass gives its `full_name` as
+  GitHub has it now, which the pass adds to the names a PR's repo can match,
+  so a rename doesn't drop the project's PRs.
 - **Delisting** uses `setProjectStatusFrom`, the compare-and-set #55 added,
   with `changed_by` null, which the maintainer's `pause_project` reads as a
   pause only an admin can lift. It tries three times, and stops as soon as
-  the project isn't approved. GitHub answers a renamed or moved repo from
-  its new name, following a redirect, so the sync reads it and pauses
-  nothing, but the project keeps its old name. Nothing renames it yet.
+  the project isn't approved. GitHub answers a REST call to a renamed or
+  moved repo's old name with a redirect, which `fetch` follows.
 - **The PR job** reads 50 PRs in one GraphQL query, each by its repo and
   number, so one point covers them.
 - **A maintainer's refresh** is `project_status` with `refresh`. It runs
@@ -1308,9 +1310,9 @@ read-only service token. The rules are in
   refreshes at once make one read. `issue_syncs.refreshed_at` counts only
   refreshes, so a scheduled run never makes a refresh wait.
 - **The log.** Each run logs one line, with what it read, what is left of
-  the budget, and every open PR it found linked to the issues it read, each
-  counted once for each issue, by the ways it was found. It counts the PRs
-  in other repos apart.
+  the budget, the projects another run held, and every open PR it found
+  linked to the issues it read, each counted once for each issue, by the
+  ways it was found. It counts the PRs in other repos apart.
 
 ### Open question 7: finding linked PRs
 
@@ -1350,12 +1352,10 @@ measured on real GitHub yet. The run logs are how to measure it.
   cross-reference. GraphQL's `CrossReferencedEvent` also has
   `willCloseTarget`, which says whether the source closes the target when it
   merges. The REST event doesn't, and the sync doesn't read it.
-- **Other repos.** Both ways find PRs in any repo. A PR in another repo that
-  mentions an issue, like a project downstream noting "works around
-  owner/app#12", says nothing about work on the issue itself. A closing
-  keyword in another repo's PR closes the issue when it merges, but its
-  work goes to that repo. So a PR counts only when it is open in the
-  project's code repo or its issue repo, from a branch there or a fork.
+- **Other repos.** Both ways find PRs in any repo, and a closing keyword in
+  another repo's PR closes the issue when it merges. The sync drops them,
+  since [spec §6](specs/v1.md#6-issues-and-claims) counts only a PR in the
+  project's code repo or its issue repo.
 - **The choice.** Both ways link a PR in the project's repos, so a PR there
   that only mentions an issue closes it to new claims. That errs toward not
   sending another agent to an issue someone is working on, and a person who

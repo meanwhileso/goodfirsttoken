@@ -88,8 +88,22 @@ test('a second refresh within 10 minutes reads nothing, and says so', async () =
   const again = await status(agent, true);
 
   expect(again.structuredContent).toMatchObject({ refresh: 'too_soon' });
-  expect(textOf(again)).toContain("less than 10 minutes ago, so they weren't read again");
+  expect(textOf(again)).toContain('A refresh ran less than 10 minutes ago');
   expect(serviceCalls()).toHaveLength(read);
+});
+
+test('a refresh that read no issue counts as one too, and the next within 10 minutes says a refresh ran, without saying it read the issues', async () => {
+  await project();
+  const agent = await connectAgent(github, 'sample-maintainer');
+  github.spendRateLimit(SERVICE_LOGIN, 'core', 2600);
+  const first = await status(agent, true);
+
+  const again = await status(agent, true);
+
+  expect(first.structuredContent).toMatchObject({ refresh: 'not_read' });
+  expect(again.structuredContent).toMatchObject({ refresh: 'too_soon' });
+  expect(textOf(again)).toContain('A refresh ran less than 10 minutes ago');
+  expect(textOf(again)).not.toMatch(/\bread (its|the) tagged issues/i);
 });
 
 test('a refresh right after scheduled runs reads the issues tagged since', async () => {

@@ -71,7 +71,7 @@ function refreshText(outcome: RefreshOutcome): string {
     case 'paused':
       return "Reading GitHub showed its repo is no longer public and open, so Good First Token paused it. Only Good First Token's admins can resume it.";
     case 'too_soon':
-      return `A refresh read its tagged issues from GitHub less than ${minutes} minutes ago, so they weren't read again.`;
+      return `A refresh ran less than ${minutes} minutes ago, so this one read nothing from GitHub.`;
     case 'busy':
       return "A scheduled sync is reading its tagged issues from GitHub now, so they weren't read again. Ask again when it's done.";
     case 'not_approved':

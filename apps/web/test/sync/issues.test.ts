@@ -10,6 +10,7 @@ import {
   getIssueSync,
   getPr,
   getProject,
+  holdProject,
   listIssues,
   listProjectsAskingForHelp,
   setProjectStatus,
@@ -17,7 +18,7 @@ import {
 } from '../../src/db';
 import { issueRoom, type IssueRoom } from '../../src/rooms/issue-room';
 import { ServiceGitHub } from '../../src/sync/github';
-import { syncTaggedIssues } from '../../src/sync/issues';
+import { HOLD_MS, syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
 import { ALLOWANCES } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
@@ -33,6 +34,9 @@ const APP = 'sample-owner/sample-app';
 const DESKTOP = 'sample-owner/sample-desktop';
 const TOOLS = 'sample-owner/sample-tools';
 const BUNDLER = 'sample-owner/sample-bundler';
+// Names sample-app and sample-desktop had before a rename.
+const OLD_APP = 'sample-owner/old-app';
+const OLD_DESKTOP = 'sample-owner/old-desktop';
 const BY = 'sample-maintainer';
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -109,6 +113,34 @@ async function claimWithPr(n: number, body: string) {
   if (!opened.ok) throw new Error(opened.refusal.message);
   await addPr(db, { claimId: claimed.claim.id, pr, openedAt: Date.now() });
   return { claimId: claimed.claim.id, pr };
+}
+
+/**
+ * Has the fake answer for a repo renamed from `from` to `to`, which it can't
+ * do itself. GitHub redirects a REST call to a renamed repo's old name, and
+ * fetch follows the redirect, so the answer comes from the new name, with
+ * the new name in it. Here a GraphQL query finds the repo by its old name
+ * too.
+ */
+function renamed(from: string, to: string): void {
+  const [fromOwner, fromName] = from.split('/');
+  const [toOwner, toName] = to.split('/');
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    const old = `/repos/${from}`;
+    if (url.pathname === old || url.pathname.startsWith(`${old}/`)) {
+      url.pathname = `/repos/${to}${url.pathname.slice(old.length)}`;
+      return github.fetch(new Request(url, { method: request.method, headers: request.headers }));
+    }
+    if (url.pathname.endsWith('/graphql')) {
+      const body = await request.json<{ variables?: Record<string, unknown> }>();
+      const vars = body.variables ?? {};
+      if (vars.owner === fromOwner && vars.name === fromName) body.variables = { ...vars, owner: toOwner, name: toName };
+      return github.fetch(new Request(url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) }));
+    }
+    return github.fetch(request);
+  });
 }
 
 /** How many of the project's issues the homepage counts waiting for an agent. */
@@ -384,6 +416,43 @@ describe('linked PRs', () => {
     expect((await getIssue(db, APP, ref(second, DESKTOP)))?.linkedPr).toMatchObject({ repo: APP, number: inCodeRepo });
   });
 
+  test("after the project's repo is renamed on GitHub, a PR there still closes an issue to claims", async () => {
+    await registeredProject({ tags: ['help wanted'] }, OLD_APP);
+    renamed(OLD_APP, APP);
+    const issue = tagged('Keep the hash in rewrites');
+    const pull = github.openPullRequest(APP, { title: 'Keep the hash', body: `Closes #${String(issue)}`, by: 'priya' });
+
+    const run = await sync();
+    const claimed = await issueRoom(env.ISSUE_ROOM, ref(issue, OLD_APP)).claim({
+      issue: ref(issue, OLD_APP),
+      project: OLD_APP,
+      githubId: priya.githubId,
+      login: priya.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+
+    expect((await getProject(db, OLD_APP))?.status).toBe('approved');
+    expect((await getIssue(db, OLD_APP, ref(issue, OLD_APP)))?.linkedPr).toMatchObject({ repo: APP, number: pull });
+    expect(run.linked.elsewhere).toBe(0);
+    expect(claimed.ok ? 'claimed' : claimed.refusal.code).toBe('pr_exists');
+  });
+
+  test("after the project's issue repo is renamed on GitHub, a PR there still links its issue", async () => {
+    freshNumbers(github, DESKTOP);
+    await registeredProject({ tags: ['ready'], issueRepo: OLD_DESKTOP });
+    renamed(OLD_DESKTOP, DESKTOP);
+    const issue = github.openIssue(DESKTOP, { title: 'Wake the second screen', labels: ['ready'], by: BY });
+    const pull = github.openPullRequest(DESKTOP, { title: 'Wake it', body: `Fixes #${String(issue)}`, by: BY });
+
+    const run = await sync();
+
+    expect((await getIssue(db, APP, ref(issue, OLD_DESKTOP)))?.linkedPr).toMatchObject({ repo: DESKTOP, number: pull });
+    expect(run.linked.elsewhere).toBe(0);
+  });
+
   test('the run counts every linked PR by the ways it was found, whichever one each copy keeps', async () => {
     await registeredProject();
     const issue = tagged('Keep the hash in rewrites');
@@ -511,5 +580,21 @@ describe('the budget', () => {
 
     expect(run.stopped).toBe('calls');
     expect(github.calls).toHaveLength(2);
+  });
+
+  test("a project another run holds is left, and the run's log line names it", async () => {
+    await registeredProject();
+    tagged('Keep the hash in rewrites');
+    await holdProject(db, APP, Date.now(), Date.now() + HOLD_MS);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const run = await sync();
+    const line = log.mock.calls
+      .map((parts) => parts.map(String).join(' '))
+      .find((logged) => logged.startsWith('The tagged-issue sync'));
+
+    expect(run.held).toEqual([APP]);
+    expect(await cached()).toEqual([]);
+    expect(line).toContain(`another run: ${APP}`);
   });
 });
