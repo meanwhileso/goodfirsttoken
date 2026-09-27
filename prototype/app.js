@@ -7,6 +7,8 @@
   'use strict';
 
   const PROMPT = 'Read goodfirsttoken.org/start.md, then spend some of my tokens on open source.';
+  // The issue page is the site's /<owner>/<repo>/issues/<n> route now, described in docs/how-it-works.md.
+  const ISSUE_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-issue-page';
 
   // ---------- DOM helpers ----------
 
@@ -214,7 +216,7 @@
   ];
 
   function feedRow(ev, time, typed) {
-    const issueHref = ev.issue === 'meanwhileso/goodfirsttoken#18' ? 'issue.html' : 'project.html';
+    const issueHref = ev.issue === 'meanwhileso/goodfirsttoken#18' ? ISSUE_PAGE : 'project.html';
     const text = h('span', { class: 'text' }, typed ? '' : ev.text);
     const row = h('div', { class: 'wall-line' },
       h('span', { class: 'time' }, time),
@@ -264,89 +266,6 @@
     });
   }
 
-  // ---------- Issue page: lanes play out, then the PR closes claims ----------
-
-  const LANE_SCRIPT = {
-    priya: [
-      'read AGENTS.md and CONTRIBUTING',
-      'wrote failing test: /live.ndjson returns one JSON object per line',
-      'tests: 1 failing, as expected',
-      'added the NDJSON formatter (apps/web/src/feed/format.ts)',
-      'tests: 214 passing',
-      'submitted: 1 file, +48 -3',
-      '__pr__',
-    ],
-    kenji: [
-      'reading the feed Durable Object',
-      'sketched a streaming encoder',
-      'tests: 3 failing, trying another approach',
-      'saw PR #57 from @priya, finishing mine for review only',
-    ],
-  };
-
-  function laneLine(...content) {
-    return h('div', { class: 'is-new' }, h('span', { class: 'faint' }, clock(0)), ...content);
-  }
-
-  function setLaneState(lane, text, kind) {
-    const state = lane.querySelector('.lane__state');
-    state.className = `chip lane__state ${kind === 'opened' ? 'chip--opened' : 'chip--live'}`;
-    state.textContent = text;
-  }
-
-  function initIssue(root) {
-    const lanes = root.querySelectorAll('[data-lane]');
-    if (!lanes.length) return;
-    const $ = (sel) => root.querySelector(sel);
-    let timers = [];
-
-    function closeClaims() {
-      $('[data-slot-open]').hidden = true;
-      $('[data-slot-closed]').hidden = false;
-      $('[data-slots]').textContent = 'claims closed';
-      $('[data-slots-glyph]').classList.add('slots--closed');
-      $('[data-pr-banner]').hidden = false;
-    }
-
-    function play() {
-      lanes.forEach((lane) => {
-        const who = lane.dataset.lane;
-        const body = lane.querySelector('.lane__body');
-        LANE_SCRIPT[who].forEach((text, n) => {
-          const at = (who === 'priya' ? 2200 : 3100) * (n + 1);
-          timers.push(setTimeout(() => {
-            if (text === '__pr__') {
-              body.append(laneLine(h('a', { class: 'chip chip--opened', href: '#pr' }, 'PR #57 opened')));
-              setLaneState(lane, 'PR opened', 'opened');
-              closeClaims();
-              return;
-            }
-            body.append(laneLine(text));
-          }, at));
-        });
-      });
-    }
-
-    function reset() {
-      timers.forEach(clearTimeout);
-      timers = [];
-      lanes.forEach((lane) => {
-        lane.querySelectorAll('.lane__body .is-new').forEach((n) => n.remove());
-        setLaneState(lane, 'working');
-      });
-      $('[data-slot-open]').hidden = false;
-      $('[data-slot-closed]').hidden = true;
-      $('[data-slots]').textContent = '2 of 3 slots taken';
-      $('[data-slots-glyph]').classList.remove('slots--closed');
-      $('[data-pr-banner]').hidden = true;
-      play();
-    }
-
-    const replay = $('[data-replay]');
-    if (replay) replay.addEventListener('click', reset);
-    play();
-  }
-
   // ---------- Review queue (/me) ----------
 
   function initMe(root) {
@@ -382,7 +301,7 @@
       btn.addEventListener('click', async () => {
         const ok = await confirmDialog({
           title: 'Release this claim?',
-          body: 'Your slot opens for someone else. Your lane stays on the issue page as an earlier attempt.',
+          body: 'Your slot opens for someone else. The issue page\'s timeline keeps your release and its reason.',
           confirm: 'Release', danger: true,
         });
         if (ok) btn.closest('[data-item]').replaceChildren(h('div', { class: 'empty' }, 'Released. The slot is open again.'));
@@ -546,7 +465,7 @@
       btn.addEventListener('click', () => {
         btn.closest('.pick').querySelector('[data-pick-more]').replaceChildren(
           h('div', { class: 'notice notice--merged' }, ICON.check(),
-            h('span', null, 'Claimed · slot 2 of 3. ', h('a', { href: 'issue.html' }, 'Watch it live'))));
+            h('span', null, 'Claimed · slot 2 of 3. ', h('a', { href: ISSUE_PAGE }, 'Watch it live'))));
       });
     });
   }
@@ -619,7 +538,6 @@
     initOpenIn(root);
     initTokenField(root);
     initFeeds(root);
-    initIssue(root);
     initMe(root);
     initAdmin(root);
     initProjects(root);

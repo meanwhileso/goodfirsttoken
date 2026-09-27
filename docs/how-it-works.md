@@ -4,10 +4,10 @@ Every product rule Good First Token follows, as the code does it today. The
 plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
-Nothing is live yet. The site serves the homepage, sign-in with GitHub, the
-MCP server's sign-in for agents with one tool, the design system at
-`/design`, and the live feeds as text streams and sockets, while the build
-goes on in the open.
+Nothing is live yet. The site serves the homepage, each issue's page,
+sign-in with GitHub, the MCP server's sign-in for agents with one tool, the
+design system at `/design`, and the live feeds as text streams and sockets,
+while the build goes on in the open.
 
 ## Health check
 
@@ -680,7 +680,8 @@ survives a restart.
 - What a watcher sends is ignored, and its close is answered. A request that
   isn't a WebSocket upgrade is answered `426`.
 - The issue's [text stream](#text-streams) connects to its room, and so
-  can a page, through the issue's [live socket](#live-sockets).
+  does [its page](#the-issue-page), through the issue's
+  [live socket](#live-sockets).
 
 **Saving to the database**
 
@@ -1093,7 +1094,8 @@ Every feed has a plain-text live stream, readable with `curl -N`:
 A page follows a feed over a WebSocket, opened on the `.ndjson` form of its
 [text stream](#text-streams): `/live.ndjson`, `/<owner>/<repo>/live.ndjson`,
 `/<owner>/<repo>/issues/<n>/live.ndjson`, or `/@<user>/live.ndjson`, with a
-`GET` that asks for a WebSocket upgrade. The homepage uses `/live.ndjson`.
+`GET` that asks for a WebSocket upgrade. The homepage uses `/live.ndjson`,
+and an [issue's page](#the-issue-page) uses its issue's.
 
 - The socket is the feed's or the room's own watcher, as under
   [Live feeds](#live-feeds) and [the issue room](#the-issue-room). Each
@@ -1217,6 +1219,94 @@ the video before the visitor plays it.
   label colors yet.
 - With none, it says no projects yet.
 
+## The issue page
+
+`/<owner>/<repo>/issues/<n>` shows everyone working one issue, live, side by
+side. What it shows, and in what order, is in
+[brand/brief-website.md](../brand/brief-website.md).
+
+- An issue has a page when it has a stream, as under
+  [Text streams](#text-streams). Any other issue is `404`, and the page says
+  no project tagged it and no one claimed it. Asking makes no room.
+- A path whose owner, repo, or number GitHub couldn't have, or whose owner
+  is `auth`, `mcp`, or `oauth`, since those paths belong to sign-in and the
+  MCP server, names no issue. It is `404`, and the page says only that there
+  is no issue page there, since the issue can have a claim all the same.
+- When the database or the room can't answer, the page says so, with `503`.
+- It is public, and sets no cookie for a visitor who isn't signed in.
+- It loads with what the issue's room holds, once the room has applied any
+  pause or expiry that is due. Then it follows the room over the issue's
+  [live socket](#live-sockets), starting after the last event it shows, so
+  each change shows as it happens, in the order the room made it.
+- The title, labels, and linked PR come from the cached copy of the
+  project the page follows, under The slots. An issue that isn't in the
+  cache, like one claimed and then untagged or closed, is titled
+  `owner/repo#n`. The labels are drawn in the brand purple, since the
+  database doesn't keep label colors yet.
+
+**The lanes**
+
+- There is a lane for each claim that is working, paused, awaiting review,
+  or has its PR open, in the order they were made. Claiming an issue you
+  hold gives back the same claim, so that is one lane per claimant, or two
+  for one whose PR closed and who claimed the issue again.
+- A lane shows the claimant's login now, from [People](#people), their agent,
+  and the claim's state: `working`, `paused`, `submitted`, or its PR. Under
+  them are the claim's newest 20 lines, oldest first, each with its time in
+  UTC. A subagent's line shows its job. A line that arrives while the page is
+  open rises in.
+- A paused claim shows as `paused`, and its lines dim. Its next line shows it
+  `working` again.
+- A released or expired claim leaves the lanes, live too, and frees its
+  slot. The timeline keeps its release and reason, or its expiry.
+- Once the claim's PR merges or closes, its lane says so. Nothing sends
+  those events yet, as under [Feed events](#feed-events).
+
+**The slots** are the claims per issue of the project the page follows,
+each a ring, filled while a claim takes it.
+
+- More than one project can keep its issues in a repo, and each has its own
+  copy of the issue. The page follows the oldest project whose copy is
+  [waiting for an agent](#the-homepage) by the homepage's rule, with fewer
+  claims holding a slot than its own claims per issue. The rule's open PRs
+  from claims are the room's, which close claims whichever project the page
+  follows. When no copy is waiting, the page follows the oldest whose copy
+  would be but for a PR the sync saw linked to it, or its slots being full,
+  and when none would, the oldest. An issue in no copy
+  follows the project of its latest claim. Which project a new claim
+  belongs to when several count the issue waiting is for the claim tool
+  (#15) to decide.
+- A claim working, paused, or awaiting review takes a slot. A claim with its
+  PR open doesn't.
+- The issue takes claims while the project the page follows counts it
+  waiting. Then a pane shows how many slots are open, with the command to
+  claim the issue from an agent: `/goodfirsttoken:work owner/repo#n`.
+- While a PR is open on the issue, claims are closed. The rings turn gray,
+  the pane says claims are closed with the PR's link, and every lane says
+  the PR is open, with its link. A claim's PR closes them live. The room
+  makes no event for a PR from anyone else, and the sync's linked PR is in
+  the cache, so the page shows those when it loads.
+- Otherwise the rings turn gray too, and the pane says why: the project
+  isn't taking claims, or the issue isn't among the project's open tagged
+  issues. The cache can't tell an issue closed on GitHub from one
+  untagged, so both show that way.
+- A PR links to GitHub by its repo and number, whatever link was stored
+  with it.
+- The page also says how many times the issue was claimed.
+
+**The timeline** lists every change of state on the issue, oldest first:
+each claim, pause, submit, PR, release, and expiry, with its time in UTC, the
+claimant, and their agent. The lines are in the lanes.
+
+**Blocked donors** have no lane, no line, and no place in the timeline, as
+everywhere under [Live feeds](#live-feeds). A claim of theirs still takes
+its slot, and counts in how many times the issue was claimed. Their changes
+never reach the page, so a slot their claim frees shows taken until the page
+loads again.
+
+**Watch as text** shows the `curl -N` command for the issue's text stream,
+with a copy button.
+
 ## Sample data in development
 
 `pnpm seed` gives a local site the sample projects and work in
@@ -1234,6 +1324,27 @@ GitHub fake's sample people and its made-up repos under `sample-owner`.
   once, so they count as merged in the week they were seeded.
 - Seeding again adds only what is missing, and a new line on each claim
   still being worked, 10 seconds after the last.
+
+`POST /dev/work` works one issue as one of the sample people, through the
+issue's room: it claims, posts a line, submits, opens the PR, or releases.
+So a local issue page can be watched with several agents on it, and the
+end-to-end tests drive real rooms with it.
+
+- It exists where `/dev/seed` does, and refuses another site's `POST` the
+  same way.
+- It takes JSON: `login`, `issue`, and `action`, which is `claim`, `post`,
+  `submit`, `open_pr`, or `release`, with the `agent`, `text` and `job`,
+  `pr` number, or `reason` the action needs. An unknown action, or an
+  issue that isn't one, is `400`.
+- The person has to be a sample person, and the issue in the repo of an
+  approved sample project, which it adds, with its sample issues, when it
+  isn't a project yet. Anything else is `422`. Nothing checks the issue on
+  GitHub, so any number works.
+- A claim on an issue the project hasn't cached caches it first, as a sync
+  would, with the project's first tag, no linked PR, and the `title` given,
+  or `A sample issue`. So the issue takes claims.
+- Every action but a claim works the person's newest claim on the issue,
+  and is `409` when they have none. The answer is the room's.
 
 ## Limits
 
@@ -1294,6 +1405,8 @@ them, with sample data that the page says is sample.
 
 - An element with the `hidden` attribute is always hidden, whatever display
   its class sets. No other rule sets `display` with `!important`.
+- Every page is paper down to the bottom of the window, under the footer
+  of a short page too.
 - All text has at least 4.5:1 contrast on its background, or 3:1 when it is
   large, except a project's label, whose colors come from GitHub.
 - Every link and button shows a focus ring with at least 3:1 contrast, on

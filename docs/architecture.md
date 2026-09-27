@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The rest of the site, other queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The rest of the site, other queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -35,8 +35,8 @@ The repo is a pnpm workspace.
   `src/auth/routes.ts`, every path shaped like a text stream to
   `src/feed/streams.ts`, which also takes a page's live socket there, and
   the form on `/oauth/authorize` to `src/mcp/authorize.ts`. It hands every
-  other one to TanStack Start, setting the status the page on
-  `/oauth/authorize` names. Its `queue` handler is the feed queue's
+  other one to TanStack Start, setting the status a page names, as the page
+  on `/oauth/authorize` and an issue page do. Its `queue` handler is the feed queue's
   consumer. The Durable Object classes are exported from it. Cron handlers
   join it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
@@ -63,9 +63,12 @@ The repo is a pnpm workspace.
 - **Sign-in lives in `src/auth/`,** described under [Sign-in](#sign-in).
 - **The homepage is `src/routes/index.tsx`,** with what it reads in
   `src/home/`, described under [The homepage](#the-homepage).
+- **The issue page is `src/routes/$owner.$repo.issues.$number.tsx`,** with
+  what it reads in `src/issue/`, described under
+  [The issue page](#the-issue-page).
 - **`src/dev/` is for local development only:** the sample work `pnpm seed`
-  gives a local site, described under
-  [Sample data](#sample-data-in-development).
+  gives a local site, and a route that works an issue as a sample person,
+  described under [Sample data](#sample-data-in-development).
 - **The MCP server lives in `src/mcp/`,** described under
   [The MCP server](#the-mcp-server).
 
@@ -696,7 +699,8 @@ before 2026-03-15. The ID comparison holds either way.
 
 **Its interface** is RPC methods on the stub, for the MCP tools to call:
 `claim`, `postUpdate`, `submit`, `openPr`, `release`, `prOpened`, `prClosed`,
-`snapshot`, and `history`. `fetch` takes a WebSocket upgrade for a watcher,
+`snapshot`, and `history`, and `glance` for the
+[issue page](#the-issue-page). `fetch` takes a WebSocket upgrade for a watcher,
 with `?since=<event ID>`. Who is asking comes in as a numeric GitHub ID. A
 refusal comes back as `{ ok: false, refusal }` with a code from core, a
 malformed argument included. The runtime reports an error thrown in a
@@ -916,8 +920,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
   [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34), which takes
   stream rate limits.
   Each open stream holds a Worker request and a hibernating WebSocket on a
-  feed or room, for up to an hour. Opening one reads D1 once or twice to
-  find its feed or room, and once for each round of the block check. It
+  feed or room, for up to an hour. Opening one reads D1 to find its feed or
+  room: once for a person or a project, and for an issue, the reads
+  `findIssue` makes, under [The issue page](#the-issue-page). Then once for
+  each round of the block check. It
   sends at most 100 events from a feed with no `since`, at most 1,000 with
   one, and an issue room's whole history. Each line costs the feed or room
   one D1 read per batch it sends, shared by its watchers, and each stream a
@@ -928,10 +934,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   on the feed or room, for as long as the page is open, with no hour limit.
   Every homepage view opens one on the homepage's feed, so that one object
   sends every event to every open homepage. It also takes one `glance` per
-  homepage view. Each message a page sends on its socket wakes the feed or
-  room from hibernation, which Cloudflare bills, though the feed ignores
-  the message. Nothing limits how many sockets a client opens,
-  or how many messages it sends on one, yet. #34 takes those limits.
+  homepage view. Every issue page view opens one on its issue's room. Each
+  message a page sends on its socket wakes the feed or room from
+  hibernation, which Cloudflare bills, though the feed ignores the message.
+  Nothing limits how many sockets a client opens, or how many messages it
+  sends on one, yet. #34 takes those limits.
 - **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
   `handleStream` sees the upgrade, finds the feed or room and checks `since`
   the same way as for a stream, and forwards the upgrade to it. The Worker
@@ -940,8 +947,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   stays open for it. That is why the socket has no hour limit, and why the
   block check is the one every watcher gets. The socket lives on the
   stream's own URL, so each feed has one address, one resolver, and one set
-  of `404`s, for people, programs, and pages alike. Issue pages (#25),
-  person pages, and `/live` (#26) can open theirs with `useLiveFeed`.
+  of `404`s, for people, programs, and pages alike. The homepage and the
+  issue page open theirs with `useLiveFeed`, and person pages and `/live`
+  (#26) can too.
 - **`useLiveFeed(path, since, onEvent)`** opens the socket from the page,
   hands each new event to the page once, and reconnects after a drop with
   the last event's ID, backing off as
@@ -951,9 +959,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
   event.
 - **Which streams exist.** A person's stream needs the person in `people`,
   a repo's the project in `projects`, and an issue's a claim in `claims` or
-  the issue in `tagged_issues`. Connecting to a feed or room that has never
-  been used makes it, with storage, so a stream for anything else would let
-  anyone make Durable Objects without end.
+  the issue in `tagged_issues`, which `findIssue` in `src/issue/find.ts`
+  checks for the stream and the issue page alike. Connecting to a feed or
+  room that has never been used makes it, with storage, so a stream for
+  anything else would let anyone make Durable Objects without end.
 - **Compression.** Cloudflare compresses `text/plain` for a browser that
   accepts it, which would hold lines back until a chunk fills.
   `Cache-Control: no-transform` turns that off.
@@ -1015,10 +1024,102 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
   `.claude-plugin/marketplace.json`. The setup gives no command for the MCP
   server. `/start.md` (#21) will.
 
+## The issue page
+
+The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
+
+| File | What it does |
+|---|---|
+| `src/routes/$owner.$repo.issues.$number.tsx` | The page, built from the components in `src/components/`, with its lanes, slot panes, and timeline |
+| `src/issue/data.ts` | `getIssuePage`, the server function the route's loader calls |
+| `src/issue/load.ts` | `loadIssue`, which reads what the page shows, on the server only |
+| `src/issue/find.ts` | `findIssue`, which says whether an issue is on the site, for the page and the issue's stream |
+| `src/issue/path.ts` | `issueFromPath`, the issue a page's path names, for the server and the 404 page |
+| `src/issue/view.ts` | The lanes, slots, timeline, and open PRs, folded from the room's events, for the server and the page alike |
+| `src/styles/issue-page.css` | The page's layout |
+
+- **The room is the source.** `loadIssue` reads the claims, their lines,
+  the timeline, and the open PRs from the issue's room, in one call,
+  `glance`. The room applies any pause or expiry that is due, reads the
+  claims, the open PRs, and the events with no await between them, then
+  leaves out blocked donors' events, and answers null when D1 can't say who
+  they are. So a PR that opens while the page loads is in its open PRs
+  exactly when its event is in the history, and the socket, which starts
+  after the last event, brings it otherwise. A test holds the block check
+  while a PR opens, to show it. The claims table in D1 would do for the
+  claims, but it can lag behind a save that waits for a retry, it holds no
+  lines, and it has no PR someone opened outside Good First Token. And the
+  page's socket resumes from the room's own event IDs, so the history the
+  page loads with and the events after it come from one place.
+- **One fold for the server and the page.** `foldEvents` in
+  `src/issue/view.ts` turns the room's events into the lanes and the
+  timeline. The server folds the history, and the page folds in each event
+  from the socket with `applyEvent`, so a page that follows the room and one
+  that loads later agree. A lane's state follows the events, the same moves
+  `nextClaimState` makes. The glance adds what the events can't say: the
+  open PRs, as repos and numbers, and the claims that have no event the page
+  may see.
+- **Blocked donors.** Their events are left out of the history, so they have
+  no lane. The glance still holds their claims, so the page counts the ones
+  holding a slot, and each claim, without naming them. When the room's D1
+  can't say who is blocked, the glance is null and the page answers `503`.
+  Tests make the room's block check throw, and hold it while a PR opens,
+  through `loadIssue`.
+- **Which issues have a page** is the rule for which issues have a stream,
+  in one place: `findIssue` in `src/issue/find.ts`, which `sourceFor` in
+  `src/feed/streams.ts` calls too. It reads the claims table and the
+  projects that keep their issues in the repo, at the same time, then each
+  one's cached copy. The page uses the claims and copies it found, for the
+  project, the title, and the linked PR. Tests check that an issue with
+  neither gets a `404` from the page and from the stream, and that no room
+  is made. The one difference is the path, under The site's own paths.
+- **Whether it takes claims** follows the homepage's rule for an issue
+  waiting for an agent, in `listProjectsAskingForHelp`. `closedBecause` in
+  `src/issue/load.ts` judges each copy with its own project, less the open
+  PRs and the free slot, which the page follows live: an approved project,
+  not on the do-not-list, and a cached copy with one of its tags and none of
+  its excluded ones, folding ASCII letters as SQLite's `lower()` does. `read`
+  then picks the copy the page follows, as how-it-works says, checking the
+  slots taken against each copy's own claims per issue. That copy's linked
+  PR joins the room's open PRs.
+- **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
+  OAuth routes before any page or stream. The page also answers `404` for
+  `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in
+  `src/issue/path.ts`, so a path like `/oauth/<repo>/issues/1` never shows
+  an issue. A stream on an `/oauth/...` path answers as any other.
+- **Logins now.** Events carry the login a claimant had when they claimed.
+  Each lane, and the timeline, shows the login in `people` for the claim's
+  GitHub ID, since a renamed login can later belong to someone else.
+- **PR links.** A PR reaches the page as its repo and number only, and
+  `prUrl` in `src/issue/view.ts` builds its link to GitHub, whether it came
+  from the room, the cache's linked PR, or a `pr_opened` event, whose text
+  carries only `opened PR owner/name#57`. The link stored with a PR can be
+  on any host, so it never reaches the page.
+- **The status.** The loader throws TanStack Router's `notFound()` for an
+  issue with no page, which renders the route's not-found component with
+  `404`. When D1 or the room throws, the server function names `503` in
+  `x-gft-page-status`, the header the page on `/oauth/authorize` uses, and
+  `src/server.ts` sets it.
+- **The lanes are the page's own markup,** like the homepage's project rows.
+  `/design` shows every component in `src/components/`, and a new sample
+  there changes its screenshots, which have to come from CI's Playwright
+  build. The page builds the lanes from `Chip`, `Slots`, `SlotRing`,
+  `Prompt`, `Marker`, and `Rail`.
+- **What a view costs.** The reads `findIssue` makes. One for the project
+  when the issue isn't cached, one for each person who claimed it, since the
+  timeline names every claimant, and two for the do-not-list when the issue
+  could take claims. Then the room's glance, which reads its whole history
+  and D1 once for its block check, and a socket on the room for as long as
+  the page is open. Each lane keeps its
+  newest 20 lines, so the page carries at most that many per claim. Nothing
+  caches any of it yet.
+
 ## Sample data in development
 
-`POST /dev/seed` is a path for local development only. `pnpm seed` resets the
-GitHub fake, then calls it when `pnpm dev` is running. The rules are in
+`POST /dev/seed` and `POST /dev/work` are paths for local development only.
+`pnpm seed` resets the GitHub fake, then calls `/dev/seed` when `pnpm dev`
+is running. `/dev/work` takes one action at a time, from `curl` or the
+end-to-end tests. The rules are in
 [how-it-works.md](how-it-works.md#sample-data-in-development).
 
 | File | What it does |
@@ -1027,18 +1128,22 @@ GitHub fake, then calls it when `pnpm dev` is running. The rules are in
 | `src/dev/seed.ts` | `handleDevSeed`, and `seedSampleWork`, which writes the sample data |
 | `src/dev/sample-work.ts` | The sample people, projects, issues, and claims |
 | `apps/web/scripts/seed-local.mjs` | What `pnpm seed` runs to call the route |
+| `src/routes/dev.work.ts` | The route, which hands every method to `handleDevWork` |
+| `src/dev/work.ts` | `handleDevWork`, which works an issue as a sample person through its room |
+| `src/dev/gate.ts` | `devOnlyRequest`, the check both routes make first |
 
-- **Two checks.** `handleDevSeed` answers `404` unless both hold. The
-  first is `isDevelopment()`, the check the dev sign-in uses, described
-  under [Sign-in](#sign-in). That check is enough for sign-in, because a
-  deployed Worker can't reach a GitHub fake on the machine it was deployed
-  from, so the dev sign-in fails there. The seed never calls GitHub, so a
+- **Two checks.** `handleDevSeed` and `handleDevWork` answer `404` unless
+  both hold, and both ask `devOnlyRequest` in `src/dev/gate.ts`. The first
+  is `isDevelopment()`, the check the dev sign-in uses, described under
+  [Sign-in](#sign-in). That check is enough for sign-in, because a deployed
+  Worker can't reach a GitHub fake on the machine it was deployed from, so
+  the dev sign-in fails there. The dev routes never call GitHub, so a
   Worker deployed with the local `wrangler.jsonc` would pass it. The second
   check, that the request came by one of the loopback hostnames
   [how-it-works.md](how-it-works.md#sample-data-in-development) lists,
-  keeps that Worker from seeding for anyone on its public hostname. Tests
-  run the Worker as staging and as production, and in development on
-  public hostnames, and see `404` and nothing seeded.
+  keeps that Worker from seeding or working an issue for anyone on its
+  public hostname. Tests run the Worker as staging and as production, and
+  in development on public hostnames, and see `404` and nothing written.
 - **Through the issue rooms.** The claims, their lines, and the merges go
   through the same room calls the MCP tools will make, so the lines reach
   the feeds through the queue, and the claims reach D1 from the room. The
@@ -1054,6 +1159,13 @@ GitHub fake, then calls it when `pnpm dev` is running. The rules are in
   with its ranks and projects. The preview keeps its data apart from
   `pnpm dev`'s, as [Tests](#tests) describes, so seeding `pnpm dev` changes
   nothing there.
+- **`/dev/work` adds what an action needs.** It records the person, and the
+  sample project with the person who added it and its sample issues, the
+  way `/dev/seed` does, so it works on an empty database. It finds the
+  person's claim for them with the room's `snapshot`. A claim caches an
+  issue the project hasn't, with `saveIssues`, so the issue takes claims.
+  The issue page's end-to-end tests call it, and run last, as under
+  [Tests](#tests).
 
 ## Configuration and secrets
 
@@ -1294,7 +1406,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   line, and no line comes there. `home.spec.ts` stands in for the homepage's
   feed with Playwright's `routeWebSocket`, and hands the page events of its
   own. The feed's side of the socket is tested in the unit tests, with real
-  feeds.
+  feeds. `issue.spec.ts` works real issue rooms through `/dev/work`, as
+  several sample people at once, and the page follows them over the real
+  socket. A pause needs 30 minutes, so that one test stands in for the
+  room's socket and sends a pause shaped like the room's. Their events
+  reach the homepage's feed, so they run in the `rooms` project, which
+  depends on the `chromium` project, once the rest are done, and the
+  homepage's tests see only what they expect.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
@@ -1306,6 +1424,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   nothing, locally as in CI, whatever `pnpm dev` holds.
   Tests in a file run in order, and `home.spec.ts` counts on it: its first
   test checks the empty homepage, and its last ones seed it.
+- **Issue page tests** load the page's data from real rooms, fetch the page
+  through the Worker, and read an issue's live socket with the page's own
+  fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake
+  `Date`, as the room tests do.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has

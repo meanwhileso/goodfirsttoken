@@ -1,6 +1,7 @@
 import { feedEventSchema, githubLogin, id, issueRef, repoName, validate, type FeedEvent } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
-import { findPersonByLogin, getIssue, getProject, listIssueClaims, listProjectsByIssueRepo } from '../db';
+import { findPersonByLogin, getProject } from '../db';
+import { findIssue } from '../issue/find';
 import { homeFeed, personFeed, repoFeed } from '../rooms/feed';
 import { issueRoom } from '../rooms/issue-room';
 import { ndjsonLine, textLine } from './format';
@@ -124,15 +125,9 @@ async function sourceFor(source: Source): Promise<DurableObjectStub | Response> 
       return repoFeed(env.FEED, project.repo);
     }
     case 'issue': {
-      const repo = source.issue.slice(0, source.issue.lastIndexOf('#'));
-      const known =
-        (await listIssueClaims(env.DB, source.issue)).length > 0 ||
-        (
-          await Promise.all(
-            (await listProjectsByIssueRepo(env.DB, repo)).map((project) => getIssue(env.DB, project.repo, source.issue)),
-          )
-        ).some((issue) => issue !== null);
-      if (!known) return text(404, `${source.issue} has no claim, and no project on Good First Token tagged it.`);
+      if (!(await findIssue(env.DB, source.issue))) {
+        return text(404, `${source.issue} has no claim, and no project on Good First Token tagged it.`);
+      }
       return issueRoom(env.ISSUE_ROOM, source.issue);
     }
     case 'person': {
