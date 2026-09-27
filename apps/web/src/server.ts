@@ -6,6 +6,8 @@ import { redirectToPrimaryDomain } from './redirect';
 // Sign-in, under /auth, goes to src/auth/routes.ts. Every other request goes
 // through TanStack Start. Queue consumers, cron jobs, and Durable Objects are
 // exported from here as they arrive.
+export { IssueRoom } from './rooms/issue-room';
+
 export default {
   fetch: (request, env) =>
     redirectToPrimaryDomain(request, env) ?? (isAuthPath(request) ? handleAuthRequest(request) : handler.fetch(request)),
