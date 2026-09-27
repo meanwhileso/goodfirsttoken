@@ -6,14 +6,14 @@ import type { ProjectSettingsInput, Tools } from '../src/index';
 type Samples = { [N in keyof Tools]: { output: z.input<Tools[N]['output']>; mentions: string[] } };
 
 const repo = 'meanwhileso/goodfirsttoken';
-const issue = `${repo}#18`;
+const issue = `${repo}#918`;
 const title = 'Stream /live as NDJSON';
-const url = `https://github.com/${repo}/issues/18`;
-const liveUrl = `https://goodfirsttoken.test/${repo}/issues/18`;
+const url = `https://github.com/${repo}/issues/918`;
+const liveUrl = `https://goodfirsttoken.test/${repo}/issues/918`;
 const at = '2026-09-26T12:00:00.000Z';
 const later = '2026-09-27T12:00:00.000Z';
 const sha = '4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6';
-const pr = { repo, number: 57, url: `https://github.com/${repo}/pull/57` };
+const pr = { repo, number: 957, url: `https://github.com/${repo}/pull/957` };
 
 export const settings: ProjectSettingsInput = {
   tags: ['help wanted', 'goodfirsttoken'],
@@ -35,7 +35,7 @@ const claim = {
 
 const followUp = {
   claimId: 'c_0',
-  issue: `${repo}#12`,
+  issue: `${repo}#912`,
   title: 'Show each agent name in the live lanes',
   pr,
   reviewer: 'octo-maintainer',
@@ -129,11 +129,11 @@ export const samples: Samples = {
       issue,
       state: 'pr_opened',
       commit: { sha, url: `https://github.com/priya/goodfirsttoken/commit/${sha}` },
-      branch: { repo: 'priya/goodfirsttoken', name: 'gft-18', url: 'https://github.com/priya/goodfirsttoken/tree/gft-18' },
+      branch: { repo: 'priya/goodfirsttoken', name: 'gft-918', url: 'https://github.com/priya/goodfirsttoken/tree/gft-918' },
       pr,
       reviewReason: null,
     },
-    mentions: ['4f2a91c', 'priya/goodfirsttoken:gft-18', pr.url],
+    mentions: ['4f2a91c', 'priya/goodfirsttoken:gft-918', pr.url],
   },
   release_claim: {
     output: { claimId: 'c_1', issue, state: 'released' },
@@ -149,7 +149,7 @@ export const samples: Samples = {
           title,
           url,
           liveUrl,
-          diffUrl: `https://github.com/${repo}/compare/main...priya:gft-18`,
+          diffUrl: `https://github.com/${repo}/compare/main...priya:gft-918`,
           additions: 23,
           deletions: 4,
           agent: 'codex',
@@ -157,7 +157,7 @@ export const samples: Samples = {
           summary: 'Adds the NDJSON formatter.',
           checks: 'pnpm test (412 passing)',
           reviewReason: 'pr_exists',
-          prOnIssue: { ...pr, number: 60, url: `https://github.com/${repo}/pull/60` },
+          prOnIssue: { ...pr, number: 960, url: `https://github.com/${repo}/pull/960` },
           expiresAt: later,
           personWrittenDescription: true,
         },
@@ -171,14 +171,14 @@ export const samples: Samples = {
       'waiting because a PR is already open on the issue',
       'summary: Adds the NDJSON formatter.',
       'pnpm test (412 passing)',
-      `pull/60. Ask the donor whether a second PR helps.`,
+      `pull/960. Ask the donor whether a second PR helps.`,
       'Ask the donor to write the PR description.',
       'working',
     ],
   },
   open_pr: {
     output: { claimId: 'c_2', issue, state: 'pr_opened', pr },
-    mentions: ['PR #57', pr.url],
+    mentions: ['PR #957', pr.url],
   },
   set_interests: {
     output: { interests: { languages: ['rust'], projects: [repo], kinds: ['docs'] } },

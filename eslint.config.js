@@ -27,6 +27,7 @@ export default defineConfig([
           './apps/web/tsconfig.json',
           './apps/web/tsconfig.node.json',
           './packages/core/tsconfig.json',
+          './packages/github-fake/tsconfig.json',
         ],
         tsconfigRootDir: import.meta.dirname,
       },
@@ -45,5 +46,18 @@ export default defineConfig([
   {
     files: ['apps/web/src/**/*.{ts,tsx}'],
     extends: [reactHooks.configs.flat.recommended],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@goodfirsttoken/github-fake', '@goodfirsttoken/github-fake/*', '**/packages/github-fake/**'],
+              message: 'The GitHub fake is for tests and local development, and never ships in the Worker.',
+            },
+          ],
+        },
+      ],
+    },
   },
 ]);

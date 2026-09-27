@@ -51,6 +51,8 @@ jobs:
           REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS || vars.REDIRECT_DOMAINS }}
           OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID || vars.OAUTH_CLIENT_ID }}
           ADMIN_GITHUB_IDS: ${{ secrets.ADMIN_GITHUB_IDS || vars.ADMIN_GITHUB_IDS }}
+          GH_API_URL: ${{ secrets.GH_API_URL || vars.GH_API_URL }}
+          GH_WEB_URL: ${{ secrets.GH_WEB_URL || vars.GH_WEB_URL }}
         run: node scripts/deploy-config.mjs "$TARGET"
 
       # The build runs before the credential step, so the Cloudflare token is

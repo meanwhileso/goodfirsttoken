@@ -17,7 +17,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const claimedAt = Date.UTC(2026, 8, 26, 12, 0, 0);
-const pr = { repo: 'meanwhileso/goodfirsttoken', number: 57, url: 'https://github.com/meanwhileso/goodfirsttoken/pull/57' };
+const pr = { repo: 'meanwhileso/goodfirsttoken', number: 957, url: 'https://github.com/meanwhileso/goodfirsttoken/pull/957' };
 
 const tick: ClaimEvent = { kind: 'tick' };
 const update: ClaimEvent = { kind: 'update' };
@@ -269,7 +269,7 @@ describe('timers', () => {
 describe('stored claims', () => {
   const record = {
     id: 'c_1',
-    issue: 'meanwhileso/goodfirsttoken#18',
+    issue: 'meanwhileso/goodfirsttoken#918',
     login: 'priya',
     agent: 'claude-code',
     startCommit: '4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6',

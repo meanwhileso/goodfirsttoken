@@ -237,6 +237,8 @@ const sentinels = {
   REDIRECT_DOMAINS: 'sentinel-second.example',
   OAUTH_CLIENT_ID: 'Ov23sentinelclient',
   ADMIN_GITHUB_IDS: '5550001,5550002',
+  GH_API_URL: 'https://sentinel-api.example/api',
+  GH_WEB_URL: 'https://sentinel-web.example',
 };
 
 test('no ID or deployed name is written to a file git tracks or would add', (t) => {
@@ -255,6 +257,39 @@ test('no ID or deployed name is written to a file git tracks or would add', (t) 
   for (const file of files) {
     const text = readFileSync(path.join(root, file), 'utf8');
     for (const value of values) assert.ok(!text.includes(value), `${file} holds ${value}`);
+  }
+});
+
+test("a deploy's GitHub URLs come from the settings or are empty, and never from the local GitHub fake", (t) => {
+  const root = sampleRepo(t);
+  const written = (env) => {
+    writeDeployConfig({ root, target: 'production', env, log: () => {} });
+    return readFileSync(path.join(root, DEPLOY_CONFIG), 'utf8');
+  };
+  // The local config points both at the GitHub fake on this machine.
+  assert.match(realLocal().vars.GH_API_URL, /127\.0\.0\.1/);
+  assert.match(realLocal().vars.GH_WEB_URL, /127\.0\.0\.1/);
+
+  const unset = written({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, WORKER_NAME: 'sentinel-worker' });
+  const set = written(sentinels);
+
+  assert.equal(JSON.parse(unset).vars.GH_API_URL, '');
+  assert.equal(JSON.parse(unset).vars.GH_WEB_URL, '');
+  assert.equal(JSON.parse(set).vars.GH_API_URL, sentinels.GH_API_URL);
+  assert.equal(JSON.parse(set).vars.GH_WEB_URL, sentinels.GH_WEB_URL);
+  for (const text of [unset, set]) assert.ok(!text.includes('127.0.0.1'), 'the deploy config names the local fake');
+});
+
+test('a GitHub URL setting has to be an https URL, so a deploy never points at a machine of its own', () => {
+  const withGitHub = { ...local, vars: { ...local.vars, GH_API_URL: '', GH_WEB_URL: '' } };
+
+  const { config } = deployConfig(withGitHub, 'production', { ...withLimiter, GH_API_URL: 'https://api.github.com/' });
+  assert.equal(config.vars.GH_API_URL, 'https://api.github.com');
+
+  for (const name of ['GH_API_URL', 'GH_WEB_URL']) {
+    for (const bad of ['http://127.0.0.1:8944/api', 'api.github.com', 'https://', 'https://api.github.com?x=1']) {
+      assert.throws(() => deployConfig(withGitHub, 'production', { ...withLimiter, [name]: bad }), new RegExp(name), bad);
+    }
   }
 });
 

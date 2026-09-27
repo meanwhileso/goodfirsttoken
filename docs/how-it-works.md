@@ -334,3 +334,13 @@ them, with sample data that the page says is sample.
   another lets go of the first.
 - A stat line's numbers and a rank's name and agent have real spaces between
   them, so a screen reader says `3 tagged` and `@priya claude-code`.
+
+## Calls to GitHub
+
+- Every call to GitHub names the token it runs with. There is no default
+  token. A call made for a person runs with that person's own token, so it
+  can act only as them. Nothing calls GitHub yet. Sign-in (#8) is the first.
+- When GitHub refuses a call, the refusal comes back with GitHub's status
+  and message.
+- In local development, GitHub is the GitHub fake, and its sign-in page
+  lets you pick any sample person to be.

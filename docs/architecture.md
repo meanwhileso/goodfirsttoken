@@ -12,6 +12,7 @@ The repo is a pnpm workspace.
 |---|---|
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, the design system at `/design`, and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
+| `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
@@ -35,6 +36,10 @@ The repo is a pnpm workspace.
   build. It is committed, so a type check works without a build first.
 - **Bindings and variables come from `cloudflare:workers`,** imported as
   `env`, so any module can read them.
+- **`src/github.ts` makes every call to GitHub,** REST and GraphQL, at the
+  base URL in `GH_API_URL`, or `https://api.github.com` when that is empty.
+  Each call takes the token it runs with as an argument. There is no
+  default token.
 
 ### The design system
 
@@ -171,6 +176,9 @@ its version did not go up.
 every binding and variable the Worker reads, under local names. Staging and
 production are not in the repo. The deploy writes their config from the
 GitHub environment, as [Deploys](#deploys) describes.
+`GH_API_URL` and `GH_WEB_URL` hold the GitHub fake's URLs locally. A deploy
+that leaves their settings empty gives them empty strings, and
+`src/github.ts` then calls GitHub itself.
 
 | Binding | Kind | Used from |
 |---|---|---|
@@ -178,6 +186,8 @@ GitHub environment, as [Deploys](#deploys) describes.
 | `PRIMARY_DOMAIN`, `REDIRECT_DOMAINS` | Variables: the site's domain, and domains that redirect to it | Now, by `src/redirect.ts` |
 | `OAUTH_CLIENT_ID` | Variable: the GitHub OAuth app's client ID | #8 |
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | #8 |
+| `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
+| `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/github.ts`, for #8 |
 | `DB` | D1 | #5 |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
 | `FEED_QUEUE` | Queue producer | #14 |
@@ -203,8 +213,77 @@ Worker can start with it.
 
 Local development needs none of it. `pnpm dev` runs the Worker in Miniflare,
 which simulates every binding and keeps D1 and KV data on disk under
-`apps/web/.wrangler/`. The variables the app reads, with safe local defaults,
-are listed in `apps/web/.dev.vars.example`.
+`apps/web/.wrangler/`. It also starts the GitHub fake at
+`http://127.0.0.1:8944`, which `wrangler.jsonc` points the Worker at. The
+variables the app reads, with safe local defaults, are listed in
+`apps/web/.dev.vars.example`.
+
+## The GitHub fake
+
+`packages/github-fake` answers the GitHub calls the app makes, from state
+built from the sample data. Tests import it and run it in-process. `pnpm dev`
+and Playwright run it as a local HTTP server.
+
+- **What it covers.** REST: the authenticated user and users, repos with the
+  caller's `permissions`, labels, issues and their timelines, issue and repo
+  search, file contents, forks, branches and refs, pull requests, reviews,
+  and review comments. GraphQL: `repository`, `viewer`, file reads with
+  `object(expression:)` across many repos in one query, and
+  `createCommitOnBranch`. The OAuth web flow: the authorize page and the
+  token endpoint, with PKCE. Each route in `src/rest.ts` names its page on
+  docs.github.com, and GitHub's errors come back in GitHub's shape.
+- **It records whose token made each call.** `fake.calls` lists every call
+  with its endpoint, the token it carried, the login that token belongs to,
+  and the status. The local server lists them at `/_fake/calls`.
+- **It behaves like GitHub where the app depends on it.** Writes need push
+  access. A fork belongs to whoever's token made it, and forking again
+  returns the same fork. `createCommitOnBranch` refuses a stale expected
+  head, makes the caller the author, and GitHub signs the commit. A PR that
+  mentions an issue adds a `cross-referenced` event to that issue's
+  timeline, and merging it closes the issues it says it closes. A PR's head
+  must be the base repo or a fork of it. Search serves the first 1,000
+  results and answers a page past them with a 422. API calls need a
+  User-Agent.
+- **Where it differs.** Tests that depend on any of these need the fake
+  changed first.
+  - Forks are ready at once. GitHub makes them in the background.
+  - OAuth scopes are recorded and sent back in `x-oauth-scopes`, and
+    nothing checks them. A token with no scopes can fork and commit.
+  - An archived repo accepts writes.
+  - `maintainer_can_modify` is kept and sent back, and the base repo's
+    maintainers still can't push to the PR's branch.
+  - Issue search refuses a query that names neither `is:issue` nor
+    `is:pull-request`, a rule stricter than GitHub's.
+  - A search qualifier it doesn't know gets a 422 naming the file to add it
+    to. GitHub would read it as text.
+  - A `localhost` OAuth callback allows any port, like GitHub's rule for
+    `127.0.0.1`.
+  - Git object IDs are 40 hex characters made with an FNV hash of the
+    content, so they never match a real repo's. The fake can't be cloned
+    with `git`.
+- **Nothing in it touches the network.** In a test, `fake.fetch` stands in
+  for the global `fetch` and throws for any URL outside the fake's two base
+  URLs, which default to hosts under `.test`, a domain that never resolves.
+  Every URL in its responses, including avatars and raw files, points back
+  at the fake.
+- **The sample data** in `src/sample-data.ts` takes the shapes of the
+  prototype's: donors and maintainers, a project with tagged issues, one
+  with nothing tagged, a popular repo that invites contributions, and a
+  registration waiting for an admin. It is the one place later issues add
+  to. Every account and repo in it is made up, under `sample-owner`, except
+  this project's own repo. That repo's sample issues and PRs are numbered
+  from 900 up, clear of its real ones.
+- **Local sign-in.** The fake's authorize page lists the sample people. Pick
+  one, and the app gets that person's token through the same OAuth flow it
+  uses with GitHub.
+- **Local state.** The server `pnpm dev` starts keeps its state in
+  `apps/web/.wrangler/github-fake/state.json`, next to Miniflare's, so forks
+  and commits survive a restart. `pnpm seed` resets it to the sample data.
+  In CI, Playwright starts a fresh fake with the sample data. Locally it
+  reuses a fake that is already running, like the one `pnpm dev` started,
+  with whatever state that one has.
+- **It never ships.** `apps/web` lists it as a dev dependency, and a lint
+  rule refuses an import of it from `apps/web/src`.
 
 ## Types
 
@@ -232,9 +311,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `@cloudflare/vitest-pool-workers`, with the bindings from `wrangler.jsonc`.
   They call the whole Worker through `exports.default.fetch` from
   `cloudflare:workers`, so a test sees the same routing and headers a
-  browser does. They live in `apps/web/test/`.
+  browser does. Code no route uses yet, like `src/github.ts`, is called
+  directly. They live in `apps/web/test/`. A test that calls GitHub creates
+  the GitHub fake in-process and puts `fake.fetch` in place of the global
+  `fetch`. `vitest.config.ts` points GitHub's URLs at hosts under `.test`.
 - **End-to-end tests** run with Playwright against the production build,
-  served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
+  served by `vite preview` inside `workerd`, beside the GitHub fake's local
+  server. They live in `apps/web/e2e/`.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
   clock paused so the live wall holds still. Up to 2% of pixels may differ,
@@ -247,6 +330,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   baselines.
 - **The core package's tests** run with plain Vitest in Node, since the
   package is pure. They live in `packages/core/test/`.
+- **The GitHub fake's own tests** run with Vitest in Node, in
+  `packages/github-fake/test/`.
 - **The tests for `scripts/`** cover the static server, the skill build, the
   deploy, and the check for advisories a pull request adds. They use Node's
   own test runner. The deploy's tests fake Cloudflare's API, GitHub's OIDC
@@ -395,11 +480,13 @@ The job runs these steps. The scripts are in `scripts/`.
    setting of the same name, so no local value reaches a deployed Worker, and
    sets `ENVIRONMENT` to the target. It attaches `PRIMARY_DOMAIN` and
    `REDIRECT_DOMAINS` as custom domains and turns workers.dev off when there
-   is a domain. It masks the account ID, resource names and IDs, and the value
-   of every variable but `ENVIRONMENT` for the later steps, Wrangler's output
-   included. A
-   key or binding it does not know stops the deploy, so a new kind of binding
-   never reaches Cloudflare with its local name.
+   is a domain. It refuses a `GH_API_URL` or `GH_WEB_URL` that isn't an
+   `https` URL, and leaves each empty when its setting is, so the Worker
+   calls GitHub itself. It masks the account ID, resource names and IDs, and
+   the value of every variable but `ENVIRONMENT` for the later steps,
+   Wrangler's output included. A key or binding it does not know stops the
+   deploy, so a new kind of binding never reaches Cloudflare with its local
+   name.
 3. The Vite build reads that file through
    `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and writes the config Wrangler
    deploys from.
@@ -468,6 +555,18 @@ Choices:
 - **Plugin versions are compared with the base branch.** Nothing a pull
   request edits can get around the rule, and one raise covers the whole
   pull request.
+- **A GitHub fake with state, built from GitHub's docs.** Recorded
+  responses can't follow a fork into a commit into a PR, and recording them
+  would need real accounts. The fake keeps state, so a flow behaves the
+  same in a test as on GitHub, and it records whose token made each call,
+  which is how the tests check that no action runs as the wrong person.
+- **The fake is its own package** so the Worker's tests, the Playwright
+  tests, and later packages share one fake and one set of sample data,
+  while the Worker never depends on it. It runs in both `workerd` and Node,
+  and Node runs its server straight from the TypeScript source.
+- **graphql-js runs the fake's GraphQL.** A slice of GitHub's schema, with
+  GitHub's names and types, means aliases, fragments, variables, and
+  validation errors behave as they do on GitHub.
 - **Code scanning holds security findings.** Alerts on `main` are visible
   only to people with write access, code scanning matches repeat findings by
   fingerprint, and a workflow can file into it. Issues and pull request

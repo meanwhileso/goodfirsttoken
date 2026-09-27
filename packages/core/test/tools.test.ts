@@ -122,7 +122,7 @@ describe('what each result says', () => {
   });
 
   test('a claimant hears about a PR on the issue with their update', () => {
-    const pr = { repo: 'meanwhileso/goodfirsttoken', number: 60, url: 'https://github.com/meanwhileso/goodfirsttoken/pull/60' };
+    const pr = { repo: 'meanwhileso/goodfirsttoken', number: 960, url: 'https://github.com/meanwhileso/goodfirsttoken/pull/960' };
     const text = textOf(toolResult('post_update', { ...samples.post_update.output, prOnIssue: pr }));
     expect(text).toContain(pr.url);
   });
