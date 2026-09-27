@@ -314,6 +314,10 @@ export async function pauseProject(caller: Caller, input: ToolInput<'pause_proje
           return refuse(error.code, `${who} paused ${project.repo}. Only Good First Token's admins can resume it.`);
         }
       }
+      // A resume makes the issue repo's issues claimable again, so it needs
+      // that repo too. A pause only stops work, so it needs the code repo alone.
+      const place = await checkIssueRepo(caller, project.repo, project.settings.issueRepo);
+      if (!place.ok) return place.answer;
       // The status before this pause, from the history, newest first.
       const before = (await statusHistory(env.DB, project.repo)).find((c) => c.status !== 'paused');
       change = { status: before?.status ?? 'pending', reason: before?.reason ?? null };

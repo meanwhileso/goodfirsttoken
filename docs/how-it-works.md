@@ -907,6 +907,9 @@ about who may name an issue repo. This rule fills that gap.
   elsewhere. Sending the same issue repo back with the rest of the settings
   needs nothing more. Moving the issues back to the code repo needs no role
   on the repo they leave.
+- Resuming a paused project with `pause_project` checks its issue repo the
+  same way, since a resume makes that repo's issues claimable again.
+  Pausing needs only the code repo, since a pause only stops work.
 - Without the role, the call is refused with `not_maintainer`, saying only
   an admin or maintainer of that repo can keep the project's issues there,
   and nothing saves.
@@ -963,7 +966,9 @@ a project is `not_found`.
   project had before the pause, from its status history, made by the
   maintainer who resumed. A history with nothing before the pause puts back
   `pending`. So a resume never approves a project an admin hasn't. Resuming
-  a project that isn't paused changes nothing.
+  a project that isn't paused changes nothing. Resuming a project whose
+  issues live in another repo needs that repo too, under the issue repo in
+  [Registering a project](#registering-a-project).
 - A pause Good First Token made, or one made by someone who is one of its
   admins, stays until an admin lifts it, under
   [Permissions](#permissions). A maintainer who isn't an admin and tries is
@@ -1569,8 +1574,9 @@ A deployment can serve them from a static host, on a hostname of its own.
   same, with a PKCE verifier. `start_session` reads the person with the
   connection's token. The `manage_project` permission reads the repo with
   the caller's token, and registering a project uses the same answer.
-  Registering also reads the repo's labels and its files. Registering or updating one reads an issue repo
-  other than the code repo for the caller's permission, and creates the
+  Registering also reads the repo's labels and its files. Registering,
+  updating, or resuming a project reads an issue repo other than the code
+  repo for the caller's permission, and registering or updating creates the
   `goodfirsttoken` label where the issues live. All of these use the
   maintainer's token.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and

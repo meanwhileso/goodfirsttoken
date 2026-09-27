@@ -870,6 +870,27 @@ describe('pause_project', () => {
     );
   });
 
+  test('resuming a project whose issues live in another repo needs that repo too, and pausing it needs only the code repo', async () => {
+    const owner = await connectAgent(github, 'sample-maintainer');
+    await call(owner, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+    await approve(APP_REPO);
+    sampleRepo(APP_REPO).collaborators['octo-maintainer'] = 'maintain';
+    const codeOnly = await connectAgent(github, 'octo-maintainer');
+    await call(owner, 'pause_project', { repo: APP_REPO, reason: 'Release week.' });
+
+    const resume = await call(codeOnly, 'pause_project', { repo: APP_REPO, paused: false });
+    const statusAfter = await getProject(env.DB, APP_REPO);
+    await call(owner, 'pause_project', { repo: APP_REPO, paused: false });
+    const pause = await call(codeOnly, 'pause_project', { repo: APP_REPO, reason: 'Found a problem.' });
+
+    expect(textOf(resume)).toBe(
+      `Refused (not_maintainer): Only an admin or maintainer of ${TOOLS} on GitHub can keep this project's issues there.`,
+    );
+    expect(statusAfter).toMatchObject({ status: 'paused', statusReason: 'Release week.', statusChangedBy: 1009 });
+    expect(pause.structuredContent).toEqual({ repo: APP_REPO, status: 'paused', changed: true, resumableBy: 'maintainers' });
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ status: 'paused', statusChangedBy: 1008 });
+  });
+
   test("someone who isn't a maintainer of the repo can neither pause nor resume it, and its status stays", async () => {
     const owner = await connectAgent(github, 'octo-maintainer');
     await approved(owner);
