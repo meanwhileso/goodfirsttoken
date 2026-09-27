@@ -231,6 +231,23 @@ describe('projects', () => {
     expect((await statusHistory(db, repo))[0]).toMatchObject({ changedBy: null, reason: 'The repo was archived.' });
   });
 
+  test.each([
+    ['an approval', 'approved' as const, null],
+    ['a rejection', 'rejected' as const, 'The notes ask agents to skip tests.'],
+  ])('%s always names the admin who made it', async (_, status, reason) => {
+    await createProject(
+      db,
+      { repo, status: 'pending', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+      t0,
+    );
+
+    const message = await refusal(setProjectStatus(db, repo, { status, reason, changedBy: null }, t0 + HOUR));
+
+    expect(message).toContain('changedBy: is required unless the project is paused');
+    expect(await getProject(db, repo)).toMatchObject({ status: 'pending', statusChangedBy: maintainer.githubId });
+    expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
   test('a status change that changes nothing adds nothing to the history', async () => {
     await registeredProject();
 
@@ -238,6 +255,50 @@ describe('projects', () => {
 
     expect(same).toMatchObject({ statusChangedBy: maintainer.githubId, statusChangedAt: t0 });
     expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
+  test('two identical pauses at once add one history row, and the project names the one that landed', async () => {
+    await registeredProject();
+    const pause = { status: 'paused' as const, reason: 'Busy week.' };
+
+    await Promise.all([
+      setProjectStatus(db, repo, { ...pause, changedBy: maintainer.githubId }, t0 + HOUR),
+      setProjectStatus(db, repo, { ...pause, changedBy: coMaintainer.githubId }, t0 + HOUR + 1),
+    ]);
+
+    const [newest, ...older] = await statusHistory(db, repo);
+    expect(older).toHaveLength(1);
+    expect(await getProject(db, repo)).toMatchObject({
+      status: 'paused',
+      statusReason: 'Busy week.',
+      statusChangedBy: newest?.changedBy,
+      statusChangedAt: newest?.changedAt,
+    });
+  });
+
+  test('two different status changes at once both land, and the project matches the newest', async () => {
+    await registeredProject();
+
+    await Promise.all([
+      setProjectStatus(db, repo, { status: 'paused', reason: 'Busy week.', changedBy: maintainer.githubId }, t0 + HOUR),
+      setProjectStatus(
+        db,
+        repo,
+        { status: 'paused', reason: 'Moving to a new CI.', changedBy: coMaintainer.githubId },
+        t0 + HOUR + 1,
+      ),
+    ]);
+
+    const history = await statusHistory(db, repo);
+    expect(history).toHaveLength(3);
+    expect(history.map((c) => c.reason)).toEqual(expect.arrayContaining(['Busy week.', 'Moving to a new CI.', null]));
+    const newest = history[0];
+    expect(await getProject(db, repo)).toMatchObject({
+      status: newest?.status,
+      statusReason: newest?.reason,
+      statusChangedBy: newest?.changedBy,
+      statusChangedAt: newest?.changedAt,
+    });
   });
 
   test('a new reason for a paused project is a change', async () => {

@@ -101,6 +101,14 @@ describe('stored projects', () => {
     expect(fields(validate(projectRecordSchema, { ...project, status: 'paused', statusReason: 'Busy week.' }))).toEqual([]);
   });
 
+  test('only a paused project can have a status that names no person', () => {
+    expect(fields(validate(projectRecordSchema, { ...project, status: 'paused', statusChangedBy: null }))).toEqual([]);
+    expect(fields(validate(projectRecordSchema, { ...project, statusChangedBy: null }))).toEqual(['statusChangedBy']);
+    expect(
+      fields(validate(projectRecordSchema, { ...project, status: 'rejected', statusReason: 'Spam.', statusChangedBy: null })),
+    ).toEqual(['statusChangedBy']);
+  });
+
   test('a person is named by numeric GitHub ID', () => {
     expect(fields(validate(projectRecordSchema, { ...project, addedBy: 'sample-maintainer' }))).toEqual(['addedBy']);
   });

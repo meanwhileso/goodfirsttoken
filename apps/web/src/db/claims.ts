@@ -70,9 +70,11 @@ function sameFixedFields(stored: string): string {
     .join(' AND ');
 }
 
-// Whether the PRs table holds a PR for the claim other than the save's.
+// Whether the save names a PR and the PRs table holds a different one for the
+// claim. A save with no PR passes, since the room may save before it records
+// the PR the PRs table already has. addPr checks the other way the same way.
 const OTHER_PR = `EXISTS (SELECT 1 FROM prs WHERE prs.claim_id = ?1
-  AND (?17 IS NULL OR prs.repo != ?16 OR prs.number != ?17))`;
+  AND ?17 IS NOT NULL AND (prs.repo != ?16 OR prs.number != ?17))`;
 
 const UPSERT = `
   INSERT INTO claims (id, issue_repo, issue_number, project, github_id, login, agent, own_project,
@@ -99,8 +101,10 @@ const WHY_NOT_SAVED = `
  *
  * A save is refused when it changes a field that is fixed once the claim is
  * made: its issue, project, claimant, login, agent, own-project flag, start
- * commit, or claim time. It is refused too when its PR differs from the one
- * the PRs table records for the claim.
+ * commit, or claim time. It is refused too when it names a PR other than the
+ * one the PRs table records for the claim, so the two tables never name two
+ * different PRs for one claim. A save with no PR is not refused, because the
+ * room may not have recorded the PR yet.
  */
 export async function saveClaim(db: D1Database, claim: ClaimRecord, revision: number): Promise<boolean> {
   const c = mustParse(claimRecordSchema, claim, 'claim');
@@ -138,9 +142,10 @@ export async function saveClaim(db: D1Database, claim: ClaimRecord, revision: nu
     );
   }
   if (why?.newer === 0) return false;
-  if (why?.other_pr === 1) {
-    const saved = c.pr === null ? 'no PR' : `${c.pr.repo}#${String(c.pr.number)}`;
-    throw new Error(`The PRs table records ${why.recorded_pr ?? 'a PR'} for claim ${c.id}. The claim can't have ${saved}.`);
+  if (why?.other_pr === 1 && c.pr !== null) {
+    throw new Error(
+      `The PRs table records ${why.recorded_pr ?? 'a PR'} for claim ${c.id}. The claim can't have ${c.pr.repo}#${String(c.pr.number)}.`,
+    );
   }
   throw new Error(`Claim ${c.id} was not saved.`);
 }

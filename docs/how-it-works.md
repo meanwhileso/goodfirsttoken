@@ -144,8 +144,9 @@ number the issue room raises with every change.
 - A claim's issue, project, claimant, login when they claimed, agent,
   own-project flag, start commit, and claim time never change. A save that
   changes one is refused, stale or not, and the stored claim stays as it was.
-- A claim's PR must be the one recorded for it under [PRs](#prs). A save with
-  a different PR is refused.
+- A save that names a PR other than the one recorded for the claim under
+  [PRs](#prs) is refused. A save that names no PR is not, since the issue
+  room may not have the PR yet.
 - An issue's claims come back in the order they were made. A person's come
   back newest first, and stay theirs when their login changes.
 
@@ -156,10 +157,11 @@ reads PRs from GitHub yet.
 
 - A PR is `open`, `merged`, or `closed`. `closed` means closed without
   merging.
-- A claim has one PR, and a PR belongs to one claim. The PR recorded for a
-  claim must be the one the claim itself records, and the other way round, so
-  the two always agree. Recording the same PR again keeps the first record,
-  and a different PR is refused.
+- A claim has one PR, and a PR belongs to one claim. A PR can't be recorded
+  for a claim that names a different one. Recording the same PR again keeps
+  the first record, and a different PR is refused.
+- So a claim and its PR record never name two different PRs. Either can name
+  the PR first, and for a while the other names none.
 - A merged PR has a merge time and a close time, the way GitHub records it. A
   PR closed without merging has a close time and no merge time. Neither time
   is before the PR opened.
@@ -188,8 +190,9 @@ reads PRs from GitHub yet.
 
 - Each change records the status, the reason, who made it by GitHub ID, and
   when. Adding the project is the first change, made by whoever added it.
-- A change Good First Token makes on its own names no person. Nothing makes
-  one yet.
+- Only a pause can name no person, for when Good First Token pauses a
+  project on its own. Nothing does that yet. An approval or a rejection
+  always names the admin who made it.
 - A change to the status and reason the project already has adds nothing.
 - The project keeps who set its current status, and when.
 

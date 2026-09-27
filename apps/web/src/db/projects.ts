@@ -208,11 +208,11 @@ export async function listProjectsByIssueRepo(db: D1Database, issueRepo: string)
 
 /**
  * Sets a project's status and the reason for it, as changed by `changedBy` at
- * `now`. `changedBy` is null for a change Good First Token makes on its own.
- * A rejection needs a reason, and pending or
- * approved takes none. Each change is kept. A change to the status and
- * reason the project already has changes nothing. Null when there's no such
- * project.
+ * `now`. `changedBy` is null only for a pause Good First Token makes on its
+ * own. An approval or rejection always names the admin who made it. A
+ * rejection needs a reason, and pending or approved takes none. Each change is
+ * kept. A change to the status and reason the project already has changes
+ * nothing. Null when there's no such project.
  */
 export async function setProjectStatus(
   db: D1Database,

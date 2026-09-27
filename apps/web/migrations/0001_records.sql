@@ -29,8 +29,8 @@ CREATE TABLE projects (
   issue_repo TEXT NOT NULL COLLATE NOCASE,
   status TEXT NOT NULL,
   status_reason TEXT,
-  -- Who gave the project its current status, and when. Null when Good First
-  -- Token changed it on its own.
+  -- Who gave the project its current status, and when. Null only for a pause
+  -- Good First Token made on its own.
   status_changed_by INTEGER REFERENCES people (github_id),
   status_changed_at INTEGER NOT NULL,
   source TEXT NOT NULL,

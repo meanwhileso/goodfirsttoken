@@ -85,6 +85,21 @@ describe('the claims mirror', () => {
     expect(await getClaim(db, 'c_1')).toEqual(released);
   });
 
+  test('a stale save changes nothing, whatever PR it names', async () => {
+    const submitted = after(claim(), { kind: 'submit' }, t0 + HOUR);
+    await saveClaim(db, submitted, 1);
+    await addPr(db, { claimId: 'c_1', pr: prRef(60), openedAt: t0 + 2 * HOUR });
+    const opened = after(submitted, { kind: 'open_pr', pr: prRef(60) }, t0 + 2 * HOUR);
+    await saveClaim(db, opened, 3);
+
+    const updated = after(submitted, { kind: 'update' }, t0 + HOUR + MINUTE);
+    expect(await saveClaim(db, updated, 2)).toBe(false);
+    const otherPr = after(submitted, { kind: 'open_pr', pr: prRef(61) }, t0 + HOUR + MINUTE);
+    expect(await saveClaim(db, otherPr, 2)).toBe(false);
+
+    expect(await getClaim(db, 'c_1')).toEqual(opened);
+  });
+
   test.each([
     ['issue', { issue: `${repo}#19` }],
     ['claimant', { githubId: kenji.githubId, login: kenji.login }],
@@ -124,6 +139,18 @@ describe('the claims mirror', () => {
     const same = after(submitted, { kind: 'open_pr', pr: prRef(60) }, t0 + 2 * HOUR);
     expect(await saveClaim(db, same, 3)).toBe(true);
     expect((await getClaim(db, 'c_1'))?.pr).toEqual(prRef(60));
+  });
+
+  test('a newer save lands while the room has not recorded the PR yet', async () => {
+    // The PR is recorded before the room saves pr_opened, and an update lands in between.
+    const submitted = after(claim(), { kind: 'submit' }, t0 + HOUR);
+    await saveClaim(db, submitted, 1);
+    await addPr(db, { claimId: 'c_1', pr: prRef(60), openedAt: t0 + 2 * HOUR });
+
+    const updated = after(submitted, { kind: 'update' }, t0 + 2 * HOUR + MINUTE);
+
+    expect(await saveClaim(db, updated, 2)).toBe(true);
+    expect(await getClaim(db, 'c_1')).toEqual(updated);
   });
 
   test('a claim that breaks the claim rules is refused before it reaches the database, naming the field', async () => {

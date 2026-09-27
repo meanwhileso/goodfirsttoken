@@ -314,19 +314,19 @@ when a claim is made, listed under
 [the claims table](how-it-works.md#claims), are compared in the same
 statement as the write, and so are the revision and the claim's PR.
 
-The rule for the issue room (#13): number each version of a claim you save,
+What the issue room (#13) does: number each version of a claim you save,
 and give every change a higher number than the last. A counter kept with the
 claim in the room's storage does it. Save each change with its number, and
-save again with the same number when a save may not have landed. A save with
-a number no higher than the stored one changes nothing and returns false.
-So a save that arrives late, or twice, never undoes a newer one.
+save again with the same number when a save may not have landed. What a
+stale save does is under [the claims table](how-it-works.md#claims).
 
 `claims` keeps the claim's PR as the room records it, and `prs` keeps what
-GitHub says about that PR afterwards. The two agree: `saveClaim` refuses a
-claim whose PR differs from the one `prs` holds for it, and `addPr` refuses
-a PR that differs from the one the claim holds. Each checks the other table
-in the same statement as its write, so neither can land between the other's
-check and write.
+GitHub says about that PR afterwards. Either can name the PR first, so for a
+while one names it and the other names none. `saveClaim` refuses a claim
+that names a PR other than the one in `prs`, and `addPr` refuses a PR other
+than the one the claim names. So the two never name two different PRs for
+one claim. Each checks the other table in the same statement as its write,
+so neither can land between the other's check and write.
 
 ### Indexes
 
@@ -357,7 +357,8 @@ pruning after a sync, with no index of its own.
 A merged PR always has a close time, as on GitHub, and only `closed_at` is
 indexed. So merged PRs this week filter on `closed_at` with
 `state = 'merged'`, which reads `prs_by_closed`. Filtering on `merged_at`
-scans every claim. Merge rate reads the same index.
+uses no index, so it reads every PR or every claim, depending on the query.
+Merge rate reads the same index.
 
 Some views have no index of their own. Issues worked per person this week
 scans every claim. The all-time views scan `claims` or `prs` and look up the
@@ -393,10 +394,10 @@ Worker can start with it.
 
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
-binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. It also starts the GitHub fake at
-`http://127.0.0.1:8944`, which `wrangler.jsonc` points the Worker at. The
-variables the app reads, with safe local defaults, are listed in
-`apps/web/.dev.vars.example`.
+binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. It
+also starts the GitHub fake at `http://127.0.0.1:8944`, which
+`wrangler.jsonc` points the Worker at. The variables the app reads, with
+safe local defaults, are listed in `apps/web/.dev.vars.example`.
 
 ## The GitHub fake
 
