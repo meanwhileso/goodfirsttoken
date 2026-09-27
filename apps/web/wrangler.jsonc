@@ -2,9 +2,9 @@
 //
 // This file holds bindings and settings only, with local names. The names of
 // deployed resources, account and resource IDs, custom domains, and secrets
-// never go here. The deploy workflow (#32) will write the staging and
-// production config from the GitHub environment. Local development needs
-// none of it.
+// never go here. scripts/deploy-config.mjs writes the staging and production
+// config from the GitHub environment when the deploy workflow runs, as
+// docs/self-hosting.md describes. Local development needs none of it.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "web",
@@ -14,13 +14,21 @@
   // it supports makes `pnpm test` fail, so move this only as far as it allows.
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
+  // Every variable the Worker reads, with its local value. A deploy sets
+  // ENVIRONMENT to staging or production, and each other one from the GitHub
+  // environment setting of the same name, so no local value reaches a
+  // deployed Worker. GitHub reserves names that start with GITHUB_, so none
+  // of these can.
   "vars": {
     "ENVIRONMENT": "development",
-    // GitHub's base URLs, pointing at the GitHub fake that `pnpm dev`
-    // starts (packages/github-fake). The names avoid GITHUB_, which GitHub
-    // reserves, so a deploy can fill them from a GitHub environment. A
-    // deploy that leaves them empty calls https://api.github.com and
-    // https://github.com (src/github.ts).
+    "PRIMARY_DOMAIN": "",
+    "REDIRECT_DOMAINS": "",
+    "OAUTH_CLIENT_ID": "",
+    "ADMIN_GITHUB_IDS": "",
+    // GitHub's API and github.com, pointing at the GitHub fake that
+    // `pnpm dev` starts (packages/github-fake). A deploy that leaves them
+    // empty calls https://api.github.com and https://github.com
+    // (src/github.ts).
     "GH_API_URL": "http://127.0.0.1:8944/api",
     "GH_WEB_URL": "http://127.0.0.1:8944"
   },

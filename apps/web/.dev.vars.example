@@ -2,12 +2,23 @@
 # a value, copy this file to .dev.vars, which git ignores.
 #
 # Every variable the app reads is listed here with a safe local default.
-# Staging and production will get theirs from the GitHub environment when
-# they deploy (#32). Secrets go up with `wrangler secret put`.
+# Staging and production get theirs from the GitHub environment when they
+# deploy, as docs/self-hosting.md describes. Secrets go up with
+# `wrangler secret put`.
 
 # The environment the Worker runs as: development, staging, or production.
 # /healthz reports it.
 ENVIRONMENT=development
+
+# The domain the site is served on, and other domains, separated by commas,
+# that redirect to it. Leave both empty locally, so nothing redirects.
+PRIMARY_DOMAIN=
+REDIRECT_DOMAINS=
+
+# The client ID of a GitHub OAuth app, and the numeric GitHub IDs of admins,
+# separated by commas. Sign-in (#8) reads them.
+OAUTH_CLIENT_ID=
+ADMIN_GITHUB_IDS=
 
 # GitHub's REST and GraphQL API, and github.com itself for sign-in. The
 # defaults point at the GitHub fake that `pnpm dev` starts. Left empty, the
