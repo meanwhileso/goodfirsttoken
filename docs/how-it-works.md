@@ -30,13 +30,35 @@ system at `/design` while the build goes on in the open.
   [self-hosting.md](self-hosting.md). With no primary domain, as in local
   development, nothing redirects.
 
+## People
+
+The database records the people who sign in. Nothing signs anyone in yet.
+
+- A person is a GitHub account. Its numeric ID is who they are, because a
+  login can change and a freed login can go to someone else.
+- A person is recorded with the login GitHub gave and when they joined.
+  Recording them again keeps their interests and the time they joined, and
+  takes their current login.
+- A login is found without case, the way GitHub compares logins. When two
+  accounts were seen with the same login, it belongs to the one seen with it
+  most recently. A sighting older than the stored one changes nothing, so a
+  slow sign-in never brings back an old login.
+- Every stored record that names a person, like a claim, a settings change,
+  or a block, names them by GitHub ID, and they must already be recorded.
+- No stored record holds a GitHub token.
+
+**Blocks.** An admin can block a donor, with an optional reason. Blocking
+them again records the new reason, admin, and time. Lifting the block
+removes it. Blocks are stored, and nothing refuses a blocked donor yet.
+
 ## Claims
 
 A claim is one person's hold on an issue while their agent works it. The
 rules for a single claim are one pure function in `packages/core`,
 `nextClaimState(claim, event, now)`. It returns the claim after the event, or
 a refusal with its reason. The same claim, event, and time always give the
-same answer. Nothing stores claims or runs their timers yet.
+same answer. No issue room holds claims or runs their timers yet. The
+database can store them, as below.
 
 | State | Meaning | Holds a slot |
 |---|---|---|
@@ -88,10 +110,17 @@ same answer. Nothing stores claims or runs their timers yet.
 - A malformed claim, event, or time is refused as `invalid_input`, with the
   field named, like `claim.lastUpdateAt`, and nothing changes.
 
-**Stored claims.** `claimRecordSchema` checks a stored claim: its ID, issue,
-login, and agent, the commit its work starts from, and the facts its state
-needs.
+**Stored claims.** `claimRecordSchema` checks a stored claim: its ID and
+issue, the project's code repo, the claimant's GitHub ID and login, the
+agent, whether it is own-project work, the commit its work starts from, the
+token estimate, and the facts its state needs.
 
+- `githubId` is who made the claim. `login` is their login when they claimed.
+- `ownProject` is true when the claimant was an admin or maintainer of the
+  project when they claimed, so the work can count in its own leaderboard
+  column.
+- `tokenEstimate` is the tokens the work took as the harness estimated them,
+  or null when it gave no estimate.
 - `startCommit` is the full SHA `claim_issue` gave the agent. `submit_work`
   sends files relative to it, so a submit doesn't repeat it.
 - `submittedAt` is set for `awaiting_review` and `pr_opened`, null for
@@ -104,6 +133,43 @@ The claim cap, the rule that a PR on the issue stops new claims, and who may
 post to a claim depend on every claim on the issue, so they are outside this
 function.
 
+**The claims table.** The database keeps a copy of each claim for the
+leaderboard and for queries across issues. Each save carries a revision, a
+number the issue room raises with every change.
+
+- Saving a claim again updates its state, times, release reason, PR, and
+  token estimate.
+- A save applies only when its revision is higher than the stored one. A
+  stale save, one that arrives late or twice, changes nothing.
+- A claim's issue, project, claimant, login when they claimed, agent,
+  own-project flag, start commit, and claim time never change. A save that
+  changes one is refused, stale or not, and the stored claim stays as it was.
+- A save that names a PR other than the one recorded for the claim under
+  [PRs](#prs) is refused. A save that names no PR is not, since the issue
+  room may not have the PR yet.
+- An issue's claims come back in the order they were made. A person's come
+  back newest first, and stay theirs when their login changes.
+
+## PRs
+
+A claim's PR is recorded once it opens, then follows what GitHub says. Nothing
+reads PRs from GitHub yet.
+
+- A PR is `open`, `merged`, or `closed`. `closed` means closed without
+  merging.
+- A claim has one PR, and a PR belongs to one claim. A PR can't be recorded
+  for a claim that names a different one. Recording the same PR again keeps
+  the first record, and a different PR is refused.
+- So a claim and its PR record never name two different PRs. Either can name
+  the PR first, and for a while the other names none.
+- A merged PR has a merge time and a close time, the way GitHub records it. A
+  PR closed without merging has a close time and no merge time. Neither time
+  is before the PR opened.
+- A PR's times change only when its state does. A merged PR stays merged. A
+  closed PR that reopens is open again, with no close time.
+- GitHub's clock and ours can differ, so a merge or close time before the PR
+  opened counts as the time it opened.
+
 ## Projects
 
 - A project's status is `pending` while it waits for an admin, `approved`
@@ -113,6 +179,22 @@ function.
 - A project listed from its policy has a tier, from what its docs say:
   `invites_agents` or `allows_with_conditions`. These are the only two tiers
   a listing can have.
+- A project listed from its policy keeps the policy quote, its link, and the
+  tier. A registered project has no policy.
+- A repo can be a project once. Repo names compare without case, the way
+  GitHub compares them, so `Owner/App` and `owner/app` are the same project.
+- A rejected project has a reason. A pending or approved project has none, so
+  resuming a paused project clears its reason. A paused project may have one.
+
+**Status changes** apply at once, and every one is kept.
+
+- Each change records the status, the reason, who made it by GitHub ID, and
+  when. Adding the project is the first change, made by whoever added it.
+- Only a pause can name no person, for when Good First Token pauses a
+  project on its own. Nothing does that yet. An approval or a rejection
+  always names the admin who made it.
+- A change to the status and reason the project already has adds nothing.
+- The project keeps who set its current status, and when.
 
 ## Project settings
 
@@ -142,6 +224,62 @@ function.
 - A change sends only the settings it changes. The rest keep their values,
   and the result is checked as a whole. A setting sent as undefined keeps its
   value too.
+
+**History.** Changes apply at once, and every save of a project's settings
+is kept.
+
+- Each save records the whole settings, who made it by GitHub ID, when, and
+  which settings it changed. The first save, when the project is added, sets
+  every setting.
+- A change that changes nothing saves nothing, and adds nothing to the
+  history.
+- A change applies to the settings as they are when it saves. Two people
+  changing different settings at the same moment both keep their change.
+
+## Tagged issues
+
+The database keeps a cache of each project's open tagged issues. Nothing
+syncs them from GitHub yet.
+
+- Each issue has its title, every label on it, an open PR linked to it if
+  there is one, and when the sync read it. Every label is kept, so a change
+  to a project's tags can apply before the next sync.
+- Each project has its own copy of an issue, so two projects that keep issues
+  in the same repo each keep theirs. The project must exist.
+- Issues saved together all save, or none of them do, so one bad issue saves
+  nothing.
+- A later sync replaces what the cache says about an issue. After a sync, a
+  project's issues it didn't see again can be dropped: the ones last read
+  before it started.
+- Issue repos compare without case, like every repo name.
+
+## Donor sessions
+
+- A session has the donor, the harness, the budget, when it started, and how
+  many issues were claimed in it, starting at none.
+- Each claim counted adds one, including claims made at the same moment.
+- A donor's last session is the one that started most recently.
+
+## Crawl candidates
+
+A candidate is a repo the crawler found whose own docs welcome AI help. Nothing
+crawls yet.
+
+- A candidate has the repo's stars, when it was made, its last push, and
+  when its owner's account was made. It has the policy quote, link, and tier,
+  the settings the crawler's rules suggest, and labels that could mean ready
+  for help, with their open issue counts.
+- Suggested settings can leave out any setting, tags included. The admin
+  picks the tags.
+- A repo on the do-not-list never enters the admin queue.
+- A repo waits in the admin queue at most once, whatever the case of its
+  name. Once decided, it can wait again.
+- A candidate is decided once, approved or rejected, with who decided and
+  when. A rejection needs a reason.
+
+**The do-not-list** holds repos whose maintainers asked to be removed, with
+the admin who added each one, when, and an optional note. A repo is found on
+it without case. Adding a repo again keeps its first entry.
 
 ## MCP tools
 
@@ -252,7 +390,7 @@ Each limit the schemas enforce, other than those under project settings:
 | Path of a submitted file | 4,096 characters | Us |
 | Submit summary, and what was checked | 2,000 characters each | Us |
 | Policy quote | 2,000 characters | Us |
-| Pause, reject, and block reasons | 500 characters | Us |
+| Pause, reject, block, and do-not-list reasons | 500 characters | Us |
 | Interests | 20 per list, 50 characters each | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
 | Suggestions left out with `exclude` | 100 | Us |

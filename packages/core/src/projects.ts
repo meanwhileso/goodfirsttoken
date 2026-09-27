@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { httpsUrl, labelName, repoName, trimmedText, wholeNumber } from './primitives';
+import { epochMs, githubId, httpsUrl, labelName, repoName, trimmedText, wholeNumber } from './primitives';
 import type { Refusal } from './refusals';
 import { describeProblems, validate, type FieldProblem, type Validated } from './validation';
 
@@ -180,3 +180,119 @@ export function updateProjectSettings(
 export function invalidSettings(problems: readonly FieldProblem[]): Refusal {
   return { code: 'invalid_settings', message: `Settings not saved.\n${describeProblems(problems)}` };
 }
+
+/**
+ * The settings whose value differs between two saves, in the order of the
+ * settings table. With no earlier save, every setting counts as changed.
+ */
+export function changedSettings(before: ProjectSettings | null, after: ProjectSettings): SettingKey[] {
+  if (before === null) return [...settingKeys];
+  return settingKeys.filter((key) => canonicalJson(before[key]) !== canonicalJson(after[key]));
+}
+
+/** A value as JSON with every object's fields sorted, so equal values always match. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => a.localeCompare(b)))
+      : inner,
+  );
+}
+
+/** The longest reason for rejecting or pausing a project. */
+export const MAX_STATUS_REASON = 500;
+
+/**
+ * What a status needs with it. A rejection needs a reason, a pending or
+ * approved project has none, and a pause may have one. Only a pause can name
+ * no person, since Good First Token pauses on its own and never lists or
+ * rejects a project without an admin.
+ */
+function checkStatus(
+  change: { status: ProjectStatus; reason: string | null; changedBy: number | null },
+  fields: { reason: string; changedBy: string },
+  ctx: z.RefinementCtx,
+): void {
+  const { status, reason, changedBy } = change;
+  if (status === 'rejected' && reason === null) {
+    ctx.addIssue({ code: 'custom', path: [fields.reason], message: 'is required for a rejected project' });
+  }
+  if ((status === 'pending' || status === 'approved') && reason !== null) {
+    ctx.addIssue({ code: 'custom', path: [fields.reason], message: `must be null for a project that is ${status}` });
+  }
+  if (status !== 'paused' && changedBy === null) {
+    ctx.addIssue({ code: 'custom', path: [fields.changedBy], message: 'is required unless the project is paused' });
+  }
+}
+
+/**
+ * A stored project with its current settings. `settingsVersion` counts the
+ * saves of its settings, starting at 1, and every save is kept.
+ */
+export const projectRecordSchema = z
+  .object({
+    /** The code repo. */
+    repo: repoName,
+    status: projectStatusSchema,
+    /** Why it was rejected or paused. */
+    statusReason: trimmedText(MAX_STATUS_REASON).nullable(),
+    /** Who gave the project its current status, or null for a pause Good First Token made on its own. */
+    statusChangedBy: githubId.nullable(),
+    statusChangedAt: epochMs,
+    source: projectSourceSchema,
+    /** The policy it was listed from. Null for a registered project. */
+    policy: policySchema.nullable(),
+    /** The maintainer who registered it, or the admin who listed it. */
+    addedBy: githubId,
+    addedAt: epochMs,
+    settings: projectSettingsSchema,
+    settingsVersion: z.int().min(1),
+  })
+  .superRefine((project, ctx) => {
+    const problem = (field: string, message: string) => {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    };
+    if (project.source === 'policy' && project.policy === null) {
+      problem('policy', 'is required for a project listed from its policy');
+    }
+    if (project.source === 'registered' && project.policy !== null) {
+      problem('policy', 'must be null for a registered project');
+    }
+    checkStatus(
+      { status: project.status, reason: project.statusReason, changedBy: project.statusChangedBy },
+      { reason: 'statusReason', changedBy: 'statusChangedBy' },
+      ctx,
+    );
+  });
+export type ProjectRecord = z.infer<typeof projectRecordSchema>;
+
+/**
+ * One change of a project's status, with who made it and when. Adding the
+ * project is the first. `changedBy` is null for a pause Good First Token
+ * made on its own.
+ */
+export const projectStatusChangeSchema = z
+  .object({
+    repo: repoName,
+    status: projectStatusSchema,
+    reason: trimmedText(MAX_STATUS_REASON).nullable(),
+    changedBy: githubId.nullable(),
+    changedAt: epochMs,
+  })
+  .superRefine((change, ctx) => {
+    checkStatus(change, { reason: 'reason', changedBy: 'changedBy' }, ctx);
+  });
+export type ProjectStatusChange = z.infer<typeof projectStatusChangeSchema>;
+
+/** One save of a project's settings: who saved them, when, and what changed. */
+export const settingsVersionSchema = z.object({
+  repo: repoName,
+  version: z.int().min(1),
+  /** The settings as this save left them. */
+  settings: projectSettingsSchema,
+  /** The settings this save changed from the one before. The first save sets every one. */
+  changed: z.array(settingKeySchema),
+  changedBy: githubId,
+  changedAt: epochMs,
+});
+export type SettingsVersion = z.infer<typeof settingsVersionSchema>;

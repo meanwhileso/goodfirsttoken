@@ -1,0 +1,23 @@
+// Applies the D1 migrations to the local database before `pnpm dev` starts
+// Vite. Wrangler asks before it applies a migration when both stdin and
+// stdout are a terminal. Its stdin here is empty, so it applies them without
+// asking, the same in a terminal, under `pnpm --parallel`, and on any OS.
+// It needs no network and no account.
+//
+//   node scripts/migrate-local.mjs
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const app = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const require = createRequire(import.meta.url);
+const pkg = require.resolve('wrangler/package.json');
+const wrangler = path.join(path.dirname(pkg), require(pkg).bin.wrangler);
+
+const result = spawnSync(process.execPath, [wrangler, 'd1', 'migrations', 'apply', 'DB', '--local'], {
+  cwd: app,
+  stdio: ['ignore', 'inherit', 'inherit'],
+});
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);

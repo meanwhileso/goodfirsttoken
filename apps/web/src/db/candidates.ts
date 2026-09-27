@@ -1,0 +1,170 @@
+import {
+  candidateStatusSchema,
+  crawlCandidateSchema,
+  id,
+  mustParse,
+  type CandidateStatus,
+  type CrawlCandidate,
+  type Policy,
+  type ProjectSettingsPatch,
+  type RepoFacts,
+  type SuggestedTag,
+} from '@goodfirsttoken/core';
+import { checkTime, fromJson, newId } from './shared';
+
+// The crawl_candidates table: repos the crawler found whose own docs welcome
+// AI help, waiting for an admin or decided by one.
+
+interface CandidateRow {
+  id: string;
+  repo: string;
+  found_at: number;
+  stars: number;
+  repo_created_at: number;
+  repo_pushed_at: number;
+  owner_created_at: number;
+  policy_quote: string;
+  policy_url: string;
+  policy_tier: string;
+  settings: string;
+  suggested_tags: string;
+  status: string;
+  decided_by: number | null;
+  decided_at: number | null;
+  reason: string | null;
+}
+
+function toCandidate(row: CandidateRow): CrawlCandidate {
+  return mustParse(
+    crawlCandidateSchema,
+    {
+      id: row.id,
+      repo: row.repo,
+      foundAt: row.found_at,
+      facts: {
+        stars: row.stars,
+        createdAt: row.repo_created_at,
+        pushedAt: row.repo_pushed_at,
+        ownerCreatedAt: row.owner_created_at,
+      },
+      policy: { quote: row.policy_quote, url: row.policy_url, tier: row.policy_tier },
+      settings: fromJson(row.settings),
+      suggestedTags: fromJson(row.suggested_tags),
+      status: row.status,
+      decidedBy: row.decided_by,
+      decidedAt: row.decided_at,
+      reason: row.reason,
+    },
+    'candidate',
+  );
+}
+
+export interface NewCandidate {
+  repo: string;
+  facts: RepoFacts;
+  policy: Policy;
+  settings: ProjectSettingsPatch;
+  suggestedTags: SuggestedTag[];
+}
+
+/**
+ * Puts a repo the crawler found in the admin queue, found at `now`. A repo on
+ * the do-not-list never enters it, and a repo waits in it at most once, so
+ * this returns null for either. A repo decided before can wait again.
+ */
+export async function addCandidate(
+  db: D1Database,
+  candidate: NewCandidate,
+  now: number,
+): Promise<CrawlCandidate | null> {
+  const c = mustParse(
+    crawlCandidateSchema,
+    {
+      ...candidate,
+      id: newId('cand'),
+      foundAt: checkTime(now),
+      status: 'waiting',
+      decidedBy: null,
+      decidedAt: null,
+      reason: null,
+    },
+    'candidate',
+  );
+  // The do-not-list check is in the same statement, so a repo added to the
+  // list at the same moment can't slip in.
+  const result = await db
+    .prepare(
+      `INSERT INTO crawl_candidates (id, repo, found_at, stars, repo_created_at, repo_pushed_at,
+         owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, status,
+         decided_by, decided_at, reason)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'waiting', NULL, NULL, NULL
+       WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?2)
+       ON CONFLICT DO NOTHING`,
+    )
+    .bind(
+      c.id,
+      c.repo,
+      c.foundAt,
+      c.facts.stars,
+      c.facts.createdAt,
+      c.facts.pushedAt,
+      c.facts.ownerCreatedAt,
+      c.policy.quote,
+      c.policy.url,
+      c.policy.tier,
+      JSON.stringify(c.settings),
+      JSON.stringify(c.suggestedTags),
+    )
+    .run();
+  return result.meta.changes === 1 ? c : null;
+}
+
+export async function getCandidate(db: D1Database, candidateId: string): Promise<CrawlCandidate | null> {
+  const row = await db
+    .prepare('SELECT * FROM crawl_candidates WHERE id = ?')
+    .bind(mustParse(id, candidateId, 'candidateId'))
+    .first<CandidateRow>();
+  return row === null ? null : toCandidate(row);
+}
+
+/** Every candidate with `status`, oldest first. */
+export async function listCandidates(db: D1Database, status: CandidateStatus): Promise<CrawlCandidate[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM crawl_candidates WHERE status = ? ORDER BY found_at, id')
+    .bind(mustParse(candidateStatusSchema, status, 'status'))
+    .all<CandidateRow>();
+  return results.map(toCandidate);
+}
+
+/**
+ * Records an admin's decision on a waiting candidate. A rejection needs a
+ * reason. A candidate is decided once, so this returns null unless it waits.
+ */
+export async function decideCandidate(
+  db: D1Database,
+  candidateId: string,
+  decision: { status: 'approved' | 'rejected'; decidedBy: number; reason: string | null },
+  now: number,
+): Promise<CrawlCandidate | null> {
+  const current = await getCandidate(db, candidateId);
+  if (current?.status !== 'waiting') return null;
+  const decided = mustParse(
+    crawlCandidateSchema,
+    {
+      ...current,
+      status: decision.status,
+      decidedBy: decision.decidedBy,
+      decidedAt: checkTime(now),
+      reason: decision.reason,
+    },
+    'candidate',
+  );
+  const result = await db
+    .prepare(
+      `UPDATE crawl_candidates SET status = ?, decided_by = ?, decided_at = ?, reason = ?
+       WHERE id = ? AND status = 'waiting'`,
+    )
+    .bind(decided.status, decided.decidedBy, decided.decidedAt, decided.reason, decided.id)
+    .run();
+  return result.meta.changes === 1 ? decided : null;
+}

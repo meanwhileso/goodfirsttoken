@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { count, githubLogin, id, isoTime, labelName, repoName, trimmedText } from '../primitives';
+import { suggestedTagSchema } from '../crawl';
+import { MAX_BLOCK_REASON } from '../people';
+import { count, githubLogin, id, isoTime, repoName, trimmedText } from '../primitives';
 import {
   policySchema,
   policyTierSchema,
@@ -34,7 +36,7 @@ const queueItemSchema = z.object({
   /** The policy text that welcomes agent work, when there is one. */
   policy: policySchema.nullable(),
   /** Labels that could mean "ready for outside help", with their open issue counts. */
-  suggestedTags: z.array(z.object({ name: labelName, openIssues: count })),
+  suggestedTags: z.array(suggestedTagSchema),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -118,7 +120,7 @@ export const adminBlockDonor = defineTool({
   input: z.object({
     login: githubLogin,
     blocked: z.boolean().default(true),
-    reason: trimmedText(500).optional(),
+    reason: trimmedText(MAX_BLOCK_REASON).optional(),
   }),
   output: z.object({ login: githubLogin, blocked: z.boolean() }),
   text: (out) =>
