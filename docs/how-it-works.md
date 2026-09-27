@@ -243,17 +243,33 @@ job, or a release reason, it replaces each of these with `[redacted]`:
   `/workflows/`, or `/triggers/`, and the ID and token of a Discord webhook
   link after `discord.com/api/webhooks/`. The host stays.
 - A value given to a name with `=` or `:`, or after a flag like `--password`
-  and a space, when the name says the value is secret. Case is ignored.
+  and a space, when the name says the value is secret. Case is ignored in
+  names, except in `Key` below.
   - A name that ends in `password`, `passwd`, or `secret`, like `DB_PASSWD`
-    or `client_secret`: any value of 6 or more characters.
+    or `client_secret`: a value of 6 or more characters.
   - A name that ends in `token`, or in `apikey`, `accesskey`, `secretkey`,
     `privatekey`, `signingkey`, or `encryptionkey` with or without `_` or
     `-` before `key`, like `GITHUB_TOKEN`, `apiKey`, `secretAccessKey`, or
     `AWS_SECRET_ACCESS_KEY`: a value of 8 or more characters with at least
-    one letter and one digit. These names also label ordinary values, like
-    `expected token: STRING_LITERAL` from a parser, which stay.
-  - The name stays, as in `?token=[redacted]` in a link. Other names, like
-    `sort_key` or `cache-key`, keep their values.
+    one letter and one digit.
+  - Any other name that ends in `_key` or `-key`, or in `Key` after a
+    lowercase letter or digit, like `RAILS_MASTER_KEY` or `masterKey`: a
+    value of 16 or more characters with at least one letter and one digit,
+    so `sort_key: created_at_desc` and `cache-key=build-output-v2` keep
+    theirs.
+  - These names also label values that aren't secret, which stay: a word
+    that says what a field is or whether it is set, like `required`,
+    `optional`, `missing`, `option`, or `parameter`, as in
+    `password: required` or `the --secret parameter`, and a reference in
+    code, like the dotted path `config.apiKeyV2` or the constant `T_STRING2`.
+    The words are listed as `FIELD_WORDS` in `packages/core/src/secrets.ts`.
+  - The value is read up to a space, a quote, a comma, a semicolon, or `&`.
+    Closing punctuation at its end, like `)`, `]`, `}`, or `.`, stays, as in
+    `(GITHUB_TOKEN=[redacted])`.
+  - The name stays. When a name or its value isn't secret, the value is
+    read again for a secret inside it, so `?api_key=[redacted]` in a link,
+    `DATABASE_URL=postgres://db.test/app?password=[redacted]`, and
+    `env: GITHUB_TOKEN=[redacted]` are all found.
 
 A password stuck to `-p`, the way `mysql -psecret` takes one, is not
 replaced, since the same form is ordinary in commands like `mkdir -pv`.
@@ -270,7 +286,8 @@ a post, a job, or a reason longer than its limit is cut to the limit.
 - Every call to the room applies the timers that are due before anything
   else, so a late alarm never changes an answer.
 - A pause or an expiry is recorded at its deadline, even when the alarm or
-  call that applies it comes later.
+  call that applies it comes later. Several applied at once are recorded in
+  the order of their deadlines, so the times in the history never go back.
 - A room with no claim left to pause or expire, and nothing waiting to save,
   sets no alarm.
 
@@ -321,7 +338,8 @@ history survives a restart.
 
 - Each change to a claim raises its revision by one. Right after the
   change, the room saves the claim to the claims table at that revision,
-  unless an earlier save of the claim failed and waits for its next try.
+  unless an earlier save of the claim is still out in another call, or
+  failed and waits for its next try.
 - A save that fails is tried again a minute later, then after 2, 4, 8, 16,
   and 32 minutes, then every hour. Each try sends the claim as it is then,
   so when the claim changed during the wait, only its latest version
@@ -329,7 +347,13 @@ history survives a restart.
   for its next try is left alone by other calls to the room.
 - A save that has failed for a day is given up, with one error in the log
   that names the claim. The table keeps an older version of the claim, or
-  none, until the claim changes again, which starts the tries over.
+  none. A change to the claim starts the tries over, from a minute.
+- When a save lands, the database is taking saves again. Each other claim in
+  the room that waits for a try, or that the room gave up on, is then due a
+  minute after its last try at the latest, or at once when that minute has
+  passed. So a save that can never land, like one for a claimant the
+  database has no record of, is tried at most once a minute while the room
+  is busy. A given-up save that fails again logs no second error.
 - A claimant has to be recorded under [People](#people) for their claim to
   save.
 - The room stores claim facts and public events only. It takes who is

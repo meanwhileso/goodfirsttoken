@@ -397,8 +397,12 @@ migration that has run on a deployed database never changes.
 per issue, that holds the issue's claims. Its rules are in
 [how-it-works.md](how-it-works.md#the-issue-room).
 `issueRoom(namespace, issue)` gets the room with `getByName`, named for the
-issue in lower case. Inside, `ctx.id.name` holds that name, and a claim's
-issue is checked against it.
+issue in lower case. A claim's issue is checked by comparing the room's own
+ID with `idFromName` of that issue in lower case. Cloudflare's
+[DurableObjectId docs](https://developers.cloudflare.com/durable-objects/api/id/)
+say `ctx.id.name` is set for an object reached with `getByName`, but it is
+undefined when the ID came through `idFromString`, and for an alarm set
+before 2026-03-15. The ID comparison holds either way.
 
 **Its interface** is RPC methods on the stub, for the MCP tools to call:
 `claim`, `postUpdate`, `submit`, `openPr`, `release`, `prOpened`, `prClosed`,
@@ -423,7 +427,7 @@ it fails.
 | Table | One row per |
 |---|---|
 | `facts` | Fact about the room. Today only `issue`, the issue it holds, as the first claim spelled it. |
-| `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, the time before which no try is made, and the revision the room gave up at |
+| `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, when the last try started, the time before which no try is made, until when a call's try is out, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
 | `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
 
@@ -440,12 +444,22 @@ due. When it is set for, and what the timers do, is under
 [the issue room's timers](how-it-works.md#the-issue-room).
 
 **Saving to D1.** After its writes, each call tries every claim whose save
-is due with `saveClaim`, and marks the revision saved when it lands or D1
-calls it stale. Before the await, it moves the claim's next-try time a
-minute ahead, so a second call leaves the claim alone while the first
-call's try is out. A failed try sets the next-try time from the count of
-failed tries. The retry and give-up rules are under
+is due with `saveClaim`, one at a time, and marks the revision saved when it
+lands or D1 calls it stale. Before the await, it records the try's time and
+marks the try out for a minute, so a second call leaves the claim alone
+while the first call's try is out, and a try whose call died is due again a
+minute later. A failed try sets the next-try time from the count of failed
+tries. A given-up save's next-try time is `Number.MAX_SAFE_INTEGER`. When a
+save lands, one statement moves every other waiting claim's next-try time
+to at most a minute after its last try, and the call goes on to try the
+ones that are due. The retry and give-up rules are under
 [Saving to the database](how-it-works.md#the-issue-room).
+
+A test can't make two calls through the stub overlap at the D1 await on
+purpose, because a failed save answers too fast. The test for the guard
+calls `snapshot` twice at once inside the room with `runInDurableObject`,
+which overlaps them at the first await, as the runtime does when D1 is
+slow.
 
 **Watchers** use the hibernation API: the room accepts each socket with
 `ctx.acceptWebSocket`, and finds them again with `ctx.getWebSockets`. What

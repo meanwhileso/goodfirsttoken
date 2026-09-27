@@ -60,6 +60,8 @@ export const SAVE_RETRY_FIRST_MS = MINUTE;
 export const SAVE_RETRY_MAX_MS = HOUR;
 /** How long a save can keep failing before the room gives up on it. */
 export const SAVE_GIVE_UP_MS = DAY;
+// The next-try time of a save the room gave up on.
+const SAVE_NEVER = Number.MAX_SAFE_INTEGER;
 
 /** A claim to make, from the tool that checked the issue and the donor first. */
 export interface ClaimRequest {
@@ -131,7 +133,9 @@ const SCHEMA = `
     save_failures INTEGER NOT NULL DEFAULT 0,
     save_after INTEGER NOT NULL DEFAULT 0,
     failing_since INTEGER,
-    gave_up INTEGER
+    gave_up INTEGER,
+    saving_until INTEGER,
+    last_try_at INTEGER
   ) STRICT;
   CREATE TABLE IF NOT EXISTS issue_prs (
     repo TEXT NOT NULL COLLATE NOCASE,
@@ -142,7 +146,8 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, event TEXT NOT NULL) STRICT;
 `;
 
-const CLAIM_COLUMNS = 'id, record, revision, mirrored, last_post_at, save_failures, save_after, failing_since, gave_up';
+const CLAIM_COLUMNS = `id, record, revision, mirrored, last_post_at, save_failures, save_after, failing_since,
+  gave_up, saving_until, last_try_at`;
 
 type ClaimRow = {
   id: string;
@@ -154,6 +159,8 @@ type ClaimRow = {
   save_after: number;
   failing_since: number | null;
   gave_up: number | null;
+  saving_until: number | null;
+  last_try_at: number | null;
 };
 
 interface StoredClaim {
@@ -170,6 +177,8 @@ interface StoredClaim {
   failingSince: number | null;
   /** The revision the room gave up saving at, or null. */
   gaveUp: number | null;
+  /** While a call's try of the save is out, the time other calls may try again, or null. */
+  savingUntil: number | null;
 }
 
 type PrRow = { repo: string; number: number; url: string };
@@ -519,12 +528,12 @@ export class IssueRoom extends DurableObject<Env> {
    * two rooms, and two caps.
    */
   private takeIssue(issue: string): string {
-    const name = this.ctx.id.name;
-    const held = this.issue();
-    if (name !== issue.toLowerCase()) {
-      const room = held ?? name ?? 'an issue, with no name';
-      throw new BadInput(`issue: this is the room for ${room}, and ${issue} has a room of its own`);
+    // The room compares IDs. An ID made from a name is the same wherever it
+    // is made, and the check doesn't depend on ctx.id.name being set.
+    if (!this.ctx.id.equals(this.env.ISSUE_ROOM.idFromName(issue.toLowerCase()))) {
+      throw new BadInput(`issue: ${issue} has a room of its own, and this is another issue's room`);
     }
+    const held = this.issue();
     if (held !== null) return held;
     this.sql.exec("INSERT INTO facts (key, value) VALUES ('issue', ?)", issue);
     return issue;
@@ -542,6 +551,7 @@ export class IssueRoom extends DurableObject<Env> {
    * claim holding a slot it lost.
    */
   private settle(now: number): void {
+    const changes: { claim: ClaimRecord; kind: FeedEventKind; text: string; at: number }[] = [];
     for (const { record } of this.readClaims()) {
       const after = nextClaimState(record, { kind: 'tick' }, now).claim;
       if (after.state === record.state) continue;
@@ -549,13 +559,16 @@ export class IssueRoom extends DurableObject<Env> {
       const { pausesAt, expiresAt } = claimDeadlines(record);
       this.save(after);
       if (after.state === 'paused') {
-        this.emit(after, 'paused', 'paused: no update for 30 minutes', null, pausesAt ?? now);
+        changes.push({ claim: after, kind: 'paused', text: 'paused: no update for 30 minutes', at: pausesAt ?? now });
       }
       if (after.state === 'expired') {
         const why = after.submittedAt === null ? 'no submit within 24 hours' : 'no PR within 7 days of the submit';
-        this.emit(after, 'expired', `expired: ${why}`, null, expiresAt ?? now);
+        changes.push({ claim: after, kind: 'expired', text: `expired: ${why}`, at: expiresAt ?? now });
       }
     }
+    // In the order of the deadlines, so the times in the history never go back.
+    changes.sort((a, b) => a.at - b.at);
+    for (const { claim, kind, text, at } of changes) this.emit(claim, kind, text, null, at);
   }
 
   /** Stores a new version of a claim, with the next revision. A post also restarts its 10 seconds. */
@@ -636,60 +649,92 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * Tries to save each claim whose save is due to D1, at its latest
-   * revision. A save D1 calls stale means it already has that revision or a
-   * later one. A claim whose save waits for a retry is left alone, so a
-   * failing save never slows other calls.
+   * revision, one claim at a time. A save D1 calls stale means it already has
+   * that revision or a later one. A claim whose save waits for a retry, or is
+   * out in another call, is left alone, so a failing save never slows other
+   * calls.
+   *
+   * When a save lands, D1 is taking saves again. Each other claim waiting for
+   * a retry, and each the room gave up on, is then due a minute after its
+   * last try at the latest, or at once when that minute has passed. The
+   * minute keeps a claim whose save can never land, like one whose claimant
+   * D1 has no record of, from being tried on every save in a busy room.
    */
   private async mirror(now: number): Promise<void> {
-    for (const stored of this.readClaims()) {
-      if (!savePending(stored) || stored.saveAfter > now) continue;
+    const tried = new Set<string>();
+    for (;;) {
+      const stored = this.readClaims().find((c) => !tried.has(c.record.id) && saveDue(c, now));
+      if (stored === undefined) return;
       const claimId = stored.record.id;
-      // Other calls leave the claim alone while this try is out.
-      this.sql.exec('UPDATE claims SET save_after = ? WHERE id = ?', now + SAVE_RETRY_FIRST_MS, claimId);
+      tried.add(claimId);
+      // Other calls leave the claim alone while this try is out. If this
+      // call ends before the try does, the claim is due again a minute later.
+      this.sql.exec(
+        'UPDATE claims SET saving_until = ?, last_try_at = ? WHERE id = ?',
+        now + SAVE_RETRY_FIRST_MS,
+        now,
+        claimId,
+      );
       try {
         await saveClaim(this.env.DB, stored.record, stored.revision);
-        this.sql.exec(
-          `UPDATE claims SET mirrored = MAX(mirrored, ?), save_failures = 0, save_after = 0, failing_since = NULL,
-             gave_up = NULL WHERE id = ?`,
-          stored.revision,
-          claimId,
-        );
       } catch (error) {
         this.saveFailed(stored, now, error);
+        continue;
       }
+      this.sql.exec(
+        `UPDATE claims SET mirrored = MAX(mirrored, ?), save_failures = 0, save_after = 0, failing_since = NULL,
+           gave_up = NULL, saving_until = NULL WHERE id = ?`,
+        stored.revision,
+        claimId,
+      );
+      this.sql.exec(
+        `UPDATE claims SET save_after = MIN(save_after, MAX(?, COALESCE(last_try_at, 0) + ?))
+         WHERE mirrored < revision`,
+        now,
+        SAVE_RETRY_FIRST_MS,
+      );
     }
   }
 
   /**
    * Plans the next try of a save that failed: after a minute, then twice as
    * long each time, up to an hour. A save that has failed for a day is given
-   * up, with one error in the log, until the claim changes again.
+   * up, with one error in the log, until the claim changes or another save
+   * in the room lands.
    */
   private saveFailed(stored: StoredClaim, now: number, error: unknown): void {
     const claimId = stored.record.id;
-    // A try after the room gave up starts the count over.
-    const restarted = stored.gaveUp !== null;
+    // A try after the claim changed, once the room gave up, starts the count
+    // over.
+    const restarted = changedSinceGiveUp(stored);
     const failures = (restarted ? 0 : stored.saveFailures) + 1;
     const since = restarted ? now : (stored.failingSince ?? now);
     console.warn(`Claim ${claimId} was not saved to D1 at revision ${String(stored.revision)}.`, error);
     if (now - since >= SAVE_GIVE_UP_MS) {
       this.sql.exec(
-        'UPDATE claims SET save_failures = ?, failing_since = ?, save_after = 0, gave_up = ? WHERE id = ?',
+        `UPDATE claims SET save_failures = ?, failing_since = ?, save_after = ?, gave_up = ?, saving_until = NULL
+         WHERE id = ?`,
         failures,
         since,
+        SAVE_NEVER,
         stored.revision,
         claimId,
       );
-      console.error(
-        `Claim ${claimId}: the room gave up saving it to D1 after ${String(failures)} tries over a day. ` +
-          `D1 keeps an older version of the claim, or none, until the claim changes again.`,
-        error,
-      );
+      // A retry after another save landed, which fails again, logs no second
+      // error.
+      if (stored.gaveUp === null || restarted) {
+        console.error(
+          `Claim ${claimId}: the room gave up saving it to D1 after ${String(failures)} tries over a day. ` +
+            `D1 keeps an older version of the claim, or none, until the claim changes or another save lands.`,
+          error,
+        );
+      }
       return;
     }
     const wait = Math.min(SAVE_RETRY_FIRST_MS * 2 ** (failures - 1), SAVE_RETRY_MAX_MS);
     this.sql.exec(
-      'UPDATE claims SET save_failures = ?, failing_since = ?, save_after = ? WHERE id = ?',
+      `UPDATE claims SET save_failures = ?, failing_since = ?, save_after = ?, gave_up = NULL, saving_until = NULL
+       WHERE id = ?`,
       failures,
       since,
       now + wait,
@@ -704,19 +749,34 @@ export class IssueRoom extends DurableObject<Env> {
       const { pausesAt, expiresAt } = claimDeadlines(stored.record);
       if (pausesAt !== null) times.push(pausesAt);
       if (expiresAt !== null) times.push(expiresAt);
-      if (savePending(stored)) times.push(Math.max(stored.saveAfter, now));
+      const next = nextTry(stored);
+      if (next !== null) times.push(Math.max(next, now));
     }
     if (times.length === 0) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...times));
   }
 }
 
+/** A claim the room gave up saving, that has changed since. */
+function changedSinceGiveUp(stored: StoredClaim): boolean {
+  return stored.gaveUp !== null && stored.revision > stored.gaveUp;
+}
+
 /**
- * Whether D1 lacks the claim's latest revision, and the room still tries to
- * save it: it hasn't given up, or the claim changed since it did.
+ * When the claim's save can next be tried: after its wait, and once no
+ * other call's try is out. Null when D1 has its latest revision, or the room
+ * gave up and nothing has changed since.
  */
-function savePending(stored: StoredClaim): boolean {
-  return stored.mirrored < stored.revision && (stored.gaveUp === null || stored.revision > stored.gaveUp);
+function nextTry(stored: StoredClaim): number | null {
+  if (stored.mirrored >= stored.revision) return null;
+  const after = changedSinceGiveUp(stored) ? 0 : stored.saveAfter;
+  if (after >= SAVE_NEVER) return null;
+  return Math.max(after, stored.savingUntil ?? 0);
+}
+
+function saveDue(stored: StoredClaim, now: number): boolean {
+  const next = nextTry(stored);
+  return next !== null && next <= now;
 }
 
 function toStored(row: ClaimRow): StoredClaim {
@@ -729,5 +789,6 @@ function toStored(row: ClaimRow): StoredClaim {
     saveAfter: row.save_after,
     failingSince: row.failing_since,
     gaveUp: row.gave_up,
+    savingUntil: row.saving_until,
   };
 }

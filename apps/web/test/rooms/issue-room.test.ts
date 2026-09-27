@@ -214,7 +214,7 @@ describe('the claim cap', () => {
     const wrongRoom = await room.claim(request(priya, { issue: other }));
 
     expect(wrongRoom).toMatchObject({ ok: false, refusal: { code: 'invalid_input' } });
-    expect(!wrongRoom.ok && wrongRoom.refusal.message).toContain(`issue: this is the room for ${issue}`);
+    expect(!wrongRoom.ok && wrongRoom.refusal.message).toContain(`issue: ${other} has a room of its own`);
     expect(await room.snapshot()).toEqual({ issue: null, claims: [], prs: [] });
     const rightRoom = issueRoom(env.ISSUE_ROOM, other);
     const results = [];
@@ -415,12 +415,14 @@ describe('expiry', () => {
     });
   });
 
-  test('a late alarm records each pause and expiry at its deadline', async () => {
+  test('a late alarm records each pause and expiry at its deadline, in the order of the deadlines', async () => {
     const priyas = await claim(priya);
     at(t0 + 5 * MINUTE);
     const kenjis = await claim(kenji);
-    at(t0 + 10 * MINUTE);
-    await post(kenjis, 'reading the issue');
+    // Priya's post moves her pause after Kenji's, so the deadlines come in
+    // another order than the claims.
+    at(t0 + 20 * MINUTE);
+    await post(priyas, 'reading the issue');
 
     at(t0 + 2 * HOUR);
     await runDurableObjectAlarm(room);
@@ -429,8 +431,8 @@ describe('expiry', () => {
 
     const changes = (await room.history()).filter((e) => e.kind === 'paused' || e.kind === 'expired');
     expect(changes.map((e) => [e.kind, e.claim, e.time])).toEqual([
-      ['paused', priyas.id, new Date(t0 + 30 * MINUTE).toISOString()],
-      ['paused', kenjis.id, new Date(t0 + 40 * MINUTE).toISOString()],
+      ['paused', kenjis.id, new Date(t0 + 35 * MINUTE).toISOString()],
+      ['paused', priyas.id, new Date(t0 + 50 * MINUTE).toISOString()],
       ['expired', priyas.id, new Date(t0 + DAY).toISOString()],
       ['expired', kenjis.id, new Date(t0 + 5 * MINUTE + DAY).toISOString()],
     ]);
@@ -712,31 +714,120 @@ describe('the D1 mirror', () => {
     expect(String(givenUp[0]?.[0])).toContain('gave up');
   });
 
-  test('a change while a save waits for its retry waits too, and a change after the room gave up tries again', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  test('a change while a save waits for its retry waits too', async () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const wanderer = { githubId: 3097, login: 'wanderer' };
-    const made = await claim(wanderer);
-    const mine = { claimId: made.id, githubId: wanderer.githubId };
+    const drifter = { githubId: 3096, login: 'drifter-two' };
+    const made = await claim(drifter);
     expect(warnings).toHaveBeenCalledTimes(1);
 
     at(t0 + 10 * SECOND);
-    await room.submit(mine);
+    await room.submit({ claimId: made.id, githubId: drifter.githubId });
+
+    expect(warnings).toHaveBeenCalledTimes(1);
+    expect(await alarmTime()).toBe(t0 + MINUTE);
+  });
+
+  test('a save that is out is not tried again by another call at the same moment', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const made = await claim({ githubId: 3095, login: 'racer' });
     expect(warnings).toHaveBeenCalledTimes(1);
 
-    // Run the retries until only the 7-day review window is left.
+    // Two calls at once, when the save is due. Made inside the room, the
+    // first runs until it awaits D1, then the second looks for saves to try
+    // while the first one's try is out. Calls through the stub overlap the
+    // same way, but only when D1 answers slowly.
+    at(t0 + MINUTE);
+    await runInDurableObject(room, (instance) => Promise.all([instance.snapshot(), instance.snapshot()]));
+
+    expect(warnings).toHaveBeenCalledTimes(2);
+    // One more failed try, so the next waits 2 minutes.
+    expect(await alarmTime()).toBe(t0 + 3 * MINUTE);
+    expect(await getClaim(db, made.id)).toBeNull();
+  });
+
+  test('a change after the room gave up starts the tries over, and they back off and give up again', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const wanderer = { githubId: 3097, login: 'wanderer' };
+    const made = await claim(wanderer);
+    const mine = { claimId: made.id, githubId: wanderer.githubId };
+    at(t0 + 10 * SECOND);
+    await room.submit(mine);
     const expiry = t0 + 10 * SECOND + 7 * DAY;
-    for (let next = await alarmTime(); next !== null && next !== expiry; next = await alarmTime()) {
+    const gaveUp = () => errors.mock.calls.filter((call) => String(call[0]).includes(made.id)).length;
+    // Runs each alarm until only the 7-day review window is left.
+    const retries = async () => {
+      const alarms: number[] = [];
+      for (let next = await alarmTime(); next !== null && next !== expiry; next = await alarmTime()) {
+        if (alarms.length > 100) throw new Error('The room never stopped trying.');
+        alarms.push(next);
+        at(next);
+        await runDurableObjectAlarm(room);
+      }
+      return alarms;
+    };
+    await retries();
+    expect(gaveUp()).toBe(1);
+
+    // The change starts the tries over, and D1 still refuses the claim.
+    at(t0 + 2 * DAY);
+    await room.submit(mine);
+    const again = await retries();
+
+    expect(again[0]).toBe(t0 + 2 * DAY + MINUTE);
+    const gaps = again.slice(1, 6).map((time, i) => time - (again[i] ?? 0));
+    expect(gaps).toEqual([2, 4, 8, 16, 32].map((m) => m * MINUTE));
+    expect(gaveUp()).toBe(2);
+
+    // Once D1 can take it, the next change lands.
+    await savePerson(db, wanderer, t0);
+    at(t0 + 4 * DAY);
+    await room.submit(mine);
+    expect(await getClaim(db, made.id)).toMatchObject({ id: made.id, state: 'awaiting_review' });
+  });
+
+  test('a save that can never land is tried at most once a minute, however busy its room', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const stuck = await claim({ githubId: 3092, login: 'stuck' });
+    const priyas = await claim(priya);
+
+    // Priya's posts land every 10 seconds for two minutes.
+    for (let seconds = 10; seconds <= 120; seconds += 10) {
+      at(t0 + seconds * SECOND);
+      await post(priyas, `step ${String(seconds / 10)}`);
+    }
+
+    const tries = warnings.mock.calls.filter((call) => String(call[0]).includes(stuck.id));
+    expect(tries).toHaveLength(3);
+  });
+
+  test("when a save lands, the room's other waiting saves, and those it gave up on, are tried at once", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const early = { githubId: 3094, login: 'early-bird' };
+    const late = { githubId: 3093, login: 'late-comer' };
+    const earlyClaim = await claim(early);
+    // Run every alarm until the room gives up on the save, after the claim expired.
+    for (let next = await alarmTime(), runs = 0; next !== null; next = await alarmTime(), runs += 1) {
+      if (runs > 100) throw new Error('The room never stopped trying.');
       at(next);
       await runDurableObjectAlarm(room);
     }
-    expect(await alarmTime()).toBe(expiry);
-
-    await savePerson(db, wanderer, t0);
     at(t0 + 2 * DAY);
-    await room.submit(mine);
+    const lateClaim = await claim(late);
+    for (const minutes of [1, 3]) {
+      at(t0 + 2 * DAY + minutes * MINUTE);
+      await runDurableObjectAlarm(room);
+    }
+    expect(await alarmTime()).toBe(t0 + 2 * DAY + 7 * MINUTE);
 
-    expect(await getClaim(db, made.id)).toMatchObject({ id: made.id, state: 'awaiting_review' });
+    await savePerson(db, early, t0);
+    await savePerson(db, late, t0);
+    at(t0 + 2 * DAY + 4 * MINUTE);
+    await claim(priya);
+
+    expect(await getClaim(db, earlyClaim.id)).toMatchObject({ state: 'expired' });
+    expect(await getClaim(db, lateClaim.id)).toMatchObject({ state: 'active' });
   });
 });
 

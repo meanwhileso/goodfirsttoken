@@ -6,7 +6,9 @@
 // and a new pattern goes there too.
 //
 // No pattern has two unbounded repeats in a row that can match the same
-// characters, so a long line can't make one slow.
+// characters. The scan for named values reads a value again when its name
+// isn't secret, so a line like `a=b=c=...` takes time that grows with the
+// square of its length. The room strips lines of 200 characters or fewer.
 
 /** What a key or token is replaced with. */
 export const REDACTED = '[redacted]';
@@ -63,26 +65,100 @@ const AFTER_FIRST_GROUP: readonly RegExp[] = [
 
 // A value given to a name with = or :, like GITHUB_TOKEN=..., "password":
 // "...", or ?token=... in a link. The name starts where a run of name
-// characters starts, so each run is scanned once.
+// characters starts.
 const ASSIGNMENT = /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?[ \t]*[:=][ \t]*["']?)([^\s"',;&]+)/g;
 // A value after a flag and a space, like --password hunter2. A value that
 // starts with - is the next flag.
 const FLAG = /(?<![A-Za-z0-9_-])(--[A-Za-z][A-Za-z0-9-]*)([ \t]+)(?!-)([^\s"',;&]+)/g;
 
-// Names whose value is a password or a secret, whatever it looks like.
+// Names whose value is a password or a secret: 6 or more characters.
 const PASSWORD_NAME = /(?:passw(?:or)?d|secret)$/i;
 const MIN_PASSWORD = 6;
-// Names whose value is a token or a key. These names also label ordinary
-// values, like `expected token: STRING_LITERAL` from a parser or
-// `apiKey: process.env.API_KEY`, so the value must look random too: 8 or more
-// characters, with a letter and a digit.
-const KEY_NAME = /(?:token|(?:api|access|secret|private|signing|encryption)[_-]?key)$/i;
-const MIN_KEY = 8;
+// Names whose value is a token or one of these keys. These names also label
+// ordinary values, like `expected token: STRING_LITERAL` from a parser, so
+// the value needs 8 or more characters with a letter and a digit.
+const TOKEN_NAME = /(?:token|(?:api|access|secret|private|signing|encryption)[_-]?key)$/i;
+const MIN_TOKEN = 8;
+// Any other key: a name that ends in _key or -key, or in Key after a
+// lowercase letter or digit, like RAILS_MASTER_KEY or masterKey. Many such
+// names hold ordinary values, like `sort_key: created_at_desc`, so the value
+// needs 16 or more characters with a letter and a digit.
+const KEY_NAME = /[_-]key$/i;
+const CAMEL_KEY_NAME = /[a-z0-9]Key$/;
+const MIN_KEY = 16;
+
+// Words that say what a field is or whether it is set, and don't give its
+// value, like `password: required` or `the --secret parameter`.
+const FIELD_WORDS = new Set([
+  'argument',
+  'boolean',
+  'changed',
+  'default',
+  'disabled',
+  'enabled',
+  'hidden',
+  'masked',
+  'missing',
+  'needed',
+  'option',
+  'optional',
+  'parameter',
+  'placeholder',
+  'provided',
+  'redacted',
+  'removed',
+  'required',
+  'rotated',
+  'setting',
+  'string',
+  'support',
+  'switch',
+  'updated',
+]);
+// A reference in code, which names a value and doesn't hold it: a dotted
+// path like config.apiKeyV2, or a constant in capitals with an underscore,
+// like T_STRING2.
+const CODE_PATH = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+const CONSTANT = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+// Closing punctuation after a value belongs to the text around it.
+const CLOSING = new Set([')', ']', '}', '>', '.', '!']);
+
+function looksRandom(value: string, min: number): boolean {
+  return value.length >= min && /[A-Za-z]/.test(value) && /[0-9]/.test(value);
+}
 
 function isSecret(name: string, value: string): boolean {
+  if (FIELD_WORDS.has(value.toLowerCase()) || CODE_PATH.test(value) || CONSTANT.test(value)) return false;
   if (PASSWORD_NAME.test(name)) return value.length >= MIN_PASSWORD;
-  if (KEY_NAME.test(name)) return value.length >= MIN_KEY && /[A-Za-z]/.test(value) && /[0-9]/.test(value);
+  if (TOKEN_NAME.test(name)) return looksRandom(value, MIN_TOKEN);
+  if (KEY_NAME.test(name) || CAMEL_KEY_NAME.test(name)) return looksRandom(value, MIN_KEY);
   return false;
+}
+
+/**
+ * Replaces each secret value that `pattern` finds after a name. When the
+ * name or value isn't secret, the scan goes on from the start of the value,
+ * so a secret inside it is found too, like `?api_key=...` in a link or
+ * `GITHUB_TOKEN=...` after `env:`.
+ */
+function replaceNamed(text: string, pattern: RegExp): string {
+  let out = '';
+  let copied = 0;
+  pattern.lastIndex = 0;
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const [whole, name = '', separator = '', found = ''] = match;
+    let value = found;
+    while (value.length > 0 && CLOSING.has(value.slice(-1))) value = value.slice(0, -1);
+    const valueAt = match.index + name.length + separator.length;
+    if (isSecret(name, value)) {
+      out += text.slice(copied, valueAt) + REDACTED;
+      copied = valueAt + value.length;
+      pattern.lastIndex = match.index + whole.length;
+    } else {
+      pattern.lastIndex = valueAt;
+    }
+  }
+  return out + text.slice(copied);
 }
 
 /**
@@ -93,7 +169,5 @@ export function stripSecrets(text: string): string {
   let out = text;
   for (const pattern of WHOLE) out = out.replace(pattern, REDACTED);
   for (const pattern of AFTER_FIRST_GROUP) out = out.replace(pattern, `$1${REDACTED}`);
-  const named = (match: string, name: string, separator: string, value: string) =>
-    isSecret(name, value) ? name + separator + REDACTED : match;
-  return out.replace(ASSIGNMENT, named).replace(FLAG, named);
+  return replaceNamed(replaceNamed(out, ASSIGNMENT), FLAG);
 }

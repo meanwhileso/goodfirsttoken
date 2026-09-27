@@ -102,6 +102,43 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
     expect(stripSecrets(`--client-secret\t${chars(10)}`)).toBe('--client-secret\t[redacted]');
   });
 
+  test('a secret value inside another value, like the query of a link, is found too', () => {
+    const lines: [string, string][] = [
+      [`fetched https://api.test/v1/items?api_key=${chars(24)}`, 'fetched https://api.test/v1/items?api_key=[redacted]'],
+      [
+        `opened http://localhost:5173/auth/callback?token=${chars(24)}&next=/`,
+        'opened http://localhost:5173/auth/callback?token=[redacted]&next=/',
+      ],
+      [`set url=https://hooks.test/cb?access_token=${chars(24)}`, 'set url=https://hooks.test/cb?access_token=[redacted]'],
+      [`env: GITHUB_TOKEN=${hex(40)}`, 'env: GITHUB_TOKEN=[redacted]'],
+      [`config: password=${chars(12)}`, 'config: password=[redacted]'],
+      [`DATABASE_URL=postgres://db.test/app?password=${chars(12)}`, 'DATABASE_URL=postgres://db.test/app?password=[redacted]'],
+    ];
+    for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
+  });
+
+  test('a long value with a letter and a digit, given to any name that ends in _key, -key, or Key', () => {
+    const lines: [string, string][] = [
+      [`RAILS_MASTER_KEY=${hex(32)}`, 'RAILS_MASTER_KEY=[redacted]'],
+      [`SESSION_KEY=${chars(32)}`, 'SESSION_KEY=[redacted]'],
+      [`AUTH_KEY: ${chars(40)}`, 'AUTH_KEY: [redacted]'],
+      [`OPENAI_KEY=${chars(40)}`, 'OPENAI_KEY=[redacted]'],
+      [`APP_KEY=base64:${chars(43)}=`, 'APP_KEY=[redacted]'],
+      [`masterKey: "${chars(24)}"`, 'masterKey: "[redacted]"'],
+    ];
+    for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
+  });
+
+  test('closing punctuation after a replaced value stays', () => {
+    const lines: [string, string][] = [
+      [`(GITHUB_TOKEN=${hex(40)})`, '(GITHUB_TOKEN=[redacted])'],
+      [`set password=${chars(12)}.`, 'set password=[redacted].'],
+      [`[api_key: ${chars(24)}]`, '[api_key: [redacted]]'],
+      [`{token=${chars(20)}}`, '{token=[redacted]}'],
+    ];
+    for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
+  });
+
   test('every secret in a line is replaced', () => {
     expect(stripSecrets(`ghp_${chars(36)} then sk-ant-${chars(40)}`)).toBe('[redacted] then [redacted]');
   });
@@ -131,6 +168,14 @@ describe('ordinary lines pass through as they were', () => {
     // A password stuck to -p, as mysql -psecret takes it, is left, since the
     // same form is ordinary in commands like this one.
     'ran mkdir -pv build/output before the tests',
+    'primaryKey: user_id_2024',
+    'added the --password option to the CLI',
+    'the --secret parameter is now optional',
+    'validated password: required',
+    'form shows secret: missing now',
+    'client_secret: optional in the schema',
+    'apiKey: config.apiKeyV2',
+    'expected token: T_STRING2',
   ])('%s', (line) => {
     expect(stripSecrets(line)).toBe(line);
   });
