@@ -228,6 +228,9 @@ To start staging deploys, once #32 merges:
   domains itself.
 - Create the `staging` and `production` GitHub environments, limit each to `main`, and fill them with
   their settings as secrets.
+- Sign-in (#8) adds settings each environment needs before its first deploy: `SIGN_IN_LIMITER_NAMESPACE_ID`,
+  `OAUTH_CLIENT_ID`, `ADMIN_GITHUB_IDS`, and the secrets `OAUTH_CLIENT_SECRET` and `AUTH_SECRET`.
+  [docs/self-hosting.md](docs/self-hosting.md) says what each one is.
 - Set the repository variable `DEPLOY_STAGING` to `true`.
 
 Once #39 merges:
