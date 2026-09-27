@@ -342,11 +342,13 @@ The job runs these steps. The scripts are in `scripts/`.
    setting of the same name, so no local value reaches a deployed Worker, and
    sets `ENVIRONMENT` to the target. It attaches `PRIMARY_DOMAIN` and
    `REDIRECT_DOMAINS` as custom domains and turns workers.dev off when there
-   is a domain. It masks the account ID, resource names and IDs, and the value
-   of every variable but `ENVIRONMENT` for the later steps, Wrangler's output
-   included. A
-   key or binding it does not know stops the deploy, so a new kind of binding
-   never reaches Cloudflare with its local name.
+   is a domain. It refuses a `GH_API_URL` or `GH_WEB_URL` that isn't an
+   `https` URL, and leaves each empty when its setting is, so the Worker
+   calls GitHub itself. It masks the account ID, resource names and IDs, and
+   the value of every variable but `ENVIRONMENT` for the later steps,
+   Wrangler's output included. A key or binding it does not know stops the
+   deploy, so a new kind of binding never reaches Cloudflare with its local
+   name.
 3. The Vite build reads that file through
    `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and writes the config Wrangler
    deploys from.
