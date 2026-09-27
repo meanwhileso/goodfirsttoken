@@ -1,6 +1,8 @@
-name: Security weekly
+name: Security on main
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '23 5 * * 1'
   workflow_dispatch:
@@ -8,15 +10,20 @@ on:
 permissions: {}
 
 concurrency:
-  group: security-weekly
+  group: security-main
   cancel-in-progress: false
 
 # Runs Semgrep, CodeQL, zizmor, and OSV-Scanner on main and files every
 # finding in code scanning, where only people with write access can see it.
-# It catches new advisories and new rules for code that hasn't changed. Code
-# scanning matches each finding to the alert it already has, so a problem is
-# filed once however often this runs. The logs carry no findings, and a finding
-# never fails a job. Only a scan or an upload that breaks does.
+# A push run gives pull requests a fresh analysis of their base to compare
+# with, and closes alerts once a fix merges. The Monday run catches new
+# advisories and new rules for code that hasn't changed.
+#
+# Code scanning matches each finding to the alert it already has, so a problem
+# is filed once however often this runs. Each upload has a fixed category, the
+# same one security.yml uses, so renaming this file files nothing again. The
+# logs carry no findings. A job fails when a scan or an upload breaks, and
+# findings leave it green.
 #
 # This is the only workflow that can write, and only security-events, which
 # uploading to code scanning needs.
@@ -62,6 +69,10 @@ jobs:
           languages: javascript-typescript
           build-mode: none
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          # Without it the category holds the workflow path and job, so pull
+          # request analyses would never match the ones from main.
+          category: /language:javascript-typescript
 
   zizmor:
     if: github.ref == 'refs/heads/main'
@@ -109,6 +120,9 @@ jobs:
       security-events: write # to upload SARIF to code scanning
     env:
       OSV_SCANNER_VERSION: 2.6.0
+      # From the release's osv-scanner_SHA256SUMS, kept here so the binary
+      # and its checksum come from different places.
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -117,10 +131,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
           cd "$RUNNER_TEMP"
-          base="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}"
-          curl -fsSLO "$base/osv-scanner_linux_amd64"
-          curl -fsSLO "$base/osv-scanner_SHA256SUMS"
-          grep " osv-scanner_linux_amd64\$" osv-scanner_SHA256SUMS | sha256sum -c -
+          curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "$OSV_SCANNER_SHA256  osv-scanner_linux_amd64" | sha256sum -c -
           install -m 755 osv-scanner_linux_amd64 "$RUNNER_TEMP/bin/osv-scanner"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Scan the lockfile

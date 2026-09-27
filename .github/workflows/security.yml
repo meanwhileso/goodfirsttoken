@@ -12,13 +12,14 @@ concurrency:
 
 # A job names a finding only when it sits in code the pull request adds or
 # edits, which the diff already shows. Findings elsewhere on main are never
-# named here. The weekly workflow files them in code scanning, where only people
+# named here. security-main.yml files them in code scanning, where only people
 # with write access can see them. docs/architecture.md has the whole picture.
 #
 # Semgrep, CodeQL, and zizmor upload their results to code scanning, which
 # code scanning allows from a pull_request run with this read-only token, fork
 # or not. Code scanning then shows a finding as an annotation only when it sits
-# on a line the pull request changes.
+# on a line the pull request changes. Each upload uses the same fixed category
+# as security-main.yml, so it compares with the analysis of the base.
 #
 # The checkout is the test merge commit, so HEAD^1 is the exact commit the
 # pull request merges into.
@@ -72,6 +73,10 @@ jobs:
           languages: javascript-typescript
           build-mode: none
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          # Without it the category holds the workflow path and job, so pull
+          # request analyses would never match the ones from main.
+          category: /language:javascript-typescript
 
   zizmor:
     runs-on: ubuntu-latest
@@ -121,6 +126,12 @@ jobs:
     timeout-minutes: 10
     env:
       OSV_SCANNER_VERSION: 2.6.0
+      # From the release's osv-scanner_SHA256SUMS, kept here so the binary
+      # and its checksum come from different places.
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+    # This job uploads nothing. OSV-Scanner's SARIF gives no line numbers, so
+    # code scanning could annotate an advisory already on main on a pull
+    # request that touches the lockfile.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -133,10 +144,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
           cd "$RUNNER_TEMP"
-          base="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}"
-          curl -fsSLO "$base/osv-scanner_linux_amd64"
-          curl -fsSLO "$base/osv-scanner_SHA256SUMS"
-          grep " osv-scanner_linux_amd64\$" osv-scanner_SHA256SUMS | sha256sum -c -
+          curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "$OSV_SCANNER_SHA256  osv-scanner_linux_amd64" | sha256sum -c -
           install -m 755 osv-scanner_linux_amd64 "$RUNNER_TEMP/bin/osv-scanner"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Scan the lockfile before and after this pull request

@@ -23,9 +23,10 @@ comment, or a public CI log.
 
 - **Reports** come in through private vulnerability reporting, as a draft
   security advisory that only you and the maintainers can see.
-- **Scans of `main`** file what they find as code scanning alerts. On a
-  public repo, only people with write access can see those. The scans are
-  listed in [docs/architecture.md](docs/architecture.md#security-scans).
+- **Scans of `main`** file what they find as code scanning alerts, and GitHub
+  files Dependabot alerts for advisories in our dependencies. On a public
+  repo, only people with write access can see either. The scans are listed
+  in [docs/architecture.md](docs/architecture.md#security-scans).
 - **Checks on a pull request** name a finding only when it sits in code the
   pull request adds or edits, which its diff already shows. Findings
   elsewhere on `main` never appear in a pull request.
