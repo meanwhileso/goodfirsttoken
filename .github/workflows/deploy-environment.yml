@@ -53,13 +53,16 @@ jobs:
           ADMIN_GITHUB_IDS: ${{ secrets.ADMIN_GITHUB_IDS || vars.ADMIN_GITHUB_IDS }}
           GH_API_URL: ${{ secrets.GH_API_URL || vars.GH_API_URL }}
           GH_WEB_URL: ${{ secrets.GH_WEB_URL || vars.GH_WEB_URL }}
+          STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
         run: node scripts/deploy-config.mjs "$TARGET"
 
       # The build runs before the credential step, so the Cloudflare token is
-      # not in its environment.
+      # not in its environment. With STATIC_ORIGIN set, every built file's URL
+      # is on the static host.
       - name: Build the Worker
         env:
           CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH: wrangler.deploy.json
+          STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
         run: pnpm --filter @goodfirsttoken/web build
 
       - name: Get the Cloudflare credential
@@ -67,6 +70,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ secrets.CLOUDFLARE_CREDENTIAL_BROKER_URL || vars.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
         run: node scripts/deploy.mjs credential
+
+      # Right after the credential, before any step that changes the
+      # environment. So the Worker's pages never link to a file the static
+      # host doesn't have yet, and a static host that fails its check stops
+      # the deploy with the database, the secrets, and the Worker untouched.
+      # With STATIC_ORIGIN empty, it does nothing.
+      - name: Upload the built files to the static host, and check it
+        env:
+          STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
+        run: node scripts/deploy.mjs static-assets
 
       - name: Create the D1 database and queues when missing
         run: node scripts/deploy.mjs resources

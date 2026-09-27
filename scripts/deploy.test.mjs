@@ -5,12 +5,14 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   applyMigrations,
+  checkStaticHost,
   ensureResources,
   exportCredential,
   getCredential,
   putSecrets,
   smokeTest,
   smokeTestUrl,
+  uploadStaticAssets,
   wranglerIn,
 } from './deploy.mjs';
 
@@ -327,6 +329,232 @@ test('a missing secret stops the deploy before any secret is put', () => {
     /Missing secrets: OAUTH_CLIENT_SECRET/,
   );
   assert.deepEqual(runs, []);
+});
+
+// A build's client folder: files named after their content under assets/,
+// and files outside it, which are not.
+function sampleBuild(t) {
+  const dir = path.join(tempDir(t), 'client');
+  mkdirSync(path.join(dir, 'assets', 'nested'), { recursive: true });
+  writeFileSync(path.join(dir, 'assets', 'app-Ab12Cd34.css'), 'body{}');
+  writeFileSync(path.join(dir, 'assets', 'nested', 'chunk-Ef56Gh78.js'), 'export {}');
+  writeFileSync(path.join(dir, 'assets', 'good-first-token-launch-Ij90Kl12.mp4'), Buffer.from([0, 0, 0, 24, 102, 116]));
+  writeFileSync(path.join(dir, '.assetsignore'), 'wrangler.json\n');
+  writeFileSync(path.join(dir, 'robots.txt'), 'User-agent: *\n');
+  return dir;
+}
+
+// Cloudflare's R2 API for one bucket, keeping its objects in memory. `refuse`
+// answers every request for an object with that method with the given
+// status, like { PUT: 403 }.
+function fakeR2({ bucket = 'site-static', exists = true, objects = {}, refuse = {} } = {}) {
+  const state = { objects: new Map(Object.entries(objects)), puts: [] };
+  const prefix = `/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${bucket}`;
+  const fetch = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    const method = init.method ?? 'GET';
+    assert.equal(init.headers.authorization, 'Bearer cf-token');
+    if (!exists || !pathname.startsWith(prefix)) {
+      return json({ success: false, errors: [{ code: 10006, message: 'The specified bucket does not exist.' }] }, 404);
+    }
+    if (pathname === prefix && method === 'GET') return json({ success: true, result: { name: bucket } });
+    if (refuse[method]) return json({ success: false, errors: [{ message: 'refused' }] }, refuse[method]);
+    const key = decodeURIComponent(pathname.slice(`${prefix}/objects/`.length));
+    if (method === 'GET') {
+      if (!state.objects.has(key)) return json({ success: false, errors: [{ code: 10007, message: 'not found' }] }, 404);
+      return new Response(state.objects.get(key).body);
+    }
+    if (method === 'PUT') {
+      const headers = Object.fromEntries(Object.entries(init.headers).filter(([name]) => name !== 'authorization'));
+      state.objects.set(key, { headers, body: Buffer.from(init.body) });
+      state.puts.push(key);
+      return json({ success: true, result: { key } });
+    }
+    return json({ success: false, errors: [{ message: 'unexpected' }] }, 400);
+  };
+  return { fetch, state };
+}
+
+const siteConfig = { name: 'site', account_id: ACCOUNT_ID };
+const upload = (t, fetch, options = {}) =>
+  uploadStaticAssets({
+    config: siteConfig,
+    staticOrigin: 'https://static.example',
+    clientDir: sampleBuild(t),
+    token: 'cf-token',
+    fetch,
+    log: () => {},
+    ...options,
+  });
+
+test('each built file goes to <WORKER_NAME>-static with its type and a year of immutable caching, and nothing outside assets/ does', async (t) => {
+  const r2 = fakeR2();
+
+  await upload(t, r2.fetch);
+
+  assert.deepEqual(r2.state.puts.sort(), [
+    'assets/app-Ab12Cd34.css',
+    'assets/good-first-token-launch-Ij90Kl12.mp4',
+    'assets/nested/chunk-Ef56Gh78.js',
+  ]);
+  const css = r2.state.objects.get('assets/app-Ab12Cd34.css');
+  assert.deepEqual(css.headers, {
+    'content-type': 'text/css; charset=utf-8',
+    'cache-control': 'public, max-age=31536000, immutable',
+  });
+  assert.equal(css.body.toString(), 'body{}');
+  const video = r2.state.objects.get('assets/good-first-token-launch-Ij90Kl12.mp4');
+  assert.equal(video.headers['content-type'], 'video/mp4');
+  assert.deepEqual([...video.body], [0, 0, 0, 24, 102, 116]);
+});
+
+test('a file the bucket already has is not uploaded again, since a changed file gets a new name', async (t) => {
+  const r2 = fakeR2({ objects: { 'assets/app-Ab12Cd34.css': { body: 'body{}' } } });
+
+  await upload(t, r2.fetch);
+
+  assert.deepEqual(r2.state.puts.sort(), ['assets/good-first-token-launch-Ij90Kl12.mp4', 'assets/nested/chunk-Ef56Gh78.js']);
+});
+
+test('with STATIC_ORIGIN empty, the Worker serves the files, so nothing is uploaded', async (t) => {
+  const { fetch, calls } = fakeFetch();
+  const lines = [];
+
+  await upload(t, fetch, { staticOrigin: '', log: (line) => lines.push(line) });
+
+  assert.equal(calls.length, 0);
+  assert.match(lines.join('\n'), /STATIC_ORIGIN is not set/);
+});
+
+test('a missing bucket stops the deploy before anything is uploaded, and says how to make it', async (t) => {
+  const r2 = fakeR2({ exists: false });
+
+  await assert.rejects(upload(t, r2.fetch), /<WORKER_NAME>-static, does not exist\. Create it as docs\/self-hosting\.md describes/);
+  assert.deepEqual(r2.state.puts, []);
+});
+
+test('a built file of a type the static host has no content type for stops the upload before anything goes up', async (t) => {
+  const r2 = fakeR2();
+  const clientDir = sampleBuild(t);
+  writeFileSync(path.join(clientDir, 'assets', 'engine-Mn34Op56.wasm'), Buffer.from([0, 97, 115, 109]));
+
+  await assert.rejects(upload(t, r2.fetch, { clientDir }), /assets\/engine-Mn34Op56\.wasm.*scripts\/serve\.mjs/);
+  assert.deepEqual(r2.state.puts, []);
+});
+
+test('an upload with no built files stops the deploy', async (t) => {
+  const r2 = fakeR2();
+
+  await assert.rejects(upload(t, r2.fetch, { clientDir: tempDir(t) }), /has no files\. Build the Worker first/);
+  assert.deepEqual(r2.state.puts, []);
+});
+
+test('an upload Cloudflare refuses stops the deploy', async (t) => {
+  const r2 = fakeR2({ refuse: { PUT: 403 } });
+
+  await assert.rejects(upload(t, r2.fetch), /Cloudflare answered 403 to the upload of assets\//);
+});
+
+test('an answer other than 404 when the upload looks for a file stops the deploy before anything goes up', async (t) => {
+  for (const status of [401, 403, 500, 503]) {
+    const r2 = fakeR2({ refuse: { GET: status } });
+
+    await assert.rejects(upload(t, r2.fetch), new RegExp(`Cloudflare answered ${String(status)} when asked for assets/`));
+    assert.deepEqual(r2.state.puts, [], String(status));
+  }
+});
+
+test('a file the static host already has with other bytes stops the deploy, naming it, before anything goes up', async (t) => {
+  const r2 = fakeR2({ objects: { 'assets/nested/chunk-Ef56Gh78.js': { body: 'export const changed = 1' } } });
+
+  await assert.rejects(upload(t, r2.fetch), /assets\/nested\/chunk-Ef56Gh78\.js/);
+  assert.deepEqual(r2.state.puts, []);
+});
+
+// The static host as a browser sees it, serving the fake bucket's objects.
+// `change` edits each answer's headers, and `status` replaces its 200.
+function fakeStaticHost(r2, change = () => {}, { status = 200 } = {}) {
+  const requests = [];
+  const fetch = async (url, init = {}) => {
+    const { origin, pathname } = new URL(url);
+    if (origin !== 'https://static.example') return r2.fetch(url, init);
+    requests.push(pathname);
+    const object = r2.state.objects.get(pathname.slice(1));
+    if (!object) return new Response('Not found', { status: 404 });
+    const headers = new Headers({ ...object.headers, 'access-control-allow-origin': '*' });
+    change(headers, pathname);
+    return new Response(object.body, { status, headers });
+  };
+  return { fetch, requests };
+}
+const check = (t, fetch, options = {}) =>
+  checkStaticHost({ staticOrigin: 'https://static.example', clientDir: sampleBuild(t), fetch, log: () => {}, ...options });
+
+test('before the Worker goes live, the static host answers one file of each kind with its type, a year of caching, and no cookie', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const host = fakeStaticHost(r2);
+
+  await check(t, host.fetch);
+
+  assert.deepEqual(host.requests.sort(), [
+    '/assets/app-Ab12Cd34.css',
+    '/assets/good-first-token-launch-Ij90Kl12.mp4',
+    '/assets/nested/chunk-Ef56Gh78.js',
+  ]);
+});
+
+test('a cookie from the static host stops the deploy before the Worker goes live', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const host = fakeStaticHost(r2, (headers) => headers.append('set-cookie', '__cf_bm=abc; Path=/; Secure; HttpOnly'));
+
+  await assert.rejects(check(t, host.fetch), /the Worker was not deployed[\s\S]*assets\/app-Ab12Cd34\.css set a cookie/);
+});
+
+test('a static host that lacks a file, the caching, the type, or Access-Control-Allow-Origin stops the deploy', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const cases = [
+    [(headers) => headers.set('cache-control', 'public, max-age=14400'), /cache-control/],
+    [(headers) => headers.set('content-type', 'application/octet-stream'), /content-type/],
+    [(headers) => headers.delete('access-control-allow-origin'), /access-control-allow-origin/],
+  ];
+  for (const [change, problem] of cases) {
+    await assert.rejects(check(t, fakeStaticHost(r2, change).fetch), problem);
+  }
+
+  const empty = fakeR2();
+  await assert.rejects(check(t, fakeStaticHost(empty).fetch), /answered 404/);
+});
+
+test('a static host that cannot be reached, like one whose certificate is not ready, stops the deploy', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const fetch = async (url, init) => {
+    if (new URL(url).origin === 'https://static.example') throw new TypeError('fetch failed');
+    return r2.fetch(url, init);
+  };
+
+  await assert.rejects(check(t, fetch), /the Worker was not deployed[\s\S]*could not be fetched from the static host/);
+});
+
+test('a redirect from the static host stops the deploy, even with every header right', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  for (const status of [301, 302, 307, 308]) {
+    const host = fakeStaticHost(r2, (headers) => headers.set('location', 'https://elsewhere.example/'), { status });
+
+    await assert.rejects(check(t, host.fetch), new RegExp(`answered ${String(status)}`), String(status));
+  }
+});
+
+test('with STATIC_ORIGIN empty, the static host is not checked', async (t) => {
+  const { fetch, calls } = fakeFetch();
+
+  await check(t, fetch, { staticOrigin: '' });
+
+  assert.equal(calls.length, 0);
 });
 
 test('the smoke test reads /healthz on the primary domain, or else on the workers.dev URL Wrangler reported', () => {

@@ -169,6 +169,33 @@ test('redirect domains need a primary domain, and cannot include it', () => {
   );
 });
 
+test('STATIC_ORIGIN has to be an https origin, on a hostname the site does not use', () => {
+  const withDomains = { ...withLimiter, PRIMARY_DOMAIN: 'primary.example', REDIRECT_DOMAINS: 'second.example' };
+  for (const good of ['', 'https://static.primary.example', 'https://Static.Primary.Example/']) {
+    assert.doesNotThrow(() => deployConfig(local, 'production', { ...withDomains, STATIC_ORIGIN: good }), good);
+  }
+  for (const bad of [
+    'http://static.primary.example',
+    'static.primary.example',
+    'https://static.primary.example/assets',
+    'https://static.primary.example:8443',
+    'https://static.primary.example?x=1',
+  ]) {
+    assert.throws(
+      () => deployConfig(local, 'production', { ...withDomains, STATIC_ORIGIN: bad }),
+      /STATIC_ORIGIN is not an https origin/,
+      bad,
+    );
+  }
+  for (const site of ['https://primary.example', 'https://second.example']) {
+    assert.throws(
+      () => deployConfig(local, 'production', { ...withDomains, STATIC_ORIGIN: site }),
+      /STATIC_ORIGIN is on a domain the site uses/,
+      site,
+    );
+  }
+});
+
 test('a binding the script does not know stops the deploy, so no local name reaches Cloudflare', () => {
   const withBucket = { ...local, r2_buckets: [{ binding: 'STATIC', bucket_name: 'static' }] };
   assert.throws(() => deployConfig(withBucket, 'staging', withLimiter), /"r2_buckets", which scripts\/deploy-config.mjs does not deploy yet/);
@@ -332,7 +359,8 @@ test('a symlink in place of the deploy config is refused, so nothing is written 
 test('in GitHub Actions, every setting the Worker gets is masked before any line could print it', (t) => {
   const root = sampleRepo(t);
   const lines = [];
-  writeDeployConfig({ root, target: 'staging', env: { ...sentinels, GITHUB_ACTIONS: 'true' }, log: (line) => lines.push(line) });
+  const env = { ...sentinels, STATIC_ORIGIN: 'https://Sentinel-Static.example/', GITHUB_ACTIONS: 'true' };
+  writeDeployConfig({ root, target: 'staging', env, log: (line) => lines.push(line) });
 
   const masks = lines.filter((line) => line.startsWith('::add-mask::')).map((line) => line.slice('::add-mask::'.length));
   const values = [
@@ -342,6 +370,11 @@ test('in GitHub Actions, every setting the Worker gets is masked before any line
     'sentinel-worker-db',
     'sentinel-worker-feed',
     'sentinel-worker-crawl',
+    // Masks are case-sensitive, so the value as the setting holds it too.
+    'https://Sentinel-Static.example/',
+    'https://sentinel-static.example',
+    'sentinel-static.example',
+    'sentinel-worker-static',
   ];
   for (const value of values) assert.ok(masks.includes(value), `${value} is masked`);
   const firstOther = lines.findIndex((line) => !line.startsWith('::add-mask::'));
