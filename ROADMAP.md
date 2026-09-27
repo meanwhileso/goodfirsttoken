@@ -37,7 +37,7 @@ GitHub sign-in on the site and the MCP server with OAuth 2.1.
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
 | [#8](https://github.com/meanwhileso/goodfirsttoken/issues/8) | Add GitHub sign-in on the site and the permission checks | #5, #6 | [#51](https://github.com/meanwhileso/goodfirsttoken/pull/51) |
-| [#9](https://github.com/meanwhileso/goodfirsttoken/issues/9) | Serve the MCP server with OAuth 2.1 and a connected-agents list | #8 | |
+| [#9](https://github.com/meanwhileso/goodfirsttoken/issues/9) | Serve the MCP server with OAuth 2.1 and a connected-agents list | #8 | [#52](https://github.com/meanwhileso/goodfirsttoken/pull/52) |
 
 ## M3 Projects
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n23 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23 done
 ```
 
 ## Maintainer steps
@@ -228,8 +228,9 @@ To start staging deploys, once #32 merges:
   domains itself.
 - Create the `staging` and `production` GitHub environments, limit each to `main`, and fill them with
   their settings as secrets.
-- Sign-in (#8) adds settings each environment needs before its first deploy: `SIGN_IN_LIMITER_NAMESPACE_ID`,
-  `OAUTH_CLIENT_ID`, `ADMIN_GITHUB_IDS`, and the secrets `OAUTH_CLIENT_SECRET` and `AUTH_SECRET`.
+- Sign-in (#8) and the MCP server (#9) add settings each environment needs before its first deploy:
+  `SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`, `TOKEN_LIMITER_NAMESPACE_ID`, `OAUTH_CLIENT_ID`,
+  `ADMIN_GITHUB_IDS`, and the secrets `OAUTH_CLIENT_SECRET` and `AUTH_SECRET`.
   [docs/self-hosting.md](docs/self-hosting.md) says what each one is.
 - Set the repository variable `DEPLOY_STAGING` to `true`.
 

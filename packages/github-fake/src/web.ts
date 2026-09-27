@@ -6,7 +6,7 @@
 
 import { base64ToBytes, bytesToBase64, lookupPath, readObject } from './git.ts';
 import { json } from './http.ts';
-import { findAccount, findRepo, type FakeState } from './state.ts';
+import { findAccount, findRepo, type FakeState, type TokenRecord } from './state.ts';
 
 export interface WebContext {
   state: FakeState;
@@ -240,6 +240,42 @@ async function accessToken(ctx: WebContext, request: Request, url: URL): Promise
     scope: grant.scopes.join(','),
     token_type: 'bearer',
   });
+}
+
+// GitHub issues at most 10 tokens to one app for one person and one set of
+// scopes. When it creates another, it revokes one of the existing ones: the
+// oldest never used and created more than a minute ago, or else the least
+// recently used, or else, when none was ever used, the oldest.
+// https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+export const TOKENS_PER_APP_AND_SCOPES = 10;
+
+export function revokeOverTheCap(state: FakeState, issued: string, now: Date): void {
+  const record = state.tokens[issued];
+  if (!record) return;
+  const scopes = (list: string[]) => [...list].sort().join(' ');
+  const time = (iso: string | null | undefined) => (iso ? Date.parse(iso) : 0);
+  const others = Object.entries(state.tokens).filter(
+    ([token, other]) =>
+      token !== issued &&
+      other.clientId === record.clientId &&
+      other.login.toLowerCase() === record.login.toLowerCase() &&
+      scopes(other.scopes) === scopes(record.scopes),
+  );
+  const byAge = (a: [string, TokenRecord], b: [string, TokenRecord]) => time(a[1].createdAt) - time(b[1].createdAt);
+  while (others.length >= TOKENS_PER_APP_AND_SCOPES) {
+    const unused = others.filter(([, other]) => !other.lastUsedAt).sort(byAge);
+    const used = others
+      .filter(([, other]) => other.lastUsedAt)
+      .sort((a, b) => time(a[1].lastUsedAt) - time(b[1].lastUsedAt) || byAge(a, b));
+    const stale = unused.find(([, other]) => now.getTime() - time(other.createdAt) > 60_000);
+    const [token] = stale ?? used[0] ?? unused[0] ?? [];
+    if (token === undefined) return;
+    Reflect.deleteProperty(state.tokens, token);
+    others.splice(
+      others.findIndex(([other]) => other === token),
+      1,
+    );
+  }
 }
 
 // Stands in for avatars.githubusercontent.com, so a page that shows avatars

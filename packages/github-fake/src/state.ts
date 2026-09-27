@@ -131,6 +131,10 @@ export interface TokenRecord {
   login: string;
   scopes: string[];
   clientId: string | null;
+  // When GitHub issued the token, and when a call last carried it. State
+  // saved before the fake kept these has neither.
+  createdAt?: string;
+  lastUsedAt?: string | null;
 }
 
 export interface OAuthAppRecord {

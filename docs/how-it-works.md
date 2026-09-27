@@ -5,8 +5,9 @@ plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves the homepage, sign-in with GitHub, the
-design system at `/design`, and the live feeds as text streams and sockets,
-while the build goes on in the open.
+MCP server's sign-in for agents with one tool, the design system at
+`/design`, and the live feeds as text streams and sockets, while the build
+goes on in the open.
 
 ## Health check
 
@@ -100,12 +101,14 @@ sign-up, can be reached.
 | `GET /auth/callback/github` | Where GitHub sends the person back |
 | `POST /auth/sign-out` | Signs out, from the button on `/me` |
 | `POST /auth/dev/sign-in` | Development only, below |
+| `GET /auth/callback/mcp` | Where GitHub sends someone connecting an agent back, under [Connecting an agent](#connecting-an-agent) |
+| `POST /auth/agents/disconnect` | Disconnects an agent, from its button on `/me` |
 
-- The three `POST` routes take a form from the site's own pages. The
+- The `POST` routes take a form from the site's own pages. The
   `Origin` has to be the site's own exactly, scheme and port included. Any
   other, `null`, or none is refused with `403`.
-- Sign-in, the callback, and the dev sign-in share a Cloudflare rate limit
-  of 20 requests a minute from each client: an IPv4 address, or the /64 an
+- Sign-in, the callback, the dev sign-in, and an agent's sign-in share a
+  Cloudflare rate limit of 20 requests a minute from each client: an IPv4 address, or the /64 an
   IPv6 address is in, since one IPv6 client can use any address in its /64.
   An IPv4 address written as IPv6, like `::ffff:198.51.100.7`, counts as the
   IPv4 address. The next one gets `429` with `Retry-After: 60`. A form
@@ -141,6 +144,193 @@ every sample person.
   only fills in the fake's page, and the session still comes from the
   callback, with a code from the configured GitHub. Real GitHub has no page
   it could fill in.
+
+## Connecting an agent
+
+An agent works through the MCP server at `/mcp`, over streamable HTTP. It
+signs in once with the person's GitHub account, and then acts as them.
+
+- The server follows the MCP authorization spec, with OAuth 2.1. A call to
+  `/mcp` with no token gets `401`, which points to the server's
+  protected-resource metadata at `/.well-known/oauth-protected-resource/mcp`.
+  That names the site as the authorization server, whose own metadata is at
+  `/.well-known/oauth-authorization-server`.
+- An agent registers itself at `/oauth/register`, with dynamic client
+  registration, and gets a client ID of its own. Each redirect URI it
+  registers has to use `https`, or `http` on `localhost`, `127.0.0.1`, or
+  `[::1]`, or a scheme of an app's own, like `cursor://`. A registration
+  with any other `http` URI is refused with `invalid_redirect_uri`.
+- Every agent has to use PKCE with `S256`, whether or not it has a client
+  secret. A code traded without the verifier it was made for gets no token.
+- The agent sends the person to `/oauth/authorize`. The page there names
+  the agent as it named itself, which Good First Token can't check, and shows
+  where the agent's access goes: the scheme and host of its redirect URI.
+  When that is `http`, a scheme of an app's own, or `https` on `localhost`,
+  `127.0.0.1`, or `[::1]`, the page warns that it is an app on the person's
+  computer. No other site can show the page in a frame.
+- Continue with GitHub sends the person to GitHub, which asks for
+  `public_repo` and nothing else, and back to `/auth/callback/mcp`. The site
+  sends them on to the agent with a code, which the agent trades at
+  `/oauth/token` for tokens of its own. Cancel, or declining on GitHub, sends
+  them back to the agent with `access_denied`.
+- A request to `/oauth/authorize` never sends the browser anywhere on its
+  own, since any agent can register any redirect URI. A request that isn't
+  right gets an error on the page, with its own status: `400`, `429`, or
+  `503`. When the agent should hear about it, like a missing PKCE
+  challenge, the page gives a reason in the site's own words for that
+  error, and a link back to the agent with the error, named by the scheme
+  and host it goes to. The person can follow it or not. Words from the
+  agent's request never show on the page. They go only in the link, in its
+  `error_description`. An unknown client, or a redirect URI the client
+  didn't register, gets the error with no link.
+- Each step is tied to the browser that started it by a cookie that lasts
+  10 minutes, and works once. So the person has 10 minutes to approve, and
+  GitHub has to send them back to the same browser. A step taken late, twice,
+  or in another browser connects nothing, and says to connect again from the
+  agent.
+- The page's form has to come from the site itself, by its `Origin`, like
+  the site's other forms.
+- When a setting sign-in needs is missing, the page and the form answer
+  `503`, and the log names it.
+
+**Connections.** Each agent's sign-in makes a connection, which holds the
+GitHub token GitHub gave that sign-in.
+
+- A tool call acts as the person the connection belongs to, with that
+  token. There are no OAuth scopes of our own, so a connection can use every
+  tool its person can.
+- An agent's access token lasts an hour, and the agent refreshes it. A
+  connection lasts 30 days from the sign-in, and each refresh extends it to
+  30 days from then. An agent left unused for 30 days signs in again.
+- Trading the code and refreshing work only while the connection does. A
+  disconnected agent gets `invalid_grant`, and its grant is deleted.
+- Signing the same agent in again, with the same client ID, replaces its
+  connection. The earlier one stops working, and its GitHub token is
+  revoked. The person's other agents keep theirs.
+- A connection also ends with its grant, the way Disconnect ends it, so its
+  GitHub token is revoked. An agent that revokes its refresh token at
+  `/oauth/token` ends its connection at once, whether its request leaves out
+  `grant_type` or sends it empty. An agent that revokes only an access token
+  stays connected. A connection whose agent never traded its code within
+  the code's 10 minutes and one more, or went 30 days and a minute without
+  getting tokens, ends the next time the person opens `/me` or connects an
+  agent.
+- When a step of an agent's sign-in fails after GitHub gave the token, the
+  connection is removed and the token is revoked, and the agent gets
+  `server_error`.
+- An agent's sign-in never revokes the token the site holds for the
+  person's own sign-in, or another agent's token.
+
+**Tokens at GitHub.** Every sign-in, the site's and each agent's, gets a
+token of its own from the one OAuth app, with `public_repo`. So a person can
+hold one token for the site, and one for each connected agent.
+
+- GitHub keeps at most 10 tokens for one person, one app, and one scope.
+  Creating another revokes one of them: the oldest one never used and over a
+  minute old, or else the least recently used, or else, when none was ever
+  used, the oldest. That can be the site's token or an agent's.
+- When GitHub stops accepting a connection's token, because GitHub revoked
+  it or the person revoked the app in their GitHub settings, the
+  connection's next `start_session` ends the connection, revokes nothing,
+  and tells the agent to reconnect. The agent's next call gets `401`, and it
+  signs in again.
+- A site token GitHub revoked stays stored until the person's next sign-in
+  replaces it. Nothing on the site needs it yet, and signing out works
+  without it.
+- GitHub's docs also limit an app to 10 new tokens an hour for one person
+  and scope. Past that, GitHub asks the person in the browser to approve the
+  app again. When GitHub gives an agent's sign-in no token, the person goes
+  back to the agent with `access_denied`.
+- The tokens last until they are revoked, while the OAuth app has expiring
+  user tokens turned off, as
+  [self-hosting.md](self-hosting.md#3-create-the-github-oauth-apps) says.
+  GitHub turns them on for a new app. With them on, GitHub stops accepting
+  each token after 8 hours, since the site doesn't refresh them yet. Then an
+  agent's next `start_session` ends its connection, as above, so the agent
+  signs in again. The site's own token stops working too. Nothing on the
+  site needs it yet, and signing out works without it.
+
+**Where the tokens are kept.**
+
+- The agent's grant, its OAuth client, and hashes of its tokens live in the
+  `OAUTH_KV` namespace, written by `@cloudflare/workers-oauth-provider`. The
+  GitHub token is in the grant's props, which the library encrypts with a key
+  that only the agent's own tokens unwrap. KV holds no agent token and no
+  GitHub token, so a copy of it can't recover either.
+- The site keeps a second copy of each agent's GitHub token in D1,
+  encrypted with `AUTH_SECRET`, like the site's own token. Ending a
+  connection reads it to revoke the token, since the copy in the grant opens
+  only while the agent calls. Revoking also reads the person's other copies,
+  to leave alone a token held twice. Nothing else reads them.
+- So anyone with a copy of D1 and `AUTH_SECRET` can read every agent's
+  GitHub token, as they can the site's own tokens.
+
+**The tool endpoint.**
+
+- `start_session` is the one tool so far. It takes the harness name and the
+  budget under [MCP tools](#mcp-tools), asks GitHub who the connection's
+  token belongs to, records that login under [People](#people), and answers
+  with the person's GitHub ID and login, as text like
+  `Signed in as @priya.`
+- Each person gets 120 calls to `/mcp` a minute, across all their agents,
+  counted with Cloudflare rate limiting. The next gets `429` with
+  `Retry-After: 60`. Other people's agents keep theirs.
+- A disconnected agent gets `401` on its next call.
+
+**Limits on an agent's sign-in.** Registering a client, opening the page,
+approving, and GitHub's return each count toward the sign-in limit under
+[Signing in](#signing-in): 20 requests a minute from each address. An
+approval refused for its `Origin` doesn't count.
+
+- Each registration stores a client, so it counts toward the sign-in limit.
+  One host that signs in agents for many people, like Grok Bot, can
+  register at most 20 clients a minute from one address.
+- The page's data also loads from a server function at a URL of its own,
+  under `/_serverFn/`, which anyone can call. Each call there counts the
+  same as opening the page.
+- Over the limit, the page says to try again in a minute, with `429`.
+- Trading a code and refreshing tokens at `/oauth/token` have a limit of
+  their own: 600 requests a minute from each address. A shared host
+  refreshes many people's tokens from one address. Sign-ins and pages don't
+  use up that limit, and token requests don't use up the sign-in limit.
+- Over either limit, `/oauth/register` and `/oauth/token` answer `429` with
+  `Retry-After: 60` and an OAuth error in JSON, `temporarily_unavailable`.
+  An agent then waits and tries again, and keeps its tokens. It doesn't
+  send the person to sign in again. An agent in a web page can read that
+  answer too.
+
+**Cookies.** The page sets a cookie whose name starts with
+`__Host-gft.oauth-consent-`, and approving sets one that starts with
+`__Host-gft.oauth-upstream-`. Each name ends with part of a hash, so two
+sign-ins in one browser don't collide. Each is `Secure`, `HttpOnly`, and
+`SameSite=Lax`, with `Path=/` and no `Domain`, like the site's own cookies.
+Each lasts 10 minutes, and the next step clears it.
+
+**Connected agents on /me.** `/me` lists the agents the person connected,
+the most recently used first. Each shows the name it gave itself, when it
+connected, and when it last called a tool, to the minute, in UTC. The name
+is on one line, cut to 60 characters, with no control or format characters,
+like the ones that turn text right to left or take no space. The page to
+approve an agent shows its name the same way.
+
+- Disconnect ends the connection. The agent's next tool call gets `401`, its
+  grant is deleted, and its GitHub token is revoked at GitHub, as the OAuth
+  app.
+- It revokes that one token. The site's own token and the person's other
+  agents' tokens keep working. A token the site also holds for the person's
+  sign-in or another agent is left alone.
+- When GitHub can't revoke the token, the agent is still disconnected, and
+  the log names no token.
+- The form has to come from the site itself, by its `Origin`. It
+  disconnects only the signed-in person's own agents. Signed out, it goes to
+  `/sign-in`.
+- Opening `/me` first ends the person's connections whose grants ran out,
+  as under Connections above, and revokes their tokens. An agent approved
+  in the last 10 minutes that hasn't traded its code yet is listed, and
+  Disconnect works on it.
+- A harness that revokes its refresh token when the server is removed ends
+  its connection. Removing the server from a harness that doesn't leaves
+  the connection, so `/me` is where access is cut off.
 
 ## Permissions
 
@@ -183,9 +373,10 @@ The database records the people who sign in.
   slow sign-in never brings back an old login.
 - Every stored record that names a person, like a claim, a settings change,
   or a block, names them by GitHub ID, and they must already be recorded.
-- No record like these holds a GitHub token. The one token stored is a
-  person's token from signing in, encrypted, under
-  [Signing in](#signing-in).
+- No record like these holds a GitHub token. The tokens stored are a
+  person's token from signing in, under [Signing in](#signing-in), and each
+  connected agent's, under [Connecting an agent](#connecting-an-agent), all
+  encrypted.
 
 **Blocks.** An admin can block a donor, with an optional reason. Blocking
 them again records the new reason, admin, and time. Lifting the block
@@ -658,7 +849,9 @@ it without case. Adding a repo again keeps its first entry.
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. No tool is served yet.
+a description for agents. The MCP server serves one of them so far,
+`start_session`, which takes the input defined here and answers with who is
+signed in, under [Connecting an agent](#connecting-an-agent).
 
 | Who | Tools |
 |---|---|
@@ -1151,7 +1344,8 @@ A deployment can serve them from a static host, on a hostname of its own.
 - The static host answers byte ranges, which Safari needs to play video.
 - The static host sets no cookie. Every cookie the site sets is host-only
   with the `__Host-` prefix, so a browser never sends one to the static
-  host. Today every one comes from [signing in](#signing-in).
+  host. Today they come from [signing in](#signing-in) and
+  [connecting an agent](#connecting-an-agent).
 - A deploy uploads the new files before the Worker whose pages link to them
   goes live, and never deletes a file. So a page an older Worker rendered
   still finds its files.
@@ -1167,10 +1361,13 @@ A deployment can serve them from a static host, on a hostname of its own.
   token. A call made for a person runs with that person's own token, so it
   can act only as them.
 - Sign-in makes the first calls. It trades GitHub's code for the person's
-  token, and reads who they are with that token. The `manage_project`
-  permission reads the repo with the caller's token.
-- Revoking a token at sign-out runs as the OAuth app, with its client ID and
-  secret, and names the one token to revoke.
+  token, and reads who they are with that token. An agent's sign-in does the
+  same, with a PKCE verifier. `start_session` reads the person with the
+  connection's token. The `manage_project` permission reads the repo with
+  the caller's token.
+- Revoking a token runs as the OAuth app, with its client ID and secret, and
+  names the one token to revoke. Signing out, Disconnect, and an agent's
+  sign-in that replaces an earlier one each revoke this way.
 - When GitHub refuses a call, the refusal comes back with GitHub's status
   and message.
 - In local development, GitHub is the GitHub fake, and its sign-in page

@@ -48,6 +48,8 @@ jobs:
           DB_ID: ${{ secrets.DB_ID || vars.DB_ID }}
           OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID || vars.OAUTH_KV_ID }}
           SIGN_IN_LIMITER_NAMESPACE_ID: ${{ secrets.SIGN_IN_LIMITER_NAMESPACE_ID || vars.SIGN_IN_LIMITER_NAMESPACE_ID }}
+          MCP_LIMITER_NAMESPACE_ID: ${{ secrets.MCP_LIMITER_NAMESPACE_ID || vars.MCP_LIMITER_NAMESPACE_ID }}
+          TOKEN_LIMITER_NAMESPACE_ID: ${{ secrets.TOKEN_LIMITER_NAMESPACE_ID || vars.TOKEN_LIMITER_NAMESPACE_ID }}
           PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN || vars.PRIMARY_DOMAIN }}
           REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS || vars.REDIRECT_DOMAINS }}
           OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID || vars.OAUTH_CLIENT_ID }}

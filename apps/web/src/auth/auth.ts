@@ -26,8 +26,8 @@ export const COOKIE_PREFIX = '__Host-gft';
 /** Where Better Auth's routes live, and so its GitHub callback, /auth/callback/github. */
 export const AUTH_BASE_PATH = '/auth';
 
-/** The scope sign-in asks GitHub for, and nothing else. */
-const GITHUB_SCOPE = 'public_repo';
+/** The scope every sign-in asks GitHub for, the site's and each agent's, and nothing else. */
+export const GITHUB_SCOPE = 'public_repo';
 
 // Reads who signed in, with the token GitHub just gave, and records them in
 // `people` by numeric GitHub ID. Better Auth takes the account's ID from

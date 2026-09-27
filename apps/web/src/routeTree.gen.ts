@@ -15,6 +15,7 @@ import { Route as HealthzRouteImport } from './routes/healthz'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as DevSeedRouteImport } from './routes/dev.seed'
+import { Route as OauthAuthorizeRouteImport } from './routes/oauth/authorize'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +47,11 @@ const DevSeedRoute = DevSeedRouteImport.update({
   path: '/dev/seed',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OauthAuthorizeRoute = OauthAuthorizeRouteImport.update({
+  id: '/oauth/authorize',
+  path: '/oauth/authorize',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +60,7 @@ export interface FileRoutesByFullPath {
   '/me': typeof MeRoute
   '/sign-in': typeof SignInRoute
   '/dev/seed': typeof DevSeedRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -62,6 +69,7 @@ export interface FileRoutesByTo {
   '/me': typeof MeRoute
   '/sign-in': typeof SignInRoute
   '/dev/seed': typeof DevSeedRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -71,14 +79,36 @@ export interface FileRoutesById {
   '/me': typeof MeRoute
   '/sign-in': typeof SignInRoute
   '/dev/seed': typeof DevSeedRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design' | '/healthz' | '/me' | '/sign-in' | '/dev/seed'
+  fullPaths:
+    | '/'
+    | '/design'
+    | '/healthz'
+    | '/me'
+    | '/sign-in'
+    | '/dev/seed'
+    | '/oauth/authorize'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/design' | '/healthz' | '/me' | '/sign-in' | '/dev/seed'
+  to:
+    | '/'
+    | '/design'
+    | '/healthz'
+    | '/me'
+    | '/sign-in'
+    | '/dev/seed'
+    | '/oauth/authorize'
   id:
-    '__root__' | '/' | '/design' | '/healthz' | '/me' | '/sign-in' | '/dev/seed'
+    | '__root__'
+    | '/'
+    | '/design'
+    | '/healthz'
+    | '/me'
+    | '/sign-in'
+    | '/dev/seed'
+    | '/oauth/authorize'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -88,6 +118,7 @@ export interface RootRouteChildren {
   MeRoute: typeof MeRoute
   SignInRoute: typeof SignInRoute
   DevSeedRoute: typeof DevSeedRoute
+  OauthAuthorizeRoute: typeof OauthAuthorizeRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -134,6 +165,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevSeedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/oauth/authorize': {
+      id: '/oauth/authorize'
+      path: '/oauth/authorize'
+      fullPath: '/oauth/authorize'
+      preLoaderRoute: typeof OauthAuthorizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -144,6 +182,7 @@ const rootRouteChildren: RootRouteChildren = {
   MeRoute: MeRoute,
   SignInRoute: SignInRoute,
   DevSeedRoute: DevSeedRoute,
+  OauthAuthorizeRoute: OauthAuthorizeRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
