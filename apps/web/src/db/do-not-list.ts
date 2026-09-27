@@ -67,33 +67,26 @@ export function doNotListWhenRejected(
 }
 
 /**
- * Takes the repo off the do-not-list when its maintainer `by` just
- * registered it at `now`, so it waits for an admin as a registered project.
+ * Takes the repo off the do-not-list when the admin `by` just approved its
+ * maintainer's registration at `now`. A registration waits on the list, so
+ * the admin sees the request to be removed, and a rejection leaves it there.
  */
-export function leaveDoNotListWhenRegistered(db: D1Database, repo: string, by: number, now: number): D1PreparedStatement {
+export function leaveDoNotListWhenApproved(db: D1Database, repo: string, by: number, now: number): D1PreparedStatement {
   return db
     .prepare(
       `DELETE FROM do_not_list WHERE repo = ?1 AND EXISTS (SELECT 1 FROM projects WHERE repo = ?1
-         AND source = 'registered' AND status = 'pending' AND status_changed_by = ?2 AND status_changed_at = ?3)`,
+         AND source = 'registered' AND status = 'approved' AND status_changed_by = ?2 AND status_changed_at = ?3)`,
     )
     .bind(mustParse(repoName, repo, 'repo'), mustParse(githubId, by, 'by'), checkTime(now));
 }
 
-/** Takes a repo off the do-not-list. False when it wasn't on it. */
-export async function removeFromDoNotList(db: D1Database, repo: string): Promise<boolean> {
-  const result = await db
-    .prepare('DELETE FROM do_not_list WHERE repo = ?')
-    .bind(mustParse(repoName, repo, 'repo'))
-    .run();
-  return result.meta.changes > 0;
-}
-
 /**
  * Which of these repos the do-not-list covers, as the repos where issues
- * live: a repo on the list, or the issue repo of a project whose code repo
- * is on it now. Each comes back in lower case. The repos go in as one JSON
- * array, so any number of them takes one query, under D1's limit on bound
- * values.
+ * live: a repo on the list, and an issue repo when every project that keeps
+ * its issues there has its code repo on the list. So removing one project
+ * never hides the events of another that shares its issue repo. Each comes
+ * back in lower case. The repos go in as one JSON array, so any number of
+ * them takes one query, under D1's limit on bound values.
  */
 export async function doNotListedAmong(db: D1Database, repos: Iterable<string>): Promise<Set<string>> {
   const checked = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
@@ -102,7 +95,9 @@ export async function doNotListedAmong(db: D1Database, repos: Iterable<string>):
     .prepare(
       `SELECT j.value AS repo FROM json_each(?) j
        WHERE EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = j.value)
-          OR EXISTS (SELECT 1 FROM projects p JOIN do_not_list d ON d.repo = p.repo WHERE p.issue_repo = j.value)`,
+          OR (EXISTS (SELECT 1 FROM projects p WHERE p.issue_repo = j.value)
+            AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.issue_repo = j.value
+              AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = p.repo)))`,
     )
     .bind(JSON.stringify(checked))
     .all<{ repo: string }>();

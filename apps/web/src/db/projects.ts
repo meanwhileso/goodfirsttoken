@@ -26,7 +26,7 @@ import {
   type SettingKey,
   type SettingsVersion,
 } from '@goodfirsttoken/core';
-import { getDoNotListEntry, leaveDoNotListWhenRegistered } from './do-not-list';
+import { getDoNotListEntry } from './do-not-list';
 import { checkTime, fromJson } from './shared';
 
 // The projects, project_settings, and project_status_changes tables. A
@@ -121,7 +121,8 @@ export interface NewProject {
  * project, in any case, since GitHub ignores case in repo names, and when a
  * project listed from its policy would be for a repo on the do-not-list,
  * checked in the same statement as the insert. A maintainer's registration
- * takes the repo off the do-not-list, in the same batch.
+ * of a repo on the list is saved, and the repo stays on it until an admin
+ * approves the registration.
  */
 export async function createProject(
   db: D1Database,
@@ -145,7 +146,7 @@ export async function createProject(
     },
     'project',
   );
-  const statements = [
+  const [inserted] = await db.batch([
     db
       .prepare(
         `INSERT INTO projects (repo, issue_repo, status, status_reason, status_changed_by, status_changed_at,
@@ -185,11 +186,7 @@ export async function createProject(
            AND EXISTS (SELECT 1 FROM projects WHERE repo = ?1)`,
       )
       .bind(record.repo, record.status, record.addedBy, record.addedAt),
-  ];
-  if (record.source === 'registered' && record.status === 'pending') {
-    statements.push(leaveDoNotListWhenRegistered(db, record.repo, record.addedBy, record.addedAt));
-  }
-  const [inserted] = await db.batch(statements);
+  ]);
   return inserted?.meta.changes === 1 ? record : null;
 }
 
@@ -336,7 +333,8 @@ export async function setProjectStatus(
  * returns `read`. The same status and reason from someone else is a change of
  * its own, so an admin's pause over a maintainer's names the admin.
  * `alongside` runs in the same transaction, after the change, for a write
- * that has to land with it, and checks for itself that the change landed.
+ * that has to land with it, and checks for itself that the change landed. A
+ * change that writes nothing, as above, runs nothing, `alongside` included.
  */
 export async function setProjectStatusFrom(
   db: D1Database,
@@ -552,12 +550,8 @@ export async function takeOverListing(
         )
         .bind(...read, addedBy, version, issueRepoOf(current.repo, next), ...(reopened ? [at] : [])),
     );
-    const update = statements.length - 1;
-    // A listing removed at its maintainers' request comes off the do-not-list
-    // when a maintainer takes it over, with the takeover.
-    if (reopened) statements.push(leaveDoNotListWhenRegistered(db, current.repo, addedBy, at));
     const results = await db.batch(statements);
-    if (results[update]?.meta.changes === 1) return { project, changed };
+    if (results.at(-1)?.meta.changes === 1) return { project, changed };
   }
   throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }
@@ -719,9 +713,9 @@ export async function relistFromPolicy(
  * project's, whole, as a new save made by `by` at `now`, with settings they
  * left out at their defaults, and it goes back to `pending`, changed by them,
  * so an admin reviews it again. It names them as who added it, and keeps the
- * time it was first added. A repo on the do-not-list comes off it, in the
- * same batch. Null when the repo isn't a rejected registration when it
- * saves.
+ * time it was first added. A repo on the do-not-list stays on it until an
+ * admin approves the registration. Null when the repo isn't a rejected
+ * registration when it saves.
  */
 export async function reopenRegistration(
   db: D1Database,
@@ -785,10 +779,8 @@ export async function reopenRegistration(
         )
         .bind(...read, addedBy, at, version, issueRepoOf(current.repo, next)),
     );
-    const update = statements.length - 1;
-    statements.push(leaveDoNotListWhenRegistered(db, current.repo, addedBy, at));
     const results = await db.batch(statements);
-    if (results[update]?.meta.changes === 1) return project;
+    if (results.at(-1)?.meta.changes === 1) return project;
   }
   throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }

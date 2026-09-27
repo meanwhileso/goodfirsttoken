@@ -28,6 +28,7 @@ import {
   getPerson,
   getProject,
   getWaitingCandidate,
+  leaveDoNotListWhenApproved,
   listCandidates,
   listPendingProjects,
   relistFromPolicy,
@@ -287,7 +288,17 @@ async function decideRegistration(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const pending = await getPendingProject(env.DB, changeId);
     if (pending === null) return nothingWaits(input.id);
-    const decided = await setProjectStatusFrom(env.DB, pending.project, { ...change, changedBy: caller.githubId }, now);
+    // A maintainer asked for it to be listed, so an approval takes the repo
+    // off the do-not-list, in the same transaction. A rejection leaves it on.
+    const alongside =
+      change.status === 'approved' ? [leaveDoNotListWhenApproved(env.DB, pending.project.repo, caller.githubId, now)] : [];
+    const decided = await setProjectStatusFrom(
+      env.DB,
+      pending.project,
+      { ...change, changedBy: caller.githubId },
+      now,
+      alongside,
+    );
     if (decided === null) continue;
     return { ok: true, value: { repo: decided.repo, kind: 'registration', status: decided.status } };
   }
@@ -407,7 +418,7 @@ export async function adminPauseProject(
  * so from then on nothing lists the repo unless its maintainers register it.
  * A crawler find for it waiting in the queue is rejected, and its project is
  * rejected, with a reason its maintainers see. The rejection puts the repo on
- * the list again in the same transaction, so a registration that took it off
+ * the list again in the same transaction, so an approval that took it off
  * before the rejection landed leaves it on.
  */
 export async function adminRemoveProject(

@@ -11,6 +11,7 @@ import {
   listProjects,
   listProjectsByIssueRepo,
   relistFromPolicy,
+  reopenRegistration,
   setProjectStatus,
   settingsHistory,
   statusHistory,
@@ -635,6 +636,37 @@ describe('the admin queue and the listings', () => {
     expect(relisted).toBeNull();
     expect(await getProject(db, repo)).toMatchObject({ settingsVersion: 1, settings: { prMode: 'reviewed' } });
     expect(await settingsHistory(db, repo)).toHaveLength(1);
+  });
+
+  test('a rejected registration registered again lands only on the rejection it read, so one that landed first wins', async () => {
+    await createProject(
+      db,
+      { repo, status: 'pending', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+      t0,
+    );
+    await setProjectStatus(db, repo, { status: 'rejected', reason: 'Not yet.', changedBy: admin.githubId }, t0 + HOUR);
+    const batch = db.batch.bind(db);
+    let first: unknown;
+    vi.spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      // Another maintainer registers it again between this one's read and write.
+      first = await reopenRegistration(db, repo, { tags: ['help wanted'] }, coMaintainer.githubId, t0 + 2 * HOUR);
+      return batch(statements);
+    });
+
+    const second = await reopenRegistration(db, repo, { tags: ['help wanted'] }, maintainer.githubId, t0 + 3 * HOUR);
+
+    expect(first).toMatchObject({ status: 'pending', statusChangedBy: coMaintainer.githubId });
+    expect(second).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({
+      status: 'pending',
+      statusChangedBy: coMaintainer.githubId,
+      addedBy: coMaintainer.githubId,
+    });
+    expect((await statusHistory(db, repo)).map((change) => [change.status, change.changedBy])).toEqual([
+      ['pending', coMaintainer.githubId],
+      ['rejected', admin.githubId],
+      ['pending', maintainer.githubId],
+    ]);
   });
 
   test('a registered project is never listed again from a policy', async () => {

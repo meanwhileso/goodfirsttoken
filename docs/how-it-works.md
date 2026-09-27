@@ -938,10 +938,12 @@ rejection's reason with `project_status`.
   change of status that lands while the takeover saves stays. A rejected
   listing goes back to `pending`, changed by the maintainer, so an admin
   reviews it again.
-- A registration that makes the project `pending` takes the repo off the
-  [do-not-list](#crawl-candidates), in the same write, since a maintainer
-  asked for it to be listed: a new one, a takeover of a rejected listing,
-  or a rejected registration registered again.
+- A repo on the [do-not-list](#crawl-candidates) can be registered, a new
+  one, a takeover of a rejected listing, or a rejected registration
+  registered again. It stays on the list while the registration waits, so
+  the admin who decides sees that its maintainers asked to be removed.
+  Approving the registration takes it off, in the same write, since a
+  maintainer asked for it to be listed. Rejecting it leaves it on.
 - A crawler find still waiting in the admin queue doesn't stop a
   registration, and the registration doesn't change it.
 
@@ -1094,7 +1096,8 @@ waited longest first, each with an ID that `admin_decide` takes.
   doesn't answer, as on a rate limit, the item says that instead, and
   never that the repo isn't public. `factsMissing` tells the two apart. A
   crawler find has the facts the crawler read.
-- An item says when the repo is on the do-not-list.
+- An item says when the repo is on the do-not-list. A registration of one
+  says that approving it takes the repo off.
 
 **Deciding.** `admin_decide` approves or rejects an item.
 
@@ -1103,7 +1106,8 @@ waited longest first, each with an ID that `admin_decide` takes.
   crawler find's reason stays with the find, and no one else sees it.
 - Approving a registration makes its project `approved`, with the settings
   its maintainer chose. Settings or a tier sent with it are refused with
-  `invalid_settings`, and nothing changes.
+  `invalid_settings`, and nothing changes. When the repo is on the
+  do-not-list, the approval takes it off, in the same write.
 - Approving a crawler find lists it from its policy, as `admin_add_project`
   does below, with the tier the admin confirms and the settings they send.
   A setting they leave out takes the crawler's suggestion, then its
@@ -1163,15 +1167,16 @@ how they asked, and only admins see it.
 - Its project, when it has one, is `rejected`, with the reason
   `Removed at its maintainers' request.`, which its maintainers read with
   `project_status`. The rejection puts the repo back on the list in the
-  same write, in case a registration took it off while the removal ran.
+  same write, in case an approval took it off while the removal ran.
 - A crawler find for it waiting in the queue is rejected with the same
   reason.
-- Nothing lists it again unless a maintainer registers it: the crawler
-  can't add it, and an admin can't list it from its policy. A maintainer
-  who registers it takes it off the list, under
+- Nothing lists it again unless a maintainer registers it and an admin
+  approves that: the crawler can't add it, and an admin can't list it from
+  its policy. A maintainer can register it, under
   [Registering a project](#registering-a-project). A removed listing is
   taken over, and a removed registration is registered again, and either
-  waits in the queue as `pending`.
+  waits in the queue as `pending`, still on the list. Approving it takes
+  the repo off the list, and rejecting it leaves it on.
 - The events on its issues leave the live feeds, as
   [Live feeds](#live-feeds) says.
 
@@ -1360,12 +1365,14 @@ crawls yet.
 **The do-not-list** holds repos whose maintainers asked to be removed, with
 the admin who added each one, when, and an optional note. A repo is found on
 it without case. Adding a repo again keeps its first entry. An admin adds a
-repo by removing it, under [The admin queue](#the-admin-queue), and a
-maintainer's registration takes it off, under
+repo by removing it, under [The admin queue](#the-admin-queue), and
+approving a maintainer's registration of it takes it off, under
 [Registering a project](#registering-a-project).
 
-- It covers the repo itself, and the issue repo of a project whose code
-  repo is on it now.
+- It covers the repo itself, and an issue repo when every project that
+  keeps its issues there has its code repo on the list now. Two projects
+  can share an issue repo, so removing one leaves the other's issues, and
+  the events on them, shown.
 - The homepage's lists, the live feeds, and the issue pages leave out what
   it covers.
 
@@ -1588,6 +1595,8 @@ live socket, and of a room's or feed's history read directly.
   then on. Feeds and rooms still store them, and a watcher that connects
   after the repo comes off the list gets them again.
 - An event is judged by the repo its issue is in, as the event names it.
+  So while a project that isn't on the list keeps its issues in the same
+  repo as a removed one, the events on both projects' issues there show.
 - A feed counts its events by day and claimant, so a day's count still
   counts events on issues the list covers.
 - When the database can't say what the list covers, nothing goes out, as

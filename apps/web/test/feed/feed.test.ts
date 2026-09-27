@@ -1,9 +1,9 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { addToDoNotList, blockDonor, createProject, removeFromDoNotList, unblockDonor } from '../../src/db';
+import { addToDoNotList, blockDonor, createProject, listProjectsAskingForHelp, setProjectStatus, unblockDonor } from '../../src/db';
 import { repoFeed, type Feed, type FeedEntry } from '../../src/rooms/feed';
-import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0 } from '../db/helpers';
+import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0, takeOffDoNotList } from '../db/helpers';
 import { feedEvent, storedEvents, watchSocket } from './helpers';
 
 // A feed on its own, as the queue's consumer calls it. Every person, repo,
@@ -251,7 +251,7 @@ describe('a repo on the do-not-list', () => {
 
     // Taking the repo off the list, as approving its maintainer's
     // registration does, shows them to a new watcher again.
-    await removeFromDoNotList(db, 'sample-owner/sample-app');
+    await takeOffDoNotList('sample-owner/sample-app');
     const later = await watchSocket(feed);
     expect(await later.received(4)).toEqual(['app before', 'tools before', 'app during', 'tools during']);
   });
@@ -275,6 +275,36 @@ describe('a repo on the do-not-list', () => {
     const watcher = await watchSocket(feed);
 
     expect(await watcher.received(1)).toEqual(['tools']);
+  });
+
+  test("leaves the events on an issue repo another project shares in that project's feed, when one project is removed", async () => {
+    const shared = 'sample-owner/sample-issues';
+    const removed = 'sample-owner/sample-code';
+    const stays = 'sample-owner/sample-other';
+    for (const code of [removed, stays]) {
+      await createProject(
+        db,
+        {
+          repo: code,
+          status: 'approved',
+          source: 'registered',
+          policy: null,
+          settings: { tags: ['help wanted'], issueRepo: shared },
+          addedBy: kenji.githubId,
+        },
+        Date.now(),
+      );
+    }
+    // As admin_remove_project leaves it: on the list, and rejected.
+    await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, removed, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+    await feed.deliver([on(`${shared}#5`, 'still listed')]);
+
+    const watcher = await watchSocket(feed);
+    const listed = await listProjectsAskingForHelp(db, 10, Date.now());
+
+    expect(listed.projects.map(({ project }) => project.repo)).toContain(stays);
+    expect(await watcher.received(1)).toEqual(['still listed']);
   });
 
   test('a watcher who gives no last event ID still gets the newest events it may see, and a glance leaves them out', async () => {

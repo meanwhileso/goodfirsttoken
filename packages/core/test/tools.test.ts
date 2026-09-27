@@ -222,6 +222,18 @@ describe('what each result says', () => {
     expect(queue('no_answer')).not.toContain('no public repo');
   });
 
+  test('an item on the do-not-list says so: approving a registration takes it off, and only its maintainers can list a crawler find', () => {
+    const [candidate, registration] = samples.admin_queue.output.items;
+    if (candidate === undefined || registration === undefined) throw new Error('missing sample');
+    const queue = (item: typeof candidate) => textOf(toolResult('admin_queue', { items: [{ ...item, onDoNotList: true }] }));
+    expect(queue(registration)).toContain(
+      'Its maintainers asked to be removed, so it is on the do-not-list. Approving this registration takes it off.',
+    );
+    expect(queue(candidate)).toContain(
+      'Its maintainers asked to be removed, so it is on the do-not-list. Only they can list it again, by registering it.',
+    );
+  });
+
   test("a rejection says who sees its reason: a registration's maintainers, and no one for a crawler find", () => {
     const decide = (kind: 'registration' | 'candidate') =>
       textOf(toolResult('admin_decide', { repo: repoName, kind, status: 'rejected' }));

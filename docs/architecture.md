@@ -353,12 +353,14 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   the tool reads again and takes over or refuses. A rejected registration
   registered again is `reopenRegistration`, which checks the row the same
   way, against the rejection read.
-- **The do-not-list changes with the status.** A registration that makes
-  a project `pending` ends its batch with `leaveDoNotListWhenRegistered`
-  from `src/db/do-not-list.ts`, a delete that applies only when the row
-  is a registered project that this maintainer made `pending` at this
-  time. So the list and the status change in one transaction, and a
-  registration that lost its compare-and-set takes nothing off.
+- **The do-not-list changes with the status.** A registration leaves the
+  list alone, so the admin who decides it sees the request to be removed.
+  An approval runs `leaveDoNotListWhenApproved` from
+  `src/db/do-not-list.ts` through `setProjectStatusFrom`'s `alongside`, a
+  delete that applies only when the row is a registered project that this
+  admin approved at this time. So the list and the status change in one
+  transaction, and an approval that lost its compare-and-set takes nothing
+  off.
 - **A pause or resume is a compare-and-set.** `setProjectStatusFrom` writes
   the new status only while the project's status, reason, who set it, and
   when are the ones read, the way `changeSettings` checks the settings
@@ -429,7 +431,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   so the check and the write are one step. A removal adds the entry on its own, before
   anything else, and its rejection runs `doNotListWhenRejected` in the same
   batch, through `setProjectStatusFrom`'s `alongside`, which adds the entry
-  again only when that rejection landed. So a registration that took the
+  again only when that rejection landed. So an approval that took the
   repo off the list between them can't leave a removed project off it.
 - **Blocked donors** come from `listBlocks`, one query that joins
   `donor_blocks` to `people` for each login.
@@ -1076,9 +1078,14 @@ streams' in [Text streams](how-it-works.md#text-streams).
   as one JSON array the same way. An event names its issue, and a feed
   reads the issue's repo from the event's JSON in SQL, so no stored event
   needed rewriting. The do-not-list names code repos, so the query also
-  covers the issue repo of each project whose code repo is on it. The
-  `history()` RPC of a room and of a feed
-  leaves blocked donors out too, and throws when D1 can't say who they are.
+  covers an issue repo when every project that keeps its issues there has
+  its code repo on the list. It is the simpler of two rules that never hide
+  another project's events. The other judges each event by its claim's
+  project, which would also hide a removed project's own events on a shared
+  issue repo, but would change how every feed and room reads its history,
+  since they skip hidden repos in SQL. The `history()` RPC
+  of a room and of a feed leaves blocked donors out too, and throws when D1
+  can't say who they are.
   Tests read what is stored straight from the object's SQLite.
 - **The Worker holds each stream.** It connects to the feed or room over the
   WebSocket a page uses, accepts it, and keeps each message it gets as a

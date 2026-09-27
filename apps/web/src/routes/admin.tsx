@@ -1,4 +1,4 @@
-import { productName, type ToolOutputInput } from '@goodfirsttoken/core';
+import { doNotListNote, productName, type ToolOutputInput } from '@goodfirsttoken/core';
 import { createFileRoute, Link, notFound, redirect } from '@tanstack/react-router';
 import { useId, type CSSProperties, type ReactNode } from 'react';
 import { getAdminPage, type AdminPage, type PolicyListing } from '../admin/data';
@@ -69,9 +69,15 @@ function tierName(tier: PolicyListing['policy']['tier']): string {
   return tier === 'invites_agents' ? 'invites agents' : 'allows with conditions';
 }
 
-function Facts({ item, now }: { item: QueueItem; now: number }) {
+/**
+ * The repo's facts from GitHub, or why there are none. When GitHub no longer
+ * takes the admin's token, the banner says to sign in again, and the item
+ * says nothing more.
+ */
+function Facts({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
   const facts = item.facts;
   if (facts === null) {
+    if (signInAgain) return null;
     return item.factsMissing === 'no_answer' ? (
       <p className="admin-item__warning">
         GitHub didn't answer when asked about {item.repo}. Load the page again for its facts.
@@ -130,14 +136,10 @@ function ReasonField({ label, placeholder }: { label: string; placeholder: strin
 }
 
 function DoNotListNote({ item }: { item: QueueItem }) {
-  return item.onDoNotList ? (
-    <p className="admin-item__warning">
-      Its maintainers asked to be removed, so it is on the do-not-list. Only they can list it again, by registering it.
-    </p>
-  ) : null;
+  return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
 
-function Candidate({ item, now }: { item: QueueItem; now: number }) {
+function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
   const titleId = useId();
   const tagsId = useId();
   const tierId = useId();
@@ -151,7 +153,7 @@ function Candidate({ item, now }: { item: QueueItem; now: number }) {
         </h3>
         <span className="mono small muted">found {span(item.requestedAt, now)} ago</span>
       </div>
-      <Facts item={item} now={now} />
+      <Facts item={item} now={now} signInAgain={signInAgain} />
       {policy && (
         <Quote>
           &ldquo;{policy.quote}&rdquo;{' '}
@@ -207,7 +209,7 @@ function Candidate({ item, now }: { item: QueueItem; now: number }) {
   );
 }
 
-function Registration({ item, now }: { item: QueueItem; now: number }) {
+function Registration({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
   const titleId = useId();
   const notes = item.settings.agentNotes ?? '';
   return (
@@ -220,7 +222,7 @@ function Registration({ item, now }: { item: QueueItem; now: number }) {
           from @{item.requestedBy} · {span(item.requestedAt, now)} ago
         </span>
       </div>
-      <Facts item={item} now={now} />
+      <Facts item={item} now={now} signInAgain={signInAgain} />
       <DoNotListNote item={item} />
       <Block label="settings they chose">
         <SettingsBadges settings={item.settings} />
@@ -393,7 +395,9 @@ function Admin() {
               {page.candidates.length === 0 ? (
                 <p className="admin__empty">No finds waiting.</p>
               ) : (
-                page.candidates.map((item) => <Candidate key={item.id} item={item} now={page.now} />)
+                page.candidates.map((item) => (
+                  <Candidate key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                ))
               )}
             </section>
             <section className="stack" aria-label="registrations">
@@ -405,7 +409,9 @@ function Admin() {
               {page.registrations.length === 0 ? (
                 <p className="admin__empty">No registrations waiting.</p>
               ) : (
-                page.registrations.map((item) => <Registration key={item.id} item={item} now={page.now} />)
+                page.registrations.map((item) => (
+                  <Registration key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                ))
               )}
             </section>
           </div>

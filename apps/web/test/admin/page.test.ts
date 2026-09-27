@@ -2,7 +2,7 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { loadAdminPage } from '../../src/admin/page';
-import { createProject, getBlock, getProject, savePerson } from '../../src/db';
+import { addToDoNotList, createProject, getBlock, getDoNotListEntry, getProject, savePerson } from '../../src/db';
 import { Browser, ORIGIN, location, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 
@@ -196,12 +196,27 @@ describe("the admin page's forms", () => {
     );
 
     expect(page).toContain(HARBOR);
-    // React puts an empty comment around each value it fills into text.
-    expect(page).toContain(`answer when asked about <!-- -->${HARBOR}<!-- -->. Load the page again for its facts.`);
+    // The banner says what to do. No item says to load the page again, or
+    // that its repo isn't public.
+    expect(page).not.toContain('Load the page again for its facts.');
     expect(page).not.toContain('no public repo');
     expect(page).toContain('GitHub no longer takes the token this site holds for you, so the queue shows no facts from GitHub.');
     expect(answer).toContain('GitHub no longer takes the token this site holds for you.');
     expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test("a registration of a repo its maintainers asked to be removed says so, and approving it takes the repo off the do-not-list", async () => {
+    const browser = await signedIn('sample-admin');
+    await addToDoNotList(env.DB, { repo: HARBOR, reason: null, addedBy: 1010 }, Date.now());
+
+    const page = await (await browser.fetch('/admin')).text();
+    const answer = await back(browser, await browser.post('/admin', { action: 'decide', id: harborId(page), decision: 'approve' }));
+
+    expect(page).toContain(
+      'Its maintainers asked to be removed, so it is on the do-not-list. Approving this registration takes it off.',
+    );
+    expect(answer).toContain(`Approved ${HARBOR}.`);
+    expect(await getDoNotListEntry(env.DB, HARBOR)).toBeNull();
   });
 
   test("a notice in a link the page's own form didn't make shows nothing", async () => {

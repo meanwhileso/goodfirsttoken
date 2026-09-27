@@ -497,6 +497,36 @@ describe('the slots', () => {
     expect((await load()).closedBecause).toBe('project');
   });
 
+  test("a removed project that kept its issues in another project's repo leaves that project's lanes, and a removed project's own issue repo shows none", async () => {
+    const web = 'sample-owner/sample-web';
+    const docs = 'sample-owner/sample-docs';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, web);
+    await registeredProject({ tags: ['help wanted'], issueRepo: 'sample-owner/sample-docs-issues' }, docs);
+    const p = await claim(priya);
+    await post(p, 'read AGENTS.md and CONTRIBUTING');
+    const docsIssue = `sample-owner/sample-docs-issues#${number}`;
+    const made = await issueRoom(env.ISSUE_ROOM, docsIssue).claim({
+      issue: docsIssue,
+      project: docs,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'codex',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!made.ok) throw new Error(made.refusal.message);
+    const docsBefore = ready(await loadIssue(request, 'sample-owner', 'sample-docs-issues', number));
+
+    await addToDoNotList(db, { repo: web, reason: null, addedBy: admin.githubId }, t0);
+    await addToDoNotList(db, { repo: docs, reason: null, addedBy: admin.githubId }, t0);
+    const docsPage = ready(await loadIssue(request, 'sample-owner', 'sample-docs-issues', number));
+
+    expect(lanes((await load()).view)).toEqual({ priya: ['read AGENTS.md and CONTRIBUTING'] });
+    expect(lanesInPlay(docsBefore.view).map((lane) => lane.login)).toEqual(['kenji']);
+    expect(lanesInPlay(docsPage.view)).toEqual([]);
+  });
+
   test('a project on the do-not-list takes no claims', async () => {
     await tag();
     await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);

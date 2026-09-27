@@ -75,6 +75,16 @@ function withDefaults(settings: ProjectSettingsPatch): ProjectSettings {
   return { ...defaults, tags: [], ...given };
 }
 
+/**
+ * What an item on the do-not-list says. A registration of one waits on the
+ * list, and approving it takes the repo off.
+ */
+export function doNotListNote(kind: QueueItem['kind']): string {
+  const then =
+    kind === 'registration' ? 'Approving this registration takes it off.' : 'Only they can list it again, by registering it.';
+  return `Its maintainers asked to be removed, so it is on the do-not-list. ${then}`;
+}
+
 function renderQueueItem(item: QueueItem): string {
   const facts = item.facts;
   return lines(
@@ -87,8 +97,7 @@ function renderQueueItem(item: QueueItem): string {
       : item.factsMissing === 'no_answer'
         ? `GitHub didn't answer when asked about ${item.repo}. Read the queue again for its facts.`
         : `GitHub showed no public repo named ${item.repo} when asked.`,
-    item.onDoNotList &&
-      'Its maintainers asked to be removed, so it is on the do-not-list. Only they can list it again, by registering it.',
+    item.onDoNotList && doNotListNote(item.kind),
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
       `labels that could mean ready for help: ${item.suggestedTags

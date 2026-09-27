@@ -793,23 +793,47 @@ describe('the do-not-list', () => {
     });
   });
 
-  test('a maintainer who registers a removed listing puts it back in the queue, and takes the repo off the do-not-list', async () => {
+  test('a maintainer who registers a removed listing puts it back in the queue on the do-not-list, and approving the registration takes the repo off', async () => {
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } });
     await call(admin, 'admin_remove_project', { repo: BUNDLER });
     const maintainer = await connectAgent(github, 'sample-maintainer');
 
     const registered = await call(maintainer, 'register_project', { repo: BUNDLER, settings: { tags: ['contribution welcome'] } });
+    const onTheList = await getDoNotListEntry(env.DB, BUNDLER);
     const queue = await call(admin, 'admin_queue', {});
     const approved = await call(admin, 'admin_decide', { id: await queueId(admin, BUNDLER), decision: 'approve' });
 
     expect(registered.structuredContent).toMatchObject({ status: 'pending' });
-    expect(queue.structuredContent).toMatchObject({ items: [{ repo: BUNDLER, kind: 'registration', onDoNotList: false }] });
+    expect(onTheList).not.toBeNull();
+    expect(queue.structuredContent).toMatchObject({ items: [{ repo: BUNDLER, kind: 'registration', onDoNotList: true }] });
+    expect(textOf(queue)).toContain(
+      'Its maintainers asked to be removed, so it is on the do-not-list. Approving this registration takes it off.',
+    );
     expect(approved.structuredContent).toMatchObject({ status: 'approved' });
     expect(await getDoNotListEntry(env.DB, BUNDLER)).toBeNull();
   });
 
-  test('a maintainer who registers a removed registration again puts it back in the queue, off the do-not-list, and a second registration is refused', async () => {
+  test("rejecting a registration of a removed repo keeps the maintainers' request to be removed, so the crawler still can't queue it", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['contribution welcome'] } });
+    await call(admin, 'admin_remove_project', { repo: BUNDLER, note: 'The maintainers asked in an issue.' });
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await call(maintainer, 'register_project', { repo: BUNDLER, settings: { tags: ['contribution welcome'] } });
+
+    const rejected = await call(admin, 'admin_decide', {
+      id: await queueId(admin, BUNDLER),
+      decision: 'reject',
+      reason: 'Its maintainers asked to stay off.',
+    });
+
+    expect(rejected.structuredContent).toMatchObject({ status: 'rejected' });
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({ status: 'rejected' });
+    expect(await getDoNotListEntry(env.DB, BUNDLER)).toMatchObject({ reason: 'The maintainers asked in an issue.' });
+    await expect(crawlerFind()).rejects.toThrow('the candidate was not added');
+  });
+
+  test('a maintainer who registers a removed registration again puts it back in the queue, still on the do-not-list, and a second registration is refused', async () => {
     const maintainer = await registerHarbor();
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_remove_project', { repo: HARBOR });
@@ -824,55 +848,62 @@ describe('the do-not-list', () => {
       statusChangedBy: 1008,
       settings: { claimsPerIssue: 2 },
     });
-    expect(await getDoNotListEntry(env.DB, HARBOR)).toBeNull();
+    expect(await getDoNotListEntry(env.DB, HARBOR)).not.toBeNull();
     expect(textOf(twice)).toMatch(/^Refused \(already_registered\)/);
   });
 
-  test("a maintainer who registers a repo that was on the do-not-list, and no project, takes it off the list", async () => {
+  test('a maintainer who registers a repo on the do-not-list, with no project, leaves it on the list until an admin approves the registration', async () => {
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_remove_project', { repo: TOOLS });
     const maintainer = await connectAgent(github, 'sample-maintainer');
 
     const registered = await call(maintainer, 'register_project', { repo: TOOLS, settings: { tags: ['help wanted'] } });
+    const waiting = await getDoNotListEntry(env.DB, TOOLS);
+    await call(admin, 'admin_decide', { id: await queueId(admin, TOOLS), decision: 'approve' });
 
     expect(registered.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(waiting).not.toBeNull();
     expect(await getDoNotListEntry(env.DB, TOOLS)).toBeNull();
   });
 
-  test("a removal that lands just after a maintainer registers the repo again leaves it rejected and on the do-not-list", async () => {
+  test('a removal that lands just after an admin approves a registration leaves it rejected and on the do-not-list', async () => {
     const maintainer = await registerHarbor();
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_remove_project', { repo: HARBOR });
+    await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+    const id = await queueId(admin, HARBOR);
     const batch = env.DB.batch.bind(env.DB);
     vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
       const results = await batch(statements);
-      // The maintainers ask again, right after the registration's write.
+      // The maintainers ask again, right after the approval's write.
       await adminRemoveProject(adminCaller(), { repo: HARBOR }, Date.now());
       return results;
     });
 
-    await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+    const approved = await adminDecide(adminCaller(), { id, decision: 'approve' }, Date.now());
 
+    expect(approved).toMatchObject({ ok: true, value: { status: 'approved' } });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
     expect(await getDoNotListEntry(env.DB, HARBOR)).not.toBeNull();
   });
 
-  test("a registration that lands while a removal rejects the project doesn't leave it off the do-not-list", async () => {
-    const maintainer = await registerHarbor();
+  test("an approval that lands while a removal rejects the project doesn't leave it off the do-not-list", async () => {
+    await registerHarbor();
     const admin = await connectAgent(github, ADMIN.login);
-    await call(admin, 'admin_decide', { id: await queueId(admin, HARBOR), decision: 'reject', reason: 'Not ready yet.' });
+    const id = await queueId(admin, HARBOR);
     const batch = env.DB.batch.bind(env.DB);
-    let again: Result | undefined;
+    let approved: Awaited<ReturnType<typeof adminDecide>> | undefined;
     vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
-      // The maintainer registers again after the removal put the repo on the
-      // list and read the project, and before its rejection lands.
-      again = await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+      // Another admin approves the registration after the removal put the
+      // repo on the list and read the project, and before its rejection
+      // lands. The approval takes the repo off the list.
+      approved = await adminDecide(adminCaller(), { id, decision: 'approve' }, Date.now());
       return batch(statements);
     });
 
     const removed = await adminRemoveProject(adminCaller(), { repo: HARBOR }, Date.now());
 
-    expect(again?.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(approved).toMatchObject({ ok: true, value: { status: 'approved' } });
     expect(removed).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected' } });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
     expect(await getDoNotListEntry(env.DB, HARBOR)).not.toBeNull();
