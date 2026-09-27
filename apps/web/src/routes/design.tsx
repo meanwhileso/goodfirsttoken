@@ -2,6 +2,7 @@ import { productName } from '@goodfirsttoken/core';
 import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import markUrl from '../assets/mark.svg?url';
+import { SiteNav } from '../auth/SiteNav';
 import { Button, ButtonLink } from '../components/Button';
 import { Chip, Tag } from '../components/Chip';
 import { FilterChips } from '../components/FilterChips';
@@ -155,7 +156,7 @@ function DesignSystem() {
 
   return (
     <>
-      <Nav />
+      <SiteNav />
       <main className="wrap ds-main">
         <h1 className="display ds-title">
           GitHub, <InlineLabel>alive</InlineLabel>

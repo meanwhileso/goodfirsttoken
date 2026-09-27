@@ -4,8 +4,9 @@ Every product rule Good First Token follows, as the code does it today. The
 plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
-Nothing is live yet. The site serves a placeholder home page and the design
-system at `/design` while the build goes on in the open.
+Nothing is live yet. The site serves a placeholder home page, sign-in with
+GitHub, and the design system at `/design` while the build goes on in the
+open.
 
 ## Health check
 
@@ -30,9 +31,112 @@ system at `/design` while the build goes on in the open.
   [self-hosting.md](self-hosting.md). With no primary domain, as in local
   development, nothing redirects.
 
+## Signing in
+
+People sign in on the site with GitHub. Their numeric GitHub ID is who they
+are.
+
+- `/sign-in` has one button, Sign in with GitHub. It sends the person to
+  GitHub, which asks them to give Good First Token `public_repo` and nothing
+  else, and then back to `/auth/callback/github`. They land on `/me`.
+- Sign-in uses PKCE, and a state tied to the browser that started it. A
+  sign-in has 5 minutes to come back from GitHub. One that fails, took
+  longer, or was started in another browser signs no one in, and goes back
+  to `/sign-in`, which says it didn't finish.
+- Signing in records the person under [People](#people), with the login
+  GitHub gives then. A renamed GitHub account signs in as the same person,
+  under its new login.
+- Every page's nav shows the signed-in person's login from People, in place
+  of the GitHub mark.
+- `/me` needs someone signed in and sends anyone else to `/sign-in`.
+  `/sign-in` sends someone already signed in to `/me`.
+- A session lasts 7 days. Using the site extends it to 7 days from then, at
+  most once a day.
+
+**The GitHub token.** Sign-in keeps the token GitHub gives, to act for the
+person later.
+
+- It is encrypted with the `AUTH_SECRET` secret before it is stored. It never
+  appears in a page, a response, or a log.
+- Each sign-in replaces the stored token with the new one.
+- Signing out revokes that token at GitHub, forgets it, and ends every
+  session the person has, in every browser, since all of them used it. It
+  revokes that one token, so the person's other tokens from the same GitHub
+  OAuth app keep working. When GitHub can't revoke it, the person is still
+  signed out and the token is still forgotten.
+
+**Cookies.** Every cookie sign-in sets is named with the `__Host-` prefix,
+so the browser keeps it for this host only: it is `Secure`, has `Path=/`, and
+has no `Domain`. Each is also `HttpOnly` and `SameSite=Lax`. There are two:
+`__Host-gft.session_token` holds the session, and `__Host-gft.state` ties a
+sign-in in progress to the browser.
+
+**Where sign-in answers.** Only these routes answer under `/auth`. Every
+other path there is a 404, so no other Better Auth endpoint, like email
+sign-up, can be reached.
+
+| Route | What it does |
+|---|---|
+| `POST /auth/sign-in` | Starts sign-in, from the button on `/sign-in` |
+| `GET /auth/callback/github` | Where GitHub sends the person back |
+| `POST /auth/sign-out` | Signs out, from the button on `/me` |
+| `POST /auth/dev/sign-in` | Development only, below |
+
+- The three `POST` routes take a form from the site's own pages. One sent
+  with another site's `Origin`, or none, is refused with `403`.
+- Sign-in, the callback, and the dev sign-in share a Cloudflare rate limit
+  of 20 requests a minute from each client address. The next one gets `429`
+  with `Retry-After: 60`.
+- Outside development, when a secret sign-in needs is missing, the sign-in
+  routes answer `503`, and the log names the secret.
+
+**In development.** GitHub is the GitHub fake, and its sign-in page lists
+every sample person.
+
+- `POST /auth/dev/sign-in` with `login` set to a sample person's login signs
+  in as them in one step. It fills in the fake's sign-in page for them, so
+  the session comes from the same callback, with that person's own token
+  from the fake. A login the fake doesn't have gets `422`.
+- Two things keep it off outside development. It answers only when the
+  `ENVIRONMENT` variable is `development`, and every deploy sets
+  `ENVIRONMENT` to `staging` or `production` and reads no setting that could
+  change it (`scripts/deploy-config.mjs`). Even when it runs, it can't make a
+  session on its own. It only fills in the fake's page, and the session still
+  comes from the callback, with a code from the configured GitHub. Real GitHub
+  has no page it could fill in.
+- With no secrets set, development uses stand-ins: the GitHub fake's client
+  secret, and a public value for `AUTH_SECRET`. Outside development, a
+  missing secret stops sign-in.
+
+## Permissions
+
+Every action goes through one named check, `requirePermission(caller,
+permission, resource)`. It returns, or refuses with a
+[refusal](#refusals) code. Nothing calls it yet. The tools and pages that need
+it arrive with the issues that build them.
+
+| Permission | Allows | Who holds it | Refusal |
+|---|---|---|---|
+| `review_projects` | Seeing the admin queue, and approving or rejecting what waits in it | Admins | `not_admin` |
+| `list_from_policy` | Listing a project from its written policy, or editing such a listing | Admins | `not_admin` |
+| `block_donors` | Blocking a donor, or lifting a block | Admins | `not_admin` |
+| `pause_any_project` | Pausing any project | Admins | `not_admin` |
+| `manage_project` | Registering a repo, changing its settings, or pausing it | Admins and maintainers of the repo on GitHub | `not_maintainer` |
+| `work_claim` | Posting to a claim, submitting its work, releasing it, or opening its PR | The person who made the claim | `not_claim_owner` |
+
+- Admins are the numeric GitHub IDs in the `ADMIN_GITHUB_IDS` setting. A
+  login never makes someone an admin, since logins change hands. An entry that
+  isn't a whole number names no one, and with the setting empty there are no
+  admins.
+- `manage_project` asks GitHub for the caller's permission on the repo, with
+  the caller's own token, and needs `admin` or `maintain`. It asks on every
+  check and keeps nothing. With no token, or for a repo GitHub says isn't
+  there, the answer is no.
+- Being a Good First Token admin is no permission on anyone's repo.
+
 ## People
 
-The database records the people who sign in. Nothing signs anyone in yet.
+The database records the people who sign in.
 
 - A person is a GitHub account. Its numeric ID is who they are, because a
   login can change and a freed login can go to someone else.
@@ -45,7 +149,9 @@ The database records the people who sign in. Nothing signs anyone in yet.
   slow sign-in never brings back an old login.
 - Every stored record that names a person, like a claim, a settings change,
   or a block, names them by GitHub ID, and they must already be recorded.
-- No stored record holds a GitHub token.
+- No record like these holds a GitHub token. The one token stored is a
+  person's token from signing in, encrypted, under
+  [Signing in](#signing-in).
 
 **Blocks.** An admin can block a donor, with an optional reason. Blocking
 them again records the new reason, admin, and time. Lifting the block
@@ -337,8 +443,9 @@ a description for agents. No tool is served yet.
 
 ## Refusals
 
-The codes are defined in `packages/core`. Today only `nextClaimState` returns
-any: the first four and `invalid_input`.
+The codes are defined in `packages/core`. Today `nextClaimState` returns the
+first four and `invalid_input`, and `requirePermission` returns
+`not_claim_owner`, `not_maintainer`, and `not_admin`.
 
 | Code | When |
 |---|---|
@@ -477,7 +584,12 @@ them, with sample data that the page says is sample.
 
 - Every call to GitHub names the token it runs with. There is no default
   token. A call made for a person runs with that person's own token, so it
-  can act only as them. Nothing calls GitHub yet. Sign-in (#8) is the first.
+  can act only as them.
+- Sign-in makes the first calls. It trades GitHub's code for the person's
+  token, and reads who they are with that token. The `manage_project`
+  permission reads the repo with the caller's token.
+- Revoking a token at sign-out runs as the OAuth app, with its client ID and
+  secret, and names the one token to revoke.
 - When GitHub refuses a call, the refusal comes back with GitHub's status
   and message.
 - In local development, GitHub is the GitHub fake, and its sign-in page

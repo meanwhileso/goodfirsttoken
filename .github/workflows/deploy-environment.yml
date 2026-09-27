@@ -47,6 +47,7 @@ jobs:
           WORKER_NAME: ${{ secrets.WORKER_NAME || vars.WORKER_NAME }}
           DB_ID: ${{ secrets.DB_ID || vars.DB_ID }}
           OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID || vars.OAUTH_KV_ID }}
+          SIGN_IN_LIMITER_NAMESPACE_ID: ${{ secrets.SIGN_IN_LIMITER_NAMESPACE_ID || vars.SIGN_IN_LIMITER_NAMESPACE_ID }}
           PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN || vars.PRIMARY_DOMAIN }}
           REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS || vars.REDIRECT_DOMAINS }}
           OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID || vars.OAUTH_CLIENT_ID }}
@@ -75,9 +76,11 @@ jobs:
         run: node scripts/deploy.mjs migrations
 
       # Each secret in secrets.required in apps/web/wrangler.jsonc gets a line
-      # in this step's env, from the environment secret of the same name. The
-      # Worker reads none yet.
+      # in this step's env, from the environment secret of the same name.
       - name: Put the Worker's secrets
+        env:
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
         run: node scripts/deploy.mjs secrets
 
       - name: Deploy the Worker

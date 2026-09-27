@@ -30,7 +30,8 @@ pnpm skills:build  # the skills and plugins, from skill-src/
 ```
 
 Before the first `pnpm test:e2e`, run `pnpm exec playwright install chromium`.
-No accounts are needed for any of it. How the pieces fit is in
+No accounts are needed for any of it. With `pnpm dev` running, sign in at
+http://localhost:5173/sign-in as any sample person. How the pieces fit is in
 [docs/architecture.md](docs/architecture.md).
 
 ## Making a change

@@ -15,10 +15,19 @@ ENVIRONMENT=development
 PRIMARY_DOMAIN=
 REDIRECT_DOMAINS=
 
-# The client ID of a GitHub OAuth app, and the numeric GitHub IDs of admins,
-# separated by commas. Sign-in (#8) reads them.
-OAUTH_CLIENT_ID=
+# The client ID of the GitHub OAuth app sign-in uses, and the numeric GitHub
+# IDs of admins, separated by commas. The client ID is the GitHub fake's app.
+OAUTH_CLIENT_ID=goodfirsttoken-local
 ADMIN_GITHUB_IDS=
+
+# Sign-in's two secrets: the OAuth app's client secret, and the secret that
+# signs sign-in cookies and encrypts stored GitHub tokens. Leave them out
+# locally. In development, sign-in uses the GitHub fake's client secret and a
+# public stand-in (src/auth/settings.ts), and Wrangler's warning that they are
+# missing is expected. To sign in with a real GitHub OAuth app, set both, with
+# its client ID above and the GitHub URLs below left empty.
+# OAUTH_CLIENT_SECRET=
+# AUTH_SECRET=
 
 # GitHub's REST and GraphQL API, and github.com itself for sign-in. The
 # defaults point at the GitHub fake that `pnpm dev` starts. Left empty, the

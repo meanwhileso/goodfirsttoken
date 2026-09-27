@@ -3,7 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 // End-to-end tests run against the production build, served by Vite preview
 // inside the Workers runtime, with the GitHub fake that wrangler.jsonc
-// points the Worker at. Locally, servers you already started are reused.
+// points the Worker at. The D1 migrations are applied to the local database
+// first, since sign-in reads it. Locally, servers you already started are
+// reused.
 export default defineConfig({
   testDir: './e2e',
   forbidOnly: !!process.env.CI,
@@ -22,7 +24,7 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: 'pnpm build && pnpm preview',
+      command: 'node scripts/migrate-local.mjs && pnpm build && pnpm preview',
       url: 'http://localhost:4173/healthz',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

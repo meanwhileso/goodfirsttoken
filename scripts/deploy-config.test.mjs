@@ -45,7 +45,8 @@ const local = {
   },
   ratelimits: [{ name: 'LOGIN_LIMITER', namespace_id: '1', simple: { limit: 10, period: 60 } }],
 };
-const withLimiter = { ...required, LOGIN_LIMITER_NAMESPACE_ID: '1001' };
+// The sample config's limiter, and the real config's.
+const withLimiter = { ...required, LOGIN_LIMITER_NAMESPACE_ID: '1001', SIGN_IN_LIMITER_NAMESPACE_ID: '1002' };
 
 const realLocal = () => readLocalConfig(readFileSync(path.join(REPO_ROOT, LOCAL_CONFIG), 'utf8'));
 
@@ -78,6 +79,23 @@ test('the Worker reports the environment it was deployed as, whatever the settin
     assert.equal(config.vars.ENVIRONMENT, target);
   }
   assert.throws(() => deployConfig(local, 'development', withLimiter), /staging or production/);
+});
+
+// The dev sign-in, and the stand-ins for the sign-in secrets, work only when
+// ENVIRONMENT is development (apps/web/src/auth/settings.ts).
+test('no deploy runs the Worker as development, so the dev sign-in is never on in staging or production', () => {
+  const real = realLocal();
+
+  assert.equal(real.vars.ENVIRONMENT, 'development');
+  assert.equal(
+    settingsFor(real).some(({ name }) => name === 'ENVIRONMENT'),
+    false,
+  );
+  for (const target of ['staging', 'production']) {
+    const { config } = deployConfig(real, target, { ...withLimiter, ENVIRONMENT: 'development' });
+    assert.equal(config.vars.ENVIRONMENT, target);
+  }
+  assert.throws(() => deployConfig(real, 'development', withLimiter), /staging or production/);
 });
 
 test('no local value of a variable reaches a deployed Worker', () => {
@@ -233,6 +251,7 @@ const sentinels = {
   WORKER_NAME: 'sentinel-worker',
   DB_ID: D1_ID,
   OAUTH_KV_ID: KV_ID,
+  SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
   PRIMARY_DOMAIN: 'sentinel-primary.example',
   REDIRECT_DOMAINS: 'sentinel-second.example',
   OAUTH_CLIENT_ID: 'Ov23sentinelclient',
@@ -270,7 +289,11 @@ test("a deploy's GitHub URLs come from the settings or are empty, and never from
   assert.match(realLocal().vars.GH_API_URL, /127\.0\.0\.1/);
   assert.match(realLocal().vars.GH_WEB_URL, /127\.0\.0\.1/);
 
-  const unset = written({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, WORKER_NAME: 'sentinel-worker' });
+  const unset = written({
+    CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
+    WORKER_NAME: 'sentinel-worker',
+    SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
+  });
   const set = written(sentinels);
 
   assert.equal(JSON.parse(unset).vars.GH_API_URL, '');

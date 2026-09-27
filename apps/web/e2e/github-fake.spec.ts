@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 
 // The GitHub fake that `pnpm dev` and these tests run beside the app. Its
 // sign-in page is how local development signs in as a sample person. The
-// app's own sign-in (#8) will send people through it.
+// app's own sign-in sends people through it (sign-in.spec.ts).
 test('signing in on the GitHub fake as a sample person returns to the app with a code for their token', async ({
   page,
   request,

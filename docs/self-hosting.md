@@ -81,13 +81,13 @@ hostname.
 | Homepage URL | `https://<domain>` |
 | Authorization callback URL | `https://<domain>/auth/callback` |
 
-GitHub accepts any path under the callback URL, and
+GitHub accepts any path under the callback URL. The site's sign-in comes back
+to `/auth/callback/github`, and
 [the plan](specs/v1.md#3-identity-permissions-and-token-storage) puts the
-site's login and the login from agents under this one. Copy the app's client
-ID for `OAUTH_CLIENT_ID` in step 4.
-
-The site does not sign anyone in yet. Sign-in (#8) also needs the app's
-client secret, and adds it to [the Worker's secrets](#the-workers-secrets).
+login from agents under the same URL. Copy the app's client ID for
+`OAUTH_CLIENT_ID` in step 4. Then click Generate a new client secret, and
+keep it for `OAUTH_CLIENT_SECRET`, one of
+[the Worker's secrets](#the-workers-secrets).
 
 ## 4. Create the GitHub environments
 
@@ -118,10 +118,11 @@ variables. In a private repo, either works.
 | `WORKER_NAME` | Yes | The environment's Worker name from step 2. The D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed` and `<WORKER_NAME>-crawl`. |
 | `DB_ID` | No | The ID of a D1 database to use. When it's empty, the deploy uses `<WORKER_NAME>-db`, and creates it if it's missing. |
 | `OAUTH_KV_ID` | No | The ID of a KV namespace for sign-in grants. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
+| `SIGN_IN_LIMITER_NAMESPACE_ID` | Yes | A whole number you pick for the rate limiter on sign-in, like `1001`. It names the limiter within your Cloudflare account, and there is nothing to create. If staging and production share an account, give them different numbers. |
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
-| `OAUTH_CLIENT_ID` | No | The client ID of this environment's GitHub OAuth app. Sign-in (#8) reads it. |
-| `ADMIN_GITHUB_IDS` | No | The numeric GitHub user IDs of the site's admins, separated by commas. `https://api.github.com/users/<username>` shows a user's `id`. Sign-in (#8) reads it. |
+| `OAUTH_CLIENT_ID` | No | The client ID of this environment's GitHub OAuth app from step 3. Without it, no one can sign in. |
+| `ADMIN_GITHUB_IDS` | No | The numeric GitHub user IDs of the site's admins, separated by commas. `https://api.github.com/users/<username>` shows a user's `id`. When it's empty, the site has no admins. |
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
 | `GH_WEB_URL` | No | github.com itself, which sign-in sends people to, as an `https` URL. Leave it empty, and the Worker uses `https://github.com`. |
 
@@ -137,9 +138,15 @@ stops before it changes anything.
 
 ### The Worker's secrets
 
-The Worker reads no secrets yet. Each secret it reads is listed under
-`secrets.required` in `apps/web/wrangler.jsonc`, gets a row here, and goes in
-each environment as an environment secret with the same name.
+Each secret the Worker reads is listed under `secrets.required` in
+`apps/web/wrangler.jsonc`, and goes in each environment as an environment
+secret with the same name. The deploy stops before it puts any of them when
+one is missing.
+
+| Name | Kind | What it is |
+|---|---|---|
+| `OAUTH_CLIENT_SECRET` | Environment secret | The client secret of this environment's GitHub OAuth app from step 3. |
+| `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores. Changing it signs everyone out. |
 
 ### On switches
 

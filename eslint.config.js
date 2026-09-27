@@ -47,6 +47,12 @@ export default defineConfig([
     files: ['apps/web/src/**/*.{ts,tsx}'],
     extends: [reactHooks.configs.flat.recommended],
     rules: {
+      // A route sends someone elsewhere by throwing TanStack Router's
+      // redirect(), which is a Response.
+      '@typescript-eslint/only-throw-error': [
+        'error',
+        { allow: [{ from: 'package', package: '@tanstack/router-core', name: 'Redirect' }] },
+      ],
       'no-restricted-imports': [
         'error',
         {
