@@ -6,3 +6,9 @@ packages:
 onlyBuiltDependencies:
   - esbuild
   - workerd
+
+# The Workers test pool pins a miniflare that pulls in sharp 0.35.2, which has
+# GHSA-rgj7-g3m4-5g8c. This lifts only versions below the fix, so it does
+# nothing once the pool moves past it.
+overrides:
+  sharp@<0.35.4: ^0.35.4
