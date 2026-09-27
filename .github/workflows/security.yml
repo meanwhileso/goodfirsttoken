@@ -1,0 +1,174 @@
+name: Security
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+# A job names a finding only when it sits in code the pull request adds or
+# edits, which the diff already shows. Findings elsewhere on main are never
+# named here. security-main.yml files them in code scanning, where only people
+# with write access can see them. docs/architecture.md has the whole picture.
+#
+# Semgrep, CodeQL, and zizmor upload their results to code scanning, which
+# code scanning allows from a pull_request run with this read-only token, fork
+# or not. Code scanning then shows a finding as an annotation only when it sits
+# on a line the pull request changes. Each upload uses the same fixed category
+# as security-main.yml, so it compares with the analysis of the base.
+#
+# The checkout is the test merge commit, so HEAD^1 is the exact commit the
+# pull request merges into.
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # semgrep/semgrep:1.178.0
+      SEMGREP_IMAGE: semgrep/semgrep@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Scan with Semgrep
+        run: |
+          docker run --rm --volume "$PWD:/src" --volume "$RUNNER_TEMP:/out" --workdir /src "$SEMGREP_IMAGE" \
+            semgrep scan --config p/typescript --config p/react --config p/github-actions \
+            --metrics=off --quiet --sarif --output /out/semgrep.sarif
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/semgrep.sarif
+          category: semgrep
+      - name: Fail on high-severity findings this pull request adds
+        run: |
+          # --baseline-commit drops every finding that HEAD^1 already has.
+          # The findings stay in a file this job never uploads.
+          status=0
+          docker run --rm --volume "$PWD:/src" --volume "$RUNNER_TEMP:/out" --workdir /src "$SEMGREP_IMAGE" \
+            semgrep scan --config p/typescript --config p/react --config p/github-actions \
+            --metrics=off --quiet --baseline-commit HEAD^1 \
+            --severity ERROR --error --json --output /out/semgrep-new.json || status=$?
+          if [ "$status" -eq 1 ]; then
+            echo "::error title=Semgrep::This pull request adds a high-severity Semgrep finding. It shows as an annotation on the changed line under Files changed. Maintainers can see every finding in code scanning."
+          fi
+          exit "$status"
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Blocks through the "Code scanning results / CodeQL" check, which fails
+      # on a high or critical alert on a line the pull request changes.
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          # Without it the category holds the workflow path and job, so pull
+          # request analyses would never match the ones from main.
+          category: /language:javascript-typescript
+
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ZIZMOR_VERSION: 1.30.1
+      # The SHA-256 that PyPI publishes for this wheel.
+      ZIZMOR_WHEEL_SHA256: eee12266b793cb87ad4a7e3af2e72404f8a63e3de5eb099b80bf7b1cfd232a8e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zizmor
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          wheel="zizmor-${ZIZMOR_VERSION}-py3-none-manylinux_2_28_x86_64.whl"
+          curl -fsSLO "https://files.pythonhosted.org/packages/py3/z/zizmor/$wheel"
+          echo "$ZIZMOR_WHEEL_SHA256  $wheel" | sha256sum -c -
+          unzip -q -j "$wheel" "zizmor-${ZIZMOR_VERSION}.data/scripts/zizmor" -d "$RUNNER_TEMP/bin"
+          chmod +x "$RUNNER_TEMP/bin/zizmor"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan workflows and actions
+        env:
+          # Read-only, and enough for zizmor's checks that call the GitHub API.
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --quiet --format sarif . > "$RUNNER_TEMP/zizmor.sarif"
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/zizmor.sarif
+          category: zizmor
+      - name: Fail on high-severity findings
+        run: |
+          # Offline, with a pinned zizmor, a finding can only come from a
+          # workflow change. So this checks every workflow and names none.
+          status=0
+          zizmor --offline --quiet --min-severity high . > /dev/null || status=$?
+          if [ "$status" -eq 14 ]; then
+            echo "::error title=zizmor::zizmor found a high-severity problem in a workflow or action. It shows as an annotation when it is on a line this pull request changes. Maintainers can see every finding in code scanning."
+            exit 1
+          fi
+          exit "$status"
+
+  osv-scanner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OSV_SCANNER_VERSION: 2.6.0
+      # From the release's osv-scanner_SHA256SUMS, kept here so the binary
+      # and its checksum come from different places.
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+    # This job uploads nothing. OSV-Scanner's SARIF gives no line numbers, so
+    # code scanning could annotate an advisory already on main on a pull
+    # request that touches the lockfile.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install OSV-Scanner
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "$OSV_SCANNER_SHA256  osv-scanner_linux_amd64" | sha256sum -c -
+          install -m 755 osv-scanner_linux_amd64 "$RUNNER_TEMP/bin/osv-scanner"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan the lockfile before and after this pull request
+        run: |
+          mkdir -p "$RUNNER_TEMP/before"
+          git show HEAD^1:pnpm-lock.yaml > "$RUNNER_TEMP/before/pnpm-lock.yaml"
+          # Exit code 1 means advisories were found. The next step decides
+          # which ones count. Any other failure stops the job.
+          osv-scanner scan source --lockfile "$RUNNER_TEMP/before/pnpm-lock.yaml" \
+            --format json --output-file "$RUNNER_TEMP/before.json" || [ $? -eq 1 ]
+          osv-scanner scan source --lockfile pnpm-lock.yaml \
+            --format json --output-file "$RUNNER_TEMP/after.json" || [ $? -eq 1 ]
+      - name: Fail on high or critical advisories this pull request adds
+        run: node scripts/new-advisories.mjs "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/after.json"
+
+  dependency-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Compares the dependency graph before and after the pull request, and
+      # names only the packages the pull request adds.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime, development, unknown
+          license-check: false
