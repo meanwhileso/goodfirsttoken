@@ -230,6 +230,14 @@ To start staging deploys, once #32 merges:
   their settings as secrets.
 - Set the repository variable `DEPLOY_STAGING` to `true`.
 
+Once #39 merges:
+
+- Keep CodeQL default setup off, and turn on private vulnerability reporting and Dependabot alerts.
+- Run "Security on main" by hand twice, and check that the second run files no new code scanning alerts.
+- Open one pull request from a fork, and check that every check runs and passes on it.
+- Then add the security jobs as required checks, and the code scanning ruleset, in the order
+  [docs/architecture.md](docs/architecture.md) gives.
+
 Once #33 merges:
 
 - Attach the static host's custom domain with cookie-free settings.
