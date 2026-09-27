@@ -385,6 +385,27 @@ describe('the slots', () => {
     );
   });
 
+  test("with two projects keeping issues in one repo, a blocked donor's claim counts against each project's cap", async () => {
+    const web = 'sample-owner/sample-web';
+    await changeSettings(db, repo, { claimsPerIssue: 1 }, maintainer.githubId, t0);
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo, claimsPerIssue: 3 }, web);
+    await saveIssues(db, [
+      { issue, project: repo, title: 'As sample-app cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+      { issue, project: web, title: 'As sample-web cached it', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+    await claim(kenji, 'codex', 1);
+    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0);
+
+    // kenji's claim takes sample-app's one slot, though the page shows no lane for it.
+    expect([await waitingOnHomepage(repo), await waitingOnHomepage(web)]).toEqual([0, 1]);
+    const page = await load();
+    expect(page).toMatchObject({ closedBecause: null, slots: 3, title: 'As sample-web cached it' });
+    expect([lanesInPlay(page.view), slotsTaken(page.view)]).toEqual([[], 1]);
+    const html = await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text();
+    expect(html).toContain('1 of 3 slots taken');
+    expect(html).toContain(`/goodfirsttoken:work ${issue}`);
+  });
+
   test('with no copy waiting, the page follows the oldest that would be but for a PR the sync saw, and shows that PR', async () => {
     const web = 'sample-owner/sample-web';
     await registeredProject({ tags: ['help wanted'], issueRepo: repo }, web);
