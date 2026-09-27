@@ -103,6 +103,17 @@ export function sendFile(req, res, root, file, size, headers) {
 const escapeHtml = (text) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+// Lists the pages in `folder`, which must be root or inside it. Like
+// sendFile, this checks next to the read, so a caller can't forget.
+async function sendFolder(res, root, folder) {
+  const base = path.resolve(root) + path.sep;
+  const dir = path.resolve(folder) + path.sep;
+  if (!dir.startsWith(base)) return notFound(res);
+  const names = await readdir(dir).catch(() => null);
+  if (!names) return notFound(res);
+  sendListing(res, `${path.basename(dir)}/`, names);
+}
+
 // Answers with a list of the HTML and markdown pages in a folder, linked.
 export function sendListing(res, title, names) {
   const pages = names.filter((name) => /\.(html|md)$/.test(name)).sort();
@@ -123,11 +134,8 @@ export function createStaticServer(root) {
     }
     // A folder URL, whose folder has no index.html, lists the folder's pages.
     const isFolder = file !== null && new URL(req.url ?? '/', 'http://localhost').pathname.endsWith('/');
-    const folder = isFolder ? path.dirname(file) : null;
-    const inside = folder !== null && (folder === base || folder.startsWith(base + path.sep));
-    const names = inside ? await readdir(folder).catch(() => null) : null;
-    if (!names) return notFound(res);
-    sendListing(res, `${path.basename(folder)}/`, names);
+    if (!isFolder) return notFound(res);
+    return sendFolder(res, base, path.dirname(file));
   });
 }
 
