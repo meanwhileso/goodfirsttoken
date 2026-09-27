@@ -237,6 +237,15 @@ deploy again. A new hostname's certificate can take a few minutes, so a
 static host that can't be reached right after you attach it may only need
 another run.
 
+When the step says the static host already has a file with other bytes
+than the build's, a file's content changed while its name stayed the same.
+Browsers and Cloudflare's cache may already keep the old one for a year
+under that name, so the deploy won't replace it. Only deleting that object
+from the bucket gets past the stop. Delete it in the dashboard, under R2,
+purge its URL from the zone's cache under Caching, and run the deploy
+again. Visitors who already have the old file keep it. Then find why the
+build gave changed content an old name, so it doesn't happen again.
+
 Byte ranges, which Safari needs to play the video, are checked by hand. No
 page links to the launch video yet. Its name starts with
 `good-first-token-launch-`, and the deploy's build step lists it. After the

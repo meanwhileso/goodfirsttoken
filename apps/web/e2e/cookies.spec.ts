@@ -22,12 +22,15 @@ test('the cookie check reads the responses of every page and request, from the s
   expect(urls).toContain(`${SITE}/healthz`);
 });
 
-// A server on this machine that answers every request with the given
-// headers and body.
-async function probe(host: string, headers: Record<string, string>, body: string) {
-  const server = createServer((_req, res) => {
-    res.writeHead(200, headers);
-    res.end(body);
+type Answer = { status?: number; headers: Record<string, string>; body?: string };
+
+// A server on this machine that answers each path with its answer, and any
+// other path with the answer for '*'.
+async function probe(host: string, answers: Record<string, Answer>) {
+  const server = createServer((req, res) => {
+    const answer = answers[req.url ?? ''] ?? answers['*'] ?? { status: 404, headers: {} };
+    res.writeHead(answer.status ?? 200, answer.headers);
+    res.end(answer.body ?? '');
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -42,20 +45,26 @@ test.describe('a page whose site and static host answer with bad cookies', () =>
   test.use({
     // eslint-disable-next-line no-empty-pattern -- Playwright reads the fixtures a function needs from this pattern.
     cookieHosts: async ({}, use) => {
-      const staticHost = await probe(
-        '127.0.0.1',
-        {
-          'content-type': 'text/css',
-          'access-control-allow-origin': '*',
-          'set-cookie': '__cf_bm=abc; Path=/; Secure; HttpOnly',
+      const staticHost = await probe('127.0.0.1', {
+        '*': {
+          headers: {
+            'content-type': 'text/css',
+            'access-control-allow-origin': '*',
+            'set-cookie': '__cf_bm=abc; Path=/; Secure; HttpOnly',
+          },
+          body: 'p { color: rgb(1, 2, 3); }',
         },
-        'p { color: rgb(1, 2, 3); }',
-      );
-      const site = await probe(
-        'localhost',
-        { 'content-type': 'text/html', 'set-cookie': 'session=abc; Path=/' },
-        `<!doctype html><link rel="stylesheet" href="${staticHost.origin}/assets/probe.css"><p>probe</p>`,
-      );
+      });
+      const site = await probe('localhost', {
+        '/': {
+          headers: { 'content-type': 'text/html', 'set-cookie': 'session=abc; Path=/' },
+          body: `<!doctype html><link rel="stylesheet" href="${staticHost.origin}/assets/probe.css"><p>probe</p>`,
+        },
+        // The request fixture follows a redirect, so only its cookie jar
+        // keeps the cookie this one sets.
+        '/redirect': { status: 302, headers: { location: '/landed', 'set-cookie': 'redirected=1; Path=/' } },
+        '/landed': { headers: { 'content-type': 'text/plain' }, body: 'landed' },
+      });
       await use({ site: site.origin, staticHost: staticHost.origin });
       site.close();
       staticHost.close();
@@ -68,14 +77,18 @@ test.describe('a page whose site and static host answer with bad cookies', () =>
       'the site set session without Secure',
       'the static host set a cookie: __cf_bm=abc; Path=/; Secure; HttpOnly',
       "a browser's cookie jar holds session from the site, which is not a host-only __Host- cookie",
+      "the request fixture's cookie jar holds redirected from the site, which is not a host-only __Host- cookie",
     ],
   });
 
-  test('fails the check that runs after it', async ({ page, cookieHosts }) => {
+  test('fails the check that runs after it', async ({ page, request, cookieHosts }) => {
     await page.goto(`${cookieHosts.site}/`);
+    const landed = await request.get(`${cookieHosts.site}/redirect`);
 
-    // The stylesheet applied, so both answers reached the page.
+    // The stylesheet applied, so both of the page's answers reached it, and
+    // the request followed the redirect.
     await expect(page.locator('p')).toHaveCSS('color', 'rgb(1, 2, 3)');
+    expect(await landed.text()).toBe('landed');
   });
 });
 

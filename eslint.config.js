@@ -4,6 +4,23 @@ import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+// A spec that loads `test` from Playwright itself skips the cookie check in
+// apps/web/e2e/fixtures.ts.
+const PLAYWRIGHT_TEST = {
+  selector:
+    ':matches(CallExpression[callee.name="require"], ImportExpression) > Literal[value=/^(@playwright\\u002Ftest|playwright\\u002Ftest)$/]',
+  message: 'Import test from ./fixtures, which checks every cookie the tests see.',
+};
+
+// Two options tell the cookie check which cookies to accept and which
+// origins are the site's. Only cookies.spec.ts may set them, to show the
+// check reports bad cookies. Anywhere else they would let a bad cookie pass.
+const COOKIE_OPTIONS = /^(expectedCookieProblems|cookieHosts)$/;
+const COOKIE_OPTION_NAMES = ['Identifier[name=', 'Literal[value=', 'TemplateElement[value.raw='].map((node) => ({
+  selector: `${node}${String(COOKIE_OPTIONS)}]`,
+  message: 'Only cookies.spec.ts may set the cookie check\'s options. Anywhere else they would let a bad cookie pass.',
+}));
+
 export default defineConfig([
   {
     ignores: [
@@ -61,14 +78,15 @@ export default defineConfig([
           })),
         },
       ],
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector:
-            ':matches(CallExpression[callee.name="require"], ImportExpression) > Literal[value=/^(@playwright\\u002Ftest|playwright\\u002Ftest)$/]',
-          message: 'Import test from ./fixtures, which checks every cookie the tests see.',
-        },
-      ],
+      'no-restricted-syntax': ['error', PLAYWRIGHT_TEST, ...COOKIE_OPTION_NAMES],
+    },
+  },
+  {
+    // The spec that shows the cookie check reports bad cookies, the one
+    // place its options may be set.
+    files: ['apps/web/e2e/cookies.spec.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', PLAYWRIGHT_TEST],
     },
   },
   {

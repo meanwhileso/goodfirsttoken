@@ -435,9 +435,13 @@ A deployment without one serves the same files from the Worker.
   up. The upload never creates the bucket, whose custom domain is attached
   by hand.
 - **The check.** The same step then fetches one file of each kind from
-  `STATIC_ORIGIN`, as a browser would, and compares the answer with what
-  the upload stored. [how-it-works.md](how-it-works.md#static-assets) has
-  the rule it enforces. Byte ranges are left to the check by hand in
+  `STATIC_ORIGIN`, as a browser would, without following a redirect. It
+  looks at the answer's status, its `Content-Type` and `Cache-Control`,
+  which have to match what the upload stored, its
+  `Access-Control-Allow-Origin`, and any `Set-Cookie`. It doesn't read the
+  body, since the upload already compared the bytes in the bucket.
+  [how-it-works.md](how-it-works.md#static-assets) has the rule it
+  enforces. Byte ranges are left to the check by hand in
   [self-hosting.md](self-hosting.md#the-static-host). How Cloudflare's
   cache answers a range for a file it doesn't hold yet couldn't be
   confirmed while building this, and a wrong guess would block deploys.
@@ -584,10 +588,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   the GitHub fake, are not checked. The site sets no cookies yet, so
   `cookies.spec.ts` checks that the fixture sees the responses of pages and
   requests from both hosts. It also runs two servers of its own that answer
-  with bad cookies, has the fixture take them as the site and the static
-  host, and expects the fixture to report each cookie. Chromium doesn't
-  report the `Set-Cookie` of an answer a route makes up, so those answers
-  have to come over the network.
+  with bad cookies, one of them on a redirect the `request` fixture
+  follows. It has the fixture take them as the site and the static host,
+  and expects the fixture to report each cookie. Chromium doesn't report
+  the `Set-Cookie` of an answer a route makes up, so those answers have to
+  come over the network. The two fixture options it sets for this,
+  `cookieHosts` and `expectedCookieProblems`, would let a bad cookie pass
+  anywhere else, so a lint rule allows them only in `cookies.spec.ts`.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
   clock paused so the live wall holds still. Up to 2% of pixels may differ,
