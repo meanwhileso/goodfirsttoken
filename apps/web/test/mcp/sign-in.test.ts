@@ -83,6 +83,32 @@ function textOf(html: string): string {
 }
 
 /**
+ * The words a person sees on a page: its text, read by the runtime's HTML
+ * parser, leaving out attributes and what's inside scripts and styles.
+ */
+async function visibleText(html: string): Promise<string> {
+  const seen: string[] = [];
+  let hidden = 0;
+  await new HTMLRewriter()
+    .on('script, style', {
+      element(element) {
+        hidden += 1;
+        element.onEndTag(() => {
+          hidden -= 1;
+        });
+      },
+    })
+    .onDocument({
+      text(text) {
+        if (hidden === 0) seen.push(text.lastInTextNode ? `${text.text} ` : text.text);
+      },
+    })
+    .transform(new Response(html))
+    .text();
+  return textOf(seen.join(''));
+}
+
+/**
  * An agent's sign-in for `login` up to GitHub's return: the person approves
  * the agent and picks themselves on GitHub. Returns their browser and where
  * GitHub sends it back to, which the test then follows.
@@ -185,7 +211,7 @@ test("the error page gives the site's own reason, and words an agent put in its 
 
   const answer = await new Browser().fetch(url.toString());
   const html = await answer.text();
-  const shown = textOf(html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]*>/g, ' '));
+  const shown = await visibleText(html);
   const back = links(html).find((link) => link.origin === 'https://phish.example');
 
   expect(answer.status).toBe(400);
