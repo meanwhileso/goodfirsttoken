@@ -19,7 +19,8 @@ We most want to hear about:
 
 Our own security scans follow the same rule as your reports. What they find
 on `main` stays private until it's fixed. It never goes in an issue, a
-comment, or a public CI log.
+comment, or a public CI log, apart from the one exception at the end of this
+list.
 
 - **Reports** come in through private vulnerability reporting, as a draft
   security advisory that only you and the maintainers can see.
@@ -34,3 +35,8 @@ comment, or a public CI log.
   temporary private fork. CI can't reach that fork, so run `pnpm check` and
   `pnpm test` there by hand. A maintainer merges the fix and publishes the
   advisory at the same time.
+- **An advisory already published for a dependency** is the one exception.
+  When an alert names an upstream advisory that anyone can read, for a
+  version `main`'s lockfile already shows, the fix can go in an ordinary pull
+  request that names the advisory. A finding in our own code always goes
+  through the private fork.
