@@ -348,7 +348,7 @@ describe('projects asking for help', () => {
 
   test("leave out an issue once a claim on it has opened a PR, until GitHub says the PR merged or closed, as the issue's room does", async () => {
     await registeredProject({ tags: ['help wanted'], claimsPerIssue: 3 });
-    await saveIssues(db, issues(repo, [['help wanted'], ['help wanted'], ['help wanted'], ['help wanted']]));
+    await saveIssues(db, issues(repo, [['help wanted'], ['help wanted'], ['help wanted'], ['help wanted'], ['help wanted']]));
     const opened = async (number: number, person: { githubId: number; login: string }, state?: 'open' | 'merged' | 'closed') => {
       const pr = { repo, number: 700 + number, url: `https://github.com/${repo}/pull/${String(700 + number)}` };
       const claim = await claimOn(number, person, { state: 'pr_opened', submittedAt: t0 - HOUR, pr });
@@ -364,8 +364,10 @@ describe('projects asking for help', () => {
     // #3: its PR closed without merging, so the issue takes claims again.
     await opened(3, sam, 'closed');
     // #4: nobody on it.
+    // #5: its PR merged, so the room takes claims again.
+    await opened(5, admin, 'merged');
 
-    expect(await waiting()).toBe(2);
+    expect(await waiting()).toBe(3);
   });
 
   test('come in order of issues waiting, then the newest added, and the total counts past the limit', async () => {

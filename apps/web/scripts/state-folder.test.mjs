@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, beforeEach, test } from 'node:test';
-import { emptyStateFolder } from './migrate-local.mjs';
+import { emptyStateFolder } from './state-folder.mjs';
 
 // `--fresh` empties the local data folder, so it must never reach past the
 // app's .wrangler folder. Each test builds an app folder and a folder
