@@ -7,9 +7,10 @@ staging, checks it, and then deploys production.
 You need:
 
 - A GitHub account, with a copy of this repo under it.
-- A Cloudflare account whose plan includes Workers, D1, KV, and Queues.
+- A Cloudflare account whose plan includes Workers, D1, KV, and Queues, and
+  R2 if you want a static host.
 - A domain on Cloudflare, if you want the site on your own domain. Without
-  one, it is served on workers.dev.
+  one, it is served on workers.dev. A static host needs one too.
 
 Local development needs none of this. [CONTRIBUTING.md](../CONTRIBUTING.md)
 covers it.
@@ -53,10 +54,12 @@ in step 5.
 5. **Make a credential.** Each environment uses one of these two forms:
    - **An API token.** In the dashboard, go to My Profile, API Tokens, and
      Create Token. Start from the Edit Cloudflare Workers template, and add
-     two permissions: Account, D1, Edit, and Account, Queues, Edit. Under
-     Account Resources, pick your account. Under Zone Resources, pick the
-     zones of your domains, or all zones if you have none. Staging and
-     production can share one token or have one each.
+     two permissions: Account, D1, Edit, and Account, Queues, Edit. With a
+     static host, check that it also has Account, Workers R2 Storage, Edit,
+     and add it if not. Under Account Resources, pick your account. Under
+     Zone Resources, pick the zones of your domains, or all zones if you
+     have none. Staging and production can share one token or have one
+     each.
    - **A credential broker.** This is a service you run that trades the deploy
      job's GitHub OIDC token for a short-lived Cloudflare token, so no
      long-lived token sits in GitHub. [The credential broker](#the-credential-broker)
@@ -66,6 +69,10 @@ in step 5.
    environment that also has its own API token then has both forms, and its
    deploy stops with "Keep only one". Set the broker URL on the repository
    only when both environments use the broker.
+6. **Set up a static host, if you want one.** It serves the site's scripts,
+   styles, fonts, and video from a hostname of its own, with long caching
+   and no cookies. [The static host](#the-static-host) says how. Without
+   one, the Worker serves them.
 
 ## 3. Create the GitHub OAuth apps
 
@@ -121,6 +128,7 @@ variables. In a private repo, either works.
 | `SIGN_IN_LIMITER_NAMESPACE_ID` | Yes | A whole number you pick for the rate limiter on sign-in, like `1001`. It names the limiter within your Cloudflare account, and there is nothing to create. If staging and production share an account, give them different numbers. |
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
+| `STATIC_ORIGIN` | No | The static host's origin, like `https://static.example.org`, set up as [The static host](#the-static-host) says. Pages then load the built files from there, and the deploy uploads them to `<WORKER_NAME>-static`. When it's empty, the Worker serves them. |
 | `OAUTH_CLIENT_ID` | No | The client ID of this environment's GitHub OAuth app from step 3. Without it, no one can sign in. |
 | `ADMIN_GITHUB_IDS` | No | The numeric GitHub user IDs of the site's admins, separated by commas. `https://api.github.com/users/<username>` shows a user's `id`. When it's empty, the site has no admins. |
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
@@ -187,6 +195,75 @@ variable or set it to anything else.
   by hand.
 - A deploy reuses the database, the KV namespace, and the queues it finds, so
   running it again loses nothing.
+
+## The static host
+
+A static host serves the site's built files from an R2 bucket on a hostname
+of its own, like `static.example.org`. Cloudflare's cache keeps them close
+to visitors, browsers keep them for a year, and the site's cookies never
+reach them. R2 attaches a custom domain only from a zone in the same
+Cloudflare account. Set it up once for each environment:
+
+1. **Create the bucket.** In the Cloudflare dashboard, go to R2 and create a
+   bucket named `<WORKER_NAME>-static`, with that environment's Worker name.
+   The deploy uploads to it and never creates it.
+2. **Attach its hostname.** In the bucket's settings, under Custom Domains,
+   connect a hostname in one of your zones. Use one the site doesn't use.
+   Leave the bucket's r2.dev URL turned off.
+3. **Let the site's pages use the files.** A browser loads fonts and
+   scripts from another origin only when the answer carries
+   `Access-Control-Allow-Origin`. In the zone, go to Rules and create a
+   response header transform rule. Match requests whose hostname equals the
+   static host's, and set the static header `Access-Control-Allow-Origin`
+   to `*`.
+4. **Keep cookies away from the hostname.** Leave off every Cloudflare
+   feature that sets a cookie. Bot Fight Mode sets `__cf_bm`, and a
+   challenge sets `cf_clearance`. Bot Fight Mode covers the whole zone.
+
+   Cloudflare's docs don't say which domain these cookies are set for.
+   Examples published outside them show `__cf_bm` set with the zone's own
+   domain as its `Domain`, and a browser sends such a cookie to every
+   hostname in the zone, the static host's included. We have not confirmed
+   this. Until someone does, take one of two ways:
+   - Put the static host on a domain of its own, in a zone that serves
+     nothing else. Then challenges and Bot Fight Mode on the site's zone
+     can't reach it.
+   - Or keep Bot Fight Mode and every challenge off for the whole zone the
+     site and the static host share, the site's hostname included.
+
+   The deploy's check sees only the cookies the static host itself sets.
+   It can't see one the site's hostname sets for the whole zone.
+5. **Set `STATIC_ORIGIN`** in the environment to `https://` and the
+   hostname, like `https://static.example.org`, and deploy.
+
+Each deploy checks the static host before it changes anything else, as
+[how-it-works.md](how-it-works.md#static-assets) describes. When the step
+"Upload the built files to the static host, and check it" fails, its log
+names each problem. Fix it on the hostname or in the bucket, and run the
+deploy again. A new hostname's certificate can take a few minutes, so a
+static host that can't be reached right after you attach it may only need
+another run.
+
+When the step says the static host already has a file with other bytes
+than the build's, a file's content changed while its name stayed the same.
+Browsers and Cloudflare's cache may already keep the old one for a year
+under that name, so the deploy won't replace it. Only deleting that object
+from the bucket gets past the stop. Delete it in the dashboard, under R2,
+purge its URL from the zone's cache under Caching, and run the deploy
+again. Visitors who already have the old file keep it. Then find why the
+build gave changed content an old name, so it doesn't happen again.
+
+Byte ranges, which Safari needs to play the video, are checked by hand. No
+page links to the launch video yet. Its name starts with
+`good-first-token-launch-`, and the deploy's build step lists it. After the
+first deploy with the static host, run:
+
+```bash
+curl -s -o /dev/null -D - -H 'Range: bytes=0-99' https://static.example.org/assets/<video file>
+```
+
+It answers `206`, with `content-range: bytes 0-99/` and the file's size, and
+no `set-cookie`.
 
 ## The credential broker
 

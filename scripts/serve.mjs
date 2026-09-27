@@ -30,6 +30,10 @@ export function contentType(file) {
   return TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
 }
 
+export function knownType(file) {
+  return Object.hasOwn(TYPES, path.extname(file).toLowerCase());
+}
+
 // Returns { start, end } for a satisfiable single range, { unsatisfiable: true }
 // for one past the end, or null when the header is missing or malformed.
 export function parseRange(header, size) {
@@ -62,36 +66,47 @@ export function resolvePath(root, urlPath) {
   return file === root || file.startsWith(root + path.sep) ? file : null;
 }
 
+export function notFound(res) {
+  res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+  res.end('Not found\n');
+}
+
+// Sends a file with the given headers, or the byte range the request asks
+// for. `size` is the file's size in bytes. The file must be inside root. Its
+// callers check that already, and this checks again next to the read, so a
+// caller can't forget.
+export function sendFile(req, res, root, file, size, headers) {
+  file = path.resolve(file);
+  if (!file.startsWith(path.resolve(root) + path.sep)) return notFound(res);
+  headers = { ...headers, 'accept-ranges': 'bytes' };
+  const range = parseRange(req.headers.range, size);
+  if (range?.unsatisfiable) {
+    res.writeHead(416, { ...headers, 'content-range': `bytes */${size}` });
+    res.end();
+    return;
+  }
+  if (range) {
+    res.writeHead(206, {
+      ...headers,
+      'content-range': `bytes ${range.start}-${range.end}/${size}`,
+      'content-length': range.end - range.start + 1,
+    });
+    if (req.method === 'HEAD') return res.end();
+    pipeline(createReadStream(file, range), res, () => {});
+    return;
+  }
+  res.writeHead(200, { ...headers, 'content-length': size });
+  if (req.method === 'HEAD') return res.end();
+  pipeline(createReadStream(file), res, () => {});
+}
+
 export function createStaticServer(root) {
   const base = path.resolve(root);
   return createServer(async (req, res) => {
     const file = resolvePath(base, req.url ?? '/');
     const info = file && (await stat(file).catch(() => null));
-    if (!info?.isFile()) {
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('Not found\n');
-      return;
-    }
-    const headers = { 'content-type': contentType(file), 'accept-ranges': 'bytes', 'cache-control': 'no-store' };
-    const range = parseRange(req.headers.range, info.size);
-    if (range?.unsatisfiable) {
-      res.writeHead(416, { ...headers, 'content-range': `bytes */${info.size}` });
-      res.end();
-      return;
-    }
-    if (range) {
-      res.writeHead(206, {
-        ...headers,
-        'content-range': `bytes ${range.start}-${range.end}/${info.size}`,
-        'content-length': range.end - range.start + 1,
-      });
-      if (req.method === 'HEAD') return res.end();
-      pipeline(createReadStream(file, range), res, () => {});
-      return;
-    }
-    res.writeHead(200, { ...headers, 'content-length': info.size });
-    if (req.method === 'HEAD') return res.end();
-    pipeline(createReadStream(file), res, () => {});
+    if (!info?.isFile()) return notFound(res);
+    sendFile(req, res, base, file, info.size, { 'content-type': contentType(file), 'cache-control': 'no-store' });
   });
 }
 

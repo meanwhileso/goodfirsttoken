@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 // Sign-in against the GitHub fake that runs beside the app. wrangler.jsonc
 // runs the app as development, with the fake's OAuth app.

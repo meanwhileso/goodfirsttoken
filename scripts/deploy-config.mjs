@@ -50,6 +50,17 @@ const DOMAIN_VARS = ['PRIMARY_DOMAIN', 'REDIRECT_DOMAINS'];
 const GITHUB_URL_VARS = ['GH_API_URL', 'GH_WEB_URL'];
 const HTTPS_URL = /^https:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/;
 
+// The static host's origin, like https://static.example.org. It is not one
+// of the Worker's variables. The build reads it to give every built file's
+// URL that origin, and the upload step reads it to find the bucket. This
+// script checks it with the other settings, before anything is built.
+export const STATIC_ORIGIN = 'STATIC_ORIGIN';
+// The R2 bucket behind the static host is <WORKER_NAME>-static, like every
+// other resource. The deploy never creates it, because its custom domain is
+// attached by hand once, as docs/self-hosting.md describes.
+export const STATIC_BUCKET = 'static';
+export const staticBucketName = (worker) => `${worker}-${STATIC_BUCKET}`;
+
 const ACCOUNT_ID = /^[0-9a-f]{32}$/i;
 const KV_ID = /^[0-9a-f]{32}$/i;
 const D1_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -78,6 +89,7 @@ export function settingsFor(local) {
     ...(local.kv_namespaces ?? []).map((kv) => ({ name: `${kv.binding}_ID`, required: false })),
     ...(local.ratelimits ?? []).map((limiter) => ({ name: `${limiter.name}_NAMESPACE_ID`, required: true })),
     ...DOMAIN_VARS.map((name) => ({ name, required: false })),
+    { name: STATIC_ORIGIN, required: false },
     ...Object.keys(local.vars ?? {})
       .filter((name) => name !== 'ENVIRONMENT' && !DOMAIN_VARS.includes(name))
       .map((name) => ({ name, required: false })),
@@ -95,7 +107,9 @@ export function settingsFor(local) {
 
 // Returns the deploy config for the target, and every deployment-specific
 // value in it (account, names, IDs, domains) so the caller can mask them in
-// logs. Throws with every missing or malformed setting listed.
+// logs. STATIC_ORIGIN is checked and masked here too, with the static host's
+// bucket name, though the config does not hold them. Throws with every
+// missing or malformed setting listed.
 export function deployConfig(local, target, env) {
   if (!TARGETS.includes(target)) throw new Error(`The target has to be staging or production. It was "${target}".`);
   checkLocalConfig(local);
@@ -136,6 +150,24 @@ export function deployConfig(local, target, env) {
   }
   if (redirects.length && !primary) problems.push('REDIRECT_DOMAINS is set, so PRIMARY_DOMAIN has to be too.');
   if (primary && redirects.includes(primary)) problems.push('REDIRECT_DOMAINS includes PRIMARY_DOMAIN.');
+
+  // The static host needs a hostname of its own, so the site's cookies never
+  // reach it.
+  const staticOrigin = read(STATIC_ORIGIN).toLowerCase().replace(/\/$/, '');
+  if (staticOrigin) {
+    const host = staticOrigin.replace(/^https:\/\//, '');
+    if (!staticOrigin.startsWith('https://') || !DOMAIN.test(host)) {
+      problems.push(`${STATIC_ORIGIN} is not an https origin, like https://static.example.org.`);
+    } else if (host === primary || redirects.includes(host)) {
+      problems.push(`${STATIC_ORIGIN} is on a domain the site uses. The static host needs a hostname of its own.`);
+    }
+    // Masks are case-sensitive, and the build and upload steps read the
+    // setting as it is.
+    mask(read(STATIC_ORIGIN));
+    mask(staticOrigin);
+    mask(host);
+    named(STATIC_BUCKET);
+  }
 
   const config = { name: worker, account_id: account };
   for (const [key, value] of Object.entries(local)) {
