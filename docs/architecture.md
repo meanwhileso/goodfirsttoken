@@ -1388,11 +1388,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
   set. Playwright's preview sets it to `apps/web/.wrangler/e2e-state` and
-  runs the migrations with `--fresh`, which empties that folder first. It
-  empties only a folder inside `apps/web/.wrangler`, checked after every
-  symlink on the way is followed, so a link there can't point it at another
-  folder. So the tests start from nothing, locally as in CI, whatever
-  `pnpm dev` holds.
+  runs the migrations with `--fresh`, which empties that folder first,
+  through `scripts/state-folder.mjs`. It empties only a folder inside
+  `apps/web/.wrangler`, checked after every symlink on the way is followed,
+  so a link there can't point it at another folder. So the tests start from
+  nothing, locally as in CI, whatever `pnpm dev` holds.
   Tests in a file run in order, and `home.spec.ts` counts on it: its first
   test checks the empty homepage, and its last ones seed it.
 - **Issue page tests** load the page's data from real rooms, fetch the page
@@ -1459,9 +1459,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `packages/github-fake/test/`.
 - **The tests for `scripts/`** cover the static server, the skill build, the
   deploy, and the check for advisories a pull request adds. They use Node's
-  own test runner, and so does `apps/web/scripts/migrate-local.test.mjs`,
-  which checks what `--fresh` may empty. The deploy's tests fake Cloudflare's API, GitHub's OIDC
-  endpoint, and Wrangler, and check the scripts, the deploy workflows, and
+  own test runner, and so does `apps/web/scripts/state-folder.test.mjs`,
+  which checks what `--fresh` may empty. The deploy's tests fake
+  Cloudflare's API, GitHub's OIDC endpoint, and Wrangler, and check the
+  scripts, the deploy workflows, and
   [self-hosting.md](self-hosting.md) against each other.
 
 `pnpm test` runs all of them but Playwright. `pnpm test:e2e` runs Playwright.
