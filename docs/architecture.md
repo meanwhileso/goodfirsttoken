@@ -654,12 +654,18 @@ streams' in [Text streams](how-it-works.md#text-streams).
   worked out from the message's `attempts`. A malformed message is asked for
   again at once, so its tries take it to the dead-letter queue, where it can
   be read.
-- **The queue's settings** are in `wrangler.jsonc`, and each retry's wait is
-  in `src/feed/queue.ts`. What they add up to is under
-  [Live feeds](how-it-works.md#live-feeds). Cloudflare allows at most 100
-  retries, and a wait of at most 24 hours. The deploy makes the queue with
-  no retention setting, so it keeps messages for Cloudflare's default time,
-  which bounds the tries too.
+- **The queue's settings** are in `wrangler.jsonc`, and the wait for each
+  message the consumer asks for again is in `src/feed/queue.ts`. What they
+  add up to is under [Live feeds](how-it-works.md#live-feeds). Two waits
+  apply. `retry({ delaySeconds })` sets the wait for a message the consumer
+  asks for again. The consumer's `retry_delay` in `wrangler.jsonc` is the
+  wait when the batch fails as a whole, as when the consumer throws or runs
+  out of time, and no message was asked for again. Cloudflare allows at most
+  100 retries, and a wait of at most 24 hours. The deploy makes the queue
+  with no retention setting, so it keeps messages for Cloudflare's default
+  time, which is 4 days on paid plans and can be set up to 14. `max_retries`
+  is set so the retries end well inside that time, since a message the
+  queue deletes never reaches the dead-letter queue.
 - **Order.** Queues promises no order, and with no `max_concurrency` set,
   batches can run at the same time. A feed stores events in the order they
   arrive, and a watcher resumes by the feed's own order, so a reader who

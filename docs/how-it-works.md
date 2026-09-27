@@ -781,13 +781,21 @@ live. No page shows a feed yet. The [text streams](#text-streams) read them.
   it.
 - A message is done once all three of its feeds have it. When one of them
   can't take it, the message comes again to all three: after 30 seconds,
-  then twice as long each time, up to an hour between tries, for 100 tries,
-  which take about 4 days. After the last try, it goes to the dead-letter
-  queue, which nothing reads yet. The other messages in the batch are done.
-- A queue keeps a message at most 4 days, or 24 hours on Cloudflare's
-  Workers Free plan, and deletes it after that, tried or not. So a feed can
-  be down about 4 days, or a day on the Free plan, and still get every
-  event. The room keeps every event whatever happens.
+  then twice as long each time, up to an hour between deliveries. It is
+  retried 90 times, so delivered 91 times in all, over about 84 hours. If
+  the last delivery fails too, it goes to the dead-letter queue, which
+  nothing reads yet. The other messages in the batch are done.
+- When the consumer fails a whole batch, as when it runs out of time, every
+  message in the batch comes again 30 seconds later. That counts as one of
+  its 90 retries.
+- By default a queue keeps a message 4 days, and deletes it after that,
+  delivered or not. The 90 retries end about 12 hours before that, so a
+  message whose feed stays down reaches the dead-letter queue. A feed can
+  be down about 84 hours and still get every event.
+- On Cloudflare's Workers Free plan, a queue keeps a message 24 hours. A
+  feed that fails for longer than that loses those messages: they are
+  deleted, and never reach the dead-letter queue.
+- The room keeps every event, whatever happens to the queue.
 - Queues can deliver a message twice. A feed ignores an event it keeps, or
   got in the last 7 days, so it never shows an event twice.
 

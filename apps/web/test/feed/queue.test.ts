@@ -125,7 +125,8 @@ describe('the feed queue', () => {
 
   test("a message a feed doesn't take comes again after 30 seconds, then twice as long each time, up to an hour", async () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const tries = [1, 2, 3, 7, 8, 50, 100];
+    // A message is delivered at most 91 times: once, and 90 retries.
+    const tries = [1, 2, 3, 7, 8, 50, 91];
 
     const { retried } = await consume(
       tries.map((attempts) => ({ body: feedMessage({ githubId: 4099 }), attempts })),

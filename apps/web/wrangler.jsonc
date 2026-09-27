@@ -62,13 +62,18 @@
     ],
     // The feed queue's consumer (src/feed/queue.ts). What these settings
     // mean for a line on its way to the feeds is under Live feeds in
-    // docs/how-it-works.md. src/feed/queue.ts sets each retry's wait.
+    // docs/how-it-works.md. src/feed/queue.ts sets the wait for each message
+    // it asks for again. retry_delay is the wait for a batch that fails as a
+    // whole. max_retries keeps the last retry well inside the time the queue
+    // keeps a message, so a message that fails every time reaches the
+    // dead-letter queue.
     "consumers": [
       {
         "queue": "feed",
         "max_batch_size": 100,
         "max_batch_timeout": 1,
-        "max_retries": 100,
+        "max_retries": 90,
+        "retry_delay": 30,
         "dead_letter_queue": "feed-dlq"
       }
     ]
