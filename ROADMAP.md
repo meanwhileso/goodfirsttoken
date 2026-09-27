@@ -254,6 +254,8 @@ Once #33 merges, for staging and then production:
 
 Before launch, once #34 merges:
 
+- Open the three seed issues the launch video shows, set their numbers, and their titles if they differ,
+  in `DEMO` in `video/index.html`, and run `pnpm video:render`.
 - Register `meanwhileso/goodfirsttoken` as project number one and tag its seed issues.
 - Run the real harnesses against staging. These runs spend real tokens, so they are never automatic.
 - Set the repository variable `DEPLOY_PRODUCTION` to `true`. The first production deploy is the launch.

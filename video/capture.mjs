@@ -49,7 +49,7 @@ if (mode === 'stills') {
   await browser.close();
 
   mkdirSync(assets, { recursive: true });
-  // These keep the MP4 near 1.2 MB with small text still sharp. The
+  // These keep the MP4 small with small text still sharp. The
   // exhaustive motion search follows a page as it scrolls. Up to 15 seconds
   // between keyframes, besides the ones x264 puts at each cut, keeps a forced
   // keyframe out of the busy issue page.

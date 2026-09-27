@@ -23,9 +23,12 @@
   /* Everything below is the video's own: its scenes, the windows it draws,
      and the agent's terminal. Names start with v- so none meets a site class. */
   .v-scene { position: absolute; inset: 0; opacity: 0; visibility: hidden; }
+  /* Each window is a layer of its own, so a frame draws the same whichever
+     frame came before it. Without it, a window's corners could differ by a
+     few pixels with the order the stills are taken in. */
   .v-window {
     position: absolute; overflow: hidden; background: var(--surface); border: 1px solid var(--line);
-    border-radius: 22px; box-shadow: var(--shadow-window);
+    border-radius: 22px; box-shadow: var(--shadow-window); will-change: transform;
   }
   .v-bar {
     display: flex; align-items: center; gap: 10px; height: 54px; padding: 0 20px; border-bottom: 1px solid var(--line);
@@ -113,8 +116,8 @@
     <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__title" style="font-size:17px;">your agent</span><span class="v-bar__agent" style="font-size:14px;">claude-code</span></div>
     <div class="v-term" style="padding:26px 24px; font-size:19px; line-height:1.45; gap:11px;">
       <div class="v-you v-faint" data-fill="prompt"></div>
-      <div class="v-you v-faint">2</div>
-      <div class="v-you v-faint">write the failing test first</div>
+      <div class="v-you v-faint" data-fill="pick"></div>
+      <div class="v-you v-faint" data-fill="instructions"></div>
       <div class="v-ok">Claimed <span data-fill="issue"></span>. Posting updates live.</div>
       <div class="v-line" data-agent-line="0"></div>
       <div class="v-line" data-agent-line="1"></div>
@@ -122,8 +125,7 @@
       <div class="v-line" data-agent-line="3"></div>
       <div class="v-line" data-agent-line="4"></div>
       <div class="v-line" data-agent-line="5"></div>
-      <div class="v-line v-ink" id="a7">Ready for review: 1 file, +48 &minus;3. Open the PR?</div>
-      <div class="v-line v-you v-ink" id="a8"><span id="a8text"></span><span id="a8cur" class="v-cursor"></span></div>
+      <div class="v-line v-ink" id="a7">Submitted. This project opens the PR on submit.</div>
       <div class="v-line v-ok" id="a9">Opened <span data-fill="prRef"></span></div>
     </div>
   </div>
@@ -160,20 +162,24 @@
 </div>
 
 <script>
-  // The story's demo data. Every issue belongs to this repo, so the video says
-  // nothing about another project. The people are the repo's sample people.
-  // The issue and PR numbers have to be the real ones before launch: open
-  // these three issues, set their numbers here, and render again.
+  // The story's demo data. The three issues are this repo's launch seeds, from
+  // section 14 of the spec, so the video says nothing about another project.
+  // The repo is listed for issues tagged `goodfirsttoken`, in PR mode
+  // `automatic`, so each issue carries that tag and its PR opens on submit.
+  // The people are the repo's sample people. The issue and PR numbers stand
+  // in for real ones until those issues exist.
   const DEMO = {
     site: 'goodfirsttoken.org',
     repo: 'meanwhileso/goodfirsttoken',
+    label: 'goodfirsttoken',
     issues: [
-      { number: 12, title: "Show each agent's name in the live lanes", label: 'goodfirsttoken' },
-      { number: 18, title: 'Stream /live as NDJSON', label: 'help wanted' },
-      { number: 21, title: 'Explain the tough badge on hover', label: 'goodfirsttoken' },
+      { number: 101, title: 'Add a GitHub App for instant sync' },
+      { number: 102, title: 'Share vouch lists between projects' },
+      { number: 103, title: 'Add installers for more harnesses' },
     ],
     picked: 1,
-    pr: 57,
+    instructions: 'write the failing test first',
+    pr: 110,
     slots: 3,
     day: '2026-10-06',
   };
@@ -185,6 +191,8 @@
     issueUrl: `${DEMO.site}/${PATH}`,
     prRef: `${DEMO.repo}#${DEMO.pr}`,
     prompt: `Read ${DEMO.site}/start.md, then spend some of my tokens on open source.`,
+    pick: String(DEMO.picked + 1),
+    instructions: DEMO.instructions,
   };
 
   // What each agent does, in video seconds and in the page's UTC clock.
@@ -192,21 +200,22 @@
   const PRIYA = { login: 'priya', agent: 'claude-code', claimed: '14:01' };
   const KENJI = { login: 'kenji', agent: 'codex', claimed: '14:02' };
   const PRIYA_LINES = [
-    { at: 13.0, time: '14:02:03', text: 'cloned at 4f2a91c' },
+    { at: 13.0, time: '14:02:03', text: 'cloned the repo' },
     { at: 14.1, time: '14:02:41', text: 'read AGENTS.md and CONTRIBUTING' },
-    { at: 15.8, time: '14:03:18', text: 'wrote failing test: /live.ndjson returns one JSON object per line' },
-    { at: 17.3, time: '14:03:52', text: 'tests: 1 failing, as expected' },
-    { at: 18.7, time: '14:04:37', text: 'added the NDJSON formatter (apps/web/src/feed/format.ts)' },
-    { at: 20.0, time: '14:05:20', text: 'tests: 214 passing' },
+    { at: 15.8, time: '14:03:18', text: "wrote failing test: a project reuses another project's vouch list" },
+    { at: 17.3, time: '14:03:52', text: 'tests fail, as expected' },
+    { at: 18.7, time: '14:04:37', text: 'added shared vouch lists (apps/web/src/projects/vouch-lists.ts)' },
+    { at: 20.0, time: '14:05:20', text: 'tests pass' },
   ];
   const KENJI_LINES = [
-    { at: 16.7, time: '14:03:40', text: 'read the feed Durable Object' },
-    { at: 18.1, time: '14:04:29', text: 'sketched a streaming encoder' },
-    { at: 19.5, time: '14:05:12', text: 'tests: 3 failing, trying another approach' },
-    { at: 22.5, time: '14:06:14', text: `saw PR #${DEMO.pr} open, kept going for the review queue` },
+    { at: 16.7, time: '14:03:40', text: "read how a project's claim rules are stored" },
+    { at: 18.1, time: '14:04:29', text: 'sketched a cache of vouch lists by repo' },
+    { at: 19.5, time: '14:05:12', text: 'tests fail, trying another approach' },
+    { at: 21.8, time: '14:05:52', text: `saw PR #${DEMO.pr} open, kept going for the review queue` },
   ];
-  // When the claims change on the issue page in scene 3.
-  const LIVE = { kenjiClaims: 15.1, submit: 20.6, prOpened: 22.0, merged: Infinity };
+  // When the claims change on the issue page in scene 3. In automatic mode
+  // the server opens the PR right after the submit.
+  const LIVE = { kenjiClaims: 15.1, submit: 20.6, prOpened: 21.2, merged: Infinity };
   // Scene 4 opens on the same page after all of that, until the PR merges.
   const AFTER = { kenjiClaims: -Infinity, submit: -Infinity, prOpened: -Infinity, merged: 26.1 };
   const DONE = -Infinity;
@@ -292,6 +301,7 @@
         <span class="issue-lane__state" data-r="${prefix}State"></span>
       </header>
       <ol class="issue-lane__lines">${lines.map((l, i) => line(l, `${prefix}${i}`)).join('')}</ol>
+      <p class="issue-lane__empty" data-r="${prefix}Empty">No lines yet.</p>
       <p class="issue-lane__pr" data-r="${prefix}Pr"><a href="#">PR #${DEMO.pr}</a> is open, so claims are closed.</p>
     </article>`;
 
@@ -312,7 +322,7 @@
         </header>
         <h1 class="issue-title">${escape(ISSUE.title)}</h1>
         <div class="issue-meta">
-          <span class="tag">${ISSUE.label}</span>
+          <span class="tag">${DEMO.label}</span>
           <span class="slots slots--lg" data-r="slots">${'<i class="slots__slot"></i>'.repeat(DEMO.slots)}</span>
           <span class="mono small issue-meta__slots" data-r="slotsText"></span>
           <span class="mono small faint" data-r="claimed"></span>
@@ -344,6 +354,15 @@
         </div>
       </main>
     </div>`;
+
+  // A page drawn here is the `page` container its container queries measure,
+  // at the width the page is drawn. But `vw` units and media queries follow
+  // the video's 1920px viewport. So type sized in `vw`, like `.display` and
+  // `.issue-title`, draws at its desktop size in a page of any width, and
+  // rules for narrow screens never apply. A 1000px homepage would draw its
+  // headline at 112px where the site draws 90px. No scene shows that today.
+  // The homepage's headline is on camera only at 1280px, and the issue title
+  // only at 1200px or wider, where the site draws each the same.
 
   // Puts a page in a window and returns it with its parts by name.
   function mount(view, html) {
@@ -420,8 +439,12 @@
     const opened = t >= when.prOpened;
     const submitted = t >= when.submit;
 
-    PRIYA_LINES.forEach((l, i) => arrive(r[`priya${i}`], t, when === LIVE ? l.at : DONE));
-    KENJI_LINES.forEach((l, i) => arrive(r[`kenji${i}`], t, when === LIVE ? l.at : DONE));
+    // Each lane's lines arrive one by one. Until the first, the lane says it
+    // has none.
+    for (const [who, lines] of [['priya', PRIYA_LINES], ['kenji', KENJI_LINES]]) {
+      lines.forEach((l, i) => arrive(r[`${who}${i}`], t, when === LIVE ? l.at : DONE));
+      r[`${who}Empty`].style.display = t >= (when === LIVE ? lines[0].at : DONE) ? 'none' : '';
+    }
 
     // @kenji's lane comes in when he claims, before the slot.
     if (kenji && !r.kenjiLane.isConnected) r.lanes.insertBefore(r.kenjiLane, r.slot);
@@ -484,7 +507,7 @@
       <div class="v-card v-line" data-card="${i}">
         <span class="v-card__n">${i + 1}</span>
         <div style="flex:1;"><div class="v-card__ref">${DEMO.repo}#${issue.number}</div><div class="v-card__title">${escape(issue.title)}</div></div>
-        <span class="v-tag">${issue.label}</span>
+        <span class="v-tag">${DEMO.label}</span>
       </div>`);
     $('s2cards').innerHTML = cards.join('');
     agentLines.forEach((el, i) => { el.textContent = PRIYA_LINES[i].text; });
@@ -525,17 +548,16 @@
       rise($('s2l2'), t, 6.2);
       document.querySelectorAll('[data-card]').forEach((el, i) => rise(el, t, 6.6 + 0.25 * i, 24));
       rise($('s2pick'), t, 8.1);
-      $('s2pickText').textContent = typed(String(DEMO.picked + 1), t, 8.4, 8);
+      $('s2pickText').textContent = typed(FILL.pick, t, 8.4, 8);
       cursor($('s2cur2'), t, 8.1, 8.9, 8.55);
       const on = seg(t, 8.55, 8.8);
       const picked = document.querySelector(`[data-card="${DEMO.picked}"]`);
       picked.style.borderColor = on > 0 ? 'var(--label)' : '';
-      picked.style.boxShadow = on > 0 ? `0 0 0 ${3 * on}px rgba(112, 87, 255, 0.25)` : '';
+      picked.style.boxShadow = on > 0 ? `0 0 0 ${3 * on}px color-mix(in srgb, var(--label) 25%, transparent)` : '';
       rise($('s2l3'), t, 9.0);
       rise($('s2instr'), t, 9.5);
-      const instr = 'write the failing test first';
-      $('s2instrText').textContent = typed(instr, t, 9.7, 20);
-      cursor($('s2cur3'), t, 9.5, 11.3, 9.7 + instr.length / 20);
+      $('s2instrText').textContent = typed(DEMO.instructions, t, 9.7, 20);
+      cursor($('s2cur3'), t, 9.5, 11.3, 9.7 + DEMO.instructions.length / 20);
       rise($('s2l4'), t, 11.3);
       rise($('s2l5'), t, 11.6);
     }
@@ -545,9 +567,6 @@
     if (scene($('s3'), t, 12.4, 25.2)) {
       agentLines.forEach((el, i) => rise(el, t, PRIYA_LINES[i].at - 0.1, 12));
       rise($('a7'), t, LIVE.submit, 12);
-      rise($('a8'), t, 21.1, 12);
-      $('a8text').textContent = typed('open it', t, 21.3, 16);
-      cursor($('a8cur'), t, 21.1, 22.0, 21.75);
       rise($('a9'), t, LIVE.prOpened, 12);
 
       issueAt(s3, t, LIVE);
