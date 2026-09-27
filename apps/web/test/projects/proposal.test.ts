@@ -124,16 +124,22 @@ test('four files at the size limit, each one long line with no period, are read 
   const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nCLA '.length - start.length - 1)}x`;
   const template = `${half}\nCLA ${link}`;
   expect([full.length, template.length].every((n) => n > 0.99 * MAX_DOC_BYTES && n <= MAX_DOC_BYTES)).toBe(true);
-  const started = performance.now();
-
-  const { settings } = proposeSettings(
-    ['help wanted'],
-    docs({ contributing: full, aiPolicy: full, agents: full, prTemplate: template }),
-  );
+  const read = () =>
+    proposeSettings(['help wanted'], docs({ contributing: full, aiPolicy: full, agents: full, prTemplate: template }));
 
   // Read in one pass, all four take about a millisecond. A pattern that tries
-  // every start position again took most of a second for each file.
-  expect(performance.now() - started).toBeLessThan(50);
+  // every start position again took most of a second for each file, on every
+  // run. The fastest of five runs is timed, so a pause that a busy machine
+  // puts in one run can't fail the test.
+  let fastest = Infinity;
+  for (let run = 0; run < 5; run += 1) {
+    const started = performance.now();
+    read();
+    fastest = Math.min(fastest, performance.now() - started);
+  }
+  expect(fastest).toBeLessThan(50);
+
+  const { settings } = read();
   expect(settings).not.toHaveProperty('personWrittenDescription');
   expect(settings.claUrl).toBe(link);
 });
