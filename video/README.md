@@ -9,9 +9,8 @@ the same way every time and can be re-rendered whenever the site changes.
   `stills/` for a layout check.
 - `pnpm video:render` writes all 1,080 frames, encodes
   `apps/web/src/assets/good-first-token-launch.mp4`, and writes the WebP
-  poster beside it. It copies both into `prototype/assets/` for the
-  prototype. It needs `ffmpeg` and `cwebp` (`brew install ffmpeg webp`) and
-  takes about 30 seconds.
+  poster beside it, for the homepage. It needs `ffmpeg` and `cwebp`
+  (`brew install ffmpeg webp`) and takes about 30 seconds.
 
 Both need Chromium for Playwright once: `pnpm exec playwright install chromium`.
 

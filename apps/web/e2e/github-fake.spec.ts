@@ -20,7 +20,7 @@ test('signing in on the GitHub fake as a sample person returns to the app with a
   await page.getByRole('button', { name: '@priya' }).click();
 
   await page.waitForURL((url) => url.href.startsWith(back));
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Good First Token');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Spend your spare tokens on open source');
   const returned = new URL(page.url());
   expect(returned.searchParams.get('state')).toBe(state);
 

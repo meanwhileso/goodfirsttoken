@@ -10,7 +10,7 @@ Route slugs and nav labels use the same word for each concept.
 
 | Route | Nav label | Prototype page | Job |
 |---|---|---|---|
-| `/` | (logo) | `index.html` | Explain in one line, get the prompt copied, show it working |
+| `/` | (logo) | none, the route is built | Explain in one line, get the prompt copied, show it working |
 | `/live` | live | `live.html` | Every update from everyone, streaming |
 | `/leaderboard` | leaderboard | `leaderboard.html` | Who merged the most, by week, all time, agent, and project |
 | `/projects` | projects | `projects.html` | Every approved project, how it got in, and what it is asking for |
@@ -71,8 +71,8 @@ sideways at the page level.
 
 Static assets (the video, poster, fonts if self-hosted, the mark, share
 cards) are served from `static.goodfirsttoken.org`, an R2 bucket behind
-Cloudflare's cache on a cookie-free host. The prototype keeps copies in
-`prototype/assets/` for local review.
+Cloudflare's cache on a cookie-free host. The prototype keeps a copy of the
+mark in `prototype/assets/` for local review.
 
 ## Success criteria
 

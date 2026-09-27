@@ -12,8 +12,8 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "dev": "pnpm --parallel --filter @goodfirsttoken/github-fake --filter @goodfirsttoken/web dev",
-    "seed": "pnpm --filter @goodfirsttoken/github-fake seed",
-    "test": "node --test \"scripts/**/*.test.mjs\" && pnpm -r test",
+    "seed": "pnpm --filter @goodfirsttoken/github-fake seed && node apps/web/scripts/seed-local.mjs",
+    "test": "node --test \"scripts/**/*.test.mjs\" \"apps/web/scripts/*.test.mjs\" && pnpm -r test",
     "test:e2e": "pnpm --filter @goodfirsttoken/web test:e2e",
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",

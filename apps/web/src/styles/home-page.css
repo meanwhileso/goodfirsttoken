@@ -1,0 +1,75 @@
+/* Layout for the homepage only. The components it uses are styled in
+   components.css. */
+
+/* The hero: the headline and its line, with the token field beside them. */
+.home-hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 56px; align-items: end; padding-top: 72px;
+}
+.home-hero__words { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+.home-hero__field { display: flex; flex-direction: column; gap: 12px; padding-bottom: 12px; }
+.home-legend {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; font: 12.5px var(--font-mono);
+  color: var(--text-faint);
+}
+.home-legend b { color: var(--ink); font-weight: 600; }
+@container page (max-width: 960px) {
+  .home-hero { grid-template-columns: minmax(0, 1fr); gap: 32px; padding-top: 40px; }
+  .home-hero__field { max-width: 420px; }
+}
+
+/* The prompt, its open-in links, and the setup under them. */
+.home-start { display: flex; flex-direction: column; gap: 18px; padding-top: 56px; }
+
+.home-setup { font-size: 15px; }
+.home-setup summary {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+  font: 14px var(--font-mono); color: var(--text-muted);
+}
+.home-setup summary::-webkit-details-marker { display: none; }
+.home-setup summary::before {
+  content: '+'; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+  border: 1px solid var(--line); border-radius: 99px; font-size: 13px;
+}
+.home-setup[open] summary::before { content: '\2212'; }
+.home-setup__grid {
+  display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 14px 24px; margin: 18px 0 0; align-items: baseline;
+}
+.home-setup__grid dt { font: 500 14px var(--font-mono); color: var(--ink); }
+.home-setup__grid dd { display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; color: var(--text-muted); font-size: 14px; }
+.home-setup .home-note { margin-top: 18px; }
+@container page (max-width: 720px) {
+  .home-setup__grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .home-setup__grid dd { margin-bottom: 12px; }
+}
+
+/* The rail, below the prompt. */
+.home-rail { margin-top: var(--section); }
+
+/* Said once, in mono, at the bottom of a section. */
+.home-note { margin-top: 14px; font: 14px var(--font-mono); color: var(--text-faint); }
+
+.home-video {
+  display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: var(--r-xl); background: var(--surface);
+  box-shadow: var(--shadow-window);
+}
+
+/* The projects asking for help, as rows grouped by hairlines. */
+.home-rows > li { padding: 16px 0; border-top: 1px solid var(--line-soft); }
+.home-rows > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.home-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; color: inherit;
+}
+.home-row:hover { text-decoration: none; }
+.home-row:hover .home-row__title { color: var(--label-ink); }
+.home-row__title { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); overflow-wrap: anywhere; }
+.home-row__meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; grid-column: 1; min-width: 0; font-size: 14px;
+  color: var(--text-muted);
+}
+/* A label can be long. It wraps, so the page never scrolls sideways. */
+.home-row__meta .tag { height: auto; min-height: 24px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.home-row__side { display: flex; align-items: center; gap: 12px; grid-row: 1 / span 2; grid-column: 2; }
+@container page (max-width: 720px) {
+  .home-row { grid-template-columns: minmax(0, 1fr); }
+  .home-row__side { grid-row: auto; grid-column: 1; }
+}

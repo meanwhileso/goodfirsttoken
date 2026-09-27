@@ -1,4 +1,16 @@
-import { id, mustParse, prRecordSchema, prStateSchema, type PrRecord, type PrRef, type PrState } from '@goodfirsttoken/core';
+import {
+  agentName,
+  count,
+  githubId,
+  githubLogin,
+  id,
+  mustParse,
+  prRecordSchema,
+  prStateSchema,
+  type PrRecord,
+  type PrRef,
+  type PrState,
+} from '@goodfirsttoken/core';
 import { checkTime, prFromColumns } from './shared';
 
 // The prs table: the PR opened for each claim, followed until it merges or
@@ -147,4 +159,76 @@ export async function listOpenPrs(db: D1Database): Promise<PrRecord[]> {
     .prepare("SELECT * FROM prs WHERE state = 'open' ORDER BY opened_at, claim_id")
     .all<PrRow>();
   return results.map(toPr);
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * When the week that holds `now` began: Monday at 00:00 UTC. The
+ * leaderboard's week resets then, and so does the homepage's merged this
+ * week.
+ */
+export function startOfWeek(now: number): number {
+  const time = checkTime(now);
+  const day = new Date(time);
+  const midnight = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+  // getUTCDay is 0 on Sunday, so Monday is 1.
+  return midnight - ((day.getUTCDay() + 6) % 7) * DAY;
+}
+
+/** One person's PRs merged in a time range, for the homepage's ranks. */
+export interface Merger {
+  githubId: number;
+  /** Their login now, from people. */
+  login: string;
+  /** The agent that did their latest merged PR in the range. */
+  agent: string;
+  merged: number;
+}
+
+interface MergerRow {
+  github_id: number;
+  login: string;
+  agent: string;
+  merged: number;
+}
+
+/**
+ * The people with the most PRs merged from `from` up to `until`, most first,
+ * at most `limit` of them. A PR counts when it merged in the range, from a
+ * claim on someone else's project. Blocked donors are left out, and so is a
+ * PR when the do-not-list names its repo, its claim's project or issue
+ * repo, or the project's issue repo now. Ties go to whoever reached the
+ * count first, then by login.
+ */
+export async function topMergers(
+  db: D1Database,
+  { from, until, limit }: { from: number; until: number; limit: number },
+): Promise<Merger[]> {
+  // A merged PR's close time is when it merged, and only closed_at is
+  // indexed. With MAX() in the select list, SQLite takes the bare column
+  // c.agent from the row that has the latest merge.
+  const { results } = await db
+    .prepare(
+      `SELECT c.github_id, pe.login, c.agent, COUNT(*) AS merged, MAX(p.closed_at) AS last_merged
+       FROM prs p
+       JOIN claims c ON c.id = p.claim_id
+       JOIN people pe ON pe.github_id = c.github_id
+       WHERE p.state = 'merged' AND p.closed_at >= ?1 AND p.closed_at < ?2 AND c.own_project = 0
+         AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)
+         AND NOT EXISTS (SELECT 1 FROM do_not_list d
+           WHERE d.repo IN (c.project, c.issue_repo, p.repo)
+             OR d.repo = (SELECT issue_repo FROM projects WHERE repo = c.project))
+       GROUP BY c.github_id
+       ORDER BY merged DESC, last_merged, pe.login, c.github_id
+       LIMIT ?3`,
+    )
+    .bind(checkTime(from, 'from'), checkTime(until, 'until'), mustParse(count, limit, 'limit'))
+    .all<MergerRow>();
+  return results.map((row) => ({
+    githubId: mustParse(githubId, row.github_id, 'githubId'),
+    login: mustParse(githubLogin, row.login, 'login'),
+    agent: mustParse(agentName, row.agent, 'agent'),
+    merged: mustParse(count, row.merged, 'merged'),
+  }));
 }
