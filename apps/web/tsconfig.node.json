@@ -1,6 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // The DOM types are for callbacks the Playwright tests run in the browser.
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
   "include": ["*.config.ts", "e2e"]

@@ -26,9 +26,9 @@ The workspace, shared schemas, database, GitHub fake, design system, and securit
 | [#3](https://github.com/meanwhileso/goodfirsttoken/issues/3) | Scaffold the workspace, the Workers app, and CI | Nothing | [#37](https://github.com/meanwhileso/goodfirsttoken/pull/37) |
 | [#4](https://github.com/meanwhileso/goodfirsttoken/issues/4) | Define the core schemas and the claim state machine | #3 | [#41](https://github.com/meanwhileso/goodfirsttoken/pull/41) |
 | [#5](https://github.com/meanwhileso/goodfirsttoken/issues/5) | Add the D1 schema and data access | #4 | |
-| [#6](https://github.com/meanwhileso/goodfirsttoken/issues/6) | Build the recorded GitHub fake and the sample data | #3 | |
-| [#7](https://github.com/meanwhileso/goodfirsttoken/issues/7) | Build the design system in code and the /design page | #3 | |
-| [#39](https://github.com/meanwhileso/goodfirsttoken/issues/39) | Run security scans on every PR and every week | #3 | |
+| [#6](https://github.com/meanwhileso/goodfirsttoken/issues/6) | Build the recorded GitHub fake and the sample data | #3 | [#46](https://github.com/meanwhileso/goodfirsttoken/pull/46) |
+| [#7](https://github.com/meanwhileso/goodfirsttoken/issues/7) | Build the design system in code and the /design page | #3 | [#47](https://github.com/meanwhileso/goodfirsttoken/pull/47) |
+| [#39](https://github.com/meanwhileso/goodfirsttoken/issues/39) | Run security scans on every PR and every week | #3 | [#44](https://github.com/meanwhileso/goodfirsttoken/pull/44) |
 
 ## M2 Sign-in
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32 done
+  class n3,n4,n18,n32,n39,n6,n7 done
 ```
 
 ## Maintainer steps
@@ -229,6 +229,14 @@ To start staging deploys, once #32 merges:
 - Create the `staging` and `production` GitHub environments, limit each to `main`, and fill them with
   their settings as secrets.
 - Set the repository variable `DEPLOY_STAGING` to `true`.
+
+Once #39 merges:
+
+- Keep CodeQL default setup off, and turn on private vulnerability reporting and Dependabot alerts.
+- Run "Security on main" by hand twice, and check that the second run files no new code scanning alerts.
+- Open one pull request from a fork, and check that every check runs and passes on it.
+- Then add the security jobs as required checks, and the code scanning ruleset, in the order
+  [docs/architecture.md](docs/architecture.md) gives.
 
 Once #33 merges:
 

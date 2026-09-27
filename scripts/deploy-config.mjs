@@ -45,6 +45,11 @@ const DEPLOYMENT_ONLY = new Set(['account_id', 'routes', 'route', 'workers_dev',
 // attaches to the Worker as custom domains.
 const DOMAIN_VARS = ['PRIMARY_DOMAIN', 'REDIRECT_DOMAINS'];
 
+// Settings that hold GitHub's base URLs. Empty means GitHub itself, which
+// the Worker falls back to. A value has to be an https URL.
+const GITHUB_URL_VARS = ['GH_API_URL', 'GH_WEB_URL'];
+const HTTPS_URL = /^https:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/;
+
 const ACCOUNT_ID = /^[0-9a-f]{32}$/i;
 const KV_ID = /^[0-9a-f]{32}$/i;
 const D1_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -156,6 +161,10 @@ export function deployConfig(local, target, env) {
         else problems.push(`ADMIN_GITHUB_IDS has "${id}", which is not a numeric GitHub ID.`);
       }
       config.vars[name] = mask(ids.join(','));
+    } else if (GITHUB_URL_VARS.includes(name)) {
+      const url = read(name).replace(/\/+$/, '');
+      if (url && !HTTPS_URL.test(url)) problems.push(`${name} is not an https URL, like https://api.github.com.`);
+      config.vars[name] = mask(url);
     } else {
       config.vars[name] = mask(read(name));
     }

@@ -1,0 +1,329 @@
+/* Every component in src/components, styled from brand/design.md. The idea
+   is GitHub, alive: labels are the interface, the token mark counts slots,
+   and the only things that move are the things that are live. */
+
+/* ---------- Logo chip and the inline label ---------- */
+
+.logo-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px 5px 8px; border-radius: var(--r-pill);
+  background: var(--label); color: var(--on-label); font: var(--logo); white-space: nowrap;
+}
+.logo-chip:hover { text-decoration: none; }
+.logo-chip svg { width: 18px; height: 18px; flex: none; }
+.logo-chip--lg { gap: 12px; padding: 12px 28px 12px 16px; font-size: 34px; }
+.logo-chip--lg svg { width: 36px; height: 36px; }
+@media (max-width: 720px) {
+  .logo-chip--lg { font-size: 22px; padding: 10px 20px 10px 12px; }
+  .logo-chip--lg svg { width: 26px; height: 26px; }
+}
+
+/* A GitHub label set inside display type */
+.inline-label {
+  display: inline-block; padding: 0 0.26em 0.06em; margin: 0 0.02em; border-radius: var(--r-pill);
+  background: var(--label); color: var(--on-label); font-family: var(--font-mono); font-size: 0.78em;
+  letter-spacing: -0.04em; word-spacing: -0.3em; line-height: 1.12; vertical-align: 0.06em; white-space: nowrap;
+}
+
+/* ---------- Markers: a label names each section ---------- */
+
+.marker {
+  display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; border: 1px solid var(--line);
+  border-radius: var(--r-pill); background: var(--surface); font: 500 13px/1 var(--font-mono); color: var(--ink);
+  letter-spacing: 0; white-space: nowrap; align-self: flex-start; width: max-content; max-width: 100%;
+}
+.marker__count { color: var(--text-faint); }
+.marker--live::before {
+  content: ''; width: 7px; height: 7px; border-radius: 99px; background: var(--merged); animation: pulse 2.4s ease-in-out infinite;
+}
+.marker--label { background: var(--label); border-color: var(--label); color: var(--on-label); }
+/* White like the label, told apart by weight, since a lighter count would
+   fall under 4.5:1 on purple. */
+.marker--label .marker__count { color: var(--on-label); font-weight: 400; }
+
+/* ---------- Tags: a project's own GitHub label, in that label's color ---------- */
+
+.tag {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: var(--r-pill);
+  background: var(--label); color: var(--on-label); font: 500 12.5px/1 var(--font-mono); white-space: nowrap;
+}
+
+/* ---------- Chips: small labels for agents and states ---------- */
+
+.chip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 22px; max-width: 100%;
+  padding: 2px 9px; border: 1px solid var(--line); border-radius: 11px; background: transparent;
+  color: var(--text-muted); font: 12.5px/1.3 var(--font-mono); text-wrap: balance;
+}
+a.chip:hover { text-decoration: none; }
+.chip--tint { background: var(--label-tint); border-color: transparent; color: var(--label-ink); }
+.chip--merged { background: var(--merged); border-color: var(--merged); color: var(--on-label); }
+.chip--opened { background: var(--label); border-color: var(--label); color: var(--on-label); }
+/* Ink text, since green text on the green tint is under 4.5:1. The dot
+   carries the green. */
+.chip--live { background: var(--merged-tint); border-color: transparent; color: var(--ink); }
+.chip--live::before {
+  content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--merged); animation: pulse 2.4s ease-in-out infinite;
+}
+.chip--tough { background: var(--attention-tint); border-color: transparent; color: var(--attention); }
+button.chip { cursor: pointer; font-size: 13px; min-height: 30px; padding: 4px 12px; border-radius: 15px; }
+button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
+  background: var(--ink); border-color: var(--ink); color: var(--on-ink);
+}
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ---------- Split badge: a rule and its value ---------- */
+
+.badges { display: flex; flex-wrap: wrap; gap: 8px; }
+.badge {
+  display: inline-flex; align-items: stretch; border-radius: 6px; overflow: hidden; font: 12.5px/1 var(--font-mono);
+  white-space: nowrap;
+}
+.badge__rule, .badge__value { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; }
+.badge__rule { background: #E6E9ED; color: var(--text-muted); }
+.badge__value { background: var(--label-tint); color: var(--label-ink); font-weight: 500; }
+.badge--strict .badge__value { background: var(--ink); color: var(--on-ink); }
+
+/* ---------- Slots: the token mark as a counter ---------- */
+
+.slots { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
+.slots__slot { width: 15px; height: 15px; border-radius: 99px; border: 2px solid #C5CCD3; position: relative; }
+.slots__slot--taken { border-color: var(--label); }
+.slots__slot--taken::after { content: ''; position: absolute; inset: 2.5px; border-radius: 99px; background: var(--label); }
+.slots--lg .slots__slot { width: 22px; height: 22px; border-width: 3px; }
+.slots--lg .slots__slot--taken::after { inset: 4px; }
+.slots--closed .slots__slot { border-color: #C5CCD3; }
+.slots--closed .slots__slot--taken::after { background: #C5CCD3; }
+
+/* The large ring in an issue page's open slot, and its closed state */
+.slot-ring {
+  display: inline-block; flex: none; width: 56px; height: 56px; border-radius: 99px; border: 3px dashed var(--label);
+}
+.slot-ring--closed { position: relative; border: 3px solid #C5CCD3; }
+.slot-ring--closed::after {
+  content: ''; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 3px; background: #C5CCD3;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* ---------- Stat line: numbers as the headline ---------- */
+
+.stat-line {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 28px; font-size: 18px; color: var(--text-muted);
+}
+.stat-line b {
+  font-size: clamp(32px, 4.5vw, 48px); font-weight: 600; letter-spacing: -0.03em; color: var(--ink); margin-right: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Dots and avatars ---------- */
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 99px; background: var(--merged); flex: none; }
+.dot--pulse { width: 7px; height: 7px; animation: pulse 2.4s ease-in-out infinite; }
+.avatar {
+  width: 28px; height: 28px; flex: none; border-radius: 99px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--label-tint); color: var(--label-ink); font: 700 12px/1 var(--font-sans);
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 18px;
+  border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface); color: var(--ink);
+  font: var(--button-label); cursor: pointer; white-space: nowrap;
+}
+.btn:hover { text-decoration: none; border-color: #B8C0C8; }
+.btn--primary { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
+.btn--primary:hover { background: #262C36; border-color: #262C36; }
+.btn--danger { color: var(--danger); }
+.btn--sm { height: 36px; padding: 0 14px; font-size: 14px; }
+.btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.btn svg { width: 14px; height: 14px; }
+
+/* ---------- The prompt: the one dark thing on the page ---------- */
+
+.prompt {
+  display: flex; align-items: center; gap: 16px; padding: 22px 22px 22px 26px; border-radius: var(--r-xl);
+  background: var(--code-bg); color: var(--code-text); font: 19px/1.5 var(--font-mono);
+}
+.prompt__text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.prompt__text::before { content: '\203A  '; color: var(--code-accent); }
+.prompt__accent { color: var(--code-accent); }
+.prompt__caret {
+  display: inline-block; width: 0.55em; height: 1.1em; margin-left: 4px; background: var(--code-accent); vertical-align: -0.2em;
+  animation: blink 1.1s steps(1) infinite;
+}
+.prompt--sm { font-size: 14px; padding: 12px 12px 12px 16px; border-radius: var(--r-md); }
+.prompt--shell .prompt__text::before { content: '$ '; }
+@media (max-width: 720px) {
+  .prompt { font-size: 16px; padding: 18px; flex-direction: column; align-items: stretch; }
+  .prompt--sm { flex-direction: row; align-items: center; font-size: 13px; }
+}
+
+/* The copy button says `copied` in place. */
+.copy-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 16px; flex: none;
+  border-radius: var(--r-pill); border: 1px solid var(--code-line); background: var(--code-surface); color: var(--code-text);
+  font: 500 14px var(--font-mono); cursor: pointer;
+}
+.prompt--sm .copy-btn { height: 34px; padding: 0 12px; font-size: 12.5px; }
+
+/* ---------- Open-in links: the harness opens with the prompt filled in ---------- */
+
+.open-in {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font: 14px var(--font-mono); color: var(--text-muted);
+}
+.open-in a, .open-in button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--ink);
+  font: inherit; cursor: pointer;
+}
+.open-in a::after, .open-in button::after { content: '\2197'; color: var(--label-ink); }
+.open-in a:hover, .open-in button:hover { color: var(--label-ink); text-decoration: none; }
+
+/* ---------- Tabs: chips that pick a panel ---------- */
+
+.tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ---------- The rail: an issue timeline as the page spine ---------- */
+
+.rail { position: relative; padding-left: 44px; }
+.rail::before { content: ''; position: absolute; left: 11px; top: 14px; bottom: 0; width: 2px; background: var(--line); }
+.rail__section { position: relative; padding-bottom: var(--section); }
+.rail__section:last-child { padding-bottom: 0; }
+.rail__section::before {
+  content: ''; position: absolute; left: -44px; top: 2px; width: 24px; height: 24px; border-radius: 99px;
+  background: var(--paper); border: 2px solid var(--line); box-sizing: border-box;
+}
+.rail__section--live::before {
+  border: 3px solid var(--label); background: radial-gradient(circle, var(--label) 0 4px, var(--paper) 4.5px);
+}
+.rail__section--merged::before {
+  border: 3px solid var(--merged); background: radial-gradient(circle, var(--merged) 0 4px, var(--paper) 4.5px);
+}
+.rail__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px;
+  min-height: 28px;
+}
+@media (max-width: 720px) {
+  .rail { padding-left: 32px; }
+  .rail::before { left: 7px; }
+  .rail__section::before { left: -32px; width: 16px; height: 16px; }
+  .rail__section--live::before, .rail__section--merged::before { border-width: 2px; }
+}
+
+/* ---------- The wall: live lines, newest loudest ---------- */
+
+.wall { font: 17px/1.45 var(--font-mono); }
+.wall-line {
+  display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 18px; padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.wall-line__time { color: var(--text-faint); font-size: 14px; padding-top: 3px; }
+.wall-line__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.wall-line__who { font-weight: 600; color: var(--wall-ink, var(--ink)); }
+.wall-line__issue { font-size: 14px; }
+.wall-line__text { flex-basis: 100%; color: var(--wall-ink, var(--ink)); overflow-wrap: anywhere; }
+.wall-line .chip { color: var(--wall-chip, var(--text-muted)); }
+/* Each older line is dimmer than the one above, stepping down the text
+   colors and stopping at text-faint, the lightest text the brand allows. */
+.wall-line:nth-child(2) { --wall-ink: var(--text-body); }
+.wall-line:nth-child(3) { --wall-ink: var(--text-muted); --wall-chip: var(--text-faint); }
+.wall-line:nth-child(n+4) { --wall-ink: var(--text-faint); --wall-chip: var(--text-faint); }
+.wall-line--new { animation: rise 0.45s ease-out; }
+@media (max-width: 720px) {
+  .wall { font-size: 15px; }
+  .wall-line { grid-template-columns: minmax(0, 1fr); }
+  .wall-line__time { padding: 0; }
+}
+.cursor {
+  display: inline-block; width: 0.55em; height: 1.05em; background: var(--ink); vertical-align: -0.15em;
+  animation: blink 1s steps(1) infinite;
+}
+
+/* ---------- The token field: every square is agent work ---------- */
+
+.token-field { display: grid; gap: 5px; }
+.token-field__square { aspect-ratio: 1; border-radius: 3px; background: var(--line-soft); transition: background 0.6s ease; }
+.token-field__square[data-level="1"] { background: #D9D3FF; }
+.token-field__square[data-level="2"] { background: #B1A3FF; }
+.token-field__square[data-level="3"] { background: #8F7BFF; }
+.token-field__square[data-level="4"] { background: var(--label); }
+.token-field__square[data-level="merged"] { background: var(--merged); }
+.token-field__square--flash { animation: flash 1.2s ease-out; }
+
+/* ---------- Ranks: numerals as the design ---------- */
+
+.ranks > li {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: baseline; gap: 16px; padding: 14px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.ranks > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.ranks__n {
+  font: 600 34px/1 var(--font-sans); letter-spacing: -0.04em; color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+.ranks > li:first-child .ranks__n { color: var(--label); }
+.ranks__who { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; min-width: 0; overflow-wrap: anywhere; }
+.ranks__agent { font: 13px var(--font-mono); color: var(--text-muted); margin-left: 5px; letter-spacing: 0; }
+.ranks__score { font: 600 28px/1 var(--font-sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .ranks > li { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .ranks__n { font-size: 24px; }
+  .ranks__who { font-size: 18px; }
+  .ranks__agent { display: block; margin: 2px 0 0; }
+}
+
+/* ---------- Quote: an issue body or a maintainer's words ---------- */
+
+.quote {
+  margin: 0; border-left: 3px solid var(--line); padding: 2px 0 2px 18px; color: var(--text-body); font-size: 17px;
+  line-height: 1.6; max-width: 44em;
+}
+
+/* ---------- Nav ---------- */
+
+/* The nav folds into its menu when it is 880px wide or narrower. For the nav
+   at the top of a page, that is the viewport's width. */
+.site-nav { position: relative; background: var(--paper); container: site-nav / inline-size; }
+.site-nav__inner { height: 76px; display: flex; align-items: center; gap: 24px; }
+.site-nav__links { display: flex; align-items: center; gap: 26px; margin-left: auto; font: 14px var(--font-mono); }
+.site-nav__links a { color: var(--text-muted); display: inline-flex; align-items: center; gap: 8px; }
+.site-nav__links a:hover { color: var(--ink); text-decoration: none; }
+.site-nav__links a[aria-current="page"] { color: var(--ink); }
+.site-nav__links a[aria-current="page"]::before {
+  content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--label);
+}
+.site-nav__gh {
+  display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+  border: 1px solid var(--line); border-radius: 99px;
+}
+.site-nav__gh svg { width: 16px; height: 16px; }
+.site-nav__links .site-nav__me { color: var(--ink); }
+.site-nav__toggle, .site-nav__menu { display: none; }
+@container site-nav (max-width: 880px) {
+  .site-nav__toggle { display: block; position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+  .site-nav__menu {
+    display: inline-flex; margin-left: auto; width: 44px; height: 44px; align-items: center; justify-content: center;
+    border: 1px solid var(--line); border-radius: 99px; background: var(--surface); cursor: pointer;
+  }
+  .site-nav__menu span, .site-nav__menu span::before, .site-nav__menu span::after {
+    display: block; width: 16px; height: 2px; background: var(--ink); border-radius: 2px; position: relative; content: '';
+  }
+  .site-nav__menu span::before { position: absolute; top: -5px; }
+  .site-nav__menu span::after { position: absolute; top: 5px; }
+  .site-nav__toggle:focus-visible + .site-nav__menu { box-shadow: var(--focus); }
+  .site-nav__links {
+    display: none; position: absolute; z-index: 20; top: 76px; left: 0; right: 0; flex-direction: column; align-items: stretch;
+    gap: 0; margin: 0; padding: 4px var(--gutter) 16px; background: var(--paper); border-bottom: 1px solid var(--line);
+    font-size: 16px;
+  }
+  .site-nav__links a { min-height: 48px; border-bottom: 1px solid var(--line-soft); color: var(--ink); }
+  .site-nav__toggle:checked ~ .site-nav__links { display: flex; }
+}
+
+/* ---------- Footer ---------- */
+
+.site-footer { margin-top: 120px; padding: 28px 0 36px; font: 13px var(--font-mono); color: var(--text-faint); }
+.site-footer__inner {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  border-top: 1px solid var(--line); padding-top: 24px;
+}
+.site-footer nav { display: flex; gap: 22px; flex-wrap: wrap; }
+.site-footer a { color: var(--text-muted); }

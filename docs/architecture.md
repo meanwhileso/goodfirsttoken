@@ -10,9 +10,10 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page and `/healthz`, and holds the D1 schema and the functions that read and write it. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, the design system at `/design`, and `/healthz`, and holds the D1 schema and the functions that read and write it. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
-| `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, and the deploy scripts, with their tests. |
+| `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
+| `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
 | `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
@@ -38,6 +39,39 @@ The repo is a pnpm workspace.
 - **Data access lives in `src/db/`,** one module per table, described under
   [Database](#database). The migrations that make the tables are in
   `migrations/`.
+- **`src/github.ts` makes every call to GitHub,** REST and GraphQL, at the
+  base URL in `GH_API_URL`, or `https://api.github.com` when that is empty.
+  Each call takes the token it runs with as an argument. There is no
+  default token.
+
+### The design system
+
+- **Components are React components in `src/components/`,** one file per
+  component, which any route imports. `/design` (`src/routes/design.tsx`)
+  shows every one of them with sample data from `src/design/samples.ts`,
+  which the end-to-end tests read too. It replaced the prototype's
+  design-system page.
+- **Styles are plain CSS in `src/styles/`.** `tokens.css` holds the tokens
+  from the YAML in `brand/design.md` as CSS variables. `app.css` bundles it
+  with the fonts, the base styles, and every component's styles, and the
+  root route links it on every page. CSS for one page, like
+  `design-page.css`, is linked from that route's `head`.
+- **Class names are BEM-style:** a block like `wall-line`, its parts like
+  `wall-line__time`, and its variants like `chip--live`. State lives in
+  attributes, like `aria-pressed`, `aria-current`, and the token field's
+  `data-level`. The layout and text helpers in `base.css`, like `wrap`,
+  `stack`, and `mono`, are single words.
+- **The fonts are self-hosted.** `src/fonts/` holds the Geist and Geist Mono
+  variable fonts from the `geist` npm package, version 1.7.2, under the SIL
+  Open Font License in `src/fonts/OFL.txt`. Vite gives each file a content
+  hash, the Worker's static assets serve it, and the root route preloads
+  both. #33 moves them to the static host.
+- **Widths come from containers.** The nav is a container and folds on its
+  own width, so the same component works at the top of a page and inside a
+  narrower frame. `body` is a container too, and the gutter switches on its
+  width. A media query would count the scrollbar, so with a classic
+  scrollbar the nav could fold at a different width than the gutter
+  switches.
 
 ### packages/core
 
@@ -148,6 +182,9 @@ its version did not go up.
 every binding and variable the Worker reads, under local names. Staging and
 production are not in the repo. The deploy writes their config from the
 GitHub environment, as [Deploys](#deploys) describes.
+`GH_API_URL` and `GH_WEB_URL` hold the GitHub fake's URLs locally. A deploy
+that leaves their settings empty gives them empty strings, and
+`src/github.ts` then calls GitHub itself.
 
 | Binding | Kind | Used from |
 |---|---|---|
@@ -155,6 +192,8 @@ GitHub environment, as [Deploys](#deploys) describes.
 | `PRIMARY_DOMAIN`, `REDIRECT_DOMAINS` | Variables: the site's domain, and domains that redirect to it | Now, by `src/redirect.ts` |
 | `OAUTH_CLIENT_ID` | Variable: the GitHub OAuth app's client ID | #8 |
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | #8 |
+| `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
+| `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/github.ts`, for #8 |
 | `DB` | D1 | `src/db/`, from #8 on |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
 | `FEED_QUEUE` | Queue producer | #14 |
@@ -311,9 +350,77 @@ Worker can start with it.
 
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
-binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. The
+binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. It also starts the GitHub fake at
+`http://127.0.0.1:8944`, which `wrangler.jsonc` points the Worker at. The
 variables the app reads, with safe local defaults, are listed in
 `apps/web/.dev.vars.example`.
+
+## The GitHub fake
+
+`packages/github-fake` answers the GitHub calls the app makes, from state
+built from the sample data. Tests import it and run it in-process. `pnpm dev`
+and Playwright run it as a local HTTP server.
+
+- **What it covers.** REST: the authenticated user and users, repos with the
+  caller's `permissions`, labels, issues and their timelines, issue and repo
+  search, file contents, forks, branches and refs, pull requests, reviews,
+  and review comments. GraphQL: `repository`, `viewer`, file reads with
+  `object(expression:)` across many repos in one query, and
+  `createCommitOnBranch`. The OAuth web flow: the authorize page and the
+  token endpoint, with PKCE. Each route in `src/rest.ts` names its page on
+  docs.github.com, and GitHub's errors come back in GitHub's shape.
+- **It records whose token made each call.** `fake.calls` lists every call
+  with its endpoint, the token it carried, the login that token belongs to,
+  and the status. The local server lists them at `/_fake/calls`.
+- **It behaves like GitHub where the app depends on it.** Writes need push
+  access. A fork belongs to whoever's token made it, and forking again
+  returns the same fork. `createCommitOnBranch` refuses a stale expected
+  head, makes the caller the author, and GitHub signs the commit. A PR that
+  mentions an issue adds a `cross-referenced` event to that issue's
+  timeline, and merging it closes the issues it says it closes. A PR's head
+  must be the base repo or a fork of it. Search serves the first 1,000
+  results and answers a page past them with a 422. API calls need a
+  User-Agent.
+- **Where it differs.** Tests that depend on any of these need the fake
+  changed first.
+  - Forks are ready at once. GitHub makes them in the background.
+  - OAuth scopes are recorded and sent back in `x-oauth-scopes`, and
+    nothing checks them. A token with no scopes can fork and commit.
+  - An archived repo accepts writes.
+  - `maintainer_can_modify` is kept and sent back, and the base repo's
+    maintainers still can't push to the PR's branch.
+  - Issue search refuses a query that names neither `is:issue` nor
+    `is:pull-request`, a rule stricter than GitHub's.
+  - A search qualifier it doesn't know gets a 422 naming the file to add it
+    to. GitHub would read it as text.
+  - A `localhost` OAuth callback allows any port, like GitHub's rule for
+    `127.0.0.1`.
+  - Git object IDs are 40 hex characters made with an FNV hash of the
+    content, so they never match a real repo's. The fake can't be cloned
+    with `git`.
+- **Nothing in it touches the network.** In a test, `fake.fetch` stands in
+  for the global `fetch` and throws for any URL outside the fake's two base
+  URLs, which default to hosts under `.test`, a domain that never resolves.
+  Every URL in its responses, including avatars and raw files, points back
+  at the fake.
+- **The sample data** in `src/sample-data.ts` takes the shapes of the
+  prototype's: donors and maintainers, a project with tagged issues, one
+  with nothing tagged, a popular repo that invites contributions, and a
+  registration waiting for an admin. It is the one place later issues add
+  to. Every account and repo in it is made up, under `sample-owner`, except
+  this project's own repo. That repo's sample issues and PRs are numbered
+  from 900 up, clear of its real ones.
+- **Local sign-in.** The fake's authorize page lists the sample people. Pick
+  one, and the app gets that person's token through the same OAuth flow it
+  uses with GitHub.
+- **Local state.** The server `pnpm dev` starts keeps its state in
+  `apps/web/.wrangler/github-fake/state.json`, next to Miniflare's, so forks
+  and commits survive a restart. `pnpm seed` resets it to the sample data.
+  In CI, Playwright starts a fresh fake with the sample data. Locally it
+  reuses a fake that is already running, like the one `pnpm dev` started,
+  with whatever state that one has.
+- **It never ships.** `apps/web` lists it as a dev dependency, and a lint
+  rule refuses an import of it from `apps/web/src`.
 
 ## Types
 
@@ -341,21 +448,37 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `@cloudflare/vitest-pool-workers`, with the bindings from `wrangler.jsonc`.
   HTTP tests call the whole Worker through `exports.default.fetch` from
   `cloudflare:workers`, so a test sees the same routing and headers a
-  browser does. They live in `apps/web/test/`.
+  browser does. Code no route uses yet, like `src/github.ts`, is called
+  directly. They live in `apps/web/test/`. A test that calls GitHub creates
+  the GitHub fake in-process and puts `fake.fetch` in place of the global
+  `fetch`. `vitest.config.ts` points GitHub's URLs at hosts under `.test`.
 - **Database tests** call the functions in `src/db/` against a real local
   D1. The Vitest config reads `migrations/`, and a setup file applies them
   before each test file. Each test file gets its own storage, and the tests
   in a file share it, so each database test starts by emptying every table.
   They live in `apps/web/test/db/`.
 - **End-to-end tests** run with Playwright against the production build,
-  served by `vite preview` inside `workerd`. They live in `apps/web/e2e/`.
+  served by `vite preview` inside `workerd`, beside the GitHub fake's local
+  server. They live in `apps/web/e2e/`.
+- **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
+  with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
+  clock paused so the live wall holds still. Up to 2% of pixels may differ,
+  for antialiasing, and a change in page height always fails. The baselines
+  must come from the Playwright build CI uses, because other Chromium builds
+  can wrap text differently. To update them, after a deliberate visual
+  change and after every Playwright upgrade, let the `e2e` job fail, take
+  each `design-<width>-actual.png` from `test-results/` in the job's
+  `playwright-report` artifact, check them by eye, and commit them as the
+  baselines.
 - **The core package's tests** run with plain Vitest in Node, since the
   package is pure. They live in `packages/core/test/`.
-- **The tests for `scripts/`**, the static server, the skill build, and the
-  deploy, use Node's own test runner. The deploy's tests fake Cloudflare's
-  API, GitHub's OIDC endpoint, and Wrangler, and check the scripts, the
-  deploy workflows, and [self-hosting.md](self-hosting.md) against each
-  other.
+- **The GitHub fake's own tests** run with Vitest in Node, in
+  `packages/github-fake/test/`.
+- **The tests for `scripts/`** cover the static server, the skill build, the
+  deploy, and the check for advisories a pull request adds. They use Node's
+  own test runner. The deploy's tests fake Cloudflare's API, GitHub's OIDC
+  endpoint, and Wrangler, and check the scripts, the deploy workflows, and
+  [self-hosting.md](self-hosting.md) against each other.
 
 `pnpm test` runs all of them but Playwright. `pnpm test:e2e` runs Playwright.
 
@@ -376,6 +499,105 @@ Every action is pinned to a commit SHA.
 | `actionlint` | actionlint over every workflow, with shellcheck on their `run:` scripts |
 
 Branch protection requires `test` and `leaks` by name.
+
+### Security scans
+
+`.github/workflows/security.yml` runs on every pull request under the same
+rules as CI. Each tool a job downloads itself is checked against a published
+checksum that the workflow pins, and the Semgrep image is pinned by digest.
+The CodeQL action brings the CodeQL version its commit names. Semgrep's rules
+come from the Semgrep Registry at scan time, since their license doesn't allow
+copying them here. A job names a finding only when it sits in code the pull
+request adds or edits, which the diff already shows. Findings elsewhere on
+`main` stay in code scanning.
+
+| Job | What it scans | What it blocks | Where findings go |
+|---|---|---|---|
+| `semgrep` | Code and workflows, with Semgrep's TypeScript, React, and GitHub Actions rules | A high-severity finding the pull request adds or edits | Code scanning |
+| `codeql` | JavaScript and TypeScript, with CodeQL's default queries | An alert at `error` level, or of high or critical security severity, on a line the pull request changes, through the `Code scanning results / CodeQL` check | Code scanning |
+| `zizmor` | Every workflow and action | A high-severity finding in any of them | Code scanning |
+| `osv-scanner` | `pnpm-lock.yaml` before and after the pull request, against osv.dev | A package version with a high or critical advisory, or a known-malicious package, that the pull request adds | The job log, naming only what the pull request adds |
+| `dependency-review` | The dependency graph before and after the pull request, against the GitHub Advisory Database | A package version with a high or critical advisory that the pull request adds | The job log and summary, naming only what the pull request adds |
+
+Each tool uploads under one fixed category, the same on pull requests and on
+`main`: `semgrep`, `/language:javascript-typescript` for CodeQL, and
+`zizmor`. OSV-Scanner uploads as `osv-scanner`, from `main` only.
+
+Code scanning accepts uploads from a pull request's read-only token, from a
+fork too. On the pull request it shows a finding as an annotation only when
+the finding sits on a line the pull request changes. The rest stays in the
+Security and quality tab, which only people with write access can see. The
+`semgrep` and `zizmor` jobs fail with a short message that points there.
+Every job but `zizmor` fails only on what the pull request adds or edits.
+zizmor's check runs offline with a pinned version, so a high finding in any
+workflow can only come from a workflow change, and it blocks every pull
+request until it is fixed.
+
+The pull request jobs get `contents: read` and no `security-events` access.
+So the CodeQL action warns that it can't read its feature flags, and a job
+can't check whether GitHub processed the SARIF it uploaded. If GitHub can't
+process a pull request's SARIF, the job still passes. The same SARIF fails
+the upload on `main`, where the job can check, and the ruleset keeps waiting
+for pull request results that never arrive.
+
+OSV-Scanner's SARIF carries no line numbers, which GitHub's SARIF reference
+lists as required. Nothing documented keeps code scanning from annotating an
+advisory already on `main` on a pull request that touches the lockfile, so
+pull requests don't upload it. Expect a warning on each pull request's code
+scanning results that one configuration on `main`, `osv-scanner`, was not
+found. The `osv-scanner` job is the lockfile's gate.
+
+A pull request can switch off its own checks with a `nosemgrep` comment, a
+`.semgrepignore` file, a zizmor ignore comment or config file, or an edit to
+`scripts/new-advisories.mjs` or these workflows, since each job runs from the
+pull request's checkout. Reviewers watch for changes to any of them.
+
+`.github/workflows/security-main.yml` runs Semgrep, CodeQL, zizmor, and
+OSV-Scanner on `main` on every push, every Monday at 05:23 UTC, and by hand
+from the Actions tab. The push runs give each pull request a fresh analysis
+of its base to compare with, and close an alert soon after its fix merges.
+The Monday run catches new advisories and new rules for code that hasn't
+changed. It uploads every finding to code scanning. Its jobs fail when a scan
+or an upload breaks, and findings leave them green. It is the only scan
+workflow that can write, and it writes only `security-events`, which the
+upload needs.
+
+Code scanning matches each finding to the alert it already has, so a second
+run files nothing new. Matching can slip in three ways. OSV-Scanner's
+fingerprint holds the lockfile's absolute path on the runner and the package
+version, so a new path, or a bump to another vulnerable version, files a new
+alert. A Semgrep rule that gets a new ID files a new alert. And when the
+content of a flagged line changes, code scanning can file its finding again.
+
+Dependabot alerts tell maintainers about new dependency advisories. Code
+scanning tells no one, so a maintainer checks the Security and quality tab
+each week. [SECURITY.md](../SECURITY.md) says what happens next.
+
+Two habits keep findings out of public logs. SARIF files are never kept as
+workflow artifacts, which anyone signed in can download. And a CodeQL job is
+never re-run with debug logging, because CodeQL then keeps its results as an
+artifact.
+
+#### Turning the scans on
+
+A required tool that has never uploaded blocks every merge. So the first
+time, a maintainer goes in this order:
+
+1. Turn CodeQL default setup off before the pull request that adds these
+   workflows runs its checks. Code scanning refuses CodeQL results from a
+   workflow while default setup is on.
+2. Merge that pull request.
+3. Run "Security on main" by hand from the Actions tab.
+4. Check that all four categories above show up under code scanning in the
+   Security and quality tab.
+5. Only then add the required checks and the code scanning ruleset.
+
+After that, these settings stay on: private vulnerability reporting,
+Dependabot alerts, branch protection that requires the five security jobs above, and a
+ruleset that requires code scanning results. In the ruleset, CodeQL gets
+"Security alerts: High or higher" and "Alerts: Errors". Semgrep OSS and zizmor
+get "Alerts: Errors", since their SARIF carries no security severity. CodeQL
+default setup and Dependabot security updates stay off.
 
 ## Deploys
 
@@ -400,11 +622,13 @@ The job runs these steps. The scripts are in `scripts/`.
    setting of the same name, so no local value reaches a deployed Worker, and
    sets `ENVIRONMENT` to the target. It attaches `PRIMARY_DOMAIN` and
    `REDIRECT_DOMAINS` as custom domains and turns workers.dev off when there
-   is a domain. It masks the account ID, resource names and IDs, and the value
-   of every variable but `ENVIRONMENT` for the later steps, Wrangler's output
-   included. A
-   key or binding it does not know stops the deploy, so a new kind of binding
-   never reaches Cloudflare with its local name.
+   is a domain. It refuses a `GH_API_URL` or `GH_WEB_URL` that isn't an
+   `https` URL, and leaves each empty when its setting is, so the Worker
+   calls GitHub itself. It masks the account ID, resource names and IDs, and
+   the value of every variable but `ENVIRONMENT` for the later steps,
+   Wrangler's output included. A key or binding it does not know stops the
+   deploy, so a new kind of binding never reaches Cloudflare with its local
+   name.
 3. The Vite build reads that file through
    `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and writes the config Wrangler
    deploys from.
@@ -473,3 +697,30 @@ Choices:
 - **Plugin versions are compared with the base branch.** Nothing a pull
   request edits can get around the rule, and one raise covers the whole
   pull request.
+- **A GitHub fake with state, built from GitHub's docs.** Recorded
+  responses can't follow a fork into a commit into a PR, and recording them
+  would need real accounts. The fake keeps state, so a flow behaves the
+  same in a test as on GitHub, and it records whose token made each call,
+  which is how the tests check that no action runs as the wrong person.
+- **The fake is its own package** so the Worker's tests, the Playwright
+  tests, and later packages share one fake and one set of sample data,
+  while the Worker never depends on it. It runs in both `workerd` and Node,
+  and Node runs its server straight from the TypeScript source.
+- **graphql-js runs the fake's GraphQL.** A slice of GitHub's schema, with
+  GitHub's names and types, means aliases, fragments, variables, and
+  validation errors behave as they do on GitHub.
+- **Code scanning holds security findings.** Alerts on `main` are visible
+  only to people with write access, code scanning matches repeat findings by
+  fingerprint, and a workflow can file into it. Issues and pull request
+  comments are public.
+- **Semgrep and CodeQL both.** CodeQL follows data across functions and
+  files, such as a token that reaches a log. Semgrep's free rules match
+  patterns within a file, cover GitHub Actions, and run in seconds.
+- **Dependabot alerts on, security updates off.** Dependabot alerts are
+  private too, and GitHub tells maintainers when one is filed, which code
+  scanning never does. A dependency advisory can then show up in both places.
+  A security update pull request is public and names its advisory before a
+  maintainer has looked at it.
+- **No OpenSSF Scorecard.** Its workflow checks repeat zizmor's, and its other
+  checks grade practices this repo doesn't have yet, such as fuzzing and
+  signed releases, so it would file alerts nobody fixes.

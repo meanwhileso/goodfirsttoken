@@ -1,0 +1,556 @@
+// A slice of GitHub's GraphQL API: reading files from many repos in one
+// query, and createCommitOnBranch. The schema below copies the names and
+// types of GitHub's own, so a query that works here works on GitHub. Queries
+// run through graphql-js, so aliases, fragments, variables, and validation
+// errors behave as they do on GitHub.
+//
+// https://docs.github.com/en/graphql/reference/repos#query-repository
+// https://docs.github.com/en/graphql/reference/repos#object-repository
+// https://docs.github.com/en/graphql/reference/users#query-viewer
+// https://docs.github.com/en/graphql/reference/git#object-blob
+// https://docs.github.com/en/graphql/reference/git#object-tree
+// https://docs.github.com/en/graphql/reference/git#object-ref
+// https://docs.github.com/en/graphql/reference/commits#object-commit
+// https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch
+
+import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
+import { base64ToBytes, blobText, lookupPath, type GitPerson, type Oid } from './git.ts';
+import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
+import {
+  FakeError,
+  canPush,
+  commitOnBranch,
+  findAccount,
+  findRepo,
+  findRepoByFullName,
+  fullName,
+  roleOf,
+  type RepoRecord,
+} from './state.ts';
+
+const schema = buildSchema(/* GraphQL */ `
+  scalar Base64String
+  scalar DateTime
+  scalar GitObjectID
+  scalar GitTimestamp
+  scalar URI
+
+  enum RepositoryPermission {
+    ADMIN
+    MAINTAIN
+    WRITE
+    TRIAGE
+    READ
+  }
+
+  enum GitSignatureState {
+    VALID
+    INVALID
+  }
+
+  interface Node {
+    id: ID!
+  }
+
+  interface RepositoryOwner {
+    id: ID!
+    login: String!
+    url: URI!
+    avatarUrl(size: Int): URI!
+  }
+
+  type User implements Node & RepositoryOwner {
+    id: ID!
+    databaseId: Int
+    login: String!
+    name: String
+    url: URI!
+    avatarUrl(size: Int): URI!
+    createdAt: DateTime!
+  }
+
+  type Organization implements Node & RepositoryOwner {
+    id: ID!
+    databaseId: Int
+    login: String!
+    name: String
+    url: URI!
+    avatarUrl(size: Int): URI!
+    createdAt: DateTime!
+  }
+
+  type Repository implements Node {
+    id: ID!
+    databaseId: Int
+    name: String!
+    nameWithOwner: String!
+    url: URI!
+    description: String
+    owner: RepositoryOwner!
+    isPrivate: Boolean!
+    isArchived: Boolean!
+    isFork: Boolean!
+    stargazerCount: Int!
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    pushedAt: DateTime
+    viewerPermission: RepositoryPermission
+    defaultBranchRef: Ref
+    ref(qualifiedName: String!): Ref
+    object(expression: String, oid: GitObjectID): GitObject
+  }
+
+  type Ref implements Node {
+    id: ID!
+    name: String!
+    prefix: String!
+    target: GitObject
+    repository: Repository!
+  }
+
+  interface GitObject {
+    id: ID!
+    oid: GitObjectID!
+    abbreviatedOid: String!
+    commitUrl: URI!
+    repository: Repository!
+  }
+
+  type Blob implements Node & GitObject {
+    id: ID!
+    oid: GitObjectID!
+    abbreviatedOid: String!
+    commitUrl: URI!
+    repository: Repository!
+    byteSize: Int!
+    isBinary: Boolean
+    isTruncated: Boolean!
+    text: String
+  }
+
+  type TreeEntry {
+    name: String!
+    path: String
+    type: String!
+    mode: Int!
+    oid: GitObjectID!
+    size: Int!
+    object: GitObject
+    repository: Repository!
+  }
+
+  type Tree implements Node & GitObject {
+    id: ID!
+    oid: GitObjectID!
+    abbreviatedOid: String!
+    commitUrl: URI!
+    repository: Repository!
+    entries: [TreeEntry!]
+  }
+
+  type GitActor {
+    name: String
+    email: String
+    date: GitTimestamp
+    user: User
+  }
+
+  interface GitSignature {
+    email: String!
+    isValid: Boolean!
+    payload: String!
+    signature: String!
+    signer: User
+    state: GitSignatureState!
+    wasSignedByGitHub: Boolean!
+  }
+
+  type GpgSignature implements GitSignature {
+    email: String!
+    isValid: Boolean!
+    keyId: String
+    payload: String!
+    signature: String!
+    signer: User
+    state: GitSignatureState!
+    wasSignedByGitHub: Boolean!
+  }
+
+  type CommitConnection {
+    totalCount: Int!
+    nodes: [Commit]
+  }
+
+  type Commit implements Node & GitObject {
+    id: ID!
+    oid: GitObjectID!
+    abbreviatedOid: String!
+    commitUrl: URI!
+    repository: Repository!
+    message: String!
+    messageHeadline: String!
+    messageBody: String!
+    url: URI!
+    authoredDate: DateTime!
+    committedDate: DateTime!
+    author: GitActor
+    committer: GitActor
+    signature: GitSignature
+    tree: Tree!
+    parents(first: Int, after: String, last: Int, before: String): CommitConnection!
+  }
+
+  type Query {
+    repository(owner: String!, name: String!, followRenames: Boolean = true): Repository
+    viewer: User!
+  }
+
+  input CommittableBranch {
+    branchName: String
+    id: ID
+    repositoryNameWithOwner: String
+  }
+
+  input FileAddition {
+    contents: Base64String!
+    path: String!
+  }
+
+  input FileDeletion {
+    path: String!
+  }
+
+  input FileChanges {
+    additions: [FileAddition!] = []
+    deletions: [FileDeletion!] = []
+  }
+
+  input CommitMessage {
+    body: String
+    headline: String!
+  }
+
+  input CreateCommitOnBranchInput {
+    branch: CommittableBranch!
+    clientMutationId: String
+    expectedHeadOid: GitObjectID!
+    fileChanges: FileChanges
+    message: CommitMessage!
+  }
+
+  type CreateCommitOnBranchPayload {
+    clientMutationId: String
+    commit: Commit
+    ref: Ref
+  }
+
+  type Mutation {
+    createCommitOnBranch(input: CreateCommitOnBranchInput!): CreateCommitOnBranchPayload
+  }
+`);
+
+function fail(type: string, message: string): GraphQLError {
+  return new GraphQLError(message, { extensions: { type } });
+}
+
+function ownerNode(ctx: Ctx, login: string) {
+  const account = findAccount(ctx.state, login);
+  if (!account) return null;
+  const org = account.type === 'Organization';
+  return {
+    __typename: org ? 'Organization' : 'User',
+    id: nodeId(org ? 'O' : 'U', account.id),
+    databaseId: account.id,
+    login: account.login,
+    name: account.name,
+    url: `${ctx.webUrl}/${account.login}`,
+    avatarUrl: () => avatarUrl(ctx, account.id),
+    createdAt: account.createdAt,
+  };
+}
+
+const PERMISSION = { admin: 'ADMIN', maintain: 'MAINTAIN', write: 'WRITE', triage: 'TRIAGE', read: 'READ' };
+
+function repositoryNode(ctx: Ctx, repo: RepoRecord) {
+  const name = fullName(repo);
+  return {
+    __typename: 'Repository',
+    id: nodeId('R', repo.id),
+    databaseId: repo.id,
+    name: repo.name,
+    nameWithOwner: name,
+    url: `${ctx.webUrl}/${name}`,
+    description: repo.description,
+    owner: () => ownerNode(ctx, repo.owner),
+    isPrivate: false,
+    isArchived: repo.archived,
+    isFork: repo.forkOf !== null,
+    stargazerCount: repo.stars,
+    createdAt: repo.createdAt,
+    updatedAt: repo.updatedAt,
+    pushedAt: repo.pushedAt,
+    viewerPermission: () => {
+      const role = roleOf(repo, ctx.viewer);
+      return role ? PERMISSION[role] : null;
+    },
+    defaultBranchRef: () => refNode(ctx, repo, repo.defaultBranch),
+    ref: ({ qualifiedName }: { qualifiedName: string }) => refNode(ctx, repo, qualifiedName.replace(/^refs\/heads\//, '')),
+    object: ({ expression, oid }: { expression?: string; oid?: string }) =>
+      oid !== undefined ? objectNode(ctx, repo, resolveRev(ctx, repo, oid), '') : objectAt(ctx, repo, expression ?? ''),
+  };
+}
+
+function refNode(ctx: Ctx, repo: RepoRecord, branch: string) {
+  const oid = repo.branches[branch];
+  if (oid === undefined) return null;
+  return {
+    __typename: 'Ref',
+    id: nodeId('REF', repo.id, `refs/heads/${branch}`),
+    name: branch,
+    prefix: 'refs/heads/',
+    target: () => objectNode(ctx, repo, oid, ''),
+    repository: () => repositoryNode(ctx, repo),
+  };
+}
+
+// A revision: HEAD, a branch name, or a full or abbreviated commit ID.
+function resolveRev(ctx: Ctx, repo: RepoRecord, rev: string): Oid | null {
+  if (rev === '' || rev === 'HEAD') return repo.branches[repo.defaultBranch] ?? null;
+  const branch = repo.branches[rev.replace(/^refs\/heads\//, '')];
+  if (branch !== undefined) return branch;
+  if (!/^[0-9a-f]{4,40}$/.test(rev)) return null;
+  return Object.keys(ctx.state.objects).find((oid) => oid.startsWith(rev)) ?? null;
+}
+
+// GitHub's object(expression:) takes "<rev>" or "<rev>:<path>", like
+// "HEAD:CONTRIBUTING.md" or "main:.github/".
+function objectAt(ctx: Ctx, repo: RepoRecord, expression: string) {
+  const colon = expression.indexOf(':');
+  const rev = resolveRev(ctx, repo, colon === -1 ? expression : expression.slice(0, colon));
+  if (rev === null) return null;
+  if (colon === -1) return objectNode(ctx, repo, rev, '');
+  const commit = ctx.state.objects[rev];
+  if (commit?.type !== 'commit') return null;
+  const path = expression.slice(colon + 1).replace(/\/+$/, '');
+  const found = lookupPath(ctx.state.objects, commit.tree, path);
+  return found ? objectNode(ctx, repo, found.oid, path) : null;
+}
+
+function gitActor(ctx: Ctx, person: GitPerson) {
+  return {
+    name: person.name,
+    email: person.email,
+    date: person.date,
+    user: () => (person.login ? ownerNode(ctx, person.login) : null),
+  };
+}
+
+function objectNode(ctx: Ctx, repo: RepoRecord, oid: Oid | null, path: string): Record<string, unknown> | null {
+  const object = oid === null ? undefined : ctx.state.objects[oid];
+  if (oid === null || object === undefined) return null;
+  const common = {
+    oid,
+    abbreviatedOid: oid.slice(0, 7),
+    commitUrl: `${ctx.webUrl}/${fullName(repo)}/commit/${oid}`,
+    repository: () => repositoryNode(ctx, repo),
+  };
+  switch (object.type) {
+    case 'blob': {
+      const text = blobText(object);
+      return {
+        ...common,
+        __typename: 'Blob',
+        id: nodeId('B', repo.id, oid),
+        byteSize: object.size,
+        isBinary: text === null,
+        isTruncated: false,
+        text,
+      };
+    }
+    case 'tree':
+      return {
+        ...common,
+        __typename: 'Tree',
+        id: nodeId('T', repo.id, oid),
+        entries: object.entries.map((entry) => {
+          const entryPath = path ? `${path}/${entry.name}` : entry.name;
+          const target = ctx.state.objects[entry.oid];
+          return {
+            name: entry.name,
+            path: entryPath,
+            type: entry.type,
+            mode: entry.type === 'blob' ? 0o100644 : 0o40000,
+            oid: entry.oid,
+            size: target?.type === 'blob' ? target.size : 0,
+            object: () => objectNode(ctx, repo, entry.oid, entryPath),
+            repository: () => repositoryNode(ctx, repo),
+          };
+        }),
+      };
+    case 'commit': {
+      const [headline = '', ...rest] = object.message.split('\n');
+      return {
+        ...common,
+        __typename: 'Commit',
+        id: nodeId('C', repo.id, oid),
+        message: object.message,
+        messageHeadline: headline,
+        messageBody: rest.join('\n').trim(),
+        url: common.commitUrl,
+        authoredDate: object.author.date,
+        committedDate: object.committer.date,
+        author: gitActor(ctx, object.author),
+        committer: gitActor(ctx, object.committer),
+        signature: object.signedByGitHub
+          ? {
+              __typename: 'GpgSignature',
+              email: object.committer.email,
+              isValid: true,
+              keyId: null,
+              payload: '',
+              signature: '',
+              signer: null,
+              state: 'VALID',
+              wasSignedByGitHub: true,
+            }
+          : null,
+        tree: () => objectNode(ctx, repo, object.tree, ''),
+        parents: ({ first }: { first?: number }) => ({
+          totalCount: object.parents.length,
+          nodes: object.parents.slice(0, first ?? object.parents.length).map((p) => objectNode(ctx, repo, p, '')),
+        }),
+      };
+    }
+  }
+}
+
+// The repo and branch a CommittableBranch names, by node ID or by name.
+function committableBranch(ctx: Ctx, branch: { id?: string; repositoryNameWithOwner?: string; branchName?: string }) {
+  if (branch.id !== undefined) {
+    const [, id, ref] = (() => {
+      try {
+        return new TextDecoder().decode(base64ToBytes(branch.id.replace(/^REF_/, ''))).split(':');
+      } catch {
+        return [];
+      }
+    })();
+    const repo = Object.values(ctx.state.repos).find((r) => String(r.id) === id);
+    if (!repo || !ref?.startsWith('refs/heads/')) throw fail('NOT_FOUND', `Could not resolve to a node with the global id of '${branch.id}'`);
+    return { repo, name: ref.slice('refs/heads/'.length) };
+  }
+  if (branch.repositoryNameWithOwner === undefined || branch.branchName === undefined) {
+    throw fail('UNPROCESSABLE', 'Either branch.id or both branch.repositoryNameWithOwner and branch.branchName are required.');
+  }
+  const repo = findRepoByFullName(ctx.state, branch.repositoryNameWithOwner);
+  if (!repo) {
+    throw fail('NOT_FOUND', `Could not resolve to a Repository with the name '${branch.repositoryNameWithOwner}'.`);
+  }
+  return { repo, name: branch.branchName };
+}
+
+interface CreateCommitInput {
+  branch: { id?: string; repositoryNameWithOwner?: string; branchName?: string };
+  clientMutationId?: string;
+  expectedHeadOid: string;
+  fileChanges?: { additions?: { path: string; contents: string }[]; deletions?: { path: string }[] };
+  message: { headline: string; body?: string };
+}
+
+const KIND_TYPE = { not_found: 'NOT_FOUND', forbidden: 'FORBIDDEN', invalid: 'UNPROCESSABLE', stale: 'STALE_DATA' };
+
+function rootValue(ctx: Ctx, now: string) {
+  return {
+    repository: ({ owner, name }: { owner: string; name: string }) => {
+      const repo = findRepo(ctx.state, owner, name);
+      if (!repo) throw fail('NOT_FOUND', `Could not resolve to a Repository with the name '${owner}/${name}'.`);
+      return repositoryNode(ctx, repo);
+    },
+    viewer: () => ownerNode(ctx, ctx.viewer ?? ''),
+    // Appends a commit to the branch as the person whose token made the
+    // call. GitHub commits and signs it.
+    createCommitOnBranch: ({ input }: { input: CreateCommitInput }) => {
+      const { repo, name } = committableBranch(ctx, input.branch);
+      const login = ctx.viewer ?? '';
+      if (!canPush(roleOf(repo, login))) {
+        throw fail('FORBIDDEN', `${login} does not have the correct permissions to execute \`CreateCommitOnBranch\``);
+      }
+      try {
+        const oid = commitOnBranch(
+          ctx.state,
+          repo,
+          name,
+          {
+            additions: (input.fileChanges?.additions ?? []).map((a) => ({
+              path: a.path,
+              contents: base64ToBytes(a.contents),
+            })),
+            deletions: (input.fileChanges?.deletions ?? []).map((d) => d.path),
+            headline: input.message.headline,
+            body: input.message.body ?? null,
+            login,
+            expectedHeadOid: input.expectedHeadOid,
+          },
+          now,
+        );
+        return {
+          clientMutationId: input.clientMutationId ?? null,
+          commit: objectNode(ctx, repo, oid, ''),
+          ref: refNode(ctx, repo, name),
+        };
+      } catch (error) {
+        if (error instanceof FakeError) throw fail(KIND_TYPE[error.kind], error.message);
+        throw error;
+      }
+    },
+  };
+}
+
+// "query repository" or "mutation createCommitOnBranch": the operation type
+// and its top-level fields, for the call log.
+export function describeOperation(query: string, operationName?: string | null): string {
+  let document: DocumentNode;
+  try {
+    document = parse(query);
+  } catch {
+    return 'graphql (unparsable)';
+  }
+  const operation = getOperationAST(document, operationName ?? undefined);
+  if (!operation) return 'graphql';
+  const fields = new Set<string>();
+  for (const selection of operation.selectionSet.selections) {
+    if (selection.kind === Kind.FIELD) fields.add(selection.name.value);
+  }
+  return `${operation.operation} ${[...fields].join(', ')}`.trim();
+}
+
+// https://docs.github.com/en/graphql/guides/forming-calls-with-graphql
+// Errors come back with status 200 in GitHub's shape: type, path,
+// locations, and message.
+export async function runGraphQL(ctx: Ctx, body: unknown, now: string): Promise<Record<string, unknown>> {
+  const request = (body ?? {}) as { query?: unknown; variables?: unknown; operationName?: unknown };
+  if (typeof request.query !== 'string') {
+    return { errors: [{ message: 'A query attribute must be specified and must be a string.' }] };
+  }
+  const result = await graphql({
+    schema,
+    source: request.query,
+    rootValue: rootValue(ctx, now),
+    variableValues: (request.variables ?? undefined) as Record<string, unknown> | undefined,
+    operationName: typeof request.operationName === 'string' ? request.operationName : undefined,
+  });
+  const out: Record<string, unknown> = {};
+  if (result.data !== undefined) out.data = result.data;
+  if (result.errors) {
+    out.errors = result.errors.map((error) => {
+      const { type, ...extensions } = error.extensions as { type?: string };
+      return {
+        ...(type ? { type } : {}),
+        ...(error.path ? { path: error.path } : {}),
+        ...(error.locations ? { locations: error.locations } : {}),
+        message: error.message,
+        ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
+      };
+    });
+  }
+  return out;
+}

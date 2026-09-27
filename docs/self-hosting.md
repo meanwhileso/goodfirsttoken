@@ -122,6 +122,8 @@ variables. In a private repo, either works.
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
 | `OAUTH_CLIENT_ID` | No | The client ID of this environment's GitHub OAuth app. Sign-in (#8) reads it. |
 | `ADMIN_GITHUB_IDS` | No | The numeric GitHub user IDs of the site's admins, separated by commas. `https://api.github.com/users/<username>` shows a user's `id`. Sign-in (#8) reads it. |
+| `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
+| `GH_WEB_URL` | No | github.com itself, which sign-in sends people to, as an `https` URL. Leave it empty, and the Worker uses `https://github.com`. |
 
 ### Credential
 

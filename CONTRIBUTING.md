@@ -8,7 +8,7 @@ built in public from the first commit.
 | To work on | Start from |
 |---|---|
 | The idea and the audience | `brand/brand.md` |
-| Pages and components | `brand/design.md`, `brand/brief-website.md`, and `prototype/` |
+| Pages and components | `brand/design.md`, the components in `apps/web/src/components/` (all shown at `/design`), `brand/brief-website.md`, and `prototype/` |
 | Words on the site | `brand/voice.md` |
 | The launch video | `video/README.md` |
 | What gets built next | [`ROADMAP.md`](ROADMAP.md) and [`docs/specs/v1.md`](docs/specs/v1.md) |
@@ -20,7 +20,8 @@ You need Node 24. pnpm comes through corepack.
 ```bash
 corepack enable
 pnpm install
-pnpm dev         # the site, at http://localhost:5173
+pnpm dev         # the site, at http://localhost:5173, and a fake GitHub
+pnpm seed        # reset the fake GitHub to the sample data
 pnpm prototype   # the clickable prototype, at http://localhost:8943
 pnpm check       # lint, typecheck, and a check that the skills match skill-src/
 pnpm test        # unit tests, the Worker's inside the Workers runtime
