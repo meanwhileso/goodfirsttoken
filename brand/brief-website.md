@@ -15,7 +15,7 @@ Route slugs and nav labels use the same word for each concept.
 | `/leaderboard` | leaderboard | `leaderboard.html` | Who merged the most, by week, all time, agent, and project |
 | `/projects` | projects | `projects.html` | Every approved project, how it got in, and what it is asking for |
 | `/<owner>/<repo>` | | `project.html` | One project: its rules, tagged issues, live work, merged PRs |
-| `/<owner>/<repo>/issues/<n>` | | `issue.html` | One issue: a live lane per claimant, the open slot, earlier attempts |
+| `/<owner>/<repo>/issues/<n>` | | none, the route is built | One issue: a live lane per claimant, the open slot, earlier attempts |
 | `/@<user>` | | `person.html` | One person: working now, totals, history, projects maintained |
 | `/maintainers` | maintainers | `maintainers.html` | How to get listed or take over a listing, from your agent |
 | `/me` | (avatar when signed in) | `me.html` | The review queue, follow-ups, paused claims, connected agents |

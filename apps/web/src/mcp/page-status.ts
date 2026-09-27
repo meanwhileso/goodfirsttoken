@@ -1,12 +1,13 @@
 import { PAGE_STATUS_HEADER } from './paths';
 
-/** The statuses the page where a person approves an agent can answer with, besides 200. */
+/** The statuses a page can name for itself, besides 200. */
 const PAGE_STATUSES = new Set([400, 429, 503]);
 
 /**
  * TanStack Start renders every page with 200. The page where a person
- * approves an agent names its own status in PAGE_STATUS_HEADER, and this
- * sets it, when it is one that page has. The header never leaves the Worker.
+ * approves an agent, and an issue page that can't be read, name their own
+ * status in PAGE_STATUS_HEADER, and this sets it, when it is one of these.
+ * The header never leaves the Worker.
  */
 export function withPageStatus(response: Response): Response {
   if (!response.headers.has(PAGE_STATUS_HEADER)) return response;

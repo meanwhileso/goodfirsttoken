@@ -5,7 +5,10 @@
 /* An element with `hidden` is always hidden, whatever display its class sets. */
 [hidden] { display: none !important; }
 
-html { -webkit-text-size-adjust: 100%; }
+/* Paper under the whole window. The body is a container, and a container's
+   background doesn't spread to the window, so without this a short page
+   ends in white under its footer. */
+html { -webkit-text-size-adjust: 100%; background: var(--paper); }
 /* The page is a container, so the gutter switches on the page's own width,
    the same width the nav folds on. A media query would count the scrollbar
    and switch at a different point. */

@@ -122,6 +122,11 @@ export interface RoomSnapshot {
   prs: PrRef[];
 }
 
+/** A snapshot of the room with the events a watcher may see, all of one moment. */
+export interface RoomGlance extends RoomSnapshot {
+  events: FeedEvent[];
+}
+
 /**
  * The room for an issue like `owner/name#12`. Repo names compare without
  * case, so every spelling of an issue reaches the same room.
@@ -444,6 +449,43 @@ export class IssueRoom extends DurableObject<Env> {
     return events
       .filter((event) => !blocked.has(event.githubId))
       .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
+  }
+
+  /**
+   * What the issue page loads with, as of one moment: its issue, every
+   * claim in the order made, blocked donors' included, the open PRs on the
+   * issue, and every event a watcher may see, oldest first. The timers that
+   * are due apply first. The claims, the PRs, and the events are read with
+   * no await between them, so no call lands in between, and a PR is in the
+   * PRs exactly when its event is in the events. Null when D1 can't say who
+   * is blocked.
+   */
+  async glance(): Promise<RoomGlance | null> {
+    const now = Date.now();
+    this.settle(now);
+    const read = {
+      issue: this.issue(),
+      claims: this.readClaims().map((c) => c.record),
+      prs: this.issuePrs(),
+    };
+    const stored = this.storedAfter(0);
+    await this.done(now, undefined);
+    let blocked: Set<number>;
+    try {
+      blocked = await blockedAmong(
+        this.env.DB,
+        stored.map((event) => event.githubId),
+      );
+    } catch (error) {
+      console.warn('A glance at an issue room was turned away, because D1 could not say which donors are blocked.', error);
+      return null;
+    }
+    return {
+      ...read,
+      events: stored
+        .filter((event) => !blocked.has(event.githubId))
+        .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event')),
+    };
   }
 
   /**
