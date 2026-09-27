@@ -1478,6 +1478,11 @@ each a ring, filled while a claim takes it.
 - The issue takes claims while the project the page follows counts it
   waiting. Then a pane shows how many slots are open, with the command to
   claim the issue from an agent: `/goodfirsttoken:work owner/repo#n`.
+  When the command is wider than the pane, `owner/repo#n` starts a new
+  line and stays whole on it if it fits. When it is wider than a line, it
+  wraps after the slash. A name then breaks at a hyphen, or in the middle
+  when it can't fit on a line of its own. The break adds no character to
+  what a screen reader reads, or to what a person selects and copies.
 - While a PR is open on the issue, claims are closed. The rings turn gray,
   the pane says claims are closed with the PR's link, and every lane says
   the PR is open, with its link. A claim's PR closes them live. The room
@@ -1502,7 +1507,8 @@ never reach the page, so a slot their claim frees shows taken until the page
 loads again.
 
 **Watch as text** shows the `curl -N` command for the issue's text stream,
-with a copy button.
+with a copy button. On a narrow screen its URL wraps the same way: whole
+on a line of its own when it fits, and after its slashes when it doesn't.
 
 ## Sample data in development
 
@@ -1537,6 +1543,11 @@ end-to-end tests drive real rooms with it.
   approved sample project, which it adds, with its sample issues, when it
   isn't a project yet. Anything else is `422`. Nothing checks the issue on
   GitHub, so any number works.
+- One sample project is only ever added this way: `sampleorg/samplenotes`.
+  `pnpm seed` leaves it out, and the GitHub fake has no such repo, since
+  nothing reads it from GitHub. Its owner and name have no hyphen for a
+  line to break at, so the issue page's end-to-end tests use it to check
+  where the claim command and the stream's URL wrap.
 - A claim on an issue the project hasn't cached caches it first, as a sync
   would, with the project's first tag, no linked PR, and the `title` given,
   or `A sample issue`. So the issue takes claims.
