@@ -79,7 +79,7 @@ Every public page, the markdown and JSON versions, and share cards.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#23](https://github.com/meanwhileso/goodfirsttoken/issues/23) | Build the homepage | #7, #14 | |
+| [#23](https://github.com/meanwhileso/goodfirsttoken/issues/23) | Build the homepage | #7, #14 | [#54](https://github.com/meanwhileso/goodfirsttoken/pull/54) |
 | [#24](https://github.com/meanwhileso/goodfirsttoken/issues/24) | Build the projects list and the project pages | #7, #12, #14 | |
 | [#25](https://github.com/meanwhileso/goodfirsttoken/issues/25) | Build the issue page with live lanes | #7, #14 | |
 | [#26](https://github.com/meanwhileso/goodfirsttoken/issues/26) | Build person pages, the leaderboard, and /live | #7, #14, #17 | |
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n10 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n10 done
 ```
 
 ## Maintainer steps

@@ -73,7 +73,8 @@
 
     slot.replaceWith(h('header', { class: 'site-nav' },
       h('nav', { class: 'wrap site-nav__inner', 'aria-label': 'Primary' },
-        h('a', { class: 'logo-chip', href: 'index.html', 'aria-label': 'Good First Token home' }, ICON.mark(), 'good first token'),
+        // The homepage is the site's / now. Here the logo goes to the list of prototype pages.
+        h('a', { class: 'logo-chip', href: './', 'aria-label': 'Good First Token home' }, ICON.mark(), 'good first token'),
         h('input', { type: 'checkbox', id: 'nav-toggle', class: 'site-nav__toggle', 'aria-label': 'Menu', 'aria-controls': 'nav-links' }),
         h('label', { for: 'nav-toggle', class: 'site-nav__hamburger' }, h('span', { 'aria-hidden': 'true' })),
         h('ul', { id: 'nav-links', class: 'site-nav__links' }, items))));

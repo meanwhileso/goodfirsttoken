@@ -30,6 +30,16 @@ export async function watchSocket(stub: { fetch: (url: string, init: RequestInit
   const res = await stub.fetch(`https://feed.test/${since ? `?since=${since}` : ''}`, {
     headers: { Upgrade: 'websocket' },
   });
+  return collect(res);
+}
+
+/** Opens a live socket through the Worker on a stream's URL, as a page does, and collects every event it is sent. */
+export async function liveSocket(path: string) {
+  const res = await exports.default.fetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
+  return { res, ...collect(res) };
+}
+
+function collect(res: Response) {
   const socket = res.webSocket;
   if (!socket) throw new Error(`No WebSocket came back, status ${String(res.status)}.`);
   const events: FeedEvent[] = [];
@@ -46,6 +56,17 @@ export async function watchSocket(stub: { fetch: (url: string, init: RequestInit
         expect(events).toHaveLength(n);
       });
       return events.map((e) => e.text);
+    },
+    /** Waits for an event with this text, and gives it. */
+    async event(text: string): Promise<FeedEvent> {
+      return vi.waitFor(
+        () => {
+          const found = events.find((e) => e.text === text);
+          expect(found, `"${text}" in ${JSON.stringify(events.map((e) => e.text))}`).toBeDefined();
+          return found as FeedEvent;
+        },
+        { timeout: 5000, interval: 20 },
+      );
     },
   };
 }

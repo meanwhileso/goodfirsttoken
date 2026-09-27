@@ -1,10 +1,10 @@
 // Serves a folder over HTTP for local review, with byte ranges so Safari
-// plays video. No dependencies.
+// plays video. A folder with no index.html lists its pages. No dependencies.
 //
 //   node scripts/serve.mjs prototype        # http://localhost:8943
 //   PORT=9000 node scripts/serve.mjs video
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
@@ -100,13 +100,42 @@ export function sendFile(req, res, root, file, size, headers) {
   pipeline(createReadStream(file), res, () => {});
 }
 
+const escapeHtml = (text) =>
+  text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+// Lists the pages in `folder`, which must be root or inside it. Like
+// sendFile, this checks next to the read, so a caller can't forget.
+async function sendFolder(res, root, folder) {
+  const base = path.resolve(root) + path.sep;
+  const dir = path.resolve(folder) + path.sep;
+  if (!dir.startsWith(base)) return notFound(res);
+  const names = await readdir(dir).catch(() => null);
+  if (!names) return notFound(res);
+  sendListing(res, `${path.basename(dir)}/`, names);
+}
+
+// Answers with a list of the HTML and markdown pages in a folder, linked.
+export function sendListing(res, title, names) {
+  const pages = names.filter((name) => /\.(html|md)$/.test(name)).sort();
+  const items = pages.map((name) => `<li><a href="${escapeHtml(encodeURIComponent(name))}">${escapeHtml(name)}</a></li>`);
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(
+    `<!doctype html>\n<meta charset="utf-8">\n<title>${escapeHtml(title)}</title>\n<h1>${escapeHtml(title)}</h1>\n<ul>\n${items.join('\n')}\n</ul>\n`,
+  );
+}
+
 export function createStaticServer(root) {
   const base = path.resolve(root);
   return createServer(async (req, res) => {
     const file = resolvePath(base, req.url ?? '/');
     const info = file && (await stat(file).catch(() => null));
-    if (!info?.isFile()) return notFound(res);
-    sendFile(req, res, base, file, info.size, { 'content-type': contentType(file), 'cache-control': 'no-store' });
+    if (info?.isFile()) {
+      return sendFile(req, res, base, file, info.size, { 'content-type': contentType(file), 'cache-control': 'no-store' });
+    }
+    // A folder URL, whose folder has no index.html, lists the folder's pages.
+    const isFolder = file !== null && new URL(req.url ?? '/', 'http://localhost').pathname.endsWith('/');
+    if (!isFolder) return notFound(res);
+    return sendFolder(res, base, path.dirname(file));
   });
 }
 

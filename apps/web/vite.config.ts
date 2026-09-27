@@ -25,9 +25,8 @@ function base(staticOrigin = ''): string {
 
 // Each file directly in src/assets goes into the build, named after its
 // content like any file a page imports, whether a page links to it yet or
-// not. So the static host has the launch video and its poster before the
-// homepage (#23) shows them. A page that imports one with ?url gets the same
-// file. Hidden files, like a .DS_Store, stay out, and so do folders under
+// not. A page that imports one with ?url, like the homepage's launch video,
+// gets the same file. Hidden files, like a .DS_Store, stay out, and so do folders under
 // it, whose files go in only when a page imports them.
 function everyAsset(dir: string): Plugin {
   return {
@@ -48,12 +47,21 @@ function everyAsset(dir: string): Plugin {
   };
 }
 
+// Where the local D1, Durable Objects, KV, and queues keep their data. By
+// default .wrangler/state, which `pnpm dev` uses. The end-to-end tests set
+// LOCAL_STATE_DIR to a folder of their own (playwright.config.ts), so data
+// seeded into `pnpm dev` never reaches them. scripts/migrate-local.mjs reads
+// the same setting.
+function localState(dir = ''): true | { path: string } {
+  return dir.trim() ? { path: dir.trim() } : true;
+}
+
 export default defineConfig({
   base: base(process.env.STATIC_ORIGIN),
   server: { port: 5173, strictPort: true },
   preview: { port: 4173, strictPort: true },
   plugins: [
-    cloudflare({ viteEnvironment: { name: 'ssr' } }),
+    cloudflare({ viteEnvironment: { name: 'ssr' }, persistState: localState(process.env.LOCAL_STATE_DIR) }),
     tanstackStart(),
     react(),
     everyAsset(fileURLToPath(new URL('./src/assets/', import.meta.url))),

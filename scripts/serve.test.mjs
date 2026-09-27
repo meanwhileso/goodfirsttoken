@@ -17,6 +17,8 @@ before(async () => {
   await mkdir(path.join(root, 'assets'), { recursive: true });
   await writeFile(path.join(root, 'index.html'), '<h1>home</h1>');
   await writeFile(path.join(root, 'start.md'), '# start');
+  await mkdir(path.join(root, 'pages'));
+  for (const name of ['live.html', 'start.md', 'styles.css']) await writeFile(path.join(root, 'pages', name), name);
   await writeFile(path.join(root, 'assets', 'clip.mp4'), '0123456789');
   await writeFile(path.join(root, 'assets', 'big.mp4'), Buffer.alloc(8 * 1024 * 1024));
   await writeFile(path.join(base, 'outside.txt'), 'secret');
@@ -32,6 +34,17 @@ test('a folder URL serves its index.html', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
   assert.equal(await res.text(), '<h1>home</h1>');
+});
+
+test('a folder URL whose folder has no index.html lists its pages', async () => {
+  const res = await fetch(`${origin}/pages/`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
+  const page = await res.text();
+  assert.match(page, /<a href="live\.html">live\.html<\/a>/);
+  assert.match(page, /<a href="start\.md">start\.md<\/a>/);
+  assert.doesNotMatch(page, /styles\.css/);
+  assert.equal((await fetch(`${origin}/no-such-folder/`)).status, 404);
 });
 
 test('markdown is served as text an agent can read', async () => {

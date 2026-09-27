@@ -18,6 +18,11 @@ import { ndjsonLine, textLine } from './format';
 // as a line. A stream closes after an hour. A reader reconnects with
 // `?since=<event ID>` to get what it missed. The streams are public and set
 // no cookie.
+//
+// A page opens that WebSocket itself, with a WebSocket upgrade on the
+// .ndjson form's URL. The Worker finds the feed or room the same way and
+// hands the upgrade to it, so the browser holds the feed's own hibernating
+// socket, which sends each event as one JSON message.
 
 const HOUR = 60 * 60 * 1000;
 
@@ -150,11 +155,35 @@ function parseEvent(data: unknown): FeedEvent | null {
 }
 
 /**
- * Answers a request for a stream: a line for each event the feed or room
- * sends, until the stream's lifetime, an hour, has passed, the feed or room
- * closes the socket, or the reader goes away. A reader that leaves a line
- * untaken for a minute is too slow, and the stream ends, so lines never pile
- * up in memory. The options are for tests.
+ * Answers a WebSocket upgrade on a stream's .ndjson URL by handing it to the
+ * feed or room, whose hibernating socket then sends the browser each event
+ * as one JSON message: first every event after `since`, or the ones a
+ * watcher with no `since` gets, then each new one. Blocked donors' events
+ * are left out, as for every watcher. The socket is public and read-only.
+ * What the browser sends is ignored, and no cookie is read or set.
+ */
+async function openLiveSocket(source: Source, format: Format, since: string | null): Promise<Response> {
+  if (format !== 'ndjson') return text(400, 'Open a WebSocket on the .ndjson form of this stream.');
+  try {
+    const stub = await sourceFor(source);
+    if (stub instanceof Response) return stub;
+    const query = since === null ? '' : `?since=${encodeURIComponent(since)}`;
+    const upgrade = await stub.fetch(`https://feed.internal/${query}`, { headers: { Upgrade: 'websocket' } });
+    if (upgrade.status !== 101 || !upgrade.webSocket) throw new Error(`The feed answered ${String(upgrade.status)}.`);
+    return new Response(null, { status: 101, webSocket: upgrade.webSocket });
+  } catch (error) {
+    console.warn('A live socket could not reach its feed.', error);
+    return text(503, 'Try again in a moment.');
+  }
+}
+
+/**
+ * Answers a request for a stream, or a page's WebSocket upgrade on one,
+ * which openLiveSocket takes. A stream is a line for each event the feed or
+ * room sends, until the stream's lifetime, an hour, has passed, the feed or
+ * room closes the socket, or the reader goes away. A reader that leaves a
+ * line untaken for a minute is too slow, and the stream ends, so lines never
+ * pile up in memory. The options are for tests.
  */
 export async function handleStream(
   request: Request,
@@ -172,6 +201,9 @@ export async function handleStream(
   const since = new URL(request.url).searchParams.get('since') || null;
   if (since !== null && !validate(id, since).ok) {
     return text(400, 'since has to be the ID of an event, as a line of the stream gives it.');
+  }
+  if (request.method === 'GET' && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+    return openLiveSocket(source, format, since);
   }
   const { type, line } = FORMATS[format];
   const headers = { 'content-type': type, ...HEADERS };
