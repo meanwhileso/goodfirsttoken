@@ -122,12 +122,10 @@ export async function signIn(browser: Browser, github: GitHubFake, login: string
 /** The text of the nav's link to /me, which shows who is signed in, or null when it isn't there. */
 export async function navLogin(response: Response): Promise<string | null> {
   const html = await response.text();
-  const link = /<a class="site-nav__me"[^>]*>(.*?)<\/a>/s.exec(html)?.[1];
-  if (link === undefined) return null;
-  return link
-    .replace(/<span class="avatar"[^>]*>.*?<\/span>/s, '')
-    .replace(/<[^>]*>/g, '')
-    .trim();
+  // The login is the text after the avatar. React puts an empty comment
+  // between the "@" and the login, and nothing else sits in the link.
+  const text = /<a class="site-nav__me"[^>]*>\s*<span class="avatar"[^>]*>[^<]*<\/span>([^<]*(?:<!-- -->[^<]*)*)<\/a>/.exec(html)?.[1];
+  return text === undefined ? null : text.split('<!-- -->').join('').trim();
 }
 
 /** The tokens the fake gave the app through sign-in, oldest first. */
