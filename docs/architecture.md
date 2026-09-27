@@ -1182,7 +1182,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `/design` shows every component in `src/components/`, and a new sample
   there changes its screenshots, which have to come from CI's Playwright
   build. The page builds the lanes from `Chip`, `Slots`, `SlotRing`,
-  `Prompt`, `Marker`, and `Rail`.
+  `Prompt`, `Marker`, and `Rail`. In its prompts, `PromptPath` holds the
+  claim command's `owner/repo#n` and the stream's URL: an inline block with
+  a `<wbr>` after each slash between two names, so the path starts a new
+  line whole when it fits there, and wraps after a slash when it doesn't.
+  It is a part of the prompt, like `PromptAccent`, and `/design` doesn't
+  show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
   timeline names every claimant, and two for the do-not-list when the issue
@@ -1413,9 +1418,11 @@ end-to-end tests. The rules are in
   one closed.
 - **The GitHub fake's people.** The sample work names the fake's sample
   people, with their GitHub IDs, so signing in locally as one shows their
-  work. A test checks that every person, repo, and issue it names is in
-  `packages/github-fake/src/sample-data.ts`. Its projects are the fake's
-  made-up repos under `sample-owner`.
+  work. A test checks that every person, repo, and issue `pnpm seed` uses
+  is in `packages/github-fake/src/sample-data.ts`. Its projects are the
+  fake's made-up repos under `sample-owner`. The one project only
+  `/dev/work` knows is described in
+  [how-it-works.md](how-it-works.md#sample-data-in-development).
 - **The end-to-end tests seed their own preview.** `home.spec.ts` checks
   the empty homepage first, then posts to `/dev/seed` and checks the page
   with its ranks and projects. The preview keeps its data apart from

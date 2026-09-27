@@ -4,7 +4,7 @@ import { siteOrigin } from '../auth/settings';
 import { createProject, getIssue, getProject, saveIssues, savePerson } from '../db';
 import { issueRoom } from '../rooms/issue-room';
 import { devOnlyRequest } from './gate';
-import { SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleProject } from './sample-work';
+import { SAMPLE_PEOPLE, SAMPLE_PROJECTS, WORK_ONLY_PROJECTS, type SampleProject } from './sample-work';
 
 // POST /dev/work, in local development only: works an issue as one of the
 // GitHub fake's sample people, through the issue's room, the way the MCP
@@ -20,12 +20,13 @@ import { SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleProject } from './sample-wor
 //   { "login": "priya", "issue": "sample-owner/sample-app#311", "action": "open_pr", "pr": 312 }
 //   { "login": "priya", "issue": "sample-owner/sample-app#311", "action": "release", "reason": "..." }
 //
-// The issue has to be in an approved sample project's repo, which is added
-// with its sample issues when it isn't there yet. Nothing checks the issue
-// on GitHub, so any number works. A claim on an issue the project hasn't
-// cached caches it first, as a sync would, with the project's first tag and
-// the `title` given, so the issue takes claims. Every action but a claim
-// works the person's newest claim on the issue. The answer is the room's.
+// The issue has to be in the repo of an approved sample project from either
+// list in ./sample-work.ts, which is added with its sample issues when it
+// isn't there yet. Nothing checks the issue on GitHub, so any number works.
+// A claim on an issue the project hasn't cached caches it first, as a sync
+// would, with the project's first tag and the `title` given, so the issue
+// takes claims. Every action but a claim works the person's newest claim on
+// the issue. The answer is the room's.
 
 const ACTIONS = ['claim', 'post', 'submit', 'open_pr', 'release'] as const;
 /** The title a claim caches an issue with when the request gives none. */
@@ -122,7 +123,9 @@ export async function handleDevWork(request: Request): Promise<Response> {
   const person = Object.values(SAMPLE_PEOPLE).find((p) => p.login === work.login);
   if (!person) return text(422, `login has to be one of the sample people: ${Object.values(SAMPLE_PEOPLE).map((p) => p.login).join(', ')}.`);
   const repo = work.issue.slice(0, work.issue.lastIndexOf('#'));
-  const sample = SAMPLE_PROJECTS.find((p) => p.status === 'approved' && p.repo.toLowerCase() === repo.toLowerCase());
+  const sample = [...SAMPLE_PROJECTS, ...WORK_ONLY_PROJECTS].find(
+    (p) => p.status === 'approved' && p.repo.toLowerCase() === repo.toLowerCase(),
+  );
   if (!sample) return text(422, `The issue has to be in one of the approved sample projects' repos.`);
 
   const now = Date.now();

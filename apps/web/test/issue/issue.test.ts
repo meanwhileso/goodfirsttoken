@@ -54,6 +54,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A path as the page's HTML holds it, in its span, with a `<wbr>` after each
+ * slash between two names, where the line can break.
+ */
+function shownPath(...names: string[]): string {
+  return `<span class="prompt__path">${names.join('/<wbr/>')}</span>`;
+}
+
+/** The claim command as the page's HTML holds it. */
+function claimCommand(): string {
+  const [owner = '', name = ''] = repo.split('/');
+  return `/goodfirsttoken:work ${shownPath(owner, `${name}#${number}`)}`;
+}
+
 function at(time: number): void {
   vi.setSystemTime(time);
 }
@@ -380,9 +394,7 @@ describe('the slots', () => {
     const page = await load();
     expect(page).toMatchObject({ closedBecause: null, slots: 3, title: 'As sample-web cached it' });
     expect(slotsTaken(page.view)).toBe(1);
-    expect(await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text()).toContain(
-      `/goodfirsttoken:work ${issue}`,
-    );
+    expect(await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text()).toContain(claimCommand());
   });
 
   test("with two projects keeping issues in one repo, a blocked donor's claim counts against each project's cap", async () => {
@@ -403,7 +415,7 @@ describe('the slots', () => {
     expect([lanesInPlay(page.view), slotsTaken(page.view)]).toEqual([[], 1]);
     const html = await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text();
     expect(html).toContain('1 of 3 slots taken');
-    expect(html).toContain(`/goodfirsttoken:work ${issue}`);
+    expect(html).toContain(claimCommand());
   });
 
   test('with no copy waiting, the page follows the oldest that would be but for a PR the sync saw, and shows that PR', async () => {
@@ -604,8 +616,8 @@ describe('the page, through the Worker', () => {
     expect(res.headers.get('set-cookie')).toBeNull();
     expect(html).toContain('wrote failing test: a rewrite from /docs/ keeps its slash');
     expect(html).toContain('1 of 3 slots taken');
-    expect(html).toContain(`/goodfirsttoken:work ${issue}`);
-    expect(html).toContain(`curl -N primary.example/${repo}/issues/${number}/live.txt`);
+    expect(html).toContain(claimCommand());
+    expect(html).toContain(`curl -N ${shownPath('primary.example', ...repo.split('/'), 'issues', number, 'live.txt')}`);
   });
 
   test('offers the claim command only for an issue that takes claims', async () => {
@@ -621,7 +633,7 @@ describe('the page, through the Worker', () => {
     expect(linked).toContain(`href="https://github.com/${repo}/pull/70"`);
 
     await tag();
-    expect(await (await page(`/${repo}/issues/${number}`)).text()).toContain(`/goodfirsttoken:work ${issue}`);
+    expect(await (await page(`/${repo}/issues/${number}`)).text()).toContain(claimCommand());
   });
 
   test('answers 404 for an issue that is not on the site, and 503 when the database is down', async () => {
