@@ -292,8 +292,9 @@ from the Actions tab. The push runs give each pull request a fresh analysis
 of its base to compare with, and close an alert soon after its fix merges.
 The Monday run catches new advisories and new rules for code that hasn't
 changed. It uploads every finding to code scanning. Its jobs fail when a scan
-or an upload breaks, and findings leave them green. It is the only workflow
-that can write, and it writes only `security-events`, which the upload needs.
+or an upload breaks, and findings leave them green. It is the only scan
+workflow that can write, and it writes only `security-events`, which the
+upload needs.
 
 Code scanning matches each finding to the alert it already has, so a second
 run files nothing new. Matching can slip in three ways. OSV-Scanner's
@@ -326,7 +327,7 @@ time, a maintainer goes in this order:
 5. Only then add the required checks and the code scanning ruleset.
 
 After that, these settings stay on: private vulnerability reporting,
-Dependabot alerts, branch protection that requires the five jobs above, and a
+Dependabot alerts, branch protection that requires the five security jobs above, and a
 ruleset that requires code scanning results. In the ruleset, CodeQL gets
 "Security alerts: High or higher" and "Alerts: Errors". Semgrep OSS and zizmor
 get "Alerts: Errors", since their SARIF carries no security severity. CodeQL
