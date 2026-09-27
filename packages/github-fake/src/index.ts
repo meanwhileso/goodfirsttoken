@@ -14,6 +14,7 @@ import { describeOperation, runGraphQL } from './graphql.ts';
 import { REST_DOCS, errorResponse, json } from './http.ts';
 import { rateHeaders, rateWindow, resourceOf, type RateResource } from './rate-limit.ts';
 import { handleRest } from './rest.ts';
+import { own, setOwn } from './own.ts';
 import { sampleData as defaultSampleData, type SampleData } from './sample-data.ts';
 import {
   addReview,
@@ -175,7 +176,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
 
   async function answerApi(request: Request, url: URL, path: string) {
     const token = tokenFrom(request.headers.get('authorization'));
-    const grant = token === null ? undefined : state.tokens[token];
+    const grant = token === null ? undefined : own(state.tokens, token);
     const login = grant?.login ?? null;
     // GitHub keeps when each token was last used, which decides the one it
     // revokes past the cap (web.ts).
@@ -329,10 +330,10 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       const base = repoNamed(repo);
       const author = getAccount(state, pull.by).login;
       const baseRef = pull.base ?? base.defaultBranch;
-      base.branches[baseRef] ??= base.branches[base.defaultBranch] ?? '';
+      if (own(base.branches, baseRef) === undefined) setOwn(base.branches, baseRef, own(base.branches, base.defaultBranch) ?? '');
       const target = canPush(roleOf(base, author)) ? base : forkRepo(state, base, author, {}, at);
       const branch = `patch-${String(newId(state))}`;
-      target.branches[branch] = base.branches[baseRef] ?? '';
+      setOwn(target.branches, branch, own(base.branches, baseRef) ?? '');
       commitOnBranch(
         state,
         target,

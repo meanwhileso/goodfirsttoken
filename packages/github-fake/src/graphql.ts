@@ -19,6 +19,7 @@
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
 import { base64ToBytes, blobText, bytesToBase64, lookupPath, type GitPerson, type Oid } from './git.ts';
 import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
+import { own } from './own.ts';
 import {
   FakeError,
   canPush,
@@ -466,7 +467,7 @@ function pullRequestNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull
 }
 
 function refNode(ctx: Ctx, repo: RepoRecord, branch: string) {
-  const oid = repo.branches[branch];
+  const oid = own(repo.branches, branch);
   if (oid === undefined) return null;
   return {
     __typename: 'Ref',
@@ -480,8 +481,8 @@ function refNode(ctx: Ctx, repo: RepoRecord, branch: string) {
 
 // A revision: HEAD, a branch name, or a full or abbreviated commit ID.
 function resolveRev(ctx: Ctx, repo: RepoRecord, rev: string): Oid | null {
-  if (rev === '' || rev === 'HEAD') return repo.branches[repo.defaultBranch] ?? null;
-  const branch = repo.branches[rev.replace(/^refs\/heads\//, '')];
+  if (rev === '' || rev === 'HEAD') return own(repo.branches, repo.defaultBranch) ?? null;
+  const branch = own(repo.branches, rev.replace(/^refs\/heads\//, ''));
   if (branch !== undefined) return branch;
   if (!/^[0-9a-f]{4,40}$/.test(rev)) return null;
   return Object.keys(ctx.state.objects).find((oid) => oid.startsWith(rev)) ?? null;
@@ -494,7 +495,7 @@ function objectAt(ctx: Ctx, repo: RepoRecord, expression: string) {
   const rev = resolveRev(ctx, repo, colon === -1 ? expression : expression.slice(0, colon));
   if (rev === null) return null;
   if (colon === -1) return objectNode(ctx, repo, rev, '');
-  const commit = ctx.state.objects[rev];
+  const commit = own(ctx.state.objects, rev);
   if (commit?.type !== 'commit') return null;
   const path = expression.slice(colon + 1).replace(/\/+$/, '');
   const found = lookupPath(ctx.state.objects, commit.tree, path);
@@ -511,7 +512,7 @@ function gitActor(ctx: Ctx, person: GitPerson) {
 }
 
 function objectNode(ctx: Ctx, repo: RepoRecord, oid: Oid | null, path: string): Record<string, unknown> | null {
-  const object = oid === null ? undefined : ctx.state.objects[oid];
+  const object = oid === null ? undefined : own(ctx.state.objects, oid);
   if (oid === null || object === undefined) return null;
   const common = {
     oid,

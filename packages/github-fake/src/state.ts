@@ -17,6 +17,7 @@ import {
   type Oid,
 } from './git.ts';
 import type { RateResource, RateWindow } from './rate-limit.ts';
+import { own } from './own.ts';
 
 export type Role = 'admin' | 'maintain' | 'write' | 'triage' | 'read';
 
@@ -202,7 +203,7 @@ export function fullName(repo: RepoRecord): string {
 }
 
 export function findAccount(state: FakeState, login: string): Account | null {
-  return state.accounts[key(login)] ?? null;
+  return own(state.accounts, key(login)) ?? null;
 }
 
 export function getAccount(state: FakeState, login: string): Account {
@@ -212,15 +213,15 @@ export function getAccount(state: FakeState, login: string): Account {
 }
 
 export function findRepo(state: FakeState, owner: string, name: string): RepoRecord | null {
-  return state.repos[key(`${owner}/${name}`)] ?? null;
+  return own(state.repos, key(`${owner}/${name}`)) ?? null;
 }
 
 export function findRepoByFullName(state: FakeState, name: string): RepoRecord | null {
-  return state.repos[key(name)] ?? null;
+  return own(state.repos, key(name)) ?? null;
 }
 
 export function findIssue(repo: RepoRecord, number: number): IssueRecord | null {
-  return repo.issues[String(number)] ?? null;
+  return own(repo.issues, String(number)) ?? null;
 }
 
 // The person's role on a repo. Anyone signed in can read a public repo. A
@@ -229,7 +230,7 @@ export function findIssue(repo: RepoRecord, number: number): IssueRecord | null 
 export function roleOf(repo: RepoRecord, login: string | null): Role | null {
   if (login === null) return null;
   if (key(repo.owner) === key(login)) return 'admin';
-  return repo.collaborators[key(login)] ?? (repo.private === true ? null : 'read');
+  return own(repo.collaborators, key(login)) ?? (repo.private === true ? null : 'read');
 }
 
 // Whether a call can see the repo at all. Anyone can see a public repo. A
@@ -350,7 +351,7 @@ export function commitOnBranch(
   change: FileChanges & { headline: string; body?: string | null; login: string; expectedHeadOid?: Oid },
   now: string,
 ): Oid {
-  const head = repo.branches[branch];
+  const head = own(repo.branches, branch);
   if (head === undefined) {
     throw new FakeError('not_found', `A ref named "refs/heads/${branch}" does not exist in ${fullName(repo)}.`);
   }
@@ -527,11 +528,11 @@ export function openPull(state: FakeState, base: RepoRecord, input: OpenPullInpu
   if (input.headRepo && (!headRepo || networkRoot(state, headRepo) !== networkRoot(state, base))) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
   }
-  const headSha = headRepo?.branches[branch];
+  const headSha = headRepo ? own(headRepo.branches, branch) : undefined;
   if (!headRepo || headSha === undefined) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head' }]);
   }
-  const baseSha = base.branches[input.base];
+  const baseSha = own(base.branches, input.base);
   if (baseSha === undefined) throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'base' }]);
   const label = `${headRepo.owner}:${branch}`;
   if (isAncestor(state.objects, headSha, baseSha)) {
