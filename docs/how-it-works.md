@@ -63,14 +63,16 @@ person later.
   appears in a page, a response, or a log.
 - The site keeps one token per person, which all their browsers use. Each
   sign-in replaces it, and revokes the one it replaces at GitHub first,
-  since nothing else holds that one. When GitHub can't revoke it, sign-in
-  goes on.
+  since nothing else holds that one. When GitHub gives back the token the
+  site already holds, nothing is revoked. When GitHub can't revoke it,
+  sign-in goes on.
 - Signing out revokes the stored token at GitHub, forgets it, and ends every
-  session the person has, in every browser, since all of them used it. It
-  forgets the token only while it is still the one it revoked, so a sign-in
-  in another browser at the same moment keeps the new token it stored. When
-  GitHub can't revoke it, the person is still signed out and the token is
-  still forgotten.
+  session the person had when they signed out, in every browser, since all
+  of them used it. A sign-in in another browser at the same moment keeps its
+  session and the new token it stored: sign-out forgets the token only while
+  it is still the one it revoked, and ends only the sessions it found first.
+  When GitHub can't revoke it, the person is still signed out and the token
+  is still forgotten.
 - Revoking touches that one token. The person's other tokens from the same
   GitHub OAuth app, like the ones their agents hold, keep working.
 - A session that ends by expiring, with no sign-out, leaves the token stored
@@ -105,13 +107,15 @@ sign-up, can be reached.
 - Sign-in, the callback, and the dev sign-in share a Cloudflare rate limit
   of 20 requests a minute from each client: an IPv4 address, or the /64 an
   IPv6 address is in, since one IPv6 client can use any address in its /64.
-  The next one gets `429` with `Retry-After: 60`. A form refused for its
-  `Origin` doesn't count, so a page on another site can't use up someone's
-  sign-ins.
+  An IPv4 address written as IPv6, like `::ffff:198.51.100.7`, counts as the
+  IPv4 address. The next one gets `429` with `Retry-After: 60`. A form
+  refused for its `Origin` doesn't count, so a page on another site can't
+  use up someone's sign-ins.
 - When a setting sign-in needs is missing, `OAUTH_CLIENT_ID`,
   `OAUTH_CLIENT_SECRET`, or `AUTH_SECRET`, the sign-in routes answer `503`,
-  and the log names it. Development has stand-ins for the two secrets,
-  below.
+  and the log names it. Pages still answer, with no one signed in. A deploy
+  stops when any of the three is empty. Development has stand-ins for the
+  two secrets, below.
 
 **In development.** Development means the `ENVIRONMENT` variable is
 `development` and `GH_WEB_URL` is the GitHub fake on this machine: an `http`

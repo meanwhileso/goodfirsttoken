@@ -129,7 +129,7 @@ variables. In a private repo, either works.
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
 | `STATIC_ORIGIN` | No | The static host's origin, like `https://static.example.org`, set up as [The static host](#the-static-host) says. Pages then load the built files from there, and the deploy uploads them to `<WORKER_NAME>-static`. When it's empty, the Worker serves them. |
-| `OAUTH_CLIENT_ID` | No | The client ID of this environment's GitHub OAuth app from step 3. Without it, no one can sign in. |
+| `OAUTH_CLIENT_ID` | Yes | The client ID of this environment's GitHub OAuth app from step 3. No one can sign in without it, so the deploy stops when it's empty. |
 | `ADMIN_GITHUB_IDS` | No | The numeric GitHub user IDs of the site's admins, separated by commas. `https://api.github.com/users/<username>` shows a user's `id`. When it's empty, the site has no admins. |
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
 | `GH_WEB_URL` | No | github.com itself, which sign-in sends people to, as an `https` URL. Leave it empty, and the Worker uses `https://github.com`. |

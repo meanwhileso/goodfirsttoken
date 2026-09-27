@@ -2,9 +2,11 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { emptyDatabase } from '../db/helpers';
+import { getAuth } from '../../src/auth/auth';
 import {
   APP,
   Browser,
+  ORIGIN,
   location,
   navLogin,
   parseSetCookie,
@@ -73,6 +75,42 @@ test('a sign-in that replaces the stored token revokes the old one, so a person 
   expect(await storedToken()).toBe(second);
 });
 
+test("reading the person's GitHub profile with the stored token, as Better Auth's account info does, revokes nothing", async () => {
+  await signIn(new Browser(), github, 'priya');
+  const [token = ''] = tokensIssued(github);
+  const account = await env.DB.prepare('SELECT id, user_id FROM account').first<{ id: string; user_id: string }>();
+
+  const info = await getAuth(ORIGIN).api.accountInfo({
+    query: { accountId: account?.id ?? '', userId: account?.user_id ?? '' },
+  });
+
+  expect(info.data).toMatchObject({ login: 'priya' });
+  expect(github.calls.filter((call) => call.method === 'DELETE')).toEqual([]);
+  expect((await gitHubUser(token)).status).toBe(200);
+  expect(await storedToken()).toBe(token);
+});
+
+test("when GitHub can't revoke the token a sign-in replaces, sign-in still lands on /me, and the log names no token", async () => {
+  await signIn(new Browser(), github, 'sam');
+  const [first = ''] = tokensIssued(github);
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+    new Request(input, init).method === 'DELETE'
+      ? Promise.resolve(Response.json({ message: 'Server Error' }, { status: 502 }))
+      : github.fetch(input, init),
+  );
+
+  const browser = new Browser();
+  const back = await signIn(browser, github, 'sam');
+  const second = tokensIssued(github).find((token) => token !== first) ?? '';
+
+  expect(location(back).pathname).toBe('/me');
+  expect(await navLogin(await browser.fetch('/me'))).toBe('@sam');
+  expect(await storedToken()).toBe(second);
+  expect(logged).toHaveBeenCalledWith("GitHub didn't revoke a replaced token at sign-in: 502 Server Error");
+  for (const token of [first, second]) expect(JSON.stringify(logged.mock.calls)).not.toContain(token);
+});
+
 test('after signing in on a laptop and a phone, signing out on the phone leaves no token from sign-in working', async () => {
   const laptop = new Browser();
   const phone = new Browser();
@@ -85,7 +123,7 @@ test('after signing in on a laptop and a phone, signing out on the phone leaves 
   expect(await storedToken()).toBeNull();
 });
 
-test('a sign-out clears only the token it revoked, so a sign-in in another browser at the same moment keeps its token', async () => {
+test('a sign-out clears only the token it revoked and ends only the sessions it found, so a sign-in in another browser at the same moment stays signed in', async () => {
   const laptop = new Browser();
   const phone = new Browser();
   await signIn(laptop, github, 'arjun');
@@ -109,6 +147,8 @@ test('a sign-out clears only the token it revoked, so a sign-in in another brows
   expect(tokensIssued(github)).toEqual([phones]);
   expect(await storedToken()).toBe(phones);
   expect(JSON.stringify(logged.mock.calls)).not.toContain(phones);
+  expect(await navLogin(await phone.fetch('/me'))).toBe('@arjun');
+  expect(location(await laptop.fetch('/me')).pathname).toBe('/sign-in');
 });
 
 test('a session that ends by expiring leaves its token stored and working, until the next sign-in revokes it', async () => {

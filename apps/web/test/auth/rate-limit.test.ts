@@ -2,7 +2,15 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { emptyDatabase } from '../db/helpers';
-import { Browser, location, pickOnGitHub, randomAddress, runAsDevelopment, startGitHub } from './helpers';
+import {
+  Browser,
+  inOneLimitWindow,
+  location,
+  pickOnGitHub,
+  randomAddress,
+  runAsDevelopment,
+  startGitHub,
+} from './helpers';
 
 // wrangler.jsonc gives the sign-in limiter 20 requests a minute for each
 // client. The Workers runtime counts them in the tests too.
@@ -14,6 +22,7 @@ let restore: () => void = () => undefined;
 beforeEach(async () => {
   await emptyDatabase();
   github = startGitHub();
+  await inOneLimitWindow();
 });
 
 afterEach(() => {
@@ -46,6 +55,22 @@ test('an IPv6 client counts by its /64, so changing addresses within it gets no 
 
   expect(sameNetwork.status).toBe(429);
   expect(written).toBe(LIMIT);
+});
+
+test.each([
+  ['::ffff:198.51.100.7', '198.51.100.7'],
+  ['0:0:0:0:0:ffff:198.51.100.17', '198.51.100.17'],
+  ['0000:0000:0000:0000:0000:FFFF:198.51.100.27', '198.51.100.27'],
+  ['::ffff:c633:6425', '198.51.100.37'],
+])('an IPv4 address written as the IPv6 address %s counts as %s', async (mapped, address) => {
+  const ipv4 = new Browser(address);
+  for (let i = 0; i < LIMIT; i++) await ipv4.post('/auth/sign-in');
+
+  const asIPv6 = await new Browser(mapped).post('/auth/sign-in');
+  const neighbor = await new Browser('198.51.100.200').post('/auth/sign-in');
+
+  expect(asIPv6.status).toBe(429);
+  expect(neighbor.status).toBe(303);
 });
 
 test("a form another site sends is refused before it counts, so a page elsewhere can't use up someone's sign-ins", async () => {

@@ -76,11 +76,15 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   GitHub is the one way in, so an email matches only the same GitHub account.
 - **Replacing a token.** Better Auth writes each new token over the stored
   one. Our `getUserInfo` runs just before that write, so it looks up the
-  person's GitHub account and revokes the token about to be replaced. It
-  reads Better Auth's context from a small plugin that keeps it.
-- **Forgetting a token at sign-out** is one update through Better Auth's
-  adapter that matches the account and the encrypted token it revoked. A
-  token a sign-in stored meanwhile doesn't match, so it stays.
+  person's GitHub account and revokes the stored token when the new one is
+  different. Better Auth also calls `getUserInfo` with the stored token
+  itself, for its account info, and that has to revoke nothing. It reads
+  Better Auth's context from a small plugin that keeps it.
+- **Sign-out** lists the person's sessions before it revokes anything, and
+  ends only those. It forgets the token with one update through Better
+  Auth's adapter that matches the account and the encrypted token it
+  revoked. A sign-in in another browser meanwhile stores a token that
+  doesn't match and a session that wasn't listed, so both stay.
 - **GitHub's URLs come from `GH_WEB_URL` and `GH_API_URL`.** Better Auth's
   GitHub provider names github.com and api.github.com itself. The provider's
   options move the authorize page to `GH_WEB_URL`, reading the person goes
@@ -93,7 +97,8 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   placeholder under `.invalid`.
 - **Who is signed in** comes from Better Auth's session, then its user's
   GitHub account, whose `account_id` is the numeric GitHub ID, then that
-  person in `people`. A request with no session cookie reads nothing.
+  person in `people`. A request with no session cookie reads nothing, and
+  with a sign-in setting missing, no one is signed in.
 - **Cookies.** Better Auth puts `__Secure-` in front of cookie names over
   https. The `__Host-` prefix asks for more, so `useSecureCookies` is off and
   the names start with `__Host-gft`. better-call, which Better Auth builds
@@ -108,7 +113,8 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   limit. Better Auth skips its own check when `NODE_ENV` is `test`, so it is
   turned on outright and the tests see it.
 - **Cloudflare rate limiting,** through the `SIGN_IN_LIMITER` binding,
-  counted per `cf-connecting-ip`, with an IPv6 address cut to its /64.
+  counted per `cf-connecting-ip`, with an IPv6 address cut to its /64, and
+  an IPv4 address written as IPv6 read as the IPv4 address.
   Better Auth's own limiter is off, since it counts in each isolate's memory.
 - **Development** is checked in `src/auth/settings.ts`: `ENVIRONMENT` and a
   loopback `http` `GH_WEB_URL` both. The dev sign-in and the stand-ins for

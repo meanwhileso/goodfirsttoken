@@ -111,14 +111,24 @@ export function failureReason(error: unknown): string {
 // stay valid at GitHub, and count toward GitHub's cap of 10 tokens per person
 // for the app, which the tokens their agents hold count toward too. When
 // GitHub can't revoke it, sign-in goes on.
-async function revokeReplacedToken(context: AuthContext, app: OAuthApp, githubId: number): Promise<void> {
+//
+// Better Auth also reads the person with the stored token itself, as its
+// account info does, and GitHub could give the same token again. So a token
+// is revoked only when a different one is about to take its place.
+async function revokeReplacedToken(
+  context: AuthContext,
+  app: OAuthApp,
+  githubId: number,
+  incoming: string,
+): Promise<void> {
   const account = await context.internalAdapter.findAccountByKey({
     providerId: 'github',
     accountId: String(githubId),
   });
   if (!account?.accessToken) return;
   try {
-    await revokeGitHubToken(app, await decryptOAuthToken(account.accessToken, context));
+    const stored = await decryptOAuthToken(account.accessToken, context);
+    if (stored !== incoming) await revokeGitHubToken(app, stored);
   } catch (error) {
     console.error(`GitHub didn't revoke a replaced token at sign-in: ${failureReason(error)}`);
   }
@@ -151,7 +161,9 @@ function authOptions(origin: string) {
         overrideUserInfoOnSignIn: true,
         getUserInfo: async (tokens: OAuth2Tokens) => {
           const info = await gitHubUserInfo(tokens);
-          if (info && context) await revokeReplacedToken(context, app, Number(info.data.id));
+          if (info && context && tokens.accessToken) {
+            await revokeReplacedToken(context, app, Number(info.data.id), tokens.accessToken);
+          }
           return info;
         },
       },

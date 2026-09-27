@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { getPerson } from '../db';
 import { COOKIE_PREFIX, getAuth, type Auth } from './auth';
-import { siteOrigin } from './settings';
+import { SignInNotSetUp, siteOrigin } from './settings';
 
 /** The person signed in on the site. Their numeric GitHub ID is who they are. */
 export interface SignedIn {
@@ -30,11 +30,18 @@ function hasSessionCookie(request: Request): boolean {
  * Who is signed in on this request, and any cookies Better Auth set while it
  * checked, like a session it extended or one it found had expired. The caller
  * sends those cookies back with its response. A request with no session
- * cookie reads nothing.
+ * cookie reads nothing. When a setting sign-in needs is missing, no one can
+ * be signed in, so every page treats the request as signed out.
  */
 export async function readSignedIn(request: Request): Promise<{ signedIn: SignedIn | null; setCookies: string[] }> {
   if (!hasSessionCookie(request)) return { signedIn: null, setCookies: [] };
-  const auth = getAuth(siteOrigin(request));
+  let auth: Auth;
+  try {
+    auth = getAuth(siteOrigin(request));
+  } catch (error) {
+    if (error instanceof SignInNotSetUp) return { signedIn: null, setCookies: [] };
+    throw error;
+  }
   const { headers, response } = await auth.api.getSession({ headers: request.headers, returnHeaders: true });
   const setCookies = headers.getSetCookie();
   if (!response) return { signedIn: null, setCookies };

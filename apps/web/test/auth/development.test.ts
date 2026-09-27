@@ -10,6 +10,7 @@ import {
   navLogin,
   runAsDevelopment,
   setEnv,
+  signIn,
   startGitHub,
   tokensIssued,
 } from './helpers';
@@ -120,6 +121,23 @@ test.each(['OAUTH_CLIENT_ID', 'OAUTH_CLIENT_SECRET', 'AUTH_SECRET'] as const)(
     expect(github.calls).toEqual([]);
   },
 );
+
+test('with a sign-in setting missing, pages still answer, and treat someone holding a session cookie as signed out', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const forged = new Browser();
+  forged.cookies.set('__Host-gft.session_token', 'not-a-real-session.not-a-signature');
+  restore = setEnv({ OAUTH_CLIENT_ID: undefined });
+
+  const home = await browser.fetch('/');
+  const me = await browser.fetch('/me');
+  const forgedHome = await forged.fetch('/');
+
+  expect(home.status).toBe(200);
+  expect(await navLogin(home)).toBeNull();
+  expect(location(me).pathname).toBe('/sign-in');
+  expect(forgedHome.status).toBe(200);
+});
 
 test('in development with GitHub the fake on this machine and neither secret set, sign-in uses the stand-ins', async () => {
   development({ OAUTH_CLIENT_SECRET: undefined, AUTH_SECRET: undefined });

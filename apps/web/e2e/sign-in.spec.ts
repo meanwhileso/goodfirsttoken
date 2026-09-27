@@ -40,13 +40,24 @@ test('signing in with GitHub through the fake shows your login in the nav, and s
   expect(await context.cookies(baseURL)).toEqual([]);
 });
 
-test('in development, the dev sign-in signs in as a sample person in one request', async ({ page, baseURL }) => {
-  const answer = await page.request.post('/auth/dev/sign-in', {
-    form: { login: 'kenji' },
-    headers: { origin: new URL(baseURL ?? '').origin },
+// The page posts the form itself, so the browser sends its own Origin, and
+// the fixtures' cookie check sees every response on the way to /me.
+test('in development, the dev sign-in signs in as a sample person in one request', async ({ page }) => {
+  await page.goto('/');
+
+  await page.evaluate(() => {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = '/auth/dev/sign-in';
+    const login = document.createElement('input');
+    login.name = 'login';
+    login.value = 'kenji';
+    form.append(login);
+    document.body.append(form);
+    form.submit();
   });
 
-  expect(new URL(answer.url()).pathname).toBe('/me');
-  await page.goto('/');
+  await page.waitForURL((url) => url.pathname === '/me');
   await expect(nav(page).getByRole('link', { name: '@kenji' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('@kenji');
 });

@@ -139,6 +139,16 @@ export class Browser {
   }
 }
 
+/**
+ * Waits, when needed, until the next 8 seconds fall in one rate-limit window.
+ * The runtime counts each minute of the wall clock apart, so a test that sends
+ * 21 requests across the turn of a minute would see its count start over.
+ */
+export async function inOneLimitWindow(): Promise<void> {
+  const left = 60_000 - (Date.now() % 60_000);
+  if (left < 8_000) await new Promise((resolve) => setTimeout(resolve, left + 100));
+}
+
 /** Where a redirect points. */
 export function location(response: Response): URL {
   const to = response.headers.get('location');

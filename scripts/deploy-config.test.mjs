@@ -45,8 +45,14 @@ const local = {
   },
   ratelimits: [{ name: 'LOGIN_LIMITER', namespace_id: '1', simple: { limit: 10, period: 60 } }],
 };
-// The sample config's limiter, and the real config's.
-const withLimiter = { ...required, LOGIN_LIMITER_NAMESPACE_ID: '1001', SIGN_IN_LIMITER_NAMESPACE_ID: '1002' };
+// The sample config's limiter, and the real config's, with the OAuth app's
+// client ID the real config needs.
+const withLimiter = {
+  ...required,
+  LOGIN_LIMITER_NAMESPACE_ID: '1001',
+  SIGN_IN_LIMITER_NAMESPACE_ID: '1002',
+  OAUTH_CLIENT_ID: 'Ov23sampleclient',
+};
 
 const realLocal = () => readLocalConfig(readFileSync(path.join(REPO_ROOT, LOCAL_CONFIG), 'utf8'));
 
@@ -96,6 +102,20 @@ test('no deploy runs the Worker as development, so the dev sign-in is never on i
     assert.equal(config.vars.ENVIRONMENT, target);
   }
   assert.throws(() => deployConfig(real, 'development', withLimiter), /staging or production/);
+});
+
+test('a deploy needs OAUTH_CLIENT_ID, since no one can sign in without it', () => {
+  const real = realLocal();
+
+  assert.equal(settingsFor(real).find(({ name }) => name === 'OAUTH_CLIENT_ID')?.required, true);
+  for (const missing of [{}, { OAUTH_CLIENT_ID: '' }, { OAUTH_CLIENT_ID: '  ' }]) {
+    assert.throws(
+      () => deployConfig(real, 'staging', { ...withLimiter, OAUTH_CLIENT_ID: undefined, ...missing }),
+      /OAUTH_CLIENT_ID is not set/,
+    );
+  }
+  const { config } = deployConfig(real, 'staging', { ...withLimiter, OAUTH_CLIENT_ID: 'Ov23sampleclient' });
+  assert.equal(config.vars.OAUTH_CLIENT_ID, 'Ov23sampleclient');
 });
 
 test('no local value of a variable reaches a deployed Worker', () => {
@@ -320,6 +340,7 @@ test("a deploy's GitHub URLs come from the settings or are empty, and never from
     CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
     WORKER_NAME: 'sentinel-worker',
     SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
+    OAUTH_CLIENT_ID: 'Ov23sentinelclient',
   });
   const set = written(sentinels);
 

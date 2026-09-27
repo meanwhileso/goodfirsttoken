@@ -129,6 +129,34 @@ test('the session cookie is HttpOnly and SameSite=Lax, and the cookie tying a si
   );
 });
 
+test("an email GitHub gives never links one person's GitHub account to another person's user", async () => {
+  await signIn(new Browser(), github, 'priya');
+  // priya's sign-in stopped halfway, so her user has no GitHub account.
+  await env.DB.prepare('DELETE FROM account').run();
+  const lone = await env.DB.prepare('SELECT id, email FROM "user"').first<{ id: string; email: string }>();
+  // kenji's public email on GitHub is the one priya's user holds.
+  const priyasEmail = `${String(1001)}@github.invalid`;
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await github.fetch(input, init);
+    if (new URL(new Request(input, init).url).pathname !== '/user') return response;
+    const user = await response.json<{ login: string }>();
+    return Response.json(user.login === 'kenji' ? { ...user, email: priyasEmail } : user, { status: response.status });
+  });
+
+  const browser = new Browser();
+  await signIn(browser, github, 'kenji');
+  const accounts = await env.DB.prepare('SELECT user_id, account_id FROM account').all<{
+    user_id: string;
+    account_id: string;
+  }>();
+
+  expect(lone?.email).toBe(priyasEmail);
+  expect(await navLogin(await browser.fetch('/me'))).toBe('@kenji');
+  expect(accounts.results.map((row) => row.account_id)).toEqual(['1002']);
+  expect(accounts.results[0]?.user_id).not.toBe(lone?.id);
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM "user"').first('n')).toBe(2);
+});
+
 test('a sign-in that stopped halfway, with the user written and the GitHub account not, works when tried again', async () => {
   await signIn(new Browser(), github, 'sam');
   // D1 writes Better Auth's user and account one after the other, so a
