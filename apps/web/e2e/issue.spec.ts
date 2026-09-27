@@ -1,7 +1,8 @@
 import { inflateSync } from 'node:zlib';
 import type { FeedEvent } from '@goodfirsttoken/core';
-import type { APIRequestContext, Page, WebSocketRoute } from '@playwright/test';
+import type { APIRequestContext, Locator, Page, WebSocketRoute } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { SITE } from './hosts';
 
 // The issue page, with real issue rooms. Each test works an issue of its own
 // through the dev-only POST /dev/work, as several of the GitHub fake's sample
@@ -14,11 +15,13 @@ import { expect, test } from './fixtures';
 // what they expect. Every person, repo, and line here is made up.
 
 const REPO = 'sample-owner/sample-app';
+// A sample project's repo with no hyphen in its name for a line to break at.
+const UNHYPHENATED_REPO = 'sample-owner/samplenotes';
 
 /** An issue in a sample project's repo that no earlier run has touched. */
-function freshIssue(): { issue: string; path: string; number: number } {
+function freshIssue(repo = REPO): { issue: string; path: string; number: number } {
   const number = 1_000_000_000 + Math.floor(Math.random() * 8_000_000_000);
-  return { issue: `${REPO}#${String(number)}`, path: `/${REPO}/issues/${String(number)}`, number };
+  return { issue: `${repo}#${String(number)}`, path: `/${repo}/issues/${String(number)}`, number };
 }
 
 type Work =
@@ -275,4 +278,73 @@ test('fits the screen from 360 to 1280px, with long lines in every lane', async 
     ]);
     expect(scrollWidth, `${String(width)}px`).toBeLessThanOrEqual(clientWidth);
   }
+});
+
+/** Each line of an element's text as the browser broke it on the screen, trimmed. */
+async function screenLines(locator: Locator): Promise<string[]> {
+  return locator.evaluate((element) => {
+    const lines: { top: number; text: string }[] = [];
+    const texts = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      const text = node.textContent ?? '';
+      for (let i = 0; i < text.length; i += 1) {
+        const range = document.createRange();
+        range.setStart(node, i);
+        range.setEnd(node, i + 1);
+        const box = range.getClientRects()[0];
+        if (!box) continue;
+        const line = lines.at(-1);
+        if (line && Math.abs(line.top - box.top) < 1) line.text += text.charAt(i);
+        else lines.push({ top: box.top, text: text.charAt(i) });
+      }
+    }
+    return lines.map((line) => line.text.trim());
+  });
+}
+
+/** The text a person gets by selecting all of an element's text to copy it. */
+async function selectedText(locator: Locator): Promise<string> {
+  return locator.evaluate((element) => {
+    const selection = getSelection();
+    selection?.selectAllChildren(element);
+    return selection?.toString() ?? '';
+  });
+}
+
+test('a claim command too wide for its slot wraps after the slash, and keeps the repo name and number on one line', async ({ page, context, request }) => {
+  const { issue, path, number } = freshIssue(UNHYPHENATED_REPO);
+  await work(request, issue, 'priya', { action: 'claim', agent: 'claude-code' });
+  // At 1200px, the open slot beside one lane fits 24 characters a line.
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto(path);
+  await page.evaluate(() => document.fonts.ready);
+
+  const command = `/goodfirsttoken:work ${issue}`;
+  const text = page.locator('.issue-slot .prompt__text');
+  await expect(text).toHaveText(command);
+  expect(await screenLines(text)).toEqual(['/goodfirsttoken:work', 'sample-owner/', `samplenotes#${String(number)}`]);
+
+  // The place to break adds nothing to what a person selects, hears, or copies.
+  expect(await selectedText(text)).toBe(command);
+  await expect(page.locator('.issue-slot .prompt')).toMatchAriaSnapshot(`- text: › ${command}`);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByRole('button', { name: 'Copy the claim command' }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(command);
+});
+
+test('on a phone, the command to watch as text wraps after slashes, with no name broken in the middle', async ({ page, request }) => {
+  const { issue, path, number } = freshIssue(UNHYPHENATED_REPO);
+  await work(request, issue, 'priya', { action: 'claim', agent: 'claude-code' });
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(path);
+  await page.evaluate(() => document.fonts.ready);
+
+  const text = page.locator('.issue-rail .prompt__text');
+  await expect(text).toHaveText(`curl -N ${SITE}${path}/live.txt`);
+  expect(await screenLines(text)).toEqual([
+    'curl -N',
+    `${SITE}/`,
+    'sample-owner/samplenotes/',
+    `issues/${String(number)}/live.txt`,
+  ]);
 });

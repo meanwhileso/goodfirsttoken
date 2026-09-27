@@ -1218,7 +1218,9 @@ end-to-end tests. The rules are in
   people, with their GitHub IDs, so signing in locally as one shows their
   work. A test checks that every person, repo, and issue it names is in
   `packages/github-fake/src/sample-data.ts`. Its projects are the fake's
-  made-up repos under `sample-owner`.
+  made-up repos under `sample-owner`. The one that only `/dev/work` adds,
+  `sample-owner/samplenotes`, is made up too, and the fake leaves it out,
+  since nothing reads it from GitHub.
 - **The end-to-end tests seed their own preview.** `home.spec.ts` checks
   the empty homepage first, then posts to `/dev/seed` and checks the page
   with its ranks and projects. The preview keeps its data apart from

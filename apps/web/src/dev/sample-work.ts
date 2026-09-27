@@ -79,6 +79,24 @@ export const SAMPLE_PROJECTS: SampleProject[] = [
   },
 ];
 
+/**
+ * A project only POST /dev/work adds, the first time it works an issue in
+ * it. Its name has no hyphen for a line to break at, so the issue page's
+ * end-to-end tests use it to check where the claim command wraps.
+ * `pnpm seed` leaves it out, so the seeded homepage lists only the projects
+ * above. Nothing reads it from GitHub, so the GitHub fake has no such repo.
+ */
+export const WORK_ONLY_PROJECTS: SampleProject[] = [
+  {
+    repo: 'sample-owner/samplenotes',
+    status: 'approved',
+    tags: ['help wanted'],
+    prMode: 'automatic',
+    addedBy: SAMPLE_PEOPLE.sampleMaintainer,
+    issues: [],
+  },
+];
+
 export interface SampleClaim {
   person: SamplePerson;
   agent: string;
