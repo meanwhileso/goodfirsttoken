@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The rest of the site, other queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, and the scheduled jobs that read GitHub. The rest of the site and other queue consumers join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -37,8 +37,8 @@ The repo is a pnpm workspace.
   the form on `/oauth/authorize` to `src/mcp/authorize.ts`. It hands every
   other one to TanStack Start, setting the status a page names, as the page
   on `/oauth/authorize` and an issue page do. Its `queue` handler is the feed queue's
-  consumer. The Durable Object classes are exported from it. Cron handlers
-  join it as they arrive.
+  consumer, and its `scheduled` handler runs the job for each cron trigger,
+  from `src/sync/`. The Durable Object classes are exported from it.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -59,7 +59,11 @@ The repo is a pnpm workspace.
   empty. Each call takes the token it runs with as an argument. There is no
   default token. Revoking a token takes the OAuth app's client ID and secret
   in its place. Sign-in trades codes for tokens at github.com itself, in
-  `src/auth/auth.ts`.
+  `src/auth/auth.ts`. `gitHubRead` and `gitHubQuery` also hand back what the
+  `x-ratelimit` headers say is left of the token's budget, and a
+  `GitHubError` carries it too.
+- **The scheduled jobs live in `src/sync/`,** described under
+  [The sync](#the-sync).
 - **Sign-in lives in `src/auth/`,** described under [Sign-in](#sign-in).
 - **The homepage is `src/routes/index.tsx`,** with what it reads in
   `src/home/`, described under [The homepage](#the-homepage).
@@ -303,7 +307,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 
 | File | What it does |
 |---|---|
-| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, and `pause_project` |
+| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, and `pause_project`. `project_status` with `refresh` runs the sync for its project, under [The sync](#the-sync) |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
 | `src/projects/status.ts` | Who can lift a pause, and the status a resume puts back, for the maintainer's tools and the admin's alike |
@@ -608,18 +612,19 @@ that leaves their settings empty gives them empty strings, and
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
-| `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, and the text streams |
+| `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, and the scheduled jobs |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
 | `TOKEN_LIMITER` | Rate limiter: 600 requests to `/oauth/token` a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
-| `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream. The MCP tools, from #15 on |
+| `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream and the scheduled jobs. The MCP tools, from #15 on |
 | `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer. The Worker also consumes the queue, with `feed-dlq` as its dead-letter queue | Now, by the issue room and `src/feed/queue.ts` |
 | `CRAWL_QUEUE` | Queue producer | #30 |
 
-Cron triggers arrive with the issues that use them. The static host's R2
-bucket is not a binding, since the Worker never reads it.
+The cron triggers are in `wrangler.jsonc` too, under `triggers`, and
+[The sync](#the-sync) lists them. The static host's R2 bucket is not a
+binding, since the Worker never reads it.
 [The static host](#the-static-host) covers it.
 
 A Durable Object class gets its storage from an entry under `migrations` in
@@ -663,7 +668,8 @@ in `people`.
 | `projects` | Project: its current status, reason, and who set it and when, how it got in, with the policy quote, link, and tier for a policy listing, who added it and when, where its issues live, and its current settings version | `repo` |
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
 | `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
-| `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR, and sync time | `project`, `issue_repo`, `number` |
+| `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
+| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, and until when a run holds it | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, and issues claimed | `id` |
@@ -708,9 +714,12 @@ that break the rules, so it returns the problems for the caller to show.
   is in `people`, found by GitHub ID. A page should show that one, because a
   renamed login can later belong to someone else.
 - **`tagged_issues` has no assignee.** An issue with an assignee isn't
-  eligible, and the sync (#12) leaves it out, so no cached issue has one. The
+  eligible, and the sync leaves it out, so no cached issue has one. The
   server checks GitHub again before it suggests or claims an issue, which
   catches an assignee added since the last sync.
+- **`tagged_issues.linked_pr_found_by`** came with migration
+  `0004_issue_sync.sql`, which also makes `issue_syncs`. It is a JSON list,
+  null with no linked PR.
 
 ### Who sees what
 
@@ -810,13 +819,13 @@ pruning after a sync, with no index of its own.
 |---|---|
 | `people_by_login` | A person by login, for `/@<login>` pages and admin blocks |
 | `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first |
-| `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync |
+| `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync, and the copies of an issue the sync checks before a room forgets its PR |
 | `project_status_changes_by_repo` | A project's status changes, newest first, and its latest, which names a registration in the admin queue |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
 | `claims_by_person` | One person's claims, newest first: `my_work`, their page, and their leaderboard row |
 | `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project. Its claims working now, for `project_status` |
 | `prs_by_number` | A PR's claim, and one claim per PR |
-| `prs_open` | The open PRs the PR job follows, oldest first |
+| `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
 | `prs_by_closed` | PRs merged or closed in a time range, like this week |
 | `donor_sessions_by_person` | A donor's last session, for what merged since |
@@ -966,8 +975,10 @@ the alarm doesn't fire again and again.
 **IDs.** Claim IDs are `c_` and event IDs `e_`, each followed by 20
 URL-safe characters, made the same way as session IDs.
 
-**Not here yet.** Nothing tracks whether a claim's PR merged or closed, so
-the room doesn't refuse with `pr_closed`.
+**Not here yet.** The PR job records when a claim's PR merged or closed, and
+tells the room, which forgets it. The room keeps no state of its own for
+that, so it doesn't refuse with `pr_closed`, and makes no `pr_merged` or
+`pr_closed` event.
 
 ## The live feeds
 
@@ -1288,7 +1299,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `/design` shows every component in `src/components/`, and a new sample
   there changes its screenshots, which have to come from CI's Playwright
   build. The page builds the lanes from `Chip`, `Slots`, `SlotRing`,
-  `Prompt`, `Marker`, and `Rail`.
+  `Prompt`, `Marker`, and `Rail`. In its prompts, `PromptPath` holds the
+  claim command's `owner/repo#n` and the stream's URL: an inline block with
+  a `<wbr>` after each slash between two names, so the path starts a new
+  line whole when it fits there, and wraps after a slash when it doesn't.
+  It is a part of the prompt, like `PromptAccent`, and `/design` doesn't
+  show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
   timeline names every claimant, and two for the do-not-list when the issue
@@ -1297,6 +1313,190 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   the page is open. Each lane keeps its
   newest 20 lines, so the page carries at most that many per claim. Nothing
   caches any of it yet.
+
+## The sync
+
+The tagged-issue sync and the PR job read GitHub on a schedule, with the
+read-only service token. The rules are in
+[how-it-works.md](how-it-works.md#tagged-issues), under Tagged issues and
+[PRs](how-it-works.md#prs).
+
+| File | What it does |
+|---|---|
+| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run |
+| `src/sync/issues.ts` | The tagged-issue sync: one project's pass, and the scheduled run over every approved project |
+| `src/sync/prs.ts` | The PR job |
+| `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
+| `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, and which run holds it |
+
+- **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync and
+  `7,37 * * * *` for the PR job, so the two never start in the same
+  minute. The Worker's `scheduled` handler in `src/server.ts` hands the cron
+  to `runScheduled`, which runs its job, and logs an error for a cron no job
+  answers. The deploy copies the triggers as they are.
+- **The service token** is the `GH_SERVICE_TOKEN` secret, a token that reads
+  public data only, like a fine-grained personal access token for public
+  repos with no permissions, as
+  [self-hosting.md](self-hosting.md#the-token-for-reading-github) says. With
+  none, no job reads anything, and the log names the secret. No person's
+  token is ever used for these reads.
+- **What a pass costs.** One REST call for the repo, one more for an issue
+  repo apart from it, one for each 100 open issues under each tag, one
+  GraphQL query for each 25 issues, and one REST call for each 100 events on
+  each issue's timeline. The timelines are most of it: about one call for
+  each tagged issue.
+- **One list for each tag.** GitHub's issue list filter takes labels as a
+  list separated by commas, and an issue has to carry every one. So each tag
+  is a list of its own, with `assignee=none`, and the lists meet in code,
+  which also leaves out pull requests and excluded tags. A tag with a comma in
+  its name can't be listed this way.
+- **One call at a time.** GitHub asks a client not to make concurrent
+  requests for one user, or it may apply a secondary rate limit.
+- **The budget.** GitHub counts a token's calls against its account, the
+  budget [how-it-works.md](how-it-works.md#tagged-issues) gives under The
+  budget, and says in the `x-ratelimit` headers of every answer how much is
+  left and when it starts over. A run first reads `GET /rate_limit`, which
+  GitHub counts against no budget, so it knows what is left before its
+  first read. `ServiceGitHub` keeps the latest for each resource, `core` and
+  `graphql`, and stops before a call when less is left than the job leaves:
+  `ALLOWANCES` in `src/sync/scheduled.ts`. A budget whose hour is over counts
+  as full again.
+- **What stops a run.** A `429`. A `403` with nothing left, a `retry-after`,
+  or a message that says it is a rate limit, since GitHub's docs say a
+  secondary rate limit can come with neither header. A GraphQL error of type
+  `RATE_LIMITED`, or whose message says it is a rate limit, which GitHub can
+  send with status 200. A `401`, a `5xx`, a failed fetch, and an answer
+  that isn't JSON. Any other refusal goes back to the code that made the
+  call, which knows what a `404` means there. The PR job stops on any
+  refusal of its query, and ends without an error.
+- **Only GitHub's answers pause a project.** `GitHubError` keeps the
+  `message` of GitHub's JSON error body apart, as `bodyMessage`, which is
+  null when the body was anything else. A repo read pauses a project only on
+  a `404` whose body says `Not Found`, a `451` with a JSON body, or a repo
+  with the fields GitHub sends that says it is private or archived. A
+  `/rate_limit` answer without GitHub's budgets, or any other `404` or
+  `451`, stops the run. So a proxy, or a `GH_API_URL` that isn't GitHub's
+  API, never pauses a project.
+- **Calls in one run.** The caps in
+  [how-it-works.md](how-it-works.md#tagged-issues), under The budget, count
+  the `/rate_limit` read too. Four sync runs an hour at the sync's cap come
+  to four fifths of the budget, all it spends before it stops. The caps keep
+  a run inside Cloudflare's limits, which
+  [developers.cloudflare.com/workers/platform/limits](https://developers.cloudflare.com/workers/platform/limits/)
+  gave on 2026-09-27: 10,000 subrequests for one invocation on the Workers
+  Paid plan, calls to D1, KV, and R2 included, and 30 seconds of CPU for a
+  cron that runs more often than hourly, with 15 minutes of wall time. The
+  Workers Free plan allows 50 subrequests and 10 ms of CPU, so a run there
+  reads little. The sync hasn't been tried there.
+- **Passes.** `issue_syncs` keeps each project's pass in progress, and when
+  the last whole pass finished. A resumed
+  run lists the tags again, which is cheap, and skips the issues whose copy
+  was saved after the pass started. A new pass starts a millisecond after
+  the last one finished at the earliest, so no issue from the last pass
+  counts as read in the new one. Copies are dropped by key at the end of a
+  pass, when the listing is whole.
+- **One run holds a project.** Before a run reads a project, it sets
+  `reading_until` in `issue_syncs` to 15 minutes ahead, the longest a
+  scheduled run lasts, in a statement that sets it only when no other hold is
+  left, and clears its own hold when it is done. A scheduled run leaves a
+  project another run holds, and a refresh answers `busy`. A run that dies
+  keeps its hold until the time runs out.
+- **The rooms.** The sync calls an issue room's `prOpened` and `prClosed`
+  only when the linked PR it keeps for the issue changes, so a room is made
+  only for an issue that gets a linked PR. The new PR goes in before the old
+  one comes out. The cache keeps the PR the room was last told, so a call
+  that fails is made again on the next pass. The sync leaves `prClosed` to
+  the PR job only for a claim's PR in the claim's own issue's room, found by
+  joining `prs` to `claims`, since the PR job closes it there and nowhere
+  else. The PR job calls `prClosed` before it writes the table, for the same
+  reason.
+- **Which PRs count** is under Linked PRs in
+  [how-it-works.md](how-it-works.md#tagged-issues), and why is in
+  [spec §6](specs/v1.md#6-issues-and-claims). GitHub gives a PR's base
+  repo, where it is open, so a PR from a fork counts when it is aimed at the
+  project. The read of each repo before a pass gives its `full_name` as
+  GitHub has it now, which the pass adds to the names a PR's repo can match,
+  so a rename doesn't drop the project's PRs.
+- **Delisting** uses `setProjectStatusFrom`, the compare-and-set #55 added,
+  with `changed_by` null, which the maintainer's `pause_project` reads as a
+  pause only an admin can lift. It tries three times, and stops as soon as
+  the project isn't approved. GitHub answers a REST call to a renamed or
+  moved repo's old name with a redirect, which `fetch` follows.
+- **The PR job** reads 50 PRs in one GraphQL query, each by its repo and
+  number, so one point covers them.
+- **A maintainer's refresh** is `project_status` with `refresh`. It runs
+  inside the MCP call, so it gets few calls, under The budget in
+  [how-it-works.md](how-it-works.md#tagged-issues). `takeRefresh` records
+  the refresh and takes the hold in one statement, only when no refresh
+  started in the last 10 minutes and no run holds the project, so two
+  refreshes at once make one read. `issue_syncs.refreshed_at` counts only
+  refreshes, so a scheduled run never makes a refresh wait.
+- **The log.** Each run logs one line, with what it read, what is left of
+  the budget, the projects another run held, and every open PR it found
+  linked to the issues it read, each counted once for each issue, by the
+  ways it was found. It counts the PRs in other repos apart.
+
+### Open question 7: finding linked PRs
+
+[Open question 7](specs/v1.md#open-questions) asks how reliably GitHub's
+closing references and timeline cross-references find the PRs linked to an
+issue, including PRs that mention it without closing it. This is what
+building the sync showed, from GitHub's docs and the GitHub fake. It isn't
+measured on real GitHub yet. The run logs are how to measure it.
+
+- **Closing references** come from GraphQL's
+  `Issue.closedByPullRequestsReferences`, which GitHub documents as the open
+  pull requests referenced from the issue. It takes `includeClosedPrs`, and
+  `userLinkedOnly` and `excludeUserLinked`, so it holds PRs someone linked by
+  hand in the issue's Development box as well as PRs whose description
+  closes the issue with a keyword. GitHub's docs say a keyword links only
+  from a PR's description, and only on a PR aimed at its repo's default
+  branch. A keyword in a commit message closes the issue when the commit
+  merges, but links no PR. A keyword is read as the description is now:
+  edit it out, and the PR is no longer linked. So closing references miss a
+  PR that mentions the issue without a keyword, one aimed at another branch,
+  one whose keyword is only in its commits, and a keyword with a typo.
+- **Cross-references** come from the REST timeline's `cross-referenced`
+  events, which the issue events API doesn't have. GitHub adds one when an
+  issue or PR mentions the issue, so the sync keeps only those whose source
+  is a PR. Each event carries its source issue, with its state and, for a
+  PR, when it merged, so one read of the timeline says which PRs are open.
+  The timeline is paged, 100 events at a time, and is the costliest read: at
+  least one call for every tagged issue. GraphQL's `Issue.timelineItems`,
+  with `CROSS_REFERENCED_EVENT`, could read the same events for 25 issues in
+  the query that reads their closing references, with each PR's state read
+  as it is. That would cut a pass to about one call for every 25 issues. The
+  sync reads the REST timeline today.
+- **Together.** A PR with a closing keyword in its description is found both
+  ways, since the keyword is a mention too. A PR linked by hand that never
+  mentions the issue is found only as a closing reference. A PR that only
+  mentions the issue, or aims at another branch, is found only as a
+  cross-reference. GraphQL's `CrossReferencedEvent` also has
+  `willCloseTarget`, which says whether the source closes the target when it
+  merges. The REST event doesn't, and the sync doesn't read it.
+- **Other repos.** Both ways find PRs in any repo, and a closing keyword in
+  another repo's PR closes the issue when it merges. The sync drops them,
+  since [spec §6](specs/v1.md#6-issues-and-claims) counts only a PR in the
+  project's code repo or its issue repo.
+- **The choice.** Both ways link a PR in the project's repos, so a PR there
+  that only mentions an issue closes it to new claims. That errs toward not
+  sending another agent to an issue someone is working on, and a person who
+  wants the issue can still open a PR. Each copy records the ways its PR was
+  found. Each run logs every open PR it found linked to each issue it read,
+  counted by a closing reference only, a cross-reference only, and both
+  ways, and the PRs in other repos apart, so staging's logs can show how
+  often each way finds what the other misses, and whether mentions close
+  too many issues.
+- **Not checked on real GitHub yet,** since GitHub's docs don't say. The
+  fake answers the first as the PR is at the read, and keeps the event.
+  - Whether a cross-reference's source is the PR as it is at the read, or as
+    it was when it mentioned the issue. That decides whether a closed PR
+    drops out.
+  - Whether the event goes when the mention is edited out.
+  - Whether a mention from a repo the service token can't see is hidden from
+    it.
+  - Whether the source always carries `repository`. The sync falls back to
+    `repository_url`.
 
 ## Sample data in development
 
@@ -1335,9 +1535,11 @@ end-to-end tests. The rules are in
   one closed.
 - **The GitHub fake's people.** The sample work names the fake's sample
   people, with their GitHub IDs, so signing in locally as one shows their
-  work. A test checks that every person, repo, and issue it names is in
-  `packages/github-fake/src/sample-data.ts`. Its projects are the fake's
-  made-up repos under `sample-owner`.
+  work. A test checks that every person, repo, and issue `pnpm seed` uses
+  is in `packages/github-fake/src/sample-data.ts`. Its projects are the
+  fake's made-up repos under `sample-owner`. The one project only
+  `/dev/work` knows is described in
+  [how-it-works.md](how-it-works.md#sample-data-in-development).
 - **The end-to-end tests seed their own preview.** `home.spec.ts` checks
   the empty homepage first, then posts to `/dev/seed` and checks the page
   with its ranks and projects. `admin.spec.ts` seeds too, and works the
@@ -1362,9 +1564,11 @@ and writes them into a config file that git ignores. Where an ID is left out,
 the deploy or Wrangler creates the resource on the first deploy.
 
 Each secret the Worker reads goes by name under `secrets.required` in
-`wrangler.jsonc`, and the deploy puts it. There are two, `OAUTH_CLIENT_SECRET`
-and `AUTH_SECRET`, for sign-in. `AUTH_SECRET` also encrypts the copy of each
-connected agent's GitHub token. The OAuth library needs no secret of its
+`wrangler.jsonc`, and the deploy puts it. There are three.
+`OAUTH_CLIENT_SECRET` and `AUTH_SECRET` are for sign-in, and `AUTH_SECRET`
+also encrypts the copy of each connected agent's GitHub token.
+`GH_SERVICE_TOKEN` is the read-only token the scheduled jobs read GitHub
+with, under [The sync](#the-sync). The OAuth library needs no secret of its
 own. GitHub reserves names that start with `GITHUB_` for its own variables
 and secrets, so no variable or secret of the Worker can start with it.
 
@@ -1381,8 +1585,9 @@ also starts the GitHub fake at `http://127.0.0.1:8944`, which
 `wrangler.jsonc` points the Worker at. The variables the app reads, with
 safe local defaults, are listed in `apps/web/.dev.vars.example`. With no
 secrets set, sign-in uses the stand-ins in `src/auth/settings.ts`, and only
-in development. Wrangler warns that the two secrets are missing, and locally
-that is expected.
+in development. Wrangler warns that the secrets are missing, and locally
+that is expected. The scheduled jobs read nothing without `GH_SERVICE_TOKEN`,
+and `pnpm dev` doesn't run them on a schedule.
 
 ## The static host
 
@@ -1448,8 +1653,12 @@ and Playwright run it as a local HTTP server.
   caller's `permissions`, labels listed or one by name, issues and their
   timelines, issue and repo search, file contents, forks, branches and refs,
   pull requests, reviews, and review comments. GraphQL: `repository`, `viewer`, file reads with
-  `object(expression:)` across many repos in one query, and
-  `createCommitOnBranch`. The OAuth web flow: the authorize page and the
+  `object(expression:)` across many repos in one query, an issue with the
+  open PRs that close it, through `closedByPullRequestsReferences`, a pull
+  request's state, and `createCommitOnBranch`. GitHub's primary rate limits:
+  each person's REST, GraphQL, and search budgets, whichever of their tokens
+  made the calls, in the `x-ratelimit` headers of every answer, with a `403`,
+  or a `RATE_LIMITED` GraphQL error, once one is spent. The OAuth web flow: the authorize page and the
   token endpoint, with PKCE, and an OAuth app revoking one of its tokens with
   its client ID and secret. GitHub's cap of 10 tokens for one person, app,
   and set of scopes: an 11th revokes the oldest one never used and over a
@@ -1459,6 +1668,10 @@ and Playwright run it as a local HTTP server.
 - **It records whose token made each call.** `fake.calls` lists every call
   with its endpoint, the token it carried, the login that token belongs to,
   and the status. The local server lists them at `/_fake/calls`.
+- **Tests change it the way people change GitHub.** Besides merging,
+  closing, and reviewing PRs and committing files, a test can open, label,
+  assign, and close issues, open a PR from a branch or a fork, and spend
+  part of a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
   access. A fork belongs to whoever's token made it, and forking again
   returns the same fork. `createCommitOnBranch` refuses a stale expected
@@ -1490,6 +1703,12 @@ and Playwright run it as a local HTTP server.
     another app issued the token. GitHub's docs name only its 204 and 422.
   - GitHub's limit of 10 new tokens an hour for one person, app, and scope
     isn't kept. Tokens don't expire, and the fake gives no refresh tokens.
+  - A GraphQL query costs one point, whatever it asks for. GitHub counts
+    the connections a query asks for. There are no secondary rate limits,
+    and every caller without a token shares one budget.
+  - A closing keyword in a commit message closes nothing when the PR
+    merges. On GitHub it does, though it links no PR. The fake has no PRs
+    linked by hand.
   - An app has one callback URL, and any path under it is allowed, the way
     GitHub matches with wildcard matching on.
   - Git object IDs are 40 hex characters made with an FNV hash of the
@@ -1634,6 +1853,15 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   nothing, locally as in CI, whatever `pnpm dev` holds.
   Tests in a file run in order, and `home.spec.ts` counts on it: its first
   test checks the empty homepage, and its last ones seed it.
+- **Sync tests** run the tagged-issue sync, the PR job, and the Worker's
+  `scheduled` handler against the GitHub fake, with the rooms and D1 as
+  they run deployed, in `apps/web/test/sync/`. The fake learns the service
+  token the Vitest config sets. They set the clock with a fake `Date`, as the
+  room tests do, and give each test's new issues numbers of their own, since
+  rooms keep their storage across a file. The scheduled tests run each cron
+  in `wrangler.jsonc`, which `vitest.config.ts` reads and passes in as
+  `TEST_CRONS`. A maintainer's refresh is tested through the MCP client SDK
+  with the MCP tests.
 - **Issue page tests** load the page's data from real rooms, fetch the page
   through the Worker, and read an issue's live socket with the page's own
   fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake

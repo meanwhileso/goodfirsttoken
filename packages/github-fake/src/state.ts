@@ -16,6 +16,8 @@ import {
   type ObjectStore,
   type Oid,
 } from './git.ts';
+import type { RateResource, RateWindow } from './rate-limit.ts';
+import { own } from './own.ts';
 
 export type Role = 'admin' | 'maintain' | 'write' | 'triage' | 'read';
 
@@ -165,6 +167,10 @@ export interface FakeState {
   tokens: Record<string, TokenRecord>;
   oauthApps: Record<string, OAuthAppRecord>;
   oauthCodes: Record<string, OAuthCodeRecord>;
+  // Each caller's rate limit budgets, by login, `app:<client ID>`, or
+  // `anonymous` (rate-limit.ts). State saved before the fake kept them has
+  // none, and every budget starts full.
+  rateLimits?: Record<string, Partial<Record<RateResource, RateWindow>>>;
 }
 
 export interface ValidationError {
@@ -197,7 +203,7 @@ export function fullName(repo: RepoRecord): string {
 }
 
 export function findAccount(state: FakeState, login: string): Account | null {
-  return state.accounts[key(login)] ?? null;
+  return own(state.accounts, key(login)) ?? null;
 }
 
 export function getAccount(state: FakeState, login: string): Account {
@@ -207,15 +213,15 @@ export function getAccount(state: FakeState, login: string): Account {
 }
 
 export function findRepo(state: FakeState, owner: string, name: string): RepoRecord | null {
-  return state.repos[key(`${owner}/${name}`)] ?? null;
+  return own(state.repos, key(`${owner}/${name}`)) ?? null;
 }
 
 export function findRepoByFullName(state: FakeState, name: string): RepoRecord | null {
-  return state.repos[key(name)] ?? null;
+  return own(state.repos, key(name)) ?? null;
 }
 
 export function findIssue(repo: RepoRecord, number: number): IssueRecord | null {
-  return repo.issues[String(number)] ?? null;
+  return own(repo.issues, String(number)) ?? null;
 }
 
 // The person's role on a repo. Anyone signed in can read a public repo. A
@@ -224,7 +230,7 @@ export function findIssue(repo: RepoRecord, number: number): IssueRecord | null 
 export function roleOf(repo: RepoRecord, login: string | null): Role | null {
   if (login === null) return null;
   if (key(repo.owner) === key(login)) return 'admin';
-  return repo.collaborators[key(login)] ?? (repo.private === true ? null : 'read');
+  return own(repo.collaborators, key(login)) ?? (repo.private === true ? null : 'read');
 }
 
 // Whether a call can see the repo at all. Anyone can see a public repo. A
@@ -345,7 +351,7 @@ export function commitOnBranch(
   change: FileChanges & { headline: string; body?: string | null; login: string; expectedHeadOid?: Oid },
   now: string,
 ): Oid {
-  const head = repo.branches[branch];
+  const head = own(repo.branches, branch);
   if (head === undefined) {
     throw new FakeError('not_found', `A ref named "refs/heads/${branch}" does not exist in ${fullName(repo)}.`);
   }
@@ -392,6 +398,99 @@ export function closingReferences(text: string, repo: string) {
   return references(CLOSING, text, repo);
 }
 
+// The pull requests linked to an issue by a closing keyword in their
+// description, from any repo the caller can see. GitHub links a keyword
+// only on a PR aimed at its repo's default branch. Open ones only, unless
+// `includeClosed`, oldest first.
+// https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
+export function closingPulls(
+  state: FakeState,
+  repo: RepoRecord,
+  issue: IssueRecord,
+  options: { includeClosed: boolean; visible: (repo: RepoRecord) => boolean },
+): { repo: RepoRecord; pull: IssueRecord & { pull: PullData } }[] {
+  const found: { repo: RepoRecord; pull: IssueRecord & { pull: PullData } }[] = [];
+  for (const source of Object.values(state.repos).filter(options.visible)) {
+    for (const candidate of Object.values(source.issues)) {
+      if (candidate.pull === null || candidate.pull.base.ref !== source.defaultBranch) continue;
+      if (!options.includeClosed && candidate.state !== 'open') continue;
+      const closes = closingReferences(candidate.body ?? '', fullName(source)).some(
+        (ref) => findRepoByFullName(state, ref.repo) === repo && findIssue(repo, ref.number) === issue,
+      );
+      if (closes) found.push({ repo: source, pull: candidate as IssueRecord & { pull: PullData } });
+    }
+  }
+  return found.sort((a, b) => Date.parse(a.pull.createdAt) - Date.parse(b.pull.createdAt) || a.pull.id - b.pull.id);
+}
+
+// Adds a label to the repo when it has none of that name, the way GitHub
+// creates a label that an issue is given.
+function ensureLabel(state: FakeState, repo: RepoRecord, name: string): LabelRecord {
+  const found = repo.labels.find((l) => key(l.name) === key(name));
+  if (found) return found;
+  const label = { id: newId(state), name, color: 'ededed', description: null, default: false };
+  repo.labels.push(label);
+  return label;
+}
+
+// Adds a label to an issue, as someone with triage access does on GitHub.
+export function labelIssue(state: FakeState, repo: RepoRecord, issue: IssueRecord, name: string, login: string, now: string) {
+  const label = ensureLabel(state, repo, name);
+  if (issue.labels.some((l) => key(l) === key(label.name))) return;
+  issue.labels.push(label.name);
+  issue.updatedAt = now;
+  issue.timeline.push({
+    id: newId(state),
+    event: 'labeled',
+    actor: getAccount(state, login).login,
+    createdAt: now,
+    label: { name: label.name, color: label.color },
+  });
+}
+
+export function assignIssue(state: FakeState, issue: IssueRecord, assignee: string, login: string, now: string) {
+  const person = getAccount(state, assignee).login;
+  if (issue.assignees.some((a) => key(a) === key(person))) return;
+  issue.assignees.push(person);
+  issue.updatedAt = now;
+  issue.timeline.push({ id: newId(state), event: 'assigned', actor: getAccount(state, login).login, createdAt: now, assignee: person });
+}
+
+export interface OpenIssueInput {
+  title: string;
+  body?: string | null;
+  labels?: string[];
+  login: string;
+}
+
+// Opens an issue as the person. Like a PR, an issue that mentions another
+// adds a cross-referenced event to that one's timeline.
+export function openIssue(state: FakeState, repo: RepoRecord, input: OpenIssueInput, now: string): IssueRecord {
+  const number = repo.nextNumber++;
+  const issue: IssueRecord = {
+    id: newId(state),
+    number,
+    title: input.title,
+    body: input.body ?? null,
+    user: getAccount(state, input.login).login,
+    labels: [],
+    assignees: [],
+    state: 'open',
+    stateReason: null,
+    createdAt: now,
+    updatedAt: now,
+    closedAt: null,
+    closedBy: null,
+    comments: 0,
+    timeline: [],
+    pull: null,
+  };
+  repo.issues[String(number)] = issue;
+  for (const label of input.labels ?? []) labelIssue(state, repo, issue, label, input.login, now);
+  crossReference(state, repo, issue, now);
+  return issue;
+}
+
 export interface OpenPullInput {
   title: string;
   body: string | null;
@@ -429,11 +528,11 @@ export function openPull(state: FakeState, base: RepoRecord, input: OpenPullInpu
   if (input.headRepo && (!headRepo || networkRoot(state, headRepo) !== networkRoot(state, base))) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
   }
-  const headSha = headRepo?.branches[branch];
+  const headSha = headRepo ? own(headRepo.branches, branch) : undefined;
   if (!headRepo || headSha === undefined) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head' }]);
   }
-  const baseSha = base.branches[input.base];
+  const baseSha = own(base.branches, input.base);
   if (baseSha === undefined) throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'base' }]);
   const label = `${headRepo.owner}:${branch}`;
   if (isAncestor(state.objects, headSha, baseSha)) {

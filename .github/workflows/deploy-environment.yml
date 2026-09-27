@@ -96,6 +96,7 @@ jobs:
         env:
           OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          GH_SERVICE_TOKEN: ${{ secrets.GH_SERVICE_TOKEN }}
         run: node scripts/deploy.mjs secrets
 
       - name: Deploy the Worker

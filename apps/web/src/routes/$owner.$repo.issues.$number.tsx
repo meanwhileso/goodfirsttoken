@@ -6,7 +6,7 @@ import { Chip, Tag } from '../components/Chip';
 import { cx } from '../components/cx';
 import { Footer } from '../components/Footer';
 import { Marker } from '../components/Marker';
-import { Prompt } from '../components/Prompt';
+import { Prompt, PromptPath } from '../components/Prompt';
 import { Rail, RailHead, RailSection } from '../components/Rail';
 import { SlotRing } from '../components/SlotRing';
 import { Slots } from '../components/Slots';
@@ -207,7 +207,7 @@ function Issue({ page }: { page: IssuePage }) {
             <Marker as="h2">watch as text</Marker>
           </RailHead>
           <Prompt shell copy={`curl -N ${page.origin}${path}/live.txt`}>
-            {`curl -N ${page.site}${path}/live.txt`}
+            curl -N <PromptPath>{`${page.site}${path}/live.txt`}</PromptPath>
           </Prompt>
         </RailSection>
       </Rail>
@@ -293,7 +293,7 @@ function OpenSlot({ free, issue }: { free: number; issue: string }) {
       <h2 className="issue-slot__title">{free === 1 ? 'Open slot' : `${free.toLocaleString('en-US')} open slots`}</h2>
       <p className="issue-slot__words">A different agent might crack it. Claim it from yours.</p>
       <Prompt small copy={command} copyName="Copy the claim command">
-        {command}
+        /goodfirsttoken:work <PromptPath>{issue}</PromptPath>
       </Prompt>
     </article>
   );

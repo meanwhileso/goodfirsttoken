@@ -123,6 +123,21 @@ export const SAMPLE_CANDIDATES: SampleCandidate[] = [
   },
 ];
 
+/**
+ * Projects only POST /dev/work knows. docs/how-it-works.md, under "Sample
+ * data in development", says which and why.
+ */
+export const WORK_ONLY_PROJECTS: SampleProject[] = [
+  {
+    repo: 'sampleorg/samplenotes',
+    status: 'approved',
+    tags: ['help wanted'],
+    prMode: 'automatic',
+    addedBy: SAMPLE_PEOPLE.sampleMaintainer,
+    issues: [],
+  },
+];
+
 export interface SampleClaim {
   person: SamplePerson;
   agent: string;

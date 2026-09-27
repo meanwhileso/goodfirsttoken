@@ -23,7 +23,7 @@ interface Resources {
   block_donors: undefined;
   /** Pause any project. */
   pause_any_project: undefined;
-  /** Register a repo as a project, change its settings, or pause it. */
+  /** Register a repo as a project, change its settings, pause it, or have its tagged issues read now. */
   manage_project: { repo: string };
   /** Post to a claim, submit its work, release it, or open its PR. */
   work_claim: { claimantGithubId: number };

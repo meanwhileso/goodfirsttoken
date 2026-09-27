@@ -110,6 +110,40 @@ Copy the app's client ID for `OAUTH_CLIENT_ID` in step 4. Then click Generate
 a new client secret, and keep it for `OAUTH_CLIENT_SECRET`, one of
 [the Worker's secrets](#the-workers-secrets).
 
+### The token for reading GitHub
+
+The Worker reads each project's tagged issues and follows each claim's PR on
+a schedule, as no one in particular. It reads public data only, with a token
+of its own, `GH_SERVICE_TOKEN`, one of
+[the Worker's secrets](#the-workers-secrets).
+
+GitHub counts every call against the account the token belongs to, whichever
+of the account's tokens makes it, and gives each account one budget an hour,
+as [how-it-works.md](how-it-works.md#tagged-issues) says under The budget.
+So each environment needs a GitHub account of its own, used for nothing
+else, or staging's sync spends production's budget. Use a machine account.
+[GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+let one person keep one free machine account besides their personal
+account, so the second environment's account needs a second person, or a
+paid account.
+
+For each environment:
+
+1. Sign in to GitHub as the environment's account.
+2. In Settings, go to Developer settings, Personal access tokens,
+   Fine-grained tokens, and Generate new token.
+3. Under Repository access, choose Public repositories. Add no permissions.
+   [GitHub's docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+   say every token can read all public repositories, and the jobs read
+   nothing more.
+4. Pick an expiration, and note when it ends. Make a new token before then,
+   and put it in place of the old one.
+
+The jobs ask what is left of the budget, and stop early when it runs low, as
+[architecture.md](architecture.md#the-sync) describes. When GitHub refuses
+the token, because it expired or was revoked, the jobs stop, pause nothing,
+and the Worker's log says so.
+
 ## 4. Create the GitHub environments
 
 In your repo's settings, go to Environments and create `staging` and
@@ -171,6 +205,7 @@ one is missing.
 |---|---|---|
 | `OAUTH_CLIENT_SECRET` | Environment secret | The client secret of this environment's GitHub OAuth app from step 3. |
 | `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores, the site's own and each connected agent's. Changing it signs everyone out, and makes every stored token unreadable, so neither signing out, signing in again, nor Disconnect can revoke it. Connected agents keep working. Those tokens stay valid at GitHub until each person revokes the app in their GitHub settings, or GitHub revokes them after a year unused. So change it only when you have to. |
+| `GH_SERVICE_TOKEN` | Environment secret | The token for reading GitHub from [step 3](#the-token-for-reading-github). The tagged-issue sync and the PR job read public data with it. |
 
 ### On switches
 
