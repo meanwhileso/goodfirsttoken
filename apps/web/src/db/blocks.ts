@@ -66,6 +66,20 @@ export async function getBlock(db: D1Database, id: number): Promise<DonorBlock |
   return row === null ? null : toBlock(row);
 }
 
+/**
+ * Which of these donors are blocked now. The IDs go in as one JSON array, so
+ * any number of them takes one query, under D1's limit on bound values.
+ */
+export async function blockedAmong(db: D1Database, ids: Iterable<number>): Promise<Set<number>> {
+  const checked = [...new Set(ids)].map((id) => mustParse(githubId, id, 'githubId'));
+  if (checked.length === 0) return new Set();
+  const { results } = await db
+    .prepare('SELECT github_id FROM donor_blocks WHERE github_id IN (SELECT value FROM json_each(?))')
+    .bind(JSON.stringify(checked))
+    .all<{ github_id: number }>();
+  return new Set(results.map((row) => row.github_id));
+}
+
 /** Every blocked donor, most recently blocked first. */
 export async function listBlocks(db: D1Database): Promise<DonorBlock[]> {
   const { results } = await db

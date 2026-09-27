@@ -1,8 +1,8 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import type { ClaimRecord, FeedEvent, PrRef } from '@goodfirsttoken/core';
+import type { ClaimRecord, FeedEvent, FeedMessage, PrRef } from '@goodfirsttoken/core';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { getClaim, listIssueClaims, savePerson } from '../../src/db';
+import { blockDonor, getClaim, listIssueClaims, savePerson } from '../../src/db';
 import { issueRoom, type ClaimRequest, type ClaimResult, type IssueRoom } from '../../src/rooms/issue-room';
 import { db, repo, sha } from '../db/helpers';
 
@@ -23,6 +23,7 @@ const kenji = { githubId: 3002, login: 'kenji' };
 const ana = { githubId: 3003, login: 'ana-codes' };
 const ravi = { githubId: 3004, login: 'ravi' };
 const mei = { githubId: 3005, login: 'mei' };
+const admin = { githubId: 3900, login: 'sample-admin' };
 type Person = typeof priya;
 
 function prRef(number: number): PrRef {
@@ -35,7 +36,7 @@ let issue = '';
 let room: DurableObjectStub<IssueRoom>;
 
 beforeAll(async () => {
-  for (const person of [priya, kenji, ana, ravi, mei]) await savePerson(db, person, t0);
+  for (const person of [priya, kenji, ana, ravi, mei, admin]) await savePerson(db, person, t0);
 });
 
 beforeEach(() => {
@@ -98,8 +99,49 @@ async function afterAlarm(claimed: ClaimRecord): Promise<[string | undefined, st
   return [(await getClaim(db, claimed.id))?.state, events.at(-1)?.kind];
 }
 
+/** The events the room has yet to send to the feed queue, by their place in its history. */
+async function unsent(): Promise<{ seq: number; tries: number }[]> {
+  return runInDurableObject(room, (_, state) =>
+    state.storage.sql.exec<{ seq: number; tries: number }>('SELECT seq, tries FROM outbox ORDER BY seq').toArray(),
+  );
+}
+
+/**
+ * The room's alarm, once its sends to the feed queue are done. A call's
+ * answer doesn't wait for them, and a send sets the alarm again when it
+ * ends.
+ */
 async function alarmTime(): Promise<number | null> {
+  await vi.waitFor(async () => {
+    expect(await unsent()).toEqual([]);
+  });
   return runInDurableObject(room, (_, state) => state.storage.getAlarm());
+}
+
+/**
+ * Puts a stand-in for the feed queue in the running room. It records what
+ * the room sends, and refuses it while `down` is true. Until the room
+ * restarts, the stand-in is its queue.
+ */
+async function standInQueue() {
+  const queue = {
+    down: false,
+    hang: false,
+    sent: [] as FeedMessage[],
+    sendBatch(messages: Iterable<{ body: unknown }>): Promise<void> {
+      if (queue.hang) return new Promise(() => undefined);
+      if (queue.down) return Promise.reject(new Error('The queue is down.'));
+      for (const { body } of messages) queue.sent.push(body as FeedMessage);
+      return Promise.resolve();
+    },
+  };
+  await runInDurableObject(room, (instance) => {
+    const live = instance as unknown as { env: Env };
+    live.env = new Proxy(live.env, {
+      get: (target, key) => (key === 'FEED_QUEUE' ? queue : (Reflect.get(target, key) as unknown)),
+    });
+  });
+  return queue;
 }
 
 /** Connects a watcher, and collects every event it is sent. */
@@ -438,7 +480,7 @@ describe('expiry', () => {
     ]);
   });
 
-  test('a room with nothing left to time sets no alarm', async () => {
+  test('a room with nothing left to time, save, or send sets no alarm', async () => {
     const made = await claim(priya);
     await room.release({ claimId: made.id, githubId: priya.githubId, reason: 'picked another issue' });
 
@@ -855,6 +897,101 @@ describe('the D1 mirror', () => {
     await post(made, 'back on it');
 
     expect(await getClaim(db, made.id)).toMatchObject({ state: 'active', lastUpdateAt: t0 + 32 * MINUTE });
+  });
+});
+
+describe('the feed queue', () => {
+  test('gets each event once it is stored, with its claimant and project', async () => {
+    const queue = await standInQueue();
+    const made = await claim(priya);
+    at(t0 + MINUTE);
+    await post(made, 'reading src/range.ts');
+
+    await vi.waitFor(() => {
+      expect(queue.sent).toHaveLength(2);
+    });
+    const events = await room.history();
+    expect(queue.sent).toEqual(events.map((event) => ({ event, githubId: priya.githubId, project: repo })));
+    expect(await unsent()).toEqual([]);
+  });
+
+  test('a queue that is down fails no call, and the alarm sends its events a minute later, then later and later', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const queue = await standInQueue();
+    queue.down = true;
+
+    const made = await claim(priya);
+    expect(await post(made, 'one')).toMatchObject({ ok: true, posted: true });
+
+    // Each try that fails waits a minute, then twice as long.
+    const tries = async (n: number) => {
+      await vi.waitFor(async () => {
+        expect((await unsent()).map((row) => row.tries)).toEqual([n, n]);
+      });
+      return runInDurableObject(room, (_, state) => state.storage.getAlarm());
+    };
+    expect(await tries(1)).toBe(t0 + MINUTE);
+    at(t0 + MINUTE);
+    await runDurableObjectAlarm(room);
+    expect(await tries(2)).toBe(t0 + 3 * MINUTE);
+    at(t0 + 3 * MINUTE);
+    await runDurableObjectAlarm(room);
+    expect(await tries(3)).toBe(t0 + 7 * MINUTE);
+    expect(queue.sent).toEqual([]);
+
+    queue.down = false;
+    at(t0 + 7 * MINUTE);
+    await runDurableObjectAlarm(room);
+
+    await vi.waitFor(() => {
+      expect(queue.sent.map((m) => m.event.text)).toEqual(['claimed the issue', 'one']);
+    });
+    // Nothing is left to send, so the alarm is the claim's pause again.
+    expect(await alarmTime()).toBe(t0 + 30 * MINUTE);
+    expect(warnings).toHaveBeenCalled();
+  });
+
+  test("a send that never answers holds up no call, and the alarm sends its event a minute later", async () => {
+    const queue = await standInQueue();
+    queue.hang = true;
+
+    const made = await claim(priya);
+
+    expect(made.state).toBe('active');
+    await vi.waitFor(async () => {
+      expect(await runInDurableObject(room, (_, state) => state.storage.getAlarm())).toBe(t0 + MINUTE);
+    });
+    queue.hang = false;
+    at(t0 + MINUTE);
+    await runDurableObjectAlarm(room);
+    await vi.waitFor(() => {
+      expect(queue.sent.map((m) => m.event.kind)).toEqual(['claimed']);
+    });
+  });
+});
+
+describe('a blocked donor', () => {
+  test("has their events hidden from the room's watchers, those stored before the block included", async () => {
+    const priyas = await claim(priya);
+    const kenjis = await claim(kenji);
+    at(t0 + MINUTE);
+    await post(priyas, 'priya before');
+    await post(kenjis, 'kenji before');
+
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, t0 + MINUTE);
+
+    const watcher = await watch();
+    expect(await watcher.received(2)).toEqual([
+      ['claimed', 'claimed the issue'],
+      ['update', 'kenji before'],
+    ]);
+    expect(watcher.events.every((e) => e.user === 'kenji')).toBe(true);
+    at(t0 + 2 * MINUTE);
+    await post(priyas, 'priya after');
+    await post(kenjis, 'kenji after');
+    expect((await watcher.received(3))[2]).toEqual(['update', 'kenji after']);
+    // The room keeps every event.
+    expect((await room.history()).map((e) => e.text)).toContain('priya after');
   });
 });
 

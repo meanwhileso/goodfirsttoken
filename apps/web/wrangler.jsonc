@@ -13,7 +13,7 @@
   // which can be older than the one dev and preview use. A date newer than
   // it supports makes `pnpm test` fail, so move this only as far as it allows.
   "compatibility_date": "2026-08-15",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   // Every variable the Worker reads, with its local value. A deploy sets
   // ENVIRONMENT to staging or production, and each other one from the GitHub
   // environment setting of the same name, so no local value reaches a
@@ -39,17 +39,41 @@
   // stores. Local development needs neither (src/auth/settings.ts).
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
-  // One issue room per issue, named by the issue (src/rooms/issue-room.ts).
-  // Class names are code, so they may be here. Each class gets its storage
-  // from a migration, which is never edited once it has run on a deploy. A
-  // new class is a new migration with the next tag.
-  "durable_objects": { "bindings": [{ "name": "ISSUE_ROOM", "class_name": "IssueRoom" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["IssueRoom"] }],
+  // One issue room per issue, named by the issue (src/rooms/issue-room.ts),
+  // and one feed each for the homepage, each project, and each person
+  // (src/rooms/feed.ts). Class names are code, so they may be here. Each
+  // class gets its storage from a migration, which is never edited once it
+  // has run on a deploy. A new class is a new migration with the next tag.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ISSUE_ROOM", "class_name": "IssueRoom" },
+      { "name": "FEED", "class_name": "Feed" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["IssueRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["Feed"] }
+  ],
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "queues": {
     "producers": [
       { "binding": "FEED_QUEUE", "queue": "feed" },
       { "binding": "CRAWL_QUEUE", "queue": "crawl" }
+    ],
+    // The feed queue's consumer delivers each event to its three feeds
+    // (src/feed/queue.ts). A batch waits at most a second, so a line reaches
+    // the feeds about a second after it is posted. A message a feed doesn't
+    // take is tried again 30 seconds later, up to 10 times, and then goes to
+    // the dead-letter queue, which nothing reads.
+    "consumers": [
+      {
+        "queue": "feed",
+        "max_batch_size": 100,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "retry_delay": 30,
+        "dead_letter_queue": "feed-dlq"
+      }
     ]
   },
   // Cloudflare rate limiting on the sign-in endpoints (src/auth/routes.ts).

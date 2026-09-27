@@ -52,8 +52,11 @@ test('a change whose save was out when its call died is saved by the alarm a min
   vi.setSystemTime(t0 + HOUR);
   await room.submit(mine);
   await room.openPr({ ...mine, pr });
-  // A claim with an open PR has no timer, and D1 has it, so no alarm is set.
-  expect(await runInDurableObject(room, (_, state) => state.storage.getAlarm())).toBeNull();
+  // A claim with an open PR has no timer, D1 has it, and once the events
+  // reach the feed queue, no alarm is set.
+  await vi.waitFor(async () => {
+    expect(await runInDurableObject(room, (_, state) => state.storage.getAlarm())).toBeNull();
+  });
 
   // The running room's saves to D1 never answer from here. Aborting the
   // room ends the call, and the room comes back with its real D1.

@@ -5,8 +5,8 @@ plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves a placeholder home page, sign-in with
-GitHub, and the design system at `/design` while the build goes on in the
-open.
+GitHub, the design system at `/design`, and the live text streams, while the
+build goes on in the open.
 
 ## Health check
 
@@ -189,7 +189,8 @@ The database records the people who sign in.
 
 **Blocks.** An admin can block a donor, with an optional reason. Blocking
 them again records the new reason, admin, and time. Lifting the block
-removes it. Blocks are stored, and nothing refuses a blocked donor yet.
+removes it. Nothing refuses a blocked donor yet. The live feeds and streams
+hide their events, as [Live feeds](#live-feeds) says.
 
 ## Claims
 
@@ -294,9 +295,10 @@ number the issue room raises with every change.
 
 Each issue has one room, which holds every claim on the issue. A claim
 changes only there. The room runs the claims' timers, takes the claimants'
-updates, streams events to the people watching, and saves each claim to the
-[claims table](#claims). Nothing calls a room yet. The MCP tools will, once
-they are served.
+updates, streams events to the people watching, sends each event on to the
+[live feeds](#live-feeds), and saves each claim to the
+[claims table](#claims). Nothing makes a claim or a post yet. The MCP tools
+will, once they are served.
 
 **Claiming**
 
@@ -439,8 +441,8 @@ a post, a job, or a reason longer than its limit is cut to the limit.
 - A pause or an expiry is recorded at its deadline, even when the alarm or
   call that applies it comes later. Several applied at once are recorded in
   the order of their deadlines, so the times in the history never go back.
-- A room with no claim left to pause or expire, and nothing waiting to save,
-  sets no alarm.
+- A room with no claim left to pause or expire, nothing waiting to save, and
+  no event waiting to go to the feed queue, sets no alarm.
 
 **Submitting, opening the PR, and releasing**
 
@@ -459,8 +461,9 @@ claim's own PR is added when it opens. Nothing reads them from GitHub yet.
 Once none is open, the issue takes claims again.
 
 **Events.** Each post and each change of a claim's state is a
-[feed event](#feed-events), stored in the room and sent to its watchers. The
-history survives a restart.
+[feed event](#feed-events), stored in the room, sent to its watchers, and
+sent to the feed queue, as [Live feeds](#live-feeds) says. The history
+survives a restart.
 
 | Kind | Text |
 |---|---|
@@ -475,15 +478,18 @@ history survives a restart.
 **Watchers**
 
 - A watcher connects to a room over a WebSocket and gets each event as it
-  happens, one feed event as JSON per message.
+  happens, one feed event as JSON per message. A call's answer doesn't wait
+  for its events to reach the watchers.
 - A watcher that reconnects sends the ID of the last event it saw as
   `since`, and first gets every event after that one. With no `since`, or
   one the room never sent, it first gets the whole history.
+- A blocked donor's events are left out, as [Live feeds](#live-feeds) says.
 - A room can sleep with watchers connected. They stay connected, and get the
   next event.
 - What a watcher sends is ignored, and its close is answered. A request that
   isn't a WebSocket upgrade is answered `426`.
-- No page or stream connects to a room yet.
+- The issue's [text stream](#text-streams) connects to its room. No page
+  does yet.
 
 **Saving to the database**
 
@@ -746,6 +752,112 @@ claim ID, a kind, the text, and for a subagent's line, its job.
   facts, and the claim stays `pr_opened`.
 - The issue room makes every kind but `pr_merged` and `pr_closed`, with the
   texts [the issue room](#the-issue-room) lists. Nothing makes those two yet.
+- On the feed queue, an event travels with the claimant's GitHub ID and the
+  project's code repo, which pick its feeds. The event itself carries
+  neither.
+
+## Live feeds
+
+Every event reaches three feeds besides its issue's room: the homepage's,
+the project's, and the claimant's. Each keeps its history and streams it
+live. No page shows a feed yet. The [text streams](#text-streams) read them.
+
+**From the room to the feeds**
+
+- Once the issue room stores an event, it sends the event to the feed queue.
+  The call that made the event doesn't wait for the send, and a send that
+  fails fails no call.
+- An event the queue doesn't take stays with the room, which tries it again
+  a minute later, then after 2, 4, 8, 16, and 32 minutes, then every hour,
+  until the queue takes it. A send that never answers is tried again a
+  minute after it started. So no event is lost on the way, and the room's
+  own history has it all along.
+- The queue's consumer delivers each event to the homepage's feed, the feed
+  of the project the claim was made in, by its code repo, and the feed of
+  the claimant, by GitHub ID. The queue waits at most a second to fill a
+  batch, so a line reaches the feeds about a second after the room stores
+  it.
+- A message is done once all three of its feeds have it. When one of them
+  can't take it, the message comes again 30 seconds later, to all three, up
+  to 10 times, and then goes to the dead-letter queue. Nothing reads the
+  dead-letter queue yet. The other messages in the batch are done.
+- Queues can deliver a message twice. A feed ignores an event it keeps, or
+  got in the last 7 days, so it never shows an event twice.
+
+**History**
+
+- A feed keeps its newest 1,000 events, through restarts. Older ones are
+  dropped as new ones come, so a feed stays small however long it runs. The
+  issue room keeps its whole history.
+- A feed keeps events in the order it got them. A delivery the queue tried
+  again can come after events that happened later.
+
+**Watchers**
+
+- A watcher connects to a feed over a WebSocket, as to a room, and gets each
+  event as it arrives, one feed event as JSON per message.
+- With `since` set to the ID of an event the feed keeps, or got in the last
+  7 days, a watcher first gets every event the feed keeps after that one.
+  With no `since`, or any other ID, it first gets the newest 100.
+- A feed can sleep with watchers connected. They stay connected, and get the
+  next event.
+
+**Blocked donors.** Every event about a blocked donor's claims is hidden:
+their lines, and their claims' changes of state. Feeds and rooms leave them
+out of what they send watchers, and so of every stream.
+
+- Who is blocked is read from the database each time events go out, and
+  each time a watcher connects. So a block hides the events already stored,
+  and new ones, from then on.
+- Feeds and rooms still store those events. A watcher that connects after
+  the block is lifted gets them again. A watcher connected all along doesn't
+  get the ones that went out while the donor was blocked.
+- When the database can't say who is blocked, nothing goes out. A new
+  watcher is turned away with `503`, and new events wait to go out with the
+  next event, or until the watcher reconnects.
+
+## Text streams
+
+Every feed has a plain-text live stream, readable with `curl -N`:
+
+| Stream | Reads |
+|---|---|
+| `/live.txt` | The homepage's feed: every event |
+| `/<owner>/<repo>/live.txt` | The feed of the project whose code repo it is |
+| `/<owner>/<repo>/issues/<n>/live.txt` | The issue's room |
+| `/@<user>/live.txt` | The person's feed |
+
+- Each has an `.ndjson` form at the same path, with `.ndjson` in place of
+  `.txt`.
+- A text line is one event: time, user, agent, issue, and text, separated by
+  tabs. The user is the login the claimant had when they claimed.
+- The time, user, agent, and issue can't hold a tab, a line break, or a
+  control character. In the text, each run of control characters, tabs and
+  line breaks among them, Unicode line and paragraph separators, and the
+  marks that reorder text, with the spaces around it, becomes one space. So
+  every event is one line, and reads in a terminal as it was written.
+- An `.ndjson` line is the feed event as one JSON object, its ID included.
+  The same characters are escaped as `\u` and four hex digits, so the line
+  parses to the event as it was.
+- `?since=<event ID>` backfills. The stream starts with the events after
+  that one, as a watcher's `since` does. Without it, a feed's stream starts
+  with the newest 100 events, and an issue's with its whole history.
+- A text line carries no event ID. A reader that reconnects with `since`
+  reads the `.ndjson` form.
+- A stream closes after an hour, and when its feed or room closes the
+  socket, as a deploy can. The reader reconnects with `since`.
+- `/@<user>` finds the person by their login now, without case, and reads
+  their feed by GitHub ID. So a renamed person's stream moves to their new
+  login, and a login that changed hands shows its new owner.
+- Streams are public. They set no cookie, are sent with
+  `Cache-Control: no-store, no-transform`, so nothing caches or compresses
+  them, and with `Access-Control-Allow-Origin: *`, so any page can read them.
+- A stream is read with `GET` or `HEAD`. Anything else is `405`.
+- A repo that isn't a project, an issue in a repo where no project keeps its
+  issues, a login no one has signed in with, and a path whose owner, repo,
+  number, or login GitHub couldn't have, are `404`. So a request never makes
+  a feed or room for a repo that has none. A `since` that isn't an event ID
+  is `400`. When the database or the feed can't answer, it is `503`.
 
 ## Limits
 

@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, sign-in with GitHub, the design system at `/design`, and `/healthz`, and holds the D1 schema, the functions that read and write it, and the issue room. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, sign-in with GitHub, the design system at `/design`, `/healthz`, and the live text streams, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The site, the MCP server, other queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -28,9 +28,10 @@ The repo is a pnpm workspace.
   tests, and in production.
 - **`src/server.ts` is the Worker's entry point.** It answers a request to a
   redirect domain itself, with `src/redirect.ts`, sends every request under
-  `/auth` to `src/auth/routes.ts`, and hands every other request to TanStack
-  Start. Queue consumers, cron handlers, and Durable Object classes are
-  exported from it as they arrive.
+  `/auth` to `src/auth/routes.ts`, and every path shaped like a text stream
+  to `src/feed/streams.ts`, and hands every other request to TanStack Start.
+  Its `queue` handler is the feed queue's consumer. The Durable Object
+  classes are exported from it. Cron handlers join it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -41,7 +42,11 @@ The repo is a pnpm workspace.
   [Database](#database). The migrations that make the tables are in
   `migrations/`.
 - **Durable Objects live in `src/rooms/`.** `issue-room.ts` is the issue
-  room, described under [The issue room](#the-issue-room).
+  room, described under [The issue room](#the-issue-room), and `feed.ts` the
+  live feed, under [The live feeds](#the-live-feeds). `watchers.ts` holds
+  what both do for the people watching.
+- **The feed queue and the text streams live in `src/feed/`,** also under
+  [The live feeds](#the-live-feeds).
 - **`src/github.ts` makes every call to GitHub's API,** REST and GraphQL, at
   the base URL in `GH_API_URL`, or `https://api.github.com` when that is
   empty. Each call takes the token it runs with as an argument. There is no
@@ -275,23 +280,23 @@ that leaves their settings empty gives them empty strings, and
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
-| `DB` | D1 | Now, by `src/db/`, Better Auth, and the issue room |
+| `DB` | D1 | Now, by `src/db/`, Better Auth, the issue room, the feeds, and the text streams |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/routes.ts` |
-| `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | The MCP tools, from #15 on |
+| `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream. The MCP tools, from #15 on |
+| `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
 | `OAUTH_KV` | KV, for OAuth grants | #9 |
-| `FEED_QUEUE` | Queue producer | #14 |
+| `FEED_QUEUE` | Queue producer. The Worker also consumes the queue, with `feed-dlq` as its dead-letter queue | Now, by the issue room and `src/feed/queue.ts` |
 | `CRAWL_QUEUE` | Queue producer | #30 |
 
-The feed's dead-letter queue arrives with the feed consumer in #14. The feed
-Durable Object, cron triggers, and the tool endpoint's rate limiter arrive
-with the issues that use them. The static host's R2 bucket is not a binding,
-since the Worker never reads it. [The static host](#the-static-host) covers
-it.
+Cron triggers and the tool endpoint's rate limiter arrive with the issues
+that use them. The static host's R2 bucket is not a binding, since the
+Worker never reads it. [The static host](#the-static-host) covers it.
 
 A Durable Object class gets its storage from an entry under `migrations` in
-`wrangler.jsonc`. `IssueRoom` is under `new_sqlite_classes`, so its storage
-is SQLite. A migration that has run on a deploy never changes, and a new
-class is a new entry with the next tag. Class and binding names are code, so
+`wrangler.jsonc`. `IssueRoom`, at tag `v1`, and `Feed`, at `v2`, are under
+`new_sqlite_classes`, so their storage is SQLite. A migration that has run
+on a deploy never changes, and a new class is a new entry with the next
+tag. Class and binding names are code, so
 they are in the file. Cloudflare keeps each class's objects under the
 Worker's name, so no setting names them.
 
@@ -542,6 +547,7 @@ it fails.
 | `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, when the last try started, the time before which no try is made, until when a call's try is out, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
 | `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
+| `outbox` | Event not yet sent to the feed queue, by its place in `events`: the message to send, the failed tries, and the time before which no try is made |
 
 The tables are made with `CREATE TABLE IF NOT EXISTS` when the object starts.
 A later change to them needs a step that moves the rows it has. So does a
@@ -550,9 +556,10 @@ stored claim and event against them when it reads one, so a new required
 field would make every room that holds an older row throw, its alarm
 included. Such a change needs a step that rewrites the stored rows first.
 
-**Timers.** One alarm per room, set again at the end of every call. The
-alarm runs the same steps as a call: apply the due timers, then save what is
-due. When it is set for, and what the timers do, is under
+**Timers.** One alarm per room, set again at the end of every call, and
+when a send to the feed queue ends. The alarm runs the same steps as a
+call: apply the due timers, then send and save what is due. When it is set
+for, and what the timers do, is under
 [the issue room's timers](how-it-works.md#the-issue-room).
 
 **Saving to D1.** After its writes, each call lists the claims whose save
@@ -579,19 +586,109 @@ for one whose queries never answer, then aborts the room with
 `abortAllDurableObjects`, to check that a call that dies mid-save leaves an
 alarm behind.
 
-**Watchers** use the hibernation API: the room accepts each socket with
-`ctx.acceptWebSocket`, and finds them again with `ctx.getWebSockets`. What
-that means for a watcher is under
-[Watchers](how-it-works.md#the-issue-room). A new watcher is sent the
-history it asked for before the upgrade answer goes back, with no await in
-between, so no event can fall between its history and the live ones.
+**Sending to the feed queue.** `emit` stores each event with a row in
+`outbox` holding its `FeedMessage`, in the same step as the change. At the
+end of the call, `sendDue` marks the rows whose send is due as out for a
+minute, before any await, so another call leaves them alone. It then sends
+them with `sendBatch`, 50 to a batch, without the call's answer waiting.
+Before the send goes out, it moves the alarm to a minute ahead, unless the
+alarm is sooner, so a send whose call dies, or that never answers, is tried
+again by the alarm. A batch that lands is deleted from `outbox`. One that
+fails gets its next try from its count of failed tries. When the send ends,
+it sets the alarm again with `schedule`, which counts each row's next try.
+The queue may then get an event twice, which the feeds ignore.
+
+**Watchers** use the hibernation API, through `src/rooms/watchers.ts`, as
+[The live feeds](#the-live-feeds) describes. What that means for a watcher
+is under [Watchers](how-it-works.md#the-issue-room). The claimant of each
+event, which the block check needs, comes from joining `events` to
+`claims` on the event's claim ID.
 
 **IDs.** Claim IDs are `c_` and event IDs `e_`, each followed by 20
 URL-safe characters, made the same way as session IDs.
 
-**Not here yet.** Events don't go to the feed queue. #14 does that. Nothing
-tracks whether a claim's PR merged or closed, so the room doesn't refuse
-with `pr_closed`.
+**Not here yet.** Nothing tracks whether a claim's PR merged or closed, so
+the room doesn't refuse with `pr_closed`.
+
+## The live feeds
+
+The rules are in [how-it-works.md](how-it-works.md#live-feeds), and the
+streams' in [Text streams](how-it-works.md#text-streams).
+
+| File | What it does |
+|---|---|
+| `src/rooms/feed.ts` | `Feed`, the Durable Object for every feed, and `homeFeed`, `repoFeed`, and `personFeed`, which name them |
+| `src/rooms/watchers.ts` | Opening a watcher's socket and sending new events to watchers, with the block check, for rooms and feeds alike |
+| `src/feed/queue.ts` | The feed queue's consumer |
+| `src/feed/streams.ts` | The text streams |
+| `src/feed/format.ts` | The two line formats |
+
+- **One class, three kinds of feed.** `getByName` names each: `home`,
+  `repo:` and the project's code repo in lower case, and `person:` and the
+  numeric GitHub ID. A login can change hands, so no feed is named by one.
+- **What a feed stores,** in its own SQLite: `events`, each event as JSON
+  with its claimant's GitHub ID, in the order it arrived, and `seen`, the
+  ID of each event it got, with the time. `deliver` inserts into `seen`
+  first, and an insert that changes nothing marks a copy. It then drops the
+  events past the newest 1,000, and the `seen` rows older than a week whose
+  event it no longer keeps. A feed reads its rows back with the core schema,
+  so the rule under [The issue room](#the-issue-room) about changing
+  `feedEventSchema` covers feeds too.
+- **The queue message** is core's `feedMessageSchema`: the event, the
+  claimant's GitHub ID, and the project's code repo. The event carries
+  neither of those, and adding them to `feedEventSchema` would need every
+  room's stored events rewritten. The consumer checks each message with the
+  schema, groups the batch by feed, and calls each feed's `deliver` once,
+  all at the same time. It acknowledges each message whose three feeds took
+  it and retries the rest. A malformed message is retried too, so its tries
+  take it to the dead-letter queue, where it can be read.
+- **The queue's settings** are in `wrangler.jsonc`: batches of up to 100,
+  waiting at most a second, so a line reaches the feeds about a second after
+  it is posted. A retry waits 30 seconds, and a message goes to `feed-dlq`
+  after 10.
+- **Watchers and the block check.** Each watcher's socket carries, as its
+  attachment, the place of the last event it was sent, which survives
+  hibernation. Events go out after the call that stored them, with an await
+  for D1's `donor_blocks` in between, so calls can finish out of order. Each
+  send reads the events after the lowest place among the sockets, asks D1
+  which of their claimants are blocked, and sends each socket what it hasn't
+  had, up to the last event it read before the await. An event stored
+  during the await goes out with the send of the call that stored it. So
+  each watcher gets each event once, in order. A new watcher's history is
+  read, D1 is asked about any claimant in it not yet asked about, and this
+  repeats until none is new. Then the socket is accepted, sent its history,
+  and given its place, with no await in between, so no event falls between
+  its history and the live ones.
+- **The block check runs as events go out.** So a block covers the history
+  a feed already stores, and lifting it shows that history again. It costs
+  one D1 read for each batch of events sent to a feed or room that has
+  watchers, and one for each watcher that connects. `blockedAmong` passes
+  the IDs as one JSON array, since D1 binds at most 100 values in a
+  statement.
+- **The Worker holds each stream.** It connects to the feed or room over the
+  WebSocket a page uses, accepts it, and writes each message it gets to a
+  `TransformStream` as a line, after checking it with `feedEventSchema`. So
+  the Durable Object can hibernate while the stream is open, and the Worker
+  spends CPU only on the lines. A Worker that answers HTTP has no time limit
+  while its client is connected, but Cloudflare gives it 30 seconds to
+  finish when the runtime is updated, which a reader sees as the stream
+  ending early.
+- **Ending a stream.** A timer ends it after an hour. The Worker ends it
+  when the feed closes the socket, and when the reader goes away, which it
+  learns from `request.signal`. That signal needs the
+  `enable_request_signal` compatibility flag, which `wrangler.jsonc` turns
+  on for the whole Worker. Ending a stream closes the socket to the feed,
+  which answers the close.
+- **Compression.** Cloudflare compresses `text/plain` for a browser that
+  accepts it, which would hold lines back until a chunk fills.
+  `Cache-Control: no-transform` turns that off.
+- **The local server holds a stream's headers** until its first line, in
+  `vite preview` and `pnpm dev`. A `HEAD` answers at once. The Workers
+  runtime itself hands back the answer before any line, as the unit tests
+  show.
+- **No event ID in a text line.** The spec gives a text line five fields,
+  so a reader who reconnects with `since` reads the `.ndjson` form, which
+  has the ID.
 
 ## Configuration and secrets
 
@@ -783,7 +880,19 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   2100, far ahead of the real clock, so no alarm a test sets fires on its
   own. A test runs each alarm with `runDurableObjectAlarm`, and restarts a
   room with `evictDurableObject`, which keeps its storage and its
-  hibernating sockets.
+  hibernating sockets. A call's answer doesn't wait for its sends to the
+  feed queue, so a test that reads the room's alarm first waits for the
+  room's `outbox` to empty. A test swaps the queue on the running room for a
+  stand-in that records, refuses, or never answers, the way the crash test
+  swaps D1.
+- **Feed tests** are in `apps/web/test/feed/`. They call a feed through its
+  stub, run the Worker's `queue` handler on batches made with
+  `createMessageBatch`, and read the text streams through the Worker while
+  the room, the queue, and the feeds run as they do deployed. The local
+  queue waits a second for a batch, as a deployed one does. The test of a
+  stream's close calls `handleStream` with a lifetime of a second. A fake
+  timer can't stand in for the hour: it would fire in the test's I/O
+  context, where the Worker's stream can't be closed.
 - **Database tests** call the functions in `src/db/` against a real local
   D1. The Vitest config reads `migrations/`, and a setup file applies them
   before each test file. Each test file gets its own storage, and the tests
@@ -797,7 +906,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. The web server applies the D1 migrations first. They live in
-  `apps/web/e2e/`.
+  `apps/web/e2e/`. `streams.spec.ts` asks for the streams that exist with
+  `HEAD`, since the local server holds a stream's headers until its first
+  line, and no line comes there.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has
