@@ -241,8 +241,10 @@ Once #39 merges:
 Once #33 merges, for staging and then production:
 
 - Set up the static host as [docs/self-hosting.md](docs/self-hosting.md#the-static-host) says: the
-  `<WORKER_NAME>-static` bucket, its custom domain, the `Access-Control-Allow-Origin` header rule, and
-  no cookie-setting features such as Bot Fight Mode on that hostname.
+  `<WORKER_NAME>-static` bucket, its custom domain, and the `Access-Control-Allow-Origin` header rule.
+- Keep Cloudflare's cookies off the static host. Bot Fight Mode and challenges can set cookies for the
+  whole zone, so either keep them off for all of `goodfirsttoken.org`, or put the static host on a domain
+  in a zone of its own. The guide says why.
 - Give the deploy credential Workers R2 Storage Edit, set `STATIC_ORIGIN`, and deploy. Then check a
   byte range on the video with the `curl` command there.
 
