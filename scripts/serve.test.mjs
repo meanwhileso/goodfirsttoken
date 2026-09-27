@@ -5,7 +5,7 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { createStaticServer, parseRange, resolvePath } from './serve.mjs';
+import { createStaticServer, parseRange, resolvePath, sendFile } from './serve.mjs';
 
 let root;
 let server;
@@ -90,6 +90,19 @@ test('paths that climb out of the folder are refused', async () => {
   for (const url of ['/../outside.txt', '/%2e%2e/outside.txt', '/assets/..%2f..%2foutside.txt']) {
     const res = await fetch(`${origin}${url}`);
     assert.equal(res.status, 404, url);
+  }
+});
+
+test('sendFile reads only files inside the folder it serves, even when its caller skipped the check', async () => {
+  const outside = path.join(path.dirname(root), 'outside.txt');
+  const one = http.createServer((req, res) => sendFile(req, res, root, outside, 6, {}));
+  await new Promise((resolve) => one.listen(0, resolve));
+  try {
+    const res = await fetch(`http://127.0.0.1:${one.address().port}/`);
+    assert.equal(res.status, 404);
+    assert.notEqual(await res.text(), 'secret');
+  } finally {
+    one.close();
   }
 });
 

@@ -72,8 +72,12 @@ export function notFound(res) {
 }
 
 // Sends a file with the given headers, or the byte range the request asks
-// for. `size` is the file's size in bytes.
-export function sendFile(req, res, file, size, headers) {
+// for. `size` is the file's size in bytes. The file must be inside root. Its
+// callers check that already, and this checks again next to the read, so a
+// caller can't forget.
+export function sendFile(req, res, root, file, size, headers) {
+  file = path.resolve(file);
+  if (!file.startsWith(path.resolve(root) + path.sep)) return notFound(res);
   headers = { ...headers, 'accept-ranges': 'bytes' };
   const range = parseRange(req.headers.range, size);
   if (range?.unsatisfiable) {
@@ -102,7 +106,7 @@ export function createStaticServer(root) {
     const file = resolvePath(base, req.url ?? '/');
     const info = file && (await stat(file).catch(() => null));
     if (!info?.isFile()) return notFound(res);
-    sendFile(req, res, file, info.size, { 'content-type': contentType(file), 'cache-control': 'no-store' });
+    sendFile(req, res, base, file, info.size, { 'content-type': contentType(file), 'cache-control': 'no-store' });
   });
 }
 

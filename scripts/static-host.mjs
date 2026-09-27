@@ -67,7 +67,7 @@ export function createStaticHost(clientDir) {
     // request looks for its file afresh.
     const info = await stat(file).catch(() => null);
     if (!info?.isFile()) return notFound(res);
-    sendFile(req, res, file, info.size, { ...objectHeaders(file), 'access-control-allow-origin': '*' });
+    sendFile(req, res, assets, file, info.size, { ...objectHeaders(file), 'access-control-allow-origin': '*' });
   });
 }
 
