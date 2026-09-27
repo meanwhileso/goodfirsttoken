@@ -39,17 +39,43 @@
   // stores. Local development needs neither (src/auth/settings.ts).
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
-  // One issue room per issue, named by the issue (src/rooms/issue-room.ts).
-  // Class names are code, so they may be here. Each class gets its storage
-  // from a migration, which is never edited once it has run on a deploy. A
-  // new class is a new migration with the next tag.
-  "durable_objects": { "bindings": [{ "name": "ISSUE_ROOM", "class_name": "IssueRoom" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["IssueRoom"] }],
+  // One issue room per issue, named by the issue (src/rooms/issue-room.ts),
+  // and one feed each for the homepage, each project, and each person
+  // (src/rooms/feed.ts). Class names are code, so they may be here. Each
+  // class gets its storage from a migration, which is never edited once it
+  // has run on a deploy. A new class is a new migration with the next tag.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ISSUE_ROOM", "class_name": "IssueRoom" },
+      { "name": "FEED", "class_name": "Feed" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["IssueRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["Feed"] }
+  ],
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "queues": {
     "producers": [
       { "binding": "FEED_QUEUE", "queue": "feed" },
       { "binding": "CRAWL_QUEUE", "queue": "crawl" }
+    ],
+    // The feed queue's consumer (src/feed/queue.ts). What these settings
+    // mean for a line on its way to the feeds is under Live feeds in
+    // docs/how-it-works.md. src/feed/queue.ts sets the wait for each message
+    // it asks for again. retry_delay is the wait for a batch that fails as a
+    // whole. max_retries keeps the last retry well inside the time the queue
+    // keeps a message, so a message that fails every time reaches the
+    // dead-letter queue.
+    "consumers": [
+      {
+        "queue": "feed",
+        "max_batch_size": 100,
+        "max_batch_timeout": 1,
+        "max_retries": 90,
+        "retry_delay": 30,
+        "dead_letter_queue": "feed-dlq"
+      }
     ]
   },
   // Cloudflare rate limiting on the sign-in endpoints (src/auth/routes.ts).

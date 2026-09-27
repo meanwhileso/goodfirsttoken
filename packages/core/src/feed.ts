@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { agentName, githubLogin, id, isoTime, issueRef } from './primitives';
+import { agentName, githubId, githubLogin, id, isoTime, issueRef, repoName } from './primitives';
 
-// Live feed events (spec section 8). The issue room makes each one, and the
-// repo, person, and homepage feeds store and stream it.
+// Live feed events (spec section 8). The issue room makes each one, and sends
+// it on the feed queue to the repo, person, and homepage feeds, which store
+// and stream it.
 
 /**
  * What an event records.
@@ -64,3 +65,16 @@ export const feedEventSchema = z.object({
   text: z.string().min(1).max(500),
 });
 export type FeedEvent = z.infer<typeof feedEventSchema>;
+
+/**
+ * A message on the feed queue: an event from an issue room, with the facts
+ * about its claim that pick the feeds it goes to. The event carries neither.
+ */
+export const feedMessageSchema = z.object({
+  event: feedEventSchema,
+  /** The claimant's numeric GitHub ID, which keys their feed and says whether they are blocked. */
+  githubId,
+  /** The project's code repo, which keys the project's feed. */
+  project: repoName,
+});
+export type FeedMessage = z.infer<typeof feedMessageSchema>;

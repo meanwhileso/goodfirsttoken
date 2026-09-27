@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { blockDonor, getBlock, listBlocks, unblockDonor } from '../../src/db';
+import { blockDonor, blockedAmong, getBlock, listBlocks, unblockDonor } from '../../src/db';
 import { admin, db, emptyDatabase, HOUR, kenji, priya, signIn, t0 } from './helpers';
 
 const secondAdmin = { githubId: 9002, login: 'sample-admin-two' };
@@ -42,6 +42,16 @@ describe('donor blocks', () => {
       blockedBy: secondAdmin.githubId,
       blockedAt: t0 + HOUR,
     });
+  });
+
+  test('a feed finds which of its donors are blocked, however many it asks about', async () => {
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, t0);
+    // More IDs than D1 binds in one statement.
+    const asked = [kenji.githubId, priya.githubId, ...Array.from({ length: 150 }, (_, i) => 50_000 + i)];
+
+    expect(await blockedAmong(db, asked)).toEqual(new Set([priya.githubId]));
+    expect(await blockedAmong(db, [kenji.githubId])).toEqual(new Set());
+    expect(await blockedAmong(db, [])).toEqual(new Set());
   });
 
   test('blocked donors are listed most recently blocked first', async () => {
