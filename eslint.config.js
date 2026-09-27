@@ -94,10 +94,16 @@ export default defineConfig([
     extends: [reactHooks.configs.flat.recommended],
     rules: {
       // A route sends someone elsewhere by throwing TanStack Router's
-      // redirect(), which is a Response.
+      // redirect(), which is a Response, and answers 404 by throwing its
+      // notFound().
       '@typescript-eslint/only-throw-error': [
         'error',
-        { allow: [{ from: 'package', package: '@tanstack/router-core', name: 'Redirect' }] },
+        {
+          allow: [
+            { from: 'package', package: '@tanstack/router-core', name: 'Redirect' },
+            { from: 'package', package: '@tanstack/router-core', name: 'NotFoundError' },
+          ],
+        },
       ],
       'no-restricted-imports': [
         'error',

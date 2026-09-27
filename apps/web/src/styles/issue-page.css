@@ -1,0 +1,77 @@
+/* Layout for the issue page only. The components it uses are styled in
+   components.css. */
+
+.issue { padding-top: 48px; }
+
+.issue-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.issue-head nav { min-width: 0; overflow-wrap: anywhere; }
+.issue-title {
+  margin-top: 22px; max-width: 14em; font: var(--display-lg); font-size: clamp(36px, 6vw, 64px);
+  letter-spacing: var(--display-lg-tracking); overflow-wrap: anywhere;
+}
+/* An issue with no cached title goes by owner/repo#n, set in mono. */
+.issue-title--ref { max-width: none; font-family: var(--font-mono); font-size: clamp(28px, 4.5vw, 48px); letter-spacing: -0.03em; }
+.issue-lede { margin-top: 20px; max-width: 34em; font-size: 18px; color: var(--text-muted); }
+.issue-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 22px; }
+/* A label can be long. It wraps, so the page never scrolls sideways. */
+.issue-meta .tag { height: auto; min-height: 24px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+/* The lanes: panes divided by hairlines under a 2px ink rule, three to a
+   row, stacked one above the other on narrow screens. */
+.issue-lanes {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 48px; border-top: 2px solid var(--ink);
+}
+.issue-lane, .issue-slot {
+  display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 360px; padding: 18px 24px 28px;
+  border-left: 1px solid var(--line);
+}
+.issue-lanes > :nth-child(3n + 1) { border-left: 0; padding-left: 0; }
+.issue-lanes > :nth-child(n + 4) { border-top: 1px solid var(--line); }
+
+.issue-lane__head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
+.issue-lane__who { font-size: 17px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.issue-lane__who a { color: var(--ink); }
+.issue-lane__state { margin-left: auto; }
+.issue-lane__lines { display: flex; flex-direction: column; gap: 10px; font: 14px/1.5 var(--font-mono); color: var(--text-body); }
+.issue-line { overflow-wrap: anywhere; }
+.issue-line__time { color: var(--text-faint); margin-right: 4px; }
+.issue-line__job {
+  display: inline-block; padding: 0 6px; margin-right: 2px; border-radius: 6px; background: var(--label-tint);
+  color: var(--label-ink); font-size: 12.5px;
+}
+.issue-line--new { animation: rise 0.45s ease-out; }
+.issue-lane--paused .issue-lane__lines { color: var(--text-muted); }
+.issue-lane__empty { font: 14px var(--font-mono); color: var(--text-faint); }
+.issue-lane__pr {
+  margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line-soft); font: 13px/1.5 var(--font-mono);
+  color: var(--text-muted);
+}
+
+/* The open slot: a dashed purple ring and the claim command. Closed, a gray
+   ring with a slash. */
+.issue-slot { align-items: flex-start; justify-content: center; gap: 18px; }
+.issue-slot .prompt { align-self: stretch; }
+.issue-slot__title { font-size: 24px; letter-spacing: -0.02em; }
+.issue-slot__words { max-width: 22em; font-size: 14px; color: var(--text-muted); }
+
+@container page (max-width: 900px) {
+  .issue-lanes { grid-template-columns: minmax(0, 1fr); }
+  .issue-lanes > * { border-left: 0; padding: 18px 0 24px; min-height: 0; }
+  .issue-lanes > :nth-child(n + 2) { border-top: 1px solid var(--line); }
+}
+
+/* The rail under the lanes: the timeline, and the text stream. */
+.issue-rail { margin-top: var(--section); }
+.issue-note { font: 14px var(--font-mono); color: var(--text-faint); }
+.issue-timeline > li {
+  display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 18px; padding: 12px 0;
+  border-top: 1px solid var(--line-soft); font: 14px/1.5 var(--font-mono);
+}
+.issue-timeline > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.issue-event__time { color: var(--text-faint); }
+.issue-event__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.issue-event__who { font-weight: 600; color: var(--ink); }
+.issue-event__text { color: var(--text-body); overflow-wrap: anywhere; min-width: 0; }
+@container page (max-width: 720px) {
+  .issue-timeline > li { grid-template-columns: minmax(0, 1fr); }
+}

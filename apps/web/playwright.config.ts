@@ -18,7 +18,12 @@ export default defineConfig({
     baseURL: SITE,
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /issue\.spec\.ts$/ },
+    // The issue page's tests work real issue rooms, and every event they
+    // make reaches the homepage's feed. So they run once the rest are done.
+    { name: 'rooms', use: { ...devices['Desktop Chrome'] }, testMatch: /issue\.spec\.ts$/, dependencies: ['chromium'] },
+  ],
   webServer: [
     {
       command: 'pnpm --filter @goodfirsttoken/github-fake start',
