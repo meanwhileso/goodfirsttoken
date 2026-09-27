@@ -54,6 +54,22 @@ export async function addPr(
     'PR',
   );
   const { claimId, pr } = record;
+  // The claim's own PR is checked in the same statement as the insert, and
+  // saveClaim checks this table the same way, so the two always agree.
+  const inserted = await db
+    .prepare(
+      `INSERT INTO prs (claim_id, repo, number, url, state, opened_at, merged_at, closed_at)
+       SELECT ?1, ?2, ?3, ?4, 'open', ?5, NULL, NULL
+       WHERE EXISTS (SELECT 1 FROM claims WHERE id = ?1
+         AND (pr_number IS NULL OR (pr_repo = ?2 AND pr_number = ?3)))
+       ON CONFLICT DO NOTHING
+       RETURNING *`,
+    )
+    .bind(claimId, pr.repo, pr.number, pr.url, record.openedAt)
+    .first<PrRow>();
+  if (inserted !== null) return toPr(inserted);
+
+  // Nothing was inserted. Find out why.
   const claim = await db
     .prepare('SELECT pr_repo, pr_number FROM claims WHERE id = ?')
     .bind(claimId)
@@ -64,19 +80,6 @@ export async function addPr(
       `Claim ${claimId} records ${name(claim.pr_repo, claim.pr_number)}. It can't take ${name(pr.repo, pr.number)}.`,
     );
   }
-
-  const inserted = await db
-    .prepare(
-      `INSERT INTO prs (claim_id, repo, number, url, state, opened_at, merged_at, closed_at)
-       VALUES (?, ?, ?, ?, 'open', ?, NULL, NULL)
-       ON CONFLICT DO NOTHING
-       RETURNING *`,
-    )
-    .bind(claimId, pr.repo, pr.number, pr.url, record.openedAt)
-    .first<PrRow>();
-  if (inserted !== null) return toPr(inserted);
-
-  // Nothing was inserted: the claim has a PR already, or the PR has a claim.
   const stored = await getPr(db, claimId);
   if (stored === null) {
     const owner = await db

@@ -29,8 +29,8 @@ function openedClaim(claimId: string, number: number): ClaimRecord {
 beforeEach(async () => {
   await emptyDatabase();
   await signIn(priya);
-  await saveClaim(db, openedClaim('c_1', 57));
-  await saveClaim(db, openedClaim('c_2', 58));
+  await saveClaim(db, openedClaim('c_1', 57), 1);
+  await saveClaim(db, openedClaim('c_2', 58), 1);
 });
 
 describe('PRs', () => {
@@ -60,7 +60,7 @@ describe('PRs', () => {
     expect(message).toContain(`records ${repo}#57`);
     expect(await getPr(db, 'c_1')).toBeNull();
 
-    await saveClaim(db, { ...openedClaim('c_3', 60), state: 'awaiting_review', pr: null });
+    await saveClaim(db, { ...openedClaim('c_3', 60), state: 'awaiting_review', pr: null }, 1);
     await addPr(db, { claimId: 'c_3', pr: prRef(60), openedAt: t0 + 2 * HOUR });
 
     await refusal(addPr(db, { claimId: 'c_3', pr: prRef(61), openedAt: t0 + 3 * HOUR }));
@@ -69,7 +69,7 @@ describe('PRs', () => {
 
   test('a PR belongs to one claim', async () => {
     await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 2 * HOUR });
-    await saveClaim(db, { ...openedClaim('c_3', 60), state: 'awaiting_review', pr: null });
+    await saveClaim(db, { ...openedClaim('c_3', 60), state: 'awaiting_review', pr: null }, 1);
 
     const message = await refusal(addPr(db, { claimId: 'c_3', pr: prRef(57), openedAt: t0 + 2 * HOUR }));
 

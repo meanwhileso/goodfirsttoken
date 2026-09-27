@@ -65,6 +65,8 @@ describe('stored projects', () => {
     repo: 'sample-owner/sample-app',
     status: 'approved',
     statusReason: null,
+    statusChangedBy: 2001,
+    statusChangedAt: at,
     source: 'registered',
     policy: null,
     addedBy: 2001,

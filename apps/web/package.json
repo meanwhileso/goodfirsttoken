@@ -8,7 +8,7 @@
   "scripts": {
     "postinstall": "wrangler types --strict-vars=false",
     "types": "wrangler types --strict-vars=false",
-    "dev": "wrangler d1 migrations apply DB --local && vite dev",
+    "dev": "node scripts/migrate-local.mjs && vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",

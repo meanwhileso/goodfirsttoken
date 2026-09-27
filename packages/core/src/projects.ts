@@ -202,6 +202,21 @@ function canonicalJson(value: unknown): string {
 /** The longest reason for rejecting or pausing a project. */
 export const MAX_STATUS_REASON = 500;
 
+/** A rejection needs a reason, a pending or approved project has none, and a pause may have one. */
+function checkStatusReason(
+  status: ProjectStatus,
+  reason: string | null,
+  field: string,
+  ctx: z.RefinementCtx,
+): void {
+  if (status === 'rejected' && reason === null) {
+    ctx.addIssue({ code: 'custom', path: [field], message: 'is required for a rejected project' });
+  }
+  if ((status === 'pending' || status === 'approved') && reason !== null) {
+    ctx.addIssue({ code: 'custom', path: [field], message: `must be null for a project that is ${status}` });
+  }
+}
+
 /**
  * A stored project with its current settings. `settingsVersion` counts the
  * saves of its settings, starting at 1, and every save is kept.
@@ -213,6 +228,9 @@ export const projectRecordSchema = z
     status: projectStatusSchema,
     /** Why it was rejected or paused. */
     statusReason: trimmedText(MAX_STATUS_REASON).nullable(),
+    /** Who gave the project its current status, or null when Good First Token did it on its own. */
+    statusChangedBy: githubId.nullable(),
+    statusChangedAt: epochMs,
     source: projectSourceSchema,
     /** The policy it was listed from. Null for a registered project. */
     policy: policySchema.nullable(),
@@ -232,14 +250,27 @@ export const projectRecordSchema = z
     if (project.source === 'registered' && project.policy !== null) {
       problem('policy', 'must be null for a registered project');
     }
-    if (project.status === 'rejected' && project.statusReason === null) {
-      problem('statusReason', 'is required for a rejected project');
-    }
-    if ((project.status === 'pending' || project.status === 'approved') && project.statusReason !== null) {
-      problem('statusReason', `must be null for a project that is ${project.status}`);
-    }
+    checkStatusReason(project.status, project.statusReason, 'statusReason', ctx);
   });
 export type ProjectRecord = z.infer<typeof projectRecordSchema>;
+
+/**
+ * One change of a project's status, with who made it and when. Adding the
+ * project is the first. `changedBy` is null when Good First Token changed it
+ * on its own.
+ */
+export const projectStatusChangeSchema = z
+  .object({
+    repo: repoName,
+    status: projectStatusSchema,
+    reason: trimmedText(MAX_STATUS_REASON).nullable(),
+    changedBy: githubId.nullable(),
+    changedAt: epochMs,
+  })
+  .superRefine((change, ctx) => {
+    checkStatusReason(change.status, change.reason, 'reason', ctx);
+  });
+export type ProjectStatusChange = z.infer<typeof projectStatusChangeSchema>;
 
 /** One save of a project's settings: who saved them, when, and what changed. */
 export const settingsVersionSchema = z.object({

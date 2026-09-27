@@ -8,6 +8,7 @@ import {
   listProjectsByIssueRepo,
   setProjectStatus,
   settingsHistory,
+  statusHistory,
 } from '../../src/db';
 import {
   admin,
@@ -60,6 +61,8 @@ describe('projects', () => {
       policy: null,
       addedBy: maintainer.githubId,
       addedAt: t0,
+      statusChangedBy: maintainer.githubId,
+      statusChangedAt: t0,
       settingsVersion: 1,
     });
     expect(stored?.settings).toMatchObject({ tags: ['help wanted'], prMode: 'automatic', claimsPerIssue: 3 });
@@ -143,7 +146,12 @@ describe('projects', () => {
   test('a rejection keeps its reason for the maintainer', async () => {
     await registeredProject();
 
-    await setProjectStatus(db, repo, { status: 'rejected', reason: 'The notes ask agents to skip tests.' });
+    await setProjectStatus(
+      db,
+      repo,
+      { status: 'rejected', reason: 'The notes ask agents to skip tests.', changedBy: admin.githubId },
+      t0 + HOUR,
+    );
 
     expect(await getProject(db, repo)).toMatchObject({
       status: 'rejected',
@@ -154,21 +162,92 @@ describe('projects', () => {
   test('a rejection without a reason is refused and changes nothing', async () => {
     await registeredProject();
 
-    const message = await refusal(setProjectStatus(db, repo, { status: 'rejected', reason: null }));
+    const message = await refusal(
+      setProjectStatus(db, repo, { status: 'rejected', reason: null, changedBy: admin.githubId }, t0 + HOUR),
+    );
 
-    expect(message).toContain('statusReason: is required for a rejected project');
+    expect(message).toContain('reason: is required for a rejected project');
     expect((await getProject(db, repo))?.status).toBe('approved');
+    expect(await statusHistory(db, repo)).toHaveLength(1);
   });
 
   test('resuming a paused project clears the pause reason', async () => {
     await registeredProject();
-    await setProjectStatus(db, repo, { status: 'paused', reason: 'Too many PRs this week.' });
+    await setProjectStatus(
+      db,
+      repo,
+      { status: 'paused', reason: 'Too many PRs this week.', changedBy: maintainer.githubId },
+      t0 + HOUR,
+    );
 
-    const resumed = await setProjectStatus(db, repo, { status: 'approved', reason: null });
+    const resumed = await setProjectStatus(
+      db,
+      repo,
+      { status: 'approved', reason: null, changedBy: maintainer.githubId },
+      t0 + 2 * HOUR,
+    );
 
     expect(resumed).toMatchObject({ status: 'approved', statusReason: null });
     expect(await getProject(db, repo)).toEqual(resumed);
-    expect(await setProjectStatus(db, 'sample-owner/missing', { status: 'paused', reason: null })).toBeNull();
+    expect(
+      await setProjectStatus(db, 'sample-owner/missing', { status: 'paused', reason: null, changedBy: null }, t0),
+    ).toBeNull();
+  });
+
+  test('status changes show who made them and when', async () => {
+    await registeredProject();
+
+    await setProjectStatus(
+      db,
+      repo,
+      { status: 'paused', reason: 'Too many PRs this week.', changedBy: coMaintainer.githubId },
+      t0 + HOUR,
+    );
+    await setProjectStatus(db, repo, { status: 'approved', reason: null, changedBy: admin.githubId }, t0 + 2 * HOUR);
+
+    expect(await getProject(db, repo)).toMatchObject({
+      status: 'approved',
+      statusChangedBy: admin.githubId,
+      statusChangedAt: t0 + 2 * HOUR,
+    });
+    expect(await statusHistory(db, repo)).toEqual([
+      { repo, status: 'approved', reason: null, changedBy: admin.githubId, changedAt: t0 + 2 * HOUR },
+      { repo, status: 'paused', reason: 'Too many PRs this week.', changedBy: coMaintainer.githubId, changedAt: t0 + HOUR },
+      { repo, status: 'approved', reason: null, changedBy: maintainer.githubId, changedAt: t0 },
+    ]);
+  });
+
+  test('a pause Good First Token makes on its own names no person', async () => {
+    await registeredProject();
+
+    const paused = await setProjectStatus(
+      db,
+      repo,
+      { status: 'paused', reason: 'The repo was archived.', changedBy: null },
+      t0 + HOUR,
+    );
+
+    expect(paused).toMatchObject({ status: 'paused', statusChangedBy: null, statusChangedAt: t0 + HOUR });
+    expect((await statusHistory(db, repo))[0]).toMatchObject({ changedBy: null, reason: 'The repo was archived.' });
+  });
+
+  test('a status change that changes nothing adds nothing to the history', async () => {
+    await registeredProject();
+
+    const same = await setProjectStatus(db, repo, { status: 'approved', reason: null, changedBy: admin.githubId }, t0 + HOUR);
+
+    expect(same).toMatchObject({ statusChangedBy: maintainer.githubId, statusChangedAt: t0 });
+    expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
+  test('a new reason for a paused project is a change', async () => {
+    await registeredProject();
+    const pause = { status: 'paused' as const, changedBy: maintainer.githubId };
+    await setProjectStatus(db, repo, { ...pause, reason: 'Busy week.' }, t0 + HOUR);
+
+    await setProjectStatus(db, repo, { ...pause, reason: 'Busy month.' }, t0 + 2 * HOUR);
+
+    expect((await statusHistory(db, repo)).map((c) => c.reason)).toEqual(['Busy month.', 'Busy week.', null]);
   });
 });
 

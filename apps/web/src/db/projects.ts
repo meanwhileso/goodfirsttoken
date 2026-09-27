@@ -6,6 +6,7 @@ import {
   projectRecordSchema,
   projectSettingsSchema,
   projectSourceSchema,
+  projectStatusChangeSchema,
   projectStatusSchema,
   repoName,
   settingsVersionSchema,
@@ -18,20 +19,24 @@ import {
   type ProjectSettingsPatch,
   type ProjectSource,
   type ProjectStatus,
+  type ProjectStatusChange,
   type SettingKey,
   type SettingsVersion,
 } from '@goodfirsttoken/core';
 import { checkTime, fromJson } from './shared';
 
-// The projects and project_settings tables. A project's row points at its
-// current settings, and every save of its settings is kept, with who made it
-// and when.
+// The projects, project_settings, and project_status_changes tables. A
+// project's row holds its current status and points at its current
+// settings. Every save of its settings and every change of its status is
+// kept, with who made it and when.
 
 interface ProjectRow {
   repo: string;
   issue_repo: string;
   status: string;
   status_reason: string | null;
+  status_changed_by: number | null;
+  status_changed_at: number;
   source: string;
   policy_quote: string | null;
   policy_url: string | null;
@@ -41,6 +46,15 @@ interface ProjectRow {
   settings_version: number;
   /** From the current row of project_settings. */
   settings: string;
+}
+
+interface StatusChangeRow {
+  id: number;
+  repo: string;
+  status: string;
+  reason: string | null;
+  changed_by: number | null;
+  changed_at: number;
 }
 
 interface SettingsRow {
@@ -66,6 +80,8 @@ function toProject(row: ProjectRow): ProjectRecord {
       repo: row.repo,
       status: row.status,
       statusReason: row.status_reason,
+      statusChangedBy: row.status_changed_by,
+      statusChangedAt: row.status_changed_at,
       source: row.source,
       policy,
       addedBy: row.added_by,
@@ -96,7 +112,8 @@ export interface NewProject {
 }
 
 /**
- * Saves a new project and the first version of its settings. Null when the
+ * Saves a new project, the first version of its settings, and its first
+ * status, all made by `addedBy` at `now`. Null when the
  * repo is already a project, in any case, since GitHub ignores case in repo
  * names.
  */
@@ -111,6 +128,8 @@ export async function createProject(
       repo: project.repo,
       status: mustParse(projectStatusSchema, project.status, 'status'),
       statusReason: null,
+      statusChangedBy: project.addedBy,
+      statusChangedAt: now,
       source: mustParse(projectSourceSchema, project.source, 'source'),
       policy: project.policy === null ? null : mustParse(policySchema, project.policy, 'policy'),
       addedBy: project.addedBy,
@@ -123,15 +142,17 @@ export async function createProject(
   const [inserted] = await db.batch([
     db
       .prepare(
-        `INSERT INTO projects (repo, issue_repo, status, status_reason, source, policy_quote, policy_url,
-           policy_tier, added_by, added_at, settings_version)
-         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1)
+        `INSERT INTO projects (repo, issue_repo, status, status_reason, status_changed_by, status_changed_at,
+           source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1)
          ON CONFLICT DO NOTHING`,
       )
       .bind(
         record.repo,
         issueRepoOf(record.repo, record.settings),
         record.status,
+        record.statusChangedBy,
+        record.statusChangedAt,
         record.source,
         record.policy?.quote ?? null,
         record.policy?.url ?? null,
@@ -146,6 +167,14 @@ export async function createProject(
          ON CONFLICT DO NOTHING`,
       )
       .bind(record.repo, JSON.stringify(record.settings), record.addedBy, record.addedAt),
+    // A project that already existed has status changes, so this adds none.
+    db
+      .prepare(
+        `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
+         SELECT ?1, ?2, NULL, ?3, ?4
+         WHERE NOT EXISTS (SELECT 1 FROM project_status_changes WHERE repo = ?1)`,
+      )
+      .bind(record.repo, record.status, record.addedBy, record.addedAt),
   ]);
   return inserted?.meta.changes === 1 ? record : null;
 }
@@ -178,31 +207,68 @@ export async function listProjectsByIssueRepo(db: D1Database, issueRepo: string)
 }
 
 /**
- * Sets a project's status and the reason for it. A rejection needs a reason,
- * and pending or approved takes none. Null when there's no such project.
+ * Sets a project's status and the reason for it, as changed by `changedBy` at
+ * `now`. `changedBy` is null for a change Good First Token makes on its own.
+ * A rejection needs a reason, and pending or
+ * approved takes none. Each change is kept. A change to the status and
+ * reason the project already has changes nothing. Null when there's no such
+ * project.
  */
 export async function setProjectStatus(
   db: D1Database,
   repo: string,
-  change: { status: ProjectStatus; reason: string | null },
+  change: { status: ProjectStatus; reason: string | null; changedBy: number | null },
+  now: number,
 ): Promise<ProjectRecord | null> {
   const current = await getProject(db, repo);
   if (current === null) return null;
   const next = mustParse(
-    projectRecordSchema,
-    { ...current, status: change.status, statusReason: change.reason },
-    'project',
+    projectStatusChangeSchema,
+    { repo: current.repo, status: change.status, reason: change.reason, changedBy: change.changedBy, changedAt: now },
+    'status change',
   );
-  // One transaction, so the project returned is the one stored, whatever
-  // else changed since the read.
-  const [, stored] = await db.batch<ProjectRow>([
+  // One transaction. The history row and the update each apply only when
+  // the status or reason differs from what is stored, and the project
+  // returned is the one stored.
+  const [, , stored] = await db.batch<ProjectRow>([
     db
-      .prepare('UPDATE projects SET status = ?, status_reason = ? WHERE repo = ?')
-      .bind(next.status, next.statusReason, current.repo),
-    db.prepare(`${SELECT_PROJECT} WHERE p.repo = ?`).bind(current.repo),
+      .prepare(
+        `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
+         SELECT ?1, ?2, ?3, ?4, ?5
+         WHERE NOT EXISTS (SELECT 1 FROM projects WHERE repo = ?1 AND status = ?2 AND status_reason IS ?3)`,
+      )
+      .bind(next.repo, next.status, next.reason, next.changedBy, next.changedAt),
+    db
+      .prepare(
+        `UPDATE projects SET status = ?2, status_reason = ?3, status_changed_by = ?4, status_changed_at = ?5
+         WHERE repo = ?1 AND NOT (status = ?2 AND status_reason IS ?3)`,
+      )
+      .bind(next.repo, next.status, next.reason, next.changedBy, next.changedAt),
+    db.prepare(`${SELECT_PROJECT} WHERE p.repo = ?`).bind(next.repo),
   ]);
   const row = stored?.results[0];
   return row === undefined ? null : toProject(row);
+}
+
+/** Every change of a project's status, newest first, with who made it and when. */
+export async function statusHistory(db: D1Database, repo: string): Promise<ProjectStatusChange[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM project_status_changes WHERE repo = ? ORDER BY id DESC')
+    .bind(mustParse(repoName, repo, 'repo'))
+    .all<StatusChangeRow>();
+  return results.map((row) =>
+    mustParse(
+      projectStatusChangeSchema,
+      {
+        repo: row.repo,
+        status: row.status,
+        reason: row.reason,
+        changedBy: row.changed_by,
+        changedAt: row.changed_at,
+      },
+      'status change',
+    ),
+  );
 }
 
 export type SettingsChange =

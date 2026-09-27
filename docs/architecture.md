@@ -206,34 +206,37 @@ limiters arrive with the issues that use them.
 ## Database
 
 D1, bound as `DB`, holds the structured records that search and the
-leaderboard read: people, projects and their settings, the tagged-issue
-cache, claims, PRs, donor sessions, blocks, the do-not-list, and crawl
-candidates. GitHub is the source of truth for issues and PRs, and the issue
-room (#13) will be for claims, so those tables are caches and mirrors. Better
-Auth's own tables arrive with #8. No table holds a GitHub token. Tokens stay
-in the encrypted grant store.
+leaderboard read: people, projects with their settings and status changes,
+the tagged-issue cache, claims, PRs, donor sessions, blocks, the
+do-not-list, and crawl candidates. GitHub is the source of truth for issues
+and PRs, and the issue room (#13) will be for claims, so those tables are
+caches and mirrors. Better Auth's own tables arrive with #8. No table holds a
+GitHub token. Tokens stay in the encrypted grant store. The rules these
+records follow are in [how-it-works.md](how-it-works.md#people), under
+People through Crawl candidates.
 
 | Table | One row per | Key |
 |---|---|---|
 | `people` | Person who has signed in: login, interests, when they joined, and when GitHub last showed their login | `github_id` |
-| `projects` | Project: status and its reason, how it got in, with the policy quote, link, and tier for a policy listing, who added it and when, where its issues live, and its current settings version | `repo` |
+| `projects` | Project: its current status, reason, and who set it and when, how it got in, with the policy quote, link, and tier for a policy listing, who added it and when, where its issues live, and its current settings version | `repo` |
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
-| `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR, and sync time. Two projects that keep issues in one repo each have their own copy. | `project`, `issue_repo`, `number` |
-| `claims` | Claim, mirrored from its issue room: issue, project, claimant, agent, own-project flag, start commit, token estimate, state, times, release reason, and PR | `id` |
+| `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
+| `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR, and sync time | `project`, `issue_repo`, `number` |
+| `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, and issues claimed | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, status, and the admin's decision | `id` |
 
-Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns
-both project tables. Its functions take the database first, so the Worker
+Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns the
+three project tables. Its functions take the database first, so the Worker
 passes `env.DB` and a test passes its own. Every function checks what it
 writes with the core schema before the write, and checks every row it reads
 with the same schema, so a bad value never reaches the database and a bad
 row never reaches the caller. Either throws a `TypeError` that names the
-field. A settings change that breaks the settings rules returns the problems
-instead, because a maintainer can fix them.
+field. `changeSettings` is the one exception. A maintainer can fix settings
+that break the rules, so it returns the problems for the caller to show.
 
 ### Storage choices
 
@@ -245,20 +248,39 @@ instead, because a maintainer can fix them.
 - **Lists and small objects are JSON text:** settings, interests, labels,
   budgets, suggested settings, and suggested tags. A PR is three columns,
   repo, number, and link, so it can be found by number. So is a policy.
-- **Repo names and logins compare without case,** with `COLLATE NOCASE`, as
-  GitHub's do. A repo can't be listed twice under different case, and a
-  lookup finds it however it is typed.
+- **Every repo and login column uses `COLLATE NOCASE`,** which gives the
+  case rules in how-it-works.md. An index on such a column compares the same
+  way.
 - **Tables are STRICT,** so SQLite refuses a value of the wrong type.
 - **No CHECK constraints.** The rules live in the core schemas, which every
   read and write goes through. SQLite can only change a CHECK by rebuilding
   the table, so a rule kept there would turn each rule change into a rebuild.
-- **Foreign keys** tie every row that names a person to `people`, settings
-  and cached issues to their project, and a PR to its claim. D1 enforces
-  them. A claim's project has none, so a claim's history can outlive a
-  listing.
+- **Foreign keys** tie every row that names a person to `people`, settings,
+  status changes, and cached issues to their project, and a PR to its claim.
+  D1 enforces them. A claim's project has none, so a claim's history can
+  outlive a listing.
 - **IDs** for sessions and candidates are made in `src/db/`: a prefix and 20
-  random URL-safe characters, like `s_2x8Qm0vT4kLp9aZr1yWc`. The issue room
-  makes claim IDs.
+  URL-safe characters, the base64url form of 15 random bytes, like
+  `s_2x8Qm0vT4kLp9aZr1yWc`. The issue room makes claim IDs.
+- **`claims.login` is the login when the claim was made.** The current login
+  is in `people`, found by GitHub ID. A page should show that one, because a
+  renamed login can later belong to someone else.
+- **`tagged_issues` has no assignee.** An issue with an assignee isn't
+  eligible, and the sync (#12) leaves it out, so no cached issue has one. The
+  server checks GitHub again before it suggests or claims an issue, which
+  catches an assignee added since the last sync.
+
+### Who sees what
+
+The spec says everything the site shows is public GitHub data or the public
+live feed. It says crawl results stay in the deployment's database, and only
+listed projects and their policy quotes are public, so `crawl_candidates`
+stays private, a rejection's reason included. The reason an admin gives for
+rejecting a registration reaches the maintainer's agent.
+
+These columns are not public GitHub data, and the spec says nothing more
+about who sees them: `people.interests`, `donor_sessions.budget`,
+`donor_blocks.reason`, and `do_not_list.reason`.
 
 ### Settings history
 
@@ -274,65 +296,86 @@ A save reads the current version, applies the change with core's
 statements in the batch check that the version is still the one read, and
 D1 runs a batch as one transaction. When another save landed first, neither
 statement applies, and the save reads again and reapplies its change, up to
-five times. So two maintainers changing different settings at once both
-keep their change, and each version names the person whose change it holds.
+five times. That is how two changes at once both land, as
+[Project settings](how-it-works.md#project-settings) says.
+
+### Status changes
+
+A project's row holds its current status and reason, who set them, and
+when, so the lists by status read one table. `project_status_changes` keeps
+every change, and adding the project writes the first. `setProjectStatus`
+writes both in one batch, and each statement applies only when the status or
+reason differs from the stored one.
 
 ### The claims mirror
 
-`saveClaim` inserts a claim, or updates what changes over its life: state,
-times, release reason, PR, and token estimate. What was fixed when it was
-made, the issue, project, claimant, agent, own-project flag, start commit,
-and claim time, is compared in the same statement, and a save that
-disagrees is refused. A save carries the whole claim, and the last save
-wins, so the issue room has to save each change in order, as it makes it.
-A queue that can deliver twice or out of order would need a revision number
-on the claim first.
+`saveClaim` takes the claim and the room's revision of it. The fields fixed
+when a claim is made, listed under
+[the claims table](how-it-works.md#claims), are compared in the same
+statement as the write, and so are the revision and the claim's PR.
+
+The rule for the issue room (#13): number each version of a claim you save,
+and give every change a higher number than the last. A counter kept with the
+claim in the room's storage does it. Save each change with its number, and
+save again with the same number when a save may not have landed. A save with
+a number no higher than the stored one changes nothing and returns false.
+So a save that arrives late, or twice, never undoes a newer one.
 
 `claims` keeps the claim's PR as the room records it, and `prs` keeps what
-GitHub says about that PR afterwards. `addPr` refuses a PR that differs from
-the one the claim records, so the two agree.
+GitHub says about that PR afterwards. The two agree: `saveClaim` refuses a
+claim whose PR differs from the one `prs` holds for it, and `addPr` refuses
+a PR that differs from the one the claim holds. Each checks the other table
+in the same statement as its write, so neither can land between the other's
+check and write.
 
 ### Indexes
 
 Each index serves a query that a page, a tool, a job, or the leaderboard
-needs. The leaderboard isn't built yet. Its queries were checked with
-`EXPLAIN QUERY PLAN` against these indexes. The key of `tagged_issues` leads
-with the project, so it serves a project's issues, suggestions across
-approved projects through `projects_by_status`, and pruning after a sync,
-with no index of its own.
+needs. The leaderboard isn't built yet, and #26 writes its queries. The
+plans below were checked with `EXPLAIN QUERY PLAN`. The key of
+`tagged_issues` leads with the project, so it serves a project's issues,
+suggestions across approved projects through `projects_by_status`, and
+pruning after a sync, with no index of its own.
 
 | Index | Serves |
 |---|---|
 | `people_by_login` | A person by login, for `/@<login>` pages and admin blocks |
 | `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first |
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync |
+| `project_status_changes_by_repo` | A project's status changes, newest first |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
-| `claims_by_person` | `my_work`, a person's page and leaderboard row, and issues worked per person this week, read in person order |
-| `claims_by_project` | A project's page and the leaderboard by project |
+| `claims_by_person` | One person's claims, newest first: `my_work`, their page, and their leaderboard row |
+| `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project |
 | `prs_by_number` | A PR's claim, and one claim per PR |
 | `prs_open` | The open PRs the PR job follows, oldest first |
-| `prs_by_opened` | PRs opened this week |
-| `prs_by_closed` | PRs merged or closed this week, for merged PRs and merge rate |
+| `prs_by_opened` | PRs opened in a time range, like this week |
+| `prs_by_closed` | PRs merged or closed in a time range, like this week |
 | `donor_sessions_by_person` | A donor's last session, for what merged since |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
 
-A merged PR has a close time, as on GitHub, so one index on `closed_at`
-answers both merged PRs this week and merge rate, merged over merged plus
-closed. The all-time views, by person, agent, or project, read every PR once
-and join each to its claim by key, and hiding blocked donors joins
-`donor_blocks` by key. At v1's size those need no index of their own.
+A merged PR always has a close time, as on GitHub, and only `closed_at` is
+indexed. So merged PRs this week filter on `closed_at` with
+`state = 'merged'`, which reads `prs_by_closed`. Filtering on `merged_at`
+scans every claim. Merge rate reads the same index.
+
+Some views have no index of their own. Issues worked per person this week
+scans every claim. The all-time views scan `claims` or `prs` and look up the
+other by key, and hiding blocked donors looks up `donor_blocks` by key.
 
 ### Migrations
 
 Migrations live in `apps/web/migrations/`, Wrangler's default folder,
-numbered in order. `pnpm dev` applies new ones to the local database with
-`wrangler d1 migrations apply DB --local` before it starts Vite. In a
-terminal, Wrangler asks before it applies one. The database tests apply them
-in their setup, and a deploy applies them to the environment's database
-before the Worker goes up, as [Deploys](#deploys) describes. A schema change
-is a new migration. A migration that has run on a deployed database never
-changes.
+numbered in order. `pnpm dev` runs `apps/web/scripts/migrate-local.mjs`
+before it starts Vite. The script runs `wrangler d1 migrations apply DB
+--local` with no input attached. Wrangler asks before it applies a migration
+only when both its input and output are a terminal, so it applies new ones
+without asking, whether `pnpm dev` runs from the root, where pnpm runs the
+GitHub fake beside it, or in `apps/web`. It needs no network and no account.
+The database tests apply the migrations in their setup, and a deploy applies
+them to the environment's database before the Worker goes up, as
+[Deploys](#deploys) describes. A schema change is a new migration. A
+migration that has run on a deployed database never changes.
 
 ## Configuration and secrets
 

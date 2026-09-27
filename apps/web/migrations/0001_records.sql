@@ -29,6 +29,10 @@ CREATE TABLE projects (
   issue_repo TEXT NOT NULL COLLATE NOCASE,
   status TEXT NOT NULL,
   status_reason TEXT,
+  -- Who gave the project its current status, and when. Null when Good First
+  -- Token changed it on its own.
+  status_changed_by INTEGER REFERENCES people (github_id),
+  status_changed_at INTEGER NOT NULL,
   source TEXT NOT NULL,
   policy_quote TEXT,
   policy_url TEXT,
@@ -56,10 +60,26 @@ CREATE TABLE project_settings (
   PRIMARY KEY (repo, version)
 ) STRICT;
 
+-- Every change of a project's status, kept, with who made it and when. Adding
+-- the project is the first.
+CREATE TABLE project_status_changes (
+  id INTEGER PRIMARY KEY,
+  repo TEXT NOT NULL COLLATE NOCASE REFERENCES projects (repo),
+  status TEXT NOT NULL,
+  reason TEXT,
+  changed_by INTEGER REFERENCES people (github_id),
+  changed_at INTEGER NOT NULL
+) STRICT;
+
+-- A project's status changes, newest first, for its page.
+CREATE INDEX project_status_changes_by_repo ON project_status_changes (repo, id);
+
 -- Open issues carrying a project's tag, as the last sync saw them. Two
 -- projects can keep issues in the same repo, so each project has its own copy
 -- of an issue. The key leads with the project, which serves a project's
 -- issues, suggestions across approved projects, and pruning after a sync.
+-- An issue with an assignee isn't eligible, and the sync leaves it out, so
+-- there is no assignee column.
 CREATE TABLE tagged_issues (
   project TEXT NOT NULL COLLATE NOCASE REFERENCES projects (repo),
   issue_repo TEXT NOT NULL COLLATE NOCASE,
@@ -73,16 +93,18 @@ CREATE TABLE tagged_issues (
   PRIMARY KEY (project, issue_repo, number)
 ) STRICT;
 
--- A mirror of each issue room's claims. The room is the source of truth.
--- project has no reference to projects, because a claim's history outlives
--- a listing.
+-- A mirror of each issue room's claims. The room is the source of truth, and
+-- numbers each version it saves in revision, so an older save never lands
+-- over a newer one. project has no reference to projects, because a claim's
+-- history outlives a listing. login is the claimant's login when they
+-- claimed.
 CREATE TABLE claims (
   id TEXT PRIMARY KEY,
   issue_repo TEXT NOT NULL COLLATE NOCASE,
   issue_number INTEGER NOT NULL,
   project TEXT NOT NULL COLLATE NOCASE,
   github_id INTEGER NOT NULL REFERENCES people (github_id),
-  login TEXT NOT NULL,
+  login TEXT NOT NULL COLLATE NOCASE,
   agent TEXT NOT NULL,
   own_project INTEGER NOT NULL,
   start_commit TEXT NOT NULL,
@@ -94,7 +116,8 @@ CREATE TABLE claims (
   release_reason TEXT,
   pr_repo TEXT COLLATE NOCASE,
   pr_number INTEGER,
-  pr_url TEXT
+  pr_url TEXT,
+  revision INTEGER NOT NULL
 ) STRICT;
 
 -- The claims on one issue: its lanes, its slots, how many times it was
