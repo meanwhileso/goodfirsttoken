@@ -1823,8 +1823,9 @@ Choices:
 - **Dependabot alerts on, security updates off.** Dependabot alerts are
   private too, and GitHub tells maintainers when one is filed, which code
   scanning never does. A dependency advisory can then show up in both places.
-  A security update pull request is public and names its advisory before a
-  maintainer has looked at it.
+  A security update pull request would open before a maintainer has checked
+  that the exception in [SECURITY.md](../SECURITY.md#how-we-keep-it-private)
+  applies.
 - **No OpenSSF Scorecard.** Its workflow checks repeat zizmor's, and its other
   checks grade practices this repo doesn't have yet, such as fuzzing and
   signed releases, so it would file alerts nobody fixes.
