@@ -1,14 +1,18 @@
 // Lines agents post are public (spec section 8). Before the server stores or
 // shows one, it replaces anything that looks like a key or a token with
 // `[redacted]`. The patterns follow the published formats of common keys and
-// tokens, or need a name that says a value is secret, so ordinary text,
-// paths, and commit SHAs pass through. The list is in docs/how-it-works.md,
-// and a new pattern goes there too.
+// tokens, or need a name that says a value is secret. The list is in
+// docs/how-it-works.md, and a new pattern goes there too.
+//
+// The rule: when in doubt, redact. A redacted ordinary word costs little,
+// and a leaked secret costs a lot. A value is left alone only where it can't
+// plausibly be a credential.
 //
 // No pattern has two unbounded repeats in a row that can match the same
 // characters. The scan for named values reads a value again when its name
 // isn't secret, so a line like `a=b=c=...` takes time that grows with the
-// square of its length. The room strips lines of 200 characters or fewer.
+// square of its length. That is why stripSecrets refuses text longer than
+// MAX_STRIP_LENGTH.
 
 /** What a key or token is replaced with. */
 export const REDACTED = '[redacted]';
@@ -42,6 +46,10 @@ const WHOLE: readonly RegExp[] = [
   /\bnpm_[A-Za-z0-9]{36}\b/g,
   // SendGrid API keys: SG., an ID, a dot, and the secret.
   /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g,
+  // Discord bot tokens: the account's numeric ID in base64, which starts
+  // with M, N, or O and runs 23 to 28 characters, a dot, 6 characters, a
+  // dot, and 27 to 38 characters.
+  /(?<![\w-])[MNO][\w-]{22,27}\.[\w-]{6}\.[\w-]{27,38}(?![\w-])/g,
   // JSON Web Tokens: three base64url parts, the first two JSON objects.
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
   // A private key in PEM or PGP form: its BEGIN line and everything after
@@ -82,44 +90,18 @@ const MIN_TOKEN = 8;
 // Any other key: a name that ends in _key or -key, or in Key after a
 // lowercase letter or digit, like RAILS_MASTER_KEY or masterKey. Many such
 // names hold ordinary values, like `sort_key: created_at_desc`, so the value
-// needs 16 or more characters with a letter and a digit.
+// needs 16 or more characters with a letter and a digit. A value that long
+// is replaced even under a name that labels no secret, like
+// `row_key=20260927T120000Z1`, since it could be one.
 const KEY_NAME = /[_-]key$/i;
 const CAMEL_KEY_NAME = /[a-z0-9]Key$/;
 const MIN_KEY = 16;
 
-// Words that say what a field is or whether it is set, and don't give its
-// value, like `password: required` or `the --secret parameter`.
-const FIELD_WORDS = new Set([
-  'argument',
-  'boolean',
-  'changed',
-  'default',
-  'disabled',
-  'enabled',
-  'hidden',
-  'masked',
-  'missing',
-  'needed',
-  'option',
-  'optional',
-  'parameter',
-  'placeholder',
-  'provided',
-  'redacted',
-  'removed',
-  'required',
-  'rotated',
-  'setting',
-  'string',
-  'support',
-  'switch',
-  'updated',
-]);
-// A reference in code, which names a value and doesn't hold it: a dotted
-// path like config.apiKeyV2, or a constant in capitals with an underscore,
-// like T_STRING2.
-const CODE_PATH = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
-const CONSTANT = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+// Words that say a password field is set or not, and can't plausibly be the
+// password, like `password: required`, or that name the flag itself, like
+// `the --secret parameter`. Other names get no such words: a value of the
+// right shape under them is replaced, whatever it says.
+const NOT_A_PASSWORD = new Set(['argument', 'hidden', 'masked', 'missing', 'option', 'optional', 'parameter', 'required']);
 // Closing punctuation after a value belongs to the text around it.
 const CLOSING = new Set([')', ']', '}', '>', '.', '!']);
 
@@ -128,8 +110,9 @@ function looksRandom(value: string, min: number): boolean {
 }
 
 function isSecret(name: string, value: string): boolean {
-  if (FIELD_WORDS.has(value.toLowerCase()) || CODE_PATH.test(value) || CONSTANT.test(value)) return false;
-  if (PASSWORD_NAME.test(name)) return value.length >= MIN_PASSWORD;
+  // An earlier pattern already replaced it.
+  if (value.startsWith(REDACTED.slice(0, -1))) return false;
+  if (PASSWORD_NAME.test(name)) return value.length >= MIN_PASSWORD && !NOT_A_PASSWORD.has(value.toLowerCase());
   if (TOKEN_NAME.test(name)) return looksRandom(value, MIN_TOKEN);
   if (KEY_NAME.test(name) || CAMEL_KEY_NAME.test(name)) return looksRandom(value, MIN_KEY);
   return false;
@@ -161,11 +144,22 @@ function replaceNamed(text: string, pattern: RegExp): string {
   return out + text.slice(copied);
 }
 
+/** The longest text `stripSecrets` takes. */
+export const MAX_STRIP_LENGTH = 1000;
+
 /**
  * `text` with every key or token in it replaced with `[redacted]`. Text that
  * holds none comes back as it was.
+ *
+ * For lines up to 1,000 characters, like a post, a job, or a release
+ * reason. The scan for named values takes time that grows with the square
+ * of the length for a line like `a=b=c=...`, so longer text is refused with
+ * a RangeError. Cut it first.
  */
 export function stripSecrets(text: string): string {
+  if (text.length > MAX_STRIP_LENGTH) {
+    throw new RangeError(`stripSecrets takes at most ${String(MAX_STRIP_LENGTH)} characters.`);
+  }
   let out = text;
   for (const pattern of WHOLE) out = out.replace(pattern, REDACTED);
   for (const pattern of AFTER_FIRST_GROUP) out = out.replace(pattern, `$1${REDACTED}`);

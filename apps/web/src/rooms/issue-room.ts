@@ -571,13 +571,20 @@ export class IssueRoom extends DurableObject<Env> {
     for (const { claim, kind, text, at } of changes) this.emit(claim, kind, text, null, at);
   }
 
-  /** Stores a new version of a claim, with the next revision. A post also restarts its 10 seconds. */
+  /**
+   * Stores a new version of a claim, with the next revision. A post also
+   * restarts its 10 seconds. When the claim's save waits for a retry, the
+   * change makes it due a minute after its last try at the latest.
+   */
   private save(claim: ClaimRecord, { postedAt = null }: { postedAt?: number | null } = {}): void {
     const checked = mustParse(claimRecordSchema, claim, 'claim');
     this.sql.exec(
-      'UPDATE claims SET record = ?, revision = revision + 1, last_post_at = COALESCE(?, last_post_at) WHERE id = ?',
+      `UPDATE claims SET record = ?, revision = revision + 1, last_post_at = COALESCE(?, last_post_at),
+         save_after = MIN(save_after, COALESCE(last_try_at, 0) + ?)
+       WHERE id = ?`,
       JSON.stringify(checked),
       postedAt,
+      SAVE_RETRY_FIRST_MS,
       checked.id,
     );
   }
@@ -648,25 +655,32 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * Tries to save each claim whose save is due to D1, at its latest
-   * revision, one claim at a time. A save D1 calls stale means it already has
-   * that revision or a later one. A claim whose save waits for a retry, or is
-   * out in another call, is left alone, so a failing save never slows other
-   * calls.
+   * Tries to save to D1, at its latest revision, each claim whose save is
+   * due when the call gets here, one claim at a time. A save D1 calls stale
+   * means it already has that revision or a later one. A claim whose save
+   * waits for a retry, or is out in another call, is left alone.
    *
    * When a save lands, D1 is taking saves again. Each other claim waiting for
    * a retry, and each the room gave up on, is then due a minute after its
-   * last try at the latest, or at once when that minute has passed. The
-   * minute keeps a claim whose save can never land, like one whose claimant
-   * D1 has no record of, from being tried on every save in a busy room.
+   * last try at the latest, or at once when that minute has passed. This call
+   * doesn't try those. The alarm it sets at its end does. The minute keeps a
+   * claim whose save can never land, like one whose claimant D1 has no
+   * record of, from being tried on every save in a busy room.
    */
   private async mirror(now: number): Promise<void> {
-    const tried = new Set<string>();
-    for (;;) {
-      const stored = this.readClaims().find((c) => !tried.has(c.record.id) && saveDue(c, now));
-      if (stored === undefined) return;
-      const claimId = stored.record.id;
-      tried.add(claimId);
+    const due = this.readClaims()
+      .filter((c) => saveDue(c, now))
+      .map((c) => c.record.id);
+    if (due.length === 0) return;
+    // If this call dies while a save is out, schedule() never runs. This
+    // alarm then brings the room back to try again a minute later.
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > now + SAVE_RETRY_FIRST_MS) await this.ctx.storage.setAlarm(now + SAVE_RETRY_FIRST_MS);
+    for (const claimId of due) {
+      // Read again: the claim may have changed, or another call's try may be
+      // out, since the list was made.
+      const stored = this.readClaim(claimId);
+      if (stored === null || !saveDue(stored, now)) continue;
       // Other calls leave the claim alone while this try is out. If this
       // call ends before the try does, the claim is due again a minute later.
       this.sql.exec(

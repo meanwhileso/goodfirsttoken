@@ -701,14 +701,17 @@ describe('the D1 mirror', () => {
       await runDurableObjectAlarm(room);
     }
 
-    // Tries at 1, 3, 7, 15, 31, and 63 minutes, with the pause at 30.
-    expect(alarms.slice(0, 7)).toEqual([1, 3, 7, 15, 30, 31, 63].map((m) => m * MINUTE));
+    // Tries at 1, 3, 7, and 15 minutes. The pause at 30 changes the claim,
+    // and its last try was over a minute before, so it is tried then too, and
+    // then 32 minutes later, and 60 after that.
+    expect(alarms.slice(0, 7)).toEqual([1, 3, 7, 15, 30, 62, 122].map((m) => m * MINUTE));
     const gaps = alarms.slice(1).map((time, i) => time - (alarms[i] ?? 0));
     expect(Math.max(...gaps)).toBe(HOUR);
     expect(alarms.at(-1)).toBeGreaterThanOrEqual(DAY);
     expect(await getClaim(db, made.id)).toBeNull();
-    // One try when the claim was made, and one at each retry.
-    expect(warnings).toHaveBeenCalledTimes(alarms.length - 1);
+    // One try when the claim was made, and one at each alarm: every retry,
+    // and the pause and the expiry, which change the claim.
+    expect(warnings).toHaveBeenCalledTimes(alarms.length + 1);
     const givenUp = errors.mock.calls.filter((call) => String(call[0]).includes(made.id));
     expect(givenUp).toHaveLength(1);
     expect(String(givenUp[0]?.[0])).toContain('gave up');
@@ -801,7 +804,7 @@ describe('the D1 mirror', () => {
     expect(tries).toHaveLength(3);
   });
 
-  test("when a save lands, the room's other waiting saves, and those it gave up on, are tried at once", async () => {
+  test("when a save lands, the room's other waiting saves, and those it gave up on, are due at once, for the alarm to try", async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const early = { githubId: 3094, login: 'early-bird' };
@@ -826,8 +829,32 @@ describe('the D1 mirror', () => {
     at(t0 + 2 * DAY + 4 * MINUTE);
     await claim(priya);
 
+    // Priya's claim answers without waiting on the saves it made due.
+    expect(await getClaim(db, earlyClaim.id)).toBeNull();
+    expect(await alarmTime()).toBe(t0 + 2 * DAY + 4 * MINUTE);
+    await runDurableObjectAlarm(room);
     expect(await getClaim(db, earlyClaim.id)).toMatchObject({ state: 'expired' });
     expect(await getClaim(db, lateClaim.id)).toMatchObject({ state: 'active' });
+  });
+
+  test("a claimant's change makes their waiting save due a minute after its last try, at the latest", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const lateSigner = { githubId: 3091, login: 'late-signer' };
+    const made = await claim(lateSigner);
+    // Tries fail at 1, 3, 7, 15, and 30 minutes, the last at the pause. The
+    // next would wait 32 minutes.
+    for (const minutes of [1, 3, 7, 15, 30]) {
+      at(t0 + minutes * MINUTE);
+      await runDurableObjectAlarm(room);
+    }
+    expect(await alarmTime()).toBe(t0 + 62 * MINUTE);
+
+    // D1 takes the claim from minute 32, and the claimant posts then.
+    await savePerson(db, lateSigner, t0);
+    at(t0 + 32 * MINUTE);
+    await post(made, 'back on it');
+
+    expect(await getClaim(db, made.id)).toMatchObject({ state: 'active', lastUpdateAt: t0 + 32 * MINUTE });
   });
 });
 

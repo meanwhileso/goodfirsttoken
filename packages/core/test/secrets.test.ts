@@ -10,6 +10,10 @@ const upper = (length: number) => chars(length, 'AB3DE5GH7JK9MN1PQ2RS4TU6VW8XY0Z
 const hex = (length: number) => chars(length, '0123456789abcdef');
 // A PEM key's BEGIN line, with its dashes added at run time for the same reason.
 const begin = (kind: string) => `${'-'.repeat(5)}BEGIN ${kind}${'-'.repeat(5)}`;
+// A Discord bot token's shape: the account ID in base64, a dot, 6
+// characters, a dot, and the rest. Letters and digits only, so each part
+// also reads like a name in code.
+const discordToken = () => `M${chars(25)}.${chars(6)}.${chars(38)}`;
 
 describe('keys and tokens in a posted line are replaced with [redacted]', () => {
   const cases: [string, string][] = [
@@ -36,6 +40,7 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
     ['a Google OAuth client secret (GOCSPX-)', `GOCSPX-${chars(28)}`],
     ['a Google OAuth access token (ya29.)', `ya29.${chars(60)}`],
     ['a SendGrid key (SG.)', `SG.${chars(22)}.${chars(43)}`],
+    ['a Discord bot token', discordToken()],
   ];
 
   test.each(cases)('%s', (_, secret) => {
@@ -129,6 +134,36 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
     for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
   });
 
+  test('a value that could be a password or a token is replaced, whatever it looks like', () => {
+    const lines: [string, string][] = [
+      [`DISCORD_TOKEN=${discordToken()}`, 'DISCORD_TOKEN=[redacted]'],
+      [`token: ${discordToken()}`, 'token: [redacted]'],
+      [`DB_PASSWORD=${['Pa55', 'word'].join('.')}`, 'DB_PASSWORD=[redacted]'],
+      [`password: ${['correct', 'horse', 'battery9'].join('.')}`, 'password: [redacted]'],
+      [`password: ${['HUNTER', '2024'].join('_')}`, 'password: [redacted]'],
+      [`API_TOKEN=${['AB12', 'CD34', 'EF56', 'GH78'].join('_')}`, 'API_TOKEN=[redacted]'],
+      ['password: default', 'password: [redacted]'],
+      ['expected token: T_STRING2', 'expected token: [redacted]'],
+      ['apiKey: config.apiKeyV2', 'apiKey: [redacted]'],
+    ];
+    for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
+  });
+
+  test('a known token under a secret name is replaced once, with no bracket left over', () => {
+    expect(stripSecrets(`password=ghp_${chars(36)}`)).toBe('password=[redacted]');
+    expect(stripSecrets(`client_secret=GOCSPX-${chars(28)}`)).toBe('client_secret=[redacted]');
+  });
+
+  test('a random-looking value under any key name is replaced, even when it is no secret', () => {
+    const lines: [string, string][] = [
+      [`idempotency_key: ${['order', '12345678901'].join('_')}`, 'idempotency_key: [redacted]'],
+      [`partition_key: ${['tenant2024', 'abcdefgh'].join('')}`, 'partition_key: [redacted]'],
+      ['set cacheKey: v2-build-20260927-abc', 'set cacheKey: [redacted]'],
+      ['row_key=20260927T120000Z1', 'row_key=[redacted]'],
+    ];
+    for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
+  });
+
   test('closing punctuation after a replaced value stays', () => {
     const lines: [string, string][] = [
       [`(GITHUB_TOKEN=${hex(40)})`, '(GITHUB_TOKEN=[redacted])'],
@@ -141,6 +176,13 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
 
   test('every secret in a line is replaced', () => {
     expect(stripSecrets(`ghp_${chars(36)} then sk-ant-${chars(40)}`)).toBe('[redacted] then [redacted]');
+  });
+});
+
+describe('the length stripSecrets takes', () => {
+  test('text up to 1,000 characters is stripped, and longer text is refused', () => {
+    expect(stripSecrets('a'.repeat(1000))).toBe('a'.repeat(1000));
+    expect(() => stripSecrets('a'.repeat(1001))).toThrow(RangeError);
   });
 });
 
@@ -174,8 +216,6 @@ describe('ordinary lines pass through as they were', () => {
     'validated password: required',
     'form shows secret: missing now',
     'client_secret: optional in the schema',
-    'apiKey: config.apiKeyV2',
-    'expected token: T_STRING2',
   ])('%s', (line) => {
     expect(stripSecrets(line)).toBe(line);
   });

@@ -203,8 +203,11 @@ they are served.
   post carries its link, unless the PR is the claimant's own.
 - A subagent's post carries its job, under the same claim.
 
-**Keys and tokens.** Before the room stores or sends a post, a subagent's
-job, or a release reason, it replaces each of these with `[redacted]`:
+**Keys and tokens.** The feed is public, so the rule is: when in doubt,
+redact. A redacted ordinary word costs little, and a leaked secret costs a
+lot. A value is left alone only where it can't plausibly be a credential.
+Before the room stores or sends a post, a subagent's job, or a release
+reason, it replaces each of these with `[redacted]`:
 
 - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` followed by 20
   or more letters and digits, and `github_pat_` followed by 20 or more
@@ -229,6 +232,9 @@ job, or a release reason, it replaces each of these with `[redacted]`:
   hyphens, a dot, and 16 or more of those.
 - JSON Web Tokens: `eyJ` and 8 or more base64url characters, a dot, `eyJ`
   and 8 or more, a dot, and 8 or more.
+- Discord bot tokens: `M`, `N`, or `O` and 22 to 27 letters, digits,
+  underscores, and hyphens, a dot, 6 of those, a dot, and 27 to 38 of
+  those.
 - A private key's `-----BEGIN ... PRIVATE KEY-----` or
   `-----BEGIN PGP PRIVATE KEY BLOCK-----` line, and everything after it to
   the end of the text.
@@ -254,15 +260,20 @@ job, or a release reason, it replaces each of these with `[redacted]`:
     one letter and one digit.
   - Any other name that ends in `_key` or `-key`, or in `Key` after a
     lowercase letter or digit, like `RAILS_MASTER_KEY` or `masterKey`: a
-    value of 16 or more characters with at least one letter and one digit,
-    so `sort_key: created_at_desc` and `cache-key=build-output-v2` keep
-    theirs.
-  - These names also label values that aren't secret, which stay: a word
-    that says what a field is or whether it is set, like `required`,
-    `optional`, `missing`, `option`, or `parameter`, as in
-    `password: required` or `the --secret parameter`, and a reference in
-    code, like the dotted path `config.apiKeyV2` or the constant `T_STRING2`.
-    The words are listed as `FIELD_WORDS` in `packages/core/src/secrets.ts`.
+    value of 16 or more characters with at least one letter and one digit.
+    So `sort_key: created_at_desc` and `cache-key=build-output-v2` keep
+    theirs, but a random-looking value is replaced even when it is no
+    secret, like `row_key=20260927T120000Z1`.
+  - Under a password or secret name, a value that says whether the field is
+    set, or names the flag, stays: `required`, `optional`, `missing`,
+    `hidden`, `masked`, `option`, `parameter`, or `argument`, as in
+    `password: required` or `the --secret parameter`. No other value stays
+    for its look. A value that could be a password or a token is replaced,
+    like `Pa55.word`, `HUNTER_2024`, or `password: default`, and so is a
+    token-shaped value that happens to name something in code, like
+    `expected token: T_STRING2` or `apiKey: config.apiKeyV2`.
+  - A value an earlier pattern already replaced stays `[redacted]`, so
+    `password=ghp_...` becomes `password=[redacted]`.
   - The value is read up to a space, a quote, a comma, a semicolon, or `&`.
     Closing punctuation at its end, like `)`, `]`, `}`, or `.`, stays, as in
     `(GITHUB_TOKEN=[redacted])`.
@@ -339,7 +350,9 @@ history survives a restart.
 - Each change to a claim raises its revision by one. Right after the
   change, the room saves the claim to the claims table at that revision,
   unless an earlier save of the claim is still out in another call, or
-  failed and waits for its next try.
+  failed and waits for its next try. A change to a waiting claim, the
+  claimant's or a timer's, makes its save due a minute after its last try
+  at the latest.
 - A save that fails is tried again a minute later, then after 2, 4, 8, 16,
   and 32 minutes, then every hour. Each try sends the claim as it is then,
   so when the claim changed during the wait, only its latest version
@@ -351,9 +364,15 @@ history survives a restart.
 - When a save lands, the database is taking saves again. Each other claim in
   the room that waits for a try, or that the room gave up on, is then due a
   minute after its last try at the latest, or at once when that minute has
-  passed. So a save that can never land, like one for a claimant the
-  database has no record of, is tried at most once a minute while the room
-  is busy. A given-up save that fails again logs no second error.
+  passed. The call whose save landed doesn't try them. It sets the room's
+  alarm, and the alarm does. So a save that can never land, like one for a
+  claimant the database has no record of, is tried at most once a minute
+  while the room is busy. A given-up save that fails again logs no second
+  error.
+- A call tries the saves that are due when it gets to them, its own among
+  them, before it answers. Before the first try goes out, the room sets its
+  alarm a minute ahead at the latest, so when a call dies with a save out,
+  the alarm tries again a minute later.
 - A claimant has to be recorded under [People](#people) for their claim to
   save.
 - The room stores claim facts and public events only. It takes who is

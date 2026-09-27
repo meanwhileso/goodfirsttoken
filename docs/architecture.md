@@ -443,23 +443,29 @@ alarm runs the same steps as a call: apply the due timers, then save what is
 due. When it is set for, and what the timers do, is under
 [the issue room's timers](how-it-works.md#the-issue-room).
 
-**Saving to D1.** After its writes, each call tries every claim whose save
-is due with `saveClaim`, one at a time, and marks the revision saved when it
-lands or D1 calls it stale. Before the await, it records the try's time and
-marks the try out for a minute, so a second call leaves the claim alone
-while the first call's try is out, and a try whose call died is due again a
-minute later. A failed try sets the next-try time from the count of failed
-tries. A given-up save's next-try time is `Number.MAX_SAFE_INTEGER`. When a
-save lands, one statement moves every other waiting claim's next-try time
-to at most a minute after its last try, and the call goes on to try the
-ones that are due. The retry and give-up rules are under
-[Saving to the database](how-it-works.md#the-issue-room).
+**Saving to D1.** After its writes, each call lists the claims whose save
+is due, and tries each with `saveClaim`, one at a time. It marks the
+revision saved when the save lands or D1 calls it stale. Before the first
+try, it moves the alarm to a minute ahead, unless the alarm is sooner, so a
+call that dies mid-save leaves the room an alarm. Before each await, it
+records the try's time and marks the try out for a minute, so a second call
+leaves the claim alone while the first call's try is out, and a try whose
+call died is due again a minute later. A failed try sets the next-try time
+from the count of failed tries. A given-up save's next-try time is
+`Number.MAX_SAFE_INTEGER`. A change to a claim, and a save that lands, move
+waiting next-try times to at most a minute after the last try, in one
+statement each. Claims a landing save made due are left for the alarm that
+`schedule` sets at the end of the call. The retry and give-up rules are
+under [Saving to the database](how-it-works.md#the-issue-room).
 
 A test can't make two calls through the stub overlap at the D1 await on
 purpose, because a failed save answers too fast. The test for the guard
 calls `snapshot` twice at once inside the room with `runInDurableObject`,
 which overlaps them at the first await, as the runtime does when D1 is
-slow.
+slow. `issue-room-crash.test.ts` swaps the D1 binding on the running room
+for one whose queries never answer, then aborts the room with
+`abortAllDurableObjects`, to check that a call that dies mid-save leaves an
+alarm behind.
 
 **Watchers** use the hibernation API: the room accepts each socket with
 `ctx.acceptWebSocket`, and finds them again with `ctx.getWebSockets`. What
