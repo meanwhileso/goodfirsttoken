@@ -1,4 +1,5 @@
 import { createGitHubFake, type GitHubFake } from '@goodfirsttoken/github-fake';
+import { symmetricDecrypt } from 'better-auth/crypto';
 import { env, exports } from 'cloudflare:workers';
 import { vi } from 'vitest';
 
@@ -15,9 +16,51 @@ export const APP = {
   callbackUrl: `${ORIGIN}/auth/callback`,
 };
 
+/** Where the GitHub fake runs for `pnpm dev`, on this machine. */
+export const LOCAL_FAKE = { web: 'http://127.0.0.1:8944', api: 'http://127.0.0.1:8944/api' };
+
+type Setting = 'ENVIRONMENT' | 'GH_WEB_URL' | 'GH_API_URL' | 'OAUTH_CLIENT_ID' | 'OAUTH_CLIENT_SECRET' | 'AUTH_SECRET';
+
+/**
+ * Changes settings for one test, with undefined removing one, and returns a
+ * function that puts them all back.
+ */
+export function setEnv(values: Partial<Record<Setting, string | undefined>>): () => void {
+  const vars = env as unknown as Record<string, string | undefined>;
+  const before = Object.fromEntries(Object.keys(values).map((name) => [name, vars[name]]));
+  const apply = (next: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(next)) {
+      if (value === undefined) Reflect.deleteProperty(vars, name);
+      else vars[name] = value;
+    }
+  };
+  apply(values);
+  return () => {
+    apply(before);
+  };
+}
+
+/**
+ * Runs the Worker as `pnpm dev` does: as development, with GitHub the fake
+ * on this machine. Call startGitHub after it, so the fake answers there.
+ */
+export function runAsDevelopment(): () => void {
+  return setEnv({ ENVIRONMENT: 'development', GH_WEB_URL: LOCAL_FAKE.web, GH_API_URL: LOCAL_FAKE.api });
+}
+
+/** The GitHub token stored for the one person signed in, decrypted, or null. */
+export async function storedToken(): Promise<string | null> {
+  const stored = await env.DB.prepare('SELECT access_token FROM account').first<string | null>('access_token');
+  return stored ? symmetricDecrypt({ key: env.AUTH_SECRET, data: stored }) : null;
+}
+
 /** A fresh GitHub fake that knows the app, standing in for the global fetch. */
 export function startGitHub(): GitHubFake {
-  const github = createGitHubFake({ apiUrl: env.GH_API_URL, webUrl: env.GH_WEB_URL });
+  // An empty URL means GitHub itself, as it does for the Worker.
+  const github = createGitHubFake({
+    apiUrl: env.GH_API_URL || 'https://api.github.com',
+    webUrl: env.GH_WEB_URL || 'https://github.com',
+  });
   github.state.oauthApps[APP.clientId] = { ...APP };
   vi.stubGlobal('fetch', github.fetch);
   return github;
@@ -36,15 +79,20 @@ export function parseSetCookie(header: string): SetCookie {
   return { name: pair.slice(0, eq), value: pair.slice(eq + 1), attributes, header };
 }
 
-function randomAddress(): string {
+/**
+ * An IPv6 address in the documentation range, 2001:db8::/32. The limiter
+ * counts an IPv6 address by its /64, so each call picks a /64 of its own, and
+ * `prefix` gives a /64 to share.
+ */
+export function randomAddress(prefix?: string): string {
   const words = [...crypto.getRandomValues(new Uint16Array(4))].map((word) => word.toString(16));
-  return `2001:db8::${words.join(':')}`;
+  return `${prefix ?? `2001:db8:${words[0] ?? '0'}:${words[1] ?? '0'}`}:${words[2] ?? '0'}::${words[3] ?? '0'}`;
 }
 
 /**
  * A browser: it keeps the cookies the Worker sets and sends them back, and
- * records every Set-Cookie header it gets. Each one comes from its own
- * address, so the sign-in rate limit counts it alone.
+ * records every Set-Cookie header it gets. Each one comes from an address in
+ * its own /64, so the sign-in rate limit counts it alone.
  */
 export class Browser {
   readonly cookies = new Map<string, string>();
@@ -78,11 +126,14 @@ export class Browser {
     return response;
   }
 
-  /** Posts a form from one of the site's own pages. */
-  post(path: string, fields: Record<string, string> = {}, origin = ORIGIN): Promise<Response> {
+  /** Posts a form from one of the site's own pages, or from `origin`, or with no Origin when it is null. */
+  post(path: string, fields: Record<string, string> = {}, origin: string | null = ORIGIN): Promise<Response> {
     return this.fetch(path, {
       method: 'POST',
-      headers: { origin, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: {
+        ...(origin === null ? {} : { origin }),
+        'content-type': 'application/x-www-form-urlencoded',
+      },
       body: new URLSearchParams(fields),
     });
   }

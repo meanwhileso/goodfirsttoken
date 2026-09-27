@@ -21,11 +21,13 @@ OAUTH_CLIENT_ID=goodfirsttoken-local
 ADMIN_GITHUB_IDS=
 
 # Sign-in's two secrets: the OAuth app's client secret, and the secret that
-# signs sign-in cookies and encrypts stored GitHub tokens. Leave them out
-# locally. In development, sign-in uses the GitHub fake's client secret and a
-# public stand-in (src/auth/settings.ts), and Wrangler's warning that they are
-# missing is expected. To sign in with a real GitHub OAuth app, set both, with
-# its client ID above and the GitHub URLs below left empty.
+# signs sign-in cookies and encrypts stored GitHub tokens. Leave both out
+# locally. With neither set, and GitHub the fake on this machine, sign-in uses
+# the fake's client secret and a public stand-in (src/auth/settings.ts), and
+# Wrangler's warning that they are missing is expected. Setting one turns the
+# stand-ins off, so set both or neither. To sign in with a real GitHub OAuth
+# app, set both, with its client ID above and the GitHub URLs below left
+# empty.
 # OAUTH_CLIENT_SECRET=
 # AUTH_SECRET=
 

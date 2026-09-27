@@ -2,7 +2,17 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { emptyDatabase } from '../db/helpers';
-import { APP, Browser, location, navLogin, signIn, startGitHub, tokensIssued } from './helpers';
+import {
+  APP,
+  Browser,
+  location,
+  navLogin,
+  parseSetCookie,
+  signIn,
+  startGitHub,
+  storedToken,
+  tokensIssued,
+} from './helpers';
 
 let github: GitHubFake;
 
@@ -28,9 +38,16 @@ test("signing out revokes the web session's GitHub token at GitHub, as the app, 
   const [token = ''] = tokensIssued(github);
 
   const out = await browser.post('/auth/sign-out');
+  const expired = out.headers.getSetCookie().map(parseSetCookie);
 
   expect(out.status).toBe(303);
   expect(location(out).pathname).toBe('/');
+  expect(expired.map((cookie) => cookie.name).sort()).toEqual([
+    '__Host-gft.dont_remember',
+    '__Host-gft.session_data',
+    '__Host-gft.session_token',
+  ]);
+  expect(expired.every((cookie) => cookie.value === '' && cookie.attributes.includes('Max-Age=0'))).toBe(true);
   expect(github.calls.filter((call) => call.method === 'DELETE')).toMatchObject([
     { url: `${github.apiUrl}/applications/${APP.clientId}/token`, status: 204 },
   ]);
@@ -39,6 +56,74 @@ test("signing out revokes the web session's GitHub token at GitHub, as the app, 
   expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM session').first('n')).toBe(0);
   expect(browser.cookies.size).toBe(0);
   expect(await navLogin(await browser.fetch('/'))).toBeNull();
+});
+
+// tokensIssued lists the tokens the fake still honors, since a revoked
+// token leaves the fake's state.
+test('a sign-in that replaces the stored token revokes the old one, so a person has one working web token', async () => {
+  await signIn(new Browser(), github, 'priya');
+  const [first = ''] = tokensIssued(github);
+
+  await signIn(new Browser(), github, 'priya');
+  const [second = ''] = tokensIssued(github);
+
+  expect((await gitHubUser(first)).status).toBe(401);
+  expect((await gitHubUser(second)).status).toBe(200);
+  expect(tokensIssued(github)).toEqual([second]);
+  expect(await storedToken()).toBe(second);
+});
+
+test('after signing in on a laptop and a phone, signing out on the phone leaves no token from sign-in working', async () => {
+  const laptop = new Browser();
+  const phone = new Browser();
+  await signIn(laptop, github, 'kenji');
+  await signIn(phone, github, 'kenji');
+
+  await phone.post('/auth/sign-out');
+
+  expect(tokensIssued(github)).toEqual([]);
+  expect(await storedToken()).toBeNull();
+});
+
+test('a sign-out clears only the token it revoked, so a sign-in in another browser at the same moment keeps its token', async () => {
+  const laptop = new Browser();
+  const phone = new Browser();
+  await signIn(laptop, github, 'arjun');
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  let raced = false;
+  // The phone signs in while the laptop's sign-out waits for GitHub to
+  // revoke the laptop's token.
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.method === 'DELETE' && !raced) {
+      raced = true;
+      await signIn(phone, github, 'arjun');
+    }
+    return github.fetch(request);
+  });
+
+  await laptop.post('/auth/sign-out');
+  const [phones = ''] = tokensIssued(github);
+
+  expect(raced).toBe(true);
+  expect(tokensIssued(github)).toEqual([phones]);
+  expect(await storedToken()).toBe(phones);
+  expect(JSON.stringify(logged.mock.calls)).not.toContain(phones);
+});
+
+test('a session that ends by expiring leaves its token stored and working, until the next sign-in revokes it', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'lena');
+  const [first = ''] = tokensIssued(github);
+  await env.DB.prepare('UPDATE session SET expires_at = ?').bind(new Date(Date.now() - 1000).toISOString()).run();
+
+  const expired = await browser.fetch('/me');
+  const stillWorking = (await gitHubUser(first)).status;
+  await signIn(browser, github, 'lena');
+
+  expect(location(expired).pathname).toBe('/sign-in');
+  expect(stillWorking).toBe(200);
+  expect((await gitHubUser(first)).status).toBe(401);
 });
 
 test('signing out ends the sessions in every browser, since they all used the token it revoked', async () => {

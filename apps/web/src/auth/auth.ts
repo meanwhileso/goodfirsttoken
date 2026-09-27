@@ -1,10 +1,15 @@
 import { productName } from '@goodfirsttoken/core';
-import { betterAuth, type BetterAuthOptions, type BetterAuthPlugin } from 'better-auth';
-import { authorizationCodeRequest, type OAuth2Tokens, type ProviderOptions } from 'better-auth/oauth2';
+import { betterAuth, type AuthContext, type BetterAuthOptions, type BetterAuthPlugin } from 'better-auth';
+import {
+  authorizationCodeRequest,
+  decryptOAuthToken,
+  type OAuth2Tokens,
+  type ProviderOptions,
+} from 'better-auth/oauth2';
 import type { GithubProfile } from 'better-auth/social-providers';
 import { env } from 'cloudflare:workers';
 import { savePerson } from '../db';
-import { GitHubError, gitHubRest, gitHubUrls } from '../github';
+import { GitHubError, gitHubRest, gitHubUrls, revokeGitHubToken, type OAuthApp } from '../github';
 import { authSecret, oauthApp } from './settings';
 
 // Sign-in on the site: Better Auth with its GitHub provider, storing users,
@@ -95,12 +100,39 @@ function tradeCodesAt(web: string): BetterAuthPlugin {
   };
 }
 
+/** Why a call failed, for a log: GitHub's status and message, or the kind of error. Never a token. */
+export function failureReason(error: unknown): string {
+  if (error instanceof GitHubError) return `${String(error.status)} ${error.message}`;
+  return error instanceof Error ? error.name : 'an unknown error';
+}
+
+// A sign-in replaces the token stored for the person with the new one, and
+// nothing else holds the old one, so it is revoked first. Otherwise it would
+// stay valid at GitHub, and count toward GitHub's cap of 10 tokens per person
+// for the app, which the tokens their agents hold count toward too. When
+// GitHub can't revoke it, sign-in goes on.
+async function revokeReplacedToken(context: AuthContext, app: OAuthApp, githubId: number): Promise<void> {
+  const account = await context.internalAdapter.findAccountByKey({
+    providerId: 'github',
+    accountId: String(githubId),
+  });
+  if (!account?.accessToken) return;
+  try {
+    await revokeGitHubToken(app, await decryptOAuthToken(account.accessToken, context));
+  } catch (error) {
+    console.error(`GitHub didn't revoke a replaced token at sign-in: ${failureReason(error)}`);
+  }
+}
+
 // Better Auth's field names, as the snake_case columns in the migration.
 const timestamps = { createdAt: 'created_at', updatedAt: 'updated_at' };
 
 function authOptions(origin: string) {
   const { web } = gitHubUrls();
   const app = oauthApp();
+  // Better Auth's context for this instance, which the plugin below keeps,
+  // for the work sign-in does between reading the person and storing them.
+  let context: AuthContext | undefined;
   return {
     appName: productName,
     baseURL: origin,
@@ -117,7 +149,11 @@ function authOptions(origin: string) {
         disableIdTokenSignIn: true,
         // Keeps the user's name, their login, and avatar current.
         overrideUserInfoOnSignIn: true,
-        getUserInfo: gitHubUserInfo,
+        getUserInfo: async (tokens: OAuth2Tokens) => {
+          const info = await gitHubUserInfo(tokens);
+          if (info && context) await revokeReplacedToken(context, app, Number(info.data.id));
+          return info;
+        },
       },
     },
     user: { fields: { emailVerified: 'email_verified', ...timestamps } },
@@ -132,7 +168,13 @@ function authOptions(origin: string) {
     },
     account: {
       encryptOAuthTokens: true,
-      accountLinking: { enabled: false },
+      // D1 has no transactions for Better Auth, so a sign-in that fails
+      // between writing the user and their GitHub account leaves a user with
+      // no account. Linking lets the next sign-in attach the GitHub account
+      // to that user, found by email. Each email is the placeholder made from
+      // the numeric GitHub ID, and GitHub is the one way in, so an email
+      // matches only the same GitHub account.
+      accountLinking: { enabled: true, trustedProviders: ['github'], requireLocalEmailVerified: false },
       fields: {
         accountId: 'account_id',
         providerId: 'provider_id',
@@ -164,7 +206,15 @@ function authOptions(origin: string) {
     // counts in memory, which each Worker isolate would keep apart.
     rateLimit: { enabled: false },
     telemetry: { enabled: false },
-    plugins: [tradeCodesAt(web)],
+    plugins: [
+      tradeCodesAt(web),
+      {
+        id: 'goodfirsttoken-context',
+        init: (ctx) => {
+          context = ctx;
+        },
+      } satisfies BetterAuthPlugin,
+    ],
   } satisfies BetterAuthOptions;
 }
 
@@ -174,8 +224,9 @@ function createAuth(origin: string) {
 
 export type Auth = ReturnType<typeof createAuth>;
 
-// One instance per origin and settings, kept for the isolate's life, so
-// Better Auth checks the tables once and not on every request.
+// One instance per origin and settings, kept for the isolate's life. Better
+// Auth checks the tables on an instance's first request, so each isolate
+// checks them once.
 const instances = new Map<string, Auth>();
 
 /** Better Auth for the site at `origin`. Throws outside development when a secret is missing. */

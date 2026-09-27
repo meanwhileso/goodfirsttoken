@@ -154,7 +154,7 @@ one is missing.
 | Name | Kind | What it is |
 |---|---|---|
 | `OAUTH_CLIENT_SECRET` | Environment secret | The client secret of this environment's GitHub OAuth app from step 3. |
-| `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores. Changing it signs everyone out. |
+| `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores. Changing it signs everyone out, and makes every stored token unreadable, so neither signing out nor signing in again can revoke it. Those tokens stay valid at GitHub until each person revokes the app in their GitHub settings, or GitHub revokes them after a year unused. So change it only when you have to. |
 
 ### On switches
 

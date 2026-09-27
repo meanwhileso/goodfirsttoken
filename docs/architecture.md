@@ -64,10 +64,23 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
 
 - **Better Auth 1.7.6, pinned,** with its GitHub provider and
   `encryptOAuthTokens` on. It talks to D1 through its Kysely adapter, which
-  has a D1 dialect. D1 has no interactive transactions, so Better Auth writes
-  a new user and their account one after the other. At its first request in
-  each isolate, Better Auth checks that the tables have every column it
-  expects. So one instance is kept per origin and settings.
+  has a D1 dialect. At its first request in each isolate, Better Auth checks
+  that the tables have every column it expects. So one instance is kept per
+  origin and settings.
+- **A half-written sign-in.** D1 has no interactive transactions, so Better
+  Auth writes a new user and their GitHub account one after the other, and a
+  failure between them leaves a user with no account. Account linking is on
+  for GitHub alone, as a trusted provider, with no need for a verified email.
+  So the next sign-in finds that user by email and attaches the GitHub
+  account. Each email is the placeholder made from the numeric GitHub ID, and
+  GitHub is the one way in, so an email matches only the same GitHub account.
+- **Replacing a token.** Better Auth writes each new token over the stored
+  one. Our `getUserInfo` runs just before that write, so it looks up the
+  person's GitHub account and revokes the token about to be replaced. It
+  reads Better Auth's context from a small plugin that keeps it.
+- **Forgetting a token at sign-out** is one update through Better Auth's
+  adapter that matches the account and the encrypted token it revoked. A
+  token a sign-in stored meanwhile doesn't match, so it stays.
 - **GitHub's URLs come from `GH_WEB_URL` and `GH_API_URL`.** Better Auth's
   GitHub provider names github.com and api.github.com itself. The provider's
   options move the authorize page to `GH_WEB_URL`, reading the person goes
@@ -91,14 +104,17 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   routes, which call Better Auth's API. Better Auth's own endpoints take JSON
   only, and every one of them but the callback answers 404.
 - **Same-site forms.** Better Auth checks `Origin` only on the requests its
-  router handles. Our form routes check it themselves. Better Auth skips its
-  own check when `NODE_ENV` is `test`, so it is turned on outright and the
-  tests see it.
+  router handles. Our form routes check it themselves, before the rate
+  limit. Better Auth skips its own check when `NODE_ENV` is `test`, so it is
+  turned on outright and the tests see it.
 - **Cloudflare rate limiting,** through the `SIGN_IN_LIMITER` binding,
-  counted per `cf-connecting-ip`. Better Auth's own limiter is off, since it
-  counts in each isolate's memory.
+  counted per `cf-connecting-ip`, with an IPv6 address cut to its /64.
+  Better Auth's own limiter is off, since it counts in each isolate's memory.
+- **Development** is checked in `src/auth/settings.ts`: `ENVIRONMENT` and a
+  loopback `http` `GH_WEB_URL` both. The dev sign-in and the stand-ins for
+  the secrets depend on it.
 - **Also off in Better Auth:** its IP address tracking, so no session stores
-  an address, account linking, ID token sign-in, and telemetry.
+  an address, ID token sign-in, and telemetry.
 
 ### The design system
 

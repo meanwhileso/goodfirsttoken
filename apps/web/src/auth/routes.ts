@@ -1,7 +1,8 @@
 import { githubLogin } from '@goodfirsttoken/core';
+import { symmetricDecrypt } from 'better-auth/crypto';
 import { env } from 'cloudflare:workers';
-import { GitHubError, revokeGitHubToken } from '../github';
-import { AUTH_BASE_PATH, getAuth, type Auth } from './auth';
+import { revokeGitHubToken } from '../github';
+import { AUTH_BASE_PATH, failureReason, getAuth, type Auth } from './auth';
 import { gitHubAccount } from './session';
 import { SignInNotSetUp, isDevelopment, oauthApp, siteOrigin } from './settings';
 
@@ -46,11 +47,28 @@ function fromThisSite(request: Request, origin: string): boolean {
   return request.headers.get('origin') === origin;
 }
 
-// Cloudflare's rate limiter, counted per client address. Cloudflare sets
-// cf-connecting-ip on every request that reaches the Worker.
+/**
+ * Whom the rate limiter counts a request against: an IPv4 address, or the
+ * /64 an IPv6 address is in, since one IPv6 client can pick any address in
+ * its /64. Cloudflare sets cf-connecting-ip on every request that reaches
+ * the Worker.
+ */
+function limiterKey(address: string | null): string {
+  if (!address) return 'unknown';
+  const lower = address.trim().toLowerCase();
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower)?.[1];
+  if (mapped) return mapped;
+  if (!lower.includes(':')) return lower;
+  const [head = '', tail] = lower.split('::', 2);
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const zeros = tail === undefined ? [] : Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0');
+  const groups = [...left, ...zeros, ...right].slice(0, 4).map((group) => group.replace(/^0+(?=.)/, ''));
+  return `${groups.join(':')}::/64`;
+}
+
 async function underLimit(request: Request): Promise<boolean> {
-  const key = request.headers.get('cf-connecting-ip') ?? 'unknown';
-  const { success } = await env.SIGN_IN_LIMITER.limit({ key });
+  const { success } = await env.SIGN_IN_LIMITER.limit({ key: limiterKey(request.headers.get('cf-connecting-ip')) });
   return success;
 }
 
@@ -58,8 +76,9 @@ const TOO_MANY = () => text(429, 'Too many sign-ins from here. Try again in a mi
 const OTHER_SITE = () => text(403, 'Refused: this form was sent from another site.');
 
 // Starts sign-in the way Better Auth does: it keeps the state and the PKCE
-// verifier for 10 minutes, sets a cookie that ties them to this browser, and
-// returns GitHub's authorize URL.
+// verifier in a row that lasts 10 minutes, sets a cookie that ties them to
+// this browser and lasts 5, and returns GitHub's authorize URL. So a sign-in
+// has 5 minutes to come back.
 async function startSignIn(auth: Auth, request: Request): Promise<{ url: string; setCookies: string[] }> {
   const { headers, response } = await auth.api.signInSocial({
     body: { provider: 'github', callbackURL: AFTER_SIGN_IN, errorCallbackURL: SIGN_IN_PAGE },
@@ -78,24 +97,24 @@ async function signOut(auth: Auth, request: Request): Promise<Response> {
   if (session) {
     const context = await auth.$context;
     const account = await gitHubAccount(auth, session.user.id);
-    if (account?.accessToken) {
+    const stored = account?.accessToken;
+    if (account && stored) {
       try {
-        const { accessToken } = await auth.api.getAccessToken({
-          body: { accountId: account.id, userId: session.user.id },
-        });
-        if (accessToken) await revokeGitHubToken(oauthApp(), accessToken);
+        await revokeGitHubToken(oauthApp(), await symmetricDecrypt({ key: context.secretConfig, data: stored }));
       } catch (error) {
-        // GitHub's status and message, or the kind of error. The token never
-        // reaches a log.
-        const reason =
-          error instanceof GitHubError
-            ? `${String(error.status)} ${error.message}`
-            : error instanceof Error
-              ? error.name
-              : 'an unknown error';
-        console.error(`GitHub didn't revoke a token at sign-out: ${reason}`);
+        console.error(`GitHub didn't revoke a token at sign-out: ${failureReason(error)}`);
       }
-      await context.internalAdapter.updateAccount(account.id, { accessToken: null });
+      // Forgets the token only while it is still the one revoked. A sign-in
+      // in another browser may have stored a new one meanwhile, and that one
+      // stays.
+      await context.adapter.update({
+        model: 'account',
+        where: [
+          { field: 'id', value: account.id },
+          { field: 'accessToken', value: stored },
+        ],
+        update: { accessToken: null },
+      });
     }
     await context.internalAdapter.deleteUserSessions(session.user.id);
   }
@@ -148,16 +167,18 @@ async function route(request: Request): Promise<Response> {
   const origin = siteOrigin(request);
   const endpoint = `${request.method} ${pathname}`;
 
+  // A form from another site is refused before it counts toward the limit,
+  // so a page elsewhere can't use up someone's sign-ins.
   if (endpoint === `POST ${AUTH_BASE_PATH}/dev/sign-in`) {
     // Outside development this route doesn't exist.
     if (!isDevelopment()) return text(404, 'Not Found');
-    if (!(await underLimit(request))) return TOO_MANY();
     if (!fromThisSite(request, origin)) return OTHER_SITE();
+    if (!(await underLimit(request))) return TOO_MANY();
     return devSignIn(getAuth(origin), request, origin);
   }
   if (endpoint === `POST ${AUTH_BASE_PATH}/sign-in`) {
-    if (!(await underLimit(request))) return TOO_MANY();
     if (!fromThisSite(request, origin)) return OTHER_SITE();
+    if (!(await underLimit(request))) return TOO_MANY();
     const { url, setCookies } = await startSignIn(getAuth(origin), request);
     return seeOther(url, setCookies);
   }

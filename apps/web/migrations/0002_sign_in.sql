@@ -9,8 +9,9 @@
 -- ISO 8601 text and true or false as 1 or 0, so those columns are TEXT and
 -- INTEGER here.
 --
--- The GitHub token in account.access_token is encrypted with AUTH_SECRET
--- before Better Auth writes it.
+-- 0001's tables hold no GitHub token. The account table here does: each
+-- person's token from their last sign-in, in account.access_token, which
+-- Better Auth encrypts with AUTH_SECRET before it writes it.
 
 -- One per person who has signed in on the site. Who they are is the GitHub
 -- account in `account`. Better Auth needs an email for each user. We never ask
@@ -69,7 +70,8 @@ CREATE INDEX account_by_user ON account (user_id);
 CREATE UNIQUE INDEX account_by_provider ON account (provider_id, account_id);
 
 -- A sign-in in progress: the state sent to GitHub, with the PKCE verifier and
--- where to go after, for 10 minutes.
+-- where to go after. A row lasts 10 minutes, and the cookie that ties it to
+-- the browser 5, so a sign-in has 5 minutes to come back.
 CREATE TABLE verification (
   id TEXT NOT NULL PRIMARY KEY,
   identifier TEXT NOT NULL,

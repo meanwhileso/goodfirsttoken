@@ -10,6 +10,7 @@ import {
   ORIGIN,
   location,
   navLogin,
+  parseSetCookie,
   pickOnGitHub,
   signIn,
   startGitHub,
@@ -102,6 +103,47 @@ test('a sign-in started from another site is refused before it reaches GitHub', 
   expect(github.calls).toEqual([]);
 });
 
+test.each([
+  ['no Origin', null],
+  ['Origin null', 'null'],
+  ["the site's host over http", 'http://primary.example'],
+  ["the site's host on another port", 'https://primary.example:8443'],
+])('a sign-in form with %s is refused, since only the site itself sends its forms', async (_, origin) => {
+  const start = await new Browser().post('/auth/sign-in', {}, origin);
+
+  expect(start.status).toBe(403);
+  expect(start.headers.getSetCookie()).toEqual([]);
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM verification').first('n')).toBe(0);
+});
+
+test('the session cookie is HttpOnly and SameSite=Lax, and the cookie tying a sign-in to the browser lasts 5 minutes', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'ines');
+  const named = (name: string) => browser.setCookies.find((cookie) => cookie.name === name);
+
+  expect(named('__Host-gft.session_token')?.attributes).toEqual(
+    expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Secure', 'Path=/', 'Max-Age=604800']),
+  );
+  expect(named('__Host-gft.state')?.attributes).toEqual(
+    expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Secure', 'Path=/', 'Max-Age=300']),
+  );
+});
+
+test('a sign-in that stopped halfway, with the user written and the GitHub account not, works when tried again', async () => {
+  await signIn(new Browser(), github, 'sam');
+  // D1 writes Better Auth's user and account one after the other, so a
+  // failure between them leaves a user with no account.
+  await env.DB.prepare('DELETE FROM account').run();
+
+  const browser = new Browser();
+  const back = await signIn(browser, github, 'sam');
+
+  expect(location(back).pathname).toBe('/me');
+  expect(await navLogin(await browser.fetch('/me'))).toBe('@sam');
+  expect(await env.DB.prepare('SELECT account_id FROM account').first('account_id')).toBe('1003');
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM "user"').first('n')).toBe(1);
+});
+
 test('GitHub sending back a sign-in this browser never started signs no one in', async () => {
   const mine = new Browser();
   const theirs = new Browser();
@@ -130,9 +172,15 @@ test('a session lasts 7 days, and a page view a day or more after its last exten
   await env.DB.prepare('UPDATE session SET expires_at = ?').bind(fiveDaysLeft).run();
   const later = await browser.fetch('/');
 
+  const extended = later.headers.getSetCookie().map(parseSetCookie);
+
   expect(setAtSignIn?.attributes).toContain('Max-Age=604800');
   expect(fresh.headers.getSetCookie()).toEqual([]);
-  expect(later.headers.getSetCookie()).toEqual([expect.stringMatching(/^__Host-gft\.session_token=.*Max-Age=604800/)]);
+  expect(extended.map((cookie) => cookie.name)).toEqual(['__Host-gft.session_token']);
+  expect(extended[0]?.attributes).toEqual(
+    expect.arrayContaining(['Max-Age=604800', 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']),
+  );
+  expect(extended[0]?.attributes.some((attribute) => /^domain=/i.test(attribute))).toBe(false);
   expect(await expires()).toBeGreaterThan(Date.now() + 7 * DAY - 60_000);
   expect(await navLogin(later)).toBe('@priya');
 });

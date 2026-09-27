@@ -39,13 +39,16 @@ are.
 - `/sign-in` has one button, Sign in with GitHub. It sends the person to
   GitHub, which asks them to give Good First Token `public_repo` and nothing
   else, and then back to `/auth/callback/github`. They land on `/me`.
-- Sign-in uses PKCE, and a state tied to the browser that started it. A
-  sign-in has 5 minutes to come back from GitHub. One that fails, took
-  longer, or was started in another browser signs no one in, and goes back
-  to `/sign-in`, which says it didn't finish.
+- Sign-in uses PKCE, and a state tied to the browser that started it by a
+  cookie that lasts 5 minutes. So a sign-in has 5 minutes to come back from
+  GitHub. One that fails, took longer, or was started in another browser
+  signs no one in, and goes back to `/sign-in`, which says it didn't finish.
 - Signing in records the person under [People](#people), with the login
   GitHub gives then. A renamed GitHub account signs in as the same person,
   under its new login.
+- A sign-in that stopped partway, with the person's user stored and their
+  GitHub account not, works when they try again. The next sign-in attaches
+  the GitHub account to that user.
 - Every page's nav shows the signed-in person's login from People, in place
   of the GitHub mark.
 - `/me` needs someone signed in and sends anyone else to `/sign-in`.
@@ -58,18 +61,32 @@ person later.
 
 - It is encrypted with the `AUTH_SECRET` secret before it is stored. It never
   appears in a page, a response, or a log.
-- Each sign-in replaces the stored token with the new one.
-- Signing out revokes that token at GitHub, forgets it, and ends every
+- The site keeps one token per person, which all their browsers use. Each
+  sign-in replaces it, and revokes the one it replaces at GitHub first,
+  since nothing else holds that one. When GitHub can't revoke it, sign-in
+  goes on.
+- Signing out revokes the stored token at GitHub, forgets it, and ends every
   session the person has, in every browser, since all of them used it. It
-  revokes that one token, so the person's other tokens from the same GitHub
-  OAuth app keep working. When GitHub can't revoke it, the person is still
-  signed out and the token is still forgotten.
+  forgets the token only while it is still the one it revoked, so a sign-in
+  in another browser at the same moment keeps the new token it stored. When
+  GitHub can't revoke it, the person is still signed out and the token is
+  still forgotten.
+- Revoking touches that one token. The person's other tokens from the same
+  GitHub OAuth app, like the ones their agents hold, keep working.
+- A session that ends by expiring, with no sign-out, leaves the token stored
+  and working at GitHub. The person's next sign-in revokes it.
 
 **Cookies.** Every cookie sign-in sets is named with the `__Host-` prefix,
 so the browser keeps it for this host only: it is `Secure`, has `Path=/`, and
-has no `Domain`. Each is also `HttpOnly` and `SameSite=Lax`. There are two:
-`__Host-gft.session_token` holds the session, and `__Host-gft.state` ties a
-sign-in in progress to the browser.
+has no `Domain`. Each is also `HttpOnly` and `SameSite=Lax`.
+
+- Two hold a value. `__Host-gft.session_token` holds the session, for 7 days.
+  `__Host-gft.state` ties a sign-in in progress to the browser, for 5
+  minutes, and GitHub's return expires it.
+- Signing out expires the session cookie, and also sends
+  `__Host-gft.session_data` and `__Host-gft.dont_remember` already expired.
+  Better Auth clears those two on every sign-out, and the site never sets
+  them.
 
 **Where sign-in answers.** Only these routes answer under `/auth`. Every
 other path there is a 404, so no other Better Auth endpoint, like email
@@ -82,31 +99,44 @@ sign-up, can be reached.
 | `POST /auth/sign-out` | Signs out, from the button on `/me` |
 | `POST /auth/dev/sign-in` | Development only, below |
 
-- The three `POST` routes take a form from the site's own pages. One sent
-  with another site's `Origin`, or none, is refused with `403`.
+- The three `POST` routes take a form from the site's own pages. The
+  `Origin` has to be the site's own exactly, scheme and port included. Any
+  other, `null`, or none is refused with `403`.
 - Sign-in, the callback, and the dev sign-in share a Cloudflare rate limit
-  of 20 requests a minute from each client address. The next one gets `429`
-  with `Retry-After: 60`.
-- Outside development, when a secret sign-in needs is missing, the sign-in
-  routes answer `503`, and the log names the secret.
+  of 20 requests a minute from each client: an IPv4 address, or the /64 an
+  IPv6 address is in, since one IPv6 client can use any address in its /64.
+  The next one gets `429` with `Retry-After: 60`. A form refused for its
+  `Origin` doesn't count, so a page on another site can't use up someone's
+  sign-ins.
+- When a setting sign-in needs is missing, `OAUTH_CLIENT_ID`,
+  `OAUTH_CLIENT_SECRET`, or `AUTH_SECRET`, the sign-in routes answer `503`,
+  and the log names it. Development has stand-ins for the two secrets,
+  below.
 
-**In development.** GitHub is the GitHub fake, and its sign-in page lists
+**In development.** Development means the `ENVIRONMENT` variable is
+`development` and `GH_WEB_URL` is the GitHub fake on this machine: an `http`
+URL on `127.0.0.1`, `localhost`, or `[::1]`. The fake's sign-in page lists
 every sample person.
 
 - `POST /auth/dev/sign-in` with `login` set to a sample person's login signs
   in as them in one step. It fills in the fake's sign-in page for them, so
   the session comes from the same callback, with that person's own token
-  from the fake. A login the fake doesn't have gets `422`.
-- Two things keep it off outside development. It answers only when the
-  `ENVIRONMENT` variable is `development`, and every deploy sets
+  from the fake. A login the fake doesn't have gets `422`. Outside
+  development the route doesn't exist.
+- With neither secret set, development uses stand-ins: the GitHub fake's
+  client secret, and a public value for `AUTH_SECRET`. Setting either secret
+  turns both stand-ins off, so a real client secret never runs beside the
+  public `AUTH_SECRET`.
+- Three things keep both off in staging and production. Every deploy sets
   `ENVIRONMENT` to `staging` or `production` and reads no setting that could
-  change it (`scripts/deploy-config.mjs`). Even when it runs, it can't make a
-  session on its own. It only fills in the fake's page, and the session still
-  comes from the callback, with a code from the configured GitHub. Real GitHub
-  has no page it could fill in.
-- With no secrets set, development uses stand-ins: the GitHub fake's client
-  secret, and a public value for `AUTH_SECRET`. Outside development, a
-  missing secret stops sign-in.
+  change it (`scripts/deploy-config.mjs`). A deploy refuses a `GH_WEB_URL`
+  that isn't `https`. And a Worker deployed some other way, like
+  `wrangler deploy` with the local config, can't reach a fake on the machine
+  it was deployed from, so neither can sign anyone in there.
+- Even when it runs, the dev sign-in can't make a session on its own. It
+  only fills in the fake's page, and the session still comes from the
+  callback, with a code from the configured GitHub. Real GitHub has no page
+  it could fill in.
 
 ## Permissions
 
