@@ -102,7 +102,7 @@ Deploys, the static host, a security review, and the launch video.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | |
+| [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | [#43](https://github.com/meanwhileso/goodfirsttoken/pull/43) |
 | [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | |
 | [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
 | [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | |
@@ -211,25 +211,34 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18 done
+  class n3,n4,n18,n32 done
 ```
 
 ## Maintainer steps
 
 These need access to accounts, so they are done by maintainers and have no issues.
+[docs/self-hosting.md](docs/self-hosting.md) has the details for each deploy step.
 
-Before the first staging deploy, once #32 lands:
+To start staging deploys, once #32 merges:
 
-- Create the staging and production GitHub OAuth apps. GitHub has no API for this.
-- Create the Cloudflare resources and the deploy credential, and fill the `staging` and `production`
-  GitHub environments.
-- Attach the static host's custom domain with cookie-free settings, and the redirect domain.
+- Create the staging and production GitHub OAuth apps, with the callback URL
+  `https://<domain>/auth/callback`. GitHub has no API for this.
+- Create the Cloudflare API token or the credential broker, and add each domain's zone to the
+  Cloudflare account. The deploy creates D1, the queues, and KV, and attaches the primary and redirect
+  domains itself.
+- Create the `staging` and `production` GitHub environments, limit each to `main`, and fill them with
+  their settings as secrets.
+- Set the repository variable `DEPLOY_STAGING` to `true`.
 
-Before launch, once #34 lands:
+Once #33 merges:
+
+- Attach the static host's custom domain with cookie-free settings.
+
+Before launch, once #34 merges:
 
 - Register `meanwhileso/goodfirsttoken` as project number one and tag its seed issues.
 - Run the real harnesses against staging. These runs spend real tokens, so they are never automatic.
-- Turn on production deploys. The first production deploy is the launch.
+- Set the repository variable `DEPLOY_PRODUCTION` to `true`. The first production deploy is the launch.
 
 ## After v1
 
