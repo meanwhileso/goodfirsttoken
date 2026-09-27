@@ -38,6 +38,7 @@ import {
   tradeCode,
   useUpTokenRequests,
 } from './helpers';
+import { limiterKey } from '../../src/auth/rate-limit';
 
 // An agent's sign-in to the MCP server: the OAuth metadata, dynamic client
 // registration, the page where the person approves the agent, GitHub, and
@@ -575,6 +576,32 @@ test('trading a code or refreshing tokens has a limit of its own, 600 requests a
 
   expect(last.status).not.toBe(429);
   await expectOAuthLimitError(over);
+});
+
+test('an agent in a web page that meets the limit at /oauth/token or /oauth/register can read the error, like any other answer there', async () => {
+  await inOneLimitWindow();
+  const address = randomAddress();
+  const page = 'https://agent.example';
+  const fromPage = (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    request.headers.set('origin', page);
+    return agentFetch(address)(request);
+  };
+  await useUpTokenRequests(address);
+  for (let i = 0; i < 20; i++) await env.SIGN_IN_LIMITER.limit({ key: limiterKey(address) });
+
+  const token = await refreshNothing(fromPage);
+  const registration = await fromPage(`${ORIGIN}/oauth/register`, { method: 'POST', body: '{}' });
+  const noPage = await refreshNothing(agentFetch(address));
+
+  for (const answer of [token, registration]) {
+    await expectOAuthLimitError(answer);
+    expect(answer.headers.get('access-control-allow-origin')).toBe(page);
+    expect(answer.headers.get('access-control-expose-headers')).toMatch(/retry-after/i);
+    expect(answer.headers.get('vary')).toMatch(/origin/i);
+  }
+  await expectOAuthLimitError(noPage);
+  expect(noPage.headers.get('access-control-allow-origin')).toBeNull();
 });
 
 test("an address's sign-ins and pages to approve an agent don't use up its token requests, and the other way round", async () => {

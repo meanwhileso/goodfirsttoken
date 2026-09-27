@@ -273,7 +273,10 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   `no-store`. `@modelcontextprotocol/client` 2.1.0 reads any other body as a
   server error, and on a refresh a server error makes it drop to a new sign-in
   in the browser, which a headless agent can't finish. With this body it
-  throws, keeps its tokens, and can refresh again later.
+  throws, keeps its tokens, and can refresh again later. A request with an
+  `Origin` gets the CORS headers the library puts on its own answers there,
+  so an agent in a web page can read the error too. Without them the
+  browser hides it, and the SDK starts a new sign-in.
 - A request to `/mcp` with a token the library doesn't know gets its `401`
   after one KV read, and no limit here counts it.
 

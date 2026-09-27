@@ -65,8 +65,8 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 export async function limitAgentSignIn(request: Request): Promise<Response | null> {
   if (request.method !== 'POST') return null;
   const { pathname } = new URL(request.url);
-  if (pathname === REGISTER_PATH && !(await underSignInLimit(request))) return overOAuthLimit();
-  if (pathname === TOKEN_PATH && !(await underTokenLimit(request))) return overOAuthLimit();
+  if (pathname === REGISTER_PATH && !(await underSignInLimit(request))) return overOAuthLimit(request);
+  if (pathname === TOKEN_PATH && !(await underTokenLimit(request))) return overOAuthLimit(request);
   return null;
 }
 
@@ -74,10 +74,20 @@ export async function limitAgentSignIn(request: Request): Promise<Response | nul
 // error. An agent's SDK reads temporarily_unavailable as one to wait out. It
 // reads a body that isn't an OAuth error as a server error, and on a refresh
 // that makes it start a new sign-in, which a headless agent can't finish.
-function overOAuthLimit(): Response {
+// An agent in a web page gets the CORS headers the library sends on its own
+// answers here. Without them the browser hides the error, and the SDK takes
+// that as a reason to start a new sign-in too.
+function overOAuthLimit(request: Request): Response {
+  const headers = new Headers({ 'cache-control': 'no-store', 'retry-after': '60' });
+  const origin = request.headers.get('origin');
+  if (origin) {
+    headers.set('access-control-allow-origin', origin);
+    headers.set('access-control-expose-headers', 'Retry-After');
+    headers.set('vary', 'Origin');
+  }
   return Response.json(
     { error: 'temporarily_unavailable', error_description: 'Too many requests from here. Try again in a minute.' },
-    { status: 429, headers: { 'cache-control': 'no-store', 'retry-after': '60' } },
+    { status: 429, headers },
   );
 }
 

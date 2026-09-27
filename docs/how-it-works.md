@@ -296,7 +296,8 @@ approval refused for its `Origin` doesn't count.
 - Over either limit, `/oauth/register` and `/oauth/token` answer `429` with
   `Retry-After: 60` and an OAuth error in JSON, `temporarily_unavailable`.
   An agent then waits and tries again, and keeps its tokens. It doesn't
-  send the person to sign in again.
+  send the person to sign in again. An agent in a web page can read that
+  answer too.
 
 **Cookies.** The page sets a cookie whose name starts with
 `__Host-gft.oauth-consent-`, and approving sets one that starts with
