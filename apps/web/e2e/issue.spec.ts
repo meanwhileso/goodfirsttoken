@@ -63,10 +63,10 @@ test('several claimants posting to one issue at once each get a lane, and their 
   await openIssue(page, path);
   await expect(page.locator('.issue-lane')).toHaveCount(1);
 
-  await Promise.all([
-    work(request, issue, 'kenji', { action: 'claim', agent: 'codex' }),
-    work(request, issue, 'sam', { action: 'claim', agent: 'opencode' }),
-  ]);
+  // One claim after the other, so the order made, which the lanes follow,
+  // is known. The room's own tests make claims at once.
+  await work(request, issue, 'kenji', { action: 'claim', agent: 'codex' });
+  await work(request, issue, 'sam', { action: 'claim', agent: 'opencode' });
   await expect(page.locator('.issue-lane')).toHaveCount(3);
   await expect(page.locator('.issue-meta__slots')).toHaveText('3 of 3 slots taken');
   await expect(page.locator('.issue-slot')).toHaveCount(0);
