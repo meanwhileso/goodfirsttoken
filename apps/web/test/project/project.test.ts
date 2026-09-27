@@ -1,4 +1,5 @@
 import {
+  CLAIM_LIFETIME_MS,
   newClaim,
   nextClaimState,
   type ClaimEvent,
@@ -7,6 +8,7 @@ import {
   type Policy,
   type PrRef,
   type ProjectSettingsInput,
+  REVIEW_WINDOW_MS,
 } from '@goodfirsttoken/core';
 import { repos as fakeRepos } from '@goodfirsttoken/github-fake/sample-data';
 import { env, exports } from 'cloudflare:workers';
@@ -24,10 +26,25 @@ import {
   setProjectStatus,
 } from '../../src/db';
 import { SAMPLE_PROJECTS } from '../../src/dev/sample-work';
+import { filterProjects } from '../../src/project/list';
 import { loadProject, loadProjectsList, type ProjectPage, type ProjectPageResult } from '../../src/project/load';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { repoFeed } from '../../src/rooms/feed';
-import { admin, db, emptyDatabase, HOUR, kenji, maintainer, MINUTE, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
+import {
+  admin,
+  db,
+  emptyDatabase,
+  HOUR,
+  kenji,
+  maintainer,
+  MINUTE,
+  priya,
+  registeredProject,
+  repo,
+  sha,
+  signIn,
+  t0,
+} from '../db/helpers';
 
 // The projects list and a project's page: what they load from the database
 // and the project's feed, and the pages themselves through the Worker.
@@ -208,12 +225,34 @@ describe('the projects list', () => {
     expect(res.headers.get('set-cookie')).toBeNull();
     expect(html).toContain(`href="/${repo}"`);
     expect(html).toContain('registered by its maintainers');
-    expect(html).toContain('automatic');
+    expect(html).toContain('<span class="badge__rule">PRs</span><span class="badge__value">automatic</span>');
 
     databaseDown();
     const down = await exports.default.fetch('http://localhost/projects');
     expect(down.status).toBe(503);
     expect(await down.text()).toContain('can&#x27;t be read right now');
+  });
+});
+
+describe("the list's filter and search", () => {
+  const projects = [
+    { repo: 'Sample-Owner/Sample-Bundler', tags: ['Contribution Welcome'], prMode: 'reviewed' as const },
+    { repo: 'sample-owner/sample-app', tags: ['help wanted'], prMode: 'automatic' as const },
+  ];
+  const repos = (found: { repo: string }[]) => found.map((project) => project.repo);
+
+  test('the search ignores case, in the repo and in the tags, and the spaces around it', () => {
+    expect(repos(filterProjects(projects, 'all', 'bundler'))).toEqual(['Sample-Owner/Sample-Bundler']);
+    expect(repos(filterProjects(projects, 'all', ' SAMPLE-APP '))).toEqual(['sample-owner/sample-app']);
+    expect(repos(filterProjects(projects, 'all', 'welcome'))).toEqual(['Sample-Owner/Sample-Bundler']);
+    expect(repos(filterProjects(projects, 'all', 'HELP'))).toEqual(['sample-owner/sample-app']);
+    expect(repos(filterProjects(projects, 'all', ''))).toEqual(repos(projects));
+  });
+
+  test('the chips keep one PR mode, and apply with the search', () => {
+    expect(repos(filterProjects(projects, 'automatic PRs', ''))).toEqual(['sample-owner/sample-app']);
+    expect(repos(filterProjects(projects, 'reviewed PRs', 'sample'))).toEqual(['Sample-Owner/Sample-Bundler']);
+    expect(repos(filterProjects(projects, 'reviewed PRs', 'app'))).toEqual([]);
   });
 });
 
@@ -230,6 +269,25 @@ describe('which projects have a page', () => {
     await setProjectStatus(db, repo, { status: 'rejected', reason: 'No tests to run.', changedBy: admin.githubId }, t0);
     expect(await load()).toEqual({ state: 'not_found' });
     expect(await load('sample-owner/sample-nothing')).toEqual({ state: 'not_found' });
+  });
+
+  test("a pause Good First Token made on its own, with no person, leaves no page, while a maintainer's or an admin's pause keeps it", async () => {
+    await registeredProject();
+    await tag(repo, `${repo}#1`);
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'Back after the release.', changedBy: maintainer.githubId }, t0);
+    expect(ready(await load()).status).toBe('paused');
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'Too many PRs at once.', changedBy: admin.githubId }, t0 + 1);
+    expect(ready(await load()).status).toBe('paused');
+
+    // The sync pauses a project whose repo went private, was archived, or is gone.
+    const delisted = `GitHub shows no public repo named ${repo}. It went private or was deleted.`;
+    await setProjectStatus(db, repo, { status: 'paused', reason: delisted, changedBy: null }, t0 + 2);
+
+    expect(await load()).toEqual({ state: 'not_found' });
+    const res = await exports.default.fetch(`http://localhost/${repo}`);
+    expect(res.status).toBe(404);
+    // Nothing cached from the repo shows.
+    expect(await res.text()).not.toContain(`Issue ${repo}#1`);
   });
 
   test('a project whose repo, or the repo its issues live in, is on the do-not-list has none', async () => {
@@ -314,6 +372,36 @@ describe("a project's tagged issues", () => {
     ]);
     expect(help.projects[0]?.waiting).toBe(page.issues.rows.filter((row) => row.takesClaims).length);
     expect(page.issues.rows.map((row) => row.openPr)).toEqual([null, null, { repo, number: 70 }, { repo, number: 71 }, null]);
+  });
+
+  test('a claim frees its slot exactly 24 hours after it was made, or 7 days after its first submit, on the page and the homepage alike', async () => {
+    await registeredProject({ tags: ['help wanted'], claimsPerIssue: 1 });
+    const issues = [1, 2, 3, 4].map((n) => `${repo}#${String(n)}`);
+    const [madeADayAgo = '', madeJustUnder = '', submittedAWeekAgo = '', submittedJustUnder = ''] = issues;
+    for (const issue of issues) await tag(repo, issue);
+    await claim(madeADayAgo, priya, { at: now - CLAIM_LIFETIME_MS });
+    await claim(madeJustUnder, priya, { at: now - CLAIM_LIFETIME_MS + 1 });
+    await claim(submittedAWeekAgo, kenji, {
+      at: now - REVIEW_WINDOW_MS - HOUR,
+      events: [[{ kind: 'submit' }, now - REVIEW_WINDOW_MS]],
+    });
+    await claim(submittedJustUnder, kenji, {
+      at: now - REVIEW_WINDOW_MS - HOUR,
+      events: [[{ kind: 'submit' }, now - REVIEW_WINDOW_MS + 1]],
+    });
+
+    const page = ready(await load());
+    const help = await listProjectsAskingForHelp(db, 5, now);
+
+    expect(page.issues.rows.map((row) => [row.issue, row.taken, row.takesClaims])).toEqual([
+      [madeADayAgo, 0, true],
+      [madeJustUnder, 1, false],
+      [submittedAWeekAgo, 0, true],
+      [submittedJustUnder, 1, false],
+    ]);
+    // Working now counts the same claims, with core's holdsSlot.
+    expect(page.working).toBe(2);
+    expect(help.projects[0]?.waiting).toBe(2);
   });
 
   test('of a paused project take no claims', async () => {
@@ -486,6 +574,58 @@ describe('the page, through the Worker', () => {
     expect(html).toContain(`curl -N primary.example/${repo}/live.txt`);
   });
 
+  test('counts every tagged issue and merged PR in its markers and numbers, past the 100 and 10 it lists', async () => {
+    await registeredProject();
+    await saveIssues(
+      db,
+      Array.from({ length: 101 }, (_, i) => ({
+        issue: `${repo}#${String(i + 1)}`,
+        project: repo,
+        title: `Issue ${String(i + 1)}`,
+        labels: ['help wanted'],
+        linkedPr: null,
+        syncedAt: t0,
+      })),
+    );
+    for (let i = 0; i < 11; i += 1) await mergedPr(`${repo}#${String(201 + i)}`, priya, 301 + i, t0 + (i + 1) * MINUTE);
+
+    const loaded = ready(await load());
+    const html = shown(await (await page(`/${repo}`)).text());
+
+    expect([loaded.issues.total, loaded.issues.rows.length, loaded.merged.total, loaded.merged.rows.length]).toEqual([
+      101, 100, 11, 10,
+    ]);
+    expect(html).toContain('tagged for help<span class="marker__count">101</span>');
+    expect(html).toContain('merged<span class="marker__count">11</span>');
+    expect(html).toContain('<b>101</b> tagged');
+    expect(html).toContain('<b>11</b> merged');
+    expect(html).toContain('The first 100, by number.');
+  });
+
+  test('draws reviewed PRs on ink, and the defaults that let agents act, like no CLA, plain', async () => {
+    await registeredProject();
+
+    const html = await (await page(`/${repo}`)).text();
+
+    for (const [rule, value, strict] of [
+      ['PRs', 'reviewed', true],
+      ['claim', 'anyone', false],
+      ['disclose', 'Assisted-by', false],
+      ['disclose', 'in the PR body', false],
+      ['description', 'agent may write', false],
+      ['CLA', 'none', false],
+      ['slots', '3', false],
+      ['open PRs', '2 each', false],
+    ] as const) {
+      expect(html, `${rule} | ${value}`).toContain(
+        `<span class="badge${strict ? ' badge--strict' : ''}"><span class="badge__rule">${rule}</span><span class="badge__value">${value}</span></span>`,
+      );
+    }
+    expect(html).not.toContain('<span class="badge__rule">issues in</span>');
+    expect(html).not.toContain('<span class="badge__rule">left to people</span>');
+    expect(html).not.toContain('>CLA</dt>');
+  });
+
   test('shows a project listed from its policy with the quote, a link to the file, and where its maintainers take it over', async () => {
     await policyListing('sample-owner/sample-listed');
 
@@ -514,14 +654,19 @@ describe('the page, through the Worker', () => {
 
   test("answers 404 for a repo that isn't listed, and 503 when the database is down", async () => {
     const missing = await page(`/${repo}`);
+    const words = await missing.text();
     expect(missing.status).toBe(404);
-    expect(await missing.text()).toContain('isn&#x27;t listed on Good First Token');
+    expect(words).toContain('isn&#x27;t listed on Good First Token');
+    // Its description claims nothing about a repo that isn't listed.
+    expect(words).not.toContain('tagged issues for outside help');
 
     await registeredProject();
     databaseDown();
     const down = await page(`/${repo}`);
+    const unread = await down.text();
     expect(down.status).toBe(503);
-    expect(await down.text()).toContain('can&#x27;t be read right now');
+    expect(unread).toContain('can&#x27;t be read right now');
+    expect(unread).not.toContain('tagged issues for outside help');
   });
 });
 

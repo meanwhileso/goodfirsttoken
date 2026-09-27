@@ -11,7 +11,6 @@ import { siteOrigin } from '../auth/settings';
 import type { Rank } from '../components/Ranks';
 import {
   countWorkingClaims,
-  getDoNotListEntry,
   getPerson,
   getProject,
   getSettingsSave,
@@ -26,6 +25,7 @@ import { repoFromPath } from '../issue/path';
 import type { PrLink } from '../issue/view';
 import { repoFeed } from '../rooms/feed';
 import type { ProjectRowData } from './ProjectRow';
+import { hasPage } from './shown';
 
 // What the projects list and a project's page show when they load. It runs
 // on the server only: the routes call it through the server functions in
@@ -138,9 +138,6 @@ export type ProjectPageResult =
   /** The database couldn't answer. */
   | { state: 'unavailable'; repo: string };
 
-/** The statuses whose projects have a page. */
-const SHOWN = new Set<ProjectStatus>(['approved', 'paused']);
-
 /** Everything a project's page shows when it loads, as of `now`. */
 export async function loadProject(
   request: Request,
@@ -160,14 +157,8 @@ export async function loadProject(
 
 async function read(request: Request, asked: string, now: number): Promise<ProjectPageResult> {
   const project = await getProject(env.DB, asked);
-  if (project === null || !SHOWN.has(project.status)) return { state: 'not_found' };
+  if (project === null || !(await hasPage(env.DB, project))) return { state: 'not_found' };
   const status = project.status === 'paused' ? 'paused' : 'approved';
-
-  // Nothing on the do-not-list shows, by its repo or the repo where its
-  // issues live.
-  const repos = new Set([project.repo, project.settings.issueRepo ?? project.repo].map((repo) => repo.toLowerCase()));
-  const listed = await Promise.all([...repos].map((repo) => getDoNotListEntry(env.DB, repo)));
-  if (listed.some((entry) => entry !== null)) return { state: 'not_found' };
 
   const [issues, working, merged, helpers, save, live] = await Promise.all([
     listProjectIssues(env.DB, project.repo, ISSUES_SHOWN, now),

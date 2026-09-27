@@ -135,7 +135,8 @@ function Issue({ page }: { page: IssuePage }) {
     <>
       <header className="issue-head">
         <nav aria-label="Breadcrumb" className="mono small">
-          <a href={`/${page.repo}`}>{page.repo}</a> <span className="faint">#{page.number}</span>
+          {page.project === null ? page.repo : <a href={`/${page.project}`}>{page.project}</a>}{' '}
+          <span className="faint">{refName(page, page.project ?? page.repo)}</span>
         </nav>
         <a className="mono small" href={`https://github.com/${page.repo}/issues/${String(page.number)}`}>
           on github ↗

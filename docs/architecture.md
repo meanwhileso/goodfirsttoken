@@ -1237,9 +1237,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
   timeline names every claimant, and two for the do-not-list when the issue
-  could take claims. Then the room's glance, which reads its whole history
-  and D1 once for its block check, and a socket on the room for as long as
-  the page is open. Each lane keeps its
+  could take claims, and one or two more for the breadcrumb, when the
+  project the page follows is approved or a person paused it, since
+  `hasPage` checks the do-not-list again. Then the room's glance, which
+  reads its whole history and D1 once for its block check, and a socket on
+  the room for as long as the page is open. Each lane keeps its
   newest 20 lines, so the page carries at most that many per claim. Nothing
   caches any of it yet.
 
@@ -1256,6 +1258,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
+| `src/project/shown.ts` | `hasPage`, which projects have a page, for a project's page and the breadcrumb on its issues' pages |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
@@ -1276,8 +1279,11 @@ under The projects list and The project page.
   of one project how many slots are taken, which claim's PR is open, and
   whether it waits. A test checks that the page's issues that take claims
   are as many as the homepage counts waiting.
-- **What the page reads.** `loadProject` reads the project, then checks the
-  do-not-list for its repo and issue repo. Then, at the same time, its
+- **What the page reads.** `loadProject` reads the project, then asks
+  `hasPage` in `src/project/shown.ts` whether it has a page, by its status,
+  who set that status, and the do-not-list for its repo and issue repo. A
+  pause with no person in `status_changed_by` is Good First Token's own,
+  as the maintainer's `pause_project` reads it too. Then, at the same time, its
   tagged issues with `listProjectIssues`, the claims working now with
   `countWorkingClaims`, the merged PRs with `listMergedPrs`, the top
   helpers with `topHelpers`, the save of its current settings with
@@ -1317,10 +1323,18 @@ under The projects list and The project page.
   now, the merged PRs, and the top helpers are one query each, through
   `claims_by_project`, with each PR, person, block, and do-not-list entry
   by key. The save of its settings is one read by key. The `glance` at the
-  project's feed reads D1 once for its block check when the feed has
-  events. Then it reads `people` once or twice. So a view costs about ten
-  D1 queries, one call to a feed, and a socket on the feed for as long as
-  the page is open. Nothing caches any of it yet.
+  project's feed asks D1 which of the donors in the events it reads are
+  blocked, and reads again for as long as a round names donors it hasn't
+  asked about, so once when none is blocked, and never when the feed has
+  no events. Then it reads `people` once or twice. So a view costs about
+  ten D1 queries, one call to a feed, and a socket on the feed for as long
+  as the page is open.
+  The three queries through `claims_by_project` read every claim the
+  project ever had, since the index keys claims by project and claim time,
+  and none of them is limited in time. The working claims are filtered by
+  state after the index, and the merged PRs and top helpers look up each
+  claim's PR. So the rows a view reads grow with the project's claim
+  history, three times over. Nothing caches any of it yet.
 
 ## The sync
 

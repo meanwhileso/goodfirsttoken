@@ -989,3 +989,47 @@ describe('the dev-only route that works an issue as a sample person', () => {
     expect(await loadIssue(request, 'sample-owner', 'sample-app', number)).toEqual({ state: 'not_found' });
   });
 });
+
+describe("the page's breadcrumb", () => {
+  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+
+  /** Where the breadcrumb on an issue page's HTML leads, or null when it leads nowhere. */
+  function breadcrumb(html: string): string | null {
+    return /aria-label="Breadcrumb"[^>]*><a href="([^"]+)"/.exec(html)?.[1] ?? null;
+  }
+
+  test("leads to the project's page, when the project keeps its issues in another repo too", async () => {
+    const project = 'sample-owner/sample-elsewhere';
+    const issueRepo = 'sample-owner/sample-issues';
+    await registeredProject({ tags: ['help wanted'], issueRepo }, project);
+    await saveIssues(db, [
+      { issue: `${issueRepo}#${number}`, project, title: 'Keep the cursor in place', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+
+    const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-issues', number));
+    const html = await (await page(`/${issueRepo}/issues/${number}`)).text();
+
+    expect(loaded.project).toBe(project);
+    expect(breadcrumb(html)).toBe(`/${project}`);
+    expect((await page(`/${project}`)).status).toBe(200);
+    expect((await page(`/${issueRepo}`)).status).toBe(404);
+  });
+
+  test('leads nowhere when the project has no page', async () => {
+    await tag();
+    await setProjectStatus(
+      db,
+      repo,
+      { status: 'paused', reason: `GitHub shows no public repo named ${repo}. It went private or was deleted.`, changedBy: null },
+      t0,
+    );
+
+    const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-app', number));
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+
+    expect(loaded.project).toBeNull();
+    expect(breadcrumb(html)).toBeNull();
+    expect(html).toContain('aria-label="Breadcrumb"');
+    expect((await page(`/${repo}`)).status).toBe(404);
+  });
+});

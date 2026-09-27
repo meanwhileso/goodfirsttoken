@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
 import { getDoNotListEntry, getPerson, getProject } from '../db';
 import { siteAddress } from '../home/load';
+import { hasPage } from '../project/shown';
 import { issueRoom } from '../rooms/issue-room';
 import { findIssue } from './find';
 import { issueFromPath } from './path';
@@ -28,6 +29,12 @@ export interface IssuePage {
   issue: string;
   repo: string;
   number: number;
+  /**
+   * The code repo of the project the page follows, when that project has a
+   * page of its own, for the breadcrumb. It differs from `repo` when the
+   * project keeps its issues in another repo.
+   */
+  project: string | null;
   /** The title from the tagged issues cache, or null when the issue isn't in it. */
   title: string | null;
   labels: string[];
@@ -64,7 +71,7 @@ const fold = (label: string) => label.replace(/[A-Z]+/g, (letters) => letters.to
 
 /**
  * Why the issue takes no claims, by the rule the homepage uses for an issue
- * waiting for an agent (src/db/projects.ts), less the open PRs and the free
+ * waiting for an agent (src/db/waiting.ts), less the open PRs and the free
  * slot, which the page follows live. Null when it takes them.
  */
 async function closedBecause(
@@ -157,6 +164,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     issue,
     repo,
     number,
+    project: project && (await hasPage(env.DB, project)) ? project.repo : null,
     title: tagged?.copy.title ?? null,
     labels: tagged?.copy.labels ?? [],
     site: siteAddress(request),

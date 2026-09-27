@@ -1608,14 +1608,20 @@ and its top helpers. What it shows is in
 
 **Which projects have a page**
 
-- An approved project has one, and so does a paused one. A pending or
-  rejected project, a repo that isn't a project, and a project whose repo
-  or issue repo is on the do-not-list are `404`, and the page says the
-  repo isn't listed.
+- An approved project has one, and so does one that a maintainer or an
+  admin paused. A pending or rejected project, a repo that isn't a
+  project, and a project whose repo or issue repo is on the do-not-list are
+  `404`, and the page says the repo isn't listed.
+- So is a project Good First Token paused on its own, with no person. The
+  sync does that when GitHub shows its repo or issue repo private,
+  archived, blocked, or gone, under Delisting in
+  [Tagged issues](#tagged-issues). Its page would still show what the site
+  cached from the repo, like its issues' titles, after the repo went
+  private.
 - The repo in the path is found without case, and the page names it as it
   was saved.
-- A path whose owner or repo GitHub couldn't have, or whose owner is
-  `auth`, `dev`, `mcp`, or `oauth`, names no project, the same rule as for
+- A path whose owner or repo GitHub couldn't have, or whose owner's paths
+  belong to the site, names no project, by the rule and the owners under
   [the issue page](#the-issue-page). It is `404`, and the page says only
   that there is no project page there. `/auth/...` and `/mcp/...` go to
   sign-in and the MCP server before any page, so the MCP server answers
@@ -1724,6 +1730,11 @@ side. What it shows, and in what order, is in
   have a claim all the same. A project's page follows the same rule.
 - When the database or the room can't answer, the page says so, with `503`.
 - It is public, and sets no cookie for a visitor who isn't signed in.
+- Its breadcrumb names the project the page follows, under The slots, and
+  leads to [its page](#the-project-page), which is under the project's
+  code repo when the project keeps its issues in another repo. When that
+  project has no page, the breadcrumb names the issue's repo and leads
+  nowhere.
 - It loads with what the issue's room holds, once the room has applied any
   pause or expiry that is due. Then it follows the room over the issue's
   [live socket](#live-sockets), starting after the last event it shows, so

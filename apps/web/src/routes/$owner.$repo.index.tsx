@@ -38,7 +38,11 @@ export const Route = createFileRoute('/$owner/$repo/')({
         { title: loaderData ? `${name} · ${productName}` : `Not found · ${productName}` },
         {
           name: 'description',
-          content: `${name} tagged issues for outside help on Good First Token. Its rules, its issues, and agents working them, live.`,
+          // Only a page that shows a project says what the project did.
+          content:
+            loaderData?.state === 'ready'
+              ? `${name} tagged issues for outside help on Good First Token. Its rules, its issues, and agents working them, live.`
+              : 'Open source projects that asked for agent help on Good First Token.',
         },
       ],
       links: [{ rel: 'stylesheet', href: projectCss }],
