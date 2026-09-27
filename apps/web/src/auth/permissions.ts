@@ -58,9 +58,24 @@ function isAdmin(githubId: number): boolean {
   return adminGithubIds().has(githubId);
 }
 
-interface RepoPermissions {
+/**
+ * A repo as GitHub described it to the caller, from the read behind
+ * `manage_project`. The fields are the ones a tool uses.
+ * https://docs.github.com/en/rest/repos/repos#get-a-repository
+ */
+export interface ManagedRepo {
+  /** The repo as GitHub names it, which can differ in case from what was asked. */
+  full_name: string;
+  private: boolean;
+  visibility?: string;
+  archived: boolean;
+  has_pull_requests?: boolean;
+  pull_request_creation_policy?: string;
   permissions?: { admin?: boolean; maintain?: boolean };
 }
+
+/** What a check hands back when it passes: the repo it read, for `manage_project`. */
+type Granted<P extends Permission> = P extends 'manage_project' ? ManagedRepo : undefined;
 
 /**
  * Throws PermissionRefused unless `caller` holds `permission` on `resource`.
@@ -68,16 +83,17 @@ interface RepoPermissions {
  * - Admin permissions go to the numeric GitHub IDs in ADMIN_GITHUB_IDS.
  * - `manage_project` asks GitHub, with the caller's own token, for their
  *   permission on the repo, and needs admin or maintain. It asks every time
- *   and keeps nothing.
+ *   and keeps nothing. It hands back the repo as GitHub described it, so a
+ *   tool reads it once.
  * - `work_claim` goes to the person who made the claim.
  */
 export async function requirePermission<P extends Permission>(
   caller: Caller,
   permission: P,
   ...[resource]: Resources[P] extends undefined ? [] : [Resources[P]]
-): Promise<void> {
+): Promise<Granted<P>> {
   if (ADMIN_PERMISSIONS.has(permission)) {
-    if (isAdmin(caller.githubId)) return;
+    if (isAdmin(caller.githubId)) return undefined as Granted<P>;
     throw new PermissionRefused('not_admin', permission, "Only Good First Token's admins can do this.");
   }
   if (permission === 'manage_project') {
@@ -90,9 +106,9 @@ export async function requirePermission<P extends Permission>(
     );
     const token = await caller.gitHubToken();
     if (!token) throw refused;
-    let found: RepoPermissions;
+    let found: ManagedRepo;
     try {
-      found = await gitHubRest<RepoPermissions>(token, 'GET', `/repos/${name}`);
+      found = await gitHubRest<ManagedRepo>(token, 'GET', `/repos/${name}`);
     } catch (error) {
       // GitHub answers 404 for a repo the caller can't see. A token with only
       // public_repo, like every token Good First Token holds, can't see a
@@ -106,12 +122,12 @@ export async function requirePermission<P extends Permission>(
       }
       throw error;
     }
-    if (found.permissions?.admin === true || found.permissions?.maintain === true) return;
+    if (found.permissions?.admin === true || found.permissions?.maintain === true) return found as Granted<P>;
     throw refused;
   }
   if (permission === 'work_claim') {
     const { claimantGithubId } = resource as Resources['work_claim'];
-    if (caller.githubId === claimantGithubId) return;
+    if (caller.githubId === claimantGithubId) return undefined as Granted<P>;
     throw new PermissionRefused('not_claim_owner', permission, 'Only the person who made the claim can do this.');
   }
   throw new Error(`There is no permission named ${permission}.`);

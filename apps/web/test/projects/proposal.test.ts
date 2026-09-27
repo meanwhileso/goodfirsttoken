@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { proposeSettings } from '../../src/projects/proposal';
-import type { RepoDocs } from '../../src/projects/repo';
+import { MAX_DOC_BYTES, type RepoDocs } from '../../src/projects/repo';
 
 // The settings register_project proposes. Every label, file, and link here is
 // made up.
@@ -113,22 +113,27 @@ test('a CLA link ending in punctuation loses the punctuation', () => {
   expect(settings.claUrl).toBe('https://cla.example.org/sample-app');
 });
 
-test('a file of one long line with no period is read in time that grows with its length alone', () => {
-  // About 105 KB of the phrase over and over, once with the words after it
-  // only at the end and once with no words at all, and a CLA line of 100 KB
-  // whose link ends in a run of dots and a letter.
-  const phrases = 'PR description '.repeat(7_000);
-  const link = `https://cla.example.org/${'.'.repeat(100_000)}x`;
+test('four files at the size limit, each one long line with no period, are read in time that grows with their length alone', () => {
+  // Every file at the size limit: the phrase over and over, with no words
+  // after it, and in the PR template a CLA line whose link ends in a run of
+  // dots and a letter.
+  const phrase = 'PR description ';
+  const full = phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length));
+  const half = phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length / 2));
+  const start = 'https://cla.example.org/';
+  const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nCLA '.length - start.length - 1)}x`;
+  const template = `${half}\nCLA ${link}`;
+  expect([full.length, template.length].every((n) => n > 0.99 * MAX_DOC_BYTES && n <= MAX_DOC_BYTES)).toBe(true);
   const started = performance.now();
 
-  const found = proposeSettings(['help wanted'], docs({ contributing: `${phrases}by hand`, agents: `CLA ${link}` }));
-  const none = proposeSettings(['help wanted'], docs({ contributing: phrases }));
+  const { settings } = proposeSettings(
+    ['help wanted'],
+    docs({ contributing: full, aiPolicy: full, agents: full, prTemplate: template }),
+  );
 
-  // Read in one pass, all three take a few milliseconds. Read by a pattern
-  // that tries every start position again, the ones that find nothing took
-  // most of a second or more each.
-  expect(performance.now() - started).toBeLessThan(200);
-  expect(found.settings.personWrittenDescription).toBe(true);
-  expect(found.settings.claUrl).toBe(link);
-  expect(none.settings).not.toHaveProperty('personWrittenDescription');
+  // Read in one pass, all four take about a millisecond. A pattern that tries
+  // every start position again took most of a second for each file.
+  expect(performance.now() - started).toBeLessThan(50);
+  expect(settings).not.toHaveProperty('personWrittenDescription');
+  expect(settings.claUrl).toBe(link);
 });

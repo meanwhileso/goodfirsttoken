@@ -819,8 +819,8 @@ settings with the maintainer, then calls it again with the settings.
 
 **Who and which repos.** Every call first asks GitHub for the caller's
 permission on the repo, with their own token, under
-[Permissions](#permissions). Then it reads the repo from GitHub with the
-same token, and refuses with `repo_not_eligible` a repo that:
+[Permissions](#permissions). From the same answer it refuses with
+`repo_not_eligible` a repo that:
 
 - is not public: GitHub says it is private, or gives a visibility other than
   `public`,
@@ -882,20 +882,40 @@ out take their defaults. An admin approves or rejects it, which #11 builds.
 - A repo an admin listed from its AI policy is taken over. The maintainer's
   settings replace the listing's, whole, as a new save in the settings
   history made by them. The project becomes registered: its policy quote
-  goes, and it names the maintainer as who added it, and when. An approved
-  or paused listing keeps its status, since an admin already approved it. A
-  rejected listing goes back to `pending`, changed by the maintainer, so an
-  admin reviews it again.
+  goes, and it names the maintainer as who added it. It keeps the time it
+  was listed, since it has been listed since then, so it keeps its place
+  among projects ordered by when they were added. An approved or paused
+  listing keeps its status, since an admin already approved it, and a
+  change of status that lands while the takeover saves stays. A rejected
+  listing goes back to `pending`, changed by the maintainer, so an admin
+  reviews it again.
 - A crawler find still waiting in the admin queue doesn't stop a
   registration, and the registration doesn't change it.
 
 **The issue repo.** Tagged issues in another repo become work for agents
-under the project's settings. So an `issueRepo` other than the code repo
-needs the caller to be an admin or maintainer of that repo too, asked of
-GitHub with their own token, the same way as the code repo. Without it,
-`register_project` and `update_project` refuse with `not_maintainer`, naming
-the issue repo, and nothing saves. The plan says nothing about who may name
-an issue repo. This rule fills that gap.
+under the project's settings, and the tags decide which of them. So when a
+project's issues live, or will live, in a repo other than the code repo,
+the caller must be an admin or maintainer of that repo too, asked of GitHub
+with their own token, the same way as the code repo. The plan says nothing
+about who may name an issue repo. This rule fills that gap.
+
+- `register_project` with settings checks the issue repo they name,
+  whether it registers a new project or takes over a listing.
+- Every `update_project` checks the issue repo the project will have after
+  the change, whatever settings it sends. So someone who maintains only the
+  code repo can change none of the settings of a project whose issues live
+  elsewhere. Sending the same issue repo back with the rest of the settings
+  needs nothing more. Moving the issues back to the code repo needs no role
+  on the repo they leave.
+- Without the role, the call is refused with `not_maintainer`, saying only
+  an admin or maintainer of that repo can keep the project's issues there,
+  and nothing saves.
+- An issue repo that isn't public or is archived is refused with
+  `repo_not_eligible`. Its pull request settings don't count, since pull
+  requests go to the code repo.
+- The issue repo is saved as GitHub names it, so a name in another case, or
+  the old name of a renamed repo, is saved under the name GitHub gives
+  now. An issue repo that is the code repo is saved as none.
 
 **The goodfirsttoken label.** When the saved tags include `goodfirsttoken`,
 in any case, the repo where the issues live needs the label: the issue repo,
@@ -1548,8 +1568,8 @@ A deployment can serve them from a static host, on a hostname of its own.
   token, and reads who they are with that token. An agent's sign-in does the
   same, with a PKCE verifier. `start_session` reads the person with the
   connection's token. The `manage_project` permission reads the repo with
-  the caller's token. Registering a project reads the repo again, its
-  labels, and its files. Registering or updating one reads an issue repo
+  the caller's token, and registering a project uses the same answer.
+  Registering also reads the repo's labels and its files. Registering or updating one reads an issue repo
   other than the code repo for the caller's permission, and creates the
   `goodfirsttoken` label where the issues live. All of these use the
   maintainer's token.

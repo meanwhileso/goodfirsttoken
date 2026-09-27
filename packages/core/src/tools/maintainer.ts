@@ -6,6 +6,7 @@ import {
   projectSourceSchema,
   projectStatusSchema,
   settingKeySchema,
+  type ProjectSettings,
   type ProjectStatus,
 } from '../projects';
 import { defineTool } from './spec';
@@ -14,8 +15,10 @@ import { lines, plural, renderSettings } from './text';
 // The maintainer's tools (spec section 4). Every call checks with GitHub that
 // the caller is an admin or maintainer of the repo.
 
-function createdText(labels: readonly string[]): string | false {
-  return labels.length > 0 && `Created ${plural(labels.length, 'label')} in the issue repo: ${labels.join(', ')}.`;
+/** The labels created, named with the repo they went into: the issue repo, or the code repo. */
+function createdText(labels: readonly string[], repo: string, settings: ProjectSettings): string | false {
+  const where = settings.issueRepo ?? repo;
+  return labels.length > 0 && `Created ${plural(labels.length, 'label')} in ${where}: ${labels.join(', ')}.`;
 }
 
 function registeredText(repo: string, status: ProjectStatus): string {
@@ -64,7 +67,7 @@ export const registerProject = defineTool({
     out.saved
       ? lines(
           registeredText(out.repo, out.status ?? 'pending'),
-          createdText(out.createdLabels),
+          createdText(out.createdLabels, out.repo, out.settings),
           renderSettings(out.settings),
         )
       : lines(
@@ -93,7 +96,7 @@ export const updateProject = defineTool({
       out.changed.length > 0
         ? `Updated ${out.repo}: ${out.changed.join(', ')}. The changes apply now.`
         : `No settings changed on ${out.repo}.`,
-      createdText(out.createdLabels),
+      createdText(out.createdLabels, out.repo, out.settings),
       renderSettings(out.settings),
     ),
 });

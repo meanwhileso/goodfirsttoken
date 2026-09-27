@@ -197,7 +197,7 @@ export const samples: Samples = {
   },
   update_project: {
     output: { repo, status: 'approved', settings, changed: ['prMode', 'tags'], createdLabels: ['goodfirsttoken'] },
-    mentions: ['Updated', 'prMode', 'Created 1 label in the issue repo: goodfirsttoken.'],
+    mentions: ['Updated', 'prMode', `Created 1 label in ${repo}: goodfirsttoken.`],
   },
   project_status: {
     output: {

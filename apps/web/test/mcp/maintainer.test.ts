@@ -38,6 +38,11 @@ beforeEach(async () => {
   await emptyDatabase();
   await emptyKv();
   github = startGitHub();
+  // The limit of 120 calls a minute counts each person's calls across every
+  // test in the file, and these tests make more than that as the same few
+  // maintainers. They test the tools, so every call gets through here.
+  // tools.test.ts tests the limit.
+  vi.spyOn(env.MCP_LIMITER, 'limit').mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -129,6 +134,20 @@ function refuseLabels(): void {
     }
     return github.fetch(request);
   });
+}
+
+/** Runs `meanwhile` just before the first write to the database, as if it landed between the tool's read and write. */
+function beforeTheWrite(meanwhile: () => Promise<unknown>): void {
+  const batch = env.DB.batch.bind(env.DB);
+  vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+    await meanwhile();
+    return batch(statements);
+  });
+}
+
+/** An admin pausing the project, the way #11's tool will. */
+function adminPause(repo: string) {
+  return setProjectStatus(env.DB, repo, { status: 'paused', reason: 'Spam reports.', changedBy: admin.githubId }, Date.now());
 }
 
 async function approve(repo: string): Promise<void> {
@@ -279,7 +298,7 @@ describe('register_project', () => {
     const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['goodfirsttoken'] } });
 
     expect(result.structuredContent).toMatchObject({ saved: true, createdLabels: ['goodfirsttoken'] });
-    expect(textOf(result)).toContain('Created 1 label in the issue repo: goodfirsttoken.');
+    expect(textOf(result)).toContain(`Created 1 label in ${APP_REPO}: goodfirsttoken.`);
     expect(sampleRepo(APP_REPO).labels.find((l) => l.name === 'goodfirsttoken')).toMatchObject({
       color: '7057ff',
       description: 'Tagged for outside help through Good First Token',
@@ -358,7 +377,7 @@ describe('register_project', () => {
       settings: { tags: ['goodfirsttoken'], issueRepo: HARBOR },
     });
 
-    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can do this.`);
+    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can keep this project's issues there.`);
     expect(await getProject(env.DB, APP_REPO)).toBeNull();
     expect(hasLabel(HARBOR, 'goodfirsttoken')).toBe(false);
     expect(hasLabel(APP_REPO, 'goodfirsttoken')).toBe(false);
@@ -374,11 +393,50 @@ describe('register_project', () => {
     });
 
     expect(result.structuredContent).toMatchObject({ saved: true, createdLabels: ['goodfirsttoken'], settings: { issueRepo: TOOLS } });
+    expect(textOf(result)).toContain(`Created 1 label in ${TOOLS}: goodfirsttoken.`);
     expect(hasLabel(TOOLS, 'goodfirsttoken')).toBe(true);
     expect(hasLabel(APP_REPO, 'goodfirsttoken')).toBe(false);
     // The issue repo's permission is asked of GitHub with the caller's token too.
     const reads = github.calls.slice(start).filter((c) => c.operation === 'GET /repos/{owner}/{repo}');
     expect(reads.map((c) => [new URL(c.url).pathname, c.login])).toContainEqual([`/repos/${TOOLS}`, 'sample-maintainer']);
+  });
+
+  test("an issue repo named in another case is saved under GitHub's own name for it", async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const result = await call(agent, 'register_project', {
+      repo: APP_REPO,
+      settings: { tags: ['goodfirsttoken'], issueRepo: 'Sample-Owner/SAMPLE-TOOLS' },
+    });
+
+    expect(result.structuredContent).toMatchObject({ saved: true, settings: { issueRepo: TOOLS } });
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ settings: { issueRepo: TOOLS } });
+    expect((await listProjectsByIssueRepo(env.DB, TOOLS)).map((p) => p.repo)).toEqual([APP_REPO]);
+  });
+
+  test('an archived issue repo is refused, and nothing is saved', async () => {
+    sampleRepo(TOOLS).archived = true;
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const result = await call(agent, 'register_project', {
+      repo: APP_REPO,
+      settings: { tags: ['help wanted'], issueRepo: TOOLS },
+    });
+
+    expect(textOf(result)).toBe(
+      `Refused (repo_not_eligible): The issue repo ${TOOLS} is archived on GitHub. Keep this project's issues in a repo that takes changes.`,
+    );
+    expect(await getProject(env.DB, APP_REPO)).toBeNull();
+  });
+
+  test('a takeover that keeps issues in a repo the caller does not maintain is refused, and the listing stays', async () => {
+    await policyListing(APP_REPO);
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: HARBOR } });
+
+    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can keep this project's issues there.`);
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ source: 'policy', settings: { issueRepo: null } });
   });
 
   test('a repo already registered is refused, and keeps its settings', async () => {
@@ -400,12 +458,15 @@ describe('register_project', () => {
     await policyListing(APP_REPO);
     const agent = await connectAgent(github, 'sample-maintainer');
 
+    const listedAt = (await getProject(env.DB, APP_REPO))?.addedAt;
+
     const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
 
     expect(result.structuredContent).toMatchObject({ saved: true, status: 'approved' });
     expect(textOf(result)).toContain('Your settings replace the ones it was listed with, and apply now.');
     const project = await getProject(env.DB, APP_REPO);
-    expect(project).toMatchObject({ source: 'registered', policy: null, status: 'approved', addedBy: 1009 });
+    // It has been listed since the admin listed it, so it keeps that time.
+    expect(project).toMatchObject({ source: 'registered', policy: null, status: 'approved', addedBy: 1009, addedAt: listedAt });
     // Every setting is the maintainer's: the listing's PR mode and notes are gone.
     expect(project?.settings).toMatchObject({ tags: ['help wanted'], prMode: 'reviewed', agentNotes: '' });
     expect((await settingsHistory(env.DB, APP_REPO)).map((v) => v.changedBy)).toEqual([1009, admin.githubId]);
@@ -421,6 +482,25 @@ describe('register_project', () => {
     expect(textOf(result)).toContain('Agents get no new claims on it until the pause is lifted.');
     expect(textOf(result)).not.toContain('apply now');
     expect(await getProject(env.DB, APP_REPO)).toMatchObject({ status: 'paused', statusChangedBy: admin.githubId });
+  });
+
+  test("an admin's pause that lands while a maintainer takes over an approved listing stays, and the answer says paused", async () => {
+    await policyListing(APP_REPO);
+    const agent = await connectAgent(github, 'sample-maintainer');
+    env.ADMIN_GITHUB_IDS = String(admin.githubId);
+    beforeTheWrite(() => adminPause(APP_REPO));
+
+    const result = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'] } });
+
+    expect(result.structuredContent).toMatchObject({ saved: true, status: 'paused' });
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({
+      source: 'registered',
+      status: 'paused',
+      statusReason: 'Spam reports.',
+      statusChangedBy: admin.githubId,
+      settings: { tags: ['help wanted'] },
+    });
+    expect((await statusHistory(env.DB, APP_REPO))[0]).toMatchObject({ status: 'paused', changedBy: admin.githubId });
   });
 
   test('a rejected listing taken over by its maintainer goes back to pending, so an admin reviews it again', async () => {
@@ -499,9 +579,43 @@ describe('update_project', () => {
 
     const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { issueRepo: HARBOR } });
 
-    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can do this.`);
+    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${HARBOR} on GitHub can keep this project's issues there.`);
     expect(await getProject(env.DB, APP_REPO)).toMatchObject({ settings: { issueRepo: null } });
     expect(await listProjectsByIssueRepo(env.DB, HARBOR)).toEqual([]);
+  });
+
+  test('someone who maintains the code repo but not the issue repo can change none of its settings', async () => {
+    const owner = await connectAgent(github, 'sample-maintainer');
+    await call(owner, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+    sampleRepo(APP_REPO).collaborators['octo-maintainer'] = 'maintain';
+    const codeOnly = await connectAgent(github, 'octo-maintainer');
+
+    const result = await call(codeOnly, 'update_project', { repo: APP_REPO, settings: { tags: ['bug'] } });
+
+    expect(textOf(result)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${TOOLS} on GitHub can keep this project's issues there.`);
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ settingsVersion: 1, settings: { tags: ['help wanted'] } });
+  });
+
+  test('sending the settings back whole, with the same issue repo, is fine for someone who maintains both', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    const registered = await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+    const settings = { ...(registered.structuredContent?.settings as Record<string, unknown>), claimsPerIssue: 2 };
+
+    const result = await call(agent, 'update_project', { repo: APP_REPO, settings });
+
+    expect(result.structuredContent).toMatchObject({ changed: ['claimsPerIssue'], settings: { issueRepo: TOOLS } });
+  });
+
+  test('moving the issues back to the code repo needs no role on the repo they leave', async () => {
+    const owner = await connectAgent(github, 'sample-maintainer');
+    await call(owner, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+    sampleRepo(APP_REPO).collaborators['octo-maintainer'] = 'maintain';
+    const codeOnly = await connectAgent(github, 'octo-maintainer');
+
+    const result = await call(codeOnly, 'update_project', { repo: APP_REPO, settings: { issueRepo: null } });
+
+    expect(result.structuredContent).toMatchObject({ changed: ['issueRepo'], settings: { issueRepo: null } });
+    expect(await listProjectsByIssueRepo(env.DB, TOOLS)).toEqual([]);
   });
 
   test('moving the issues to another repo the caller maintains creates the label there when the tags pick it', async () => {
@@ -813,22 +927,11 @@ describe('pause_project', () => {
     expect(await statusHistory(env.DB, HARBOR)).toHaveLength(2);
   });
 
-  /** Runs `meanwhile` just before the first write to the database, as if it landed between the tool's read and write. */
-  function beforeTheWrite(meanwhile: () => Promise<unknown>): void {
-    const batch = env.DB.batch.bind(env.DB);
-    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
-      await meanwhile();
-      return batch(statements);
-    });
-  }
-
   test("a pause that lands while a maintainer's pause is on its way stays the admin's", async () => {
     const agent = await connectAgent(github, 'octo-maintainer');
     await approved(agent);
     env.ADMIN_GITHUB_IDS = String(admin.githubId);
-    beforeTheWrite(() =>
-      setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'Spam reports.', changedBy: admin.githubId }, Date.now()),
-    );
+    beforeTheWrite(() => adminPause(HARBOR));
 
     const result = await call(agent, 'pause_project', { repo: HARBOR, reason: 'Release week.' });
 
@@ -841,9 +944,7 @@ describe('pause_project', () => {
     await approved(agent);
     env.ADMIN_GITHUB_IDS = String(admin.githubId);
     await call(agent, 'pause_project', { repo: HARBOR, reason: 'Release week.' });
-    beforeTheWrite(() =>
-      setProjectStatus(env.DB, HARBOR, { status: 'paused', reason: 'Spam reports.', changedBy: admin.githubId }, Date.now()),
-    );
+    beforeTheWrite(() => adminPause(HARBOR));
 
     const result = await call(agent, 'pause_project', { repo: HARBOR, paused: false });
 

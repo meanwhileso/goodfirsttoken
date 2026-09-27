@@ -426,7 +426,8 @@ describe('a maintainer taking over a listing made from a policy', () => {
       status: 'approved',
       statusChangedBy: admin.githubId,
       addedBy: maintainer.githubId,
-      addedAt: t0 + HOUR,
+      // Listed since the admin listed it, so it keeps that time.
+      addedAt: t0,
       settingsVersion: 2,
     });
     // Whole settings: prMode, which the maintainer left out, is back to its default.

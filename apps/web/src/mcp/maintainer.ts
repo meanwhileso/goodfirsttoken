@@ -14,7 +14,7 @@ import {
 } from '@goodfirsttoken/core';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
-import { PermissionRefused, requirePermission, type Caller } from '../auth/permissions';
+import { PermissionRefused, requirePermission, type Caller, type ManagedRepo } from '../auth/permissions';
 import { adminGithubIds } from '../auth/settings';
 import {
   changeSettings,
@@ -29,7 +29,15 @@ import {
 } from '../db';
 import { GitHubError } from '../github';
 import { proposeSettings } from '../projects/proposal';
-import { createOurLabel, OUR_LABEL, readDocs, readLabels, readRepo, whyNotEligible } from '../projects/repo';
+import {
+  createOurLabel,
+  OUR_LABEL,
+  readDocs,
+  readLabels,
+  repoFacts,
+  whyNotEligible,
+  whyNotIssueRepo,
+} from '../projects/repo';
 
 // The maintainer's tools: register_project, update_project, project_status,
 // and pause_project. Each one first asks GitHub, with the caller's own token,
@@ -61,21 +69,29 @@ function picksOurTag(tags: readonly string[] | undefined): boolean {
   return tags?.some((tag) => tag.toLowerCase() === OUR_LABEL.name) ?? false;
 }
 
-/** The repo where a project's tagged issues live: its issue repo, or the code repo. */
-function issueRepoOf(repo: string, settings: ProjectSettings): string {
-  return settings.issueRepo ?? repo;
-}
+type IssueRepoCheck = { ok: true; issueRepo: string | null } | { ok: false; answer: Answer };
 
 /**
- * Tagged issues in another repo become work for agents under this project's
- * settings, so the caller must manage that repo too, asked of GitHub with
- * their own token. requirePermission throws PermissionRefused, which the
- * server answers as the tool's refusal, naming the issue repo.
+ * Checks where a project's tagged issues will live. Issues in another repo
+ * become work for agents under this project's settings, so the caller must
+ * manage that repo too, asked of GitHub with their own token, and it must be
+ * public and not archived. The issue repo as GitHub names it, or null when
+ * the issues live in the code repo.
  */
-async function requireIssueRepo(caller: Caller, repo: string, issueRepo: string | null | undefined): Promise<void> {
-  if (issueRepo && issueRepo.toLowerCase() !== repo.toLowerCase()) {
-    await requirePermission(caller, 'manage_project', { repo: issueRepo });
+async function checkIssueRepo(caller: Caller, repo: string, issueRepo: string | null): Promise<IssueRepoCheck> {
+  if (issueRepo === null || issueRepo.toLowerCase() === repo.toLowerCase()) return { ok: true, issueRepo: null };
+  let found: ManagedRepo;
+  try {
+    found = await requirePermission(caller, 'manage_project', { repo: issueRepo });
+  } catch (error) {
+    if (!(error instanceof PermissionRefused)) throw error;
+    const message = `Only an admin or maintainer of ${issueRepo} on GitHub can keep this project's issues there.`;
+    return { ok: false, answer: refuse(error.code, message) };
   }
+  const problem = whyNotIssueRepo(repoFacts(found));
+  if (problem !== null) return { ok: false, answer: refuse('repo_not_eligible', problem) };
+  const named = found.full_name;
+  return { ok: true, issueRepo: named.toLowerCase() === repo.toLowerCase() ? null : named };
 }
 
 /**
@@ -129,9 +145,8 @@ export async function registerProject(
   input: ToolInput<'register_project'>,
   now: number,
 ): Promise<Answer> {
-  await requirePermission(caller, 'manage_project', { repo: input.repo });
+  const facts = repoFacts(await requirePermission(caller, 'manage_project', { repo: input.repo }));
   const token = await tokenOf(caller);
-  const facts = await readRepo(token, input.repo);
   const problem = whyNotEligible(facts);
   if (problem !== null) return refuse('repo_not_eligible', problem);
   const repo = facts.fullName;
@@ -147,9 +162,10 @@ export async function registerProject(
     );
   }
 
-  const settings: ProjectSettings = input.settings;
-  await requireIssueRepo(caller, repo, settings.issueRepo);
-  const created = await labelsFor(token, issueRepoOf(repo, settings), settings.tags, 'register_project');
+  const place = await checkIssueRepo(caller, repo, input.settings.issueRepo);
+  if (!place.ok) return place.answer;
+  const settings: ProjectSettings = { ...input.settings, issueRepo: place.issueRepo };
+  const created = await labelsFor(token, place.issueRepo ?? repo, settings.tags, 'register_project');
   if (!Array.isArray(created)) return answer(toolRefusal(created));
 
   for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
@@ -184,15 +200,20 @@ export async function updateProject(caller: Caller, input: ToolInput<'update_pro
   // Checked before GitHub is asked anything more, so bad settings change nothing there.
   const checked = updateProjectSettings(project.settings, input.settings);
   if (!checked.ok) return answer(toolRefusal(invalidSettings(checked.problems)));
-  await requireIssueRepo(caller, project.repo, input.settings.issueRepo);
+  // Every change to a project whose issues live in another repo needs that
+  // repo too, since its settings decide which of the repo's issues agents get.
+  const place = await checkIssueRepo(caller, project.repo, checked.value.issueRepo);
+  if (!place.ok) return place.answer;
+  const patch =
+    input.settings.issueRepo === undefined ? input.settings : { ...input.settings, issueRepo: place.issueRepo };
   // The label goes where the issues will live, when the change picks the tag or moves the issues.
   const moves = input.settings.tags !== undefined || input.settings.issueRepo !== undefined;
   const created = moves
-    ? await labelsFor(await tokenOf(caller), issueRepoOf(project.repo, checked.value), checked.value.tags, 'update_project')
+    ? await labelsFor(await tokenOf(caller), place.issueRepo ?? project.repo, checked.value.tags, 'update_project')
     : [];
   if (!Array.isArray(created)) return answer(toolRefusal(created));
 
-  const change = await changeSettings(env.DB, project.repo, input.settings, caller.githubId, now);
+  const change = await changeSettings(env.DB, project.repo, patch, caller.githubId, now);
   if (change === null) return notAProject(input.repo);
   if (!change.ok) return answer(toolRefusal(invalidSettings(change.problems)));
   return answer(

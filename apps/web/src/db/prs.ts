@@ -171,8 +171,8 @@ export async function countProjectPrs(db: D1Database, project: string): Promise<
     )
     .bind(mustParse(repoName, project, 'project'))
     .all<{ state: string; n: number }>();
-  const count = (state: PrState) => results.find((row) => row.state === state)?.n ?? 0;
-  return { open: count('open'), merged: count('merged') };
+  const countOf = (state: PrState) => results.find((row) => row.state === state)?.n ?? 0;
+  return { open: countOf('open'), merged: countOf('merged') };
 }
 
 const DAY = 24 * 60 * 60 * 1000;

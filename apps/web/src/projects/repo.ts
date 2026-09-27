@@ -1,3 +1,4 @@
+import type { ManagedRepo } from '../auth/permissions';
 import { GitHubError, gitHubGraphQL, gitHubRest } from '../github';
 
 // What registering a project reads from GitHub, and the one thing it writes
@@ -19,18 +20,11 @@ export interface RepoFacts {
   pullRequestCreationPolicy: string | null;
 }
 
-interface RepoResponse {
-  full_name: string;
-  private: boolean;
-  visibility?: string;
-  archived: boolean;
-  has_pull_requests?: boolean;
-  pull_request_creation_policy?: string;
-}
-
-// https://docs.github.com/en/rest/repos/repos#get-a-repository
-export async function readRepo(token: string, repo: string): Promise<RepoFacts> {
-  const found = await gitHubRest<RepoResponse>(token, 'GET', `/repos/${repo}`);
+/**
+ * The facts registration checks, from the repo the `manage_project`
+ * permission read with the caller's token.
+ */
+export function repoFacts(found: ManagedRepo): RepoFacts {
   return {
     fullName: found.full_name,
     private: found.private,
@@ -62,6 +56,22 @@ export function whyNotEligible(facts: RepoFacts): string | null {
   }
   if (facts.pullRequestCreationPolicy !== 'all') {
     return `${name} lets only collaborators open pull requests. Let anyone open them on GitHub to register it.`;
+  }
+  return null;
+}
+
+/**
+ * Why a repo can't hold a project's tagged issues, or null when it can: it
+ * must be public and not archived. Pull requests go to the code repo, so the
+ * issue repo's pull request settings don't count.
+ */
+export function whyNotIssueRepo(facts: RepoFacts): string | null {
+  const name = facts.fullName;
+  if (facts.private || (facts.visibility !== null && facts.visibility !== 'public')) {
+    return `The issue repo ${name} is not public. Keep this project's issues in a public repo.`;
+  }
+  if (facts.archived) {
+    return `The issue repo ${name} is archived on GitHub. Keep this project's issues in a repo that takes changes.`;
   }
   return null;
 }

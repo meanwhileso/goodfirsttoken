@@ -151,8 +151,22 @@ describe('what each result says', () => {
     const saved = { ...samples.register_project.output, saved: true, status: 'pending' as const, createdLabels: ['goodfirsttoken'] };
     const text = textOf(toolResult('register_project', saved));
     expect(text).toContain('Status: pending. A Good First Token admin reviews it before agents can claim its issues.');
-    expect(text).toContain('Created 1 label in the issue repo: goodfirsttoken.');
+    expect(text).toContain(`Created 1 label in ${repoName}: goodfirsttoken.`);
     expect(text).not.toContain('Nothing is saved yet');
+  });
+
+  test('a created label is named with the repo it went into: the issue repo, or the code repo when there is none', () => {
+    const settings = { ...samples.register_project.output.settings, issueRepo: 'sample-owner/sample-issues' };
+    const register = { ...samples.register_project.output, saved: true, status: 'pending' as const, createdLabels: ['goodfirsttoken'] };
+    const update = samples.update_project.output;
+
+    expect(textOf(toolResult('register_project', { ...register, settings }))).toContain(
+      'Created 1 label in sample-owner/sample-issues: goodfirsttoken.',
+    );
+    expect(textOf(toolResult('update_project', { ...update, settings }))).toContain(
+      'Created 1 label in sample-owner/sample-issues: goodfirsttoken.',
+    );
+    expect(textOf(toolResult('update_project', update))).toContain(`Created 1 label in ${update.repo}: goodfirsttoken.`);
   });
 
   test('registering a repo listed from its AI policy says the settings apply now, with no wait for an admin', () => {

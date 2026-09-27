@@ -300,15 +300,14 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
 
-- **One permission check.** Every tool starts with
+- **One permission check, one read.** Every tool starts with
   `requirePermission(caller, 'manage_project', { repo })`, which reads the
-  repo with the caller's token and keeps nothing. `register_project` then
-  reads the repo a second time for what it checks: visibility, archived,
-  and who can open PRs. `requirePermission` returns nothing, and changing it
-  to hand back the repo would tie every permission to one tool's needs. The
-  second read costs one call to GitHub for each registration. An issue repo
-  other than the code repo goes through the same check, once more, with
-  that repo.
+  repo with the caller's token and keeps nothing. For `manage_project` it
+  hands back the repo as GitHub described it, as a `ManagedRepo`, and other
+  permissions hand back nothing. So `register_project` checks visibility,
+  archived, and who can open PRs from that one read, and an issue repo other
+  than the code repo goes through the same check, whose answer gives the
+  name to save and whether the repo is archived.
 - **Refusals and lost tokens.** `asCaller` in `src/mcp/server.ts` runs every
   tool. It turns a `PermissionRefused` into the tool's refusal, and a GitHub
   `401` from any call into the end of the connection, as `start_session`
@@ -331,11 +330,13 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   is read again. When it runs, and what it does on a refusal, is under
   [the goodfirsttoken label](how-it-works.md#registering-a-project).
 - **Taking over a listing** is `takeOverListing` in `src/db/projects.ts`. In
-  one batch it adds the new settings version, when the settings changed, a
-  status change for a rejected listing, and sets the project's source,
-  policy, who added it, and status. Every statement checks that the row is
-  still a policy listing at the version and status read, and the save
-  retries like `changeSettings`. A new registration uses `createProject`,
+  one batch it adds the new settings version, when the settings changed, and
+  sets the project's source, policy, and who added it. For a rejected
+  listing it also adds a status change and sets the status to `pending`. No
+  other takeover writes a status column. Every statement checks that the row
+  is still a policy listing at the version and status read, so the project
+  the call hands back is the one stored, and the save retries like
+  `changeSettings`. A new registration uses `createProject`,
   whose insert does nothing when the repo became a project meanwhile, so
   the tool reads again and takes over or refuses.
 - **A pause or resume is a compare-and-set.** `setProjectStatusFrom` writes

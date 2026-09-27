@@ -452,11 +452,12 @@ export async function changeSettings(
  * A maintainer registers a repo an admin listed from its AI policy. Their
  * settings replace the listing's, saved as a new version by `by` at `now`,
  * with settings they left out at their defaults. The project becomes
- * registered: its policy goes, and it names them as who added it and when.
- * Its status stays as it was, except that a rejected listing goes back to
- * `pending`, changed by them, so an admin reviews it again. Settings the same
- * as the listing's save no new version. Null when the repo isn't a project
- * listed from its policy when it saves.
+ * registered: its policy goes, and it names them as who added it. It keeps
+ * the time it was listed, since it has been listed since then. Its status
+ * stays as it was, except that a rejected listing goes back to `pending`,
+ * changed by them, so an admin reviews it again. Settings the same as the
+ * listing's save no new version. Null when the repo isn't a project listed
+ * from its policy when it saves.
  */
 export async function takeOverListing(
   db: D1Database,
@@ -485,7 +486,6 @@ export async function takeOverListing(
         source: 'registered',
         policy: null,
         addedBy,
-        addedAt: at,
         settings: next,
         settingsVersion: version,
       },
@@ -518,25 +518,19 @@ export async function takeOverListing(
           .bind(...read, addedBy, at),
       );
     }
+    // The status columns change only for a rejected listing going back to
+    // pending. Every other takeover leaves them to whoever sets the status.
+    const reopen = reopened
+      ? `, status = 'pending', status_reason = NULL, status_changed_by = ?6, status_changed_at = ?9`
+      : '';
     statements.push(
       db
         .prepare(
           `UPDATE projects SET source = 'registered', policy_quote = NULL, policy_url = NULL, policy_tier = NULL,
-             added_by = ?6, added_at = ?7, settings_version = ?8, issue_repo = ?9,
-             status = ?10, status_reason = ?11, status_changed_by = ?12, status_changed_at = ?13
+             added_by = ?6, settings_version = ?7, issue_repo = ?8${reopen}
            WHERE ${listing}`,
         )
-        .bind(
-          ...read,
-          addedBy,
-          at,
-          version,
-          issueRepoOf(current.repo, next),
-          project.status,
-          project.statusReason,
-          project.statusChangedBy,
-          project.statusChangedAt,
-        ),
+        .bind(...read, addedBy, version, issueRepoOf(current.repo, next), ...(reopened ? [at] : [])),
     );
     const results = await db.batch(statements);
     if (results.at(-1)?.meta.changes === 1) return { project, changed };
