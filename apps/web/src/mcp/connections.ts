@@ -4,13 +4,16 @@ import { failureReason, getAuth } from '../auth/auth';
 import { authSecret, oauthApp } from '../auth/settings';
 import { newId } from '../db/shared';
 import { revokeGitHubToken } from '../github';
-import { oauthApi } from './provider';
+import { TOKEN_PATH } from './paths';
+import { GRANT_DAYS, grantExists, oauthApi } from './provider';
 
 // The agents each person connected to the MCP server, in connected_agents
 // (migrations/0003_connected_agents.sql). A grant in OAUTH_KV works only while
-// its row is here. The row keeps the GitHub token from the agent's sign-in,
-// encrypted with AUTH_SECRET, because the copy in the grant's props opens only
-// with the agent's own tokens, and Disconnect has to revoke it without them.
+// its row is here: a tool call, trading the code, and a refresh each need it.
+// The row keeps the GitHub token from the agent's sign-in, encrypted with
+// AUTH_SECRET, because the copy in the grant's props opens only with the
+// agent's own tokens, and Disconnect has to revoke it without them. A
+// connection ends with its grant, so its token is revoked then too.
 
 /** A connected agent, as /me lists it. Never its token. */
 export interface Connection {
@@ -27,6 +30,8 @@ interface ConnectionRow {
   github_token: string;
   connected_at: number;
   last_used_at: number;
+  grant_id: string | null;
+  renewed_at: number | null;
 }
 
 /** A client names itself when it registers, so its name is cut to this length and never trusted. */
@@ -34,9 +39,17 @@ const CLIENT_NAME_MAX = 60;
 
 const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
-/** The name a client gave itself, as the site shows it: one line, at most 60 characters. */
+/**
+ * The name a client gave itself, as the site shows it: one line, at most 60
+ * characters, with no control or format characters, like the ones that turn
+ * text right to left or take no space.
+ */
 export function clientNameOf(name: string | undefined): string {
-  const line = (name ?? '').replace(/\s+/g, ' ').trim();
+  const line = (name ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\p{Cc}\p{Cf}]/gu, '')
+    .replace(/ {2,}/g, ' ')
+    .trim();
   if (!line) return 'An unnamed agent';
   const characters = Array.from(graphemes.segment(line), ({ segment }) => segment);
   return characters.length > CLIENT_NAME_MAX ? `${characters.slice(0, CLIENT_NAME_MAX - 3).join('')}...` : line;
@@ -58,6 +71,20 @@ export async function addConnection(
     .bind(id, person.githubId, person.clientId, person.clientName, await encrypt(person.gitHubToken), now)
     .run();
   return id;
+}
+
+/**
+ * Records that the agent got tokens at `now`, by trading its code or
+ * refreshing, from the grant `grantId`, and says whether it is still
+ * connected. The grant runs out 30 days after the last time.
+ */
+export async function renewConnection(id: string, githubId: number, grantId: string, now: number): Promise<boolean> {
+  const row = await env.DB.prepare(
+    'UPDATE connected_agents SET grant_id = ?3, renewed_at = ?4 WHERE id = ?1 AND github_id = ?2 RETURNING id',
+  )
+    .bind(id, githubId, grantId, now)
+    .first();
+  return row !== null;
 }
 
 /**
@@ -206,4 +233,67 @@ export async function endReplacedConnections(
     .bind(githubId, clientId, keepId)
     .all<Pick<ConnectionRow, 'id'>>();
   for (const { id } of results) await disconnect(origin, githubId, id);
+}
+
+const MINUTE = 60 * 1000;
+
+// An agent has the library's 10 minutes to trade its code, and its grant
+// runs out 30 days after it last got tokens. The minute more keeps this from
+// ending a grant the library hasn't.
+const CODE_LIFETIME = 10 * MINUTE;
+const GRANT_LIFETIME = GRANT_DAYS * 24 * 60 * MINUTE;
+const SLACK = MINUTE;
+
+/**
+ * Ends a person's connections whose grants ran out, the way Disconnect does,
+ * so their GitHub tokens are revoked: one whose agent never traded its code,
+ * and one whose agent last got tokens more than 30 days ago. /me and each
+ * agent's sign-in run it for the person.
+ */
+export async function endLapsedConnections(origin: string, githubId: number, now: number): Promise<void> {
+  const { results } = await env.DB.prepare(
+    `SELECT id FROM connected_agents WHERE github_id = ?1
+     AND ((renewed_at IS NULL AND connected_at < ?2) OR renewed_at < ?3)`,
+  )
+    .bind(githubId, now - CODE_LIFETIME - SLACK, now - GRANT_LIFETIME - SLACK)
+    .all<Pick<ConnectionRow, 'id'>>();
+  for (const { id } of results) await disconnect(origin, githubId, id);
+}
+
+/**
+ * The token an agent asks to revoke, when `request` is a revocation at the
+ * token endpoint: a form with a token and no grant_type, as the library reads
+ * one. Null for any other request.
+ */
+export async function revocationToken(request: Request): Promise<string | null> {
+  if (request.method !== 'POST' || new URL(request.url).pathname !== TOKEN_PATH) return null;
+  const form = await request
+    .clone()
+    .formData()
+    .catch(() => null);
+  const token = form?.get('token');
+  return typeof token === 'string' && token !== '' && !form?.has('grant_type') ? token : null;
+}
+
+/**
+ * Ends the connection whose grant an agent just revoked at the token
+ * endpoint, the way Disconnect does, so its GitHub token is revoked too. The
+ * library deletes the grant when the agent revokes its refresh token, and
+ * keeps it when the agent revokes only an access token. Each token names its
+ * person and grant, as <person>:<grant>:<secret>. A failure is logged, since
+ * the agent's revocation already worked.
+ */
+export async function endRevokedConnection(origin: string, token: string): Promise<void> {
+  const [person = '', grantId = '', ...rest] = token.split(':');
+  const githubId = Number(person);
+  if (rest.length !== 1 || grantId === '' || String(githubId) !== person) return;
+  try {
+    if (await grantExists(person, grantId)) return;
+    const row = await env.DB.prepare('SELECT id FROM connected_agents WHERE github_id = ?1 AND grant_id = ?2')
+      .bind(githubId, grantId)
+      .first<Pick<ConnectionRow, 'id'>>();
+    if (row) await disconnect(origin, githubId, row.id);
+  } catch (error) {
+    console.error(`An agent revoked its grant, and its connection wasn't ended: ${failureReason(error)}`);
+  }
 }

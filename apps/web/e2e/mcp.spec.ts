@@ -89,3 +89,55 @@ test('an agent connects through the page where the person approves it and GitHub
   await page.waitForURL((url) => url.pathname === '/me');
   await expect(page.getByRole('button', { name: `Disconnect ${name}` })).toHaveCount(0);
 });
+
+// Waits, when needed, until the next 8 seconds fall in one rate-limit
+// window, as the unit tests do. The runtime counts each minute apart.
+async function inOneLimitWindow() {
+  const left = 60_000 - (Date.now() % 60_000);
+  if (left < 8_000) await new Promise((resolve) => setTimeout(resolve, left + 100));
+}
+
+interface Router {
+  navigate: (options: { href: string }) => Promise<void>;
+}
+
+test("the server function behind the page to approve an agent counts toward the sign-in limit when it's called on its own", async ({
+  page,
+  request,
+}) => {
+  const redirectUri = `${agentOrigin}/callback`;
+  const registered = await request.post('/oauth/register', {
+    data: { client_name: 'Busy agent', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none' },
+  });
+  const { client_id: clientId } = (await registered.json()) as { client_id: string };
+  const authorize = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state: 'e2e-state',
+    code_challenge: createHash('sha256').update(randomBytes(32).toString('base64url')).digest('base64url'),
+    code_challenge_method: 'S256',
+  });
+  // A move to the page within the site loads its data from the server
+  // function, at a URL of its own that anyone can call.
+  await page.goto('/');
+  const [call] = await Promise.all([
+    page.waitForRequest((sent) => sent.url().includes('/_serverFn/') && decodeURIComponent(sent.url()).includes(clientId)),
+    page.evaluate(
+      (href) => (window as unknown as { __TSR_ROUTER__: Router }).__TSR_ROUTER__.navigate({ href }),
+      `/oauth/authorize?${authorize.toString()}`,
+    ),
+  ]);
+  await expect(page.getByRole('button', { name: 'Continue with GitHub' })).toBeVisible();
+  // Each call comes from one address of its own, so no other test shares its count.
+  const address = `2001:db8:${randomBytes(2).toString('hex')}:${randomBytes(2).toString('hex')}::1`;
+  const headers = { ...call.headers(), 'cf-connecting-ip': address };
+  await inOneLimitWindow();
+  const answers: number[] = [];
+  for (let i = 0; i < 20; i++) answers.push((await request.get(call.url(), { headers })).status());
+
+  const over = await request.get(call.url(), { headers });
+
+  expect(answers).toEqual(Array<number>(20).fill(200));
+  expect(over.status()).toBe(429);
+});

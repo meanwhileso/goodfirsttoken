@@ -273,6 +273,60 @@ export async function wholeKv(): Promise<string> {
   return JSON.stringify(entries);
 }
 
+// Each run of base64 or base64url characters in `text`, decoded, as bytes
+// read one to a character and as UTF-8.
+function decodings(text: string): string[] {
+  const decoded: string[] = [];
+  for (const run of text.match(/[A-Za-z0-9+/_-]{8,}={0,2}/g) ?? []) {
+    const base64 = run.replaceAll('-', '+').replaceAll('_', '/').replace(/=+$/, '');
+    if (base64.length % 4 === 1) continue;
+    const bytes = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='));
+    decoded.push(bytes, new TextDecoder().decode(Uint8Array.from(bytes, (byte) => byte.charCodeAt(0))));
+  }
+  return decoded;
+}
+
+/**
+ * Every string in the OAUTH_KV namespace, keys, values, and metadata, with
+ * each JSON value read into its strings, and each string also decoded from
+ * base64 or base64url wherever part of it reads as either, twice over. So a
+ * value stored only encoded, even inside JSON inside base64, is here as text.
+ */
+export async function readableKv(): Promise<string> {
+  const found: string[] = [];
+  const read = (value: unknown, depth: number): void => {
+    if (typeof value === 'string') {
+      found.push(value);
+      if (depth >= 3) return;
+      for (const text of [value, ...decodings(value)]) {
+        if (text !== value) found.push(text);
+        try {
+          const parsed: unknown = JSON.parse(text);
+          if (typeof parsed === 'object' && parsed !== null) read(parsed, depth + 1);
+        } catch {
+          // Not JSON.
+        }
+        if (text !== value) read(text, depth + 1);
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) read(item, depth);
+    } else if (typeof value === 'object' && value !== null) {
+      for (const [key, item] of Object.entries(value)) {
+        read(key, depth);
+        read(item, depth);
+      }
+    }
+  };
+  read(JSON.parse(await wholeKv()), 0);
+  return found.join('\n');
+}
+
+/** A secret as it reads in base64 and base64url, besides itself. */
+export function encodings(secret: string): string[] {
+  const base64 = btoa(String.fromCharCode(...new TextEncoder().encode(secret)));
+  return [secret, base64, base64.replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')];
+}
+
 /** Empties the OAUTH_KV namespace, so each test starts with no grants or clients. */
 export async function emptyKv(): Promise<void> {
   let cursor: string | undefined;

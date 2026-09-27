@@ -98,6 +98,14 @@ An app made before August 3, 2026, with the single callback URL
 for such an app, which allows every path under that URL, both of these
 included.
 
+Then turn off expiring user tokens. In the app's settings, click Optional
+features, and opt out of the feature that makes user tokens expire. GitHub
+turns it on for a new app, and gives each token 8 hours. The site doesn't
+refresh tokens yet, so with it on, every agent has to sign in again 8 hours
+after it connected, and the token from each person's own sign-in stops
+working at GitHub. GitHub's docs for OAuth apps don't give that feature's
+exact name. GitHub Apps call theirs User-to-server token expiration.
+
 Copy the app's client ID for `OAUTH_CLIENT_ID` in step 4. Then click Generate
 a new client secret, and keep it for `OAUTH_CLIENT_SECRET`, one of
 [the Worker's secrets](#the-workers-secrets).

@@ -10,8 +10,15 @@ import { tooManySignIns, underSignInLimit } from '../auth/rate-limit';
 import { oauthApp, SignInNotSetUp, siteOrigin } from '../auth/settings';
 import { savePerson } from '../db';
 import { exchangeGitHubCode, GitHubError, gitHubRest, gitHubUrls, revokeGitHubToken } from '../github';
-import { addConnection, clientNameOf, disconnect, endReplacedConnections, revokeUnlessHeld } from './connections';
-import { AUTHORIZE_PATH, REGISTER_PATH } from './paths';
+import {
+  addConnection,
+  clientNameOf,
+  disconnect,
+  endLapsedConnections,
+  endReplacedConnections,
+  revokeUnlessHeld,
+} from './connections';
+import { AUTHORIZE_PATH, REGISTER_PATH, TOKEN_PATH } from './paths';
 import { oauthApi, type AgentProps } from './provider';
 
 // An agent's sign-in to the MCP server, in three steps.
@@ -29,11 +36,14 @@ import { oauthApi, type AgentProps } from './provider';
 // library's helpers bind each step to the browser that started it with a
 // short-lived cookie, and keep the request itself in OAUTH_KV, so nothing a
 // form sends can change the client or where its code goes.
+//
+// No client here is trusted, so a GET /oauth/authorize never redirects. A
+// request with an error for the agent gets a page with a link back to it,
+// which the person can follow or not. Only the page's own form sends the
+// browser to the agent, after the page has shown where it goes.
 
 /** Where GitHub sends the person back, under the OAuth app's callback URL. */
 export const MCP_CALLBACK_PATH = `${AUTH_BASE_PATH}/callback/mcp`;
-
-const NO_STORE = { 'cache-control': 'no-store' };
 
 function text(status: number, body: string, headers: HeadersInit = {}): Response {
   const answer = new Headers(headers);
@@ -43,16 +53,16 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 }
 
 /**
- * Counts two steps of an agent's sign-in toward the sign-in limit, since each
- * stores something in OAUTH_KV for anyone who asks: registering a client, and
- * opening the page to approve one. The approval and GitHub's return count
- * where they are answered. Returns the 429 for an address over the limit, or
- * null.
+ * Counts an agent's registration and each request to the token endpoint
+ * toward the sign-in limit, since anyone can send them: a registration
+ * stores a client in OAUTH_KV, and a token request tries a code or a refresh
+ * token. The page to approve an agent counts where it starts, in
+ * openConsent, and the approval and GitHub's return count where they are
+ * answered. Returns the 429 for an address over the limit, or null.
  */
 export async function limitAgentSignIn(request: Request): Promise<Response | null> {
   const { pathname } = new URL(request.url);
-  const counted =
-    (pathname === REGISTER_PATH && request.method === 'POST') || (pathname === AUTHORIZE_PATH && request.method !== 'POST');
+  const counted = request.method === 'POST' && (pathname === REGISTER_PATH || pathname === TOKEN_PATH);
   if (!counted || (await underSignInLimit(request))) return null;
   return tooManySignIns();
 }
@@ -61,6 +71,16 @@ const START_AGAIN =
   "This sign-in expired, was already used, or was started in another browser. Connect again from your agent.";
 
 const BAD_LINK = "This link to connect an agent isn't right. Connect again from your agent.";
+
+/** A link back to the agent with the error it should hear, for the person to follow if they choose. */
+export interface WayBack {
+  /** The agent's redirect URI, with the error. */
+  href: string;
+  /** Where that goes, as the page shows it. */
+  to: string;
+  /** The error, in the words the agent gets. */
+  reason: string;
+}
 
 /** The consent page, or why there is none. */
 export type Consent =
@@ -74,20 +94,50 @@ export type Consent =
       /** True when that is an app on the person's own computer. */
       local: boolean;
     }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string; back: WayBack | null };
 
-export type ConsentOutcome = { page: Consent; headers: Headers } | { redirect: string };
+/** The page to show, its status, and the headers to send with it. */
+export interface ConsentOutcome {
+  page: Consent;
+  status: number;
+  headers: Headers;
+}
 
 const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
 
-function destination(redirectUri: string): { sendsTo: string; local: boolean } {
-  const url = new URL(redirectUri);
-  const web = url.protocol === 'https:' || url.protocol === 'http:';
-  return { sendsTo: web ? url.host : `${url.protocol}//${url.host}`, local: web && LOOPBACK.test(url.hostname) };
+/**
+ * Why an agent can't register `uri` as a redirect URI, or null when it can.
+ * The MCP spec asks for https, or http to this computer. A scheme of an app's
+ * own, like cursor://, works too, since desktop apps sign in that way. The
+ * library already refuses javascript:, data:, and the like.
+ */
+export function redirectUriRefusal(uri: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return `The redirect URI ${uri} isn't a URL.`;
+  }
+  if (url.protocol === 'http:' && !LOOPBACK.test(url.hostname)) {
+    return 'Use https for a redirect URI, or http on localhost, 127.0.0.1, or [::1].';
+  }
+  return null;
 }
 
-// Sends the browser back to the agent with an OAuth error, once the library
-// has checked the client and its redirect URI.
+// Where a redirect URI sends the agent's access, as the page shows it: its
+// scheme and host. It is on the person's computer when it is http, which
+// registration allows only there, or a scheme of an app's own, or https to
+// this computer.
+function destination(redirectUri: string): { sendsTo: string; local: boolean } {
+  const url = new URL(redirectUri);
+  return {
+    sendsTo: url.host ? `${url.protocol}//${url.host}` : url.protocol,
+    local: url.protocol !== 'https:' || LOOPBACK.test(url.hostname),
+  };
+}
+
+// A link back to the agent with an OAuth error, once the library has checked
+// the client and its redirect URI.
 function backToAgent(request: AuthRequest | AuthorizationError, error: string, description: string): string {
   const redirect = new URL(request instanceof AuthorizationError ? (request.redirectUri ?? '') : request.redirectUri);
   redirect.searchParams.set('error', error);
@@ -97,72 +147,83 @@ function backToAgent(request: AuthRequest | AuthorizationError, error: string, d
   return redirect.toString();
 }
 
-// The answer when a setting sign-in needs is missing, like the OAuth app's
-// client ID, or null when sign-in is set up. The log names the setting.
-function notSetUp(): Response | null {
+const NOT_SET_UP = "Sign-in isn't set up on this site yet.";
+
+// True when a setting sign-in needs is missing, like the OAuth app's client
+// ID. The log names the setting.
+function notSetUp(): boolean {
   try {
     oauthApp();
-    return null;
+    return false;
   } catch (problem) {
     if (!(problem instanceof SignInNotSetUp)) throw problem;
     console.error(`Sign-in is not set up: ${problem.message}`);
-    return text(503, "Sign-in isn't set up on this site yet.");
+    return true;
   }
 }
 
-const sendBack = (location: string) => new Response(null, { status: 302, headers: { location, ...NO_STORE } });
+// An error page with its status, sent with no-store, and kept out of frames
+// like the page itself.
+function errorPage(status: number, message: string, back: WayBack | null = null): ConsentOutcome {
+  const headers = new Headers({
+    'cache-control': 'no-store',
+    'x-frame-options': 'DENY',
+    'content-security-policy': "frame-ancestors 'none'",
+  });
+  if (status === 429) headers.set('retry-after', '60');
+  return { page: { kind: 'error', message, back }, status, headers };
+}
+
+// The error page for a request whose error the agent should hear: it says
+// what went wrong and links back to the agent.
+function wayBack(request: AuthRequest | AuthorizationError, error: string, description: string): ConsentOutcome {
+  const href = backToAgent(request, error, description);
+  return errorPage(400, "This agent's request to connect isn't right, so nothing was connected.", {
+    href,
+    to: destination(href).sendsTo,
+    reason: description,
+  });
+}
 
 // Checks an agent's authorization request, the URL it sent the browser to.
-// A request the library can send back to the agent goes back, with the
-// error. Any other bad request is answered here, never redirected, since the
-// client or its redirect URI can't be trusted.
+// A request the library could send back to the agent gets a page with a
+// link back. Any other bad request gets a page with no link, since its client
+// or redirect URI is unknown.
 async function checkAuthorizeRequest(
   request: Request,
-): Promise<{ api: OAuthHelpers; authRequest: AuthRequest } | Response> {
-  const missing = notSetUp();
-  if (missing) return missing;
+): Promise<{ api: OAuthHelpers; authRequest: AuthRequest } | ConsentOutcome> {
+  if (notSetUp()) return errorPage(503, NOT_SET_UP);
   const api = oauthApi(siteOrigin(request));
   let authRequest: AuthRequest;
   try {
     authRequest = await api.parseAuthRequest(request);
   } catch (problem) {
     if (problem instanceof AuthorizationError && problem.redirectUri) {
-      return sendBack(backToAgent(problem, problem.code, problem.description));
+      return wayBack(problem, problem.code, problem.description);
     }
-    if (problem instanceof AuthorizationError || problem instanceof CimdFetchError) return text(400, BAD_LINK);
+    if (problem instanceof AuthorizationError || problem instanceof CimdFetchError) return errorPage(400, BAD_LINK);
     throw problem;
   }
   // The library lets a client with a secret skip PKCE. MCP asks every client
   // to use it, so every client here does.
-  if (!authRequest.codeChallenge) {
-    return sendBack(backToAgent(authRequest, 'invalid_request', 'PKCE with S256 is required.'));
-  }
+  if (!authRequest.codeChallenge) return wayBack(authRequest, 'invalid_request', 'PKCE with S256 is required.');
   return { api, authRequest };
 }
 
 /**
- * Answers GET /oauth/authorize when there is no page to show, before the
- * page renders: the request goes back to the agent, or gets an error. Null
- * means the page renders.
- */
-export async function refuseAuthorizeRequest(request: Request): Promise<Response | null> {
-  const checked = await checkAuthorizeRequest(request);
-  return checked instanceof Response ? checked : null;
-}
-
-/**
- * Starts the consent page for an agent's authorization request, from the
- * URL it sent the browser to: the handle for the form, and the headers to
- * send, which set the cookie that binds it to this browser and keep the page
+ * Starts the page where a person approves an agent, for the request that
+ * loads it, with the query string the agent sent. It counts toward the
+ * sign-in limit however it is reached, as the page or on its own. Returns the
+ * page, or why there is none, with its status and the headers to send: the
+ * cookie that binds the form to this browser, and the two that keep the page
  * out of frames.
  */
-export async function openConsent(url: string): Promise<ConsentOutcome> {
+export async function openConsent(caller: Request, search: string): Promise<ConsentOutcome> {
+  if (!(await underSignInLimit(caller))) return errorPage(429, 'Too many sign-ins from here. Try again in a minute.');
+  const url = new URL(AUTHORIZE_PATH, siteOrigin(caller));
+  url.search = search;
   const checked = await checkAuthorizeRequest(new Request(url));
-  if (checked instanceof Response) {
-    const location = checked.headers.get('location');
-    if (location) return { redirect: location };
-    return { page: { kind: 'error', message: BAD_LINK }, headers: new Headers(NO_STORE) };
-  }
+  if ('page' in checked) return checked;
   const { api, authRequest } = checked;
   const client = await api.lookupClient(authRequest.clientId);
   const { handle, headers } = await api.beginConsent(authRequest);
@@ -172,7 +233,7 @@ export async function openConsent(url: string): Promise<ConsentOutcome> {
     clientName: clientNameOf(client?.clientName),
     ...destination(authRequest.redirectUri),
   };
-  return { page, headers };
+  return { page, status: 200, headers };
 }
 
 // A PKCE verifier for GitHub, and its S256 challenge.
@@ -210,8 +271,7 @@ export async function answerConsent(request: Request): Promise<Response> {
   const origin = siteOrigin(request);
   if (request.headers.get('origin') !== origin) return text(403, 'Refused: this form was sent from another site.');
   if (!(await underSignInLimit(request))) return tooManySignIns();
-  const missing = notSetUp();
-  if (missing) return missing;
+  if (notSetUp()) return text(503, NOT_SET_UP);
   const form = await request.formData().catch(() => null);
   const handle = form?.get('handle');
   const api = oauthApi(origin);
@@ -241,6 +301,8 @@ export async function answerConsent(request: Request): Promise<Response> {
  * sends the browser back to the agent with a code for its own tokens. The
  * grant holds the GitHub token in its encrypted props. A new sign-in from
  * the same agent replaces its earlier one, whose GitHub token is revoked.
+ * When a step after GitHub gave the token fails, the connection is removed
+ * and the token revoked, unless the site holds it for something else.
  */
 export async function finishConnecting(request: Request): Promise<Response> {
   if (!(await underSignInLimit(request))) return tooManySignIns();
@@ -311,10 +373,12 @@ export async function finishConnecting(request: Request): Promise<Response> {
     if (!revoked && person === null) await revokeGitHubToken(app, gitHubToken).catch(() => undefined);
     return back('server_error', "Connecting the agent didn't finish. Try again.");
   }
-  // The new connection works. Ending the ones it replaced is tidying, so a
-  // failure there is logged and the agent still gets its code.
+  // The new connection works. Ending the ones it replaced, and any whose
+  // grant ran out, is tidying, so a failure there is logged and the agent
+  // still gets its code.
   try {
     await endReplacedConnections(origin, connection.githubId, authRequest.clientId, connection.id);
+    await endLapsedConnections(origin, connection.githubId, Date.now());
   } catch (problem) {
     console.error(`An agent's earlier connections weren't ended: ${failureReason(problem)}`);
   }

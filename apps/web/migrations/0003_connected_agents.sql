@@ -8,8 +8,9 @@
 -- second copy, for Disconnect to revoke at GitHub. It is encrypted with
 -- AUTH_SECRET, like the token in `account`.
 
--- One per connected agent. A tool call works only while its agent's row is
--- here, so deleting the row disconnects the agent.
+-- One per connected agent. A tool call, trading the code, and a refresh work
+-- only while the agent's row is here, so deleting the row disconnects the
+-- agent.
 CREATE TABLE connected_agents (
   id TEXT NOT NULL PRIMARY KEY,
   github_id INTEGER NOT NULL REFERENCES people (github_id),
@@ -20,7 +21,13 @@ CREATE TABLE connected_agents (
   github_token TEXT NOT NULL,
   -- When the agent connected, and when it last called a tool.
   connected_at INTEGER NOT NULL,
-  last_used_at INTEGER NOT NULL
+  last_used_at INTEGER NOT NULL,
+  -- The agent's grant in OAUTH_KV, and when the agent last got tokens from
+  -- it, by trading its code or refreshing. Both are null until it trades the
+  -- code. The grant runs out 30 days after renewed_at, and an agent that
+  -- never trades its code loses the grant after 10 minutes.
+  grant_id TEXT,
+  renewed_at INTEGER
 ) STRICT;
 
 -- /me lists a person's agents, and a new sign-in from the same client

@@ -9,7 +9,9 @@ import accountCss from '../../styles/account-page.css?url';
 // The page where a person approves an agent that wants to connect to the MCP
 // server. The agent sends the browser here, and src/mcp/consent.ts checks its
 // request. The form posts to the same path, which src/mcp/authorize.ts
-// answers: Continue goes on to GitHub, and Cancel goes back to the agent.
+// answers: Continue goes on to GitHub, and Cancel goes back to the agent. A
+// request that isn't right gets an error here. When the agent should hear
+// it, a link goes back to the agent, and only the person follows it.
 
 export const Route = createFileRoute('/oauth/authorize')({
   loader: ({ location }) => loadConsent({ data: location.searchStr }),
@@ -28,9 +30,25 @@ function ConnectAgent() {
       <main className="wrap account">
         <h1 className="account__title">Connect an agent</h1>
         {page.kind === 'error' ? (
-          <p className="account__error" role="alert">
-            {page.message}
-          </p>
+          <>
+            <p className="account__error" role="alert">
+              {page.message}
+            </p>
+            {page.back && (
+              <>
+                <p className="account__note">
+                  The reason: <span className="mono">{page.back.reason}</span>
+                </p>
+                <p className="account__note">
+                  To tell the agent, go back to{' '}
+                  <a className="mono" href={page.back.href}>
+                    {page.back.to}
+                  </a>
+                  . Follow the link only if you just connected an agent from there.
+                </p>
+              </>
+            )}
+          </>
         ) : (
           <>
             <p className="lede account__lede">

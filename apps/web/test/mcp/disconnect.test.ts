@@ -2,11 +2,25 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { emptyDatabase } from '../db/helpers';
-import { Browser, location, signIn, startGitHub, storedToken } from '../auth/helpers';
-import { MemoryOAuthClient, appTokens, callMcp, connectAgent, emptyKv, startSession } from './helpers';
+import { Browser, ORIGIN, location, signIn, startGitHub, storedToken } from '../auth/helpers';
+import {
+  MemoryOAuthClient,
+  agentFetch,
+  appTokens,
+  approveInBrowser,
+  authorizeUrl,
+  callMcp,
+  connectAgent,
+  emptyKv,
+  pkce,
+  registerClient,
+  startSession,
+  type ConnectedAgent,
+} from './helpers';
 
 // /me lists the agents a person connected, and Disconnect cuts one off: its
-// next tool call gets a 401, and its GitHub token is revoked.
+// next tool call gets a 401, and its GitHub token is revoked. A connection
+// also ends when its grant does: when the agent revokes it, or it runs out.
 
 let github: GitHubFake;
 
@@ -34,6 +48,23 @@ async function listedAgents(browser: Browser): Promise<{ name: string; id: strin
     (match) => ({ name: match[1] ?? '', id: match[2] ?? '' }),
   );
 }
+
+/** Posts to the token endpoint as the agent, the way the SDK does. */
+function tokenRequest(agent: ConnectedAgent, fields: Record<string, string>): Promise<Response> {
+  return agentFetch()(`${ORIGIN}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ ...fields, client_id: agent.oauth.client?.client_id ?? '' }),
+  });
+}
+
+/** The agent refreshes its tokens. */
+function refresh(agent: ConnectedAgent): Promise<Response> {
+  return tokenRequest(agent, { grant_type: 'refresh_token', refresh_token: agent.oauth.saved?.refresh_token ?? '' });
+}
+
+const MINUTE = 60 * 1000;
+const DAY = 24 * 60 * MINUTE;
 
 test('after Disconnect on /me, the agent is gone from the list, its next tool call gets a 401, and its GitHub token is revoked', async () => {
   const browser = new Browser();
@@ -90,6 +121,25 @@ test('Disconnect leaves alone a GitHub token the site also holds for the person\
   expect((await callMcp(agent.oauth.saved?.access_token ?? '')).status).toBe(401);
   expect(github.calls.some((call) => call.method === 'DELETE')).toBe(false);
   expect((await gitHubUser(webToken)).status).toBe(200);
+});
+
+test("Disconnect leaves alone a GitHub token another of the person's agents also holds", async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'lena');
+  const first = await connectAgent(github, 'lena', { oauth: new MemoryOAuthClient('Claude Code') });
+  const second = await connectAgent(github, 'lena', { oauth: new MemoryOAuthClient('Codex') });
+  // As if GitHub had given both agents' sign-ins one token.
+  await env.DB.prepare(
+    `UPDATE connected_agents SET github_token = (SELECT github_token FROM connected_agents WHERE client_name = 'Codex')
+     WHERE client_name = 'Claude Code'`,
+  ).run();
+  const target = (await listedAgents(browser)).find((agent) => agent.name === 'Claude Code');
+
+  await browser.post('/auth/agents/disconnect', { agent: target?.id ?? '' });
+
+  expect((await callMcp(first.oauth.saved?.access_token ?? '')).status).toBe(401);
+  expect(github.calls.some((call) => call.method === 'DELETE')).toBe(false);
+  expect((await startSession(second)).structuredContent).toMatchObject({ login: 'lena' });
 });
 
 test("one person can't disconnect another person's agent", async () => {
@@ -167,6 +217,88 @@ test("when the grant can't be deleted at Disconnect, the agent is still cut off 
   expect(logged).toHaveBeenCalledWith("A disconnected agent's grant wasn't deleted: Error");
   expect((await callMcp(agent.oauth.saved?.access_token ?? '')).status).toBe(401);
   expect((await gitHubUser(agentToken)).status).toBe(401);
+  // The grant is still there, and still can't get the agent new tokens.
+  const refreshed = await refresh(agent);
+  expect(refreshed.status).toBe(400);
+  expect(await refreshed.json()).toMatchObject({ error: 'invalid_grant' });
+});
+
+test("an agent that revokes its refresh token at /oauth/token is disconnected: it leaves /me, and its GitHub token is revoked", async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const webToken = (await storedToken()) ?? '';
+  const agent = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Claude Code') });
+  const agentToken = appTokens(github).find((token) => token !== webToken) ?? '';
+
+  const revoked = await tokenRequest(agent, {
+    token: agent.oauth.saved?.refresh_token ?? '',
+    token_type_hint: 'refresh_token',
+  });
+
+  expect(revoked.status).toBe(200);
+  expect((await callMcp(agent.oauth.saved?.access_token ?? '')).status).toBe(401);
+  expect(await listedAgents(browser)).toEqual([]);
+  expect((await gitHubUser(agentToken)).status).toBe(401);
+  expect((await gitHubUser(webToken)).status).toBe(200);
+});
+
+test('an agent that revokes only its access token stays connected, and refreshes to go on', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'kenji');
+  const webToken = (await storedToken()) ?? '';
+  const agent = await connectAgent(github, 'kenji', { oauth: new MemoryOAuthClient('Claude Code') });
+  const agentToken = appTokens(github).find((token) => token !== webToken) ?? '';
+
+  const revoked = await tokenRequest(agent, { token: agent.oauth.saved?.access_token ?? '' });
+  const refreshed = await refresh(agent);
+  const { access_token: accessToken = '' } = await refreshed.json<{ access_token?: string }>();
+
+  expect(revoked.status).toBe(200);
+  expect(refreshed.status).toBe(200);
+  expect((await callMcp(accessToken)).status).toBe(200);
+  expect((await listedAgents(browser)).map((listed) => listed.name)).toEqual(['Claude Code']);
+  expect((await gitHubUser(agentToken)).status).toBe(200);
+});
+
+test('an agent that never trades its code is disconnected once the code expires, and its GitHub token is revoked', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'sam');
+  const webToken = (await storedToken()) ?? '';
+  const clientId = await registerClient('Stalled agent');
+  const { challenge } = await pkce();
+  await approveInBrowser(new Browser(), github, authorizeUrl(clientId, { challenge }), 'sam');
+  const agentToken = appTokens(github).find((token) => token !== webToken) ?? '';
+
+  // Within the code's 10 minutes, the agent can still trade it.
+  const waiting = await listedAgents(browser);
+  await env.DB.prepare('UPDATE connected_agents SET connected_at = connected_at - ?1').bind(12 * MINUTE).run();
+  const after = await listedAgents(browser);
+
+  expect(waiting.map((listed) => listed.name)).toEqual(['Stalled agent']);
+  expect(after).toEqual([]);
+  expect((await gitHubUser(agentToken)).status).toBe(401);
+  expect((await gitHubUser(webToken)).status).toBe(200);
+});
+
+test('a connection ends when its grant runs out, 30 days after the agent last got tokens, and a refresh before then keeps it', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'arjun');
+  const webToken = (await storedToken()) ?? '';
+  const idle = await connectAgent(github, 'arjun', { oauth: new MemoryOAuthClient('Idle agent') });
+  const busy = await connectAgent(github, 'arjun', { oauth: new MemoryOAuthClient('Busy agent') });
+  const [idleToken = '', busyToken = ''] = appTokens(github).filter((token) => token !== webToken);
+
+  await env.DB.prepare('UPDATE connected_agents SET renewed_at = renewed_at - ?1').bind(29 * DAY).run();
+  const beforeTheEnd = await listedAgents(browser);
+  expect((await refresh(busy)).status).toBe(200);
+  await env.DB.prepare('UPDATE connected_agents SET renewed_at = renewed_at - ?1').bind(2 * DAY).run();
+  const after = await listedAgents(browser);
+
+  expect(beforeTheEnd.map((listed) => listed.name).sort()).toEqual(['Busy agent', 'Idle agent']);
+  expect(after.map((listed) => listed.name)).toEqual(['Busy agent']);
+  expect((await gitHubUser(idleToken)).status).toBe(401);
+  expect((await gitHubUser(busyToken)).status).toBe(200);
+  expect((await callMcp(idle.oauth.saved?.access_token ?? '')).status).toBe(401);
 });
 
 test('/me lists only your own agents, each by the name it gave itself, shown as text, with when it connected and when it last called a tool', async () => {

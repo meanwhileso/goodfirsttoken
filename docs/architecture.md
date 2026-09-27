@@ -30,10 +30,12 @@ The repo is a pnpm workspace.
   redirect domain itself, with `src/redirect.ts`, and an agent's sign-in over
   the sign-in limit. It hands everything else to the MCP server's OAuth
   provider, which answers `/mcp` and the OAuth routes and passes the rest
-  back. Of those, it sends every request under `/auth` to
-  `src/auth/routes.ts`, answers the form on `/oauth/authorize`, and hands
-  every other request to TanStack Start. Queue consumers, cron handlers, and
-  Durable Object classes are exported from it as they arrive.
+  back, and ends an agent's connection when the agent revokes its grant at
+  the token endpoint. Of the requests passed back, it sends every one under
+  `/auth` to `src/auth/routes.ts`, answers the form on `/oauth/authorize`,
+  and hands every other one to TanStack Start, setting the status the page
+  on `/oauth/authorize` names. Queue consumers, cron handlers, and Durable
+  Object classes are exported from it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -136,12 +138,12 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 
 | File | What it does |
 |---|---|
-| `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries |
+| `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
 | `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and `start_session` |
-| `src/mcp/authorize.ts` | An agent's sign-in: the checks before the page renders, the answer to its form, and GitHub's return |
+| `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
 | `src/routes/oauth/authorize.tsx` | That page |
-| `src/mcp/connections.ts` | The `connected_agents` table, and Disconnect |
+| `src/mcp/connections.ts` | The `connected_agents` table, Disconnect, and ending connections whose grants ended |
 | `src/mcp/agents.ts` | The server function that lists a person's agents on `/me` |
 | `src/mcp/paths.ts` | The paths, with no imports, so pages can use them |
 
@@ -169,24 +171,57 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   grant's GitHub token without the agent, and the props open only with the
   agent's own tokens. So `connected_agents` keeps a copy, encrypted with
   `AUTH_SECRET` through Better Auth's `symmetricEncrypt`, the way the site's
-  own token is stored. [The spec](specs/v1.md#3-identity-permissions-and-token-storage)
-  says the server can act for a donor only while the donor's agent calls it.
-  With this copy that holds for everything but revoking.
+  own token is stored. Anyone with a copy of D1 and `AUTH_SECRET` can read
+  every agent's GitHub token with it, as they can every site token today.
+  The code reads the copy only to revoke a token, and to check that a token
+  it revokes isn't held twice. [The spec](specs/v1.md#3-identity-permissions-and-token-storage)
+  says why the copy is kept: it is the one way to revoke exactly one agent's
+  token without that agent.
 - **A tool call needs its row.** Before a request reaches the MCP server,
   the handler updates the connection's last use in `connected_agents`, and
   answers `401` when there is no row. Deleting the row cuts the agent off at
   once, while a KV delete can take up to a minute to reach every location.
+- **So do trading the code and refreshing.** The provider's
+  `tokenExchangeCallback` runs each time the agent gets tokens. It records
+  the grant's ID and the time in the row, as `grant_id` and `renewed_at`.
+  With no row it throws `invalid_grant`, and the library deletes the grant.
+- **A connection ends with its grant.** A grant can end three ways without
+  Disconnect, and each would leave a live GitHub token in the row, so each
+  ends the connection the way Disconnect does.
+  - The agent revokes its refresh token at `/oauth/token`, which the
+    library answers by deleting the grant. `src/server.ts` reads the token
+    from the form before the provider answers, and after a `200` checks the
+    grant's key, `grant:<user ID>:<grant ID>`, in `OAUTH_KV`. The library's
+    helpers have no lookup by ID, and a KV list can miss a key made in the
+    last minute. When the grant is gone, the row with that `grant_id` ends.
+    An access token revoked alone leaves the grant, and the row stays.
+  - The agent never trades its code, and the library's 10 minutes run out.
+  - The agent goes 30 days without a refresh, and the grant runs out in KV.
+  - The last two follow from `connected_at` and `renewed_at` alone, with a
+    minute more for each. `endLapsedConnections` finds them for one person,
+    when that person opens `/me` or connects an agent. No scheduled job runs
+    it for everyone yet.
 - **The MCP TypeScript SDK 2.1.0, pinned.** `@modelcontextprotocol/server`'s
   `createMcpHandler` serves both the 2026-07-28 protocol and 2025 clients,
   with a new `McpServer` for each request, so nothing is kept between
   requests and no Durable Object is needed. The example's `McpAgent` needs
   one. The tests use `@modelcontextprotocol/client` 2.1.0 as the agent.
-- **The page is a TanStack route.** A rendered page always answers `200`, so
-  `src/server.ts` checks the request before the page renders, and answers a
-  bad one itself: a redirect back to the agent, or an error with its own
-  status. The server function starts the consent and sets the library's
-  headers: the cookie, `no-store`, and the two that keep the page out of
-  frames.
+- **The page is a TanStack route.** Its server function checks the request
+  and starts the consent, and sets the library's headers: the cookie,
+  `no-store`, and the two that keep the page out of frames. It never
+  redirects. An error the agent should hear about gets a link back to the
+  agent on the page, which only the person follows.
+- **The page's status.** TanStack Start renders every page with `200`. So
+  the server function names the page's status in the `x-gft-page-status`
+  header, and `src/server.ts` sets it and removes the header.
+- **The server function has a URL of its own,** under `/_serverFn/`, which
+  the client bundle names and anyone can call. So `openConsent` counts the
+  sign-in limit itself, for the page and for each call there alike.
+- **Redirect URIs.** The provider's `clientRegistrationCallback` refuses a
+  registration with an `http` redirect URI to any host but `localhost`,
+  `127.0.0.1`, or `[::1]`. The library refuses `javascript:`, `data:`, and a
+  few other schemes itself. A scheme of an app's own stays allowed, since
+  desktop harnesses sign in that way.
 - **The upstream callback is `/auth/callback/mcp`,** under the same OAuth
   app's callback URL as the site's sign-in, as the spec plans.
   [self-hosting.md](self-hosting.md#3-create-the-github-oauth-apps) says how
@@ -208,10 +243,11 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 - **Rate limiting.** `MCP_LIMITER` counts each request to `/mcp` that has a
   valid token, by the person's GitHub ID, since agents on a shared host, like
   Grok Bot's, can share an address. An agent's sign-in counts against
-  `SIGN_IN_LIMITER`, by address: `src/server.ts` counts registration and the
-  page before the library sees them, and the form and GitHub's return count
-  where they are answered. The token endpoint is not limited here. It needs
-  a code or a refresh token.
+  `SIGN_IN_LIMITER`, by address: `src/server.ts` counts registration and
+  each request to the token endpoint before the library sees them,
+  `openConsent` counts the page, and the form and GitHub's return count where
+  they are answered. A request to `/mcp` with a token the library doesn't
+  know gets its `401` after one KV read, and no limit here counts it.
 
 ### The design system
 
@@ -404,11 +440,12 @@ encrypted the same way.
 
 | Table | One row per | Key |
 |---|---|---|
-| `connected_agents` | Agent a person connected: the client it registered as and the name it gave itself, its GitHub token, encrypted, when it connected, and when it last called a tool | `id` |
+| `connected_agents` | Agent a person connected: the client it registered as and the name it gave itself, its GitHub token, encrypted, when it connected, when it last called a tool, and its grant with when it last got tokens from it | `id` |
 
 Migration `0003_connected_agents.sql` makes it. `src/mcp/connections.ts`
 reads and writes it, with no core schema, like Better Auth's tables. A row
-goes when its agent is disconnected. Its person must be in `people`.
+goes when its agent is disconnected, or its grant ends. Its person must be
+in `people`.
 
 | Table | One row per | Key |
 |---|---|---|
@@ -577,7 +614,7 @@ pruning after a sync, with no index of its own.
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
 | `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |
 | `verification_by_identifier` | A sign-in in progress, by the state GitHub sends back |
-| `connected_agents_by_person` | A person's agents on `/me`, and the earlier connections a new sign-in from the same client replaces |
+| `connected_agents_by_person` | A person's agents on `/me`, the earlier connections a new sign-in from the same client replaces, and a person's connections whose grants ended |
 
 A merged PR always has a close time, as on GitHub, and only `closed_at` is
 indexed. So merged PRs this week filter on `closed_at` with

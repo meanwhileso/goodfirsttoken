@@ -4,7 +4,16 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { emptyDatabase } from '../db/helpers';
 import { ORIGIN, startGitHub, wholeDatabase } from '../auth/helpers';
-import { agentFetch, appTokens, connectAgent, emptyKv, startSession, wholeKv } from './helpers';
+import {
+  agentFetch,
+  appTokens,
+  connectAgent,
+  emptyKv,
+  encodings,
+  readableKv,
+  startSession,
+  wholeKv,
+} from './helpers';
 
 // Where an agent's GitHub token is kept. The grant's props in OAUTH_KV are
 // encrypted with a key that only the agent's own tokens unwrap, and KV keeps
@@ -41,6 +50,7 @@ test('nothing in the OAUTH_KV namespace holds a GitHub token, or the tokens the 
   const newTokens = await refreshed.json<{ access_token: string; refresh_token: string }>();
 
   const kv = await wholeKv();
+  const readable = await readableKv();
   const secrets = [
     ...appTokens(github),
     ...[priya, kenji].flatMap((agent) => [agent.oauth.saved?.access_token ?? '', agent.oauth.saved?.refresh_token ?? '']),
@@ -51,10 +61,22 @@ test('nothing in the OAUTH_KV namespace holds a GitHub token, or the tokens the 
   expect(refreshed.status).toBe(200);
   expect(appTokens(github)).toHaveLength(2);
   expect(kv).toContain('grant:');
+  // The search reads what it should: the client's name, which the library
+  // stores in the clear.
+  expect(readable).toContain('Claude Code (test)');
   for (const secret of secrets) {
     expect(secret.length).toBeGreaterThan(20);
-    expect(kv).not.toContain(secret);
+    for (const form of encodings(secret)) expect(kv).not.toContain(form);
+    expect(readable).not.toContain(secret);
   }
+});
+
+test('the KV search finds a token stored only encoded, as base64 of JSON, the way props would look unencrypted', async () => {
+  const token = 'gho_encodedButNotEncrypted0123456789';
+  const props = btoa(JSON.stringify({ githubId: 1, gitHubToken: token }));
+  await env.OAUTH_KV.put('grant:1:test', JSON.stringify({ encryptedProps: props }));
+
+  expect(await readableKv()).toContain(token);
 });
 
 test("D1 holds each agent's GitHub token only encrypted with AUTH_SECRET", async () => {

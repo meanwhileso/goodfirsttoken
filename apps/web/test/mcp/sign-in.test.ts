@@ -59,6 +59,39 @@ async function gitHubUser(token: string) {
   });
 }
 
+/** Where each link on a page goes, read back from its HTML. */
+function links(html: string): URL[] {
+  return [...html.matchAll(/<a [^>]*href="([^"]*)"/g)].map(
+    (match) => new URL((match[1] ?? '').replaceAll('&amp;', '&'), ORIGIN),
+  );
+}
+
+/** A page's HTML with the characters React escapes read back. */
+function textOf(html: string): string {
+  return html
+    .replaceAll('&#x27;', "'")
+    .replaceAll('&quot;', '"')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
+}
+
+/**
+ * An agent's sign-in for `login` up to GitHub's return: the person approves
+ * the agent and picks themselves on GitHub. Returns their browser and where
+ * GitHub sends it back to, which the test then follows.
+ */
+async function upToGitHubsReturn(login: string): Promise<{ browser: Browser; back: URL }> {
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const browser = new Browser();
+  const handle = consentHandle(await (await browser.fetch(authorizeUrl(clientId, { challenge }).toString())).text()) ?? '';
+  const toGitHub = location(await browser.post('/oauth/authorize', { handle, decision: 'approve' }));
+  return { browser, back: await pickOnGitHub(github, toGitHub, login) };
+}
+
+const connections = () => env.DB.prepare('SELECT COUNT(*) AS n FROM connected_agents').first<number>('n');
+
 test('an agent registers itself, signs in with PKCE through GitHub, and start_session says who it acts as', async () => {
   const agent = await connectAgent(github, 'priya');
 
@@ -117,20 +150,27 @@ test('a code traded without its PKCE verifier, or with the wrong one, gets no to
   expect(wrong.body).not.toHaveProperty('access_token');
 });
 
-test('an agent that asks without PKCE is sent back with an error, before any page or GitHub', async () => {
-  const clientId = await registerClient();
+test('an agent that asks without PKCE gets a page that says so, naming where a link back to it goes, and is never redirected', async () => {
+  const clientId = await registerClient('Phisher', 'https://phish.example/landing');
 
-  const answer = await new Browser().fetch(authorizeUrl(clientId, {}).toString());
-  const back = location(answer);
+  const answer = await new Browser().fetch(authorizeUrl(clientId, { redirectUri: 'https://phish.example/landing' }).toString());
+  const html = await answer.text();
+  const back = links(html).find((link) => link.origin === 'https://phish.example');
 
-  expect(answer.status).toBe(302);
-  expect(`${back.origin}${back.pathname}`).toBe(REDIRECT_URI);
-  expect(back.searchParams.get('error')).toBe('invalid_request');
-  expect(back.searchParams.get('state')).toBe('agent-state');
+  expect(answer.status).toBe(400);
+  expect(answer.headers.get('location')).toBeNull();
+  expect(answer.headers.get('set-cookie')).toBeNull();
+  expect(textOf(html)).toContain("This agent's request to connect isn't right");
+  expect(textOf(html)).toContain('https://phish.example');
+  expect(back?.pathname).toBe('/landing');
+  expect(back?.searchParams.get('error')).toBe('invalid_request');
+  expect(back?.searchParams.get('error_description')).toMatch(/PKCE/);
+  expect(textOf(html)).toContain(back?.searchParams.get('error_description') ?? 'a reason');
+  expect(back?.searchParams.get('state')).toBe('agent-state');
   expect(github.calls).toEqual([]);
 });
 
-test('an agent with a client secret still has to use PKCE, and is sent back without it', async () => {
+test('an agent with a client secret still has to use PKCE, and gets the same page without it', async () => {
   const registered = await agentFetch()(`${ORIGIN}/oauth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -139,16 +179,16 @@ test('an agent with a client secret still has to use PKCE, and is sent back with
   const client = await registered.json<{ client_id: string; client_secret?: string }>();
 
   const answer = await new Browser().fetch(authorizeUrl(client.client_id, {}).toString());
-  const back = location(answer);
+  const back = links(await answer.text()).find((link) => `${link.origin}${link.pathname}` === REDIRECT_URI);
 
   expect(client.client_secret).toEqual(expect.any(String));
-  expect(answer.status).toBe(302);
-  expect(`${back.origin}${back.pathname}`).toBe(REDIRECT_URI);
-  expect(back.searchParams.get('error')).toBe('invalid_request');
+  expect(answer.status).toBe(400);
+  expect(answer.headers.get('location')).toBeNull();
   expect(answer.headers.get('set-cookie')).toBeNull();
+  expect(back?.searchParams.get('error')).toBe('invalid_request');
 });
 
-test("an unknown client, or a redirect URI the client didn't register, gets an error page and is never redirected", async () => {
+test("an unknown client, or a redirect URI the client didn't register, gets an error page with no way out to the agent", async () => {
   const clientId = await registerClient();
   const { challenge } = await pkce();
 
@@ -158,10 +198,42 @@ test("an unknown client, or a redirect URI the client didn't register, gets an e
   );
 
   for (const answer of [unknown, elsewhere]) {
+    const html = await answer.text();
     expect(answer.status).toBe(400);
     expect(answer.headers.get('location')).toBeNull();
     expect(answer.headers.get('set-cookie')).toBeNull();
-    expect(await answer.text()).toContain("This link to connect an agent isn't right.");
+    expect(textOf(html)).toContain("This link to connect an agent isn't right.");
+    const toAgent = links(html).filter((link) => link.origin === 'https://attacker.example' || link.href.startsWith(REDIRECT_URI));
+    expect(toAgent).toEqual([]);
+  }
+});
+
+test('an agent can register redirect URIs on https, on this computer, or for an app, and no plain http to anywhere else', async () => {
+  const register = (uris: string[]) =>
+    agentFetch()(`${ORIGIN}/oauth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_name: 'Agent', redirect_uris: uris, token_endpoint_auth_method: 'none' }),
+    });
+  const allowed = [
+    'https://agent.example/callback',
+    'http://localhost:9/callback',
+    'http://127.0.0.1/callback',
+    'http://[::1]:8080/callback',
+    'cursor://anysphere.cursor-retrieval/oauth/callback',
+  ];
+  const refused = [
+    ['http://plain.example/callback'],
+    ['http://localhost.example/callback'],
+    ['http://127.0.0.1.example/callback'],
+    ['https://agent.example/callback', 'http://plain.example/callback'],
+  ];
+
+  for (const uri of allowed) expect((await register([uri])).status).toBe(201);
+  for (const uris of refused) {
+    const answer = await register(uris);
+    expect(answer.status).toBe(400);
+    expect(await answer.json()).toMatchObject({ error: 'invalid_redirect_uri' });
   }
 });
 
@@ -175,7 +247,7 @@ test('the consent page names the agent as text, says where its access goes, warn
   expect(page.status).toBe(200);
   expect(html).toContain('&lt;img src=x onerror=alert(1)&gt; Helper');
   expect(html).not.toContain('<img src=x');
-  expect(html).toContain('127.0.0.1:33418');
+  expect(html).toContain('>http://127.0.0.1:33418<');
   expect(html).toContain('That is an app on your computer.');
   expect(page.headers.get('x-frame-options')).toBe('DENY');
   expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
@@ -192,8 +264,30 @@ test('an agent whose access goes to a web address gets no warning about this com
     )
   ).text();
 
-  expect(html).toContain('agent.example');
+  expect(html).toContain('>https://agent.example<');
   expect(html).not.toContain('That is an app on your computer.');
+});
+
+test("an agent whose access goes to an app's own scheme gets the warning about this computer", async () => {
+  const clientId = await registerClient('Some app', 'evilapp:/callback');
+  const { challenge } = await pkce();
+
+  const html = await (
+    await new Browser().fetch(authorizeUrl(clientId, { challenge, redirectUri: 'evilapp:/callback' }).toString())
+  ).text();
+
+  expect(html).toContain('>evilapp:<');
+  expect(html).toContain('That is an app on your computer.');
+});
+
+test("the page shows an agent's name without control, bidi, or zero-width characters", async () => {
+  const clientId = await registerClient('Helper\u202Eexe.txt\u200B\u0007 bot');
+  const { challenge } = await pkce();
+
+  const html = await (await new Browser().fetch(authorizeUrl(clientId, { challenge }).toString())).text();
+
+  expect(html).toContain('Helperexe.txt bot');
+  for (const character of ['\u202E', '\u200B', '\u0007']) expect(html).not.toContain(character);
 });
 
 test('Cancel sends the person back to the agent with access_denied and its state, and GitHub never sees them', async () => {
@@ -239,6 +333,20 @@ test('an approval posted from another site is refused', async () => {
   const forged = await browser.post('/oauth/authorize', { handle, decision: 'approve' }, 'https://elsewhere.example');
 
   expect(forged.status).toBe(403);
+  expect(github.calls).toEqual([]);
+});
+
+test('an approval posted with no Origin, or with Origin null, is refused', async () => {
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const browser = new Browser();
+  const handle = consentHandle(await (await browser.fetch(authorizeUrl(clientId, { challenge }).toString())).text()) ?? '';
+
+  const none = await browser.post('/oauth/authorize', { handle, decision: 'approve' }, null);
+  const opaque = await browser.post('/oauth/authorize', { handle, decision: 'approve' }, 'null');
+
+  expect(none.status).toBe(403);
+  expect(opaque.status).toBe(403);
   expect(github.calls).toEqual([]);
 });
 
@@ -389,6 +497,78 @@ test("approving an agent counts toward the sign-in limit of 20 requests a minute
 
   expect(over.status).toBe(429);
   expect(over.headers.get('retry-after')).toBe('60');
+});
+
+test('trading a code or refreshing tokens counts toward the sign-in limit of 20 requests a minute from each address', async () => {
+  await inOneLimitWindow();
+  const fetch = agentFetch();
+  const refresh = () =>
+    fetch(`${ORIGIN}/oauth/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'a:b:c', client_id: 'nobody' }),
+    });
+  const answers: number[] = [];
+  for (let i = 0; i < 20; i++) answers.push((await refresh()).status);
+
+  const over = await refresh();
+
+  expect(answers).not.toContain(429);
+  expect(over.status).toBe(429);
+  expect(over.headers.get('retry-after')).toBe('60');
+});
+
+test("when GitHub won't say whose the new token is, the agent's sign-in stops, and that token is revoked", async () => {
+  const { browser, back } = await upToGitHubsReturn('priya');
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    return request.method === 'GET' && new URL(request.url).pathname.endsWith('/user')
+      ? Promise.resolve(Response.json({ message: 'Server Error' }, { status: 502 }))
+      : github.fetch(input, init);
+  });
+
+  const answer = await browser.fetch(back.toString());
+
+  expect(location(answer).searchParams.get('error')).toBe('server_error');
+  expect(github.calls.filter((call) => call.method === 'DELETE')).toHaveLength(1);
+  expect(appTokens(github)).toEqual([]);
+  expect(await connections()).toBe(0);
+});
+
+test("when the agent's grant can't be stored, its connection is removed, and its GitHub token is revoked", async () => {
+  const { browser, back } = await upToGitHubsReturn('kenji');
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  vi.spyOn(env.OAUTH_KV, 'put').mockRejectedValueOnce(new Error('KV is down'));
+
+  const answer = await browser.fetch(back.toString());
+
+  expect(location(answer).searchParams.get('error')).toBe('server_error');
+  expect(github.calls.filter((call) => call.method === 'DELETE')).toHaveLength(1);
+  expect(appTokens(github)).toEqual([]);
+  expect(await connections()).toBe(0);
+});
+
+test("when an agent's sign-in fails with the token the site holds for the person's own sign-in, that token is left alone", async () => {
+  await signIn(new Browser(), github, 'ines');
+  const webToken = (await storedToken()) ?? '';
+  const { browser, back } = await upToGitHubsReturn('ines');
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  // As if GitHub gave the agent's sign-in the site's own token. Then the
+  // grant can't be stored.
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+    new URL(new Request(input, init).url).pathname.endsWith('/login/oauth/access_token')
+      ? Promise.resolve(Response.json({ access_token: webToken, token_type: 'bearer', scope: 'public_repo' }))
+      : github.fetch(input, init),
+  );
+  vi.spyOn(env.OAUTH_KV, 'put').mockRejectedValueOnce(new Error('KV is down'));
+
+  const answer = await browser.fetch(back.toString());
+
+  expect(location(answer).searchParams.get('error')).toBe('server_error');
+  expect(await connections()).toBe(0);
+  expect(github.calls.some((call) => call.method === 'DELETE')).toBe(false);
+  expect((await gitHubUser(webToken)).status).toBe(200);
 });
 
 test.each(['OAUTH_CLIENT_ID', 'OAUTH_CLIENT_SECRET', 'AUTH_SECRET'] as const)(
