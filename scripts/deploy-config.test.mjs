@@ -262,6 +262,25 @@ test("every Durable Object the Worker binds is deployed with the migration that 
   }
 });
 
+test("the feed queue's consumer and its dead-letter queue are deployed under the Worker's name", () => {
+  const real = realLocal();
+  const consumers = real.queues?.consumers ?? [];
+  assert.ok(
+    consumers.some((consumer) => consumer.queue === 'feed' && consumer.dead_letter_queue),
+    'the Worker consumes the feed queue, with a dead-letter queue',
+  );
+
+  const { config } = deployConfig(real, 'production', withLimiter);
+
+  const producers = new Set(config.queues.producers.map((producer) => producer.queue));
+  for (const consumer of config.queues.consumers) {
+    assert.ok(producers.has(consumer.queue), `the Worker sends to ${consumer.queue}, which it consumes`);
+    assert.match(consumer.queue, /^sample-site-/);
+    if (consumer.dead_letter_queue) assert.match(consumer.dead_letter_queue, /^sample-site-/);
+  }
+  assert.ok(config.queues.consumers.some((consumer) => consumer.dead_letter_queue === 'sample-site-feed-dlq'));
+});
+
 test('the local config may not carry an account, a route, or a resource ID', () => {
   for (const bad of [
     { ...local, account_id: 'x' },

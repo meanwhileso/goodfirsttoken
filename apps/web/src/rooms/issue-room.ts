@@ -5,6 +5,7 @@ import {
   count,
   describeProblems,
   feedEventSchema,
+  feedMessageSchema,
   githubId,
   holdsSlot,
   id,
@@ -29,15 +30,17 @@ import {
   type Refusal,
   type ToolOutput,
 } from '@goodfirsttoken/core';
+import { blockedAmong } from '../db/blocks';
 import { saveClaim } from '../db/claims';
 import { newId } from '../db/shared';
+import { answerClose, openWatcher, sendToWatchers, type StoredEvent } from './watchers';
 
 // One issue room per issue (spec sections 6 and 8). It holds every claim on
 // the issue and is the lock for the claim cap. It runs each claim's timers
 // with alarms, takes the claimant's updates, streams events to the people
-// watching over WebSockets, and mirrors each claim to D1. The rules for one
-// claim are core's nextClaimState. The rules here need every claim on the
-// issue, or who is asking.
+// watching over WebSockets, sends each event to the feed queue, and mirrors
+// each claim to D1. The rules for one claim are core's nextClaimState. The
+// rules here need every claim on the issue, or who is asking.
 //
 // Callers pass who is asking as a numeric GitHub ID. No token ever reaches
 // the room, and it stores claim facts and public events only.
@@ -46,7 +49,9 @@ import { newId } from '../db/shared';
 // applies the timers that are due, and does its checks and writes with no
 // await in between. So no other request can land between a check and the
 // write it guards, which is what makes the claim cap hold under simultaneous
-// claims. Saving to D1 and setting the next alarm come after.
+// claims. Saving to D1 and setting the next alarm come after. So do sending
+// events to the watchers and the feed queue, which a call's answer never
+// waits for.
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -62,6 +67,13 @@ export const SAVE_RETRY_MAX_MS = HOUR;
 export const SAVE_GIVE_UP_MS = DAY;
 // The next-try time of a save the room gave up on.
 const SAVE_NEVER = Number.MAX_SAFE_INTEGER;
+/** How soon a send to the feed queue that failed is first tried again. Each later wait is twice as long. */
+export const SEND_RETRY_FIRST_MS = MINUTE;
+/** The longest wait between two tries of a send to the feed queue. */
+export const SEND_RETRY_MAX_MS = HOUR;
+// A batch sent to the queue holds at most 100 messages and 256 KB. An event
+// is at most a few KB.
+const SEND_BATCH = 50;
 
 /** A claim to make, from the tool that checked the issue and the donor first. */
 export interface ClaimRequest {
@@ -144,6 +156,12 @@ const SCHEMA = `
     PRIMARY KEY (repo, number)
   ) STRICT;
   CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, event TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS outbox (
+    seq INTEGER PRIMARY KEY,
+    message TEXT NOT NULL,
+    tries INTEGER NOT NULL DEFAULT 0,
+    next_try_at INTEGER NOT NULL DEFAULT 0
+  ) STRICT;
 `;
 
 const CLAIM_COLUMNS = `id, record, revision, mirrored, last_post_at, save_failures, save_after, failing_since,
@@ -182,6 +200,8 @@ interface StoredClaim {
 }
 
 type PrRow = { repo: string; number: number; url: string };
+
+type OutboxRow = { seq: number; message: string; tries: number; next_try_at: number };
 
 function refused(code: Refusal['code'], message: string): Refused {
   return { ok: false, refusal: { code, message } };
@@ -410,33 +430,45 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * The events after the one with ID `since`, oldest first. With no `since`,
-   * or one this room never sent, every event.
+   * The events after the one with ID `since`, oldest first, without blocked
+   * donors' events. With no `since`, or one this room never sent, every
+   * event. Throws when D1 can't say who is blocked.
    */
-  history(since?: string | null): FeedEvent[] {
-    const from = typeof since === 'string' ? since : null;
-    return this.eventsAfter(from).map((text) => mustParse(feedEventSchema, JSON.parse(text), 'event'));
+  async history(since?: string | null): Promise<FeedEvent[]> {
+    const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;
+    const events = this.storedAfter(from);
+    const blocked = await blockedAmong(
+      this.env.DB,
+      events.map((event) => event.githubId),
+    );
+    return events
+      .filter((event) => !blocked.has(event.githubId))
+      .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
   }
 
   /**
    * Opens a WebSocket for a watcher. `?since=<event ID>` sends the events
    * after that one first, then every new event as it happens. Without it, the
-   * whole history comes first. Each message is one feed event as JSON. The
-   * socket uses the hibernation API, so a quiet room can sleep with watchers
-   * connected.
+   * whole history comes first. Each message is one feed event as JSON. A
+   * blocked donor's events are left out. The socket uses the hibernation API,
+   * so a quiet room can sleep with watchers connected.
    */
-  override fetch(request: Request): Response {
+  override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Connect with a WebSocket.\n', { status: 426, headers: { Upgrade: 'websocket' } });
     }
     const since = new URL(request.url).searchParams.get('since');
-    const { 0: client, 1: server } = new WebSocketPair();
-    this.ctx.acceptWebSocket(server);
-    for (const event of this.eventsAfter(since)) server.send(event);
-    return new Response(null, { status: 101, webSocket: client });
+    return openWatcher(this.ctx, this.env.DB, {
+      history: () => this.storedAfter(since === null ? 0 : (this.placeOf(since) ?? 0)),
+      last: () => this.lastPlace(),
+    });
   }
 
-  /** Applies the timers that are due, saves to D1 what is waiting, and sets the next alarm. */
+  /**
+   * Applies the timers that are due, starts sending to the watchers and the
+   * feed queue what is waiting, saves to D1 what is waiting, and sets the
+   * next alarm.
+   */
   override async alarm(): Promise<void> {
     const now = Date.now();
     this.settle(now);
@@ -450,13 +482,7 @@ export class IssueRoom extends DurableObject<Env> {
 
   /** Answers a watcher's close, so its socket finishes closing. */
   override webSocketClose(socket: WebSocket, code: number, reason: string): void {
-    // 1005 and 1006 say no code came, and can't be sent back.
-    const answer = code === 1005 || code === 1006 ? 1000 : code;
-    try {
-      socket.close(answer, reason);
-    } catch {
-      // It closed already.
-    }
+    answerClose(socket, code, reason);
   }
 
   /**
@@ -501,8 +527,15 @@ export class IssueRoom extends DurableObject<Env> {
     }
   }
 
-  /** Finishes a request: saves to D1 what is waiting, sets the next alarm, and returns `result`. */
+  /**
+   * Finishes a request. It starts sending new events to the watchers and
+   * the feed queue, saves to D1 what is waiting, sets the next alarm, and
+   * returns `result`. Nothing waits for the sends, so a slow queue or D1
+   * holds up no answer and no alarm.
+   */
   private async done<T>(now: number, result: T): Promise<T> {
+    void this.sendDue(now);
+    void this.sendToWatchers();
     await this.mirror(now);
     await this.schedule(now);
     return result;
@@ -589,7 +622,10 @@ export class IssueRoom extends DurableObject<Env> {
     );
   }
 
-  /** Stores an event about a claim, and sends it to every watcher. */
+  /**
+   * Stores an event about a claim, and beside it a message for the feed
+   * queue, kept until it is sent. The end of the call sends both on.
+   */
   private emit(claim: ClaimRecord, kind: FeedEventKind, text: string, job: string | null, now: number): void {
     const event = mustParse(
       feedEventSchema,
@@ -606,27 +642,44 @@ export class IssueRoom extends DurableObject<Env> {
       },
       'event',
     );
-    const json = JSON.stringify(event);
-    this.sql.exec('INSERT INTO events (id, event) VALUES (?, ?)', event.id, json);
-    for (const socket of this.ctx.getWebSockets()) {
-      try {
-        socket.send(json);
-      } catch {
-        // A socket that closed meanwhile misses the event. Its watcher gets
-        // it on reconnecting with the last ID it saw.
-      }
-    }
+    const message = mustParse(
+      feedMessageSchema,
+      { event, githubId: claim.githubId, project: claim.project },
+      'message',
+    );
+    const [row] = this.sql
+      .exec<{ seq: number }>('INSERT INTO events (id, event) VALUES (?, ?) RETURNING seq', event.id, JSON.stringify(event))
+      .toArray();
+    if (!row) throw new Error(`Event ${event.id} was not stored.`);
+    this.sql.exec('INSERT INTO outbox (seq, message) VALUES (?, ?)', row.seq, JSON.stringify(message));
   }
 
-  private eventsAfter(since: string | null): string[] {
-    const [from] =
-      since === null
-        ? []
-        : this.sql.exec<{ seq: number }>('SELECT seq FROM events WHERE id = ?', since).toArray();
+  /** Where the event with this ID sits in the room's order, or null for an ID the room never sent. */
+  private placeOf(eventId: string): number | null {
+    const [row] = this.sql.exec<{ seq: number }>('SELECT seq FROM events WHERE id = ?', eventId).toArray();
+    return row?.seq ?? null;
+  }
+
+  private lastPlace(): number {
+    const [row] = this.sql.exec<{ seq: number | null }>('SELECT MAX(seq) AS seq FROM events').toArray();
+    return row?.seq ?? 0;
+  }
+
+  /**
+   * The events after a place, oldest first, each with its claimant's GitHub
+   * ID, which the watchers' block check needs. Every event is about a claim
+   * the room holds.
+   */
+  private storedAfter(seq: number): StoredEvent[] {
     return this.sql
-      .exec<{ event: string }>('SELECT event FROM events WHERE seq > ? ORDER BY seq', from?.seq ?? 0)
+      .exec<{ seq: number; event: string; github_id: number }>(
+        `SELECT e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id
+         FROM events e JOIN claims c ON c.id = json_extract(e.event, '$.claim')
+         WHERE e.seq > ? ORDER BY e.seq`,
+        seq,
+      )
       .toArray()
-      .map((row) => row.event);
+      .map((row) => ({ seq: row.seq, githubId: row.github_id, json: row.event }));
   }
 
   private readClaims(): StoredClaim[] {
@@ -756,7 +809,114 @@ export class IssueRoom extends DurableObject<Env> {
     );
   }
 
-  /** Sets the alarm for the next timer on any claim, or the next try of a save. */
+  /**
+   * Sends the events whose send is due to the feed queue, in the order the
+   * room stored them, and returns when the send is done. An event never goes
+   * ahead of an earlier one still waiting. Events that come due while a send
+   * is out go with the next one, in the same loop. Once the sends are done,
+   * the alarm is set again from what is left. A send never throws.
+   */
+  private async sendDue(now: number): Promise<void> {
+    try {
+      for (let rows = this.takeDue(now); rows.length > 0; rows = this.takeDue(Date.now())) {
+        if (!(await this.send(rows))) break;
+      }
+      await this.schedule(Date.now());
+    } catch (error) {
+      console.error('Sending events to the feed queue failed.', error);
+    }
+  }
+
+  /**
+   * The events at the front of the outbox whose send is due, oldest first,
+   * marked as out for a minute. Other calls leave them alone meanwhile, and
+   * the schedule() at the end of the call counts them as due a minute from
+   * now, so if the call dies while the send is out, the alarm sends them.
+   */
+  private takeDue(now: number): OutboxRow[] {
+    const rows: OutboxRow[] = [];
+    for (const row of this.sql.exec<OutboxRow>('SELECT seq, message, tries, next_try_at FROM outbox ORDER BY seq')) {
+      if (row.next_try_at > now) break;
+      rows.push(row);
+    }
+    if (rows.length > 0) {
+      this.sql.exec(
+        'UPDATE outbox SET next_try_at = ? WHERE seq IN (SELECT value FROM json_each(?))',
+        now + SEND_RETRY_FIRST_MS,
+        JSON.stringify(rows.map((row) => row.seq)),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * Sends events to the queue a batch at a time, and forgets each batch that
+   * lands. When the queue refuses a batch, it and every event after it wait a
+   * minute, then twice as long each try, up to an hour, and false comes back.
+   */
+  private async send(rows: OutboxRow[]): Promise<boolean> {
+    for (let i = 0; i < rows.length; i += SEND_BATCH) {
+      const batch = rows.slice(i, i + SEND_BATCH);
+      try {
+        await this.env.FEED_QUEUE.sendBatch(batch.map((row) => ({ body: JSON.parse(row.message) as unknown })));
+      } catch (error) {
+        const tries = batch[0]?.tries ?? 0;
+        const wait = Math.min(SEND_RETRY_FIRST_MS * 2 ** Math.min(tries, 20), SEND_RETRY_MAX_MS);
+        console.warn(`${String(rows.length - i)} events were not sent to the feed queue. The room will try again.`, error);
+        this.sql.exec(
+          'UPDATE outbox SET tries = tries + 1, next_try_at = ? WHERE seq IN (SELECT value FROM json_each(?))',
+          Date.now() + wait,
+          JSON.stringify(rows.slice(i).map((row) => row.seq)),
+        );
+        return false;
+      }
+      this.sql.exec(
+        'DELETE FROM outbox WHERE seq IN (SELECT value FROM json_each(?))',
+        JSON.stringify(batch.map((row) => row.seq)),
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Sends new events to the watchers. When D1 can't say who is blocked, the
+   * room keeps a fact saying when to try again, a minute later, which the
+   * alarm counts. A try already waiting moves a minute on while this one is
+   * out, so the alarm doesn't fire again and again while D1 is slow. The fact
+   * is cleared only by a send that leaves every watcher at the last event
+   * stored. A send that read the events before a newer one was stored, and
+   * whose D1 answer came late, leaves the try for the newer one in place.
+   */
+  private async sendToWatchers(): Promise<void> {
+    try {
+      this.sql.exec(
+        "UPDATE facts SET value = ? WHERE key = 'watchers_retry_at'",
+        String(Date.now() + SEND_RETRY_FIRST_MS),
+      );
+      const reached = await sendToWatchers(this.ctx, this.env.DB, (seq) => this.storedAfter(seq));
+      if (reached !== null) {
+        if (reached < this.lastPlace()) return;
+        const waited = this.sql.exec("DELETE FROM facts WHERE key = 'watchers_retry_at'").rowsWritten > 0;
+        if (waited) await this.schedule(Date.now());
+        return;
+      }
+      this.sql.exec(
+        "INSERT OR REPLACE INTO facts (key, value) VALUES ('watchers_retry_at', ?)",
+        String(Date.now() + SEND_RETRY_FIRST_MS),
+      );
+      await this.schedule(Date.now());
+    } catch (error) {
+      console.error('Events did not reach the watchers.', error);
+    }
+  }
+
+  /**
+   * Sets the alarm for the next timer on any claim, the next try of a save,
+   * the next try of a send to the feed queue, and the next try of a send to
+   * the watchers. The first event in the outbox sets when the queue's next
+   * try is, since no event goes ahead of it. A send that is out counts as due
+   * a minute after it started, in case its call dies.
+   */
   private async schedule(now: number): Promise<void> {
     const times: number[] = [];
     for (const stored of this.readClaims()) {
@@ -765,6 +925,13 @@ export class IssueRoom extends DurableObject<Env> {
       if (expiresAt !== null) times.push(expiresAt);
       const next = nextTry(stored);
       if (next !== null) times.push(Math.max(next, now));
+    }
+    const [first] = this.sql
+      .exec<{ next_try_at: number }>('SELECT next_try_at FROM outbox ORDER BY seq LIMIT 1')
+      .toArray();
+    if (first) times.push(Math.max(first.next_try_at, now));
+    for (const { value } of this.sql.exec<{ value: string }>("SELECT value FROM facts WHERE key = 'watchers_retry_at'")) {
+      times.push(Math.max(Number(value), now));
     }
     if (times.length === 0) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...times));
