@@ -1,6 +1,6 @@
 import { newClaim, type ClaimRecord } from '@goodfirsttoken/core';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { addPr, getPr, listOpenPrs, saveClaim, setPrState } from '../../src/db';
+import { addPr, countProjectPrs, getPr, listOpenPrs, saveClaim, setPrState } from '../../src/db';
 import { DAY, db, emptyDatabase, HOUR, priya, refusal, repo, sha, signIn, t0 } from './helpers';
 
 function prRef(number: number) {
@@ -121,6 +121,21 @@ describe('PRs', () => {
     await setPrState(db, 'c_1', 'merged', t0 + DAY);
 
     expect((await listOpenPrs(db)).map((p) => p.claimId)).toEqual(['c_2']);
+  });
+
+  test("a project's PR counts are its claims' open PRs and merged PRs, and a closed PR counts in neither", async () => {
+    await saveClaim(db, openedClaim('c_3', 59), 1);
+    await saveClaim(db, { ...openedClaim('c_4', 60), project: 'sample-owner/sample-tools' }, 1);
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    await addPr(db, { claimId: 'c_2', pr: prRef(58), openedAt: t0 });
+    await addPr(db, { claimId: 'c_3', pr: prRef(59), openedAt: t0 });
+    await addPr(db, { claimId: 'c_4', pr: prRef(60), openedAt: t0 });
+    await setPrState(db, 'c_2', 'merged', t0 + DAY);
+    await setPrState(db, 'c_3', 'closed', t0 + DAY);
+
+    expect(await countProjectPrs(db, repo.toUpperCase())).toEqual({ open: 1, merged: 1 });
+    expect(await countProjectPrs(db, 'sample-owner/sample-tools')).toEqual({ open: 1, merged: 0 });
+    expect(await countProjectPrs(db, 'sample-owner/nothing-here')).toEqual({ open: 0, merged: 0 });
   });
 
   test('a claim with no PR has no state to set', async () => {

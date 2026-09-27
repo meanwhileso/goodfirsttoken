@@ -1,4 +1,13 @@
-import { id, mustParse, prRecordSchema, prStateSchema, type PrRecord, type PrRef, type PrState } from '@goodfirsttoken/core';
+import {
+  id,
+  mustParse,
+  prRecordSchema,
+  prStateSchema,
+  repoName,
+  type PrRecord,
+  type PrRef,
+  type PrState,
+} from '@goodfirsttoken/core';
 import { checkTime, prFromColumns } from './shared';
 
 // The prs table: the PR opened for each claim, followed until it merges or
@@ -147,4 +156,17 @@ export async function listOpenPrs(db: D1Database): Promise<PrRecord[]> {
     .prepare("SELECT * FROM prs WHERE state = 'open' ORDER BY opened_at, claim_id")
     .all<PrRow>();
   return results.map(toPr);
+}
+
+/** How many PRs opened for a project's claims are open, and how many merged. */
+export async function countProjectPrs(db: D1Database, project: string): Promise<{ open: number; merged: number }> {
+  const { results } = await db
+    .prepare(
+      `SELECT prs.state AS state, COUNT(*) AS n FROM prs JOIN claims ON claims.id = prs.claim_id
+       WHERE claims.project = ? GROUP BY prs.state`,
+    )
+    .bind(mustParse(repoName, project, 'project'))
+    .all<{ state: string; n: number }>();
+  const count = (state: PrState) => results.find((row) => row.state === state)?.n ?? 0;
+  return { open: count('open'), merged: count('merged') };
 }

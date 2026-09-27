@@ -13,10 +13,14 @@ import { lines, plural, renderSettings } from './text';
 // The maintainer's tools (spec section 4). Every call checks with GitHub that
 // the caller is an admin or maintainer of the repo.
 
+function createdText(labels: readonly string[]): string | false {
+  return labels.length > 0 && `Created ${plural(labels.length, 'label')} in the repo: ${labels.join(', ')}.`;
+}
+
 export const registerProject = defineTool({
   audience: 'maintainer',
   description:
-    'Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it.',
+    "Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it. A repo listed from its AI policy takes your settings in place of the listing's and keeps its status. Pick the goodfirsttoken tag and the label is created in the repo with your GitHub account.",
   input: z.object({
     repo: repoName,
     settings: projectSettingsSchema
@@ -38,8 +42,10 @@ export const registerProject = defineTool({
   text: (out) =>
     out.saved
       ? lines(
-          `Registered ${out.repo}. Status: ${out.status ?? 'pending'}. A Good First Token admin reviews every new project. See the result with project_status.`,
-          out.createdLabels.length > 0 && `Created ${plural(out.createdLabels.length, 'label')}: ${out.createdLabels.join(', ')}.`,
+          (out.status ?? 'pending') === 'pending'
+            ? `Registered ${out.repo}. Status: pending. A Good First Token admin reviews every new project. See the result with project_status.`
+            : `Registered ${out.repo}. Status: ${out.status ?? 'pending'}. Your settings replace the ones it was listed with, and apply now.`,
+          createdText(out.createdLabels),
           renderSettings(out.settings),
         )
       : lines(
@@ -52,7 +58,7 @@ export const registerProject = defineTool({
 export const updateProject = defineTool({
   audience: 'maintainer',
   description:
-    "Change some of a project's settings. Settings left out keep their value. Changes apply at once and show on the project page with who made them.",
+    "Change some of a project's settings. Settings left out keep their value. Changes apply at once and show on the project page with who made them. Pick the goodfirsttoken tag and the label is created in the repo with your GitHub account.",
   input: z.object({ repo: repoName, settings: projectSettingsPatchSchema }),
   output: z.object({
     repo: repoName,
@@ -60,12 +66,15 @@ export const updateProject = defineTool({
     settings: projectSettingsSchema,
     /** The settings whose value changed. */
     changed: z.array(settingKeySchema),
+    /** Labels created in the repo with the maintainer's own login. */
+    createdLabels: z.array(labelName),
   }),
   text: (out) =>
     lines(
       out.changed.length > 0
         ? `Updated ${out.repo}: ${out.changed.join(', ')}. The changes apply now.`
         : `No settings changed on ${out.repo}.`,
+      createdText(out.createdLabels),
       renderSettings(out.settings),
     ),
 });

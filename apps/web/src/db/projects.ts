@@ -328,6 +328,63 @@ export async function changeSettings(
   throw new Error(`Settings for ${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }
 
+/**
+ * A maintainer registers a repo an admin listed from its AI policy. Their
+ * settings replace the listing's, saved as a new version by `by` at `now`,
+ * with settings they left out at their defaults. The project becomes
+ * registered: its policy goes, and it names them as who added it, then. Its
+ * status stays as it was. Settings the same as the listing's save no new
+ * version. Null when the repo isn't a project listed from its policy when it
+ * saves.
+ */
+export async function takeOverListing(
+  db: D1Database,
+  repo: string,
+  settings: ProjectSettingsInput,
+  by: number,
+  now: number,
+): Promise<{ project: ProjectRecord; changed: SettingKey[] } | null> {
+  const next = mustParse(projectSettingsSchema, settings, 'settings');
+  const addedBy = mustParse(githubId, by, 'by');
+  const at = checkTime(now);
+  for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
+    const current = await getProject(db, repo);
+    if (current?.source !== 'policy') return null;
+    const changed = changedSettings(current.settings, next);
+    const version = changed.length > 0 ? current.settingsVersion + 1 : current.settingsVersion;
+    const project = mustParse(
+      projectRecordSchema,
+      { ...current, source: 'registered', policy: null, addedBy, addedAt: at, settings: next, settingsVersion: version },
+      'project',
+    );
+    // Both statements check that the project is still the listing that was
+    // read, with no other save since, and the batch runs as one transaction.
+    const statements = [
+      db
+        .prepare(
+          `UPDATE projects SET source = 'registered', policy_quote = NULL, policy_url = NULL, policy_tier = NULL,
+             added_by = ?, added_at = ?, settings_version = ?, issue_repo = ?
+           WHERE repo = ? AND source = 'policy' AND settings_version = ?`,
+        )
+        .bind(addedBy, at, version, issueRepoOf(current.repo, next), current.repo, current.settingsVersion),
+    ];
+    if (changed.length > 0) {
+      statements.unshift(
+        db
+          .prepare(
+            `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
+             SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS
+               (SELECT 1 FROM projects WHERE repo = ?1 AND source = 'policy' AND settings_version = ?6)`,
+          )
+          .bind(current.repo, version, JSON.stringify(next), addedBy, at, current.settingsVersion),
+      );
+    }
+    const results = await db.batch(statements);
+    if (results.at(-1)?.meta.changes === 1) return { project, changed };
+  }
+  throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
+}
+
 /** Every save of a project's settings, newest first, each with what it changed. */
 export async function settingsHistory(db: D1Database, repo: string): Promise<SettingsVersion[]> {
   const { results } = await db

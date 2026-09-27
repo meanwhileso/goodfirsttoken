@@ -9,6 +9,7 @@ import {
   setProjectStatus,
   settingsHistory,
   statusHistory,
+  takeOverListing,
 } from '../../src/db';
 import {
   admin,
@@ -399,5 +400,56 @@ describe('project settings', () => {
     expect(await refusal(getProject(db, repo))).toContain(
       'settings.claimsPerIssue: must be a whole number from 1 to 10',
     );
+  });
+});
+
+describe('a maintainer taking over a listing made from a policy', () => {
+  async function listing() {
+    return createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'], prMode: 'automatic' }, addedBy: admin.githubId },
+      t0,
+    );
+  }
+
+  test("the maintainer's settings replace the listing's, the project becomes registered with no policy, and its status stays", async () => {
+    await listing();
+
+    const took = await takeOverListing(db, repo, { tags: ['help wanted'], claimsPerIssue: 2 }, maintainer.githubId, t0 + HOUR);
+
+    const stored = await getProject(db, repo);
+    expect(took?.project).toEqual(stored);
+    expect(stored).toMatchObject({
+      source: 'registered',
+      policy: null,
+      status: 'approved',
+      statusChangedBy: admin.githubId,
+      addedBy: maintainer.githubId,
+      addedAt: t0 + HOUR,
+      settingsVersion: 2,
+    });
+    // Whole settings: prMode, which the maintainer left out, is back to its default.
+    expect(stored?.settings).toMatchObject({ tags: ['help wanted'], claimsPerIssue: 2, prMode: 'reviewed' });
+    expect(took?.changed.sort()).toEqual(['claimsPerIssue', 'prMode', 'tags']);
+    expect((await settingsHistory(db, repo))[0]).toMatchObject({ version: 2, changedBy: maintainer.githubId, changedAt: t0 + HOUR });
+    expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
+  test("settings the same as the listing's save no new version, and the project still becomes registered", async () => {
+    await listing();
+
+    const took = await takeOverListing(db, repo, { tags: ['ready'], prMode: 'automatic' }, maintainer.githubId, t0 + HOUR);
+
+    expect(took?.changed).toEqual([]);
+    expect(await getProject(db, repo)).toMatchObject({ source: 'registered', policy: null, settingsVersion: 1 });
+    expect(await settingsHistory(db, repo)).toHaveLength(1);
+  });
+
+  test('a registered project, or a repo that is no project, is not taken over', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+
+    expect(await takeOverListing(db, repo, { tags: ['ready'] }, coMaintainer.githubId, t0 + HOUR)).toBeNull();
+    expect(await takeOverListing(db, 'sample-owner/sample-tools', { tags: ['ready'] }, coMaintainer.githubId, t0)).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ addedBy: maintainer.githubId, settings: { tags: ['help wanted'] } });
   });
 });

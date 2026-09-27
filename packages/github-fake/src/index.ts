@@ -17,6 +17,7 @@ import { sampleData as defaultSampleData, type SampleData } from './sample-data.
 import {
   addReview,
   closeIssue,
+  commitOnBranch,
   findRepoByFullName,
   getAccount,
   getPull,
@@ -75,6 +76,8 @@ export interface GitHubFake {
   mergePullRequest: (repo: string, number: number, by: string) => void;
   closePullRequest: (repo: string, number: number, by: string) => void;
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
+  // Commits these files, path to text, to the repo's default branch as `by`.
+  commitFiles: (repo: string, files: Record<string, string>, by: string) => void;
 }
 
 const ALPHANUMERIC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -167,7 +170,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     } catch {
       return done(errorResponse(400, 'Problems parsing JSON', REST_DOCS), operation);
     }
-    const ctx = { state, apiUrl, webUrl, viewer: login };
+    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [] };
     if (graphql) {
       const docs = 'https://docs.github.com/graphql/guides/forming-calls-with-graphql#authenticating-with-graphql';
       if (request.method !== 'POST') return done(errorResponse(404, 'Not Found', REST_DOCS), operation);
@@ -239,6 +242,17 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     },
     reviewPullRequest: (repo, number, review) => {
       addReview(state, repoNamed(repo), number, review, now().toISOString());
+    },
+    commitFiles: (repo, files, by) => {
+      const record = repoNamed(repo);
+      const additions = Object.entries(files).map(([path, contents]) => ({ path, contents }));
+      commitOnBranch(
+        state,
+        record,
+        record.defaultBranch,
+        { additions, deletions: [], headline: 'Update files', login: by },
+        now().toISOString(),
+      );
     },
   };
 }

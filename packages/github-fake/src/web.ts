@@ -294,7 +294,8 @@ function avatar(ctx: WebContext, id: string): Response {
 function raw(ctx: WebContext, owner: string, name: string, rest: string): Response {
   const repo = findRepo(ctx.state, owner, name);
   const notFound = new Response('404: Not Found', { status: 404, headers: { 'content-type': 'text/plain' } });
-  if (!repo) return notFound;
+  // A raw file carries no token here, so a private repo's files are never served.
+  if (!repo || repo.private === true) return notFound;
   // A branch name can hold slashes, so the longest branch that fits wins.
   const branch = Object.keys(repo.branches)
     .sort((a, b) => b.length - a.length)

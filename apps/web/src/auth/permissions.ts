@@ -94,8 +94,16 @@ export async function requirePermission<P extends Permission>(
     try {
       found = await gitHubRest<RepoPermissions>(token, 'GET', `/repos/${name}`);
     } catch (error) {
-      // GitHub answers 404 for a repo the caller can't see.
-      if (error instanceof GitHubError && error.status === 404) throw refused;
+      // GitHub answers 404 for a repo the caller can't see. A token with only
+      // public_repo, like every token Good First Token holds, can't see a
+      // private repo, even its owner's.
+      if (error instanceof GitHubError && error.status === 404) {
+        throw new PermissionRefused(
+          'not_maintainer',
+          permission,
+          `GitHub shows you no public repo named ${name}. Only an admin or maintainer of a public repo can do this.`,
+        );
+      }
       throw error;
     }
     if (found.permissions?.admin === true || found.permissions?.maintain === true) return;

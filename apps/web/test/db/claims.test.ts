@@ -1,6 +1,15 @@
 import { newClaim, nextClaimState, type ClaimEvent, type ClaimRecord } from '@goodfirsttoken/core';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { addPr, getClaim, getPr, listIssueClaims, listPersonClaims, savePerson, saveClaim } from '../../src/db';
+import {
+  addPr,
+  countWorkingClaims,
+  getClaim,
+  getPr,
+  listIssueClaims,
+  listPersonClaims,
+  savePerson,
+  saveClaim,
+} from '../../src/db';
 import { db, DAY, emptyDatabase, HOUR, kenji, MINUTE, priya, refusal, repo, sha, signIn, t0 } from './helpers';
 
 const issue = `${repo}#18`;
@@ -182,5 +191,21 @@ describe('the claims mirror', () => {
     await savePerson(db, { githubId: priya.githubId, login: 'priya-dev' }, t0 + 2 * DAY);
 
     expect((await listPersonClaims(db, priya.githubId)).map((c) => c.id)).toEqual(['c_2', 'c_1']);
+  });
+});
+
+describe("a project's working claims", () => {
+  test('the claims holding a slot count, and a claim past its deadline does not, though the table still has it working', async () => {
+    const working = claim({ id: 'c_1', claimedAt: t0 + DAY });
+    const paused = claim({ id: 'c_2', issue: `${repo}#19`, claimedAt: t0 + DAY - HOUR });
+    const submitted = after(claim({ id: 'c_3', issue: `${repo}#20`, claimedAt: t0 + DAY }), { kind: 'submit' }, t0 + DAY + MINUTE);
+    const released = after(claim({ id: 'c_4', issue: `${repo}#21`, claimedAt: t0 + DAY }), { kind: 'release', reason: 'stuck' }, t0 + DAY + MINUTE);
+    // Made 25 hours before the count with no submit, so it expired, though no timer saved that yet.
+    const lapsed = claim({ id: 'c_5', issue: `${repo}#22`, claimedAt: t0 });
+    const elsewhere = claim({ id: 'c_6', issue: 'sample-owner/sample-tools#3', project: 'sample-owner/sample-tools', claimedAt: t0 + DAY });
+    for (const made of [working, paused, submitted, released, lapsed, elsewhere]) await saveClaim(db, made, 1);
+
+    expect(await countWorkingClaims(db, repo, t0 + DAY + HOUR)).toBe(3);
+    expect(await countWorkingClaims(db, 'SAMPLE-OWNER/sample-tools', t0 + DAY + HOUR)).toBe(1);
   });
 });

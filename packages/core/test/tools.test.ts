@@ -145,6 +145,21 @@ describe('what each result says', () => {
     expect(text).toContain('Ask the donor to write the PR description, and pass it to open_pr word for word.');
   });
 
+  test('a saved registration says it waits for an admin, and names the label it created', () => {
+    const saved = { ...samples.register_project.output, saved: true, status: 'pending' as const, createdLabels: ['goodfirsttoken'] };
+    const text = textOf(toolResult('register_project', saved));
+    expect(text).toContain('Status: pending. A Good First Token admin reviews every new project.');
+    expect(text).toContain('Created 1 label in the repo: goodfirsttoken.');
+    expect(text).not.toContain('Nothing is saved yet');
+  });
+
+  test('registering a repo listed from its AI policy says the settings apply now, with no wait for an admin', () => {
+    const saved = { ...samples.register_project.output, saved: true, status: 'approved' as const };
+    const text = textOf(toolResult('register_project', saved));
+    expect(text).toContain('Status: approved. Your settings replace the ones it was listed with, and apply now.');
+    expect(text).not.toContain('admin reviews');
+  });
+
   test('an empty suggestion list says so', () => {
     expect(textOf(toolResult('suggest_issues', { suggestions: [] }))).toBe('No eligible issues right now.');
   });
@@ -226,6 +241,21 @@ describe('tool inputs', () => {
     const repo = 'meanwhileso/goodfirsttoken';
     expect(problemFields(validate(tools.admin_pause_project.input, { repo }))).toEqual(['reason']);
     expect(validate(tools.admin_pause_project.input, { repo, paused: false }).ok).toBe(true);
+  });
+
+  // The MCP SDK checks a tool's input through the schema's standard
+  // validate, and reports each issue's message as it is.
+  test('an unknown setting sent to a tool is named in the message the MCP SDK reports', async () => {
+    const messages = async (name: 'update_project' | 'register_project', settings: unknown) => {
+      const result = await tools[name].input['~standard'].validate({ repo: 'sample-owner/sample-app', settings });
+      return 'issues' in result ? (result.issues ?? []).map((issue) => issue.message).join('\n') : '';
+    };
+
+    expect(await messages('update_project', { claimsPerIsue: 2 })).toContain('claimsPerIsue');
+    expect(await messages('register_project', { tags: ['help wanted'], disclosure: { trailer: null, prBody: 'x', extra: 1 } })).toContain(
+      'extra',
+    );
+    expect(await messages('update_project', 'automatic')).toBe('must be an object of settings');
   });
 
   test('a settings change through update_project names the setting that failed', () => {

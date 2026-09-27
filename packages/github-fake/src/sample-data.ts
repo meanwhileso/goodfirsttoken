@@ -64,6 +64,9 @@ export interface SampleRepo {
   created: Ago;
   pushed: Ago;
   defaultBranch?: string;
+  // Only the owner and collaborators see a private repo, through a token with
+  // the repo scope.
+  private?: boolean;
   archived?: boolean;
   hasPullRequests?: boolean;
   pullRequestCreationPolicy?: 'all' | 'collaborators_only';

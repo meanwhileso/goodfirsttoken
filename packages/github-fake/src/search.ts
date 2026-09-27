@@ -148,7 +148,7 @@ function issueMatches(state: FakeState, repo: RepoRecord, issue: IssueRecord, te
       if (value === 'merged') return issue.pull !== null && issue.pull.mergedAt !== null;
       if (value === 'unmerged') return issue.pull !== null && issue.state === 'closed' && issue.pull.mergedAt === null;
       if (value === 'draft') return issue.pull?.draft === true;
-      return value === 'public';
+      return (repo.private === true) === (value === 'private');
     case 'label':
       return value.split(',').some((name) => issue.labels.some((l) => key(l) === name));
     case 'no':
@@ -167,7 +167,12 @@ function issueMatches(state: FakeState, repo: RepoRecord, issue: IssueRecord, te
 }
 
 // https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests
-export function searchIssues(state: FakeState, q: string): { repo: RepoRecord; issue: IssueRecord }[] {
+// Only repos the caller can see are searched.
+export function searchIssues(
+  state: FakeState,
+  q: string,
+  visible: (repo: RepoRecord) => boolean,
+): { repo: RepoRecord; issue: IssueRecord }[] {
   const terms = parseQuery(q, ISSUE_GRAMMAR);
   const kind = terms.some(
     (t) =>
@@ -178,7 +183,7 @@ export function searchIssues(state: FakeState, q: string): { repo: RepoRecord; i
   if (!kind) throw new FakeError('invalid', "Query must include 'is:issue' or 'is:pull-request'");
   const inFields = terms.find((t) => t.qualifier === 'in')?.value.toLowerCase().split(',') ?? ['title', 'body'];
   const results: { repo: RepoRecord; issue: IssueRecord }[] = [];
-  for (const repo of Object.values(state.repos)) {
+  for (const repo of Object.values(state.repos).filter(visible)) {
     for (const issue of Object.values(repo.issues)) {
       if (terms.every((term) => issueMatches(state, repo, issue, term, inFields) !== term.negate)) {
         results.push({ repo, issue });
@@ -207,7 +212,7 @@ function repoMatches(repo: RepoRecord, term: Term): boolean {
     case 'archived':
       return repo.archived === (value === 'true');
     case 'is':
-      return value === 'public';
+      return (repo.private === true) === (value === 'private');
     case 'language':
       return key(repo.language ?? '') === value;
     default:
@@ -216,11 +221,12 @@ function repoMatches(repo: RepoRecord, term: Term): boolean {
 }
 
 // https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories
-// Forks are left out unless the query asks for them, as on GitHub.
-export function searchRepos(state: FakeState, q: string): RepoRecord[] {
+// Forks are left out unless the query asks for them, as on GitHub. Only repos
+// the caller can see are searched.
+export function searchRepos(state: FakeState, q: string, visible: (repo: RepoRecord) => boolean): RepoRecord[] {
   const terms = parseQuery(q, REPO_GRAMMAR);
   const forks = terms.find((t) => t.qualifier === 'fork')?.value.toLowerCase() ?? 'false';
-  return Object.values(state.repos).filter((repo) => {
+  return Object.values(state.repos).filter(visible).filter((repo) => {
     if (forks === 'false' && repo.forkOf !== null) return false;
     if (forks === 'only' && repo.forkOf === null) return false;
     return terms.every((term) => repoMatches(repo, term) !== term.negate);

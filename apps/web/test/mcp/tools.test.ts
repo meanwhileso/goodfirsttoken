@@ -34,18 +34,28 @@ async function connections(): Promise<number> {
   return (await env.DB.prepare('SELECT COUNT(*) AS n FROM connected_agents').first<number>('n')) ?? 0;
 }
 
-test('a tools/list answers with start_session, the one tool so far, and its input and output schemas', async () => {
+test("a tools/list answers with start_session and the maintainer's tools, each with its input and output schemas", async () => {
   const { accessToken } = await tokensFor(github, 'priya');
 
   const response = await callMcp(accessToken);
-  const body = await mcpMessage<{ result: { tools: { name: string; inputSchema: unknown; outputSchema: unknown }[] } }>(
-    response,
-  );
+  const body = await mcpMessage<{
+    result: { tools: { name: string; description: string; inputSchema: unknown; outputSchema: unknown }[] };
+  }>(response);
+  const tool = (name: string) => body.result.tools.find((t) => t.name === name);
 
   expect(response.status).toBe(200);
-  expect(body.result.tools.map((tool) => tool.name)).toEqual(['start_session']);
-  expect(body.result.tools[0]?.inputSchema).toMatchObject({ required: ['agent', 'budget'] });
-  expect(body.result.tools[0]?.outputSchema).toMatchObject({ required: expect.arrayContaining(['login', 'githubId']) as string[] });
+  expect(body.result.tools.map((t) => t.name)).toEqual([
+    'start_session',
+    'register_project',
+    'update_project',
+    'project_status',
+    'pause_project',
+  ]);
+  expect(tool('start_session')?.inputSchema).toMatchObject({ required: ['agent', 'budget'] });
+  expect(tool('start_session')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['login', 'githubId']) as string[] });
+  expect(tool('register_project')?.inputSchema).toMatchObject({ required: ['repo'] });
+  expect(tool('update_project')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['changed', 'createdLabels']) as string[] });
+  expect(tool('pause_project')?.description).toContain('resume it with paused: false');
 });
 
 test("each person gets 120 calls a minute to the MCP server, across all their agents, and the next gets a 429 that leaves other people's agents working", async () => {

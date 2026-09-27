@@ -5,9 +5,9 @@ plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves a placeholder home page, sign-in with
-GitHub, the MCP server's sign-in for agents with one tool, the design system
-at `/design`, and the live text streams, while the build goes on in the
-open.
+GitHub, the MCP server's sign-in for agents with `start_session` and the
+maintainer's tools, the design system at `/design`, and the live text
+streams, while the build goes on in the open.
 
 ## Health check
 
@@ -231,9 +231,10 @@ hold one token for the site, and one for each connected agent.
   used, the oldest. That can be the site's token or an agent's.
 - When GitHub stops accepting a connection's token, because GitHub revoked
   it or the person revoked the app in their GitHub settings, the
-  connection's next `start_session` ends the connection, revokes nothing,
-  and tells the agent to reconnect. The agent's next call gets `401`, and it
-  signs in again.
+  connection's next tool call that asks GitHub, like `start_session` or a
+  maintainer's tool, ends the connection, revokes nothing, and tells the
+  agent to reconnect. The agent's next call gets `401`, and it signs in
+  again.
 - A site token GitHub revoked stays stored until the person's next sign-in
   replaces it. Nothing on the site needs it yet, and signing out works
   without it.
@@ -246,8 +247,8 @@ hold one token for the site, and one for each connected agent.
   [self-hosting.md](self-hosting.md#3-create-the-github-oauth-apps) says.
   GitHub turns them on for a new app. With them on, GitHub stops accepting
   each token after 8 hours, since the site doesn't refresh them yet. Then an
-  agent's next `start_session` ends its connection, as above, so the agent
-  signs in again. The site's own token stops working too. Nothing on the
+  agent's next tool call ends its connection, as above, so the agent signs in
+  again. The site's own token stops working too. Nothing on the
   site needs it yet, and signing out works without it.
 
 **Where the tokens are kept.**
@@ -267,11 +268,14 @@ hold one token for the site, and one for each connected agent.
 
 **The tool endpoint.**
 
-- `start_session` is the one tool so far. It takes the harness name and the
-  budget under [MCP tools](#mcp-tools), asks GitHub who the connection's
-  token belongs to, records that login under [People](#people), and answers
-  with the person's GitHub ID and login, as text like
-  `Signed in as @priya.`
+- `start_session` takes the harness name and the budget under
+  [MCP tools](#mcp-tools), asks GitHub who the connection's token belongs
+  to, records that login under [People](#people), and answers with the
+  person's GitHub ID and login, as text like `Signed in as @priya.`
+- The maintainer's tools, `register_project`, `update_project`,
+  `project_status`, and `pause_project`, are under
+  [Registering a project](#registering-a-project) and
+  [Managing a project](#managing-a-project).
 - Each person gets 120 calls to `/mcp` a minute, across all their agents,
   counted with Cloudflare rate limiting. The next gets `429` with
   `Retry-After: 60`. Other people's agents keep theirs.
@@ -336,15 +340,17 @@ approve an agent shows its name the same way.
 
 Every action goes through one named check, `requirePermission(caller,
 permission, resource)`. It returns, or refuses with a
-[refusal](#refusals) code. Nothing calls it yet. The tools and pages that need
-it arrive with the issues that build them.
+[refusal](#refusals) code. The maintainer's tools call it with
+`manage_project`, and resuming a pause an admin made calls it with
+`pause_any_project`. The other tools and pages that need it arrive with the
+issues that build them.
 
 | Permission | Allows | Who holds it | Refusal |
 |---|---|---|---|
 | `review_projects` | Seeing the admin queue, and approving or rejecting what waits in it | Admins | `not_admin` |
-| `list_from_policy` | Listing a project from its written policy, or editing such a listing | Admins | `not_admin` |
+| `list_from_policy` | Listing a project from its written policy, or editing any such listing | Admins | `not_admin` |
 | `block_donors` | Blocking a donor, or lifting a block | Admins | `not_admin` |
-| `pause_any_project` | Pausing any project | Admins | `not_admin` |
+| `pause_any_project` | Pausing any project, or resuming one that an admin or Good First Token paused | Admins | `not_admin` |
 | `manage_project` | Registering a repo, changing its settings, or pausing it | Admins and maintainers of the repo on GitHub | `not_maintainer` |
 | `work_claim` | Posting to a claim, submitting its work, releasing it, or opening its PR | The person who made the claim | `not_claim_owner` |
 
@@ -355,7 +361,9 @@ it arrive with the issues that build them.
 - `manage_project` asks GitHub for the caller's permission on the repo, with
   the caller's own token, and needs `admin` or `maintain`. It asks on every
   check and keeps nothing. With no token, or for a repo GitHub says isn't
-  there, the answer is no.
+  there, the answer is no. Every token Good First Token holds has
+  `public_repo` only, and GitHub hides a private repo from such a token, even
+  its owner's, so for a private repo the answer is no too.
 - Being a Good First Token admin is no permission on anyone's repo.
 
 ## People
@@ -757,7 +765,8 @@ reads PRs from GitHub yet.
   when. Adding the project is the first change, made by whoever added it.
 - Only a pause can name no person, for when Good First Token pauses a
   project on its own. Nothing does that yet. An approval or a rejection
-  always names the admin who made it.
+  always names the admin who made it, and a resume names the maintainer who
+  resumed.
 - A change to the status and reason the project already has adds nothing.
 - The project keeps who set its current status, and when.
 
@@ -800,6 +809,128 @@ is kept.
   history.
 - A change applies to the settings as they are when it saves. Two people
   changing different settings at the same moment both keep their change.
+
+## Registering a project
+
+A maintainer registers a repo from their agent with `register_project`. The
+agent calls it with the repo alone for a proposal, confirms or changes the
+settings with the maintainer, then calls it again with the settings.
+
+**Who and which repos.** Every call first asks GitHub for the caller's
+permission on the repo, with their own token, under
+[Permissions](#permissions). Then it reads the repo from GitHub with the
+same token, and refuses with `repo_not_eligible` a repo that:
+
+- is not public: GitHub says it is private, or gives a visibility other than
+  `public`,
+- is archived,
+- has pull requests turned off, or
+- lets only collaborators open pull requests, so its
+  `pull_request_creation_policy` is anything but `all`.
+
+When GitHub leaves out whether a repo takes pull requests, or who can open
+them, the repo is refused too, so no repo gets in on a guess. The project is
+saved under the repo's name as GitHub gives it, so `Sample-Owner/App`
+registers as `sample-owner/app` when that is GitHub's spelling.
+
+**The proposal.** With no settings, it reads the repo and proposes settings,
+each with the reason it differs from its default. It saves nothing, and
+creates no label. It reads the repo's labels, the first 1,000, and these
+files from the default branch, each found without case:
+
+| File | Names | Where |
+|---|---|---|
+| CONTRIBUTING | `CONTRIBUTING`, alone or ending `.md`, `.markdown`, `.rst`, `.txt`, or `.adoc` | The root, then `.github/`, then `docs/` |
+| The AI policy file | `AI_POLICY`, `AI-POLICY`, or `AIPOLICY`, alone or ending `.md`, `.markdown`, `.rst`, or `.txt` | The same |
+| AGENTS.md | `AGENTS.md` | The root |
+| The PR template | `pull_request_template`, alone or ending `.md`, `.markdown`, or `.txt` | The same as CONTRIBUTING |
+
+The first match in that order is read, and a file over 100 KB is skipped, so
+the next place is looked in. The rules read the files in the order of the
+table, and each takes its value from the first file that gives one:
+
+- **Tags** are the repo's labels that mean ready for outside help, compared
+  without case: `help wanted`, `contributor friendly`,
+  `contribution welcome`, `goodfirsttoken`, and any label starting with
+  `.contrib/`. `good first issue` is not one of them. With none of them, the
+  tag is `goodfirsttoken`, which is created if the maintainer keeps it.
+- **Disclosure** uses the trailer a file names for AI help, `Assisted-by` or
+  `Generated-by` followed by a colon, spelled as the file spells it. A name
+  that is part of a longer one, like `AI-Assisted-by:`, doesn't count. The
+  PR body line keeps its default.
+- **Person-written PR description** is on when a file mentions the PR
+  description or pull request description with `yourself`, `by hand`, or
+  `in your own words` after it in the same sentence.
+- **CLA** is the first https link on a line that says `CLA` or
+  `Contributor License Agreement`.
+- Every other setting keeps its default. So the proposal's PR mode is always
+  `reviewed`, and the maintainer chooses `automatic` if they want it.
+
+**Saving.** With settings, it checks them as a whole, and saves the project
+as `pending`, registered by the caller, then. The settings they left out
+take their defaults. An admin approves or rejects it, which #11 builds.
+
+- A repo that is already a registered project, whatever its status, is
+  refused with `already_registered`, proposal or not. Its settings change
+  with `update_project`.
+- A repo an admin listed from its AI policy is taken over. The maintainer's
+  settings replace the listing's, whole, as a new save in the settings
+  history made by them. The project becomes registered: its policy quote
+  goes, and it names the maintainer as who added it, then. Its status stays
+  as it was, since an admin already approved it. So an approved listing
+  stays listed, and a paused one stays paused.
+- A crawler find still waiting in the admin queue doesn't stop a
+  registration, and the registration doesn't change it.
+
+**The goodfirsttoken label.** When the saved tags include `goodfirsttoken`,
+in any case, the repo needs the label. `register_project` and
+`update_project` ask GitHub for it with the maintainer's token, before
+anything saves.
+
+- When the repo has a label of that name in any case, nothing is created.
+- When it doesn't, it is created with the maintainer's own token, named
+  `goodfirsttoken`, colored `7057ff`, with the description "Tagged for
+  outside help through Good First Token". The result lists it under
+  `createdLabels`. A label someone made at the same moment counts as there
+  already.
+- When GitHub refuses to create it, as it does for an organization whose
+  OAuth app access restrictions block Good First Token, nothing saves. The
+  refusal is `label_not_created`, with GitHub's status and message, and says
+  to create the label on GitHub or pick another tag.
+- Only `update_project` calls that send `tags` ask for the label.
+
+## Managing a project
+
+Any admin or maintainer of the repo on GitHub manages its project from their
+agent, asked of GitHub with their own token on every call. A repo that isn't
+a project is `not_found`.
+
+- **`update_project`** sends only the settings it changes, under
+  [Project settings](#project-settings). The change applies at once, and the
+  history records who made it. It works on a listing made from a policy too:
+  the maintainer's values replace the listing's for the settings they send,
+  and the project stays a listing. Settings that break a rule are refused
+  with `invalid_settings`, each problem naming its field, before GitHub is
+  asked to make a label.
+- **`project_status`** answers with the project's status, how it got in, the
+  reason for a rejection or a pause, its settings, and four counts: the
+  cached tagged issues that carry one of its tags and none of its excluded
+  tags, the claims holding a slot now, and the open and merged PRs opened
+  for its claims.
+- **`pause_project`** pauses an approved project, with an optional reason,
+  so agents get no new claims on it. A project that is pending or rejected
+  is refused with `project_not_open`. Pausing a paused project changes
+  nothing, so a maintainer never takes over someone else's pause.
+- **Resuming**, with `paused: false`, puts back the status and reason the
+  project had before the pause, from its status history, made by the
+  maintainer who resumed. A history with nothing before the pause puts back
+  `pending`. So a resume never approves a project an admin hasn't. Resuming
+  a project that isn't paused changes nothing.
+- A pause Good First Token made, or one made by someone who is one of its
+  admins now, stays until an admin lifts it. A maintainer who isn't an admin
+  and tries is refused with `not_admin`. Who is an admin is read from
+  `ADMIN_GITHUB_IDS` at the time, so a pause by someone no longer an admin
+  counts as a maintainer's.
 
 ## Tagged issues
 
@@ -849,9 +980,13 @@ it without case. Adding a repo again keeps its first entry.
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves one of them so far,
+a description for agents. The MCP server serves five of them so far:
 `start_session`, which takes the input defined here and answers with who is
-signed in, under [Connecting an agent](#connecting-an-agent).
+signed in, under [Connecting an agent](#connecting-an-agent), and the
+maintainer's four tools, under
+[Registering a project](#registering-a-project) and
+[Managing a project](#managing-a-project), with the inputs, outputs, and
+descriptions defined here.
 
 | Who | Tools |
 |---|---|
@@ -876,6 +1011,11 @@ signed in, under [Connecting an agent](#connecting-an-agent).
 - A refusal is an MCP error result with text only, like
   `Refused (issue_full): ...`. It has no `structuredContent`, because clients
   check that against the output schema.
+- An input that breaks the tool's schema never reaches the tool. The MCP
+  server answers with an error result whose text names each field and its
+  problem, like
+  `settings.claimsPerIssue: must be a whole number from 1 to 10`, and an
+  unknown field by its name.
 - Times in tool results and feed events are ISO 8601, in UTC.
 - A suggestion names the project's code repo, which differs from the issue's
   repo when the project keeps issues elsewhere. It also carries the tag, the
@@ -907,7 +1047,10 @@ signed in, under [Connecting an agent](#connecting-an-agent).
 The codes are defined in `packages/core`. `nextClaimState` returns the first
 four and `invalid_input`. The issue room returns those, and `pr_exists`,
 `issue_full`, `not_claim_owner`, and `not_found`. `requirePermission` returns
-`not_claim_owner`, `not_maintainer`, and `not_admin`.
+`not_claim_owner`, `not_maintainer`, and `not_admin`. The maintainer's tools
+return `not_maintainer`, `repo_not_eligible`, `already_registered`,
+`label_not_created`, `invalid_settings`, `project_not_open`, `not_admin`, and
+`not_found`.
 
 | Code | When |
 |---|---|
@@ -916,7 +1059,7 @@ four and `invalid_input`. The issue room returns those, and `pr_exists`,
 | `pr_already_opened` | Opening a PR for, or releasing, a claim that already has a PR |
 | `not_submitted` | Opening a PR before the work was submitted |
 | `pr_closed` | The claim's PR merged or closed, so the claim takes no more updates or fixes |
-| `project_not_open` | The project isn't approved, or is paused |
+| `project_not_open` | The project isn't approved, or is paused. Pausing a project that isn't approved gets it too |
 | `issue_not_eligible` | The issue is closed, has no project tag, has an excluded tag, or has an assignee |
 | `pr_exists` | A PR is open on the issue, so it takes no new claims |
 | `issue_full` | Every slot on the issue is taken |
@@ -927,7 +1070,9 @@ four and `invalid_input`. The issue room returns those, and `pr_exists`,
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
-| `repo_not_eligible` | The repo is private or archived, or limits PRs to collaborators |
+| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators |
+| `already_registered` | Registering a repo that is already a registered project |
+| `label_not_created` | GitHub refused to create the `goodfirsttoken` label with the maintainer's token, so nothing saved |
 | `invalid_settings` | Settings failed their checks |
 | `not_admin` | The caller isn't a Good First Token admin |
 | `not_found` | The claim, issue, project, or queue item doesn't exist |
@@ -1222,7 +1367,9 @@ A deployment can serve them from a static host, on a hostname of its own.
   token, and reads who they are with that token. An agent's sign-in does the
   same, with a PKCE verifier. `start_session` reads the person with the
   connection's token. The `manage_project` permission reads the repo with
-  the caller's token.
+  the caller's token. Registering a project reads the repo again, its
+  labels, and its files, and creates the `goodfirsttoken` label, all with
+  the maintainer's token.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
   names the one token to revoke. Signing out, Disconnect, and an agent's
   sign-in that replaces an earlier one each revoke this way.
