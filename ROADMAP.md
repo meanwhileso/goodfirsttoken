@@ -47,7 +47,7 @@ Maintainers register projects, admins approve them, and tagged issues sync from 
 |---|---|---|---|
 | [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 | [#55](https://github.com/meanwhileso/goodfirsttoken/pull/55) |
 | [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 | |
-| [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 | |
+| [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 | [#59](https://github.com/meanwhileso/goodfirsttoken/pull/59) |
 
 ## M4 Claims and live feeds
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12 done
 ```
 
 ## Maintainer steps
@@ -228,9 +228,10 @@ To start staging deploys, once #32 merges:
   domains itself.
 - Create the `staging` and `production` GitHub environments, limit each to `main`, and fill them with
   their settings as secrets.
-- Sign-in (#8) and the MCP server (#9) add settings each environment needs before its first deploy:
-  `SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`, `TOKEN_LIMITER_NAMESPACE_ID`, `OAUTH_CLIENT_ID`,
-  `ADMIN_GITHUB_IDS`, and the secrets `OAUTH_CLIENT_SECRET` and `AUTH_SECRET`.
+- Sign-in (#8), the MCP server (#9), and the sync (#12) add settings each environment needs before its
+  first deploy: `SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`, `TOKEN_LIMITER_NAMESPACE_ID`,
+  `OAUTH_CLIENT_ID`, `ADMIN_GITHUB_IDS`, and the secrets `OAUTH_CLIENT_SECRET`, `AUTH_SECRET`, and
+  `GH_SERVICE_TOKEN`.
   [docs/self-hosting.md](docs/self-hosting.md) says what each one is.
 - Set the repository variable `DEPLOY_STAGING` to `true`.
 

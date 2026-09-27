@@ -31,6 +31,12 @@ ADMIN_GITHUB_IDS=
 # OAUTH_CLIENT_SECRET=
 # AUTH_SECRET=
 
+# The read-only token the scheduled jobs in src/sync/ and a maintainer's
+# refresh read public GitHub data with. Leave it out locally. Without it the
+# jobs read nothing, and the log says so. `pnpm dev` doesn't run them on a
+# schedule.
+# GH_SERVICE_TOKEN=
+
 # GitHub's REST and GraphQL API, and github.com itself for sign-in. The
 # defaults point at the GitHub fake that `pnpm dev` starts. Left empty, the
 # app calls https://api.github.com and https://github.com, which is what a

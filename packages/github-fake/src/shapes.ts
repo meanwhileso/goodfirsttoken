@@ -4,6 +4,7 @@
 // machine. Only documentation_url links point at docs.github.com.
 
 import { blobText, bytesToBase64, listFiles, readObject, type Blob, type Oid, type Tree } from './git.ts';
+import { own } from './own.ts';
 import {
   findAccount,
   findRepoByFullName,
@@ -256,7 +257,7 @@ export function labelShape(ctx: Ctx, repo: RepoRecord, label: LabelRecord) {
 // How the author relates to the repo, as GitHub reports it.
 function authorAssociation(repo: RepoRecord, login: string): string {
   if (key(repo.owner) === key(login)) return 'OWNER';
-  if (repo.collaborators[key(login)]) return 'COLLABORATOR';
+  if (own(repo.collaborators, key(login))) return 'COLLABORATOR';
   const merged = Object.values(repo.issues).some((i) => key(i.user) === key(login) && i.pull?.mergedAt);
   return merged ? 'CONTRIBUTOR' : 'NONE';
 }

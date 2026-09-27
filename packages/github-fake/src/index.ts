@@ -12,23 +12,37 @@
 import { buildState } from './build.ts';
 import { describeOperation, runGraphQL } from './graphql.ts';
 import { REST_DOCS, errorResponse, json } from './http.ts';
+import { rateHeaders, rateWindow, resourceOf, type RateResource } from './rate-limit.ts';
 import { handleRest } from './rest.ts';
+import { own, setOwn } from './own.ts';
 import { sampleData as defaultSampleData, type SampleData } from './sample-data.ts';
 import {
   addReview,
+  assignIssue,
+  canPush,
   closeIssue,
   commitOnBranch,
+  findAccount,
+  findIssue,
   findRepoByFullName,
+  forkRepo,
   getAccount,
   getPull,
+  labelIssue,
   mergePull,
+  newId,
+  openIssue,
+  openPull,
+  roleOf,
   type FakeState,
+  type IssueRecord,
   type RepoRecord,
   type ReviewInput,
 } from './state.ts';
 import { handleWeb, revokeOverTheCap } from './web.ts';
 
 export type { FakeState, ReviewInput } from './state.ts';
+export type { RateResource } from './rate-limit.ts';
 export type { SampleData } from './sample-data.ts';
 
 // Hosts under the reserved .test domain, which never resolves.
@@ -78,6 +92,19 @@ export interface GitHubFake {
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
   // Commits these files, path to text, to the repo's default branch as `by`.
   commitFiles: (repo: string, files: Record<string, string>, by: string) => void;
+  // Opens an issue as `by`, with the labels given, and returns its number.
+  openIssue: (repo: string, issue: { title: string; body?: string; labels?: string[]; by: string }) => number;
+  labelIssue: (repo: string, number: number, label: string, by: string) => void;
+  assignIssue: (repo: string, number: number, assignee: string, by: string) => void;
+  closeIssue: (repo: string, number: number, by: string) => void;
+  // Opens a PR as `by`, from a branch in the repo when they can push there
+  // and from their fork when they can't, and returns its number. `base` is
+  // the repo's default branch unless given, and is made from it when the
+  // repo lacks it.
+  openPullRequest: (repo: string, pull: { title: string; body: string; by: string; base?: string }) => number;
+  // Counts `requests` more calls against the person's budget for the
+  // resource, as other clients of theirs would.
+  spendRateLimit: (login: string, resource: RateResource, requests: number) => void;
 }
 
 const ALPHANUMERIC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -124,6 +151,8 @@ function appCredentialsFrom(header: string | null): { clientId: string; clientSe
   return { clientId: decoded.slice(0, colon), clientSecret: decoded.slice(colon + 1) };
 }
 
+const RATE_LIMIT_DOCS = 'https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api';
+
 const USER_AGENT_REQUIRED =
   'Request forbidden by administrative rules. Please make sure your request has a User-Agent header (https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required). Check https://developer.github.com for other possible causes.';
 
@@ -147,7 +176,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
 
   async function answerApi(request: Request, url: URL, path: string) {
     const token = tokenFrom(request.headers.get('authorization'));
-    const grant = token === null ? undefined : state.tokens[token];
+    const grant = token === null ? undefined : own(state.tokens, token);
     const login = grant?.login ?? null;
     // GitHub keeps when each token was last used, which decides the one it
     // revokes past the cap (web.ts).
@@ -171,16 +200,55 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       return done(errorResponse(400, 'Problems parsing JSON', REST_DOCS), operation);
     }
     const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [] };
+    const app = appCredentialsFrom(request.headers.get('authorization'));
+    let name = operation;
     if (graphql) {
       const docs = 'https://docs.github.com/graphql/guides/forming-calls-with-graphql#authenticating-with-graphql';
       if (request.method !== 'POST') return done(errorResponse(404, 'Not Found', REST_DOCS), operation);
-      const name = typeof body.query === 'string' ? describeOperation(body.query, body.operationName as string) : operation;
+      name = typeof body.query === 'string' ? describeOperation(body.query, body.operationName as string) : operation;
       if (!grant) return done(errorResponse(401, 'This endpoint requires you to be authenticated.', docs), name);
-      return done(json(await runGraphQL(ctx, body, now().toISOString())), name);
     }
-    const app = appCredentialsFrom(request.headers.get('authorization'));
+    // Each call counts against its caller's budget, and every answer says
+    // what is left of it. The fake charges a GraphQL query one point,
+    // whatever it asks for.
+    const resource = resourceOf(path);
+    const caller = login ?? (app ? `app:${app.clientId}` : null);
+    // Asking what is left costs nothing.
+    // https://docs.github.com/en/rest/rate-limit/rate-limit#get-rate-limit-status-for-the-authenticated-user
+    if (path === '/rate_limit' && request.method === 'GET') {
+      const status = (name: RateResource) => {
+        const window = rateWindow(state, caller, name, now());
+        return {
+          limit: window.limit,
+          used: window.used,
+          remaining: Math.max(0, window.limit - window.used),
+          reset: Math.floor(Date.parse(window.resetAt) / 1000),
+        };
+      };
+      const resources = { core: status('core'), graphql: status('graphql'), search: status('search') };
+      const response = json({ resources, rate: resources.core });
+      for (const [header, value] of Object.entries(rateHeaders(rateWindow(state, caller, 'core', now()), 'core'))) {
+        response.headers.set(header, value);
+      }
+      return done(response, 'GET /rate_limit');
+    }
+    const budget = rateWindow(state, caller, resource, now());
+    const spent = budget.used >= budget.limit;
+    if (!spent) budget.used += 1;
+    const answer = (response: Response, operationName: string) => {
+      for (const [header, value] of Object.entries(rateHeaders(budget, resource))) response.headers.set(header, value);
+      return done(response, operationName);
+    };
+    if (spent) {
+      const who = caller === null ? 'this address' : `user ID ${String(findAccount(state, caller)?.id ?? caller)}`;
+      const message = `API rate limit exceeded for ${who}.`;
+      // GraphQL answers a spent budget with 200 and an error, REST with 403.
+      if (graphql) return answer(json({ errors: [{ type: 'RATE_LIMITED', message }] }), name);
+      return answer(errorResponse(403, message, RATE_LIMIT_DOCS), name);
+    }
+    if (graphql) return answer(json(await runGraphQL(ctx, body, now().toISOString())), name);
     const rest = handleRest({ ctx, method: request.method, url, body, app, now: now().toISOString() }, path);
-    return done(rest.response, rest.operation);
+    return answer(rest.response, rest.operation);
   }
 
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -218,6 +286,12 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     return repo;
   };
 
+  const issueNamed = (repo: string, number: number): IssueRecord => {
+    const issue = findIssue(repoNamed(repo), number);
+    if (!issue) throw new Error(`the fake has no issue ${repo}#${String(number)}`);
+    return issue;
+  };
+
   return {
     apiUrl,
     webUrl,
@@ -253,6 +327,44 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
         { additions, deletions: [], headline: 'Update files', login: by },
         now().toISOString(),
       );
+    },
+    openIssue: (repo, issue) =>
+      openIssue(
+        state,
+        repoNamed(repo),
+        { title: issue.title, body: issue.body ?? null, labels: issue.labels, login: issue.by },
+        now().toISOString(),
+      ).number,
+    labelIssue: (repo, number, label, by) => {
+      labelIssue(state, repoNamed(repo), issueNamed(repo, number), label, by, now().toISOString());
+    },
+    assignIssue: (repo, number, assignee, by) => {
+      assignIssue(state, issueNamed(repo, number), assignee, by, now().toISOString());
+    },
+    closeIssue: (repo, number, by) => {
+      closeIssue(state, issueNamed(repo, number), by, 'completed', now().toISOString());
+    },
+    openPullRequest: (repo, pull) => {
+      const at = now().toISOString();
+      const base = repoNamed(repo);
+      const author = getAccount(state, pull.by).login;
+      const baseRef = pull.base ?? base.defaultBranch;
+      if (own(base.branches, baseRef) === undefined) setOwn(base.branches, baseRef, own(base.branches, base.defaultBranch) ?? '');
+      const target = canPush(roleOf(base, author)) ? base : forkRepo(state, base, author, {}, at);
+      const branch = `patch-${String(newId(state))}`;
+      setOwn(target.branches, branch, own(base.branches, baseRef) ?? '');
+      commitOnBranch(
+        state,
+        target,
+        branch,
+        { additions: [{ path: `changes/${branch}.md`, contents: `${pull.title}\n` }], deletions: [], headline: pull.title, login: author },
+        at,
+      );
+      const head = target === base ? branch : `${author}:${branch}`;
+      return openPull(state, base, { title: pull.title, body: pull.body, head, base: baseRef, login: author }, at).number;
+    },
+    spendRateLimit: (login, resource, requests) => {
+      rateWindow(state, login, resource, now()).used += requests;
     },
   };
 }

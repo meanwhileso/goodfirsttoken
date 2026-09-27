@@ -281,6 +281,19 @@ test("the feed queue's consumer and its dead-letter queue are deployed under the
   assert.ok(config.queues.consumers.some((consumer) => consumer.dead_letter_queue === 'sample-site-feed-dlq'));
 });
 
+// The tagged-issue sync and the PR job run on cron triggers, and read GitHub
+// with the GH_SERVICE_TOKEN secret (apps/web/src/sync/scheduled.ts).
+test('a deployed Worker gets the cron triggers its jobs run on, and the service token secret they read GitHub with', () => {
+  const real = realLocal();
+  assert.ok((real.triggers?.crons ?? []).length > 0, 'the Worker has cron triggers');
+
+  const { config } = deployConfig(real, 'production', withLimiter);
+
+  assert.deepEqual(config.triggers, real.triggers);
+  assert.deepEqual(config.secrets, real.secrets);
+  assert.ok(config.secrets.required.includes('GH_SERVICE_TOKEN'), 'a deploy puts GH_SERVICE_TOKEN');
+});
+
 test('the local config may not carry an account, a route, or a resource ID', () => {
   for (const bad of [
     { ...local, account_id: 'x' },

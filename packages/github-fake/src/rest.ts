@@ -3,6 +3,7 @@
 
 import { lookupPath, readObject, type Oid } from './git.ts';
 import { REST_DOCS, errorResponse, json, paginate } from './http.ts';
+import { own, setOwn } from './own.ts';
 import { searchIssues, searchRepos } from './search.ts';
 import {
   branchShape,
@@ -109,9 +110,9 @@ function searchPage<T>(
 
 function resolveRef(repo: RepoRecord, ref: string | null, req: RestRequest): Oid {
   const name = ref ?? repo.defaultBranch;
-  const sha = repo.branches[name.replace(/^refs\/heads\//, '')];
+  const sha = own(repo.branches, name.replace(/^refs\/heads\//, ''));
   if (sha !== undefined) return sha;
-  if (req.ctx.state.objects[name]?.type === 'commit') return name;
+  if (own(req.ctx.state.objects, name)?.type === 'commit') return name;
   throw new FakeError('not_found', `No commit found for the ref ${name}`);
 }
 
@@ -132,7 +133,7 @@ const routes: Route[] = [
     path: '/applications/{client_id}/token',
     docs: `${DOCS}/apps/oauth-applications#delete-an-app-token`,
     handle: (req, params) => {
-      const app = req.ctx.state.oauthApps[params.client_id ?? ''];
+      const app = own(req.ctx.state.oauthApps, params.client_id ?? '');
       if (!app || req.app?.clientId !== app.clientId || req.app.clientSecret !== app.clientSecret) {
         throw new FakeError('not_found', 'Not Found');
       }
@@ -142,7 +143,7 @@ const routes: Route[] = [
           { resource: 'OauthAccess', code: 'missing_field', field: 'access_token' },
         ]);
       }
-      if (req.ctx.state.tokens[token]?.clientId !== app.clientId) throw new FakeError('not_found', 'Not Found');
+      if (own(req.ctx.state.tokens, token)?.clientId !== app.clientId) throw new FakeError('not_found', 'Not Found');
       Reflect.deleteProperty(req.ctx.state.tokens, token);
       return new Response(null, { status: 204 });
     },
@@ -329,7 +330,7 @@ const routes: Route[] = [
     handle: (req, params) => {
       const repo = repoOf(req, params);
       const branch = params.branch ?? '';
-      const sha = repo.branches[branch];
+      const sha = own(repo.branches, branch);
       if (sha === undefined) throw new FakeError('not_found', 'Branch not found');
       return json(branchShape(req.ctx, repo, branch, sha));
     },
@@ -341,7 +342,7 @@ const routes: Route[] = [
     handle: (req, params) => {
       const repo = repoOf(req, params);
       const branch = /^heads\/(.+)$/.exec(params.ref ?? '')?.[1];
-      const sha = branch === undefined ? undefined : repo.branches[branch];
+      const sha = branch === undefined ? undefined : own(repo.branches, branch);
       if (branch === undefined || sha === undefined) throw new FakeError('not_found', 'Not Found');
       return json(refShape(req.ctx, repo, branch, sha));
     },
@@ -361,9 +362,9 @@ const routes: Route[] = [
       if (branch === undefined) {
         throw new FakeError('invalid', "Reference name must start with 'refs/heads/' in the GitHub fake");
       }
-      if (req.ctx.state.objects[sha]?.type !== 'commit') throw new FakeError('invalid', 'Object does not exist');
-      if (repo.branches[branch] !== undefined) throw new FakeError('invalid', 'Reference already exists');
-      repo.branches[branch] = sha;
+      if (own(req.ctx.state.objects, sha)?.type !== 'commit') throw new FakeError('invalid', 'Object does not exist');
+      if (own(repo.branches, branch) !== undefined) throw new FakeError('invalid', 'Reference already exists');
+      setOwn(repo.branches, branch, sha);
       return json(refShape(req.ctx, repo, branch, sha), 201);
     },
   },

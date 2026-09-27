@@ -1,6 +1,8 @@
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { defineConfig } from 'vitest/config';
 
 // Tests run inside the Workers runtime against the whole Worker, with the
@@ -10,10 +12,13 @@ import { defineConfig } from 'vitest/config';
 // can't change the result. The secrets are set, as a deploy sets them. GitHub's
 // URLs are under .test, a domain that never resolves. Tests answer them with
 // the in-process GitHub fake. The D1 migrations are read here, in Node, and a
-// setup file applies them to the test database. Browser tests are in e2e/ and
-// use Playwright.
+// setup file applies them to the test database. So are the cron triggers in
+// wrangler.jsonc, so a test can run each one's job. Browser tests are in e2e/
+// and use Playwright.
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(fileURLToPath(new URL('migrations', import.meta.url)));
+  const wrangler = ts.parseConfigFileTextToJson('wrangler.jsonc', readFileSync(new URL('wrangler.jsonc', import.meta.url), 'utf8'));
+  const crons = (wrangler.config as { triggers?: { crons?: string[] } }).triggers?.crons ?? [];
   return {
     plugins: [
       tanstackStart(),
@@ -27,10 +32,12 @@ export default defineConfig(async () => {
             OAUTH_CLIENT_ID: 'goodfirsttoken-test',
             OAUTH_CLIENT_SECRET: 'test-only-client-secret',
             AUTH_SECRET: 'test-only-auth-secret-that-is-long-enough-for-better-auth',
+            GH_SERVICE_TOKEN: 'test-only-service-token',
             ADMIN_GITHUB_IDS: '',
             GH_API_URL: 'https://api.github.test',
             GH_WEB_URL: 'https://github.test',
             TEST_MIGRATIONS: migrations,
+            TEST_CRONS: crons,
           },
         },
       }),

@@ -3,6 +3,8 @@
 // objects on GitHub. IDs are 40 hex characters like Git's, made with an FNV
 // hash of the content, so they never match an object in a real repo.
 
+import { own } from './own.ts';
+
 export type Oid = string;
 
 export interface Blob {
@@ -118,7 +120,7 @@ export function readObject<T extends GitObject['type']>(
   oid: Oid,
   type: T,
 ): Extract<GitObject, { type: T }> {
-  const object = store[oid];
+  const object = own(store, oid);
   if (object?.type !== type) throw new Error(`the fake has no ${type} ${oid}`);
   return object as Extract<GitObject, { type: T }>;
 }

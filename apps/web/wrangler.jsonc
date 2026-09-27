@@ -37,8 +37,14 @@
   // OAUTH_CLIENT_SECRET is the GitHub OAuth app's client secret. AUTH_SECRET
   // signs the sign-in cookies and encrypts the GitHub tokens the site stores,
   // from its own sign-in and from each agent's. Local development needs
-  // neither (src/auth/settings.ts).
-  "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET"] },
+  // neither (src/auth/settings.ts). GH_SERVICE_TOKEN is the read-only token
+  // the jobs below read public GitHub data with. Without it they read
+  // nothing.
+  "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET", "GH_SERVICE_TOKEN"] },
+  // The cron triggers. Each names one job in src/sync/scheduled.ts: the
+  // tagged-issue sync every 15 minutes, and the PR job twice an hour, apart
+  // from it. Times are UTC.
+  "triggers": { "crons": ["*/15 * * * *", "7,37 * * * *"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   // One issue room per issue, named by the issue (src/rooms/issue-room.ts),
   // and one feed each for the homepage, each project, and each person

@@ -207,8 +207,17 @@ export const samples: Samples = {
       statusReason: 'The notes ask agents to skip tests.',
       settings,
       counts,
+      issuesReadAt: at,
+      refresh: 'partly_read',
     },
-    mentions: ['rejected', 'The notes ask agents to skip tests.', '3 tagged issues', '14 merged'],
+    mentions: [
+      'rejected',
+      'The notes ask agents to skip tests.',
+      '3 tagged issues',
+      '14 merged',
+      'Tagged issues last read from GitHub 2026-09-26 12:00 UTC.',
+      'The next scheduled sync reads the rest.',
+    ],
   },
   pause_project: {
     output: { repo, status: 'paused', changed: true, resumableBy: 'maintainers' },

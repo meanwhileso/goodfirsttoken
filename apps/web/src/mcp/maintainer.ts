@@ -21,6 +21,7 @@ import {
   countProjectPrs,
   countWorkingClaims,
   createProject,
+  getIssueSync,
   getProject,
   listIssues,
   setProjectStatusFrom,
@@ -38,6 +39,7 @@ import {
   whyNotEligible,
   whyNotIssueRepo,
 } from '../projects/repo';
+import { refreshIssues } from '../sync/scheduled';
 
 // The maintainer's tools: register_project, update_project, project_status,
 // and pause_project. Each one first asks GitHub, with the caller's own token,
@@ -234,14 +236,27 @@ function isTagged(labels: readonly string[], settings: ProjectSettings): boolean
   return has(settings.tags) && !has(settings.excludedTags);
 }
 
+/**
+ * Answers with the project's status and activity. With `refresh`, it first
+ * reads an approved project's tagged issues from GitHub with the service
+ * token, at most once every 10 minutes for the project. Only the repo's
+ * admins and maintainers get this far, so no one else can spend the token.
+ */
 export async function projectStatus(caller: Caller, input: ToolInput<'project_status'>, now: number): Promise<Answer> {
   await requirePermission(caller, 'manage_project', { repo: input.repo });
-  const project = await getProject(env.DB, input.repo);
+  let project = await getProject(env.DB, input.repo);
   if (project === null) return notAProject(input.repo);
-  const [issues, working, prs] = await Promise.all([
+  let refresh: Awaited<ReturnType<typeof refreshIssues>> | null = null;
+  if (input.refresh) {
+    refresh = await refreshIssues(env, project);
+    // A refresh can pause the project.
+    project = (await getProject(env.DB, project.repo)) ?? project;
+  }
+  const [issues, working, prs, sync] = await Promise.all([
     listIssues(env.DB, project.repo),
     countWorkingClaims(env.DB, project.repo, now),
     countProjectPrs(env.DB, project.repo),
+    getIssueSync(env.DB, project.repo),
   ]);
   return answer(
     toolResult('project_status', {
@@ -256,6 +271,8 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
         openPrs: prs.open,
         merged: prs.merged,
       },
+      issuesReadAt: sync?.readAt == null ? null : new Date(sync.readAt).toISOString(),
+      refresh,
     }),
   );
 }

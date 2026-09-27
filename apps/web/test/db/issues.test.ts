@@ -1,6 +1,6 @@
 import type { TaggedIssue } from '@goodfirsttoken/core';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { getIssue, listIssues, pruneIssues, saveIssues } from '../../src/db';
+import { dropIssues, getIssue, listIssueCopies, listIssues, pruneIssues, saveIssues } from '../../src/db';
 import { db, emptyDatabase, HOUR, maintainer, refusal, registeredProject, repo, signIn, t0 } from './helpers';
 
 const issueRepo = 'sample-owner/sample-issues';
@@ -33,6 +33,37 @@ describe('the tagged-issue cache', () => {
     expect(await getIssue(db, repo, `${issueRepo}#7`)).toEqual(saved[0]);
     expect(await getIssue(db, repo, 'Sample-Owner/Sample-Issues#8')).toEqual(saved[1]);
     expect(await getIssue(db, repo, `${issueRepo}#9`)).toBeNull();
+  });
+
+  test('a linked PR keeps the ways the sync found it, and an issue with no linked PR has none', async () => {
+    const found = issue(7, { linkedPr, linkedPrFoundBy: ['closing_reference', 'cross_reference'] });
+    await saveIssues(db, [found, issue(8)]);
+    await saveIssues(db, [issue(7, { syncedAt: t0 + HOUR })]);
+
+    expect((await listIssues(db, repo)).map((i) => [i.issue, i.linkedPrFoundBy])).toEqual([
+      [`${issueRepo}#7`, undefined],
+      [`${issueRepo}#8`, undefined],
+    ]);
+    await saveIssues(db, [found]);
+    expect(await getIssue(db, repo, `${issueRepo}#7`)).toEqual(found);
+  });
+
+  test('ways of finding a linked PR, with no linked PR, are refused', async () => {
+    const message = await refusal(saveIssues(db, [issue(7, { linkedPrFoundBy: ['cross_reference'] })]));
+
+    expect(message).toContain('linkedPrFoundBy: must be left out with no linked PR');
+    expect(await listIssues(db, repo)).toEqual([]);
+  });
+
+  test("dropping issues drops only the project's own copies of them", async () => {
+    const other = 'sample-owner/other-app';
+    await registeredProject({ tags: ['ready'], issueRepo }, other);
+    await saveIssues(db, [issue(7), issue(8), issue(7, { project: other })]);
+
+    expect(await dropIssues(db, repo, [`${issueRepo}#7`, 'Sample-Owner/Sample-Issues#9'])).toBe(1);
+
+    expect((await listIssues(db, repo)).map((i) => i.issue)).toEqual([`${issueRepo}#8`]);
+    expect((await listIssueCopies(db, `${issueRepo}#7`)).map((i) => i.project)).toEqual([other]);
   });
 
   test('a later sync replaces what an issue says, including a linked PR that closed', async () => {

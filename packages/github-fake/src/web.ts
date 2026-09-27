@@ -6,6 +6,7 @@
 
 import { base64ToBytes, bytesToBase64, lookupPath, readObject } from './git.ts';
 import { json } from './http.ts';
+import { own } from './own.ts';
 import { findAccount, findRepo, type FakeState, type TokenRecord } from './state.ts';
 
 export interface WebContext {
@@ -134,7 +135,7 @@ function signInPage(ctx: WebContext, appName: string, params: AuthorizeParams): 
 async function authorize(ctx: WebContext, request: Request, url: URL): Promise<Response> {
   const form = request.method === 'POST' ? new URLSearchParams(await request.text()) : url.searchParams;
   const params = readAuthorizeParams(form);
-  const app = ctx.state.oauthApps[params.clientId];
+  const app = own(ctx.state.oauthApps, params.clientId);
   if (!app) return html('<!doctype html><title>Not Found</title><h1>404</h1><p>No OAuth app has that client_id.</p>', 404);
   const back = params.redirectUri ?? app.callbackUrl;
   if (!redirectAllowed(app.callbackUrl, back)) {
@@ -219,10 +220,10 @@ async function accessToken(ctx: WebContext, request: Request, url: URL): Promise
       error_uri: `${TOKEN_ERRORS_DOCS}#${code.replace(/_/g, '-')}`,
     });
 
-  const app = ctx.state.oauthApps[params.get('client_id') ?? ''];
+  const app = own(ctx.state.oauthApps, params.get('client_id') ?? '');
   if (!app || app.clientSecret !== params.get('client_secret')) return error('incorrect_client_credentials');
   const code = params.get('code') ?? '';
-  const grant = ctx.state.oauthCodes[code];
+  const grant = own(ctx.state.oauthCodes, code);
   // A code works once.
   Reflect.deleteProperty(ctx.state.oauthCodes, code);
   if (!grant || grant.clientId !== app.clientId || Date.parse(grant.expiresAt) < ctx.now.getTime()) {
@@ -250,7 +251,7 @@ async function accessToken(ctx: WebContext, request: Request, url: URL): Promise
 export const TOKENS_PER_APP_AND_SCOPES = 10;
 
 export function revokeOverTheCap(state: FakeState, issued: string, now: Date): void {
-  const record = state.tokens[issued];
+  const record = own(state.tokens, issued);
   if (!record) return;
   const scopes = (list: string[]) => [...list].sort().join(' ');
   const time = (iso: string | null | undefined) => (iso ? Date.parse(iso) : 0);
@@ -302,7 +303,7 @@ function raw(ctx: WebContext, owner: string, name: string, rest: string): Respon
     .find((b) => rest.startsWith(`${b}/`));
   const ref = branch ?? rest.split('/')[0] ?? '';
   const path = rest.slice(ref.length + 1);
-  const sha = repo.branches[ref] ?? (ctx.state.objects[ref]?.type === 'commit' ? ref : undefined);
+  const sha = own(repo.branches, ref) ?? (own(ctx.state.objects, ref)?.type === 'commit' ? ref : undefined);
   if (sha === undefined) return notFound;
   const found = lookupPath(ctx.state.objects, readObject(ctx.state.objects, sha, 'commit').tree, path);
   if (found?.object.type !== 'blob') return notFound;
