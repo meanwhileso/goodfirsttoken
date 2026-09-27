@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, and the scheduled jobs that read GitHub. The rest of the site and other queue consumers join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, and the scheduled jobs that read GitHub. The rest of the site and other queue consumers join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -70,6 +70,9 @@ The repo is a pnpm workspace.
 - **The issue page is `src/routes/$owner.$repo.issues.$number.tsx`,** with
   what it reads in `src/issue/`, described under
   [The issue page](#the-issue-page).
+- **The projects list is `src/routes/projects.tsx`, and a project's page
+  `src/routes/$owner.$repo.index.tsx`,** with what they read in
+  `src/project/`, described under [The project pages](#the-project-pages).
 - **`src/dev/` is for local development only:** the sample work `pnpm seed`
   gives a local site, and a route that works an issue as a sample person,
   described under [Sample data](#sample-data-in-development).
@@ -720,7 +723,7 @@ pruning after a sync, with no index of its own.
 | `project_status_changes_by_repo` | A project's status changes, newest first |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
 | `claims_by_person` | One person's claims, newest first: `my_work`, their page, and their leaderboard row |
-| `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project. Its claims working now, for `project_status` |
+| `claims_by_project` | One project's claims: its page's claims working now, merged PRs, and top helpers, its claims working now for `project_status`, and, in a time range, its row on the leaderboard by project |
 | `prs_by_number` | A PR's claim, and one claim per PR |
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
@@ -1012,9 +1015,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   on the feed or room, for as long as the page is open, with no hour limit.
   Every homepage view opens one on the homepage's feed, so that one object
   sends every event to every open homepage. It also takes one `glance` per
-  homepage view. Every issue page view opens one on its issue's room. Each
-  message a page sends on its socket wakes the feed or room from
-  hibernation, which Cloudflare bills, though the feed ignores the message.
+  homepage view. Every project page view opens one on its project's feed,
+  and takes one `glance`, and every issue page view opens one on its
+  issue's room. Each message a page sends on its socket wakes the feed or
+  room from hibernation, which Cloudflare bills, though the feed ignores
+  the message.
   Nothing limits how many sockets a client opens, or how many messages it
   sends on one, yet. #34 takes those limits.
 - **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
@@ -1025,9 +1030,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   stays open for it. That is why the socket has no hour limit, and why the
   block check is the one every watcher gets. The socket lives on the
   stream's own URL, so each feed has one address, one resolver, and one set
-  of `404`s, for people, programs, and pages alike. The homepage and the
-  issue page open theirs with `useLiveFeed`, and person pages and `/live`
-  (#26) can too.
+  of `404`s, for people, programs, and pages alike. The homepage, a
+  project's page, and the issue page open theirs with `useLiveFeed`, and
+  person pages and `/live` (#26) can too.
 - **`useLiveFeed(path, since, onEvent)`** opens the socket from the page,
   hands each new event to the page once, and reconnects after a drop with
   the last event's ID, backing off as
@@ -1059,7 +1064,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
 | `src/home/data.ts` | `getHome`, the server function the route's loader calls |
 | `src/home/load.ts` | `loadHome`, which reads what the page shows, on the server only |
 | `src/home/live.ts` | The wall's lines and the token field's squares, for the server and the page alike |
+| `src/project/ProjectRow.tsx` | A project asking for help as a row, which the projects list shows too |
 | `src/styles/home-page.css` | The page's layout |
+| `src/styles/project-rows.css` | The rows' layout, which the projects list links too |
 
 - **What the page reads.** `loadHome` reads its three parts at the same
   time: a `glance` at the homepage's feed, `topMergers` in `src/db/prs.ts`,
@@ -1076,8 +1083,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
   `startOfWeek` in the same file gives the Monday.
 - **Asking for help** counts each approved project's waiting issues in the
   same query, with `json_each` over the issue's labels and the project's
-  current settings. SQLite's `lower()` folds only ASCII letters, so two
-  labels that differ in the case of other letters don't match there. The
+  current settings. The rule for an issue waiting is SQL in
+  `src/db/waiting.ts`, which a project page's tagged issues use too.
+  SQLite's `lower()` folds only ASCII letters, so two labels that differ in
+  the case of other letters don't match there. The
   claims that hold a slot come from the claims mirror, through
   `claims_by_issue`. The query applies the 24 hours and the 7 days from
   core's `CLAIM_LIFETIME_MS` and `REVIEW_WINDOW_MS` itself, as `holdsSlot`
@@ -1152,7 +1161,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   neither gets a `404` from the page and from the stream, and that no room
   is made. The one difference is the path, under The site's own paths.
 - **Whether it takes claims** follows the homepage's rule for an issue
-  waiting for an agent, in `listProjectsAskingForHelp`. `closedBecause` in
+  waiting for an agent, which `listProjectsAskingForHelp` applies with the
+  SQL in `src/db/waiting.ts`. `closedBecause` in
   `src/issue/load.ts` judges each copy with its own project, less the open
   PRs and the free slot, which the page follows live: an approved project,
   not on the do-not-list, and a cached copy with one of its tags and none of
@@ -1160,11 +1170,47 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   then picks the copy the page follows, as how-it-works says, checking the
   slots taken against each copy's own claims per issue. That copy's linked
   PR joins the room's open PRs.
-- **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
-  OAuth routes before any page or stream. The page also answers `404` for
-  `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in
-  `src/issue/path.ts`, so a path like `/oauth/<repo>/issues/1` never shows
-  an issue. A stream on an `/oauth/...` path answers as any other.
+- **The site's own paths.** A project's page is at `/<owner>/<repo>`, with
+  its issues' pages and its streams under it, so a path the site keeps for
+  itself could name a repo. `src/issue/path.ts` holds one rule for the
+  project page and the issue page: an owner whose paths belong to the site
+  has neither, and both answer `404` for it, through `repoFromPath` and
+  `issueFromPath`. Each of the site's paths, and whether it can meet a
+  project's:
+  - `/auth/...` and `/mcp/...` go to sign-in and the MCP server in
+    `src/server.ts` before any page or stream, whatever follows. The OAuth
+    library matches `/mcp` as a prefix, so `/mcp/<repo>` gets its `401`.
+    `auth` and `mcp` are reserved.
+  - `/oauth/token` and `/oauth/register` go to the OAuth library, and
+    `/oauth/authorize` is the page where a person approves an agent. Only
+    those three repo names meet, but `oauth` is reserved whole, like the
+    others, so one rule covers every owner.
+  - `/dev/seed` and `/dev/work` are routes of their own, which TanStack
+    Router matches ahead of `/$owner/$repo/`. They exist in every
+    environment, and answer `404` outside development, so `dev` is
+    reserved too. Sending `/mcp/<anything>` to the site ahead of the OAuth
+    library would still leave `auth`, `oauth`, and `dev` to reserve, so the
+    rule reserves owners.
+  - `/_serverFn/...`, where TanStack Start answers server functions, and
+    `/.well-known/...`, where the OAuth library answers its metadata, can't
+    name a repo: no GitHub login starts with `_` or `.`. Nor can
+    `/@<user>/...`, since no login has `@`.
+  - `/`, `/projects`, `/design`, `/me`, `/sign-in`, `/healthz`,
+    `/live.txt`, and `/live.ndjson` have one part, and a project's page
+    two. A path under one of them, like `/projects/<name>`, is a project's
+    page, since the site has no route there.
+  - `src/server.ts` sends every path shaped like a stream to
+    `src/feed/streams.ts` first: `/<owner>/<repo>/live.txt` and its issue's
+    have more parts than a page. A repo named `live.txt` has its page at
+    `/<owner>/live.txt`, which no stream's pattern matches.
+  - `/assets/<file>`, when a deployment serves its own built files, is
+    answered by Cloudflare before the Worker when the file exists. Only a
+    repo named exactly like a built file, whose name carries a hash of its
+    content, would lose its page, so `assets` isn't reserved.
+
+  A stream doesn't follow the rule. One on an `/oauth/...` or `/dev/...`
+  path answers as any other, and one on `/mcp/...` gets the MCP server's
+  `401`.
 - **Logins now.** Events carry the login a claimant had when they claimed.
   Each lane, and the timeline, shows the login in `people` for the claim's
   GitHub ID, since a renamed login can later belong to someone else.
@@ -1196,6 +1242,85 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   the page is open. Each lane keeps its
   newest 20 lines, so the page carries at most that many per claim. Nothing
   caches any of it yet.
+
+## The project pages
+
+The rules are in [how-it-works.md](how-it-works.md#the-projects-list),
+under The projects list and The project page.
+
+| File | What it does |
+|---|---|
+| `src/routes/projects.tsx` | The projects list, with its filter and search |
+| `src/routes/$owner.$repo.index.tsx` | A project's page, built from the components in `src/components/`, with its issue rows, merged PRs, rules, and live wall |
+| `src/project/data.ts` | `getProjectsList` and `getProjectPage`, the server functions the routes' loaders call |
+| `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
+| `src/project/list.ts` | The list's filter and search |
+| `src/project/rules.ts` | A project's settings as split badges |
+| `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
+| `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
+| `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
+
+- **The list is the homepage's.** `loadProjectsList` calls
+  `listProjectsAskingForHelp` with a limit of 1,000, so the list has the
+  homepage's projects, order, and waiting counts, and adds how each got in
+  from the project's record. The filter and the search run in the page
+  over what it loaded, with `filterProjects` in `src/project/list.ts`.
+  Their controls sit in a `fieldset` that is disabled in the server's
+  render and enabled from the page's first render after hydration, so
+  they look off until they work, and a test can wait for them.
+- **One waiting rule.** `src/db/waiting.ts` holds the SQL for a cached copy
+  that carries a tag, the slots its claims hold at a time, a claim's PR
+  that is still open, and the whole rule for an issue waiting for an
+  agent. `listProjectsAskingForHelp` counts each project's copies that
+  wait, and `listProjectIssues` in `src/db/issues.ts` says for each copy
+  of one project how many slots are taken, which claim's PR is open, and
+  whether it waits. A test checks that the page's issues that take claims
+  are as many as the homepage counts waiting.
+- **What the page reads.** `loadProject` reads the project, then checks the
+  do-not-list for its repo and issue repo. Then, at the same time, its
+  tagged issues with `listProjectIssues`, the claims working now with
+  `countWorkingClaims`, the merged PRs with `listMergedPrs`, the top
+  helpers with `topHelpers`, the save of its current settings with
+  `getSettingsSave`, and a `glance` at the project's feed. Then each
+  person it names, by their login now. A failed read of the feed leaves
+  the wall empty with a note, and any other failed read makes the page
+  answer `503`, through `PAGE_STATUS_HEADER`, as the issue page does.
+- **Merged work and top helpers** come from `claims` and `prs` in
+  `src/db/prs.ts`. `topHelpers` and the homepage's `topMergers` share one
+  ranking query and one filter for what shows, which leaves out blocked
+  donors and PRs the do-not-list names. Only the scope differs: a time
+  range read through `prs_by_closed`, or a project read through
+  `claims_by_project`. `listMergedPrs` counts them all with
+  `COUNT(*) OVER ()` as it takes the first 10. Only PRs from claims are in
+  `prs`. The sync keeps a linked PR from anyone only while it is open, and
+  the PR job reads only the PRs in `prs`, so a PR from outside Good First
+  Token is never recorded as merged.
+- **The live wall** is the homepage's `Wall`, fed by the project's feed:
+  the page loads with a `glance` of 6 events, then opens
+  `/<owner>/<repo>/live.ndjson` with `useLiveFeed`, starting after the
+  newest line it shows, and puts each event on top with `toWallLine` from
+  `src/home/live.ts`. The feed's `glance` leaves blocked donors' events
+  out.
+- **The route's file** is `$owner.$repo.index.tsx`, an index route. A file
+  named `$owner.$repo.tsx` would make every issue page a child of it, with
+  its loader run first.
+- **The takeover link** goes to `/maintainers`, the page
+  [brand/brief-website.md](../brand/brief-website.md) gives the job of
+  saying how to take over a listing from an agent. A maintainer takes a
+  listing over with `register_project`, under
+  [Registering a project](how-it-works.md#registering-a-project).
+- **What a view costs.** The list is one D1 query, the homepage's, which
+  counts the waiting issues of every approved project. A project's page
+  reads the project, and the do-not-list once or twice. Then it makes six
+  reads at once. Its tagged issues are one query, through the table's key,
+  with each issue's claims through `claims_by_issue`. The claims working
+  now, the merged PRs, and the top helpers are one query each, through
+  `claims_by_project`, with each PR, person, block, and do-not-list entry
+  by key. The save of its settings is one read by key. The `glance` at the
+  project's feed reads D1 once for its block check when the feed has
+  events. Then it reads `people` once or twice. So a view costs about ten
+  D1 queries, one call to a feed, and a socket on the feed for as long as
+  the page is open. Nothing caches any of it yet.
 
 ## The sync
 
@@ -1703,10 +1828,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   feeds. `issue.spec.ts` works real issue rooms through `/dev/work`, as
   several sample people at once, and the page follows them over the real
   socket. A pause needs 30 minutes, so that one test stands in for the
-  room's socket and sends a pause shaped like the room's. Their events
-  reach the homepage's feed, so they run in the `rooms` project, which
-  depends on the `chromium` project, once the rest are done, and the
-  homepage's tests see only what they expect.
+  room's socket and sends a pause shaped like the room's. `projects.spec.ts`
+  seeds the sample projects through `/dev/seed`, and works an issue through
+  `/dev/work` to see a line reach a project's page over the real socket.
+  Their events reach the homepage's feed, and the seed lists projects
+  there, so both run in the `rooms` project, which depends on the
+  `chromium` project, once the rest are done, and the homepage's tests see
+  only what they expect.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
@@ -1731,6 +1859,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   through the Worker, and read an issue's live socket with the page's own
   fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake
   `Date`, as the room tests do.
+- **Project page tests** write claims, PRs, and cached issues to D1 and
+  events to a project's feed, then load the projects list and a project's
+  page, and fetch both through the Worker, in `apps/web/test/project/`.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has

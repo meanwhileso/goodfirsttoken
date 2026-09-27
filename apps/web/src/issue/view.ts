@@ -108,6 +108,14 @@ export function prUrl(pr: PrLink): string {
   return `https://github.com/${pr.repo}/pull/${String(pr.number)}`;
 }
 
+/**
+ * An issue's or a PR's name as a page shows it: `#57` in the repo `here`,
+ * and `owner/name#57` in any other.
+ */
+export function refName(ref: Pick<PrLink, 'repo' | 'number'>, here: string): string {
+  return ref.repo.toLowerCase() === here.toLowerCase() ? `#${String(ref.number)}` : `${ref.repo}#${String(ref.number)}`;
+}
+
 /** The PR in a `pr_opened` event's text, `opened PR owner/name#57`, or null. */
 export function prFromText(text: string): PrLink | null {
   const match = /^opened PR ([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)#([1-9][0-9]{0,9})$/.exec(text);

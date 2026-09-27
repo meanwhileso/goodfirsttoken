@@ -53,8 +53,8 @@ export async function seedSampleWork(): Promise<{ projects: number; claims: numb
       {
         repo: project.repo,
         status: project.status,
-        source: 'registered',
-        policy: null,
+        source: project.policy ? 'policy' : 'registered',
+        policy: project.policy ?? null,
         settings: {
           tags: project.tags,
           prMode: project.prMode,

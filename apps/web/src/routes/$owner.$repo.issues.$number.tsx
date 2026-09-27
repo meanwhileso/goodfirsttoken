@@ -20,6 +20,7 @@ import {
   lanesInPlay,
   prFromText,
   prUrl,
+  refName,
   slotsTaken,
   timesClaimed,
   type IssueView,
@@ -103,11 +104,6 @@ function NotFoundIssue() {
   );
 }
 
-/** A PR's name: `#57` in the issue's own repo, and `owner/name#57` in another. */
-function prName(pr: Pick<PrLink, 'repo' | 'number'>, issueRepo: string): string {
-  return pr.repo.toLowerCase() === issueRepo.toLowerCase() ? `#${String(pr.number)}` : `${pr.repo}#${String(pr.number)}`;
-}
-
 function count(n: number, one: string, many: string): string {
   return n === 1 ? one : `${n.toLocaleString('en-US')} ${many}`;
 }
@@ -170,7 +166,7 @@ function Issue({ page }: { page: IssuePage }) {
             {view.openPrs.map((pr, i) => (
               <span key={`${pr.repo}#${String(pr.number)}`}>
                 {i > 0 && ', '}
-                <a href={prUrl(pr)}>PR {prName(pr, page.repo)}</a>
+                <a href={prUrl(pr)}>PR {refName(pr, page.repo)}</a>
               </span>
             ))}{' '}
             {view.openPrs.length === 1 ? 'is' : 'are'} open. If {view.openPrs.length === 1 ? 'it closes' : 'they close'}{' '}
@@ -232,7 +228,7 @@ function StateChip({ lane, issueRepo }: { lane: Lane; issueRepo: string }) {
     if (lane.prOutcome === 'closed') return <Chip href={prUrl(lane.pr)}>PR closed</Chip>;
     return (
       <Chip variant="opened" href={prUrl(lane.pr)}>
-        PR {prName(lane.pr, issueRepo)} opened
+        PR {refName(lane.pr, issueRepo)} opened
       </Chip>
     );
   }
@@ -278,7 +274,7 @@ function LaneView({
       {lane.lines.length === 0 && <p className="issue-lane__empty">No lines yet.</p>}
       {openPrs.map((pr) => (
         <p key={`${pr.repo}#${String(pr.number)}`} className="issue-lane__pr">
-          <a href={prUrl(pr)}>PR {prName(pr, issueRepo)}</a> is open, so claims are closed.
+          <a href={prUrl(pr)}>PR {refName(pr, issueRepo)}</a> is open, so claims are closed.
         </p>
       ))}
     </article>
@@ -324,7 +320,7 @@ function TimelineRow({ entry, issueRepo }: { entry: TimelineEntry; issueRepo: st
         <span className="issue-event__text">
           {pr ? (
             <>
-              opened <a href={prUrl(pr)}>PR {prName(pr, issueRepo)}</a>
+              opened <a href={prUrl(pr)}>PR {refName(pr, issueRepo)}</a>
             </>
           ) : (
             entry.text

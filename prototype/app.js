@@ -9,6 +9,9 @@
   const PROMPT = 'Read goodfirsttoken.org/start.md, then spend some of my tokens on open source.';
   // The issue page is the site's /<owner>/<repo>/issues/<n> route now, described in docs/how-it-works.md.
   const ISSUE_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-issue-page';
+  // So are the projects list and each project's page, /projects and /<owner>/<repo>.
+  const PROJECTS_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-projects-list';
+  const PROJECT_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-project-page';
 
   // ---------- DOM helpers ----------
 
@@ -53,7 +56,7 @@
   const NAV_LINKS = [
     { id: 'live', href: 'live.html', label: 'live', dot: true },
     { id: 'leaderboard', href: 'leaderboard.html', label: 'leaderboard' },
-    { id: 'projects', href: 'projects.html', label: 'projects' },
+    { id: 'projects', href: PROJECTS_PAGE, label: 'projects' },
     { id: 'maintainers', href: 'maintainers.html', label: 'maintainers' },
   ];
 
@@ -216,7 +219,7 @@
   ];
 
   function feedRow(ev, time, typed) {
-    const issueHref = ev.issue === 'meanwhileso/goodfirsttoken#18' ? ISSUE_PAGE : 'project.html';
+    const issueHref = ev.issue === 'meanwhileso/goodfirsttoken#18' ? ISSUE_PAGE : PROJECT_PAGE;
     const text = h('span', { class: 'text' }, typed ? '' : ev.text);
     const row = h('div', { class: 'wall-line' },
       h('span', { class: 'time' }, time),
@@ -347,32 +350,6 @@
         sync();
       });
     }
-  }
-
-  // ---------- Projects filter ----------
-
-  function initProjects(root) {
-    const list = root.querySelector('[data-projects]');
-    if (!list) return;
-    const search = root.querySelector('[data-project-search]');
-    const chips = root.querySelectorAll('[data-mode-filter]');
-    let mode = 'all';
-    const apply = () => {
-      const q = (search.value || '').toLowerCase();
-      let shown = 0;
-      list.querySelectorAll('[data-project]').forEach((row) => {
-        const ok = (mode === 'all' || row.dataset.mode === mode) && row.dataset.project.includes(q);
-        row.hidden = !ok;
-        if (ok) shown += 1;
-      });
-      root.querySelector('[data-project-empty]').hidden = shown > 0;
-    };
-    chips.forEach((chip) => chip.addEventListener('click', () => {
-      mode = chip.dataset.modeFilter;
-      chips.forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
-      apply();
-    }));
-    search.addEventListener('input', apply);
   }
 
   // ---------- In-agent replays ----------
@@ -540,7 +517,6 @@
     initFeeds(root);
     initMe(root);
     initAdmin(root);
-    initProjects(root);
     initReplays(root);
     initPickCards(root);
     initSwatches(root);

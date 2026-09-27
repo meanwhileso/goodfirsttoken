@@ -23,10 +23,17 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /issue\.spec\.ts$/ },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(issue|projects)\.spec\.ts$/ },
     // The issue page's tests work real issue rooms, and every event they
-    // make reaches the homepage's feed. So they run once the rest are done.
-    { name: 'rooms', use: { ...devices['Desktop Chrome'] }, testMatch: /issue\.spec\.ts$/, dependencies: ['chromium'] },
+    // make reaches the homepage's feed. The projects' tests do too, and seed
+    // the sample projects, which the homepage lists. So they run once the
+    // rest are done.
+    {
+      name: 'rooms',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /(issue|projects)\.spec\.ts$/,
+      dependencies: ['chromium'],
+    },
   ],
   webServer: [
     {

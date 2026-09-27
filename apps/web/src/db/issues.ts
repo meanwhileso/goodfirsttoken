@@ -1,5 +1,6 @@
-import { mustParse, repoName, taggedIssueSchema, type TaggedIssue } from '@goodfirsttoken/core';
+import { count, mustParse, repoName, taggedIssueSchema, type TaggedIssue } from '@goodfirsttoken/core';
 import { checkTime, fromJson, joinIssue, prColumns, prFromColumns, splitIssue } from './shared';
+import { CARRIES_A_TAG, OPEN_CLAIM_PR, slotsTaken, waiting } from './waiting';
 
 // The tagged_issues table: a cache of each project's open tagged issues, as
 // the last sync read them from GitHub.
@@ -132,4 +133,55 @@ export async function pruneIssues(db: D1Database, project: string, syncedBefore:
     .bind(mustParse(repoName, project, 'project'), checkTime(syncedBefore, 'syncedBefore'))
     .run();
   return result.meta.changes;
+}
+
+/** One of a project's tagged issues, as its page shows it. */
+export interface ProjectIssue {
+  copy: TaggedIssue;
+  /** How many claims on it hold a slot now, blocked donors' included. */
+  taken: number;
+  /** The first open PR a claim on it opened, as the PRs table follows it, or null. */
+  claimPr: { repo: string; number: number } | null;
+  /**
+   * Whether a new agent could claim it now, as far as the issue goes, by the
+   * rule the homepage counts with. The project has to be approved too.
+   */
+  waiting: boolean;
+}
+
+/**
+ * A project's cached issues that carry one of its tags and none of its
+ * excluded tags, by issue repo and number, at `now`. `total` is how many
+ * there are, and `issues` the first `limit` of them.
+ */
+export async function listProjectIssues(
+  db: D1Database,
+  project: string,
+  limit: number,
+  now: number,
+): Promise<{ total: number; issues: ProjectIssue[] }> {
+  // Through the table's key, which leads with the project, and each issue's
+  // claims through claims_by_issue.
+  const { results } = await db
+    .prepare(
+      `SELECT t.*, COUNT(*) OVER () AS total, ${slotsTaken('?3')} AS taken, ${OPEN_CLAIM_PR} AS claim_pr,
+         ${waiting('?3')} AS waiting
+       FROM tagged_issues t
+       JOIN projects p ON p.repo = t.project
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       WHERE t.project = ?1 AND ${CARRIES_A_TAG}
+       ORDER BY t.issue_repo, t.number
+       LIMIT ?2`,
+    )
+    .bind(mustParse(repoName, project, 'project'), mustParse(count, limit, 'limit'), checkTime(now))
+    .all<IssueRow & { total: number; taken: number; claim_pr: string | null; waiting: number }>();
+  return {
+    total: mustParse(count, results[0]?.total ?? 0, 'total'),
+    issues: results.map((row) => ({
+      copy: toIssue(row),
+      taken: mustParse(count, row.taken, 'taken'),
+      claimPr: row.claim_pr === null ? null : splitIssue(row.claim_pr),
+      waiting: row.waiting === 1,
+    })),
+  };
 }

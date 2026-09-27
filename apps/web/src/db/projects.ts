@@ -1,6 +1,5 @@
 import {
   changedSettings,
-  CLAIM_LIFETIME_MS,
   count,
   githubId,
   mustParse,
@@ -11,7 +10,6 @@ import {
   projectStatusChangeSchema,
   projectStatusSchema,
   repoName,
-  REVIEW_WINDOW_MS,
   settingsVersionSchema,
   updateProjectSettings,
   type FieldProblem,
@@ -27,6 +25,7 @@ import {
   type SettingsVersion,
 } from '@goodfirsttoken/core';
 import { checkTime, fromJson } from './shared';
+import { waiting } from './waiting';
 
 // The projects, project_settings, and project_status_changes tables. A
 // project's row holds its current status and points at its current
@@ -223,30 +222,12 @@ export async function listProjectsAskingForHelp(
   limit: number,
   now: number,
 ): Promise<{ total: number; projects: ProjectAskingForHelp[] }> {
-  // Labels compare without case. SQLite's lower() folds ASCII letters. An
-  // issue has an open PR when the sync saw one linked to it, or when a claim
-  // on it opened one that the PRs table doesn't show merged or closed, as
-  // the issue's room counts it. A claim holds a slot as core's holdsSlot
-  // says: working or paused until 24 hours after it was made, and awaiting
-  // review until 7 days after its first submit, whether or not the room's
-  // timer has run yet.
+  // Which issues wait for an agent is one rule in ./waiting.ts, which a
+  // project page's tagged issues follow too.
   const { results } = await db
     .prepare(
       `SELECT p.*, s.settings, COUNT(*) OVER () AS total,
-         (SELECT COUNT(*) FROM tagged_issues t
-          WHERE t.project = p.repo AND t.linked_pr_number IS NULL
-            AND EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.tags') g
-                        WHERE lower(l.value) = lower(g.value))
-            AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x
-                            WHERE lower(l.value) = lower(x.value))
-            AND NOT EXISTS (SELECT 1 FROM claims c LEFT JOIN prs pr ON pr.claim_id = c.id
-                            WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
-                              AND c.pr_number IS NOT NULL AND (pr.state IS NULL OR pr.state = 'open'))
-            AND (SELECT COUNT(*) FROM claims c
-                 WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
-                   AND ((c.state IN ('active', 'paused') AND c.claimed_at + ?2 > ?4)
-                     OR (c.state = 'awaiting_review' AND c.submitted_at + ?3 > ?4)))
-                < json_extract(s.settings, '$.claimsPerIssue')) AS waiting
+         (SELECT COUNT(*) FROM tagged_issues t WHERE t.project = p.repo AND ${waiting('?2')}) AS waiting
        FROM projects p
        JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
        WHERE p.status = 'approved'
@@ -254,12 +235,29 @@ export async function listProjectsAskingForHelp(
        ORDER BY waiting DESC, p.added_at DESC, p.repo
        LIMIT ?1`,
     )
-    .bind(mustParse(count, limit, 'limit'), CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS, checkTime(now))
+    .bind(mustParse(count, limit, 'limit'), checkTime(now))
     .all<ProjectRow & { total: number; waiting: number }>();
   return {
     total: mustParse(count, results[0]?.total ?? 0, 'total'),
     projects: results.map((row) => ({ project: toProject(row), waiting: mustParse(count, row.waiting, 'waiting') })),
   };
+}
+
+/**
+ * Who saved version `version` of a project's settings, by GitHub ID, and
+ * when, or null when there is no such save.
+ */
+export async function getSettingsSave(
+  db: D1Database,
+  repo: string,
+  version: number,
+): Promise<{ changedBy: number; changedAt: number } | null> {
+  const row = await db
+    .prepare('SELECT changed_by, changed_at FROM project_settings WHERE repo = ? AND version = ?')
+    .bind(mustParse(repoName, repo, 'repo'), mustParse(count, version, 'version'))
+    .first<{ changed_by: number; changed_at: number }>();
+  if (row === null) return null;
+  return { changedBy: mustParse(githubId, row.changed_by, 'changedBy'), changedAt: checkTime(row.changed_at, 'changedAt') };
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */
