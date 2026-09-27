@@ -76,24 +76,38 @@ in step 5.
 
 ## 3. Create the GitHub OAuth apps
 
-Sign-in uses one GitHub OAuth app per environment. GitHub has no API for
-creating them, so make each one by hand. In your GitHub settings, go to
-Developer settings, OAuth Apps, and New OAuth App. Fill it in with the
-environment's domain from step 2: its own domain, or its workers.dev
-hostname.
+Sign-in uses one GitHub OAuth app per environment, for the site and for
+agents connecting to the MCP server alike. GitHub has no API for creating
+them, so make each one by hand. In your GitHub settings, go to Developer
+settings, OAuth Apps, and New OAuth App. Fill it in with the environment's
+domain from step 2: its own domain, or its workers.dev hostname.
 
 | Field | Value |
 |---|---|
 | Application name | Your site's name. Add "staging" to the staging app's. |
 | Homepage URL | `https://<domain>` |
-| Authorization callback URL | `https://<domain>/auth/callback` |
+| Authorization callback URL | `https://<domain>/auth/callback/github` |
 
-GitHub accepts any path under the callback URL. The site's sign-in comes back
-to `/auth/callback/github`, and
-[the plan](specs/v1.md#3-identity-permissions-and-token-storage) puts the
-login from agents under the same URL. Copy the app's client ID for
-`OAUTH_CLIENT_ID` in step 4. Then click Generate a new client secret, and
-keep it for `OAUTH_CLIENT_SECRET`, one of
+Then click Add callback URL and add `https://<domain>/auth/callback/mcp`.
+GitHub sends people back to the site's sign-in at the first, and to an
+agent's sign-in at the second. Keep wildcard matching off for both, so
+GitHub sends a code to those two URLs and nowhere else.
+
+An app made before August 3, 2026, with the single callback URL
+`https://<domain>/auth/callback` works too. GitHub keeps wildcard matching on
+for such an app, which allows every path under that URL, both of these
+included.
+
+Then turn off expiring user tokens. In the app's settings, click Optional
+features, and opt out of the feature that makes user tokens expire. GitHub
+turns it on for a new app, and gives each token 8 hours. The site doesn't
+refresh tokens yet, so with it on, every agent has to sign in again 8 hours
+after it connected, and the token from each person's own sign-in stops
+working at GitHub. GitHub's docs for OAuth apps don't give that feature's
+exact name. GitHub Apps call theirs User-to-server token expiration.
+
+Copy the app's client ID for `OAUTH_CLIENT_ID` in step 4. Then click Generate
+a new client secret, and keep it for `OAUTH_CLIENT_SECRET`, one of
 [the Worker's secrets](#the-workers-secrets).
 
 ## 4. Create the GitHub environments
@@ -124,8 +138,10 @@ variables. In a private repo, either works.
 | `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID. |
 | `WORKER_NAME` | Yes | The environment's Worker name from step 2. The D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed`, its dead-letter queue `<WORKER_NAME>-feed-dlq`, and `<WORKER_NAME>-crawl`. |
 | `DB_ID` | No | The ID of a D1 database to use. When it's empty, the deploy uses `<WORKER_NAME>-db`, and creates it if it's missing. |
-| `OAUTH_KV_ID` | No | The ID of a KV namespace for sign-in grants. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
+| `OAUTH_KV_ID` | No | The ID of a KV namespace for the grants agents hold when they connect to the MCP server. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
 | `SIGN_IN_LIMITER_NAMESPACE_ID` | Yes | A whole number you pick for the rate limiter on sign-in, like `1001`. It names the limiter within your Cloudflare account, and there is nothing to create. If staging and production share an account, give them different numbers. |
+| `MCP_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1002`, for the rate limiter on the MCP server's tool calls. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
+| `TOKEN_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1003`, for the rate limiter on the MCP server's token endpoint, where agents trade codes and refresh tokens. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
 | `STATIC_ORIGIN` | No | The static host's origin, like `https://static.example.org`, set up as [The static host](#the-static-host) says. Pages then load the built files from there, and the deploy uploads them to `<WORKER_NAME>-static`. When it's empty, the Worker serves them. |
@@ -154,7 +170,7 @@ one is missing.
 | Name | Kind | What it is |
 |---|---|---|
 | `OAUTH_CLIENT_SECRET` | Environment secret | The client secret of this environment's GitHub OAuth app from step 3. |
-| `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores. Changing it signs everyone out, and makes every stored token unreadable, so neither signing out nor signing in again can revoke it. Those tokens stay valid at GitHub until each person revokes the app in their GitHub settings, or GitHub revokes them after a year unused. So change it only when you have to. |
+| `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores, the site's own and each connected agent's. Changing it signs everyone out, and makes every stored token unreadable, so neither signing out, signing in again, nor Disconnect can revoke it. Connected agents keep working. Those tokens stay valid at GitHub until each person revokes the app in their GitHub settings, or GitHub revokes them after a year unused. So change it only when you have to. |
 
 ### On switches
 
