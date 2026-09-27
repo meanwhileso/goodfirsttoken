@@ -443,6 +443,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   with the fonts, the base styles, and every component's styles, and the
   root route links it on every page. CSS for one page, like
   `design-page.css`, is linked from that route's `head`.
+- **The launch video links these stylesheets too.** How it draws the site's
+  pages with them is in [video/README.md](../video/README.md).
 - **Class names are BEM-style:** a block like `wall-line`, its parts like
   `wall-line__time`, and its variants like `chip--live`. State lives in
   attributes, like `aria-pressed`, `aria-current`, and the token field's

@@ -3,211 +3,417 @@
 <head>
 <meta charset="utf-8">
 <title>Good First Token: launch video</title>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- The site's own stylesheets: its tokens, its Geist fonts, its components,
+     and the layouts of the two pages the video shows. The browser windows
+     below hold those pages in the site's own markup and classes, so a
+     re-render picks up any change to how the site looks. -->
+<link rel="stylesheet" href="../apps/web/src/styles/app.css">
+<link rel="stylesheet" href="../apps/web/src/styles/home-page.css">
+<link rel="stylesheet" href="../apps/web/src/styles/issue-page.css">
 <style>
-  :root {
-    --paper: #FBFBF9; --ink: #0E1116; --label: #7057FF; --label-ink: #5B3FD9;
-    --merged: #1A7F37; --line: #D8DEE4; --muted: #57606A; --faint: #8C959F;
-    --help: #008672; --tint: #F2F1FB;
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+
+  /* Every frame is a function of one time value, so the site's own CSS
+     animations are off here. The script drives what they would: the live
+     dots' pulse and the prompt's caret, through these two variables. */
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .dot--pulse, .chip--live::before, .marker--live::before { opacity: var(--pulse, 1); }
+  .prompt__caret { opacity: var(--caret, 1); }
+
+  /* Everything below is the video's own: its scenes, the windows it draws,
+     and the agent's terminal. Names start with v- so none meets a site class. */
+  .v-scene { position: absolute; inset: 0; opacity: 0; visibility: hidden; }
+  /* Each window is a layer of its own, so a frame draws the same whichever
+     frame came before it. Without it, a window's corners could differ by a
+     few pixels with the order the stills are taken in. */
+  .v-window {
+    position: absolute; overflow: hidden; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 22px; box-shadow: var(--shadow-window); will-change: transform;
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--paper); }
-  body { font-family: 'Geist', system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
-  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
-  .scene { position: absolute; inset: 0; opacity: 0; }
-  .chip { display: inline-flex; align-items: center; gap: 12px; border-radius: 999px; background: var(--label); color: #fff; font-family: 'Geist Mono', monospace; font-weight: 600; white-space: nowrap; }
-  .tag { display: inline-flex; align-items: center; height: 34px; padding: 0 14px; border-radius: 999px; color: #fff; font-family: 'Geist Mono', monospace; font-size: 19px; font-weight: 500; white-space: nowrap; }
-  .window { position: absolute; background: #fff; border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 30px 80px rgba(14,17,22,0.10), 0 2px 6px rgba(14,17,22,0.05); overflow: hidden; }
-  .titlebar { height: 58px; display: flex; align-items: center; gap: 10px; padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--paper); }
-  .dot { width: 13px; height: 13px; border-radius: 99px; background: #D8DEE4; }
-  .line { opacity: 0; will-change: transform, opacity; }
-  .cursor { display: inline-block; width: 0.55em; height: 1.05em; background: var(--ink); vertical-align: -0.15em; margin-left: 2px; }
-  .card { border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; display: flex; align-items: center; gap: 18px; background: #fff; }
+  .v-bar {
+    display: flex; align-items: center; gap: 10px; height: 54px; padding: 0 20px; border-bottom: 1px solid var(--line);
+    background: var(--paper);
+  }
+  .v-bar > i { flex: none; width: 13px; height: 13px; border-radius: 99px; background: var(--line); }
+  .v-bar__title { flex: 1; text-align: center; font: 19px var(--font-mono); color: var(--text-muted); }
+  .v-bar__url {
+    flex: 1; display: flex; align-items: center; height: 36px; margin: 0 18px; padding: 0 16px; border: 1px solid var(--line);
+    border-radius: var(--r-md); background: var(--surface); font: 17px var(--font-mono); color: var(--text-muted);
+    white-space: nowrap; overflow: hidden;
+  }
+  .v-bar__note { font: 15px var(--font-mono); color: var(--text-faint); }
+  .v-bar__agent {
+    padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-pill); font: 16px var(--font-mono);
+    color: var(--text-muted);
+  }
+  /* A browser window's page: the site's page at a CSS width of its own,
+     scaled up so it reads at video size. It is the `page` container the
+     site's layouts query, as the body is on the site. */
+  .v-viewport { position: absolute; left: 0; right: 0; top: 55px; bottom: 0; overflow: hidden; background: var(--paper); }
+  .v-page {
+    position: absolute; left: 0; top: 0; transform-origin: 0 0; container: page / inline-size;
+    background: var(--paper); color: var(--text); font: var(--body-md);
+  }
+  /* The merged scene shows one of the homepage's rail sections. The rail's
+     spine runs on above and below it, to the sections the crop leaves out. */
+  .v-rail-cropped .rail::before { top: -2000px; bottom: -2000px; }
+
+  .v-term { display: flex; flex-direction: column; font-family: var(--font-mono); color: var(--text-body); }
+  .v-term .v-you::before { content: '\203A  '; white-space: pre; color: var(--label-ink); }
+  .v-muted { color: var(--text-muted); }
+  .v-faint { color: var(--text-faint); }
+  .v-ok { color: var(--merged); }
+  .v-ink { color: var(--ink); }
+  .v-cursor { display: inline-block; width: 0.55em; height: 1.05em; margin-left: 2px; background: var(--ink); vertical-align: -0.15em; }
+  .v-card {
+    display: flex; align-items: center; gap: 18px; padding: 16px 22px; border: 1px solid var(--line); border-radius: var(--r-lg);
+    background: var(--surface); font-family: var(--font-sans);
+  }
+  .v-card__n { width: 26px; font: 21px var(--font-mono); color: var(--text-faint); }
+  .v-card__ref { font: 18px var(--font-mono); color: var(--text-muted); }
+  .v-card__title { font-size: 25px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+  /* The site's tag, at the size the terminal's type is set in. */
+  .v-tag {
+    display: inline-flex; align-items: center; height: 34px; padding: 0 14px; border-radius: var(--r-pill);
+    background: var(--label); color: var(--on-label); font: 500 18px var(--font-mono); white-space: nowrap;
+  }
+  .v-line { opacity: 0; }
+  .v-pointer { position: absolute; left: 0; top: 0; width: 44px; height: 44px; transform-origin: 6px 6px; }
 </style>
 </head>
 <body>
 
-<!-- Scene 1: title -->
-<div class="scene" id="s1">
-  <div id="s1chip" class="chip" style="position:absolute; left:50%; top:380px; transform:translateX(-50%); padding:18px 42px 18px 24px; font-size:64px;">
-    <svg width="64" height="64" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#fff" stroke-width="3.5"/><circle cx="18" cy="18" r="6" fill="#fff"/></svg>
-    good first token
+<!-- Scene 1: the homepage, where the prompt is copied -->
+<div class="v-scene" id="s1">
+  <div class="v-window" id="s1win" style="left:205px; top:40px; width:1510px; height:1000px;">
+    <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__url" data-fill="site"></span><span class="v-bar__note">demo data</span></div>
+    <div class="v-viewport" id="s1view"></div>
   </div>
-  <div id="s1head" style="position:absolute; left:0; right:0; top:560px; text-align:center; font-size:76px; font-weight:600; letter-spacing:-0.035em;">Spend your spare tokens on open source.</div>
+  <svg class="v-pointer" id="pointer" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.43l-1.58 6.13a.5.5 0 0 1-.95.06z" style="fill: var(--ink); stroke: var(--surface);" stroke-width="1.4" stroke-linejoin="round"/></svg>
 </div>
 
-<!-- Scene 2: the agent, full -->
-<div class="scene" id="s2">
-  <div class="window" style="left:360px; top:120px; width:1200px; height:840px;">
-    <div class="titlebar">
-      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-      <span class="mono" style="flex:1; text-align:center; font-size:20px; color:var(--muted);">your agent</span>
-      <span class="mono" style="font-size:17px; padding:5px 12px; border:1px solid var(--line); border-radius:999px; color:var(--muted);">Claude Code</span>
-    </div>
-    <div class="mono" style="padding:34px 40px; font-size:25px; line-height:1.55; display:flex; flex-direction:column; gap:14px;">
-      <div><span style="color:var(--label)">›</span> <span id="s2prompt"></span><span id="s2cur1" class="cursor"></span></div>
-      <div class="line" id="s2l1" style="color:var(--muted)"><span style="color:var(--label)">●</span> good first token · signed in as @priya · budget: until my limit</div>
-      <div class="line" id="s2l2">Three issues maintainers tagged for outside help:</div>
-      <div style="display:flex; flex-direction:column; gap:12px; font-family:'Geist',sans-serif;">
-        <div class="card line" id="s2c1"><span class="mono" style="font-size:22px; color:var(--faint); width:28px;">1</span><div style="flex:1"><div class="mono" style="font-size:19px; color:var(--muted)">meanwhileso/goodfirsttoken#12</div><div style="font-size:26px; font-weight:600;">Show each agent's name in the live lanes</div></div><span class="tag" style="background:var(--label)">goodfirsttoken</span></div>
-        <div class="card line" id="s2c2"><span class="mono" style="font-size:22px; color:var(--faint); width:28px;">2</span><div style="flex:1"><div class="mono" style="font-size:19px; color:var(--muted)">meanwhileso/goodfirsttoken#18</div><div style="font-size:26px; font-weight:600;">Stream /live as NDJSON</div></div><span class="tag" style="background:var(--help)">help wanted</span></div>
-        <div class="card line" id="s2c3"><span class="mono" style="font-size:22px; color:var(--faint); width:28px;">3</span><div style="flex:1"><div class="mono" style="font-size:19px; color:var(--muted)">meanwhileso/goodfirsttoken#21</div><div style="font-size:26px; font-weight:600;">Explain the tough badge on hover</div></div><span class="tag" style="background:var(--label)">goodfirsttoken</span></div>
-      </div>
-      <div class="line" id="s2pick"><span style="color:var(--label)">›</span> <span id="s2pickText"></span><span id="s2cur2" class="cursor"></span></div>
-      <div class="line" id="s2l3">Any special instructions for this one?</div>
-      <div class="line" id="s2instr"><span style="color:var(--label)">›</span> <span id="s2instrText"></span><span id="s2cur3" class="cursor"></span></div>
-      <div class="line" id="s2l4" style="color:var(--merged)">Claimed #18. Posting updates live.</div>
+<!-- Scene 2: the prompt pasted into the agent, three issues, and a pick -->
+<div class="v-scene" id="s2">
+  <div class="v-window" style="left:330px; top:110px; width:1260px; height:860px;">
+    <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__title">your agent</span><span class="v-bar__agent">claude-code</span></div>
+    <div class="v-term" style="padding:32px 40px; font-size:24px; line-height:1.5; gap:14px;">
+      <div class="v-you v-ink"><span id="s2prompt"></span><span id="s2cur1" class="v-cursor"></span></div>
+      <div class="v-line v-muted" id="s2l1"><span style="color: var(--label);">●</span> good first token · signed in as @priya · budget: until my limit</div>
+      <div class="v-line" id="s2l2">Three issues maintainers tagged for outside help:</div>
+      <div style="display:flex; flex-direction:column; gap:12px;" id="s2cards"></div>
+      <div class="v-line v-you v-ink" id="s2pick"><span id="s2pickText"></span><span id="s2cur2" class="v-cursor"></span></div>
+      <div class="v-line" id="s2l3">Any special instructions for this one?</div>
+      <div class="v-line v-you v-ink" id="s2instr"><span id="s2instrText"></span><span id="s2cur3" class="v-cursor"></span></div>
+      <div class="v-line v-ok" id="s2l4">Claimed <span data-fill="issue"></span>. Posting updates live.</div>
+      <div class="v-line v-muted" id="s2l5" data-fill="issueUrl"></div>
     </div>
   </div>
 </div>
 
-<!-- Scene 3: agent beside the live issue page -->
-<div class="scene" id="s3">
-  <div class="window" style="left:60px; top:110px; width:720px; height:860px;">
-    <div class="titlebar">
-      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-      <span class="mono" style="flex:1; text-align:center; font-size:18px; color:var(--muted);">your agent</span>
-      <span class="mono" style="font-size:15px; padding:4px 10px; border:1px solid var(--line); border-radius:999px; color:var(--muted);">Claude Code</span>
-    </div>
-    <div class="mono" style="padding:28px 30px; font-size:20px; line-height:1.5; display:flex; flex-direction:column; gap:12px;">
-      <div style="color:var(--faint)">› spend some of my tokens on open source</div>
-      <div style="color:var(--faint)">› 2 · write the failing test first</div>
-      <div style="color:var(--merged)">Claimed #18. Posting updates live.</div>
-      <div class="line" id="a1">cloned at 4f2a91c</div>
-      <div class="line" id="a2">read AGENTS.md and CONTRIBUTING</div>
-      <div class="line" id="a3">wrote failing test: /live.ndjson returns one JSON object per line</div>
-      <div class="line" id="a4">tests: 1 failing, as expected</div>
-      <div class="line" id="a5">added the NDJSON formatter (apps/web/src/feed/format.ts)</div>
-      <div class="line" id="a6">tests: 214 passing</div>
-      <div class="line" id="a7" style="color:var(--ink)">Ready for review: 1 file, +48 −3. Open the PR?</div>
-      <div class="line" id="a8"><span style="color:var(--label)">›</span> <span id="a8text"></span><span id="a8cur" class="cursor"></span></div>
-      <div class="line" id="a9" style="color:var(--merged)">Opened meanwhileso/goodfirsttoken#57</div>
+<!-- Scene 3: the agent beside the live issue page -->
+<div class="v-scene" id="s3">
+  <div class="v-window" style="left:36px; top:40px; width:470px; height:1000px;">
+    <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__title" style="font-size:17px;">your agent</span><span class="v-bar__agent" style="font-size:14px;">claude-code</span></div>
+    <div class="v-term" style="padding:26px 24px; font-size:19px; line-height:1.45; gap:11px;">
+      <div class="v-you v-faint" data-fill="prompt"></div>
+      <div class="v-you v-faint" data-fill="pick"></div>
+      <div class="v-you v-faint" data-fill="instructions"></div>
+      <div class="v-ok">Claimed <span data-fill="issue"></span>. Posting updates live.</div>
+      <div class="v-line" data-agent-line="0"></div>
+      <div class="v-line" data-agent-line="1"></div>
+      <div class="v-line" data-agent-line="2"></div>
+      <div class="v-line" data-agent-line="3"></div>
+      <div class="v-line" data-agent-line="4"></div>
+      <div class="v-line" data-agent-line="5"></div>
+      <div class="v-line v-ink" id="a7">Submitted. This project opens the PR on submit.</div>
+      <div class="v-line v-ok" id="a9">Opened <span data-fill="prRef"></span></div>
     </div>
   </div>
-
-  <div class="window" style="left:830px; top:70px; width:1030px; height:940px;">
-    <div class="titlebar" style="gap:14px;">
-      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-      <span class="mono" style="flex:1; margin:0 20px; height:36px; display:flex; align-items:center; padding:0 16px; border:1px solid var(--line); border-radius:10px; background:#fff; font-size:17px; color:var(--muted);">goodfirsttoken.org/meanwhileso/goodfirsttoken/issues/18</span>
-      <span class="mono" style="font-size:14px; color:var(--faint);">demo data</span>
-    </div>
-    <div style="padding:30px 36px; display:flex; flex-direction:column; gap:22px;">
-      <div style="display:flex; align-items:center; justify-content:space-between;">
-        <span class="chip" style="padding:6px 16px 6px 10px; font-size:18px; gap:8px;"><svg width="20" height="20" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#fff" stroke-width="4"/><circle cx="18" cy="18" r="6" fill="#fff"/></svg>good first token</span>
-        <span style="display:inline-flex; align-items:center; gap:10px; font-size:18px;"><span id="livedot" style="width:11px; height:11px; border-radius:99px; background:var(--merged)"></span>Live</span>
-      </div>
-      <div>
-        <div class="mono" style="font-size:19px; color:var(--muted);">meanwhileso/goodfirsttoken #18</div>
-        <div style="font-size:44px; font-weight:600; letter-spacing:-0.025em; margin-top:4px;">Stream /live as NDJSON</div>
-        <div style="display:flex; gap:10px; margin-top:14px; align-items:center;">
-          <span class="tag" style="background:var(--help)">help wanted</span>
-          <span class="mono" id="workingCount" style="font-size:18px; color:var(--muted); margin-left:6px;">1 working now</span>
-        </div>
-      </div>
-      <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:18px;">
-        <div style="border:1px solid var(--line); border-radius:16px; overflow:hidden;">
-          <div style="display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); background:var(--paper);">
-            <span style="width:34px; height:34px; border-radius:99px; background:var(--tint); color:var(--label-ink); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:16px;">P</span>
-            <span style="font-weight:600; font-size:20px;">@priya</span><span class="mono" style="font-size:16px; color:var(--muted);">claude-code</span>
-            <span id="priyaState" class="mono" style="margin-left:auto; font-size:15px; color:var(--merged);">working</span>
-          </div>
-          <div class="mono" style="padding:14px 18px; font-size:16.5px; line-height:1.45; display:flex; flex-direction:column; gap:12px; min-height:520px;">
-            <div class="line" id="p1"><span style="color:var(--faint)">14:02:03</span> cloned at 4f2a91c</div>
-            <div class="line" id="p2"><span style="color:var(--faint)">14:02:41</span> read AGENTS.md and CONTRIBUTING</div>
-            <div class="line" id="p3"><span style="color:var(--faint)">14:03:18</span> wrote failing test: /live.ndjson returns one JSON object per line</div>
-            <div class="line" id="p4"><span style="color:var(--faint)">14:03:52</span> tests: 1 failing, as expected</div>
-            <div class="line" id="p5"><span style="color:var(--faint)">14:04:37</span> added the NDJSON formatter (apps/web/src/feed/format.ts)</div>
-            <div class="line" id="p6"><span style="color:var(--faint)">14:05:20</span> tests: 214 passing</div>
-            <div class="line" id="p7"><span style="color:var(--faint)">14:05:58</span> <span style="display:inline-flex; align-items:center; height:28px; padding:0 12px; border-radius:999px; background:var(--label); color:#fff; font-size:15px; font-weight:600;">PR #57 opened</span></div>
-          </div>
-        </div>
-        <div style="border:1px solid var(--line); border-radius:16px; overflow:hidden;">
-          <div style="position:relative; height:63px; border-bottom:1px solid var(--line); background:var(--paper);">
-            <div id="kenjiSlot" class="mono" style="position:absolute; inset:0; display:flex; align-items:center; padding:0 18px; font-size:17px; color:var(--faint);">open slot · 2 of 3</div>
-            <div id="kenjiHead" style="position:absolute; inset:0; display:flex; align-items:center; gap:12px; padding:0 18px;">
-              <span style="width:34px; height:34px; border-radius:99px; background:#E6F4EA; color:var(--merged); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:16px;">K</span>
-              <span style="font-weight:600; font-size:20px;">@kenji</span><span class="mono" style="font-size:16px; color:var(--muted);">codex</span>
-              <span id="kenjiState" class="mono" style="margin-left:auto; font-size:15px; color:var(--merged);">working</span>
-            </div>
-          </div>
-          <div class="mono" id="kenjiBody" style="padding:14px 18px; font-size:16.5px; line-height:1.45; display:flex; flex-direction:column; gap:12px; min-height:520px;">
-            <div class="line" id="k0" style="color:var(--faint)">waiting for a second agent</div>
-            <div class="line" id="k1"><span style="color:var(--faint)">14:02:55</span> claimed</div>
-            <div class="line" id="k2"><span style="color:var(--faint)">14:03:40</span> reading the feed Durable Object</div>
-            <div class="line" id="k3"><span style="color:var(--faint)">14:04:29</span> sketched a streaming encoder</div>
-            <div class="line" id="k4"><span style="color:var(--faint)">14:05:31</span> tests: 3 failing, trying another approach</div>
-            <div class="line" id="k5" style="color:var(--muted)"><span style="color:var(--faint)">14:05:58</span> PR #57 exists. Finishing for review.</div>
-          </div>
-        </div>
-      </div>
-    </div>
+  <div class="v-window" style="left:534px; top:40px; width:1350px; height:1000px;">
+    <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__url" data-fill="issueUrl"></span><span class="v-bar__note">demo data</span></div>
+    <div class="v-viewport" id="s3view"></div>
   </div>
 </div>
 
-<!-- Scene 4: merged -->
-<div class="scene" id="s4">
-  <div id="share" style="position:absolute; left:360px; top:130px; width:1200px; height:630px; background:#fff; border:1px solid var(--line); border-radius:28px; box-shadow:0 40px 100px rgba(14,17,22,0.12); padding:64px; display:flex; flex-direction:column; justify-content:space-between;">
-    <div style="display:flex; align-items:center; gap:18px;">
-      <span style="position:relative; display:inline-block; width:186px; height:52px; overflow:hidden; border-radius:999px;">
-      <span id="stateOpen" class="tag" style="position:absolute; left:0; top:0; height:52px; padding:0 22px; font-size:28px; background:var(--label);">open</span>
-      <span id="stateMerged" class="tag" style="position:absolute; left:0; top:0; height:52px; padding:0 22px; font-size:28px; background:var(--merged); gap:10px;"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>merged</span>
-      </span>
-      <span class="mono" style="font-size:30px; color:var(--muted);">meanwhileso/goodfirsttoken</span>
-    </div>
-    <div style="font-size:78px; font-weight:600; letter-spacing:-0.035em; line-height:1.02;">Stream /live as NDJSON</div>
-    <div style="display:flex; align-items:center; justify-content:space-between;">
-      <span style="font-size:30px; color:var(--muted);">@priya with Claude Code</span>
-      <span class="chip" style="padding:10px 24px 10px 14px; font-size:26px; gap:10px;"><svg width="28" height="28" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#fff" stroke-width="4"/><circle cx="18" cy="18" r="6" fill="#fff"/></svg>good first token</span>
-    </div>
+<!-- Scene 4: the PR merges, on the issue page, then on the homepage -->
+<div class="v-scene" id="s4">
+  <div class="v-window" id="s4a" style="left:205px; top:40px; width:1510px; height:1000px;">
+    <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__url" data-fill="issueUrl"></span><span class="v-bar__note">demo data</span></div>
+    <div class="v-viewport" id="s4aview"></div>
   </div>
-  <div id="board" style="position:absolute; left:360px; top:820px; width:1200px; height:96px; border:1px solid var(--line); border-radius:18px; background:#fff; display:flex; align-items:center; gap:24px; padding:0 34px; font-size:28px;">
-    <span class="mono" style="color:var(--faint); font-size:24px;">Merged this week</span>
-    <span class="mono" style="color:var(--faint);">1</span>
-    <span style="font-weight:600;">@priya</span>
-    <span style="color:var(--muted); font-size:24px;">Claude Code</span>
-    <span style="margin-left:auto; position:relative; width:60px; height:40px; overflow:hidden;" class="mono">
-      <span id="n9" style="position:absolute; right:0; top:0; font-weight:600; font-size:34px;">9</span>
-      <span id="n10" style="position:absolute; right:0; top:0; font-weight:600; font-size:34px; color:var(--merged);">10</span>
-    </span>
+  <div class="v-window" id="s4b" style="left:205px; top:340px; width:1510px; height:400px;">
+    <div class="v-bar"><i></i><i></i><i></i><span class="v-bar__url" data-fill="site"></span><span class="v-bar__note">demo data</span></div>
+    <div class="v-viewport v-rail-cropped" id="s4bview"></div>
   </div>
 </div>
 
 <!-- Scene 5: end card -->
-<div class="scene" id="s5">
-  <div id="s5chip" class="chip" style="position:absolute; left:50%; top:190px; transform:translateX(-50%); padding:14px 34px 14px 20px; font-size:48px;">
-    <svg width="48" height="48" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#fff" stroke-width="3.5"/><circle cx="18" cy="18" r="6" fill="#fff"/></svg>
-    good first token
+<div class="v-scene" id="s5">
+  <div class="v-page" id="s5page" style="width:1280px; left:128px; top:130px; transform:scale(1.3); background:transparent;">
+    <div class="wrap" style="display:flex; flex-direction:column; align-items:flex-start;">
+      <span class="logo-chip logo-chip--lg" id="s5chip"></span>
+      <h1 class="display" id="s5head" style="margin-top:44px;">Spend your spare tokens on <span class="inline-label">open source</span></h1>
+      <div id="s5prompt" style="align-self:stretch; margin-top:48px;"></div>
+      <div class="open-in" id="s5open" style="margin-top:18px;"><span>or open it in</span><a>claude code</a><a>codex</a><a>cursor</a><button type="button">t3 code</button></div>
+      <p id="s5url" style="margin-top:56px; font: var(--display-md); letter-spacing: var(--display-md-tracking);" data-fill="site"></p>
+      <p id="s5credit" class="mono small faint" style="margin-top:10px;">good first token · a Meanwhile project · MIT</p>
+    </div>
   </div>
-  <div id="s5head" style="position:absolute; left:0; right:0; top:330px; text-align:center; font-size:84px; font-weight:600; letter-spacing:-0.04em;">Spend your spare tokens on open source.</div>
-  <div id="s5prompt" class="mono" style="position:absolute; left:50%; top:520px; transform:translateX(-50%); width:1320px; padding:34px 40px; border-radius:18px; background:var(--ink); color:#E6EDF3; font-size:31px; line-height:1.45; display:flex; align-items:center; gap:24px;">
-    <span style="flex:1;">Read <span style="color:#B7A8FF">goodfirsttoken.org/start.md</span>, then spend some of my tokens on open source.</span>
-    <span style="width:64px; height:64px; border-radius:12px; border:1px solid #30363D; background:#161B22; display:flex; align-items:center; justify-content:center;"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#E6EDF3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
-  </div>
-  <div id="s5agents" class="mono" style="position:absolute; left:0; right:0; top:730px; text-align:center; font-size:26px; color:var(--muted);">Claude Code · Codex · Cursor · OpenCode · Grok Bot · T3 Code</div>
-  <div id="s5url" style="position:absolute; left:0; right:0; top:830px; text-align:center; font-size:44px; font-weight:600; letter-spacing:-0.02em;">goodfirsttoken.org</div>
-  <div id="s5credit" style="position:absolute; left:0; right:0; top:960px; text-align:center; font-size:22px; color:var(--faint);">a Meanwhile project · MIT</div>
 </div>
 
 <script>
+  // The story's demo data. The three issues are this repo's launch seeds, from
+  // section 14 of the spec, so the video says nothing about another project.
+  // The repo is listed for issues tagged `goodfirsttoken`, in PR mode
+  // `automatic`, so each issue carries that tag and its PR opens on submit.
+  // The people are the repo's sample people. The issue and PR numbers stand
+  // in for real ones until those issues exist.
+  const DEMO = {
+    site: 'goodfirsttoken.org',
+    repo: 'meanwhileso/goodfirsttoken',
+    label: 'goodfirsttoken',
+    issues: [
+      { number: 101, title: 'Add a GitHub App for instant sync' },
+      { number: 102, title: 'Share vouch lists between projects' },
+      { number: 103, title: 'Add installers for more harnesses' },
+    ],
+    picked: 1,
+    instructions: 'write the failing test first',
+    pr: 110,
+    slots: 3,
+    day: '2026-10-06',
+  };
+  const ISSUE = DEMO.issues[DEMO.picked];
+  const PATH = `${DEMO.repo}/issues/${ISSUE.number}`;
+  const FILL = {
+    site: DEMO.site,
+    issue: `#${ISSUE.number}`,
+    issueUrl: `${DEMO.site}/${PATH}`,
+    prRef: `${DEMO.repo}#${DEMO.pr}`,
+    prompt: `Read ${DEMO.site}/start.md, then spend some of my tokens on open source.`,
+    pick: String(DEMO.picked + 1),
+    instructions: DEMO.instructions,
+  };
+
+  // What each agent does, in video seconds and in the page's UTC clock.
+  // @priya's agent is the one on screen. @kenji's claims the open slot.
+  const PRIYA = { login: 'priya', agent: 'claude-code', claimed: '14:01' };
+  const KENJI = { login: 'kenji', agent: 'codex', claimed: '14:02' };
+  const PRIYA_LINES = [
+    { at: 13.0, time: '14:02:03', text: 'cloned the repo' },
+    { at: 14.1, time: '14:02:41', text: 'read AGENTS.md and CONTRIBUTING' },
+    { at: 15.8, time: '14:03:18', text: "wrote failing test: a project reuses another project's vouch list" },
+    { at: 17.3, time: '14:03:52', text: 'tests fail, as expected' },
+    { at: 18.7, time: '14:04:37', text: 'added shared vouch lists (apps/web/src/projects/vouch-lists.ts)' },
+    { at: 20.0, time: '14:05:20', text: 'tests pass' },
+  ];
+  const KENJI_LINES = [
+    { at: 16.7, time: '14:03:40', text: "read how a project's claim rules are stored" },
+    { at: 18.1, time: '14:04:29', text: 'sketched a cache of vouch lists by repo' },
+    { at: 19.5, time: '14:05:12', text: 'tests fail, trying another approach' },
+    { at: 21.8, time: '14:05:52', text: `saw PR #${DEMO.pr} open, kept going for the review queue` },
+  ];
+  // When the claims change on the issue page in scene 3. In automatic mode
+  // the server opens the PR right after the submit.
+  const LIVE = { kenjiClaims: 15.1, submit: 20.6, prOpened: 21.2, merged: Infinity };
+  // Scene 4 opens on the same page after all of that, until the PR merges.
+  const AFTER = { kenjiClaims: -Infinity, submit: -Infinity, prOpened: -Infinity, merged: 26.1 };
+  const DONE = -Infinity;
+
   const DURATION = 36;
   const $ = (id) => document.getElementById(id);
-  const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
-  const seg = (t, a, b) => clamp((t - a) / (b - a));
+  // How far `t` is from `a` to `b`, from 0 to 1. A step at -Infinity is done
+  // and one at Infinity never starts.
+  const seg = (t, a, b) => (t < a ? 0 : t >= b ? 1 : (t - a) / (b - a));
+  const lerp = (a, b, p) => a + (b - a) * p;
   const outCubic = (x) => 1 - Math.pow(1 - x, 3);
   const inOutCubic = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
   const outBack = (x) => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+  const escape = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+  // ---------- The site's markup, as its components render it ----------
+
+  const TOKEN_MARK = '<svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" stroke-width="4"/><circle cx="18" cy="18" r="6" fill="currentColor"/></svg>';
+  const GITHUB_MARK = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+
+  const nav = () => `
+    <header class="site-nav"><nav class="wrap site-nav__inner">
+      <a class="logo-chip" href="#">${TOKEN_MARK}good first token</a>
+      <ul class="site-nav__links">
+        <li><a href="#"><span class="dot dot--pulse" aria-hidden="true"></span>live</a></li>
+        <li><a href="#">leaderboard</a></li>
+        <li><a href="#">projects</a></li>
+        <li><a href="#">maintainers</a></li>
+        <li><a class="site-nav__gh" href="#">${GITHUB_MARK}</a></li>
+      </ul>
+    </nav></header>`;
+
+  const prompt = (text, { shell = false, small = shell, caret = false, r = '' } = {}) => `
+    <div class="prompt${small ? ' prompt--sm' : ''}${shell ? ' prompt--shell' : ''}">
+      <span class="prompt__text">${text}${caret ? '<span class="prompt__caret" aria-hidden="true"></span>' : ''}</span>
+      <button type="button" class="copy-btn"${r ? ` data-r="${r}"` : ''}>copy</button>
+    </div>`;
+
+  const homePrompt = () =>
+    prompt(`Read <span class="prompt__accent">${DEMO.site}/start.md</span>, then spend some of my tokens on open source.`, { caret: true, r: 'copy' });
+
+  // The homepage: the hero with its token field, the prompt, and the rail's
+  // merged this week. The field is empty and the count is 0, since the
+  // story's day starts here. The live wall and the video sit between the
+  // prompt and merged this week on the site. No frame shows that stretch.
+  const homePage = (width) => `
+    <div class="v-page" style="width:${width}px;">
+      ${nav()}
+      <main class="wrap home">
+        <section class="home-hero">
+          <div class="home-hero__words">
+            <h1 class="display">Spend your spare tokens on <span class="inline-label">open source</span></h1>
+            <p class="lede">Your agent picks up an issue a maintainer tagged for outside help, works it where everyone can watch, and gets it to a pull request.</p>
+          </div>
+          <aside class="home-hero__field">
+            <div class="token-field" style="grid-template-columns: repeat(14, 1fr);">${'<i class="token-field__square" data-level="0"></i>'.repeat(140)}</div>
+            <p class="home-legend"><span>agent work, live</span><span><b>0</b> today</span></p>
+          </aside>
+        </section>
+        <section class="home-start">
+          ${homePrompt()}
+          <div class="open-in"><span>or open it in</span><a href="#">claude code</a><a href="#">codex</a><a href="#">cursor</a><button type="button">t3 code</button></div>
+          <details class="home-setup"><summary>setup, agent by agent</summary></details>
+        </section>
+        <div class="rail home-rail">
+          <section class="rail__section rail__section--merged" data-r="merged">
+            <div class="rail__head"><h2 class="marker">merged this week</h2><a class="mono small" href="#">leaderboard ↗</a></div>
+            <ol class="ranks"><li><span class="ranks__n">1</span><span class="ranks__who">@${PRIYA.login} <small class="ranks__agent">${PRIYA.agent}</small></span><span class="ranks__score">1</span></li></ol>
+          </section>
+        </div>
+      </main>
+    </div>`;
+
+  const line = (l, r) =>
+    `<li class="issue-line" data-r="${r}"><time class="issue-line__time">${l.time}</time> <span class="issue-line__text">${escape(l.text)}</span></li>`;
+
+  const lane = (who, lines, prefix) => `
+    <article class="issue-lane" data-r="${prefix}Lane">
+      <header class="issue-lane__head">
+        <span class="avatar" aria-hidden="true">${who.login.charAt(0).toUpperCase()}</span>
+        <h2 class="issue-lane__who"><a href="#">@${who.login}</a></h2>
+        <span class="chip">${who.agent}</span>
+        <span class="issue-lane__state" data-r="${prefix}State"></span>
+      </header>
+      <ol class="issue-lane__lines">${lines.map((l, i) => line(l, `${prefix}${i}`)).join('')}</ol>
+      <p class="issue-lane__empty" data-r="${prefix}Empty">No lines yet.</p>
+      <p class="issue-lane__pr" data-r="${prefix}Pr"><a href="#">PR #${DEMO.pr}</a> is open, so claims are closed.</p>
+    </article>`;
+
+  const event = (r, time, who, text) => `
+    <li class="issue-event" data-r="${r}">
+      <time class="issue-event__time">${DEMO.day} ${time}</time>
+      <span class="issue-event__body"><a class="issue-event__who" href="#">@${who.login}</a> <span class="chip">${who.agent}</span> <span class="issue-event__text">${text}</span></span>
+    </li>`;
+
+  // The issue page, as $owner.$repo.issues.$number.tsx renders it.
+  const issuePage = (width) => `
+    <div class="v-page" style="width:${width}px;">
+      ${nav()}
+      <main class="wrap issue">
+        <header class="issue-head">
+          <nav class="mono small"><a href="#">${DEMO.repo}</a> <span class="faint">#${ISSUE.number}</span></nav>
+          <a class="mono small" href="#">on github ↗</a>
+        </header>
+        <h1 class="issue-title">${escape(ISSUE.title)}</h1>
+        <div class="issue-meta">
+          <span class="tag">${DEMO.label}</span>
+          <span class="slots slots--lg" data-r="slots">${'<i class="slots__slot"></i>'.repeat(DEMO.slots)}</span>
+          <span class="mono small issue-meta__slots" data-r="slotsText"></span>
+          <span class="mono small faint" data-r="claimed"></span>
+        </div>
+        <section class="issue-lanes" data-r="lanes">
+          ${lane(PRIYA, PRIYA_LINES, 'priya')}
+          ${lane(KENJI, KENJI_LINES, 'kenji')}
+          <article class="issue-slot" data-r="slot">
+            <span class="slot-ring" data-r="ring" aria-hidden="true"></span>
+            <h2 class="issue-slot__title" data-r="slotTitle"></h2>
+            <p class="issue-slot__words" data-r="slotWords"></p>
+            <div data-r="claim" style="align-self:stretch;">${prompt(`/goodfirsttoken:work ${DEMO.repo}#${ISSUE.number}`, { small: true })}</div>
+          </article>
+        </section>
+        <div class="rail issue-rail" data-r="rail">
+          <section class="rail__section rail__section--live">
+            <div class="rail__head"><h2 class="marker">timeline<span class="marker__count" data-r="events"></span></h2></div>
+            <ol class="issue-timeline">
+              ${event('e0', PRIYA.claimed, PRIYA, 'claimed the issue')}
+              ${event('e1', KENJI.claimed, KENJI, 'claimed the issue')}
+              ${event('e2', '14:05', PRIYA, 'submitted the work')}
+              ${event('e3', '14:05', PRIYA, `opened <a href="#">PR #${DEMO.pr}</a>`)}
+            </ol>
+          </section>
+          <section class="rail__section">
+            <div class="rail__head"><h2 class="marker">watch as text</h2></div>
+            ${prompt(`curl -N ${DEMO.site}/${PATH}/live.txt`, { shell: true })}
+          </section>
+        </div>
+      </main>
+    </div>`;
+
+  // A page drawn here is the `page` container its container queries measure,
+  // at the width the page is drawn. But `vw` units and media queries follow
+  // the video's 1920px viewport. So type sized in `vw`, like `.display` and
+  // `.issue-title`, draws at its desktop size in a page of any width, and
+  // rules for narrow screens never apply. A 1000px homepage would draw its
+  // headline at 112px where the site draws 90px. No scene shows that today.
+  // The homepage's headline is on camera only at 1280px, and the issue title
+  // only at 1200px or wider, where the site draws each the same.
+
+  // Puts a page in a window and returns it with its parts by name.
+  function mount(view, html) {
+    view.innerHTML = html;
+    const page = view.firstElementChild;
+    const r = {};
+    page.querySelectorAll('[data-r]').forEach((el) => { r[el.dataset.r] = el; });
+    return { view, page, r, cache: {} };
+  }
+
+  // Sets an element's HTML only when it changes, so a frame that changes
+  // nothing leaves the page alone.
+  function html(inst, key, el, value) {
+    if (inst.cache[key] === value) return;
+    inst.cache[key] = value;
+    el.innerHTML = value;
+  }
+
+  // The page's camera: which point of the page, in its own CSS pixels, is at
+  // the window's top left, and how much the page is scaled. It moves in
+  // whole pixels, so the encoder finds each frame in the one before.
+  function camera(inst, x, y, scale) {
+    inst.scale = scale;
+    inst.page.style.transform = `translate(${-Math.round(x * scale)}px, ${-Math.round(y * scale)}px) scale(${scale})`;
+  }
+  // Where an element is on its page, in the page's CSS pixels.
+  function onPage(inst, el) {
+    const a = el.getBoundingClientRect();
+    const p = inst.page.getBoundingClientRect();
+    return { x: (a.left - p.left) / inst.scale, y: (a.top - p.top) / inst.scale, w: a.width / inst.scale, h: a.height / inst.scale };
+  }
+
+  // ---------- Motion ----------
 
   // A scene fades up over 0.3s from `a` and leaves quickly over the 0.18s before `b`.
   function scene(el, t, a, b) {
     const o = Math.min(seg(t, a, a + 0.3), 1 - seg(t, b - 0.18, b));
     el.style.opacity = o;
     el.style.visibility = o > 0 ? 'visible' : 'hidden';
+    return o > 0;
   }
-  // An element rises into place starting at `at`.
+  // An element rises into place starting at `at`, like the site's `rise`.
   function rise(el, t, at, dist = 18, dur = 0.45) {
     const p = outCubic(seg(t, at, at + dur));
     el.style.opacity = p;
-    el.style.transform = `translateY(${(1 - p) * dist}px)`;
+    el.style.transform = p < 1 ? `translateY(${Math.round((1 - p) * dist)}px)` : '';
+  }
+  // A line that isn't there yet takes no room, as on the site.
+  function arrive(el, t, at, dist = 10) {
+    el.style.display = t >= at ? '' : 'none';
+    rise(el, t, at, dist);
   }
   function typed(text, t, at, cps = 22) {
     return text.slice(0, Math.max(0, Math.floor((t - at) * cps)));
@@ -215,98 +421,214 @@
   // Solid while typing or about to type, blinking otherwise, hidden outside its window.
   function cursor(el, t, from, to, typingUntil) {
     if (t < from || t >= to) { el.style.opacity = 0; return; }
-    const blink = t > typingUntil ? (Math.floor(t * 2.2) % 2 === 0 ? 1 : 0) : 1;
-    el.style.opacity = blink;
+    el.style.opacity = t > typingUntil ? (Math.floor(t * 2.2) % 2 === 0 ? 1 : 0) : 1;
+  }
+
+  // ---------- The issue page at a moment ----------
+
+  const count = (n, one, many) => (n === 1 ? one : `${n} ${many}`);
+
+  // `when` says when @kenji claims, when @priya submits, opens the PR, and
+  // when it merges. The page shows what the site shows at `t`, by the rules
+  // in docs/how-it-works.md under "The issue page".
+  function issueAt(inst, t, when) {
+    const { r } = inst;
+    const kenji = t >= when.kenjiClaims;
+    const merged = t >= when.merged;
+    const prOpen = t >= when.prOpened && !merged;
+    const opened = t >= when.prOpened;
+    const submitted = t >= when.submit;
+
+    // Each lane's lines arrive one by one. Until the first, the lane says it
+    // has none.
+    for (const [who, lines] of [['priya', PRIYA_LINES], ['kenji', KENJI_LINES]]) {
+      lines.forEach((l, i) => arrive(r[`${who}${i}`], t, when === LIVE ? l.at : DONE));
+      r[`${who}Empty`].style.display = t >= (when === LIVE ? lines[0].at : DONE) ? 'none' : '';
+    }
+
+    // @kenji's lane comes in when he claims, before the slot.
+    if (kenji && !r.kenjiLane.isConnected) r.lanes.insertBefore(r.kenjiLane, r.slot);
+    if (!kenji && r.kenjiLane.isConnected) r.kenjiLane.remove();
+    r.kenjiLane.style.opacity = outCubic(seg(t, when.kenjiClaims, when.kenjiClaims + 0.3));
+
+    const state = merged
+      ? `<a class="chip chip--merged" href="#">merged</a>`
+      : opened
+        ? `<a class="chip chip--opened" href="#">PR #${DEMO.pr} opened</a>`
+        : submitted
+          ? '<span class="chip chip--tint">submitted</span>'
+          : '<span class="chip chip--live">working</span>';
+    html(inst, 'priyaState', r.priyaState, state);
+    html(inst, 'kenjiState', r.kenjiState, '<span class="chip chip--live">working</span>');
+    const pop = outBack(seg(t, when.merged, when.merged + 0.35));
+    r.priyaState.style.transform = merged ? `scale(${0.8 + 0.2 * pop})` : '';
+
+    // A claim working, paused, or awaiting review takes a slot. One with its
+    // PR open doesn't. While a PR is open, claims are closed.
+    const taken = (opened ? 0 : 1) + (kenji ? 1 : 0);
+    const free = DEMO.slots - taken;
+    r.slots.classList.toggle('slots--closed', prOpen);
+    [...r.slots.children].forEach((ring, i) => ring.classList.toggle('slots__slot--taken', i < taken));
+    html(inst, 'slotsText', r.slotsText, prOpen ? 'claims closed' : `${taken} of ${count(DEMO.slots, '1 slot', 'slots')} taken`);
+    html(inst, 'claimed', r.claimed, `claimed ${count(kenji ? 2 : 1, 'once', 'times')}`);
+
+    r.slot.classList.toggle('issue-slot--closed', prOpen);
+    r.ring.classList.toggle('slot-ring--closed', prOpen);
+    html(inst, 'slotTitle', r.slotTitle, prOpen ? 'Claims closed' : free === 1 ? 'Open slot' : `${free} open slots`);
+    html(
+      inst, 'slotWords', r.slotWords,
+      prOpen
+        ? `<span><a href="#">PR #${DEMO.pr}</a></span> is open. If it closes without merging, the slots open again.`
+        : 'A different agent might crack it. Claim it from yours.',
+    );
+    r.claim.style.display = prOpen ? 'none' : '';
+    r.priyaPr.style.display = prOpen ? '' : 'none';
+    r.kenjiPr.style.display = prOpen ? '' : 'none';
+
+    // The timeline: each claim, the submit, and the PR. What the timeline
+    // says for a merge is for the PR follower (#17) to decide, so no frame
+    // shows the timeline once the PR merges.
+    const events = [true, kenji, submitted, opened];
+    events.forEach((on, i) => { r[`e${i}`].style.display = on ? '' : 'none'; });
+    html(inst, 'events', r.events, String(events.filter(Boolean).length));
+  }
+
+  // ---------- The scenes ----------
+
+  let s1, s3, s4a, s4b;
+  const agentLines = [...document.querySelectorAll('[data-agent-line]')];
+
+  function setup() {
+    document.querySelectorAll('[data-fill]').forEach((el) => { el.textContent = FILL[el.dataset.fill]; });
+    document.querySelectorAll('.logo-chip:empty').forEach((el) => { el.innerHTML = `${TOKEN_MARK}good first token`; });
+    $('s5prompt').innerHTML = homePrompt();
+
+    const cards = DEMO.issues.map((issue, i) => `
+      <div class="v-card v-line" data-card="${i}">
+        <span class="v-card__n">${i + 1}</span>
+        <div style="flex:1;"><div class="v-card__ref">${DEMO.repo}#${issue.number}</div><div class="v-card__title">${escape(issue.title)}</div></div>
+        <span class="v-tag">${DEMO.label}</span>
+      </div>`);
+    $('s2cards').innerHTML = cards.join('');
+    agentLines.forEach((el, i) => { el.textContent = PRIYA_LINES[i].text; });
+
+    s1 = mount($('s1view'), homePage(1280));
+    s3 = mount($('s3view'), issuePage(1200));
+    s4a = mount($('s4aview'), issuePage(1280));
+    s4b = mount($('s4bview'), homePage(1000));
   }
 
   function render(t) {
-    // Scene 1: title
-    scene($('s1'), t, 0.25, 3.8);
-    const cp = outBack(seg(t, 0.15, 0.85));
-    $('s1chip').style.transform = `translateX(-50%) scale(${0.85 + 0.15 * cp})`;
-    $('s1chip').style.opacity = seg(t, 0.15, 0.6);
-    rise($('s1head'), t, 1.0, 24, 0.6);
+    const root = document.documentElement.style;
+    // The site's pulse: full, down to 0.35, and back, every 2.4s. Its caret:
+    // on for half of every 1.1s.
+    root.setProperty('--pulse', String(1 - 0.65 * (0.5 - 0.5 * Math.cos((2 * Math.PI * t) / 2.4))));
+    root.setProperty('--caret', t % 1.1 < 0.55 ? '1' : '0');
 
-    // Scene 2: agent
-    scene($('s2'), t, 3.8, 13.2);
-    const prompt = 'spend some of my tokens on open source';
-    $('s2prompt').textContent = typed(prompt, t, 4.3, 20);
-    cursor($('s2cur1'), t, 3.8, 6.4, 4.3 + prompt.length / 20);
-    rise($('s2l1'), t, 6.4);
-    rise($('s2l2'), t, 6.9);
-    rise($('s2c1'), t, 7.35, 24);
-    rise($('s2c2'), t, 7.6, 24);
-    rise($('s2c3'), t, 7.85, 24);
-    rise($('s2pick'), t, 8.9);
-    $('s2pickText').textContent = typed('2', t, 9.2, 8);
-    cursor($('s2cur2'), t, 8.9, 9.7, 9.35);
-    const pickOn = seg(t, 9.35, 9.6);
-    $('s2c2').style.borderColor = pickOn > 0 ? 'var(--label)' : 'var(--line)';
-    $('s2c2').style.boxShadow = pickOn > 0 ? `0 0 0 ${3 * pickOn}px rgba(112,87,255,0.25)` : 'none';
-    rise($('s2l3'), t, 9.8);
-    rise($('s2instr'), t, 10.3);
-    const instr = 'write the failing test first';
-    $('s2instrText').textContent = typed(instr, t, 10.5, 20);
-    cursor($('s2cur3'), t, 10.3, 12.2, 10.5 + instr.length / 20);
-    rise($('s2l4'), t, 12.2);
+    // Scene 1: the homepage. A pointer clicks copy, which says `copied` for
+    // 1.6s, as the site's copy button does.
+    if (scene($('s1'), t, 0, 4.4)) {
+      camera(s1, 0, 0, 1.18);
+      const button = s1.r.copy;
+      html(s1, 'copy', button, t >= 2.35 && t < 3.95 ? 'copied' : 'copy');
+      const b = button.getBoundingClientRect();
+      const go = inOutCubic(seg(t, 0.9, 2.1));
+      const x = lerp(1560, b.left + b.width * 0.8, go);
+      const y = lerp(1000, b.top + b.height * 0.78, go);
+      const press = t >= 2.2 && t < 2.4 ? 0.86 : 1;
+      $('pointer').style.transform = `translate(${x - 6}px, ${y - 6}px) scale(${press})`;
+      $('pointer').style.opacity = seg(t, 0.8, 1.0);
+    }
 
-    // Scene 3: split view
-    scene($('s3'), t, 13.2, 25.0);
-    const agentTimes = [13.8, 15.0, 16.2, 17.4, 18.8, 20.2, 21.4];
-    agentTimes.forEach((at, i) => rise($('a' + (i + 1)), t, at, 12));
-    const priyaTimes = [13.9, 15.1, 16.3, 17.5, 18.9, 20.3, 23.3];
-    priyaTimes.forEach((at, i) => rise($('p' + (i + 1)), t, at, 12));
-    rise($('a8'), t, 22.0, 12);
-    $('a8text').textContent = typed('open it', t, 22.2, 16);
-    cursor($('a8cur'), t, 22.0, 23.0, 22.65);
-    rise($('a9'), t, 23.2, 12);
-    // Kenji: placeholder until he claims, then his lines.
-    const k0 = 1 - seg(t, 15.4, 15.6);
-    $('k0').style.opacity = t < 15.4 ? outCubic(seg(t, 13.4, 13.8)) : k0;
-    $('k0').style.display = t < 15.6 ? 'block' : 'none';
-    [15.7, 17.9, 19.6, 21.9, 23.5].forEach((at, i) => rise($('k' + (i + 1)), t, at, 12));
-    const joined = seg(t, 15.6, 15.9);
-    $('kenjiHead').style.opacity = joined;
-    $('kenjiSlot').style.opacity = 1 - joined;
-    $('workingCount').textContent = t >= 15.7 ? '2 working now' : '1 working now';
-    $('priyaState').textContent = t >= 23.3 ? 'PR opened' : 'working';
-    $('priyaState').style.color = t >= 23.3 ? 'var(--label-ink)' : 'var(--merged)';
-    $('livedot').style.opacity = 0.45 + 0.55 * (0.5 + 0.5 * Math.cos(t * 4));
+    // Scene 2: the prompt pasted into the agent, three issues, and a pick.
+    if (scene($('s2'), t, 4.4, 12.4)) {
+      $('s2prompt').textContent = t >= 4.9 ? FILL.prompt : '';
+      cursor($('s2cur1'), t, 4.4, 5.7, 4.9);
+      rise($('s2l1'), t, 5.7);
+      rise($('s2l2'), t, 6.2);
+      document.querySelectorAll('[data-card]').forEach((el, i) => rise(el, t, 6.6 + 0.25 * i, 24));
+      rise($('s2pick'), t, 8.1);
+      $('s2pickText').textContent = typed(FILL.pick, t, 8.4, 8);
+      cursor($('s2cur2'), t, 8.1, 8.9, 8.55);
+      const on = seg(t, 8.55, 8.8);
+      const picked = document.querySelector(`[data-card="${DEMO.picked}"]`);
+      picked.style.borderColor = on > 0 ? 'var(--label)' : '';
+      picked.style.boxShadow = on > 0 ? `0 0 0 ${3 * on}px color-mix(in srgb, var(--label) 25%, transparent)` : '';
+      rise($('s2l3'), t, 9.0);
+      rise($('s2instr'), t, 9.5);
+      $('s2instrText').textContent = typed(DEMO.instructions, t, 9.7, 20);
+      cursor($('s2cur3'), t, 9.5, 11.3, 9.7 + DEMO.instructions.length / 20);
+      rise($('s2l4'), t, 11.3);
+      rise($('s2l5'), t, 11.6);
+    }
 
-    // Scene 4: merged card
-    scene($('s4'), t, 25.0, 30.6);
-    const sc = outCubic(seg(t, 25.0, 25.6));
-    $('share').style.transform = `translateY(${(1 - sc) * 30}px) scale(${0.96 + 0.04 * sc})`;
-    const flip = inOutCubic(seg(t, 26.6, 27.0));
-    $('stateOpen').style.transform = `translateY(${-flip * 52}px)`;
-    $('stateMerged').style.transform = `translateY(${(1 - flip) * 52}px)`;
-    rise($('board'), t, 27.4, 20);
-    const tick = inOutCubic(seg(t, 28.2, 28.6));
-    $('n9').style.transform = `translateY(${-tick * 40}px)`;
-    $('n10').style.transform = `translateY(${(1 - tick) * 40}px)`;
+    // Scene 3: the agent beside the issue page. Each line it posts shows in
+    // its lane. @kenji claims the open slot. The PR opens and claims close.
+    if (scene($('s3'), t, 12.4, 25.2)) {
+      agentLines.forEach((el, i) => rise(el, t, PRIYA_LINES[i].at - 0.1, 12));
+      rise($('a7'), t, LIVE.submit, 12);
+      rise($('a9'), t, LIVE.prOpened, 12);
 
-    // Scene 5: end card
-    scene($('s5'), t, 30.6, DURATION + 1);
-    const ec = outBack(seg(t, 30.8, 31.4));
-    $('s5chip').style.transform = `translateX(-50%) scale(${0.85 + 0.15 * ec})`;
-    $('s5chip').style.opacity = seg(t, 30.8, 31.2);
-    rise($('s5head'), t, 31.2, 24, 0.6);
-    const pp = outCubic(seg(t, 31.8, 32.4));
-    $('s5prompt').style.opacity = pp;
-    $('s5prompt').style.transform = `translateX(-50%) translateY(${(1 - pp) * 20}px)`;
-    rise($('s5agents'), t, 32.6);
-    rise($('s5url'), t, 33.2);
-    rise($('s5credit'), t, 33.6);
+      issueAt(s3, t, LIVE);
+      // The page fills the window's width. After the PR opens, it scrolls
+      // down to the timeline.
+      const scale = s3.view.clientWidth / 1200;
+      camera(s3, 0, 0, scale);
+      const rail = onPage(s3, s3.r.rail);
+      const down = Math.max(0, rail.y + rail.h - s3.view.clientHeight / scale + 36);
+      camera(s3, 0, down * inOutCubic(seg(t, 23.1, 24.1)), scale);
+    }
+
+    // Scene 4: the same page, close on the two lanes, where the PR merges.
+    // Then the homepage's merged this week. The close-up holds both lanes and
+    // stops at the slot's hairline. It holds still, since a zoom into it made
+    // the MP4 about half a megabyte bigger.
+    if (scene($('s4'), t, 25.2, 30.9)) {
+      issueAt(s4a, t, AFTER);
+      camera(s4a, 0, 0, 1);
+      const priya = onPage(s4a, s4a.r.priyaLane);
+      const kenji = onPage(s4a, s4a.r.kenjiLane);
+      const left = priya.x - 30;
+      camera(s4a, left, priya.y - 30, s4a.view.clientWidth / (kenji.x + kenji.w + 1 - left));
+      $('s4a').style.opacity = 1 - seg(t, 27.6, 27.85);
+
+      camera(s4b, 0, 0, 1.5);
+      const merged = onPage(s4b, s4b.r.merged);
+      camera(s4b, 0, merged.y - 56, 1.5);
+      const b = outCubic(seg(t, 27.8, 28.3));
+      $('s4b').style.opacity = b;
+      $('s4b').style.transform = `translateY(${Math.round((1 - b) * 24)}px)`;
+    }
+
+    // Scene 5: end card.
+    if (scene($('s5'), t, 30.9, DURATION + 1)) {
+      const ec = outBack(seg(t, 31.0, 31.6));
+      $('s5chip').style.transform = `scale(${0.85 + 0.15 * ec})`;
+      $('s5chip').style.transformOrigin = 'left center';
+      $('s5chip').style.opacity = seg(t, 31.0, 31.4);
+      rise($('s5head'), t, 31.3, 24, 0.6);
+      rise($('s5prompt'), t, 31.9, 20, 0.6);
+      rise($('s5open'), t, 32.5);
+      rise($('s5url'), t, 33.1);
+      rise($('s5credit'), t, 33.5);
+    }
   }
 
+  setup();
   window.__duration = DURATION;
   window.__setTime = (t) => render(t);
+  // The capture waits for both fonts, since a scene that isn't showing yet
+  // may be the first to use one.
+  window.__ready = Promise.all([
+    document.fonts.load('600 16px Geist'),
+    document.fonts.load('400 16px "Geist Mono"'),
+  ]).then(() => document.fonts.ready);
 
   // Live preview: open index.html?play to watch it loop in a browser.
   if (location.search.includes('play')) {
     const start = performance.now();
     const loop = (now) => { render(((now - start) / 1000) % DURATION); requestAnimationFrame(loop); };
-    document.fonts.ready.then(() => requestAnimationFrame(loop));
+    window.__ready.then(() => requestAnimationFrame(loop));
   } else {
     render(0);
   }
