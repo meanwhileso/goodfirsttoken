@@ -1,7 +1,7 @@
 import { ISSUE_REFRESH_INTERVAL_MS, type ProjectRecord, type ToolOutput } from '@goodfirsttoken/core';
-import { getDoNotListEntry, takeSyncTurn } from '../db';
+import { getDoNotListEntry, releaseProject, takeRefresh } from '../db';
 import { ServiceGitHub, SyncStopped, type Allowance } from './github';
-import { syncProject, syncTaggedIssues } from './issues';
+import { HOLD_MS, newSyncRun, syncProject, syncTaggedIssues } from './issues';
 import { followPrs } from './prs';
 
 // The jobs that read GitHub with the read-only service token: the Worker's
@@ -14,13 +14,9 @@ export const ISSUE_SYNC_CRON = '*/15 * * * *';
 export const PR_JOB_CRON = '7,37 * * * *';
 
 /**
- * What each job may spend of the token's hourly budget. The sync stops
- * while a fifth is left, so the PR job, which stops at a tenth, still runs.
- * A maintainer's refresh stops at half, so it never takes what the
- * scheduled jobs need. The calls cap one run, well inside Cloudflare's 10,000
- * subrequests for one invocation on the Workers Paid plan. Four sync runs an
- * hour at 1,000 calls come to the 4,000 a 5,000 budget allows above its
- * fifth.
+ * What each job may spend of the token's hourly budget, and how many calls
+ * one run makes. docs/how-it-works.md gives the rule, under Tagged issues,
+ * and docs/architecture.md, under The sync, why these numbers.
  */
 export const ALLOWANCES = {
   sync: { leave: 0.2, maxCalls: 1000 },
@@ -59,8 +55,9 @@ export type RefreshOutcome = NonNullable<ToolOutput<'project_status'>['refresh']
 /**
  * Reads an approved project's tagged issues from GitHub now, for a
  * maintainer who asked with project_status. At most once every 10 minutes
- * for a project, counting the scheduled sync's runs, and only while half the
- * token's hourly budget is left.
+ * for a project, counting only earlier refreshes, never while a scheduled
+ * run reads the project, and only while half the token's hourly budget is
+ * left. It says it read part of the issues only when it saved some.
  */
 export async function refreshIssues(env: Env, project: ProjectRecord, now: () => number = Date.now): Promise<RefreshOutcome> {
   const token = serviceToken(env);
@@ -69,15 +66,22 @@ export async function refreshIssues(env: Env, project: ProjectRecord, now: () =>
   for (const repo of new Set([project.repo, project.settings.issueRepo ?? project.repo])) {
     if ((await getDoNotListEntry(env.DB, repo)) !== null) return 'not_approved';
   }
-  if (!(await takeSyncTurn(env.DB, project.repo, now(), ISSUE_REFRESH_INTERVAL_MS))) return 'too_soon';
+  const until = now() + HOLD_MS;
+  const turn = await takeRefresh(env.DB, project.repo, now(), ISSUE_REFRESH_INTERVAL_MS, until);
+  if (turn !== 'taken') return turn;
   const github = new ServiceGitHub(token, ALLOWANCES.refresh);
+  const run = newSyncRun();
   try {
-    const result = await syncProject({ db: env.DB, rooms: env.ISSUE_ROOM, github, now }, project);
-    if (result.outcome === 'skipped') console.warn(`A refresh of ${project.repo} was skipped. ${result.problem}`);
-    return result.outcome === 'read' ? 'read' : result.outcome === 'paused' ? 'paused' : 'partly_read';
+    await github.checkGitHub();
+    const result = await syncProject({ db: env.DB, rooms: env.ISSUE_ROOM, github, now }, project, run);
+    if (result.outcome === 'read') return 'read';
+    if (result.outcome === 'paused') return 'paused';
+    console.warn(`A refresh of ${project.repo} was skipped. ${result.problem}`);
   } catch (error) {
     if (!(error instanceof SyncStopped)) throw error;
     console.warn(`A refresh of ${project.repo} stopped. ${error.message}`);
-    return 'partly_read';
+  } finally {
+    await releaseProject(env.DB, project.repo, until);
   }
+  return run.issues > 0 ? 'partly_read' : 'not_read';
 }

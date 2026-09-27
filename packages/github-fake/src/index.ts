@@ -213,6 +213,25 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     // whatever it asks for.
     const resource = resourceOf(path);
     const caller = login ?? (app ? `app:${app.clientId}` : null);
+    // Asking what is left costs nothing.
+    // https://docs.github.com/en/rest/rate-limit/rate-limit#get-rate-limit-status-for-the-authenticated-user
+    if (path === '/rate_limit' && request.method === 'GET') {
+      const status = (name: RateResource) => {
+        const window = rateWindow(state, caller, name, now());
+        return {
+          limit: window.limit,
+          used: window.used,
+          remaining: Math.max(0, window.limit - window.used),
+          reset: Math.floor(Date.parse(window.resetAt) / 1000),
+        };
+      };
+      const resources = { core: status('core'), graphql: status('graphql'), search: status('search') };
+      const response = json({ resources, rate: resources.core });
+      for (const [header, value] of Object.entries(rateHeaders(rateWindow(state, caller, 'core', now()), 'core'))) {
+        response.headers.set(header, value);
+      }
+      return done(response, 'GET /rate_limit');
+    }
     const budget = rateWindow(state, caller, resource, now());
     const spent = budget.used >= budget.limit;
     if (!spent) budget.used += 1;

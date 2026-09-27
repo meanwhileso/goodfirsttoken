@@ -159,24 +159,35 @@ describe('the PR job', () => {
     expect((await room(issue).snapshot()).prs).toEqual([]);
   });
 
-  test('the job reads every open PR in one query, with the service token', async () => {
+  test('the job asks GitHub what is left of the budget, then reads every open PR in one query, with the service token', async () => {
     await claimWithPr();
     await claimWithPr();
 
     const run = await follow();
 
     expect(run.checked).toBe(2);
-    expect(github.calls.map((call) => [call.operation, call.login])).toEqual([['query repository', SERVICE_LOGIN]]);
+    expect(github.calls.map((call) => [call.operation, call.login])).toEqual([
+      ['GET /rate_limit', SERVICE_LOGIN],
+      ['query repository', SERVICE_LOGIN],
+    ]);
   });
 
-  test('a spent GraphQL budget stops the job, and changes nothing', async () => {
+  test('with no open PR, the job asks GitHub nothing', async () => {
+    const run = await follow();
+
+    expect(run.checked).toBe(0);
+    expect(github.calls).toEqual([]);
+  });
+
+  test('a spent GraphQL budget stops the job before it reads, and changes nothing', async () => {
     const { claim, pr } = await claimWithPr();
     github.closePullRequest(APP, pr.number, BY);
     github.spendRateLimit(SERVICE_LOGIN, 'graphql', 5000);
 
     const run = await follow();
 
-    expect(run.stopped).toBe('rate_limited');
+    expect(run.stopped).toBe('budget');
+    expect(github.calls.map((call) => call.operation)).toEqual(['GET /rate_limit']);
     expect(await getPr(db, claim.id)).toMatchObject({ state: 'open' });
   });
 });

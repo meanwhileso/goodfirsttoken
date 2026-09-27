@@ -11,11 +11,12 @@ import {
   dropIssues,
   finishPass,
   getProject,
+  holdProject,
   isOpenClaimPr,
   listIssueCopies,
   listIssues,
   listProjectsToSync,
-  markSyncTried,
+  releaseProject,
   saveIssues,
   setProjectStatusFrom,
 } from '../db';
@@ -35,6 +36,11 @@ import { SyncStopped, type ServiceGitHub, type StopReason } from './github';
 // A pass reads each of a project's issues once, and can take several runs.
 // A run that stops early, for the GitHub budget or its limit on calls,
 // leaves the pass in progress, and the next run skips the issues it read.
+// One run at a time holds a project while it reads it, a scheduled run or a
+// maintainer's refresh.
+
+/** How long a run holds a project: the most a scheduled run lasts. */
+export const HOLD_MS = 15 * 60_000;
 
 export interface SyncDeps {
   db: D1Database;
@@ -58,11 +64,33 @@ export interface SyncRun {
   finished: number;
   paused: string[];
   skipped: string[];
+  /** Projects another run held, which this one left. */
+  held: string[];
+  /** Issues saved. */
   issues: number;
-  /** Issues saved with a linked PR, by the ways the sync found it. */
-  linked: { closing: number; cross: number; both: number };
+  /**
+   * The open PRs linked to the issues read, each counted once for each issue,
+   * by the ways the sync found it: a closing reference only, a
+   * cross-reference only, or both. `elsewhere` counts the PRs either way
+   * found in a repo other than the project's, which link nothing.
+   */
+  linked: { closing: number; cross: number; both: number; elsewhere: number };
   calls: number;
   stopped: StopReason | null;
+}
+
+export function newSyncRun(): SyncRun {
+  return {
+    projects: 0,
+    finished: 0,
+    paused: [],
+    skipped: [],
+    held: [],
+    issues: 0,
+    linked: { closing: 0, cross: 0, both: 0, elsewhere: 0 },
+    calls: 0,
+    stopped: null,
+  };
 }
 
 /** Issues whose closing PRs one GraphQL query reads. */
@@ -75,10 +103,10 @@ const PER_PAGE = 100;
 // The parts of GitHub's REST answers the sync reads.
 // https://docs.github.com/en/rest/repos/repos#get-a-repository
 interface RestRepo {
-  full_name: string;
-  private: boolean;
-  visibility?: string;
-  archived: boolean;
+  full_name?: unknown;
+  private?: unknown;
+  visibility?: unknown;
+  archived?: unknown;
 }
 
 // https://docs.github.com/en/rest/issues/issues#list-repository-issues
@@ -144,24 +172,37 @@ function issueKey(issue: string): string {
   return lower(issue);
 }
 
+function notGitHub(repo: string): SyncStopped {
+  return new SyncStopped('github_error', `GitHub's API answered a read of ${repo} in a form GitHub doesn't use.`);
+}
+
 /**
  * Why GitHub no longer shows the repo as one Good First Token lists, or null
  * when it does. The service token reads public repos only, so GitHub
  * answers 404 alike for a repo that went private and one that was deleted.
  * A renamed or moved repo answers from its new name, and stays listed.
+ *
+ * Only an answer in GitHub's own form pauses a project: its JSON 404, Not
+ * Found, a 451 with its JSON body, or a repo that says it is private or
+ * archived. Any other 404 or 451, or a repo in a form GitHub doesn't send,
+ * stops the run, so a proxy or a wrong GH_API_URL never pauses a project.
  */
 async function whyUnlisted(github: ServiceGitHub, repo: string): Promise<string | null> {
   let found: RestRepo;
   try {
     found = (await github.read<RestRepo>(`/repos/${repo}`)).data;
   } catch (error) {
-    if (error instanceof GitHubError && error.status === 404) {
+    if (!(error instanceof GitHubError) || (error.status !== 404 && error.status !== 451)) throw error;
+    if (error.status === 404 && error.bodyMessage === 'Not Found') {
       return `GitHub shows no public repo named ${repo}. It went private or was deleted.`;
     }
-    if (error instanceof GitHubError && error.status === 451) return `GitHub blocked access to ${repo}.`;
-    throw error;
+    if (error.status === 451 && error.bodyMessage !== null) return `GitHub blocked access to ${repo}.`;
+    throw notGitHub(repo);
   }
-  if (found.private || (found.visibility !== undefined && found.visibility !== 'public')) {
+  if (typeof found.full_name !== 'string' || typeof found.private !== 'boolean' || typeof found.archived !== 'boolean') {
+    throw notGitHub(repo);
+  }
+  if (found.private || (typeof found.visibility === 'string' && found.visibility !== 'public')) {
     return `${repo} is no longer public on GitHub.`;
   }
   if (found.archived) return `${repo} is archived on GitHub.`;
@@ -302,13 +343,8 @@ async function crossReferences(github: ServiceGitHub, issueRepo: string, number:
   }
 }
 
-/**
- * The linked PR to keep for the issue, and how it was found, or null. The
- * one kept last time stays while it is still linked and open, so the room
- * hears of a change only when there is one. Otherwise a PR both ways found
- * comes first, then one a closing reference found, then the oldest mention.
- */
-function chooseLink(kept: PrRef | null, closing: readonly PrRef[], cross: readonly PrRef[]): Link | null {
+/** Every open PR linked to an issue, each once, with the ways it was found. */
+function linksOf(closing: readonly PrRef[], cross: readonly PrRef[]): Link[] {
   const links = new Map<string, Link>();
   const add = (pr: PrRef, method: LinkMethod) => {
     const link = links.get(prKey(pr)) ?? { pr, foundBy: [] };
@@ -317,12 +353,35 @@ function chooseLink(kept: PrRef | null, closing: readonly PrRef[], cross: readon
   };
   for (const pr of closing) add(pr, 'closing_reference');
   for (const pr of cross) add(pr, 'cross_reference');
-  if (kept !== null) {
-    const still = links.get(prKey(kept));
-    if (still) return still;
+  return [...links.values()];
+}
+
+/**
+ * The linked PR to keep for the issue, and how it was found, or null. The
+ * one kept last time stays while it is still linked and open, so the room
+ * hears of a change only when there is one. Otherwise a PR both ways
+ * found comes first, then one a closing reference found, then the oldest
+ * mention.
+ */
+function chooseLink(kept: PrRef | null, links: readonly Link[]): Link | null {
+  const still = kept === null ? undefined : links.find((link) => samePr(link.pr, kept));
+  if (still) return still;
+  return (
+    links.find((link) => link.foundBy.length === 2) ??
+    links.find((link) => link.foundBy.includes('closing_reference')) ??
+    links[0] ??
+    null
+  );
+}
+
+function countLinks(run: SyncRun | undefined, links: readonly Link[], elsewhere: number): void {
+  if (!run) return;
+  run.linked.elsewhere += elsewhere;
+  for (const link of links) {
+    if (link.foundBy.length === 2) run.linked.both += 1;
+    else if (link.foundBy.includes('closing_reference')) run.linked.closing += 1;
+    else run.linked.cross += 1;
   }
-  const all = [...links.values()];
-  return all.find((link) => link.foundBy.length === 2) ?? all.find((link) => link.foundBy.includes('closing_reference')) ?? all[0] ?? null;
 }
 
 /**
@@ -337,7 +396,7 @@ async function tellRoom(deps: SyncDeps, issue: string, before: PrRef | null, aft
   try {
     const room = issueRoom(deps.rooms, issue);
     if (after !== null && !(await room.prOpened(after)).ok) return false;
-    if (before !== null && !(await isOpenClaimPr(deps.db, before)) && !(await room.prClosed(before)).ok) return false;
+    if (before !== null && !(await isOpenClaimPr(deps.db, before, issue)) && !(await room.prClosed(before)).ok) return false;
     return true;
   } catch (error) {
     console.warn(`The room for ${issue} didn't take the sync's linked PR. The next pass tries again.`, error);
@@ -373,6 +432,9 @@ async function dropMissing(deps: SyncDeps, project: string, missing: readonly Ta
 export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: SyncRun): Promise<ProjectSync> {
   const { db, github, now } = deps;
   const issueRepo = project.settings.issueRepo ?? project.repo;
+  // A PR links an issue only when it is aimed at the project: opened in its
+  // code repo or its issue repo, from a branch there or a fork.
+  const ours = (pr: PrRef) => lower(pr.repo) === lower(project.repo) || lower(pr.repo) === lower(issueRepo);
   try {
     for (const repo of lower(issueRepo) === lower(project.repo) ? [project.repo] : [project.repo, issueRepo]) {
       const reason = await whyUnlisted(github, repo);
@@ -407,7 +469,10 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
           const ref = `${issueRepo}#${String(issue.number)}`;
           const before = cached.get(keyOf(issue.number));
           const kept = before?.linkedPr ?? null;
-          const found = chooseLink(kept, closes, mentions);
+          const all = linksOf(closes, mentions);
+          const links = all.filter((link) => ours(link.pr));
+          countLinks(run, links, all.length - links.length);
+          const found = chooseLink(kept, links);
           // When the room didn't take the change, the copy keeps what the
           // room holds, and the next pass tries again.
           const told = await tellRoom(deps, ref, kept, found?.pr ?? null);
@@ -426,7 +491,7 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
       } finally {
         await saveIssues(db, saves);
         read += saves.length;
-        if (run) countSaves(run, saves);
+        if (run) run.issues += saves.length;
       }
     }
 
@@ -449,55 +514,48 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
   }
 }
 
-function countSaves(run: SyncRun, saves: readonly TaggedIssue[]): void {
-  run.issues += saves.length;
-  for (const save of saves) {
-    const ways = save.linkedPrFoundBy ?? [];
-    if (ways.length === 2) run.linked.both += 1;
-    else if (ways.includes('closing_reference')) run.linked.closing += 1;
-    else if (ways.includes('cross_reference')) run.linked.cross += 1;
-  }
-}
-
 /**
  * The scheduled run: syncs the approved projects in the order
- * listProjectsToSync gives, until they are done or the run has to stop.
+ * listProjectsToSync gives, until they are done or the run has to stop. It
+ * first asks GitHub what is left of the budget, and leaves a project a
+ * maintainer's refresh is reading.
  */
 export async function syncTaggedIssues(deps: SyncDeps): Promise<SyncRun> {
-  const run: SyncRun = {
-    projects: 0,
-    finished: 0,
-    paused: [],
-    skipped: [],
-    issues: 0,
-    linked: { closing: 0, cross: 0, both: 0 },
-    calls: 0,
-    stopped: null,
-  };
-  for (const repo of await listProjectsToSync(deps.db)) {
-    const project = await getProject(deps.db, repo);
-    if (project?.status !== 'approved') continue;
-    run.projects += 1;
-    await markSyncTried(deps.db, project.repo, deps.now());
-    try {
-      const result = await syncProject(deps, project, run);
-      if (result.outcome === 'read') run.finished += 1;
-      if (result.outcome === 'paused') run.paused.push(project.repo);
-      if (result.outcome === 'skipped') {
-        run.skipped.push(project.repo);
-        console.warn(`The tagged-issue sync skipped ${project.repo}. ${result.problem}`);
+  const run = newSyncRun();
+  const repos = await listProjectsToSync(deps.db);
+  try {
+    if (repos.length > 0) await deps.github.checkGitHub();
+    for (const repo of repos) {
+      const project = await getProject(deps.db, repo);
+      if (project?.status !== 'approved') continue;
+      const until = deps.now() + HOLD_MS;
+      if (!(await holdProject(deps.db, project.repo, deps.now(), until))) {
+        run.held.push(project.repo);
+        continue;
       }
-    } catch (error) {
-      if (!(error instanceof SyncStopped)) throw error;
-      run.stopped = error.reason;
-      console.warn(`The tagged-issue sync stopped at ${project.repo}. ${error.message}`);
-      break;
+      run.projects += 1;
+      try {
+        const result = await syncProject(deps, project, run);
+        if (result.outcome === 'read') run.finished += 1;
+        if (result.outcome === 'paused') run.paused.push(project.repo);
+        if (result.outcome === 'skipped') {
+          run.skipped.push(project.repo);
+          console.warn(`The tagged-issue sync skipped ${project.repo}. ${result.problem}`);
+        }
+      } finally {
+        await releaseProject(deps.db, project.repo, until);
+      }
     }
+  } catch (error) {
+    if (!(error instanceof SyncStopped)) throw error;
+    run.stopped = error.reason;
+    console.warn(`The tagged-issue sync stopped. ${error.message}`);
   }
   run.calls = deps.github.calls;
-  // One line a run, which says how often each way finds a linked PR.
+  // One line a run. The linked PRs it counts say how often each way finds
+  // a PR the other misses.
   console.log(
-    `The tagged-issue sync read issues: ${String(run.issues)}, projects started: ${String(run.projects)}, finished: ${String(run.finished)}, calls to GitHub: ${String(run.calls)}. Linked PRs found by a closing reference only: ${String(run.linked.closing)}, by a cross-reference only: ${String(run.linked.cross)}, both ways: ${String(run.linked.both)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The tagged-issue sync read issues: ${String(run.issues)}, projects started: ${String(run.projects)}, finished: ${String(run.finished)}, calls to GitHub: ${String(run.calls)}. Linked PRs found by a closing reference only: ${String(run.linked.closing)}, by a cross-reference only: ${String(run.linked.cross)}, both ways: ${String(run.linked.both)}, in another repo: ${String(run.linked.elsewhere)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

@@ -12,7 +12,7 @@ import {
   type PrRef,
   type PrState,
 } from '@goodfirsttoken/core';
-import { checkTime, prFromColumns } from './shared';
+import { checkTime, prFromColumns, splitIssue } from './shared';
 
 // The prs table: the PR opened for each claim, followed until it merges or
 // closes.
@@ -155,13 +155,18 @@ export async function setPrState(
 }
 
 /**
- * Whether `pr` is a claim's PR that is still open here, so the PR job
- * follows it and tells the issue's room when it closes.
+ * Whether `pr` is the PR of a claim on `issue`, like `owner/name#12`, and
+ * still open here, so the PR job follows it and tells that issue's room
+ * when it closes. A claim's PR is followed in its own issue's room only.
  */
-export async function isOpenClaimPr(db: D1Database, pr: PrRef): Promise<boolean> {
+export async function isOpenClaimPr(db: D1Database, pr: PrRef, issue: string): Promise<boolean> {
+  const { repo, number } = splitIssue(issue);
   const row = await db
-    .prepare("SELECT 1 AS found FROM prs WHERE repo = ? AND number = ? AND state = 'open'")
-    .bind(mustParse(repoName, pr.repo, 'pr.repo'), pr.number)
+    .prepare(
+      `SELECT 1 AS found FROM prs p JOIN claims c ON c.id = p.claim_id
+       WHERE p.repo = ? AND p.number = ? AND p.state = 'open' AND c.issue_repo = ? AND c.issue_number = ?`,
+    )
+    .bind(mustParse(repoName, pr.repo, 'pr.repo'), pr.number, repo, number)
     .first<{ found: number }>();
   return row !== null;
 }

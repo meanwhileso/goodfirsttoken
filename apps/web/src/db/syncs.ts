@@ -3,19 +3,27 @@ import { checkTime } from './shared';
 
 // The issue_syncs table: where the tagged-issue sync (src/sync/issues.ts)
 // stands for each project. A pass reads each of a project's tagged issues
-// once, and can take several runs.
+// once, and can take several runs. One run at a time holds a project while
+// it reads it.
 
 interface SyncRow {
   project: string;
   pass_started_at: number | null;
   read_at: number | null;
-  tried_at: number;
+  refreshed_at: number | null;
+  reading_until: number | null;
 }
 
 function toSync(row: SyncRow): IssueSync {
   return mustParse(
     issueSyncSchema,
-    { project: row.project, passStartedAt: row.pass_started_at, readAt: row.read_at, triedAt: row.tried_at },
+    {
+      project: row.project,
+      passStartedAt: row.pass_started_at,
+      readAt: row.read_at,
+      refreshedAt: row.refreshed_at,
+      readingUntil: row.reading_until,
+    },
     'issue sync',
   );
 }
@@ -48,34 +56,64 @@ export async function listProjectsToSync(db: D1Database): Promise<string[]> {
   return results.map((row) => mustParse(repoName, row.repo, 'repo'));
 }
 
-/** Records that a scheduled run started on the project at `now`. */
-export async function markSyncTried(db: D1Database, project: string, now: number): Promise<void> {
-  await db
+/**
+ * Holds the project for a scheduled run from `now` until `until`, so no
+ * other run reads it meanwhile. False when another run holds it. A hold
+ * whose time is up counts as none, so a run that died frees the project.
+ */
+export async function holdProject(db: D1Database, project: string, now: number, until: number): Promise<boolean> {
+  const row = await db
     .prepare(
-      `INSERT INTO issue_syncs (project, pass_started_at, read_at, tried_at) VALUES (?1, NULL, NULL, ?2)
-       ON CONFLICT (project) DO UPDATE SET tried_at = ?2`,
+      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until)
+       VALUES (?1, NULL, NULL, NULL, ?3)
+       ON CONFLICT (project) DO UPDATE SET reading_until = ?3
+         WHERE issue_syncs.reading_until IS NULL OR issue_syncs.reading_until <= ?2
+       RETURNING project`,
     )
-    .bind(mustParse(repoName, project, 'project'), checkTime(now))
+    .bind(mustParse(repoName, project, 'project'), checkTime(now), checkTime(until, 'until'))
+    .first<{ project: string }>();
+  return row !== null;
+}
+
+/** Lets go of the hold that runs out at `until`. A hold another run took since stays. */
+export async function releaseProject(db: D1Database, project: string, until: number): Promise<void> {
+  await db
+    .prepare('UPDATE issue_syncs SET reading_until = NULL WHERE project = ? AND reading_until = ?')
+    .bind(mustParse(repoName, project, 'project'), checkTime(until, 'until'))
     .run();
 }
 
 /**
- * Takes a turn to sync the project at `now`, for a refresh a maintainer
- * asked for. True, with the try recorded, unless a run started on the
- * project less than `interval` ago. Two refreshes at the same moment get
- * one turn between them.
+ * Takes a maintainer's refresh of the project at `now`, holding it until
+ * `until`. `taken` records the refresh and the hold, in one statement, so two
+ * refreshes at the same moment get one turn between them. `too_soon` when an
+ * earlier refresh started less than `interval` ago, and `busy` when another
+ * run holds the project.
  */
-export async function takeSyncTurn(db: D1Database, project: string, now: number, interval: number): Promise<boolean> {
+export async function takeRefresh(
+  db: D1Database,
+  project: string,
+  now: number,
+  interval: number,
+  until: number,
+): Promise<'taken' | 'too_soon' | 'busy'> {
+  const name = mustParse(repoName, project, 'project');
   const at = checkTime(now);
+  const earliest = at - mustParse(count, interval, 'interval');
   const row = await db
     .prepare(
-      `INSERT INTO issue_syncs (project, pass_started_at, read_at, tried_at) VALUES (?1, NULL, NULL, ?2)
-       ON CONFLICT (project) DO UPDATE SET tried_at = ?2 WHERE issue_syncs.tried_at <= ?3
+      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until)
+       VALUES (?1, NULL, NULL, ?2, ?4)
+       ON CONFLICT (project) DO UPDATE SET refreshed_at = ?2, reading_until = ?4
+         WHERE (issue_syncs.refreshed_at IS NULL OR issue_syncs.refreshed_at <= ?3)
+           AND (issue_syncs.reading_until IS NULL OR issue_syncs.reading_until <= ?2)
        RETURNING project`,
     )
-    .bind(mustParse(repoName, project, 'project'), at, at - mustParse(count, interval, 'interval'))
+    .bind(name, at, earliest, checkTime(until, 'until'))
     .first<{ project: string }>();
-  return row !== null;
+  if (row !== null) return 'taken';
+  const sync = await getIssueSync(db, name);
+  return sync?.refreshedAt != null && sync.refreshedAt > earliest ? 'too_soon' : 'busy';
 }
 
 /**
@@ -87,7 +125,8 @@ export async function beginPass(db: D1Database, project: string, now: number): P
   const name = mustParse(repoName, project, 'project');
   const row = await db
     .prepare(
-      `INSERT INTO issue_syncs (project, pass_started_at, read_at, tried_at) VALUES (?1, ?2, NULL, ?2)
+      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until)
+       VALUES (?1, ?2, NULL, NULL, NULL)
        ON CONFLICT (project) DO UPDATE SET pass_started_at = MAX(?2, COALESCE(issue_syncs.read_at + 1, 0))
          WHERE issue_syncs.pass_started_at IS NULL
        RETURNING pass_started_at`,

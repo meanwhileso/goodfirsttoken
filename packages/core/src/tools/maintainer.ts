@@ -40,12 +40,23 @@ const resumers = ['maintainers', 'admins'] as const;
 
 /**
  * What asking project_status to read the tagged issues again did: read them
- * all, read some before the server's GitHub budget or its limit for one
- * call ran out, paused the project because GitHub no longer shows its repo
- * as public and open, or read nothing: they were read too recently, the
- * project isn't approved, or the server has no token for reading GitHub.
+ * all, read some before it stopped, paused the project because GitHub no
+ * longer shows its repo as public and open, or read no issue. It reads none
+ * when it stops before the first, as when little of the server's GitHub
+ * budget is left, when an earlier refresh ran less than 10 minutes ago,
+ * when a scheduled sync is reading the project, when the project isn't
+ * approved, or when the server has no token for reading GitHub.
  */
-export const refreshOutcomes = ['read', 'partly_read', 'paused', 'too_soon', 'not_approved', 'not_set_up'] as const;
+export const refreshOutcomes = [
+  'read',
+  'partly_read',
+  'not_read',
+  'paused',
+  'too_soon',
+  'busy',
+  'not_approved',
+  'not_set_up',
+] as const;
 export type RefreshOutcome = (typeof refreshOutcomes)[number];
 
 function refreshText(outcome: RefreshOutcome): string {
@@ -55,10 +66,14 @@ function refreshText(outcome: RefreshOutcome): string {
       return 'Read its tagged issues from GitHub just now.';
     case 'partly_read':
       return 'Read some of its tagged issues from GitHub just now. The next scheduled sync reads the rest.';
+    case 'not_read':
+      return "Read none of its tagged issues from GitHub: little of the server's GitHub budget is left, or GitHub didn't answer as it should. The next scheduled sync reads them.";
     case 'paused':
       return "Reading GitHub showed its repo is no longer public and open, so Good First Token paused it. Only Good First Token's admins can resume it.";
     case 'too_soon':
-      return `Its tagged issues were read from GitHub less than ${minutes} minutes ago, so they weren't read again.`;
+      return `A refresh read its tagged issues from GitHub less than ${minutes} minutes ago, so they weren't read again.`;
+    case 'busy':
+      return "A scheduled sync is reading its tagged issues from GitHub now, so they weren't read again. Ask again when it's done.";
     case 'not_approved':
       return "Only an approved project's tagged issues are read from GitHub, so they weren't read.";
     case 'not_set_up':
@@ -132,7 +147,7 @@ export const updateProject = defineTool({
 
 export const projectStatus = defineTool({
   audience: 'maintainer',
-  description: `Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused. The tagged issues are counted as the last sync read them from GitHub. Set refresh to read an approved project's tagged issues from GitHub first, at most once every ${String(ISSUE_REFRESH_INTERVAL_MS / 60_000)} minutes.`,
+  description: `Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused. The tagged issues are counted as the last sync read them from GitHub. Set refresh to read an approved project's tagged issues from GitHub first, at most once every ${String(ISSUE_REFRESH_INTERVAL_MS / 60_000)} minutes, and not while a scheduled sync is reading them.`,
   input: z.object({
     repo: repoName,
     refresh: z

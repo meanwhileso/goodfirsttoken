@@ -1,12 +1,13 @@
 import { GitHubError, gitHubQuery, gitHubRead, type GitHubPage, type GraphQLResult, type RateLimit } from '../github';
 
 // The jobs' calls to GitHub, all with the read-only service token. The
-// token's budget is GitHub's for its account, 5,000 REST calls and 5,000
-// GraphQL points an hour, and every job that uses the token shares it. So a
-// run keeps count of its calls, reads what GitHub says is left after each
-// one, and stops before a call when less is left than its job leaves for
-// the others. A job that stops early saves what it has done, and its next
-// run picks up from there.
+// token's budget is GitHub's for its account, and every job that uses the
+// token shares it. So a run first asks GitHub what is left, which costs
+// nothing, keeps count of its calls, reads what GitHub says is left after
+// each one, and stops before a call when less is left than its job leaves
+// for the others. A job that stops early saves what it has done, and its
+// next run picks up from there. The rules are under Tagged issues in
+// docs/how-it-works.md.
 
 /** Why a run stopped before it finished. */
 export type StopReason =
@@ -18,7 +19,7 @@ export type StopReason =
   | 'rate_limited'
   /** GitHub refused the service token. */
   | 'bad_token'
-  /** GitHub couldn't be reached, or answered with an error of its own. */
+  /** GitHub couldn't be reached, answered with an error of its own, or answered in a form GitHub doesn't use. */
   | 'github_error';
 
 export class SyncStopped extends Error {
@@ -47,6 +48,16 @@ const REST = 'core';
 /** GitHub's name for the budget GraphQL queries count against. */
 const GRAPHQL = 'graphql';
 
+// https://docs.github.com/en/rest/rate-limit/rate-limit#get-rate-limit-status-for-the-authenticated-user
+interface RateLimitStatus {
+  resources?: Record<string, { limit?: unknown; remaining?: unknown; reset?: unknown } | undefined>;
+}
+
+/** A GraphQL error that says GitHub is limiting the rate, primary or secondary. */
+function limitsRate(error: { type?: string; message: string }): boolean {
+  return error.type === 'RATE_LIMITED' || /rate limit/i.test(error.message);
+}
+
 export class ServiceGitHub {
   /** Calls this run made. */
   calls = 0;
@@ -64,6 +75,32 @@ export class ServiceGitHub {
   /** What GitHub last said is left of each budget the run used, by resource. */
   left(): Record<string, number> {
     return Object.fromEntries([...this.budgets].map(([resource, budget]) => [resource, budget.remaining]));
+  }
+
+  /**
+   * Asks GitHub what is left of the token's budgets, which costs none of
+   * them, so the run knows before its first read. Stops the run when the
+   * answer isn't one GitHub gives, so an API that isn't GitHub's, or a proxy
+   * in front of it, never gets read as GitHub.
+   */
+  async checkGitHub(): Promise<void> {
+    let data: RateLimitStatus;
+    try {
+      ({ data } = await this.read<RateLimitStatus>('/rate_limit'));
+    } catch (error) {
+      if (!(error instanceof GitHubError)) throw error;
+      throw new SyncStopped('github_error', `GitHub's API answered ${String(error.status)} when asked its rate limit.`);
+    }
+    const budgets = [REST, GRAPHQL].map((resource) => {
+      const found = data.resources?.[resource];
+      const [limit, remaining, reset] = [found?.limit, found?.remaining, found?.reset];
+      if (typeof limit !== 'number' || typeof remaining !== 'number' || typeof reset !== 'number') return null;
+      return { resource, limit, remaining, resetAt: reset * 1000 };
+    });
+    if (budgets.some((budget) => budget === null)) {
+      throw new SyncStopped('github_error', "GitHub's API answered its rate limit in a form GitHub doesn't use.");
+    }
+    for (const budget of budgets) this.note(budget);
   }
 
   /** Reads one page of a REST path, or stops the run. */
@@ -88,7 +125,7 @@ export class ServiceGitHub {
       throw this.failed(error);
     }
     this.note(result.rateLimit);
-    const limited = result.errors.find((error) => error.type === 'RATE_LIMITED');
+    const limited = result.errors.find(limitsRate);
     if (limited) throw new SyncStopped('rate_limited', `GitHub refused a query for the rate limit: ${limited.message}`);
     return { data: result.data, errors: result.errors };
   }
@@ -120,7 +157,7 @@ export class ServiceGitHub {
   private failed(error: unknown): unknown {
     if (!(error instanceof GitHubError)) {
       const why = error instanceof Error ? error.message : String(error);
-      return new SyncStopped('github_error', `GitHub could not be reached: ${why}`);
+      return new SyncStopped('github_error', `GitHub could not be reached, or answered what isn't JSON: ${why}`);
     }
     this.note(error.rateLimit);
     if (error.status === 401) return new SyncStopped('bad_token', 'GitHub refused the service token (401).');

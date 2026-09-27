@@ -765,7 +765,10 @@ service token under [Calls to GitHub](#calls-to-github).
   stays closed here.
 - It makes no `pr_merged` or `pr_closed` feed event yet.
 - It stops early the way the sync does, under The budget in
-  [Tagged issues](#tagged-issues), and saves what it read first.
+  [Tagged issues](#tagged-issues), and saves what it read first. With no
+  open PR, it asks GitHub nothing.
+- When GitHub refuses its query, the job stops, and the next run reads the
+  PRs again.
 
 ## Projects
 
@@ -985,13 +988,23 @@ a project is `not_found`.
   for its claims. It also says when the sync last read every tagged issue.
 - With `refresh`, `project_status` first reads the project's tagged issues
   from GitHub, the way a scheduled run does, and the answer says what that
-  did. Only the repo's admins and maintainers can call it, as for every
-  maintainer's tool, and it reads nothing for a project that isn't approved,
-  or whose repo or issue repo is on the do-not-list. It reads at most once
-  every 10 minutes for a project, counting the scheduled runs, and stops
-  while half the hour's GitHub budget is left, or after 60 calls, so no
-  maintainer spends what the scheduled jobs need. The next scheduled run
-  reads what it left.
+  did: it read them all, read some, read none, or paused the project. Only
+  the repo's admins and maintainers can call it, as for every maintainer's
+  tool, and it reads nothing for a project that isn't approved, or whose
+  repo or issue repo is on the do-not-list.
+  - It reads at most once every 10 minutes for a project. Only earlier
+    refreshes count, so a refresh right after a scheduled run reads.
+    Within the 10 minutes, the answer says a refresh read them already.
+  - It never reads a project while a scheduled run reads it, and a
+    scheduled run leaves a project a refresh reads. While one does, a
+    refresh reads nothing, the answer says the sync is busy with it, and it
+    doesn't count toward the 10 minutes.
+  - It stops early the way a scheduled run does, with its own share of the
+    budget and its own cap on calls, under The budget in
+    [Tagged issues](#tagged-issues), so no maintainer spends what the
+    scheduled jobs need. The answer says it read some of the issues only when
+    it saved at least one, and none when it stopped before. The next
+    scheduled run reads what it left.
 - **`pause_project`** pauses an approved project, with an optional reason,
   so agents get no new claims on it. A project that is pending or rejected
   is refused with `project_not_open`. Pausing a paused project changes
@@ -1054,9 +1067,12 @@ do-not-list.
 - The cache holds what GitHub said when the sync read each issue. An issue
   tagged, closed, or linked in between shows at the next read.
 
-**Linked PRs.** An issue's linked PR is an open pull request, from anyone in
-any repo, that GitHub links to the issue in either of two ways. The sync
-reads both for every issue it reads.
+**Linked PRs.** An issue's linked PR is an open pull request, from anyone,
+open in the project's code repo or its issue repo, that GitHub links to the
+issue in either of two ways. The sync reads both for every issue it reads.
+A PR from a fork counts when it is aimed at one of those repos. A PR in any
+other repo links nothing, whatever it says, like one in a project
+downstream that works around the issue.
 
 - A closing reference: a PR whose description closes the issue with a
   keyword, like `Closes #12`, aimed at its repo's default branch, or one
@@ -1076,7 +1092,9 @@ reads both for every issue it reads.
   When the kept PR goes and another is linked, the room hears of the new
   one first, so it always has one while any is open.
 - A claim's own PR that is still open in the [PRs](#prs) table is the PR
-  job's to close in the room, so the sync leaves that to it.
+  job's to close in the claim's own issue's room, so the sync leaves that to
+  it there. In the room of any other issue the PR mentions, the sync closes
+  it as it does any PR.
 - When the room doesn't take a change, the copy keeps the PR the room has,
   and the next pass tries again.
 - When a copy with a linked PR is dropped, the room forgets the PR, unless
@@ -1086,6 +1104,12 @@ reads both for every issue it reads.
 and its issue repo when that is another one. When GitHub shows either as
 private, archived, or blocked, or doesn't show it, the sync pauses the
 project, with the reason, like `sample-owner/app is archived on GitHub.`
+
+- Only an answer in GitHub's own form pauses a project: its `404` with a
+  JSON body that says `Not Found`, a `451` with a JSON body, or the repo,
+  with the fields GitHub gives, saying it is private or archived. Any other
+  answer stops the run and pauses nothing, so a proxy, or an API that isn't
+  GitHub's, can't pause a project.
 
 - The service token reads public repos only, so for a repo that went
   private and for one that was deleted, the reason is the same:
@@ -1097,10 +1121,12 @@ project, with the reason, like `sample-owner/app is archived on GitHub.`
   made at the same moment stays.
 
 **The budget.** GitHub gives the service token's account 5,000 REST calls
-and 5,000 GraphQL points an hour, and the scheduled jobs and a maintainer's
-refresh share them. Each run reads what GitHub says is left after every
-call, and before each call it stops when less is left than its job leaves
-for the others. Each job also caps the calls one run makes.
+and 5,000 GraphQL points an hour, whichever of its tokens makes them, and the
+scheduled jobs and a maintainer's refresh share them. A run first asks
+GitHub what is left, which costs nothing, then reads what GitHub says is
+left after every call, and before each call it stops when less is left than
+its job leaves for the others. Each job also caps the calls one run makes,
+the first question included.
 
 | Job | Stops while less than this share of the hour's limit is left | Most calls in one run |
 |---|---|---|
@@ -1108,15 +1134,18 @@ for the others. Each job also caps the calls one run makes.
 | The PR job | A tenth | 100 |
 | A maintainer's refresh | Half | 60 |
 
-- A run also stops when GitHub refuses a call for the rate limit, refuses the
-  token, can't be reached, or answers with an error of its own. It pauses
-  nothing then.
+- A run also stops when GitHub refuses a call for the rate limit, primary
+  or secondary, refuses the token, can't be reached, answers with an error
+  of its own, or answers what GitHub doesn't send, as when it doesn't answer
+  the first question as GitHub does. It pauses nothing then.
 - A run that stops saves what it read first, and the next picks up there.
 - When GitHub refuses a read about one project alone, like a label it can't
   list issues by, the run skips that project and goes on.
-- Each run logs one line: what it read, how many linked PRs it found by a
-  closing reference only, by a cross-reference only, and both ways, what is
-  left of the budget, and why it stopped.
+- Each run of the sync logs one line: what it read, what is left of the
+  budget, why it stopped, and every open PR it found linked to the issues it
+  read, each counted once for each issue, by a closing reference only, a
+  cross-reference only, or both ways, with the PRs in other repos counted
+  apart.
 
 ## Donor sessions
 

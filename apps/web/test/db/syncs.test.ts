@@ -5,10 +5,11 @@ import {
   createProject,
   finishPass,
   getIssueSync,
+  holdProject,
   listProjectsToSync,
-  markSyncTried,
+  releaseProject,
   setProjectStatus,
-  takeSyncTurn,
+  takeRefresh,
 } from '../../src/db';
 import { db, emptyDatabase, HOUR, maintainer, MINUTE, registeredProject, repo, signIn, t0 } from './helpers';
 
@@ -17,6 +18,8 @@ import { db, emptyDatabase, HOUR, maintainer, MINUTE, registeredProject, repo, s
 
 const second = 'sample-owner/second-app';
 const third = 'sample-owner/third-app';
+const HOLD = 15 * MINUTE;
+const INTERVAL = 10 * MINUTE;
 
 beforeEach(async () => {
   await emptyDatabase();
@@ -72,26 +75,57 @@ describe('issue syncs', () => {
     expect(before).toEqual([repo]);
     expect(await listProjectsToSync(db)).toEqual([]);
   });
+});
 
-  test('a refresh takes a turn only when no run started on the project in the interval, one of two at once', async () => {
+describe('one run at a time', () => {
+  test('a run holds a project until it lets go, or its time runs out, and no other run holds it meanwhile', async () => {
     await registeredProject();
-    await markSyncTried(db, repo, t0);
 
-    const tooSoon = await takeSyncTurn(db, repo, t0 + 9 * MINUTE, 10 * MINUTE);
-    const both = await Promise.all([
-      takeSyncTurn(db, repo, t0 + 10 * MINUTE, 10 * MINUTE),
-      takeSyncTurn(db, repo, t0 + 10 * MINUTE, 10 * MINUTE),
-    ]);
+    const first = await holdProject(db, repo, t0, t0 + HOLD);
+    const meanwhile = await holdProject(db, repo, t0 + MINUTE, t0 + MINUTE + HOLD);
+    const afterTimeUp = await holdProject(db, repo, t0 + HOLD, t0 + 2 * HOLD);
+    // The first run lets go late. The hold the third took stays.
+    await releaseProject(db, repo, t0 + HOLD);
+    const stillHeld = await holdProject(db, repo, t0 + HOLD + MINUTE, t0 + 3 * HOLD);
+    await releaseProject(db, repo, t0 + 2 * HOLD);
 
-    expect(tooSoon).toBe(false);
-    expect(both.sort()).toEqual([false, true]);
-    expect(await getIssueSync(db, repo)).toMatchObject({ triedAt: t0 + 10 * MINUTE });
+    expect([first, meanwhile, afterTimeUp, stillHeld]).toEqual([true, false, true, false]);
+    expect(await holdProject(db, repo, t0 + HOLD + 2 * MINUTE, t0 + 3 * HOLD)).toBe(true);
   });
 
-  test("a project's first refresh takes a turn", async () => {
+  test('a refresh waits 10 minutes after the last refresh, but not after a scheduled run', async () => {
+    await registeredProject();
+    await holdProject(db, repo, t0, t0 + HOLD);
+    await releaseProject(db, repo, t0 + HOLD);
+
+    const afterScheduled = await takeRefresh(db, repo, t0 + MINUTE, INTERVAL, t0 + MINUTE + HOLD);
+    await releaseProject(db, repo, t0 + MINUTE + HOLD);
+    const tooSoon = await takeRefresh(db, repo, t0 + 9 * MINUTE, INTERVAL, t0 + 9 * MINUTE + HOLD);
+    const onTime = await takeRefresh(db, repo, t0 + 11 * MINUTE, INTERVAL, t0 + 11 * MINUTE + HOLD);
+
+    expect([afterScheduled, tooSoon, onTime]).toEqual(['taken', 'too_soon', 'taken']);
+    expect(await getIssueSync(db, repo)).toMatchObject({ refreshedAt: t0 + 11 * MINUTE, readingUntil: t0 + 11 * MINUTE + HOLD });
+  });
+
+  test("a refresh while another run holds the project is busy, and doesn't count as a refresh", async () => {
+    await registeredProject();
+    await holdProject(db, repo, t0, t0 + HOLD);
+
+    const busy = await takeRefresh(db, repo, t0 + MINUTE, INTERVAL, t0 + MINUTE + HOLD);
+    await releaseProject(db, repo, t0 + HOLD);
+    const after = await takeRefresh(db, repo, t0 + 2 * MINUTE, INTERVAL, t0 + 2 * MINUTE + HOLD);
+
+    expect([busy, after]).toEqual(['busy', 'taken']);
+  });
+
+  test('of two refreshes at the same moment, one takes the turn', async () => {
     await registeredProject();
 
-    expect(await takeSyncTurn(db, repo, t0, 10 * MINUTE)).toBe(true);
-    expect(await getIssueSync(db, repo)).toEqual({ project: repo, passStartedAt: null, readAt: null, triedAt: t0 });
+    const both = await Promise.all([
+      takeRefresh(db, repo, t0, INTERVAL, t0 + HOLD),
+      takeRefresh(db, repo, t0, INTERVAL, t0 + HOLD),
+    ]);
+
+    expect(both.sort()).toEqual(['taken', 'too_soon']);
   });
 });

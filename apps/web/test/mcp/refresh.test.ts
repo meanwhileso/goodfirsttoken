@@ -4,7 +4,9 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createProject, getProject, listIssues, savePerson } from '../../src/db';
 import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
-import { freshNumbers, knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
+import { syncTaggedIssues } from '../../src/sync/issues';
+import { refreshIssues } from '../../src/sync/scheduled';
+import { freshNumbers, jobDeps, knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 
 // A maintainer asks project_status to read their project's tagged issues from
@@ -31,9 +33,12 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+const MINUTE = 60_000;
 
 async function project(status: 'approved' | 'pending' = 'approved'): Promise<void> {
   await savePerson(env.DB, admin, Date.now());
@@ -85,6 +90,124 @@ test('a second refresh within 10 minutes reads nothing, and says so', async () =
   expect(again.structuredContent).toMatchObject({ refresh: 'too_soon' });
   expect(textOf(again)).toContain("less than 10 minutes ago, so they weren't read again");
   expect(serviceCalls()).toHaveLength(read);
+});
+
+test('a refresh right after scheduled runs reads the issues tagged since', async () => {
+  await project();
+  const agent = await connectAgent(github, 'sample-maintainer');
+  await syncTaggedIssues(jobDeps(github));
+  await syncTaggedIssues(jobDeps(github));
+  github.openIssue(APP, { title: 'Keep the hash in rewrites', labels: ['help wanted'], by: 'sample-maintainer' });
+
+  const result = await status(agent, true);
+
+  expect(result.structuredContent).toMatchObject({ refresh: 'read', counts: { taggedIssues: 2 } });
+});
+
+test('a refresh 10 minutes after the last one reads again', async () => {
+  await project();
+  const agent = await connectAgent(github, 'sample-maintainer');
+  vi.useFakeTimers({ toFake: ['Date'] });
+  await status(agent, true);
+  github.openIssue(APP, { title: 'Keep the hash in rewrites', labels: ['help wanted'], by: 'sample-maintainer' });
+  vi.setSystemTime(Date.now() + 10 * MINUTE);
+
+  const result = await status(agent, true);
+
+  expect(result.structuredContent).toMatchObject({ refresh: 'read', counts: { taggedIssues: 2 } });
+});
+
+test("while a scheduled run reads the project, a refresh reads nothing, says the sync is busy with it, and doesn't count as a refresh", async () => {
+  await project();
+  const agent = await connectAgent(github, 'sample-maintainer');
+  let reached: () => void = () => undefined;
+  const atTimeline = new Promise<void>((resolve) => { reached = resolve; });
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).pathname.endsWith('/timeline')) {
+      reached();
+      await opened;
+    }
+    return github.fetch(request);
+  });
+
+  const scheduled = syncTaggedIssues(jobDeps(github));
+  await atTimeline;
+  const calls = serviceCalls().length;
+  const busy = await status(agent, true);
+  const readDuring = serviceCalls().length - calls;
+  open();
+  await scheduled;
+  const after = await status(agent, true);
+
+  expect(busy.structuredContent).toMatchObject({ refresh: 'busy' });
+  expect(textOf(busy)).toContain('A scheduled sync is reading its tagged issues from GitHub now');
+  expect(readDuring).toBe(0);
+  expect(after.structuredContent).toMatchObject({ refresh: 'read' });
+});
+
+test('while a refresh reads the project, a scheduled run leaves it', async () => {
+  await project();
+  const approved = await getProject(env.DB, APP);
+  if (approved === null) throw new Error('no project');
+  let reached: () => void = () => undefined;
+  const atTimeline = new Promise<void>((resolve) => { reached = resolve; });
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).pathname.endsWith('/timeline')) {
+      reached();
+      await opened;
+    }
+    return github.fetch(request);
+  });
+
+  // Called here, the way project_status calls it, so the test holds the
+  // refresh at its first timeline read.
+  const refreshing = refreshIssues(env, approved);
+  await atTimeline;
+  const calls = serviceCalls().length;
+  const scheduled = await syncTaggedIssues(jobDeps(github));
+  // The run asks what is left of the budget, and reads nothing of the project.
+  const readDuring = serviceCalls()
+    .slice(calls)
+    .map((call) => call.operation);
+  open();
+  const refreshed = await refreshing;
+
+  expect(scheduled).toMatchObject({ held: [APP], projects: 0 });
+  expect(readDuring).toEqual(['GET /rate_limit']);
+  expect(refreshed).toBe('read');
+});
+
+test('a refresh leaves half the hour to the scheduled jobs: with less left, it reads no issue, and says so', async () => {
+  await project();
+  const agent = await connectAgent(github, 'sample-maintainer');
+  github.spendRateLimit(SERVICE_LOGIN, 'core', 2600);
+
+  const result = await status(agent, true);
+
+  expect(result.structuredContent).toMatchObject({ refresh: 'not_read' });
+  expect(textOf(result)).toContain('Read none of its tagged issues from GitHub');
+  expect(await listIssues(env.DB, APP)).toEqual([]);
+  expect(serviceCalls().map((call) => call.operation)).toEqual(['GET /rate_limit']);
+});
+
+test('a refresh makes at most 60 calls to GitHub, and says it read part of the issues', async () => {
+  await project();
+  for (let n = 0; n < 70; n++) {
+    github.openIssue(APP, { title: `Sample issue ${String(n)}`, labels: ['help wanted'], by: 'sample-maintainer' });
+  }
+  const agent = await connectAgent(github, 'sample-maintainer');
+
+  const result = await status(agent, true);
+
+  expect(result.structuredContent).toMatchObject({ refresh: 'partly_read' });
+  expect(serviceCalls()).toHaveLength(60);
+  expect((await listIssues(env.DB, APP)).length).toBeGreaterThan(0);
 });
 
 test("a refresh that finds the repo archived pauses the project, and its maintainer can't resume it", async () => {

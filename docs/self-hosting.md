@@ -115,29 +115,34 @@ a new client secret, and keep it for `OAUTH_CLIENT_SECRET`, one of
 The Worker reads each project's tagged issues and follows each claim's PR on
 a schedule, as no one in particular. It reads public data only, with a token
 of its own, `GH_SERVICE_TOKEN`, one of
-[the Worker's secrets](#the-workers-secrets). Make one for each environment,
-or one for both:
+[the Worker's secrets](#the-workers-secrets).
 
-1. Sign in to GitHub as the account the token belongs to. An account of its
-   own, like a bot account, keeps the reads apart from a person's.
+GitHub counts every call against the account the token belongs to, whichever
+of the account's tokens makes it, and gives each account one budget an hour,
+as [how-it-works.md](how-it-works.md#tagged-issues) says under The budget.
+So each environment needs a GitHub account of its own, used for nothing
+else, or staging's sync spends production's budget. Use a machine account.
+[GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+let one person keep one free machine account besides their personal
+account, so the second environment's account needs a second person, or a
+paid account.
+
+For each environment:
+
+1. Sign in to GitHub as the environment's account.
 2. In Settings, go to Developer settings, Personal access tokens,
    Fine-grained tokens, and Generate new token.
 3. Under Repository access, choose Public repositories. Add no permissions.
-   A classic token with no scopes works the same way.
+   [GitHub's docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+   say every token can read all public repositories, and the jobs read
+   nothing more.
 4. Pick an expiration, and note when it ends. Make a new token before then,
    and put it in place of the old one.
 
-The token has to see every public repo. When it can't see a project's repo,
-the sync takes that as the repo going private, and pauses the project until
-an admin resumes it. So a token limited to selected repos would pause every
-other project.
-
-GitHub gives the account 5,000 REST calls and 5,000 GraphQL points an hour,
-shared by every token it has. So use an account whose tokens do nothing
-else. The jobs read what is left after each call and stop early when it runs
-low, as [architecture.md](architecture.md#the-sync) describes. When GitHub
-refuses the token, because it expired or was revoked, the jobs stop, pause
-nothing, and the Worker's log says so.
+The jobs ask what is left of the budget, and stop early when it runs low, as
+[architecture.md](architecture.md#the-sync) describes. When GitHub refuses
+the token, because it expired or was revoked, the jobs stop, pause nothing,
+and the Worker's log says so.
 
 ## 4. Create the GitHub environments
 

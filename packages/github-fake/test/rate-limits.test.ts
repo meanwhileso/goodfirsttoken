@@ -113,3 +113,24 @@ test('a name that no GitHub login or resource can have is refused, and Object.pr
   expect(Object.getOwnPropertyNames(Object.prototype)).not.toContain('core');
   expect(({} as Record<string, unknown>).core).toBeUndefined();
 });
+
+test('GET /rate_limit says what is left of each budget, and costs nothing', async () => {
+  const token = fake.tokenFor('priya');
+  fake.spendRateLimit('priya', 'core', 100);
+  fake.spendRateLimit('priya', 'graphql', 7);
+
+  // https://docs.github.com/en/rest/rate-limit/rate-limit#get-rate-limit-status-for-the-authenticated-user
+  const first = await rest<{ resources: Record<string, { limit: number; used: number; remaining: number; reset: number }> }>(
+    fake,
+    'GET',
+    '/rate_limit',
+    { token },
+  );
+  const second = await rest(fake, 'GET', '/rate_limit', { token });
+
+  const reset = (clock.getTime() + HOUR) / 1000;
+  expect(first.status).toBe(200);
+  expect(first.body.resources.core).toEqual({ limit: 5000, used: 100, remaining: 4900, reset });
+  expect(first.body.resources.graphql).toEqual({ limit: 5000, used: 7, remaining: 4993, reset });
+  expect(budget(second.headers)).toMatchObject({ remaining: '4900', used: '100', resource: 'core' });
+});

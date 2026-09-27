@@ -2,11 +2,13 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
+  addPr,
   addToDoNotList,
   changeSettings,
   createProject,
   getIssue,
   getIssueSync,
+  getPr,
   getProject,
   listIssues,
   listProjectsAskingForHelp,
@@ -16,6 +18,8 @@ import {
 import { issueRoom, type IssueRoom } from '../../src/rooms/issue-room';
 import { ServiceGitHub } from '../../src/sync/github';
 import { syncTaggedIssues } from '../../src/sync/issues';
+import { followPrs } from '../../src/sync/prs';
+import { ALLOWANCES } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, maintainer, priya, registeredProject, sha, signIn } from '../db/helpers';
 import { callsTo, freshNumbers, jobDeps, SERVICE_LOGIN, TIMELINE } from './helpers';
@@ -87,6 +91,24 @@ function claim(n: number) {
     startCommit: sha,
     slots: 3,
   });
+}
+
+/**
+ * priya claims the issue, submits, and opens a PR from her fork with the
+ * body given, the way the MCP tools will. The room and the prs table both
+ * record it.
+ */
+async function claimWithPr(n: number, body: string) {
+  const number = github.openPullRequest(APP, { title: 'Claimed work', body, by: 'priya' });
+  const pr = { repo: APP, number, url: `${github.webUrl}/${APP}/pull/${String(number)}` };
+  const claimed = await claim(n);
+  if (!claimed.ok) throw new Error(claimed.refusal.message);
+  const submitted = await room(n).submit({ claimId: claimed.claim.id, githubId: priya.githubId });
+  if (!submitted.ok) throw new Error(submitted.refusal.message);
+  const opened = await room(n).openPr({ claimId: claimed.claim.id, githubId: priya.githubId, pr });
+  if (!opened.ok) throw new Error(opened.refusal.message);
+  await addPr(db, { claimId: claimed.claim.id, pr, openedAt: Date.now() });
+  return { claimId: claimed.claim.id, pr };
 }
 
 /** How many of the project's issues the homepage counts waiting for an agent. */
@@ -286,6 +308,93 @@ describe('linked PRs', () => {
     expect((await room(issue).snapshot()).prs).toEqual([]);
   });
 
+  test("a claim's PR that mentions a second tagged issue leaves that issue's room once it closes, so the issue takes claims again", async () => {
+    await registeredProject();
+    const x = tagged('Keep the hash in rewrites');
+    const y = tagged('Keep the query in rewrites');
+    const { claimId, pr } = await claimWithPr(x, `Closes #${String(x)}. Related to #${String(y)}.`);
+    await sync();
+    const heldByY = (await room(y).snapshot()).prs.map((held) => held.number);
+
+    github.closePullRequest(APP, pr.number, BY);
+    later();
+    await sync();
+    await followPrs(jobDeps(github, ALLOWANCES.prs));
+    later();
+    await sync();
+
+    expect(heldByY).toEqual([pr.number]);
+    expect(await getPr(db, claimId)).toMatchObject({ state: 'closed' });
+    expect((await getIssue(db, APP, ref(y)))?.linkedPr).toBeNull();
+    expect((await room(y).snapshot()).prs).toEqual([]);
+    expect((await room(x).snapshot()).prs).toEqual([]);
+    expect(await claim(y)).toMatchObject({ ok: true, created: true });
+  });
+
+  test("when a second issue a claim's open PR mentions leaves the cache, that issue's room forgets the PR, and the claim's own room keeps it", async () => {
+    await registeredProject();
+    const x = tagged('Keep the hash in rewrites');
+    const y = tagged('Keep the query in rewrites');
+    const { pr } = await claimWithPr(x, `Closes #${String(x)}. Related to #${String(y)}.`);
+    await sync();
+    const heldByY = (await room(y).snapshot()).prs.map((held) => held.number);
+
+    // A maintainer takes the tag off.
+    const untagged = github.state.repos[APP]?.issues[String(y)];
+    if (untagged) untagged.labels = [];
+    later();
+    await sync();
+
+    expect(heldByY).toEqual([pr.number]);
+    expect(await cached()).not.toContain(ref(y));
+    expect((await room(y).snapshot()).prs).toEqual([]);
+    expect((await room(x).snapshot()).prs.map((held) => held.number)).toEqual([pr.number]);
+  });
+
+  test("only a PR in the project's own repo links an issue, and a PR from a fork aimed there counts", async () => {
+    freshNumbers(github, TOOLS);
+    await registeredProject();
+    const issue = tagged('Keep the hash in rewrites');
+    github.openPullRequest(TOOLS, { title: 'Work around the hash', body: `Works around ${APP}#${String(issue)}.`, by: BY });
+    github.openPullRequest(TOOLS, { title: 'Fix the hash upstream', body: `Closes ${APP}#${String(issue)}`, by: BY });
+    await sync();
+    const elsewhere = await getIssue(db, APP, ref(issue));
+
+    const fromFork = github.openPullRequest(APP, { title: 'Keep the hash', body: `See #${String(issue)}.`, by: 'priya' });
+    later();
+    const run = await sync();
+
+    expect(elsewhere?.linkedPr).toBeNull();
+    expect(github.state.repos['priya/sample-app']?.forkOf).toBe(APP);
+    expect((await getIssue(db, APP, ref(issue)))?.linkedPr).toMatchObject({ repo: APP, number: fromFork });
+    expect(run.linked.elsewhere).toBe(2);
+  });
+
+  test("a PR in the project's issue repo links its issue, and so does one in its code repo", async () => {
+    freshNumbers(github, DESKTOP);
+    await registeredProject({ tags: ['ready'], issueRepo: DESKTOP });
+    const first = github.openIssue(DESKTOP, { title: 'Wake the second screen', labels: ['ready'], by: BY });
+    const second = github.openIssue(DESKTOP, { title: 'Keep the layout', labels: ['ready'], by: BY });
+    const inIssueRepo = github.openPullRequest(DESKTOP, { title: 'Wake it', body: `Fixes #${String(first)}`, by: BY });
+    const inCodeRepo = github.openPullRequest(APP, { title: 'Keep it', body: `Fixes ${DESKTOP}#${String(second)}`, by: BY });
+
+    await sync();
+
+    expect((await getIssue(db, APP, ref(first, DESKTOP)))?.linkedPr).toMatchObject({ repo: DESKTOP, number: inIssueRepo });
+    expect((await getIssue(db, APP, ref(second, DESKTOP)))?.linkedPr).toMatchObject({ repo: APP, number: inCodeRepo });
+  });
+
+  test('the run counts every linked PR by the ways it was found, whichever one each copy keeps', async () => {
+    await registeredProject();
+    const issue = tagged('Keep the hash in rewrites');
+    github.openPullRequest(APP, { title: 'Keep the hash', body: `Closes #${String(issue)}`, by: 'priya' });
+    github.openPullRequest(APP, { title: 'Hash notes', body: `See #${String(issue)}.`, by: BY });
+
+    const run = await sync();
+
+    expect(run.linked).toEqual({ closing: 0, cross: 1, both: 1, elsewhere: 0 });
+  });
+
   test("when the room doesn't take the linked PR, the cache keeps what the room has, and the next pass tries again", async () => {
     await registeredProject();
     const issue = tagged('Keep the hash in rewrites');
@@ -344,13 +453,14 @@ describe('delisting', () => {
     });
   });
 
-  test('a call GitHub refuses for the rate limit pauses nothing, and the run stops', async () => {
+  test('a spent budget pauses nothing: the run asks GitHub what is left, and stops before its first read', async () => {
     await registeredProject();
     github.spendRateLimit(SERVICE_LOGIN, 'core', 5000);
 
     const run = await sync();
 
-    expect(run.stopped).toBe('rate_limited');
+    expect(run.stopped).toBe('budget');
+    expect(github.calls.map((call) => call.operation)).toEqual(['GET /rate_limit']);
     expect(await getProject(db, APP)).toMatchObject({ status: 'approved' });
   });
 

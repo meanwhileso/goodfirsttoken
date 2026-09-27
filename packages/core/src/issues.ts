@@ -5,10 +5,7 @@ import { epochMs, issueRef, labelName, prRefSchema, repoName } from './primitive
 // source of truth, and the server checks it again before suggesting,
 // claiming, and opening a PR.
 
-/**
- * How long a maintainer waits between two reads of a project's tagged
- * issues with project_status, counting the scheduled sync's reads too.
- */
+/** How long a maintainer waits between two refreshes of a project's tagged issues with project_status. */
 export const ISSUE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
 /**
@@ -57,7 +54,9 @@ export const issueSyncSchema = z.object({
   passStartedAt: epochMs.nullable(),
   /** When the last whole pass finished, or null before the first. */
   readAt: epochMs.nullable(),
-  /** When a run, scheduled or asked for, last started on the project. */
-  triedAt: epochMs,
+  /** When a maintainer's refresh last started on the project, or null. */
+  refreshedAt: epochMs.nullable(),
+  /** While a run reads the project, when its hold on it runs out. Null when none holds it. */
+  readingUntil: epochMs.nullable(),
 });
 export type IssueSync = z.infer<typeof issueSyncSchema>;

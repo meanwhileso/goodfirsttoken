@@ -46,23 +46,34 @@ export class GitHubError extends Error {
   readonly rateLimit: RateLimit | null;
   /** The seconds GitHub said to wait before trying again, or null. */
   readonly retryAfter: number | null;
+  /**
+   * The message in the JSON body GitHub answers an error with, or null when
+   * the body was something else, as when a proxy, or a GH_API_URL that
+   * isn't GitHub's, answered.
+   */
+  readonly bodyMessage: string | null;
 
-  constructor(status: number, message: string, headers?: Headers) {
+  constructor(status: number, message: string, headers?: Headers, bodyMessage: string | null = null) {
     super(message);
     this.name = 'GitHubError';
     this.status = status;
     this.rateLimit = headers ? rateLimitOf(headers) : null;
     const wait = headers?.get('retry-after') ?? null;
     this.retryAfter = wait !== null && /^[0-9]+$/.test(wait) ? Number(wait) : null;
+    this.bodyMessage = bodyMessage;
   }
 
   /**
    * GitHub refused because the token's budget ran out, or asked the caller
-   * to slow down: a 429, or a 403 with nothing left or a wait to keep.
+   * to slow down: a 429, or a 403 with nothing left, a wait to keep, or a
+   * message that says it is a rate limit. A secondary rate limit can come
+   * with neither header.
    * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
    */
   get rateLimited(): boolean {
-    return this.status === 429 || (this.status === 403 && (this.rateLimit?.remaining === 0 || this.retryAfter !== null));
+    if (this.status === 429) return true;
+    if (this.status !== 403) return false;
+    return this.rateLimit?.remaining === 0 || this.retryAfter !== null || /rate limit/i.test(this.message);
   }
 }
 
@@ -90,8 +101,9 @@ function apiHeaders(authorization: string, json: boolean): Record<string, string
 }
 
 async function refusal(response: Response): Promise<GitHubError> {
-  const body = (await response.json().catch(() => null)) as { message?: string } | null;
-  return new GitHubError(response.status, body?.message ?? response.statusText, response.headers);
+  const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
+  const message = typeof body?.message === 'string' ? body.message : null;
+  return new GitHubError(response.status, message ?? response.statusText, response.headers, message);
 }
 
 /** One page of a REST read, with the token's budget as GitHub gave it. */

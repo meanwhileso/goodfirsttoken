@@ -568,7 +568,7 @@ in `people`.
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
 | `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
-| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, and when a run last started on it | `project` |
+| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, and until when a run holds it | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, and issues claimed | `id` |
@@ -1201,11 +1201,11 @@ read-only service token. The rules are in
 
 | File | What it does |
 |---|---|
-| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, counts them, reads the rate limit after each, and stops the run |
+| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, and the scheduled run over every approved project |
 | `src/sync/prs.ts` | The PR job |
 | `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
-| `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands |
+| `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, and which run holds it |
 
 - **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync and
   `7,37 * * * *` for the PR job, so the two never start in the same
@@ -1230,35 +1230,68 @@ read-only service token. The rules are in
   its name can't be listed this way.
 - **One call at a time.** GitHub asks a client not to make concurrent
   requests for one user, or it may apply a secondary rate limit.
-- **The budget.** GitHub counts a token's calls against its account, 5,000
-  REST calls and 5,000 GraphQL points an hour, and says in the `x-ratelimit`
-  headers of every answer how much is left and when it starts over.
-  `ServiceGitHub` keeps the latest for each resource, `core` and `graphql`,
-  and stops before a call when less is left than the job leaves:
+- **The budget.** GitHub counts a token's calls against its account, the
+  budget [how-it-works.md](how-it-works.md#tagged-issues) gives under The
+  budget, and says in the `x-ratelimit` headers of every answer how much is
+  left and when it starts over. A run first reads `GET /rate_limit`, which
+  GitHub counts against no budget, so it knows what is left before its
+  first read. `ServiceGitHub` keeps the latest for each resource, `core` and
+  `graphql`, and stops before a call when less is left than the job leaves:
   `ALLOWANCES` in `src/sync/scheduled.ts`. A budget whose hour is over counts
-  as full again. A `403` or `429` with nothing left or a `retry-after`, a
-  `RATE_LIMITED` GraphQL error, a `401`, a `5xx`, or a failed fetch stops the
-  run. Any other refusal goes back to the code that made the call, which
-  knows what a `404` means there.
-- **Calls in one run.** At most 1,000 for the sync, which with four runs an
-  hour is the 4,000 a 5,000 budget allows above the fifth it leaves. That
-  keeps a run inside Cloudflare's limit of 10,000 subrequests for one
-  invocation on the Workers Paid plan, D1 queries included, and its 15
-  minutes for a cron. The Workers Free plan allows 50 subrequests and 10 ms
-  of CPU, so a run there reads little. The sync hasn't been tried there.
-- **Passes.** `issue_syncs` keeps each project's pass in progress, when the
-  last whole pass finished, and when a run last started on it. A resumed
+  as full again.
+- **What stops a run.** A `429`. A `403` with nothing left, a `retry-after`,
+  or a message that says it is a rate limit, since GitHub's docs say a
+  secondary rate limit can come with neither header. A GraphQL error of type
+  `RATE_LIMITED`, or whose message says it is a rate limit, which GitHub can
+  send with status 200. A `401`, a `5xx`, a failed fetch, and an answer
+  that isn't JSON. Any other refusal goes back to the code that made the
+  call, which knows what a `404` means there. The PR job stops on any
+  refusal of its query, and ends without an error.
+- **Only GitHub's answers pause a project.** `GitHubError` keeps the
+  `message` of GitHub's JSON error body apart, as `bodyMessage`, which is
+  null when the body was anything else. A repo read pauses a project only on
+  a `404` whose body says `Not Found`, a `451` with a JSON body, or a repo
+  with the fields GitHub sends that says it is private or archived. A
+  `/rate_limit` answer without GitHub's budgets, or any other `404` or
+  `451`, stops the run. So a proxy, or a `GH_API_URL` that isn't GitHub's
+  API, never pauses a project.
+- **Calls in one run.** The caps in
+  [how-it-works.md](how-it-works.md#tagged-issues), under The budget, count
+  the `/rate_limit` read too. Four sync runs an hour at the sync's cap come
+  to four fifths of the budget, all it spends before it stops. The caps keep
+  a run inside Cloudflare's limits, which
+  [developers.cloudflare.com/workers/platform/limits](https://developers.cloudflare.com/workers/platform/limits/)
+  gave on 2026-09-27: 10,000 subrequests for one invocation on the Workers
+  Paid plan, calls to D1, KV, and R2 included, and 30 seconds of CPU for a
+  cron that runs more often than hourly, with 15 minutes of wall time. The
+  Workers Free plan allows 50 subrequests and 10 ms of CPU, so a run there
+  reads little. The sync hasn't been tried there.
+- **Passes.** `issue_syncs` keeps each project's pass in progress, and when
+  the last whole pass finished. A resumed
   run lists the tags again, which is cheap, and skips the issues whose copy
   was saved after the pass started. A new pass starts a millisecond after
   the last one finished at the earliest, so no issue from the last pass
   counts as read in the new one. Copies are dropped by key at the end of a
   pass, when the listing is whole.
+- **One run holds a project.** Before a run reads a project, it sets
+  `reading_until` in `issue_syncs` to 15 minutes ahead, the longest a
+  scheduled run lasts, in a statement that sets it only when no other hold is
+  left, and clears its own hold when it is done. A scheduled run leaves a
+  project another run holds, and a refresh answers `busy`. A run that dies
+  keeps its hold until the time runs out.
 - **The rooms.** The sync calls an issue room's `prOpened` and `prClosed`
   only when the linked PR it keeps for the issue changes, so a room is made
   only for an issue that gets a linked PR. The new PR goes in before the old
   one comes out. The cache keeps the PR the room was last told, so a call
-  that fails is made again on the next pass. The PR job calls `prClosed`
-  before it writes the table, for the same reason.
+  that fails is made again on the next pass. The sync leaves `prClosed` to
+  the PR job only for a claim's PR in the claim's own issue's room, found by
+  joining `prs` to `claims`, since the PR job closes it there and nowhere
+  else. The PR job calls `prClosed` before it writes the table, for the same
+  reason.
+- **Which PRs count.** A PR counts only when its repo, as GitHub gives it,
+  is the project's code repo or its issue repo. GitHub gives a PR's base
+  repo, where it is open, so a PR from a fork counts when it is aimed at the
+  project.
 - **Delisting** uses `setProjectStatusFrom`, the compare-and-set #55 added,
   with `changed_by` null, which the maintainer's `pause_project` reads as a
   pause only an admin can lift. It tries three times, and stops as soon as
@@ -1268,10 +1301,16 @@ read-only service token. The rules are in
 - **The PR job** reads 50 PRs in one GraphQL query, each by its repo and
   number, so one point covers them.
 - **A maintainer's refresh** is `project_status` with `refresh`. It runs
-  inside the MCP call, so it gets 60 calls, and `takeSyncTurn` claims its
-  turn in one statement, so two refreshes at once make one read.
-- **The log.** Each run logs one line, with its counts of linked PRs by the
-  ways they were found, and what is left of the budget.
+  inside the MCP call, so it gets few calls, under The budget in
+  [how-it-works.md](how-it-works.md#tagged-issues). `takeRefresh` records
+  the refresh and takes the hold in one statement, only when no refresh
+  started in the last 10 minutes and no run holds the project, so two
+  refreshes at once make one read. `issue_syncs.refreshed_at` counts only
+  refreshes, so a scheduled run never makes a refresh wait.
+- **The log.** Each run logs one line, with what it read, what is left of
+  the budget, and every open PR it found linked to the issues it read, each
+  counted once for each issue, by the ways it was found. It counts the PRs
+  in other repos apart.
 
 ### Open question 7: finding linked PRs
 
@@ -1311,13 +1350,21 @@ measured on real GitHub yet. The run logs are how to measure it.
   cross-reference. GraphQL's `CrossReferencedEvent` also has
   `willCloseTarget`, which says whether the source closes the target when it
   merges. The REST event doesn't, and the sync doesn't read it.
-- **The choice.** Both ways link a PR, so a PR that only mentions an issue
-  closes it to new claims. That errs toward not sending another agent to an
-  issue someone is working on, and a person who wants the issue can still
-  open a PR. Each copy records the ways its PR was found, and each run logs
-  how many were found by a closing reference only, by a cross-reference
-  only, and both ways, so staging's logs can show how often each finds what
-  the other misses, and whether mentions close too many issues.
+- **Other repos.** Both ways find PRs in any repo. A PR in another repo that
+  mentions an issue, like a project downstream noting "works around
+  owner/app#12", says nothing about work on the issue itself. A closing
+  keyword in another repo's PR closes the issue when it merges, but its
+  work goes to that repo. So a PR counts only when it is open in the
+  project's code repo or its issue repo, from a branch there or a fork.
+- **The choice.** Both ways link a PR in the project's repos, so a PR there
+  that only mentions an issue closes it to new claims. That errs toward not
+  sending another agent to an issue someone is working on, and a person who
+  wants the issue can still open a PR. Each copy records the ways its PR was
+  found. Each run logs every open PR it found linked to each issue it read,
+  counted by a closing reference only, a cross-reference only, and both
+  ways, and the PRs in other repos apart, so staging's logs can show how
+  often each way finds what the other misses, and whether mentions close
+  too many issues.
 - **Not checked on real GitHub yet,** since GitHub's docs don't say. The
   fake answers the first as the PR is at the read, and keeps the event.
   - Whether a cross-reference's source is the PR as it is at the read, or as

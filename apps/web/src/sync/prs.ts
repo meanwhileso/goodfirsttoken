@@ -1,5 +1,6 @@
 import type { PrRecord, PrState } from '@goodfirsttoken/core';
 import { getClaim, listOpenPrs, setPrState } from '../db';
+import { GitHubError } from '../github';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
 import { SyncStopped, type ServiceGitHub, type StopReason } from './github';
 
@@ -65,13 +66,16 @@ function outcomeOf(pull: PullState, now: number): { state: PrState; at: number }
 
 /**
  * Reads every open PR in the prs table, oldest first, until they are done
- * or the run has to stop. A PR whose room didn't hear it closed stays open
- * in the table, so the next run tries again.
+ * or the run has to stop. It first asks GitHub what is left of the budget.
+ * A PR whose room didn't hear it closed stays open in the table, so the
+ * next run tries again. A refusal from GitHub stops the run, which ends
+ * without an error.
  */
 export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
   const run: PrRun = { checked: 0, merged: 0, closed: 0, calls: 0, stopped: null };
   const open = await listOpenPrs(deps.db);
   try {
+    if (open.length > 0) await deps.github.checkGitHub();
     for (let start = 0; start < open.length; start += BATCH) {
       const batch = open.slice(start, start + BATCH);
       const pulls = await readStates(deps.github, batch);
@@ -96,9 +100,15 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
       }
     }
   } catch (error) {
-    if (!(error instanceof SyncStopped)) throw error;
-    run.stopped = error.reason;
-    console.warn(`The PR job stopped. ${error.message}`);
+    if (error instanceof SyncStopped) {
+      run.stopped = error.reason;
+      console.warn(`The PR job stopped. ${error.message}`);
+    } else if (error instanceof GitHubError) {
+      run.stopped = 'github_error';
+      console.warn(`The PR job stopped. GitHub answered ${String(error.status)}: ${error.message}`);
+    } else {
+      throw error;
+    }
   }
   run.calls = deps.github.calls;
   console.log(
