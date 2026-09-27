@@ -97,3 +97,19 @@ test('a call with no token has the budget GitHub gives an address, 60 an hour', 
 
   expect(budget(reply.headers)).toMatchObject({ limit: '60', remaining: '59', resource: 'core' });
 });
+
+test('a name that no GitHub login or resource can have is refused, and Object.prototype stays as it was', () => {
+  const spend = fake.spendRateLimit as (login: string, resource: string, requests: number) => void;
+
+  for (const name of ['__proto__', 'constructor', 'prototype']) {
+    expect(() => {
+      spend(name, 'core', 1);
+    }).toThrow(`No GitHub caller is named ${name}`);
+    expect(() => {
+      spend('priya', name, 1);
+    }).toThrow(`No rate limit is named ${name}`);
+  }
+
+  expect(Object.getOwnPropertyNames(Object.prototype)).not.toContain('core');
+  expect(({} as Record<string, unknown>).core).toBeUndefined();
+});

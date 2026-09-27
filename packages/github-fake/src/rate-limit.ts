@@ -29,6 +29,19 @@ const RULES: Record<RateResource, { signedIn: number; anonymous: number; period:
   search: { signedIn: 30, anonymous: 10, period: MINUTE },
 };
 
+function knownResource(resource: string): RateResource | null {
+  switch (resource) {
+    case 'core':
+      return 'core';
+    case 'graphql':
+      return 'graphql';
+    case 'search':
+      return 'search';
+    default:
+      return null;
+  }
+}
+
 // The resource a call counts against.
 export function resourceOf(path: string): RateResource {
   if (path === '/graphql') return 'graphql';
@@ -40,16 +53,24 @@ export function resourceOf(path: string): RateResource {
 // a call with no credentials.
 export function rateWindow(state: FakeState, who: string | null, resource: RateResource, now: Date): RateWindow {
   const key = who === null ? 'anonymous' : who.toLowerCase();
+  // The caller and the resource name keys in plain objects, where a key like
+  // __proto__ would reach Object.prototype. No GitHub login is named like
+  // that, and only the three resources are known.
+  if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+    throw new Error(`No GitHub caller is named ${key}`);
+  }
+  const known = knownResource(resource);
+  if (!known) throw new Error(`No rate limit is named ${resource}`);
   const windows = ((state.rateLimits ??= {})[key] ??= {});
-  const current = windows[resource];
+  const current = windows[known];
   if (current && Date.parse(current.resetAt) > now.getTime()) return current;
-  const rule = RULES[resource];
+  const rule = RULES[known];
   const fresh = {
     limit: who === null ? rule.anonymous : rule.signedIn,
     used: 0,
     resetAt: new Date(now.getTime() + rule.period).toISOString(),
   };
-  windows[resource] = fresh;
+  windows[known] = fresh;
   return fresh;
 }
 
