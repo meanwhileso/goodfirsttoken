@@ -263,6 +263,21 @@ describe('a glance at a feed, which a page shows first', () => {
     expect((await glanceAt(1)).dayCount).toBe(1001);
   });
 
+  test("keeps a day's count for a week after the day, then drops it", async () => {
+    const now = Date.UTC(2100, 0, 20, 12);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    const at = (time: string, person = priya) => ({ event: feedEvent({ time }), githubId: person.githubId });
+    await feed.deliver([at('2100-01-12T23:59:59.999Z'), at('2100-01-13T00:00:00.000Z')]);
+
+    await feed.deliver([at(new Date(now).toISOString(), kenji)]);
+
+    // The week before 2100-01-20 12:00 starts on 2100-01-13.
+    expect((await glanceAt(1, '2100-01-12')).dayCount).toBe(0);
+    expect((await glanceAt(1, '2100-01-13')).dayCount).toBe(1);
+    expect((await glanceAt(1, '2100-01-20')).dayCount).toBe(1);
+  });
+
   test("leaves a blocked donor's events out of both", async () => {
     await feed.deliver([by(priya, 'priya'), by(kenji, 'kenji'), by(priya, 'priya again')]);
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());

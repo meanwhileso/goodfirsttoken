@@ -56,7 +56,14 @@ describe('merged this week', () => {
       project = repo,
       ownProject = false,
       state = 'merged',
-    }: { agent?: string; project?: string; ownProject?: boolean; state?: 'open' | 'merged' | 'closed' } = {},
+      issueRepo = project,
+    }: {
+      agent?: string;
+      project?: string;
+      ownProject?: boolean;
+      state?: 'open' | 'merged' | 'closed';
+      issueRepo?: string;
+    } = {},
   ): Promise<void> {
     made += 1;
     const number = 500 + made;
@@ -64,7 +71,7 @@ describe('merged this week', () => {
     const opened = at - 2 * HOUR;
     const claim: ClaimRecord = {
       id: `c_rail${String(made)}`,
-      issue: `${project}#${String(number - 100)}`,
+      issue: `${issueRepo}#${String(number - 100)}`,
       project,
       githubId: person.githubId,
       login: person.login,
@@ -132,6 +139,15 @@ describe('merged this week', () => {
     expect(await topMergers(db, week)).toEqual([
       { githubId: priya.githubId, login: 'priya', agent: 'claude-code', merged: 1 },
     ]);
+  });
+
+  test('a PR on a project whose issues live in a repo on the do-not-list does not count', async () => {
+    await pr(priya, t0 - HOUR, { project: 'sample-owner/split-app', issueRepo: 'sample-owner/split-issues' });
+    await pr(kenji, t0 - HOUR);
+
+    await addToDoNotList(db, { repo: 'sample-owner/split-issues', reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await topMergers(db, week)).map((rank) => rank.login)).toEqual(['kenji']);
   });
 
   test('a tie goes to whoever reached the count first', async () => {
@@ -213,7 +229,7 @@ describe('projects asking for help', () => {
     await addToDoNotList(db, { repo: 'sample-owner/removed-app', reason: null, addedBy: admin.githubId }, t0);
     await addToDoNotList(db, { repo: 'sample-owner/removed-issues', reason: null, addedBy: admin.githubId }, t0);
 
-    const help = await listProjectsAskingForHelp(db, 5);
+    const help = await listProjectsAskingForHelp(db, 5, t0);
 
     expect(help.total).toBe(1);
     expect(help.projects.map(({ project: p }) => p.repo)).toEqual([repo]);
@@ -236,9 +252,53 @@ describe('projects asking for help', () => {
       ),
     );
 
-    const help = await listProjectsAskingForHelp(db, 5);
+    const help = await listProjectsAskingForHelp(db, 5, t0);
 
     expect(help.projects.map(({ project: p, waiting }) => [p.repo, waiting])).toEqual([[repo, 2]]);
+  });
+
+  test('count an issue as waiting only while a new agent could claim it: one slot free, but not every slot taken', async () => {
+    await registeredProject({ tags: ['help wanted'], claimsPerIssue: 3 });
+    await signIn(maintainer, { githubId: 1004, login: 'ines' });
+    await saveIssues(db, issues(repo, [['help wanted'], ['help wanted'], ['help wanted'], ['help wanted']]));
+    let claims = 0;
+    const claimOn = async (number: number, person: { githubId: number; login: string }, changes: Partial<ClaimRecord> = {}) => {
+      claims += 1;
+      await saveClaim(
+        db,
+        {
+          id: `c_slot${String(claims)}`,
+          issue: `${repo}#${String(number)}`,
+          project: repo,
+          githubId: person.githubId,
+          login: person.login,
+          agent: 'claude-code',
+          ownProject: false,
+          startCommit: sha,
+          tokenEstimate: null,
+          ...newClaim(t0 - HOUR),
+          ...changes,
+        },
+        1,
+      );
+    };
+    // #1: every slot taken, by claims working, paused, and awaiting review.
+    await claimOn(1, priya);
+    await claimOn(1, kenji, { state: 'paused' });
+    await claimOn(1, sam, { state: 'awaiting_review', submittedAt: t0 - HOUR });
+    // #2: two held and one released, so a slot is free.
+    await claimOn(2, priya);
+    await claimOn(2, kenji);
+    await claimOn(2, sam, { state: 'released', releaseReason: 'the tests would not run' });
+    // #3: three stored as working, but one is past its 24 hours, so it holds no slot.
+    await claimOn(3, priya);
+    await claimOn(3, kenji);
+    await claimOn(3, sam, { ...newClaim(t0 - DAY) });
+    // #4: nobody on it.
+
+    const help = await listProjectsAskingForHelp(db, 5, t0);
+
+    expect(help.projects.map(({ project: p, waiting }) => [p.repo, waiting])).toEqual([[repo, 3]]);
   });
 
   test('come in order of issues waiting, then the newest added, and the total counts past the limit', async () => {
@@ -251,7 +311,7 @@ describe('projects asking for help', () => {
       ...issues('sample-owner/two-waiting', [['help wanted'], ['help wanted']]),
     ]);
 
-    const help = await listProjectsAskingForHelp(db, 3);
+    const help = await listProjectsAskingForHelp(db, 3, t0);
 
     expect(help.total).toBe(4);
     expect(help.projects.map(({ project: p, waiting }) => [p.repo, waiting])).toEqual([
@@ -262,6 +322,6 @@ describe('projects asking for help', () => {
   });
 
   test('none yet is an empty list', async () => {
-    expect(await listProjectsAskingForHelp(db, 5)).toEqual({ total: 0, projects: [] });
+    expect(await listProjectsAskingForHelp(db, 5, t0)).toEqual({ total: 0, projects: [] });
   });
 });

@@ -196,9 +196,10 @@ interface MergerRow {
 /**
  * The people with the most PRs merged from `from` up to `until`, most first,
  * at most `limit` of them. A PR counts when it merged in the range, from a
- * claim on someone else's project. Blocked donors are left out, and so are
- * PRs in a repo on the do-not-list. Ties go to whoever reached the count
- * first, then by login.
+ * claim on someone else's project. Blocked donors are left out, and so is a
+ * PR when the do-not-list names its repo, its claim's project or issue
+ * repo, or the project's issue repo now. Ties go to whoever reached the
+ * count first, then by login.
  */
 export async function topMergers(
   db: D1Database,
@@ -215,7 +216,9 @@ export async function topMergers(
        JOIN people pe ON pe.github_id = c.github_id
        WHERE p.state = 'merged' AND p.closed_at >= ?1 AND p.closed_at < ?2 AND c.own_project = 0
          AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)
-         AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = c.project OR d.repo = p.repo)
+         AND NOT EXISTS (SELECT 1 FROM do_not_list d
+           WHERE d.repo IN (c.project, c.issue_repo, p.repo)
+             OR d.repo = (SELECT issue_repo FROM projects WHERE repo = c.project))
        GROUP BY c.github_id
        ORDER BY merged DESC, last_merged, pe.login, c.github_id
        LIMIT ?3`,

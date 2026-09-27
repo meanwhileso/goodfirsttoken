@@ -674,7 +674,8 @@ before it starts Vite. The script runs `wrangler d1 migrations apply DB
 only when both its input and output are a terminal, so it applies new ones
 without asking, whether `pnpm dev` runs from the root, where pnpm runs the
 GitHub fake beside it, or in `apps/web`. It needs no network and no account.
-Playwright's web server runs it too, before it builds the app. The database
+Playwright's web server runs it too, before it builds the app, with
+`--fresh` and `LOCAL_STATE_DIR`, which [Tests](#tests) describes. The database
 tests apply the migrations in their setup, and a deploy applies
 them to the environment's database before the Worker goes up, as
 [Deploys](#deploys) describes. A schema change is a new migration. A
@@ -818,12 +819,12 @@ streams' in [Text streams](how-it-works.md#text-streams).
   so the rule under [The issue room](#the-issue-room) about changing
   `feedEventSchema` covers feeds too.
 - **Day counts.** A feed also keeps `day_counts`: for each UTC day and
-  claimant, how many events it stored. `deliver` adds to it in the same step
-  as the event, so a copy the feed ignores isn't counted, and drops the days
-  older than a week. The events themselves are capped at 1,000, so a count
-  over them would stop at 1,000 on a busy day. Keeping the claimant lets the
-  block check leave a blocked donor's events out of a count, and lifting the
-  block brings them back.
+  claimant, how many events it stored. `deliver` writes it in the same step
+  as the event, and prunes it with the events. What it counts, and for how
+  long, is under [Live feeds](how-it-works.md#live-feeds). The events
+  themselves are capped at 1,000, so a count over them would stop at 1,000
+  on a busy day. Keeping the claimant lets the block check leave a blocked
+  donor's events out of a count, and lifting the block brings them back.
 - **A glance for a page.** `glance({ count, day })` gives a page the newest
   events a watcher may see and the day's count, with the same block check a
   new watcher gets. When D1 can't say who is blocked, it answers null. The
@@ -927,7 +928,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
   on the feed or room, for as long as the page is open, with no hour limit.
   Every homepage view opens one on the homepage's feed, so that one object
   sends every event to every open homepage. It also takes one `glance` per
-  homepage view. Nothing limits how many sockets a client opens either.
+  homepage view. Each message a page sends on its socket wakes the feed or
+  room from hibernation, which Cloudflare bills, though the feed ignores
+  the message. Nothing limits how many sockets a client opens,
+  or how many messages it sends on one, yet. #34 takes those limits.
 - **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
   `handleStream` sees the upgrade, finds the feed or room and checks `since`
   the same way as for a stream, and forwards the upgrade to it. The Worker
@@ -942,9 +946,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   hands each new event to the page once, and reconnects after a drop with
   the last event's ID, backing off as
   [Live sockets](how-it-works.md#live-sockets) says. It closes the socket
-  when the component unmounts. It checks only the shape of each message,
-  since the feed checked each event with core's schema when it stored it, and
-  core's schemas would add zod to the page's scripts.
+  when the component unmounts. It checks each message with core's
+  `feedEventSchema`, as the streams do, and skips one that isn't a feed
+  event.
 - **Which streams exist.** A person's stream needs the person in `people`,
   a repo's the project in `projects`, and an issue's a claim in `claims` or
   the issue in `tagged_issues`. Connecting to a feed or room that has never
@@ -986,8 +990,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
 - **Asking for help** counts each approved project's waiting issues in the
   same query, with `json_each` over the issue's labels and the project's
   current settings. SQLite's `lower()` folds only ASCII letters, so two
-  labels that differ in the case of other letters don't match there. `COUNT(*)
-  OVER ()` gives the total before the limit.
+  labels that differ in the case of other letters don't match there. The
+  claims that hold a slot come from the claims mirror, through
+  `claims_by_issue`. The query applies the 24 hours and the 7 days from
+  core's `CLAIM_LIFETIME_MS` and `REVIEW_WINDOW_MS` itself, as `holdsSlot`
+  does, so a claim past its deadline frees its slot before the room's timer
+  saves it. `COUNT(*) OVER ()` gives the total before the limit.
 - **The live parts.** The loader gives the wall's newest events and the
   field's squares as the server lit them. The page then opens `/live.ndjson`
   with `useLiveFeed`, starting after the newest event it shows, and lights
@@ -998,12 +1006,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
   the primary domain or the request's origin, so no deployment domain is in
   the code.
 - **The launch video and its poster** are imported with `?url`, so they come
-  from [the static host](#the-static-host), and `preload="none"` keeps the
-  browser from fetching any of the video before a click.
-- **The Claude Code install command** names the plugin with its marketplace,
-  `goodfirsttoken@goodfirsttoken`, Claude Code's form for a plugin from a
-  given marketplace. Both names come from `.claude-plugin/marketplace.json`.
-  The setup gives no command for the MCP server. `/start.md` (#21) will.
+  from [the static host](#the-static-host). How the page loads them is under
+  [The homepage](how-it-works.md#the-homepage).
+- **The setup's commands** are listed in
+  [how-it-works.md](how-it-works.md#the-homepage). The Claude Code install
+  command names the plugin with its marketplace, Claude Code's form for a
+  plugin from a given marketplace, and both names come from
+  `.claude-plugin/marketplace.json`. The setup gives no command for the MCP
+  server. `/start.md` (#21) will.
 
 ## Sample data in development
 
@@ -1018,11 +1028,16 @@ GitHub fake, then calls it when `pnpm dev` is running. The rules are in
 | `src/dev/sample-work.ts` | The sample people, projects, issues, and claims |
 | `apps/web/scripts/seed-local.mjs` | What `pnpm seed` runs to call the route |
 
-- **Only in development.** `handleDevSeed` answers `404` unless
-  `isDevelopment()` in `src/auth/settings.ts` holds, the check the dev
-  sign-in uses: `ENVIRONMENT` is `development` and `GH_WEB_URL` is the
-  GitHub fake on this machine. A test runs the Worker as staging and as
-  production with GitHub on this machine, and sees `404` and nothing seeded.
+- **Two checks.** `handleDevSeed` answers `404` unless both hold. The
+  first is `isDevelopment()`, the check the dev sign-in uses, described
+  under [Sign-in](#sign-in). That check is enough for sign-in, because a
+  deployed Worker can't reach a GitHub fake on the machine it was deployed
+  from, so the dev sign-in fails there. The seed never calls GitHub, so a
+  Worker deployed with the local `wrangler.jsonc` would pass it. The second
+  check, that the request came to `localhost`, `127.0.0.1`, or `[::1]`,
+  keeps that Worker from seeding for anyone on its public hostname. Tests
+  run the Worker as staging and as production, and in development on
+  public hostnames, and see `404` and nothing seeded.
 - **Through the issue rooms.** The claims, their lines, and the merges go
   through the same room calls the MCP tools will make, so the lines reach
   the feeds through the queue, and the claims reach D1 from the room. The
@@ -1033,11 +1048,11 @@ GitHub fake, then calls it when `pnpm dev` is running. The rules are in
   work. A test checks that every person, repo, and issue it names is in
   `packages/github-fake/src/sample-data.ts`. Its projects are the fake's
   made-up repos under `sample-owner`.
-- **The end-to-end tests don't seed.** Their homepage has what CI's fresh
-  database has, so its screenshots match CI's. Locally, `vite preview` uses
-  the same database as `pnpm dev`, under `apps/web/.wrangler/state/`, so
-  after `pnpm seed` the homepage's screenshots fail until that folder is
-  removed.
+- **The end-to-end tests seed their own preview.** `home.spec.ts` checks
+  the empty homepage first, then posts to `/dev/seed` and checks the page
+  with its ranks and projects. The preview keeps its data apart from
+  `pnpm dev`'s, as [Tests](#tests) describes, so seeding `pnpm dev` changes
+  nothing there.
 
 ## Configuration and secrets
 
@@ -1279,6 +1294,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   feed with Playwright's `routeWebSocket`, and hands the page events of its
   own. The feed's side of the socket is tested in the unit tests, with real
   feeds.
+- **The preview's own data.** `vite.config.ts` and
+  `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
+  queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
+  set. Playwright's preview sets it to `apps/web/.wrangler/e2e-state` and
+  runs the migrations with `--fresh`, which empties that folder first. So
+  the tests start from nothing, locally as in CI, whatever `pnpm dev` holds.
+  Tests in a file run in order, and `home.spec.ts` counts on it: its first
+  test checks the empty homepage, and its last ones seed it.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has
@@ -1320,10 +1343,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
   clock paused so the live wall holds still. The homepage's, in
-  `home.spec.ts-snapshots/`, run under reduced motion, with the same three
-  live lines on a day long gone, the setup open, and the video masked, since
-  each Chromium build draws its own video controls. They show what a fresh
-  database has, which is what CI's has. Up to 2% of pixels may differ,
+  `home.spec.ts-snapshots/`, show it with the sample work seeded, its ranks
+  and projects, and the setup open. They run under reduced motion, with six
+  fixed live lines on a day long gone filling the wall. The video is masked,
+  since each Chromium build draws its own video controls, and so are the
+  token field and today's count, which the seeded events light with IDs and
+  times that change each run. Up to 2% of pixels may differ,
   for antialiasing, and a change in page height always fails. The baselines
   must come from the Playwright build CI uses, because other Chromium builds
   can wrap text differently. To update them, after a deliberate visual

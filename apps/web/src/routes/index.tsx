@@ -214,7 +214,7 @@ function Setup() {
         <dt>grok bot</dt>
         <dd>Ask it to install the skill from github.com/{REPO}.</dd>
         <dt>t3 code</dt>
-        <dd>The t3 code link above copies the prompt and opens T3 Code.</dd>
+        <dd>Set up the agent T3 Code runs, Claude Code or Codex, then use the t3 code button above.</dd>
       </dl>
       <p className="home-note">Then paste the prompt into your agent.</p>
     </details>
@@ -247,9 +247,11 @@ interface HomeFeed {
 
 // The wall and the token field, from what the page loaded with, then live
 // from the home feed's socket, starting after the newest event the page
-// shows. Each event goes on top of the wall, lights a square, and counts
-// toward today when it happened today. When the UTC day turns, the count
-// starts again from the first event of the new day.
+// shows. Each event goes on top of the wall. The field and the count show
+// the same events: those of the page's UTC day. So an event that happened on
+// an earlier day, delivered late, lights nothing and adds nothing. The first
+// event of a later day clears the field and starts the count again at one,
+// since the page has followed the feed since before that day began.
 function useHomeFeed(data: HomeData): HomeFeed {
   const [state, setState] = useState(() => ({
     lines: (data.live?.lines ?? []).map(toWallLine),
@@ -261,19 +263,17 @@ function useHomeFeed(data: HomeData): HomeFeed {
 
   useLiveFeed('/live.ndjson', data.live?.lines[0]?.id ?? null, (event: FeedEvent) => {
     setState((prev) => {
-      const lit = light(prev.squares, event);
+      const lines = [toWallLine(event), ...prev.lines].slice(0, WALL_LINES);
       const day = utcDay(event.time);
-      const counted =
-        prev.today === null || day < prev.day
-          ? { day: prev.day, today: prev.today }
-          : day === prev.day
-            ? { day, today: prev.today + 1 }
-            : { day, today: 1 };
+      if (day < prev.day) return { ...prev, lines };
+      const turned = day > prev.day;
+      const lit = light(turned ? emptyField() : prev.squares, event);
       return {
-        lines: [toWallLine(event), ...prev.lines].slice(0, WALL_LINES),
+        lines,
         squares: lit.squares,
         flash: { index: lit.index, count: (prev.flash?.count ?? 0) + 1 },
-        ...counted,
+        day,
+        today: turned ? 1 : prev.today === null ? null : prev.today + 1,
       };
     });
   });
