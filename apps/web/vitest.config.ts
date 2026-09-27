@@ -6,7 +6,9 @@ import { defineConfig } from 'vitest/config';
 // bindings from wrangler.jsonc. ENVIRONMENT and the domains are pinned to
 // values local development never uses, so a test can tell a value read from
 // the binding from a hard-coded one, and a local .dev.vars can't change the
-// result. Browser tests are in e2e/ and use Playwright.
+// result. GitHub's URLs are under .test, a domain that never resolves. Tests
+// answer them with the in-process GitHub fake. Browser tests are in e2e/ and
+// use Playwright.
 export default defineConfig({
   plugins: [
     tanstackStart(),
@@ -17,6 +19,8 @@ export default defineConfig({
           ENVIRONMENT: 'staging',
           PRIMARY_DOMAIN: 'primary.example',
           REDIRECT_DOMAINS: 'second.example,www.primary.example',
+          GH_API_URL: 'https://api.github.test',
+          GH_WEB_URL: 'https://github.test',
         },
       },
     }),

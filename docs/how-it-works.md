@@ -288,3 +288,13 @@ placeholders until #19 and #20 write them.
   down. Claude Code users get a change the next time they update the plugin
   or the marketplace, or automatically if they turned on auto-update for it.
   The higher version is what lets an update find the change.
+
+## Calls to GitHub
+
+- Every call to GitHub names the token it runs with. There is no default
+  token. A call made for a person runs with that person's own token, so it
+  can act only as them. Nothing calls GitHub yet. Sign-in (#8) is the first.
+- When GitHub refuses a call, the refusal comes back with GitHub's status
+  and message.
+- In local development, GitHub is the GitHub fake, and its sign-in page
+  lets you pick any sample person to be.
