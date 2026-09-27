@@ -919,8 +919,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34), which takes
   stream rate limits.
   Each open stream holds a Worker request and a hibernating WebSocket on a
-  feed or room, for up to an hour. Opening one reads D1 once or twice to
-  find its feed or room, and once for each round of the block check. It
+  feed or room, for up to an hour. Opening one reads D1 to find its feed or
+  room: once for a person or a project, and for an issue, its claims and
+  the projects that keep issues in its repo at the same time, then each of
+  those projects' cached copy of the issue. Then once for each round of the
+  block check. It
   sends at most 100 events from a feed with no `since`, at most 1,000 with
   one, and an issue room's whole history. Each line costs the feed or room
   one D1 read per batch it sends, shared by its watchers, and each stream a
@@ -956,9 +959,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
   event.
 - **Which streams exist.** A person's stream needs the person in `people`,
   a repo's the project in `projects`, and an issue's a claim in `claims` or
-  the issue in `tagged_issues`. Connecting to a feed or room that has never
-  been used makes it, with storage, so a stream for anything else would let
-  anyone make Durable Objects without end.
+  the issue in `tagged_issues`, which `findIssue` in `src/issue/find.ts`
+  checks for the stream and the issue page alike. Connecting to a feed or
+  room that has never been used makes it, with storage, so a stream for
+  anything else would let anyone make Durable Objects without end.
 - **Compression.** Cloudflare compresses `text/plain` for a browser that
   accepts it, which would hold lines back until a chunk fills.
   `Cache-Control: no-transform` turns that off.
@@ -1029,6 +1033,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 | `src/routes/$owner.$repo.issues.$number.tsx` | The page, built from the components in `src/components/`, with its lanes, slot panes, and timeline |
 | `src/issue/data.ts` | `getIssuePage`, the server function the route's loader calls |
 | `src/issue/load.ts` | `loadIssue`, which reads what the page shows, on the server only |
+| `src/issue/find.ts` | `findIssue`, which says whether an issue is on the site, for the page and the issue's stream |
 | `src/issue/view.ts` | The lanes, slots, timeline, and open PRs, folded from the room's events, for the server and the page alike |
 | `src/styles/issue-page.css` | The page's layout |
 
@@ -1052,11 +1057,13 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 - **Blocked donors.** Their events are left out of the history, so they have
   no lane. The snapshot still holds their claims, so the page counts the
   ones holding a slot, and each claim, without naming them.
-- **Which issues have a page** follows the same rule as `sourceFor` in
-  `src/feed/streams.ts`, with the same D1 reads: the claims table, then the
-  cached copy of each project that keeps its issues in the repo. A test
-  checks that an issue with neither gets a `404` and no room. The rule is
-  written in both files for now.
+- **Which issues have a page** is the rule for which issues have a stream,
+  in one place: `findIssue` in `src/issue/find.ts`, which `sourceFor` in
+  `src/feed/streams.ts` calls too. It reads the claims table and the
+  projects that keep their issues in the repo, at the same time, then each
+  one's cached copy. The page uses the claims and copies it found, for the
+  project and the title. Tests check that an issue with neither gets a
+  `404` from the page and from the stream, and that no room is made.
 - **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
   OAuth routes before any page, and the route answers `404` for `auth`,
   `mcp`, and `oauth` as owners too, so a path like `/oauth/<repo>/issues/1`
@@ -1077,8 +1084,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   there changes its screenshots, which have to come from CI's Playwright
   build. The page builds the lanes from `Chip`, `Slots`, `SlotRing`,
   `Prompt`, `Marker`, and `Rail`.
-- **What a view costs.** Two D1 queries to find the issue, and one more for
-  each project that keeps its issues in the repo. One for the project when
+- **What a view costs.** Two D1 queries to find the issue, at the same
+  time, and one more for each project that keeps its issues in the repo. One for the project when
   the issue isn't cached, and one for each claimant's login. Then the
   room's snapshot, its whole history, whose block check reads D1 once, and
   a socket on the room for as long as the page is open. Each lane keeps its
@@ -1101,19 +1108,20 @@ end-to-end tests. The rules are in
 | `apps/web/scripts/seed-local.mjs` | What `pnpm seed` runs to call the route |
 | `src/routes/dev.work.ts` | The route, which hands every method to `handleDevWork` |
 | `src/dev/work.ts` | `handleDevWork`, which works an issue as a sample person through its room |
+| `src/dev/gate.ts` | `devOnlyRequest`, the check both routes make first |
 
-- **Two checks.** `handleDevSeed` answers `404` unless both hold. The
-  first is `isDevelopment()`, the check the dev sign-in uses, described
-  under [Sign-in](#sign-in). That check is enough for sign-in, because a
-  deployed Worker can't reach a GitHub fake on the machine it was deployed
-  from, so the dev sign-in fails there. The seed never calls GitHub, so a
+- **Two checks.** `handleDevSeed` and `handleDevWork` answer `404` unless
+  both hold, and both ask `devOnlyRequest` in `src/dev/gate.ts`. The first
+  is `isDevelopment()`, the check the dev sign-in uses, described under
+  [Sign-in](#sign-in). That check is enough for sign-in, because a deployed
+  Worker can't reach a GitHub fake on the machine it was deployed from, so
+  the dev sign-in fails there. The dev routes never call GitHub, so a
   Worker deployed with the local `wrangler.jsonc` would pass it. The second
   check, that the request came by one of the loopback hostnames
   [how-it-works.md](how-it-works.md#sample-data-in-development) lists,
-  keeps that Worker from seeding for anyone on its public hostname. Tests
-  run the Worker as staging and as production, and in development on
-  public hostnames, and see `404` and nothing seeded. `handleDevWork`
-  answers `404` unless the first holds.
+  keeps that Worker from seeding or working an issue for anyone on its
+  public hostname. Tests run the Worker as staging and as production, and
+  in development on public hostnames, and see `404` and nothing written.
 - **Through the issue rooms.** The claims, their lines, and the merges go
   through the same room calls the MCP tools will make, so the lines reach
   the feeds through the queue, and the claims reach D1 from the room. The

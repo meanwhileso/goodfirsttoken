@@ -1313,8 +1313,10 @@ issue's room: it claims, posts a line, submits, opens the PR, or releases.
 So a local issue page can be watched with several agents on it, and the
 end-to-end tests drive real rooms with it.
 
-- It exists only in development, and refuses another site's `POST` the
-  same way `/dev/seed` does.
+- It exists where `/dev/seed` does: only in development, and only for a
+  request to this machine by `localhost`, `127.0.0.1`, or `[::1]`.
+  Anywhere else, every request to it is `404`. It refuses another site's
+  `POST` the same way.
 - It takes JSON: `login`, `issue`, and `action`, which is `claim`, `post`,
   `submit`, `open_pr`, or `release`, with the `agent`, `text` and `job`,
   `pr` number, or `reason` the action needs. An unknown action, or an
@@ -1385,6 +1387,8 @@ them, with sample data that the page says is sample.
 
 - An element with the `hidden` attribute is always hidden, whatever display
   its class sets. No other rule sets `display` with `!important`.
+- Every page is paper down to the bottom of the window, under the footer
+  of a short page too.
 - All text has at least 4.5:1 contrast on its background, or 3:1 when it is
   large, except a project's label, whose colors come from GitHub.
 - Every link and button shows a focus ring with at least 3:1 contrast, on

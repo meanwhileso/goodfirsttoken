@@ -1,3 +1,4 @@
+import { inflateSync } from 'node:zlib';
 import type { FeedEvent } from '@goodfirsttoken/core';
 import type { APIRequestContext, Page, WebSocketRoute } from '@playwright/test';
 import { expect, test } from './fixtures';
@@ -203,6 +204,31 @@ test('an issue that is not on the site is not found, and the page sets no cookie
   expect(found?.status()).toBe(200);
   expect(await found?.headerValue('set-cookie')).toBeNull();
   expect(await context.cookies()).toEqual([]);
+});
+
+/** The color of one pixel of the page as the screen shows it, as [r, g, b], from a 1 by 1 PNG screenshot. */
+async function pixel(page: Page, x: number, y: number): Promise<number[]> {
+  const png = await page.screenshot({ clip: { x, y, width: 1, height: 1 }, animations: 'disabled' });
+  // The chunks after the 8-byte signature: length, type, data, and a CRC.
+  // One pixel is one row: a filter byte, then its channels. With nothing
+  // before or above it, every PNG filter leaves the channels as they are.
+  const data: Buffer[] = [];
+  for (let at = 8; at < png.length; ) {
+    const length = png.readUInt32BE(at);
+    if (png.toString('ascii', at + 4, at + 8) === 'IDAT') data.push(png.subarray(at + 8, at + 8 + length));
+    at += 12 + length;
+  }
+  return [...inflateSync(Buffer.concat(data)).subarray(1, 4)];
+}
+
+test('a short page is paper under its footer, down to the bottom of the window', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.goto(freshIssue().path);
+  const footer = await page.locator('.site-footer').boundingBox();
+  expect((footer?.y ?? 0) + (footer?.height ?? 0)).toBeLessThan(1300);
+
+  // The paper token, #FBFBF9.
+  expect(await pixel(page, 640, 1390)).toEqual([0xfb, 0xfb, 0xf9]);
 });
 
 test('under reduced motion, a live line shows in full at once, and nothing on the page moves', async ({ page, request }) => {

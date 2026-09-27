@@ -2,7 +2,7 @@ import type { ClaimRecord, PrRef } from '@goodfirsttoken/core';
 import { listDurableObjectIds } from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, changeSettings, saveIssues, savePerson, setProjectStatus } from '../../src/db';
+import { blockDonor, changeSettings, getProject, saveIssues, savePerson, setProjectStatus } from '../../src/db';
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
 import { applyEvent, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
 import { issueRoom } from '../../src/rooms/issue-room';
@@ -472,6 +472,28 @@ describe('the dev-only route that works an issue as a sample person', () => {
       restore();
     }
     expect(await loadIssue(request, 'sample-owner', 'sample-app', number)).toEqual({ state: 'not_found' });
+  });
+
+  test('in development, on a host that is not this machine, does not exist and works nothing', async () => {
+    // An approved sample project that isn't a project yet, which a claim
+    // would add.
+    const theirs = `sample-owner/sample-desktop#${number}`;
+    const restore = runAsDevelopment();
+    try {
+      for (const host of ['gft.example', 'gft.workers.test', '192.0.2.10:5173']) {
+        const res = await exports.default.fetch(`http://${host}/dev/work`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ issue: theirs, login: 'priya', action: 'claim' }),
+        });
+        expect(res.status, host).toBe(404);
+      }
+    } finally {
+      restore();
+    }
+    expect(await getProject(db, 'sample-owner/sample-desktop')).toBeNull();
+    const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
+    expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(theirs.toLowerCase())));
   });
 
   test('in development, claims, posts, submits, opens the PR, and releases through the room', async () => {

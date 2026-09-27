@@ -1,9 +1,10 @@
 import { issueRef, validate, type ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { getIssue, getPerson, getProject, listIssueClaims, listProjectsByIssueRepo } from '../db';
+import { getPerson, getProject } from '../db';
 import { siteAddress } from '../home/load';
 import { issueRoom } from '../rooms/issue-room';
+import { findIssue } from './find';
 import { foldEvents, samePr, type IssueView } from './view';
 
 // What the issue page shows when it loads. It runs on the server only: the
@@ -12,11 +13,11 @@ import { foldEvents, samePr, type IssueView } from './view';
 // The claims, their lines, the timeline, and the open PRs come from the
 // issue's room, which holds them: its snapshot, which first applies any
 // pause or expiry that is due, then its history, which leaves out blocked
-// donors. D1 says whether the issue is on the site at all, the way the
-// issue's text stream decides, so a page never makes a room that nothing
-// could fill. It also gives the issue's title and labels from the tagged
-// issues cache, the project's claims per issue, and each claimant's login
-// now.
+// donors. D1 says whether the issue is on the site at all, with the check
+// the issue's text stream uses (./find.ts), so a page never makes a room
+// that nothing could fill. It also gives the issue's title and labels from
+// the tagged issues cache, the project's claims per issue, and each
+// claimant's login now.
 
 /**
  * Owners whose paths belong to the site: sign-in and the MCP server. The
@@ -76,22 +77,9 @@ export async function loadIssue(request: Request, owner: string, repo: string, n
 }
 
 async function read(request: Request, asked: string): Promise<IssuePageResult> {
-  // The same rule as the issue's text stream: a claim on the issue, or the
-  // issue among the tagged issues of a project that keeps its issues there.
-  const { repo: issueRepo } = splitIssue(asked);
-  const [mirrored, projects] = await Promise.all([
-    listIssueClaims(env.DB, asked),
-    listProjectsByIssueRepo(env.DB, issueRepo),
-  ]);
-  const copies = (
-    await Promise.all(
-      projects.map(async (project) => {
-        const copy = await getIssue(env.DB, project.repo, asked);
-        return copy && { project, copy };
-      }),
-    )
-  ).filter((found) => found !== null);
-  if (mirrored.length === 0 && copies.length === 0) return { state: 'not_found' };
+  const found = await findIssue(env.DB, asked);
+  if (!found) return { state: 'not_found' };
+  const { claims: mirrored, copies } = found;
 
   const room = issueRoom(env.ISSUE_ROOM, asked);
   // The snapshot first, so a pause or expiry that is due is in the history.

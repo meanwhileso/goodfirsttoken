@@ -1,16 +1,18 @@
 import { issueRef, validate } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
-import { isDevelopment, siteOrigin } from '../auth/settings';
+import { siteOrigin } from '../auth/settings';
 import { createProject, getProject, saveIssues, savePerson } from '../db';
 import { issueRoom } from '../rooms/issue-room';
+import { devOnlyRequest } from './gate';
 import { SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleProject } from './sample-work';
 
 // POST /dev/work, in local development only: works an issue as one of the
 // GitHub fake's sample people, through the issue's room, the way the MCP
 // tools will. It claims, posts a line, submits, opens the PR, or releases, so
 // a local issue page can be watched with several agents on it, and the
-// end-to-end tests can drive real rooms. Outside development the route
-// doesn't exist, the same check /dev/seed and the dev sign-in use.
+// end-to-end tests can drive real rooms. The route exists only in
+// development, and only for a request to this machine by a loopback
+// hostname, the gate in ./gate.ts that /dev/seed uses too.
 //
 //   { "login": "priya", "issue": "sample-owner/sample-app#311", "action": "claim", "agent": "claude-code" }
 //   { "login": "priya", "issue": "sample-owner/sample-app#311", "action": "post", "text": "...", "job": "tests" }
@@ -103,7 +105,7 @@ async function addProject(project: SampleProject, now: number): Promise<void> {
 
 /** Answers every request to /dev/work. */
 export async function handleDevWork(request: Request): Promise<Response> {
-  if (!isDevelopment()) return text(404, 'Not Found');
+  if (!devOnlyRequest(request)) return text(404, 'Not Found');
   if (request.method !== 'POST') return text(405, 'Send work with POST.');
   // A page on another site can't work an issue on someone's local site.
   const origin = request.headers.get('origin');

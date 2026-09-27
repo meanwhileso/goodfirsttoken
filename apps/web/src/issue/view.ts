@@ -4,7 +4,7 @@ import type { FeedEvent, FeedEventKind } from '@goodfirsttoken/core';
 // timeline, and the open PRs. The server folds the room's history into it
 // when the page loads, and the page folds in each event its live socket
 // sends after that, with the same function, so the two always agree. It
-// imports no schemas, so the page's scripts stay small.
+// imports only types, so it runs the same on the server and in the page.
 
 /** How many of a lane's newest lines it keeps. The text stream has them all. */
 export const LANE_LINES = 20;
