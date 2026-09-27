@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { SAMPLE_COMMAND, SAMPLE_EVENTS, SAMPLE_PROMPT } from '../src/design/samples';
+import { expect, test } from './fixtures';
+import { STATIC_HOST } from './hosts';
 
 // The /design page shows every component in the design system with sample
 // data. Its wall adds a sample line every 3.8 seconds.
@@ -117,9 +119,11 @@ test.describe('the design page', () => {
 test('an element with hidden stays hidden, whatever display its class sets', async ({ page }) => {
   await openDesign(page);
 
-  const result = await page.evaluate(() => {
+  const result = await page.evaluate(async () => {
     // Every style rule in every stylesheet, including rules nested in media,
-    // container, and supports queries.
+    // container, and supports queries. The stylesheets come from the static
+    // host, another origin, so the page can't read their rules. Each one is
+    // fetched again and read from a copy.
     const rules: CSSStyleRule[] = [];
     const walk = (list: CSSRuleList) => {
       for (const rule of list) {
@@ -127,7 +131,13 @@ test('an element with hidden stays hidden, whatever display its class sets', asy
         if (rule instanceof CSSGroupingRule || rule instanceof CSSStyleRule) walk(rule.cssRules);
       }
     };
-    for (const sheet of document.styleSheets) walk(sheet.cssRules);
+    const readable = async (sheet: CSSStyleSheet) => {
+      if (!sheet.href) return sheet;
+      const copy = new CSSStyleSheet();
+      copy.replaceSync(await (await fetch(sheet.href)).text());
+      return copy;
+    };
+    for (const sheet of await Promise.all([...document.styleSheets].map(readable))) walk(sheet.cssRules);
 
     // The hidden rule wins over any class because it is !important. Only
     // another !important display could beat it.
@@ -365,16 +375,22 @@ test('every component in brand/design.md looks the way its YAML says', async ({ 
   expect(mismatches).toEqual([]);
 });
 
-test('a page view loads Geist and Geist Mono from the site itself, and nothing from anywhere else', async ({ page, baseURL }) => {
+test("a page view loads Geist and Geist Mono from the site's static host, and nothing from any other site", async ({
+  page,
+  baseURL,
+}) => {
   const origins = new Set<string>();
+  const fonts: string[] = [];
   page.on('request', (request) => {
     const { protocol, origin } = new URL(request.url());
     if (protocol !== 'data:') origins.add(origin);
+    if (request.resourceType() === 'font') fonts.push(origin);
   });
   await openDesign(page);
   await page.evaluate(() => document.fonts.ready);
 
-  expect([...origins]).toEqual([new URL(baseURL ?? '').origin]);
+  expect([...origins].sort()).toEqual([new URL(baseURL ?? '').origin, STATIC_HOST].sort());
+  expect([...new Set(fonts)]).toEqual([STATIC_HOST]);
   const loaded = await page.evaluate(() =>
     [...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family.replaceAll('"', '')),
   );

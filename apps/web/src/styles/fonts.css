@@ -1,7 +1,9 @@
-/* Geist and Geist Mono, served by the site itself so a page view makes no
-   third-party requests. They are the variable fonts from the `geist` npm
-   package, version 1.7.2, under the SIL Open Font License in
-   ../fonts/OFL.txt. Vite gives each file a content hash at build time. */
+/* Geist and Geist Mono, the site's own files, served from its static host
+   when it has one, so a page view makes no third-party requests. They are
+   the variable fonts from the `geist` npm package, version 1.7.2, under the
+   SIL Open Font License in ../fonts/OFL.txt. Vite gives each file a content
+   hash at build time, and the build gives each URL the static host's
+   origin. */
 
 @font-face {
   font-family: 'Geist';

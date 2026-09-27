@@ -103,7 +103,7 @@ Deploys, the static host, a security review, and the launch video.
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
 | [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | [#43](https://github.com/meanwhileso/goodfirsttoken/pull/43) |
-| [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | |
+| [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | [#49](https://github.com/meanwhileso/goodfirsttoken/pull/49) |
 | [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
 | [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | |
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n33 done
 ```
 
 ## Maintainer steps
@@ -238,9 +238,15 @@ Once #39 merges:
 - Then add the security jobs as required checks, and the code scanning ruleset, in the order
   [docs/architecture.md](docs/architecture.md) gives.
 
-Once #33 merges:
+Once #33 merges, for staging and then production:
 
-- Attach the static host's custom domain with cookie-free settings.
+- Set up the static host as [docs/self-hosting.md](docs/self-hosting.md#the-static-host) says: the
+  `<WORKER_NAME>-static` bucket, its custom domain, and the `Access-Control-Allow-Origin` header rule.
+- Keep Cloudflare's cookies off the static host. Bot Fight Mode and challenges can set cookies for the
+  whole zone, so either keep them off for all of `goodfirsttoken.org`, or put the static host on a domain
+  in a zone of its own. The guide says why.
+- Give the deploy credential Workers R2 Storage Edit, set `STATIC_ORIGIN`, and deploy. Then check a
+  byte range on the video with the `curl` command there.
 
 Before launch, once #34 merges:
 

@@ -55,6 +55,38 @@ test('staging and production deploys each stay off until their repository variab
   assert.match(jobs.production, /^ {4}needs: staging$/m);
 });
 
+test('the build and the upload read the same STATIC_ORIGIN, and a static host that fails its check stops the deploy before anything else changes', () => {
+  // The deploy job's steps, in order, without YAML comments.
+  const steps = read('.github/workflows/deploy-environment.yml')
+    .split('\n')
+    .map((line) => line.replace(/(^|\s)#.*$/, ''))
+    .join('\n')
+    .split(/\n(?= {6}- )/)
+    .slice(1);
+  const step = (run) => steps.findIndex((text) => text.includes(`run: ${run}`));
+  const build = step('pnpm --filter @goodfirsttoken/web build');
+  const credential = step('node scripts/deploy.mjs credential');
+  const upload = step('node scripts/deploy.mjs static-assets');
+  // Each step that changes the environment: resources, migrations, the
+  // Worker's secrets, which go live as a new version, and the Worker.
+  const changes = [
+    step('node scripts/deploy.mjs resources'),
+    step('node scripts/deploy.mjs migrations'),
+    step('node scripts/deploy.mjs secrets'),
+    step('pnpm exec wrangler deploy'),
+  ];
+  const setting = 'STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}';
+
+  assert.ok([build, credential, upload, ...changes].every((index) => index >= 0), 'the job has every step');
+  assert.ok(steps[build]?.includes(setting), 'the build step gets STATIC_ORIGIN');
+  assert.ok(steps[upload]?.includes(setting), 'the upload step gets STATIC_ORIGIN');
+  assert.ok(build < upload && credential < upload, 'the upload runs after the build and the credential');
+  assert.ok(
+    changes.every((change) => upload < change),
+    'the upload and its check run before resources, migrations, secrets, and the Worker change',
+  );
+});
+
 test('the deploy workflows never run on pull_request_target', () => {
   assert.equal(workflow.includes('pull_request_target'), false);
 });
