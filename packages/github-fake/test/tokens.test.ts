@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import { createGitHubFake, type GitHubFake } from '../src/index.ts';
 import { graphql, rest, toBase64 } from './call.ts';
 
@@ -90,4 +90,22 @@ test('GitHub refuses an API call that carries no User-Agent', async () => {
 
   expect(response.status).toBe(403);
   expect(await response.text()).toContain('User-Agent');
+});
+
+test('a new token uses each letter and digit equally, so random bytes that would favour some are skipped', () => {
+  // The first draw holds only bytes that would favour the first letters of
+  // the alphabet, like 62, 63, and 255. The second draw holds 0 to 35.
+  const biased = Uint8Array.from({ length: 36 }, (_, i) => [62, 63, 126, 127, 190, 191, 254, 255][i % 8] ?? 255);
+  const fair = Uint8Array.from({ length: 36 }, (_, i) => i);
+  const draws = [biased, fair];
+  const spy = vi.spyOn(crypto, 'getRandomValues').mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+    const next = draws.shift() ?? fair;
+    if (array instanceof Uint8Array) array.set(next.subarray(0, array.length));
+    return array;
+  });
+  try {
+    expect(createGitHubFake().tokenFor('priya')).toBe('gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij');
+  } finally {
+    spy.mockRestore();
+  }
 });

@@ -79,10 +79,18 @@ export interface GitHubFake {
 
 const ALPHANUMERIC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
-// GitHub's OAuth tokens are gho_ and 36 letters and digits.
+// GitHub's OAuth tokens are gho_ and 36 letters and digits. Each random byte
+// keeps its low 6 bits, 0 to 63, and 62 and 63 are skipped, so every letter
+// and digit is equally likely.
 function newToken(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(36));
-  return `gho_${[...bytes].map((b) => ALPHANUMERIC[b % ALPHANUMERIC.length] ?? 'A').join('')}`;
+  let token = '';
+  while (token.length < 36) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(36))) {
+      const char = ALPHANUMERIC[byte & 63];
+      if (char !== undefined && token.length < 36) token += char;
+    }
+  }
+  return `gho_${token}`;
 }
 
 function relativePath(url: URL, base: URL): string | null {
