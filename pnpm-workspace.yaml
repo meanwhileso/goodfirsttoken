@@ -6,3 +6,9 @@ packages:
 onlyBuiltDependencies:
   - esbuild
   - workerd
+
+# The Workers test pool pins miniflare 5.20260815.0-alpha, which pins sharp
+# 0.35.2, with GHSA-rgj7-g3m4-5g8c. This moves that one pin to the fixed
+# 0.35.4. It does nothing once the pool's miniflare changes. Remove it then.
+overrides:
+  miniflare@5.20260815.0-alpha>sharp: 0.35.4

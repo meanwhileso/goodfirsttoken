@@ -18,8 +18,8 @@ We most want to hear about:
 ## How we keep it private
 
 Our own security scans follow the same rule as your reports. What they find
-on `main` stays private until it's fixed. It never goes in an issue, a
-comment, or a public CI log.
+on `main` stays private until it's fixed, apart from the one exception at the
+end of this list. It never goes in an issue, a comment, or a public CI log.
 
 - **Reports** come in through private vulnerability reporting, as a draft
   security advisory that only you and the maintainers can see.
@@ -28,9 +28,14 @@ comment, or a public CI log.
   repo, only people with write access can see either. The scans are listed
   in [docs/architecture.md](docs/architecture.md#security-scans).
 - **Checks on a pull request** name a finding only when it sits in code the
-  pull request adds or edits, which its diff already shows. Findings
-  elsewhere on `main` never appear in a pull request.
+  pull request adds or edits, which its diff already shows. The checks never
+  name findings elsewhere on `main`.
 - **Fixes** for a confirmed report or alert happen in the draft advisory's
   temporary private fork. CI can't reach that fork, so run `pnpm check` and
   `pnpm test` there by hand. A maintainer merges the fix and publishes the
   advisory at the same time.
+- **An advisory already published upstream** is the one exception. When an
+  alert names an advisory that anyone can read, for a version `main` already
+  pins in its lockfile or a workflow, the fix can go in an ordinary pull
+  request that names the advisory. A finding in our own code always goes
+  through the private fork.
