@@ -36,7 +36,7 @@ GitHub sign-in on the site and the MCP server with OAuth 2.1.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#8](https://github.com/meanwhileso/goodfirsttoken/issues/8) | Add GitHub sign-in on the site and the permission checks | #5, #6 | |
+| [#8](https://github.com/meanwhileso/goodfirsttoken/issues/8) | Add GitHub sign-in on the site and the permission checks | #5, #6 | [#51](https://github.com/meanwhileso/goodfirsttoken/pull/51) |
 | [#9](https://github.com/meanwhileso/goodfirsttoken/issues/9) | Serve the MCP server with OAuth 2.1 and a connected-agents list | #8 | |
 
 ## M3 Projects
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8 done
 ```
 
 ## Maintainer steps
