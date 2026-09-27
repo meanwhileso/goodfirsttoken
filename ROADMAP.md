@@ -26,7 +26,7 @@ The workspace, shared schemas, database, GitHub fake, design system, and securit
 | [#3](https://github.com/meanwhileso/goodfirsttoken/issues/3) | Scaffold the workspace, the Workers app, and CI | Nothing | [#37](https://github.com/meanwhileso/goodfirsttoken/pull/37) |
 | [#4](https://github.com/meanwhileso/goodfirsttoken/issues/4) | Define the core schemas and the claim state machine | #3 | [#41](https://github.com/meanwhileso/goodfirsttoken/pull/41) |
 | [#5](https://github.com/meanwhileso/goodfirsttoken/issues/5) | Add the D1 schema and data access | #4 | |
-| [#6](https://github.com/meanwhileso/goodfirsttoken/issues/6) | Build the recorded GitHub fake and the sample data | #3 | |
+| [#6](https://github.com/meanwhileso/goodfirsttoken/issues/6) | Build the recorded GitHub fake and the sample data | #3 | [#46](https://github.com/meanwhileso/goodfirsttoken/pull/46) |
 | [#7](https://github.com/meanwhileso/goodfirsttoken/issues/7) | Build the design system in code and the /design page | #3 | |
 | [#39](https://github.com/meanwhileso/goodfirsttoken/issues/39) | Run security scans on every PR and every week | #3 | |
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32 done
+  class n3,n4,n18,n32,n6 done
 ```
 
 ## Maintainer steps
