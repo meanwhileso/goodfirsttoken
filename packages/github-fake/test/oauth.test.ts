@@ -101,6 +101,67 @@ test("sign-in sends people back only to the app's callback URL or a path under i
   expect(otherPort.location.searchParams.get('code')).not.toBeNull();
 });
 
+// What the app sends to revoke a token: its own client ID and secret with
+// Basic authentication, and the token in the body.
+async function revoke(token: string | undefined, app = localOAuthApp) {
+  const response = await fake.fetch(`${fake.apiUrl}/applications/${app.clientId}/token`, {
+    method: 'DELETE',
+    headers: {
+      'user-agent': 'github-fake-tests',
+      authorization: `Basic ${btoa(`${app.clientId}:${app.clientSecret}`)}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(token === undefined ? {} : { access_token: token }),
+  });
+  return { status: response.status, body: response.status === 204 ? null : ((await response.json()) as unknown) };
+}
+
+async function tokenFromSignIn(login: string): Promise<string> {
+  const code = (await signIn(login)).location.searchParams.get('code') ?? '';
+  return (JSON.parse((await exchange({ code })).text) as { access_token: string }).access_token;
+}
+
+test("revoking a token with the app's client ID and secret ends that token and no other", async () => {
+  const revoked = await tokenFromSignIn('priya');
+  const kept = await tokenFromSignIn('priya');
+
+  const reply = await revoke(revoked);
+
+  expect(reply.status).toBe(204);
+  expect((await rest(fake, 'GET', '/user', { token: revoked })).status).toBe(401);
+  expect((await rest(fake, 'GET', '/user', { token: kept })).body).toMatchObject({ login: 'priya' });
+  expect(fake.calls.filter((call) => call.method === 'DELETE')).toMatchObject([
+    { operation: 'DELETE /applications/{client_id}/token', status: 204 },
+  ]);
+});
+
+test("revoking needs the app's own secret, and the token keeps working without it", async () => {
+  const token = await tokenFromSignIn('kenji');
+
+  const reply = await revoke(token, { ...localOAuthApp, clientSecret: 'wrong' });
+
+  expect(reply.status).toBe(404);
+  expect((await rest(fake, 'GET', '/user', { token })).body).toMatchObject({ login: 'kenji' });
+});
+
+test('an app can revoke only the tokens it issued', async () => {
+  const other = fake.tokenFor('lena');
+
+  const reply = await revoke(other);
+
+  expect(reply.status).toBe(404);
+  expect((await rest(fake, 'GET', '/user', { token: other })).body).toMatchObject({ login: 'lena' });
+});
+
+test('revoking with no token names the missing field', async () => {
+  const reply = await revoke(undefined);
+
+  expect(reply).toMatchObject({
+    status: 422,
+    body: { errors: [{ code: 'missing_field', field: 'access_token' }] },
+  });
+});
+
 test('cancelling sign-in sends the person back with access_denied and no code', async () => {
   const back = await signIn('priya', { decision: 'deny' });
 
