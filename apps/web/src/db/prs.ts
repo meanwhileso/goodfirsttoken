@@ -192,6 +192,22 @@ export async function countProjectPrs(db: D1Database, project: string): Promise<
   return { open: countOf('open'), merged: countOf('merged') };
 }
 
+/**
+ * How many PRs opened for a person's claims are open, by each claim's
+ * project, keyed by the project in lower case. A project with none is left
+ * out.
+ */
+export async function countOpenPrsByProject(db: D1Database, person: number): Promise<Map<string, number>> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.project AS project, COUNT(*) AS n FROM prs p JOIN claims c ON c.id = p.claim_id
+       WHERE c.github_id = ? AND p.state = 'open' GROUP BY c.project`,
+    )
+    .bind(mustParse(githubId, person, 'githubId'))
+    .all<{ project: string; n: number }>();
+  return new Map(results.map((row) => [row.project.toLowerCase(), mustParse(count, row.n, 'n')]));
+}
+
 const DAY = 24 * 60 * 60 * 1000;
 
 /**

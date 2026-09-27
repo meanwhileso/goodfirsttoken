@@ -23,6 +23,8 @@ export const refusalCodes = [
   'not_vouched',
   'cla_required',
   'open_pr_cap',
+  // The session's budget of issues or time is spent (spec section 7, budget).
+  'budget_spent',
   // Posting, submitting, and opening a PR (spec sections 7 and 8).
   'not_claim_owner',
   'description_required',

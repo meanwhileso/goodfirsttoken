@@ -166,6 +166,43 @@ test('file contents come back base64 encoded, and a folder as a list of its entr
   expect(otherBranch.status).toBe(200);
 });
 
+test("a repo's vouch file is served like any file: base64 through the contents API, and as text through GraphQL", async () => {
+  const desktop = '/repos/sample-owner/sample-desktop';
+  const file = await rest<{ content: string; encoding: string; path: string; name: string; type: string }>(
+    fake,
+    'GET',
+    `${desktop}/contents/.github/VOUCHED.td`,
+  );
+  const reply = await graphql<{
+    repository: {
+      root: { text: string } | null;
+      dotGithub: { text: string; byteSize: number; isBinary: boolean } | null;
+      defaultBranchRef: { target: { oid: string } };
+    };
+  }>(
+    fake,
+    fake.tokenFor('kenji'),
+    `{ repository(owner: "sample-owner", name: "sample-desktop") {
+        root: object(expression: "HEAD:VOUCHED.td") { ... on Blob { text } }
+        dotGithub: object(expression: "HEAD:.github/VOUCHED.td") { ... on Blob { text byteSize isBinary } }
+        defaultBranchRef { target { oid } }
+      } }`,
+  );
+  const text = fromBase64(file.body.content);
+
+  // https://docs.github.com/en/rest/repos/contents#get-repository-content
+  expect(file.body).toMatchObject({ type: 'file', encoding: 'base64', path: '.github/VOUCHED.td', name: 'VOUCHED.td' });
+  expect(text.split('\n').filter((line) => line !== '' && !line.startsWith('#'))).toEqual([
+    '-arjun opened agent PRs nobody had read',
+    'github:kenji',
+    'gitlab:priya',
+    'lena',
+  ]);
+  expect(reply.body.data?.repository.root).toBeNull();
+  expect(reply.body.data?.repository.dotGithub).toEqual({ text, byteSize: new TextEncoder().encode(text).length, isBinary: false });
+  expect(reply.body.data?.repository.defaultBranchRef.target.oid).toMatch(/^[0-9a-f]{40}$/);
+});
+
 test('one GraphQL query reads files from many repos, with an error for each repo that is not there', async () => {
   const reply = await graphql<Record<string, { contributing: { text: string } | null } | null>>(
     fake,

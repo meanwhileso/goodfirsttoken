@@ -1,12 +1,13 @@
-import type { ClaimRecord, ProjectRecord, TaggedIssue } from '@goodfirsttoken/core';
+import type { ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { getDoNotListEntry, getPerson, getProject } from '../db';
+import { getPerson, getProject } from '../db';
 import { siteAddress } from '../home/load';
 import { issueRoom } from '../rooms/issue-room';
 import { findIssue } from './find';
 import { issueFromPath } from './path';
 import { foldEvents, samePr, slotsTaken, type IssueView, type PrLink } from './view';
+import { closedBecause, followedCopy } from './waiting';
 
 export { issueFromPath } from './path';
 
@@ -58,31 +59,6 @@ function splitIssue(issue: string): { repo: string; number: number } {
 
 const HOLDS_SLOT = new Set<ClaimRecord['state']>(['active', 'paused', 'awaiting_review']);
 
-// Labels compare without case, folding ASCII letters as the homepage's
-// query does with SQLite's lower().
-const fold = (label: string) => label.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
-
-/**
- * Why the issue takes no claims, by the rule the homepage uses for an issue
- * waiting for an agent (src/db/projects.ts), less the open PRs and the free
- * slot, which the page follows live. Null when it takes them.
- */
-async function closedBecause(
-  project: ProjectRecord | null,
-  tagged: { project: ProjectRecord; copy: TaggedIssue } | undefined,
-  issueRepo: string,
-): Promise<IssuePage['closedBecause']> {
-  if (project?.status !== 'approved') return 'project';
-  if (!tagged) return 'issue';
-  const labels = new Set(tagged.copy.labels.map(fold));
-  const { tags, excludedTags } = tagged.project.settings;
-  if (!tags.some((tag) => labels.has(fold(tag))) || excludedTags.some((tag) => labels.has(fold(tag)))) return 'issue';
-  const listed = await Promise.all(
-    [project.repo, issueRepo].map((repo) => getDoNotListEntry(env.DB, repo)),
-  );
-  return listed.some((entry) => entry !== null) ? 'project' : null;
-}
-
 /** Everything the issue page shows when it loads. */
 export async function loadIssue(request: Request, owner: string, repo: string, number: string): Promise<IssuePageResult> {
   const asked = issueFromPath(owner, repo, number);
@@ -116,16 +92,9 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   // would but for a PR the sync saw or a full cap, then the oldest.
   const issueRepo = splitIssue(asked).repo;
   const judged = await Promise.all(
-    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(copy.project, copy, issueRepo) })),
+    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(env.DB, copy.project, copy, issueRepo) })),
   );
-  const taken = slotsTaken(view);
-  const tagged =
-    judged.find(
-      (copy) =>
-        copy.closed === null && copy.copy.linkedPr === null && taken < copy.project.settings.claimsPerIssue,
-    ) ??
-    judged.find((copy) => copy.closed === null) ??
-    judged[0];
+  const tagged = followedCopy(judged, slotsTaken(view));
   const latest = glance.claims.at(-1) ?? mirrored.at(-1);
   const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
 
@@ -162,7 +131,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
-    closedBecause: tagged ? tagged.closed : await closedBecause(project, undefined, issueRepo),
+    closedBecause: tagged ? tagged.closed : await closedBecause(env.DB, project, undefined, issueRepo),
     view,
   };
 }

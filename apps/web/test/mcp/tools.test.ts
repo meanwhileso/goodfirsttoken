@@ -34,7 +34,7 @@ async function connections(): Promise<number> {
   return (await env.DB.prepare('SELECT COUNT(*) AS n FROM connected_agents').first<number>('n')) ?? 0;
 }
 
-test("a tools/list answers with start_session and the maintainer's tools, each with its input and output schemas", async () => {
+test("a tools/list answers with the donor's tools and the maintainer's tools, each with its input and output schemas", async () => {
   const { accessToken } = await tokensFor(github, 'priya');
 
   const response = await callMcp(accessToken);
@@ -46,13 +46,20 @@ test("a tools/list answers with start_session and the maintainer's tools, each w
   expect(response.status).toBe(200);
   expect(body.result.tools.map((t) => t.name)).toEqual([
     'start_session',
+    'set_interests',
+    'suggest_issues',
+    'claim_issue',
+    'post_update',
+    'release_claim',
+    'my_work',
     'register_project',
     'update_project',
     'project_status',
     'pause_project',
   ]);
   expect(tool('start_session')?.inputSchema).toMatchObject({ required: ['agent', 'budget'] });
-  expect(tool('start_session')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['login', 'githubId']) as string[] });
+  expect(tool('start_session')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['sessionId', 'login']) as string[] });
+  expect(tool('claim_issue')?.inputSchema).toMatchObject({ required: ['sessionId'] });
   expect(tool('register_project')?.inputSchema).toMatchObject({ required: ['repo'] });
   expect(tool('update_project')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['changed', 'createdLabels']) as string[] });
   expect(tool('pause_project')?.description).toContain('resume it with paused: false');

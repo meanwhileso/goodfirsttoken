@@ -56,7 +56,16 @@ export const samples: Samples = {
       unfinishedClaims: [{ ...claim, state: 'paused' }],
       mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/post?text=merged' }],
     },
-    mentions: ['@priya', '3 issues', 'typescript', '@octo-maintainer asked for changes', 'paused', 'Share it'],
+    mentions: [
+      '@priya',
+      '3 issues',
+      'typescript',
+      '@octo-maintainer asked for changes',
+      'paused',
+      'Share it',
+      'Offer the follow-ups and paused claims first',
+      'Resume a claim with claim_issue and its issue.',
+    ],
   },
   suggest_issues: {
     output: {
@@ -109,6 +118,16 @@ export const samples: Samples = {
       body: 'The live feed should also stream as NDJSON.',
       project: { repo, settings },
       clone: { url: `https://github.com/${repo}.git`, commit: sha },
+      resumed: false,
+      skipped: [
+        {
+          issue: `${repo}#921`,
+          code: 'issue_full',
+          message: `${repo}#921 has no open slot: 3 of 3 are taken. Pick another issue.`,
+        },
+      ],
+      queued: [`${repo}#925`],
+      budget: { issuesLeft: 2, endsAt: null },
     },
     mentions: [
       issue,
@@ -117,6 +136,10 @@ export const samples: Samples = {
       'Disclose AI use with the trailer Assisted-by on each commit.',
       'Disclose AI use with this in the PR body, word for word:\n  Written with a coding agent through Good First Token.',
       'NDJSON',
+      `Skipped from the queue (1):\n  1  ${repo}#921 (issue_full)`,
+      `Queued next (1): ${repo}#925.`,
+      'claim the next with claim_issue and no issue',
+      'Budget left: 2 issues.',
     ],
   },
   post_update: {

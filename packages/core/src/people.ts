@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { epochMs, githubId, githubLogin, trimmedText } from './primitives';
+import { epochMs, githubId, githubLogin, httpsUrl, repoName, trimmedText } from './primitives';
 
 // People (spec section 3). Everyone who signs in is a GitHub account: donors,
 // maintainers, and admins alike. The numeric ID is who they are, and the
@@ -45,3 +45,17 @@ export const donorBlockSchema = z.object({
   blockedAt: epochMs,
 });
 export type DonorBlock = z.infer<typeof donorBlockSchema>;
+
+/**
+ * A donor's word that they signed a project's CLA. It is asked once per
+ * project, and again only when the project's CLA link changes.
+ */
+export const claConfirmationSchema = z.object({
+  githubId,
+  /** The project's code repo. */
+  project: repoName,
+  /** The CLA link the project had when the donor confirmed it. */
+  claUrl: httpsUrl,
+  confirmedAt: epochMs,
+});
+export type ClaConfirmation = z.infer<typeof claConfirmationSchema>;

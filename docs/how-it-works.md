@@ -5,11 +5,10 @@ plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves the homepage, each issue's page,
-sign-in with GitHub, the MCP server's sign-in for agents with
-`start_session` and the maintainer's tools, the design system at
-`/design`, and the live feeds as text streams and sockets, and reads
-tagged issues and PRs from GitHub on a schedule, while the build goes on in
-the open.
+sign-in with GitHub, the MCP server's sign-in for agents with the donor's
+tools and the maintainer's tools, the design system at `/design`, and the
+live feeds as text streams and sockets, and reads tagged issues and PRs
+from GitHub on a schedule, while the build goes on in the open.
 
 ## Health check
 
@@ -233,8 +232,8 @@ hold one token for the site, and one for each connected agent.
   used, the oldest. That can be the site's token or an agent's.
 - When GitHub stops accepting a connection's token, because GitHub revoked
   it or the person revoked the app in their GitHub settings, the
-  connection's next tool call that asks GitHub, like `start_session` or a
-  maintainer's tool, ends the connection, revokes nothing, and tells the
+  connection's next tool call that asks GitHub, like `start_session`,
+  `claim_issue`, or a maintainer's tool, ends the connection, revokes nothing, and tells the
   agent to reconnect. The agent's next call gets `401`, and it signs in
   again.
 - A site token GitHub revoked stays stored until the person's next sign-in
@@ -272,8 +271,9 @@ hold one token for the site, and one for each connected agent.
 
 - `start_session` takes the harness name and the budget under
   [MCP tools](#mcp-tools), asks GitHub who the connection's token belongs
-  to, records that login under [People](#people), and answers with the
-  person's GitHub ID and login, as text like `Signed in as @priya.`
+  to, records that login under [People](#people), and starts a session,
+  with text like `Signed in as @priya. Session s_...`. It and the donor's
+  other tools are under [The donor's tools](#the-donors-tools).
 - The maintainer's tools, `register_project`, `update_project`,
   `project_status`, and `pause_project`, are under
   [Registering a project](#registering-a-project) and
@@ -344,7 +344,8 @@ Every action goes through one named check, `requirePermission(caller,
 permission, resource)`. It returns, or refuses with a
 [refusal](#refusals) code. The maintainer's tools call it with
 `manage_project`, and resuming a pause an admin made calls it with
-`pause_any_project`. The other tools and pages that need it arrive with the
+`pause_any_project`. `post_update` and `release_claim` call it with
+`work_claim`. The other tools and pages that need it arrive with the
 issues that build them.
 
 | Permission | Allows | Who holds it | Refusal |
@@ -390,8 +391,13 @@ The database records the people who sign in.
 
 **Blocks.** An admin can block a donor, with an optional reason. Blocking
 them again records the new reason, admin, and time. Lifting the block
-removes it. Nothing refuses a blocked donor yet. The live feeds and streams
-hide their events, as [Live feeds](#live-feeds) says.
+removes it. A blocked donor gets no suggestions and no claims, under
+[The donor's tools](#the-donors-tools). The live feeds and streams hide
+their events, as [Live feeds](#live-feeds) says.
+
+**CLA confirmations.** A donor's word that they signed a project's CLA is
+kept with the CLA link the project had then, one per donor and project.
+Confirming again, as for a new link, replaces it.
 
 ## Claims
 
@@ -498,8 +504,9 @@ Each issue has one room, which holds every claim on the issue. A claim
 changes only there. The room runs the claims' timers, takes the claimants'
 updates, streams events to the people watching, sends each event on to the
 [live feeds](#live-feeds), and saves each claim to the
-[claims table](#claims). Nothing makes a claim or a post yet. The MCP tools
-will, once they are served.
+[claims table](#claims). The donor's tools, under
+[The donor's tools](#the-donors-tools), make claims, post to them, and
+release them through it.
 
 **Claiming**
 
@@ -1068,6 +1075,9 @@ do-not-list.
   the project no longer keeps its issues in.
 - The cache holds what GitHub said when the sync read each issue. An issue
   tagged, closed, or linked in between shows at the next read.
+- Each read of the project's code repo also keeps its main language, as
+  GitHub names it, or none. Suggestions rank by it, under
+  [The donor's tools](#the-donors-tools).
 
 **Linked PRs.** An issue's linked PR is an open pull request, from anyone,
 open in the project's code repo or its issue repo, that GitHub links to the
@@ -1159,10 +1169,211 @@ the first question included.
 
 ## Donor sessions
 
-- A session has the donor, the harness, the budget, when it started, and how
-  many issues were claimed in it, starting at none.
-- Each claim counted adds one, including claims made at the same moment.
+- A session has the donor, the harness, the budget, when it started, how
+  many issues were claimed in it, starting at none, and the donor's picks
+  waiting in its queue, none at first.
+- Each claim counted adds one, including claims made at the same moment. A
+  claim counted against the budget lands only while the budget has room, as
+  [The donor's tools](#the-donors-tools) says.
 - A donor's last session is the one that started most recently.
+
+## The donor's tools
+
+A donor's agent spends their tokens through seven tools: `start_session`,
+`set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
+`release_claim`, and `my_work`. Each acts as the caller alone, and reads
+GitHub with the caller's own token, never the service token. `submit_work`
+and `open_pr` come with #16.
+
+**Sessions**
+
+- `start_session` records the person under [People](#people), and starts a
+  session with the harness and the budget the donor chose. It answers with
+  the session's ID, the donor's saved interests, and their unfinished
+  claims. The interests are null on the first run, and the answer asks the
+  agent to ask the donor for them and save them with `set_interests`.
+- The unfinished claims are the donor's claims working or paused now, from
+  any session: the paused ones first, then the rest, newest first. The
+  claims table lists them, and each claim's room gives its state now. The
+  agent offers them before new issues, and resumes one by claiming its
+  issue again.
+- The answer's follow-ups, a maintainer asking for changes on one of the
+  donor's PRs, come first when there are any. The list is empty until #17
+  fills it. So is the list of PRs merged since the last session.
+- `set_interests` saves the donor's languages, projects, and kinds of work,
+  which rank their suggestions.
+- `my_work` lists the same claims in progress. Its follow-ups, and its work
+  waiting to open as a PR, are empty lists until #17 and #16 fill them.
+- A session belongs to the donor who started it. Another donor who names it
+  finds no session, and is refused with `not_found`.
+
+**Which issues take the donor's claim.** An issue takes a donor's new claim
+when all of these hold, the rules of
+[spec §6](specs/v1.md#6-issues-and-claims):
+
+- It waits for an agent, by the homepage's rule under
+  [The homepage](#the-homepage): its project is approved and not paused,
+  neither the project's repo nor the issue's repo is on the do-not-list, its
+  cached copy carries one of the project's tags and none of its excluded
+  tags, no open PR the sync or a claim knows of is linked to it, and fewer
+  of its claims hold a slot than the project's claims per issue.
+- On GitHub now, read with the donor's token, it is an open issue, it
+  carries one of the project's tags and none of its excluded tags, it has
+  no assignee, and no open PR in the project's code repo or issue repo is
+  linked to it, by the sync's rule under [Tagged issues](#tagged-issues).
+  GitHub numbers pull requests and issues alike, and a number that is a
+  pull request takes no claim. So an issue whose PR merged since the last
+  sync takes no claim, though the cache and the room don't know yet.
+- The donor isn't blocked.
+- The donor has fewer open PRs in the project than its open PRs per donor.
+  The PRs counted are the ones opened for the donor's claims in the
+  project that the [PRs](#prs) table shows open.
+- The project's vouch file doesn't denounce the donor, whoever the project
+  lets claim. When the project takes vouched donors only, the file vouches
+  for them. The file is under The vouch file below.
+- When the project has a CLA, the donor confirmed they signed it, under The
+  CLA below.
+
+`suggest_issues` checks every rule but the CLA, which the donor confirms
+when they pick, and each suggestion carries the CLA's link. `claim_issue`
+checks them all, and the issue's room then checks the slots and the PRs
+again, as the lock for the cap. The homepage's count of issues waiting, the
+issue page's claim pane, and the donor's tools use the one rule, so they
+agree.
+
+**Suggestions**
+
+- `suggest_issues` refuses a blocked donor with `donor_blocked`, and a
+  session whose budget is spent with `budget_spent`.
+- It takes every issue waiting for an agent, and leaves out the issues in
+  `exclude`, the picks waiting in the session's queue, the issues the donor
+  holds a slot on, which `start_session` offers to resume, and the projects
+  where the donor reached the open-PR cap. An issue two projects keep counts
+  once, for the project a claim would go to.
+- It ranks them against the donor's interests. An issue scores 4 when the
+  donor named its project, by `owner/name`, by the owner or the name alone,
+  or by the issue's own repo. It scores 2 when the donor named its
+  project's language, or a language that is one of its labels. It scores 1
+  more for each kind of work the donor named that a word of its title or
+  labels starts with, less a plural s, so `docs` matches `documentation`.
+  All of these compare without case. Higher scores come first, then fewer
+  claims holding a slot, then the oldest project, then the lowest issue.
+- From the top 12 it draws an order at random, with weight toward the top.
+  Each place goes to one of the issues not placed yet, each weighted by how
+  many places are left from it to the bottom of the 12: the first has
+  weight 12 and the twelfth 1. So donors asking at the same moment spread
+  out over the issues, and the best matches come up most often.
+- In that order, it checks each issue on GitHub and its project's vouch
+  file, and keeps the first 3 that pass. An issue that fails gives way to
+  the next. It checks at most 8 issues on GitHub in one call.
+- Each suggestion carries the issue's link on GitHub and its live page, its
+  project, the tag it carries, the PR mode, the CLA's link, the claims
+  holding a slot with each claimant's login now, agent, and state, the
+  slots, how many times the issue was claimed, and the tough badge. A
+  blocked donor's claim takes its slot and counts among the times claimed,
+  but isn't among the claimants, as on [the issue page](#the-issue-page).
+- An issue is tough once 3 of its claims ended without a merged PR,
+  released, expired, or with their PR closed without merging, and no PR of
+  its claims merged.
+- Suggestions take nothing from the budget.
+
+**Claiming**
+
+- `claim_issue` claims the issue given, or with none given, the next pick
+  waiting in the session's queue.
+- It refuses a blocked donor with `donor_blocked`, and an issue no project
+  on Good First Token tagged and no one claimed with `not_found`.
+- Claiming an issue the donor holds a slot on gives back that claim, marked
+  resumed, with the commit it started from. It takes no second slot, and
+  nothing from the budget.
+- Otherwise the checks run in this order, and the first to fail refuses the
+  claim: the budget, with `budget_spent`. The project, with
+  `project_not_open` for one that isn't approved, is paused, or is on the
+  do-not-list. The cached copy's tags, with `issue_not_eligible`. A PR the
+  sync or the room knows of, with `pr_exists`. A full issue, with
+  `issue_full`. The open-PR cap, with `open_pr_cap`. The CLA, with
+  `cla_required`. The code repo on GitHub, with `project_not_open` when
+  GitHub shows the donor no such repo. The vouch file, with `not_vouched`.
+  The issue on GitHub, with `issue_not_eligible` or `pr_exists`. Last, the
+  issue's room makes the claim, and can still refuse with `pr_exists` or
+  `issue_full`.
+- When several projects keep their issues in the repo, the claim goes to
+  the project the issue page follows, under [The issue page](#the-issue-page).
+- The claim's agent is the session's harness, and its login the donor's
+  login now. It is own-project work when GitHub says the donor is an admin
+  or maintainer of the project's code repo.
+- The work starts from the head commit of the code repo's default branch,
+  as GitHub gives it at the claim.
+- The answer has the claim, with the issue's link on GitHub, its live page,
+  and when the claim expires, the slots taken, the issue's text on GitHub,
+  the project's repo and settings with its notes for agents, the repo to
+  clone, the commit to start from, the queued picks passed over, the picks
+  still waiting, and what is left of the budget.
+
+**The CLA.** A claim on a project with a CLA is refused with `cla_required`
+and the CLA's link until the donor confirms they signed it, with
+`claConfirmed: true`. The confirmation is kept with the link, so the donor
+is asked once per project, and again only when the project's CLA link
+changes. It is kept once the donor confirms, even when the claim is then
+refused for another reason.
+
+**The vouch file.** A project's vouch file is `VOUCHED.td` at the root of
+its code repo's default branch, or else `.github/VOUCHED.td`, where Ghostty
+keeps its own, in the format of [vouch](https://github.com/mitchellh/vouch).
+
+- Each line names one person, with a handle, a login or `platform:login`,
+  and optional details after a space. Blank lines, and lines that start
+  with `#`, name no one.
+- A line that starts with `-` denounces that person.
+- A handle with no platform, or with `github`, names a GitHub login. A
+  handle for another platform, like `gitlab:priya`, names no one here.
+  Handles compare without case.
+- A person the file both vouches for and denounces counts as denounced.
+- A project that takes vouched donors only, with no vouch file, takes no
+  one.
+
+**The queue.** The donor can pick several suggestions. The agent claims the
+first, and passes the rest as the claim's `queue`.
+
+- The queue lives in the session, up to 20 picks, in order. A `queue` given
+  replaces the picks waiting. An issue given to claim leaves the queue.
+- A queued pick is claimed only when the agent reaches it, by calling
+  `claim_issue` with no issue. The claim's answer tells the agent to do that
+  once the claim before it is submitted or released.
+- A pick that no longer takes the donor's claim is passed over and
+  reported: it filled up, got a PR, isn't open and tagged, its project
+  stopped taking claims, or its project's vouch file or open-PR cap keeps
+  the donor out. The answer lists each one passed over with its refusal
+  code and message, and claims the next. When none is left, the refusal is
+  `not_found`, and names the picks passed over.
+- A pick whose project asks for a CLA the donor hasn't confirmed stops the
+  queue there, and stays next, so the agent can ask the donor. So does a
+  spent budget.
+- With no issue given, `claConfirmed` counts for the first pick the call
+  reaches, the one the refusal asked about. When that pick is passed over,
+  it counts for no pick behind it, whose CLA the donor hasn't seen.
+
+**The budget.** The session counts the issues claimed in it, and the time
+since it started.
+
+- A budget of issues is spent once that many new claims were made in the
+  session. A budget of time is spent once its minutes have passed.
+  `until_limit` is never spent: the session runs until the harness stops,
+  and its unfinished claims are offered at the next `start_session`.
+- Once the budget is spent, `suggest_issues` and new claims are refused with
+  `budget_spent`. The claims in progress go on as before.
+- A claim counts when it is made. Claims at the same moment never take more
+  issues than the budget has. A refused claim, and a claim given back to
+  the donor who held it, take nothing.
+
+**Posting and releasing**
+
+- `post_update` and `release_claim` find the claim by its ID in the claims
+  table, and reach it through its issue's room, under
+  [The issue room](#the-issue-room), whose answer is theirs.
+- Only the donor who made the claim can post to it or release it. Anyone
+  else is refused with `not_claim_owner`, by the `work_claim` permission,
+  and the room checks again. A claim the table doesn't have is `not_found`.
 
 ## Crawl candidates
 
@@ -1188,13 +1399,11 @@ it without case. Adding a repo again keeps its first entry.
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves five of them so far:
-`start_session`, which takes the input defined here and answers with who is
-signed in, under [Connecting an agent](#connecting-an-agent), and the
-maintainer's four tools, under
-[Registering a project](#registering-a-project) and
-[Managing a project](#managing-a-project), with the inputs, outputs, and
-descriptions defined here.
+a description for agents. The MCP server serves eleven of them so far, with
+the inputs, outputs, and descriptions defined here: the donor's seven,
+under [The donor's tools](#the-donors-tools), and the maintainer's four,
+under [Registering a project](#registering-a-project) and
+[Managing a project](#managing-a-project).
 
 | Who | Tools |
 |---|---|
@@ -1239,6 +1448,9 @@ descriptions defined here.
   of issues, a number of minutes, or `until_limit`.
 - `suggest_issues` returns at most 3 issues, and takes the ones already shown
   to leave out.
+- `claim_issue` takes an issue, or none to claim the next pick waiting in
+  the session, a `queue` of up to 20 picks, and `claConfirmed`, false
+  unless set.
 - A release needs a public reason.
 - A posted update is one line. Tabs and line breaks fold into single spaces.
   `post_update` takes an optional job, for a line a subagent posts.
@@ -1260,7 +1472,10 @@ four and `invalid_input`. The issue room returns those, and `pr_exists`,
 `not_claim_owner`, `not_maintainer`, and `not_admin`. The maintainer's tools
 return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 `listed_from_policy`, `label_not_created`, `invalid_settings`,
-`project_not_open`, `not_admin`, and `not_found`.
+`project_not_open`, `not_admin`, and `not_found`. The donor's tools return
+the room's, and `not_found`, `donor_blocked`, `budget_spent`,
+`project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`, and
+`not_vouched`.
 
 | Code | When |
 |---|---|
@@ -1270,13 +1485,14 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 | `not_submitted` | Opening a PR before the work was submitted |
 | `pr_closed` | The claim's PR merged or closed, so the claim takes no more updates or fixes |
 | `project_not_open` | The project isn't approved, or is paused. Pausing a project that isn't approved gets it too |
-| `issue_not_eligible` | The issue is closed, has no project tag, has an excluded tag, or has an assignee |
+| `issue_not_eligible` | The issue is closed, has no project tag, has an excluded tag, has an assignee, or is a pull request |
 | `pr_exists` | A PR is open on the issue, so it takes no new claims |
 | `issue_full` | Every slot on the issue is taken |
 | `donor_blocked` | An admin blocked the donor |
-| `not_vouched` | The project takes vouched donors only, and the donor isn't on its list |
+| `not_vouched` | The project's vouch file denounces the donor, or the project takes vouched donors only and its file doesn't vouch for the donor |
 | `cla_required` | The project has a CLA the donor hasn't confirmed |
 | `open_pr_cap` | The donor has as many open PRs in the project as it allows |
+| `budget_spent` | The session's budget of issues or time is spent |
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
@@ -1286,7 +1502,7 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 | `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
 | `invalid_settings` | Settings failed their checks |
 | `not_admin` | The caller isn't a Good First Token admin |
-| `not_found` | The claim, issue, project, or queue item doesn't exist |
+| `not_found` | The claim, issue, project, session, or queue item doesn't exist, or no pick is left in the session's queue |
 | `invalid_input` | A malformed claim, event, or time reached the claim state machine, or a malformed argument reached an issue room |
 
 ## Feed events
@@ -1561,7 +1777,8 @@ the video before the visitor plays it.
   project's cached copy of it carries one of the project's tags and none of
   its excluded tags, compared without case, it has no open PR, and fewer of
   its claims hold a slot than the project's claims per issue, as
-  [the issue room](#the-issue-room) counts slots.
+  [the issue room](#the-issue-room) counts slots. The issue page and the
+  donor's tools use the same rule.
 - An issue has an open PR when the last sync saw one linked to it, under
   [Tagged issues](#tagged-issues), or when a claim on it opened one, until
   the PR merges or closes, as
@@ -1629,9 +1846,8 @@ each a ring, filled while a claim takes it.
   follows. When no copy is waiting, the page follows the oldest whose copy
   would be but for a PR the sync saw linked to it, or its slots being full,
   and when none would, the oldest. An issue in no copy
-  follows the project of its latest claim. Which project a new claim
-  belongs to when several count the issue waiting is for the claim tool
-  (#15) to decide.
+  follows the project of its latest claim. `claim_issue` gives a new claim
+  to the project the page follows.
 - A claim working, paused, or awaiting review takes a slot. A claim with its
   PR open doesn't.
 - The issue takes claims while the project the page follows counts it
@@ -1732,6 +1948,7 @@ Each limit the schemas enforce, other than those under project settings:
 | Interests | 20 per list, 50 characters each | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
 | Suggestions left out with `exclude` | 100 | Us |
+| Picks waiting in a session's queue | 20 | Us |
 | Agent name | 1 to 40 lowercase letters, digits, dots, underscores, and hyphens, starting with a letter or digit | Us |
 | Model name | 100 characters | Us |
 | IDs the server gives out | 1 to 64 letters, digits, underscores, and hyphens | Us |
@@ -1863,6 +2080,11 @@ A deployment can serve them from a static host, on a hostname of its own.
   repo for the caller's permission, and registering or updating creates the
   `goodfirsttoken` label where the issues live. All of these use the
   maintainer's token.
+- The donor's tools read with the donor's own token. `start_session` reads
+  the person. `suggest_issues` and `claim_issue` read each issue they check,
+  its linked PRs the way the sync reads them, and the project's code repo:
+  its default branch's head, the donor's permission on it, and its vouch
+  file. `claim_issue` also reads the text of an issue the donor resumes.
 - Reads that act for no one run with the read-only service token, the
   `GH_SERVICE_TOKEN` secret: the sync, the PR job, and a maintainer's
   refresh. They read public data only, and never with a person's token. With

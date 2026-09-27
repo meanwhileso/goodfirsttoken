@@ -78,6 +78,9 @@ The repo is a pnpm workspace.
 - **What registering a project reads from GitHub, and the proposal's rules,
   live in `src/projects/`,** described under
   [The maintainer's tools](#the-maintainers-tools).
+- **What the donor's tools check and read, and how they order
+  suggestions, live in `src/donor/`,** described under
+  [The donor's tools](#the-donors-tools).
 
 ### Sign-in
 
@@ -162,7 +165,8 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | File | What it does |
 |---|---|
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
-| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, `start_session`, and the tools it serves, each run as the caller |
+| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and the tools it serves, each run as the caller |
+| `src/mcp/donor.ts` | The donor's tools, under [The donor's tools](#the-donors-tools) |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
@@ -317,8 +321,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   name to save and whether the repo is archived.
 - **Refusals and lost tokens.** `asCaller` in `src/mcp/server.ts` runs every
   tool. It turns a `PermissionRefused` into the tool's refusal, and a GitHub
-  `401` from any call into the end of the connection, as `start_session`
-  did alone before.
+  `401` from any call into the end of the connection.
 - **Schemas from core.** Each tool is registered with its description and
   its input and output schemas from `packages/core`. The MCP SDK checks the
   input against the schema before the tool runs, and reports each issue's
@@ -357,6 +360,107 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   status change keeps who made it and no role, so whether a pause was an
   admin's is worked out when the maintainer resumes, as
   [Managing a project](how-it-works.md#managing-a-project) says.
+
+### The donor's tools
+
+The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
+
+| File | What it does |
+|---|---|
+| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
+| `src/issue/waiting.ts` | Whether an issue takes claims, and which project's copy a claim goes to, for the issue page and `claim_issue` |
+| `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike |
+| `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
+| `src/donor/vouch.ts` | The vouch file's format |
+| `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
+
+- **One rule for which issues take claims.** The homepage counts waiting
+  issues in SQL, in `listProjectsAskingForHelp` in `src/db/projects.ts`.
+  Its rule is three SQL fragments there, `ASKING_FOR_HELP`, `HOLDING`, and
+  `WAITS`, which `listWaitingIssues` shares to list the issues
+  `suggest_issues` starts from. The issue page judges one copy with the
+  same rule in TypeScript, `closedBecause` in `src/issue/waiting.ts`, and
+  picks the project it follows with `followedCopy` there. `claim_issue`
+  calls both, so a claim goes to the project the page follows.
+- **One place for the donor's rules.** `src/donor/rules.ts` checks the
+  rules spec section 6 sets for the donor. `suggest_issues` and
+  `claim_issue` both call it, and each returns a refusal or nothing.
+- **The donor's token for every read.** `donorReader` wraps the donor's
+  token in `GitHubReader`, the interface `ServiceGitHub` has in
+  `src/sync/github.ts`, so `closingReferences` and `crossReferences`, the
+  sync's reads of linked PRs in `src/sync/issues.ts`, run with it
+  unchanged, with the sync's rule for which PRs count. It has no budget of
+  its own to keep: a donor's calls count against the donor's own rate
+  limit on GitHub, and a refusal, a `401` included, goes back as
+  GitHub's error. A GraphQL answer that says the rate limit ran out is a
+  refusal too.
+- **One query for a project's repo.** `readRepoFacts` reads the head of
+  the default branch, the donor's `viewerPermission`, and both places the
+  vouch file can be, each by an `object(expression:)` alias, in one
+  GraphQL query. The head is where the claim's work starts. `ADMIN` or
+  `MAINTAIN` makes it own-project work.
+- **An issue on GitHub** is one REST read, `GET /repos/{owner}/{repo}/issues/{n}`,
+  which gives its state, labels, assignees, and text, and says whether the
+  number is a pull request. Then one GraphQL query for its closing
+  references and the REST timeline for its mentions, as the sync reads
+  them.
+- **The vouch file's format** follows the
+  [vouch README](https://github.com/mitchellh/vouch/blob/main/README.md),
+  its parser, [`vouch/file.nu`](https://github.com/mitchellh/vouch/blob/main/vouch/file.nu),
+  and its check, `check-user` in
+  [`vouch/lib.nu`](https://github.com/mitchellh/vouch/blob/main/vouch/lib.nu),
+  read on 2026-09-27, and
+  [Ghostty's own file](https://github.com/ghostty-org/ghostty/blob/main/.github/VOUCHED.td),
+  which sets out the same syntax in its header. vouch looks for the file at
+  `VOUCHED.td`, then `.github/VOUCHED.td`, and so do we. It reads a line
+  trimmed, takes a leading `-` as a denouncement, splits the handle from
+  the details at the first space, lowers the handle, and splits a platform
+  off at the first `:`. Its check takes the first line that names the
+  person, and a line with no platform matches any platform. The files it
+  writes name each person once. We split the handle at any white space,
+  and a denouncing line counts over a vouching one, so a file that names
+  someone both ways refuses them.
+- **The CLA** is kept in `cla_confirmations`, one row per donor and project
+  with the link confirmed, which a confirmation of a new link replaces. The
+  project's settings keep the link, so a changed link no longer matches the
+  row, and the donor is asked again.
+- **The queue lives in the session,** as `donor_sessions.queue`, a JSON
+  list. `claim_issue` writes it back after it walks it: the pick it
+  claimed and the ones it passed over are gone, and a pick it stopped at
+  stays first. Two calls in one session at the same moment each write
+  their own view of it, and the last write stays.
+- **The budget holds under claims at the same moment.** `takeSessionIssue`
+  reads the session, checks core's `budgetLeft`, and counts the issue with
+  an update that lands only on the count it read, trying again up to five
+  times. The count comes before the room's claim, and goes back with
+  `returnSessionIssue` when no new claim is made. A call that dies in
+  between leaves the count one high.
+- **The random order draws every number before it returns,** in
+  `weightedOrder`, with no await between the draws, so calls at the same
+  moment never share one. `suggestIssues` takes the random source as an
+  argument, `Math.random` from the server, and the tests stub
+  `Math.random` in the Worker's isolate, which they share.
+- **Finding a claim's room.** `post_update` and `release_claim` take a claim
+  ID, and the room is named for the issue, so they read the claim from the
+  claims table first. The room saves a claim to D1 before its answer to
+  `claim_issue` goes out, unless D1 refuses the save, so a claim the agent
+  knows of is in the table.
+- **Unfinished claims** come from the claims table, advanced to now with
+  `nextClaimState`, and each is read again from its room's `snapshot`,
+  which is the source of truth when D1 lags behind.
+- **What a call costs.** `suggest_issues` makes six D1 reads: the
+  session, the donor with their interests, their block, their claims,
+  their open PRs by project, and one list of every waiting issue. Then one GitHub
+  GraphQL query for each project it checks, and for each issue it checks,
+  one REST read, one GraphQL query, and one timeline page or more, for 3
+  to 8 issues. Then one D1 read for the claims on the issues suggested,
+  one for the blocks among their claimants, and one for each claimant.
+  `claim_issue` makes the reads `findIssue` makes, a room `snapshot`, a few
+  D1 reads for the session, the donor, the budget, the open PRs, and the
+  CLA, one GraphQL query for the repo, the issue's three or more GitHub
+  reads, and the room's `claim`. The list of waiting issues reads every
+  approved project's cached issues, through `projects_by_status` and the
+  key of `tagged_issues`. Nothing caches any of it yet.
 
 ### The design system
 
@@ -515,7 +619,7 @@ that leaves their settings empty gives them empty strings, and
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
 | `TOKEN_LIMITER` | Rate limiter: 600 requests to `/oauth/token` a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
-| `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream and the scheduled jobs. The MCP tools, from #15 on |
+| `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream and page, the scheduled jobs, and the donor's tools |
 | `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer. The Worker also consumes the queue, with `feed-dlq` as its dead-letter queue | Now, by the issue room and `src/feed/queue.ts` |
@@ -568,11 +672,12 @@ in `people`.
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
 | `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
-| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, and until when a run holds it | `project` |
+| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, and its code repo's main language | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
-| `donor_sessions` | Donor session: harness, budget, start time, and issues claimed | `id` |
+| `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
+| `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, status, and the admin's decision | `id` |
 
@@ -619,6 +724,10 @@ that break the rules, so it returns the problems for the caller to show.
 - **`tagged_issues.linked_pr_found_by`** came with migration
   `0004_issue_sync.sql`, which also makes `issue_syncs`. It is a JSON list,
   null with no linked PR.
+- **Migration `0005_donor_tools.sql`** adds `donor_sessions.queue`, a JSON
+  list that starts empty, `issue_syncs.language`, and `cla_confirmations`.
+  A confirmation's project has no foreign key, like a claim's, so it
+  outlives a listing.
 
 ### Who sees what
 
@@ -630,7 +739,8 @@ rejecting a registration reaches the maintainer's agent.
 
 These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
-`donor_blocks.reason`, and `do_not_list.reason`.
+`donor_sessions.queue`, `cla_confirmations`, `donor_blocks.reason`, and
+`do_not_list.reason`.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -719,7 +829,7 @@ pruning after a sync, with no index of its own.
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync, and the copies of an issue the sync checks before a room forgets its PR |
 | `project_status_changes_by_repo` | A project's status changes, newest first |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
-| `claims_by_person` | One person's claims, newest first: `my_work`, their page, and their leaderboard row |
+| `claims_by_person` | One person's claims, newest first: `my_work`, the claims `start_session` offers to resume, a donor's open PRs by project, their page, and their leaderboard row |
 | `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project. Its claims working now, for `project_status` |
 | `prs_by_number` | A PR's claim, and one claim per PR |
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
@@ -1112,6 +1222,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 | `src/issue/data.ts` | `getIssuePage`, the server function the route's loader calls |
 | `src/issue/load.ts` | `loadIssue`, which reads what the page shows, on the server only |
 | `src/issue/find.ts` | `findIssue`, which says whether an issue is on the site, for the page and the issue's stream |
+| `src/issue/waiting.ts` | Whether a project's copy of the issue takes claims, and the copy the page follows, for the page and `claim_issue` |
 | `src/issue/path.ts` | `issueFromPath`, the issue a page's path names, for the server and the 404 page |
 | `src/issue/view.ts` | The lanes, slots, timeline, and open PRs, folded from the room's events, for the server and the page alike |
 | `src/styles/issue-page.css` | The page's layout |
@@ -1153,13 +1264,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   is made. The one difference is the path, under The site's own paths.
 - **Whether it takes claims** follows the homepage's rule for an issue
   waiting for an agent, in `listProjectsAskingForHelp`. `closedBecause` in
-  `src/issue/load.ts` judges each copy with its own project, less the open
-  PRs and the free slot, which the page follows live: an approved project,
-  not on the do-not-list, and a cached copy with one of its tags and none of
-  its excluded ones, folding ASCII letters as SQLite's `lower()` does. `read`
-  then picks the copy the page follows, as how-it-works says, checking the
-  slots taken against each copy's own claims per issue. That copy's linked
-  PR joins the room's open PRs.
+  `src/issue/waiting.ts` judges each copy with its own project, less the
+  open PRs and the free slot, which the page follows live: an approved
+  project, not on the do-not-list, and a cached copy with one of its tags
+  and none of its excluded ones, folding ASCII letters as SQLite's `lower()`
+  does. `followedCopy` there then picks the copy the page follows, as
+  how-it-works says, checking the slots taken against each copy's own
+  claims per issue. That copy's linked PR joins the room's open PRs.
+  `claim_issue` makes the same two calls.
 - **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
   OAuth routes before any page or stream. The page also answers `404` for
   `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in
@@ -1300,6 +1412,10 @@ read-only service token. The rules are in
   project. The read of each repo before a pass gives its `full_name` as
   GitHub has it now, which the pass adds to the names a PR's repo can match,
   so a rename doesn't drop the project's PRs.
+- **The code repo's language.** The read of the code repo before a pass
+  gives its `language`, which `setProjectLanguage` keeps in
+  `issue_syncs.language` for ranking suggestions. It costs no call of its
+  own.
 - **Delisting** uses `setProjectStatusFrom`, the compare-and-set #55 added,
   with `changed_by` null, which the maintainer's `pause_project` reads as a
   pause only an admin can lift. It tries three times, and stops as soon as
@@ -1603,7 +1719,9 @@ and Playwright run it as a local HTTP server.
 - **The sample data** in `src/sample-data.ts` takes the shapes of the
   prototype's: donors and maintainers, a project with tagged issues, one
   with nothing tagged, a popular repo that invites contributions, and a
-  registration waiting for an admin. It is the one place later issues add
+  registration waiting for an admin. `sample-owner/sample-desktop` keeps a
+  vouch file at `.github/VOUCHED.td`, in the format Ghostty uses, which the
+  fake serves like any file. It is the one place later issues add
   to. Every account and repo in it is made up, under `sample-owner`, except
   this project's own repo. That repo's sample issues and PRs are numbered
   from 900 up, clear of its real ones.
@@ -1691,7 +1809,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **MCP tests** connect agents with the MCP client SDK, as a harness does,
   and drive the person's side with the same small browser, against the whole
   Worker and the GitHub fake. They read the `OAUTH_KV` namespace directly to
-  check what it holds. They live in `apps/web/test/mcp/`.
+  check what it holds. They live in `apps/web/test/mcp/`. The donor's tools'
+  tests give each test's issues numbers of their own, as the sync tests do,
+  since rooms keep their storage across a file, and stub `Math.random` to
+  fix the random order. The vouch file's format and the random order are
+  also tested alone, in `apps/web/test/donor/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. The web server applies the D1 migrations first. They live in
