@@ -176,8 +176,10 @@ they are served.
 - Claiming an issue you already hold gives back that claim, with the commit
   it started from, and takes no second slot.
 - A new claim is `active`, with an ID the room makes and no token estimate.
-- Every spelling of an issue reaches the same room, since repo names compare
-  without case.
+- Each room is named for its issue in lower case. Repo names compare
+  without case, so every spelling of an issue reaches the same room. A room
+  refuses a claim on any other issue with `invalid_input`, its first claim
+  included, so all of an issue's claims share one cap.
 - A malformed argument to the room, like a claim with no full commit SHA, is
   refused with `invalid_input`, naming the field, and nothing changes.
 
@@ -207,33 +209,56 @@ job, or a release reason, it replaces each of these with `[redacted]`:
 - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` followed by 20
   or more letters and digits, and `github_pat_` followed by 20 or more
   letters, digits, and underscores.
+- GitLab tokens: `glpat-` followed by 20 or more letters, digits,
+  underscores, and hyphens.
 - `sk-` followed by 20 or more letters, digits, underscores, and hyphens,
   the form of OpenAI and Anthropic keys.
 - Stripe keys: `sk_live_`, `sk_test_`, `rk_live_`, or `rk_test_` followed by
-  16 or more letters and digits.
+  16 or more letters and digits. Stripe webhook secrets: `whsec_` followed by
+  20 or more letters, digits, `+`, `/`, and `=`.
 - AWS access key IDs: `AKIA` or `ASIA` followed by 16 capital letters and
   digits.
-- Google API keys: `AIza` followed by 35 letters, digits, underscores, and
-  hyphens.
-- Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxo-`, `xoxp-`, `xoxr-`, or
-  `xoxs-` followed by 10 or more letters, digits, and hyphens.
+- Google: API keys, `AIza` followed by 35 letters, digits, underscores, and
+  hyphens. OAuth client secrets, `GOCSPX-` followed by 20 or more of those.
+  OAuth access tokens, `ya29.` followed by 20 or more of those.
+- Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxo-`, `xoxp-`, `xoxr-`,
+  `xoxs-`, or `xapp-` followed by 10 or more letters, digits, and hyphens.
+- Hugging Face tokens: `hf_` followed by 30 or more letters and digits.
 - npm tokens: `npm_` followed by 36 letters and digits.
+- SendGrid keys: `SG.`, 16 or more letters, digits, underscores, and
+  hyphens, a dot, and 16 or more of those.
 - JSON Web Tokens: `eyJ` and 8 or more base64url characters, a dot, `eyJ`
   and 8 or more, a dot, and 8 or more.
-- A private key's `-----BEGIN ... PRIVATE KEY-----` line and everything
-  after it.
-- The credentials after `Bearer` or `Basic`, ignoring case, when they are
-  16 or more characters. The word before them stays.
+- A private key's `-----BEGIN ... PRIVATE KEY-----` or
+  `-----BEGIN PGP PRIVATE KEY BLOCK-----` line, and everything after it to
+  the end of the text.
+- The credentials in an Authorization header: after `Authorization`, `:` or
+  `=`, and `Bearer`, `Basic`, or `token`, ignoring case, 16 or more
+  characters. Everything before them stays. `Bearer` or `Basic` without the
+  header name is ordinary text, as in
+  `added basic src/components/Button.test.tsx coverage`.
 - The password in a link, like `https://user:password@host`. The user and
   the host stay.
-- A value of 8 or more characters after `=` or `:`, when the name before it
-  ends in `token`, `secret`, `password`, `passwd`, `apikey`, `api_key`,
-  `api-key`, `_key`, or `-key`, ignoring case. That covers
-  `GITHUB_TOKEN=...`, `"password": "..."`, and `?token=...` in a link. The
-  name stays, and a shorter value stays, so `token: 3 failing` reads as it
-  was written.
+- The path of a Slack webhook link after `hooks.slack.com/services/`,
+  `/workflows/`, or `/triggers/`, and the ID and token of a Discord webhook
+  link after `discord.com/api/webhooks/`. The host stays.
+- A value given to a name with `=` or `:`, or after a flag like `--password`
+  and a space, when the name says the value is secret. Case is ignored.
+  - A name that ends in `password`, `passwd`, or `secret`, like `DB_PASSWD`
+    or `client_secret`: any value of 6 or more characters.
+  - A name that ends in `token`, or in `apikey`, `accesskey`, `secretkey`,
+    `privatekey`, `signingkey`, or `encryptionkey` with or without `_` or
+    `-` before `key`, like `GITHUB_TOKEN`, `apiKey`, `secretAccessKey`, or
+    `AWS_SECRET_ACCESS_KEY`: a value of 8 or more characters with at least
+    one letter and one digit. These names also label ordinary values, like
+    `expected token: STRING_LITERAL` from a parser, which stay.
+  - The name stays, as in `?token=[redacted]` in a link. Other names, like
+    `sort_key` or `cache-key`, keep their values.
 
-Everything else stays as it was, like paths, links, and commit SHAs. A
+A password stuck to `-p`, the way `mysql -psecret` takes one, is not
+replaced, since the same form is ordinary in commands like `mkdir -pv`.
+Text that matches none of these stays as it was, like
+`sort_key: created_at_desc`, `token: 3 failing`, and commit SHAs. A
 replacement can be longer than what it replaces, so after the replacements,
 a post, a job, or a reason longer than its limit is cut to the limit.
 
@@ -244,6 +269,8 @@ a post, a job, or a reason longer than its limit is cut to the limit.
   a deadline moves on, and the room announces the change.
 - Every call to the room applies the timers that are due before anything
   else, so a late alarm never changes an answer.
+- A pause or an expiry is recorded at its deadline, even when the alarm or
+  call that applies it comes later.
 - A room with no claim left to pause or expire, and nothing waiting to save,
   sets no alarm.
 
@@ -251,8 +278,10 @@ a post, a job, or a reason longer than its limit is cut to the limit.
 
 - Only the claimant can submit, open the PR, or release. The rules for each
   are under [Claims](#claims).
-- A submit can carry the tokens its work took. The claim's token estimate is
-  the sum over its submits, and stays null until a submit carries one.
+- A submit can carry the tokens spent on the claim since its last submit, or
+  since it was made, as the harness estimated them. The claim's token
+  estimate is the sum over its submits, and stays null until a submit
+  carries one.
 - Opening the claim's PR links it to the issue, so the issue takes no new
   claims from then on.
 
@@ -290,11 +319,19 @@ history survives a restart.
 
 **Saving to the database**
 
-- Each change to a claim is saved to the claims table with a revision one
-  higher than the last, so the table follows every change.
-- A save that fails is tried again a minute later, at the claim's latest
-  revision, until it lands. A claimant has to be recorded under
-  [People](#people) for their claim to save.
+- Each change to a claim raises its revision by one. Right after the
+  change, the room saves the claim to the claims table at that revision,
+  unless an earlier save of the claim failed and waits for its next try.
+- A save that fails is tried again a minute later, then after 2, 4, 8, 16,
+  and 32 minutes, then every hour. Each try sends the claim as it is then,
+  so when the claim changed during the wait, only its latest version
+  reaches the table, and the versions in between never do. A claim waiting
+  for its next try is left alone by other calls to the room.
+- A save that has failed for a day is given up, with one error in the log
+  that names the claim. The table keeps an older version of the claim, or
+  none, until the claim changes again, which starts the tries over.
+- A claimant has to be recorded under [People](#people) for their claim to
+  save.
 - The room stores claim facts and public events only. It takes who is
   asking as a GitHub ID, and no token ever reaches it.
 

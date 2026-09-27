@@ -48,10 +48,18 @@ import { newId } from '../db/shared';
 // write it guards, which is what makes the claim cap hold under simultaneous
 // claims. Saving to D1 and setting the next alarm come after.
 
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
 /** The shortest time between two posts on one claim. */
 export const POST_INTERVAL_MS = 10_000;
-/** How soon a save to D1 that failed is tried again. */
-export const MIRROR_RETRY_MS = 60_000;
+/** How soon a save to D1 that failed is first tried again. Each later wait is twice as long. */
+export const SAVE_RETRY_FIRST_MS = MINUTE;
+/** The longest wait between two tries of a save. */
+export const SAVE_RETRY_MAX_MS = HOUR;
+/** How long a save can keep failing before the room gives up on it. */
+export const SAVE_GIVE_UP_MS = DAY;
 
 /** A claim to make, from the tool that checked the issue and the donor first. */
 export interface ClaimRequest {
@@ -119,7 +127,11 @@ const SCHEMA = `
     record TEXT NOT NULL,
     revision INTEGER NOT NULL,
     mirrored INTEGER NOT NULL,
-    last_post_at INTEGER
+    last_post_at INTEGER,
+    save_failures INTEGER NOT NULL DEFAULT 0,
+    save_after INTEGER NOT NULL DEFAULT 0,
+    failing_since INTEGER,
+    gave_up INTEGER
   ) STRICT;
   CREATE TABLE IF NOT EXISTS issue_prs (
     repo TEXT NOT NULL COLLATE NOCASE,
@@ -130,19 +142,34 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, event TEXT NOT NULL) STRICT;
 `;
 
+const CLAIM_COLUMNS = 'id, record, revision, mirrored, last_post_at, save_failures, save_after, failing_since, gave_up';
+
 type ClaimRow = {
   id: string;
   record: string;
   revision: number;
   mirrored: number;
   last_post_at: number | null;
+  save_failures: number;
+  save_after: number;
+  failing_since: number | null;
+  gave_up: number | null;
 };
 
 interface StoredClaim {
   record: ClaimRecord;
   revision: number;
+  /** The highest revision D1 is known to hold. */
   mirrored: number;
   lastPostAt: number | null;
+  /** Failed tries to save the claim since the last one that landed. */
+  saveFailures: number;
+  /** No save of the claim is tried before this time. */
+  saveAfter: number;
+  /** When the first of those failed tries was, or null. */
+  failingSince: number | null;
+  /** The revision the room gave up saving at, or null. */
+  gaveUp: number | null;
 }
 
 type PrRow = { repo: string; number: number; url: string };
@@ -296,8 +323,9 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * Records that the claimant submitted the work. `tokenEstimate` is the
-   * tokens this submit's work took, as the harness estimated them. The
-   * claim's estimate is the sum over its submits.
+   * tokens spent on the claim since its last submit, or since it was made,
+   * as the harness estimated them. The claim's estimate is the sum over its
+   * submits.
    */
   async submit(request: { claimId: string; githubId: number; tokenEstimate?: number | null }): Promise<ChangeResult> {
     return this.guard(() => {
@@ -466,7 +494,7 @@ export class IssueRoom extends DurableObject<Env> {
 
   /** Finishes a request: saves to D1 what is waiting, sets the next alarm, and returns `result`. */
   private async done<T>(now: number, result: T): Promise<T> {
-    await this.mirror();
+    await this.mirror(now);
     await this.schedule(now);
     return result;
   }
@@ -485,19 +513,21 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * The room's issue. The first claim sets it, and a claim on another issue
-   * is a caller's mistake, since each issue has its own room.
+   * The room's issue. The first claim sets it, and keeps the issue's spelling
+   * for events. The issue must be the one the room is named for, in lower
+   * case, as `issueRoom` names it. Otherwise one issue could have claims in
+   * two rooms, and two caps.
    */
   private takeIssue(issue: string): string {
+    const name = this.ctx.id.name;
     const held = this.issue();
-    if (held === null) {
-      this.sql.exec("INSERT INTO facts (key, value) VALUES ('issue', ?)", issue);
-      return issue;
+    if (name !== issue.toLowerCase()) {
+      const room = held ?? name ?? 'an issue, with no name';
+      throw new BadInput(`issue: this is the room for ${room}, and ${issue} has a room of its own`);
     }
-    if (held.toLowerCase() !== issue.toLowerCase()) {
-      throw new BadInput(`issue: this is the room for ${held}, and ${issue} has a room of its own`);
-    }
-    return held;
+    if (held !== null) return held;
+    this.sql.exec("INSERT INTO facts (key, value) VALUES ('issue', ?)", issue);
+    return issue;
   }
 
   private issue(): string | null {
@@ -515,11 +545,15 @@ export class IssueRoom extends DurableObject<Env> {
     for (const { record } of this.readClaims()) {
       const after = nextClaimState(record, { kind: 'tick' }, now).claim;
       if (after.state === record.state) continue;
+      // The event carries the deadline, which a late alarm has passed.
+      const { pausesAt, expiresAt } = claimDeadlines(record);
       this.save(after);
-      if (after.state === 'paused') this.emit(after, 'paused', 'paused: no update for 30 minutes', null, now);
+      if (after.state === 'paused') {
+        this.emit(after, 'paused', 'paused: no update for 30 minutes', null, pausesAt ?? now);
+      }
       if (after.state === 'expired') {
         const why = after.submittedAt === null ? 'no submit within 24 hours' : 'no PR within 7 days of the submit';
-        this.emit(after, 'expired', `expired: ${why}`, null, now);
+        this.emit(after, 'expired', `expired: ${why}`, null, expiresAt ?? now);
       }
     }
   }
@@ -576,16 +610,11 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   private readClaims(): StoredClaim[] {
-    return this.sql
-      .exec<ClaimRow>('SELECT id, record, revision, mirrored, last_post_at FROM claims ORDER BY seq')
-      .toArray()
-      .map(toStored);
+    return this.sql.exec<ClaimRow>(`SELECT ${CLAIM_COLUMNS} FROM claims ORDER BY seq`).toArray().map(toStored);
   }
 
   private readClaim(claimId: string): StoredClaim | null {
-    const [row] = this.sql
-      .exec<ClaimRow>('SELECT id, record, revision, mirrored, last_post_at FROM claims WHERE id = ?', claimId)
-      .toArray();
+    const [row] = this.sql.exec<ClaimRow>(`SELECT ${CLAIM_COLUMNS} FROM claims WHERE id = ?`, claimId).toArray();
     return row ? toStored(row) : null;
   }
 
@@ -606,35 +635,88 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * Saves each claim D1 doesn't have at its latest revision. A save that
-   * fails is sent again, with the same revision unless the claim changed
-   * since. A save D1 calls stale means it already has that revision or a
-   * later one.
+   * Tries to save each claim whose save is due to D1, at its latest
+   * revision. A save D1 calls stale means it already has that revision or a
+   * later one. A claim whose save waits for a retry is left alone, so a
+   * failing save never slows other calls.
    */
-  private async mirror(): Promise<void> {
+  private async mirror(now: number): Promise<void> {
     for (const stored of this.readClaims()) {
-      if (stored.mirrored >= stored.revision) continue;
+      if (!savePending(stored) || stored.saveAfter > now) continue;
+      const claimId = stored.record.id;
+      // Other calls leave the claim alone while this try is out.
+      this.sql.exec('UPDATE claims SET save_after = ? WHERE id = ?', now + SAVE_RETRY_FIRST_MS, claimId);
       try {
         await saveClaim(this.env.DB, stored.record, stored.revision);
-        this.sql.exec('UPDATE claims SET mirrored = MAX(mirrored, ?) WHERE id = ?', stored.revision, stored.record.id);
+        this.sql.exec(
+          `UPDATE claims SET mirrored = MAX(mirrored, ?), save_failures = 0, save_after = 0, failing_since = NULL,
+             gave_up = NULL WHERE id = ?`,
+          stored.revision,
+          claimId,
+        );
       } catch (error) {
-        console.error(`Claim ${stored.record.id} was not saved to D1. The room will try again.`, error);
+        this.saveFailed(stored, now, error);
       }
     }
   }
 
-  /** Sets the alarm for the next timer on any claim, or a retry of a save that failed. */
+  /**
+   * Plans the next try of a save that failed: after a minute, then twice as
+   * long each time, up to an hour. A save that has failed for a day is given
+   * up, with one error in the log, until the claim changes again.
+   */
+  private saveFailed(stored: StoredClaim, now: number, error: unknown): void {
+    const claimId = stored.record.id;
+    // A try after the room gave up starts the count over.
+    const restarted = stored.gaveUp !== null;
+    const failures = (restarted ? 0 : stored.saveFailures) + 1;
+    const since = restarted ? now : (stored.failingSince ?? now);
+    console.warn(`Claim ${claimId} was not saved to D1 at revision ${String(stored.revision)}.`, error);
+    if (now - since >= SAVE_GIVE_UP_MS) {
+      this.sql.exec(
+        'UPDATE claims SET save_failures = ?, failing_since = ?, save_after = 0, gave_up = ? WHERE id = ?',
+        failures,
+        since,
+        stored.revision,
+        claimId,
+      );
+      console.error(
+        `Claim ${claimId}: the room gave up saving it to D1 after ${String(failures)} tries over a day. ` +
+          `D1 keeps an older version of the claim, or none, until the claim changes again.`,
+        error,
+      );
+      return;
+    }
+    const wait = Math.min(SAVE_RETRY_FIRST_MS * 2 ** (failures - 1), SAVE_RETRY_MAX_MS);
+    this.sql.exec(
+      'UPDATE claims SET save_failures = ?, failing_since = ?, save_after = ? WHERE id = ?',
+      failures,
+      since,
+      now + wait,
+      claimId,
+    );
+  }
+
+  /** Sets the alarm for the next timer on any claim, or the next try of a save. */
   private async schedule(now: number): Promise<void> {
     const times: number[] = [];
     for (const stored of this.readClaims()) {
       const { pausesAt, expiresAt } = claimDeadlines(stored.record);
       if (pausesAt !== null) times.push(pausesAt);
       if (expiresAt !== null) times.push(expiresAt);
-      if (stored.mirrored < stored.revision) times.push(now + MIRROR_RETRY_MS);
+      if (savePending(stored)) times.push(Math.max(stored.saveAfter, now));
     }
     if (times.length === 0) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...times));
   }
+}
+
+/**
+ * Whether D1 lacks the claim's latest revision, and the room still tries to
+ * save it: it hasn't given up, or the claim changed since it did.
+ */
+function savePending(stored: StoredClaim): boolean {
+  return stored.mirrored < stored.revision && (stored.gaveUp === null || stored.revision > stored.gaveUp);
 }
 
 function toStored(row: ClaimRow): StoredClaim {
@@ -643,5 +725,9 @@ function toStored(row: ClaimRow): StoredClaim {
     revision: row.revision,
     mirrored: row.mirrored,
     lastPostAt: row.last_post_at,
+    saveFailures: row.save_failures,
+    saveAfter: row.save_after,
+    failingSince: row.failing_since,
+    gaveUp: row.gave_up,
   };
 }

@@ -395,18 +395,18 @@ migration that has run on a deployed database never changes.
 `IssueRoom` in `apps/web/src/rooms/issue-room.ts` is a Durable Object, one
 per issue, that holds the issue's claims. Its rules are in
 [how-it-works.md](how-it-works.md#the-issue-room).
-`issueRoom(namespace, issue)` finds the room for an issue by name, the issue
-in lower case, so every spelling of a repo reaches one room.
+`issueRoom(namespace, issue)` gets the room with `getByName`, named for the
+issue in lower case. Inside, `ctx.id.name` holds that name, and a claim's
+issue is checked against it.
 
 **Its interface** is RPC methods on the stub, for the MCP tools to call:
 `claim`, `postUpdate`, `submit`, `openPr`, `release`, `prOpened`, `prClosed`,
 `snapshot`, and `history`. `fetch` takes a WebSocket upgrade for a watcher,
 with `?since=<event ID>`. Who is asking comes in as a numeric GitHub ID. A
-refusal comes back as `{ ok: false, refusal }` with a code from core. A
-malformed argument gets an `invalid_input` refusal that names the field,
-before anything changes. A throw would reach the caller too, but the runtime
-also reports an error thrown in a Durable Object as uncaught, and Vitest
-fails a run that has one.
+refusal comes back as `{ ok: false, refusal }` with a code from core, a
+malformed argument included. The runtime reports an error thrown in a
+Durable Object as uncaught, even when the caller catches it, and Vitest
+fails a run that has one, so the methods throw only for a bug.
 
 **How it is the lock.** A Durable Object runs one call at a time until the
 call awaits something outside its own storage. SQLite calls in a Durable
@@ -421,27 +421,35 @@ it fails.
 
 | Table | One row per |
 |---|---|
-| `facts` | Fact about the room. Today only `issue`, the issue it holds, set by the first claim. |
-| `claims` | Claim, as JSON checked with `claimRecordSchema` on every read and write, its revision, the highest revision D1 is known to hold, and its last post time for the 10-second rule |
+| `facts` | Fact about the room. Today only `issue`, the issue it holds, as the first claim spelled it. |
+| `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, the time before which no try is made, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
 | `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
 
 The tables are made with `CREATE TABLE IF NOT EXISTS` when the object starts.
-A later change to them needs a step that moves the rows it has.
+A later change to them needs a step that moves the rows it has. So does a
+change to `claimRecordSchema` or `feedEventSchema`: the room checks every
+stored claim and event against them when it reads one, so a new required
+field would make every room that holds an older row throw, its alarm
+included. Such a change needs a step that rewrites the stored rows first.
 
-**Timers.** One alarm per room, set after every call to the earliest pause or
-expiry of any claim, from core's `claimDeadlines`, or a minute ahead when a
-save to D1 failed. The alarm applies the timers and saves what is waiting.
-Every call applies due timers first too, so a late alarm changes no answer.
+**Timers.** One alarm per room, set again at the end of every call. The
+alarm runs the same steps as a call: apply the due timers, then save what is
+due. When it is set for, and what the timers do, is under
+[the issue room's timers](how-it-works.md#the-issue-room).
 
-**Saving to D1.** After its writes, each call saves every claim whose
-revision D1 doesn't hold yet with `saveClaim`, and marks the revision saved
-when it lands or D1 calls it stale. A save that throws is left for the next
-call or the alarm.
+**Saving to D1.** After its writes, each call tries every claim whose save
+is due with `saveClaim`, and marks the revision saved when it lands or D1
+calls it stale. Before the await, it moves the claim's next-try time a
+minute ahead, so a second call leaves the claim alone while the first
+call's try is out. A failed try sets the next-try time from the count of
+failed tries. The retry and give-up rules are under
+[Saving to the database](how-it-works.md#the-issue-room).
 
 **Watchers** use the hibernation API: the room accepts each socket with
-`ctx.acceptWebSocket`, and finds them again with `ctx.getWebSockets`, so a
-room can be evicted with watchers connected. A new watcher is sent the
+`ctx.acceptWebSocket`, and finds them again with `ctx.getWebSockets`. What
+that means for a watcher is under
+[Watchers](how-it-works.md#the-issue-room). A new watcher is sent the
 history it asked for before the upgrade answer goes back, with no await in
 between, so no event can fall between its history and the live ones.
 

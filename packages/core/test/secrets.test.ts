@@ -7,6 +7,7 @@ function chars(length: number, alphabet = 'aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0z'): st
   return alphabet.repeat(Math.ceil(length / alphabet.length)).slice(0, length);
 }
 const upper = (length: number) => chars(length, 'AB3DE5GH7JK9MN1PQ2RS4TU6VW8XY0Z');
+const hex = (length: number) => chars(length, '0123456789abcdef');
 // A PEM key's BEGIN line, with its dashes added at run time for the same reason.
 const begin = (kind: string) => `${'-'.repeat(5)}BEGIN ${kind}${'-'.repeat(5)}`;
 
@@ -28,6 +29,13 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
     ['a Slack token (xoxb-)', `xoxb-1234567890-${chars(24)}`],
     ['an npm token (npm_)', `npm_${chars(36)}`],
     ['a JSON Web Token', `eyJ${chars(20)}.eyJ${chars(30)}.${chars(43)}`],
+    ['a GitLab token (glpat-)', `glpat-${chars(20)}`],
+    ['a Hugging Face token (hf_)', `hf_${chars(34)}`],
+    ['a Slack app token (xapp-)', `xapp-1-${upper(11)}-1234567890-${chars(64)}`],
+    ['a Stripe webhook secret (whsec_)', `whsec_${chars(32)}`],
+    ['a Google OAuth client secret (GOCSPX-)', `GOCSPX-${chars(28)}`],
+    ['a Google OAuth access token (ya29.)', `ya29.${chars(60)}`],
+    ['a SendGrid key (SG.)', `SG.${chars(22)}.${chars(43)}`],
   ];
 
   test.each(cases)('%s', (_, secret) => {
@@ -36,16 +44,30 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
     );
   });
 
-  test('a private key is cut from its BEGIN line to the end of the line', () => {
+  test('a private key is cut from its BEGIN line to the end of the text', () => {
     expect(stripSecrets(`pasted ${begin('RSA PRIVATE KEY')} MII${chars(60)}`)).toBe('pasted [redacted]');
-    expect(stripSecrets(`key: ${begin('PRIVATE KEY')}${chars(20)}`)).toBe('key: [redacted]');
+    expect(stripSecrets(`key: ${begin('PRIVATE KEY')}${chars(20)}\nand the next line`)).toBe('key: [redacted]');
+    expect(stripSecrets(`pasted ${begin('PGP PRIVATE KEY BLOCK')} ${chars(60)}`)).toBe('pasted [redacted]');
   });
 
   test('the credentials of an Authorization header, keeping the scheme', () => {
     expect(stripSecrets(`curl -H "Authorization: Bearer ${chars(40)}" passed`)).toBe(
       'curl -H "Authorization: Bearer [redacted]" passed',
     );
-    expect(stripSecrets(`sent basic ${chars(24)}== to the API`)).toBe('sent basic [redacted] to the API');
+    expect(stripSecrets(`sent Authorization: Basic ${chars(24)}== to the API`)).toBe(
+      'sent Authorization: Basic [redacted] to the API',
+    );
+    expect(stripSecrets(`Authorization: token ${hex(40)}`)).toBe('Authorization: token [redacted]');
+    expect(stripSecrets(`{"authorization": "Bearer ${chars(30)}"}`)).toBe('{"authorization": "Bearer [redacted]"}');
+  });
+
+  test('the secret part of a Slack or Discord webhook link, keeping the host', () => {
+    expect(stripSecrets(`posted to https://hooks.slack.com/services/${upper(9)}/${upper(11)}/${chars(24)} ok`)).toBe(
+      'posted to https://hooks.slack.com/services/[redacted] ok',
+    );
+    expect(stripSecrets(`https://discord.com/api/webhooks/${'1234567890'.repeat(2)}/${chars(68)}`)).toBe(
+      'https://discord.com/api/webhooks/[redacted]',
+    );
   });
 
   test('the password in a link, keeping the user and the host', () => {
@@ -54,9 +76,14 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
     );
   });
 
-  test('a value given to a name that ends in token, secret, password, api key, or _key', () => {
+  test('a value given to a name for a password, a secret, a token, or a key', () => {
     const value = chars(20);
     const lines: [string, string][] = [
+      [`secretKey: "${value}"`, 'secretKey: "[redacted]"'],
+      [`secretAccessKey=${value}`, 'secretAccessKey=[redacted]'],
+      [`privateKey = '${value}'`, "privateKey = '[redacted]'"],
+      [`signingKey: ${value}`, 'signingKey: [redacted]'],
+      ['password: hunter2', 'password: [redacted]'],
       [`set GITHUB_TOKEN=${value} in .env`, 'set GITHUB_TOKEN=[redacted] in .env'],
       [`{"password": "${value}"}`, '{"password": "[redacted]"}'],
       [`AWS_SECRET_ACCESS_KEY: ${value}`, 'AWS_SECRET_ACCESS_KEY: [redacted]'],
@@ -67,6 +94,12 @@ describe('keys and tokens in a posted line are replaced with [redacted]', () => 
       [`called /auth/cb?token=${value}&page=2`, 'called /auth/cb?token=[redacted]&page=2'],
     ];
     for (const [line, stripped] of lines) expect(stripSecrets(line)).toBe(stripped);
+  });
+
+  test('a value after a --password, --secret, or --token flag and a space', () => {
+    expect(stripSecrets(`ran deploy --password ${chars(12)} --verbose`)).toBe('ran deploy --password [redacted] --verbose');
+    expect(stripSecrets(`ran the CLI with --token ${chars(20)}`)).toBe('ran the CLI with --token [redacted]');
+    expect(stripSecrets(`--client-secret\t${chars(10)}`)).toBe('--client-secret\t[redacted]');
   });
 
   test('every secret in a line is replaced', () => {
@@ -89,6 +122,15 @@ describe('ordinary lines pass through as they were', () => {
     'Bearer auth now reads the header (src/auth.ts)',
     'cloned https://github.com/sample-owner/sample-app.git',
     'wrote failing test: /live.ndjson returns one JSON object per line',
+    'added basic src/components/Button.test.tsx coverage',
+    'sort_key: created_at_desc',
+    'cache-key=build-output-v2',
+    'expected token: STRING_LITERAL',
+    'apiKey: process.env.API_KEY',
+    'added a --password flag to the CLI',
+    // A password stuck to -p, as mysql -psecret takes it, is left, since the
+    // same form is ordinary in commands like this one.
+    'ran mkdir -pv build/output before the tests',
   ])('%s', (line) => {
     expect(stripSecrets(line)).toBe(line);
   });

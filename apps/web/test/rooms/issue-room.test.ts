@@ -48,6 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function at(time: number): void {
@@ -191,6 +192,36 @@ describe('the claim cap', () => {
     const kinds = (await room.snapshot()).claims.map((c) => c.state);
     expect(kinds).toEqual(['expired', 'expired', 'expired', 'active']);
   });
+
+  test('a paused claim keeps its slot until it expires, 24 hours after it was made', async () => {
+    await claim(priya);
+    await claim(kenji);
+    await claim(ana);
+    at(t0 + 30 * MINUTE);
+    await runDurableObjectAlarm(room);
+
+    at(t0 + DAY - 1);
+    expect(await room.claim(request(ravi))).toMatchObject({ ok: false, refusal: { code: 'issue_full' } });
+    expect((await room.snapshot()).claims.map((c) => c.state)).toEqual(['paused', 'paused', 'paused']);
+
+    at(t0 + DAY);
+    expect(await room.claim(request(ravi))).toMatchObject({ ok: true, slotsTaken: 1 });
+  });
+
+  test("a room refuses a claim on another issue, even as its first claim, so each issue's cap holds", async () => {
+    const other = `${repo}#${String(issueNumber + 5000)}`;
+
+    const wrongRoom = await room.claim(request(priya, { issue: other }));
+
+    expect(wrongRoom).toMatchObject({ ok: false, refusal: { code: 'invalid_input' } });
+    expect(!wrongRoom.ok && wrongRoom.refusal.message).toContain(`issue: this is the room for ${issue}`);
+    expect(await room.snapshot()).toEqual({ issue: null, claims: [], prs: [] });
+    const rightRoom = issueRoom(env.ISSUE_ROOM, other);
+    const results = [];
+    for (const person of [priya, kenji, ana, ravi]) results.push(await rightRoom.claim(request(person, { issue: other })));
+    expect(results.map((r) => r.ok)).toEqual([true, true, true, false]);
+    expect(await listIssueClaims(db, other)).toHaveLength(3);
+  });
 });
 
 describe('a new claim', () => {
@@ -220,16 +251,6 @@ describe('a new claim', () => {
     const result = await shouted.claim(request(kenji, { issue: issue.toUpperCase(), slots: 1 }));
 
     expect(result).toMatchObject({ ok: false, refusal: { code: 'issue_full' } });
-  });
-
-  test('a room takes claims on its own issue only', async () => {
-    await claim(priya);
-
-    const result = await room.claim(request(kenji, { issue: `${repo}#1` }));
-
-    expect(result).toMatchObject({ ok: false, refusal: { code: 'invalid_input' } });
-    expect(!result.ok && result.refusal.message).toContain(`issue: this is the room for ${issue}`);
-    expect((await room.snapshot()).claims).toHaveLength(1);
   });
 
   test('a malformed argument is refused with the field named, and changes nothing', async () => {
@@ -392,6 +413,27 @@ describe('expiry', () => {
       kind: 'expired',
       text: 'expired: no PR within 7 days of the submit',
     });
+  });
+
+  test('a late alarm records each pause and expiry at its deadline', async () => {
+    const priyas = await claim(priya);
+    at(t0 + 5 * MINUTE);
+    const kenjis = await claim(kenji);
+    at(t0 + 10 * MINUTE);
+    await post(kenjis, 'reading the issue');
+
+    at(t0 + 2 * HOUR);
+    await runDurableObjectAlarm(room);
+    at(t0 + 3 * DAY);
+    await runDurableObjectAlarm(room);
+
+    const changes = (await room.history()).filter((e) => e.kind === 'paused' || e.kind === 'expired');
+    expect(changes.map((e) => [e.kind, e.claim, e.time])).toEqual([
+      ['paused', priyas.id, new Date(t0 + 30 * MINUTE).toISOString()],
+      ['paused', kenjis.id, new Date(t0 + 40 * MINUTE).toISOString()],
+      ['expired', priyas.id, new Date(t0 + DAY).toISOString()],
+      ['expired', kenjis.id, new Date(t0 + 5 * MINUTE + DAY).toISOString()],
+    ]);
   });
 
   test('a room with nothing left to time sets no alarm', async () => {
@@ -640,6 +682,61 @@ describe('the D1 mirror', () => {
 
     expect(await getClaim(db, made.id)).toEqual(made);
     expect(await alarmTime()).toBe(t0 + 30 * MINUTE);
+  });
+
+  test('a save that keeps failing is tried later and later, up to an hour apart, and given up after a day', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // Someone D1 never records, so every save is refused.
+    const made = await claim({ githubId: 3098, login: 'drifter' });
+
+    // Run each alarm when it comes, until the room sets none.
+    const alarms: number[] = [];
+    for (let next = await alarmTime(); next !== null; next = await alarmTime()) {
+      if (alarms.length > 100) throw new Error('The room never stopped trying.');
+      alarms.push(next - t0);
+      at(next);
+      await runDurableObjectAlarm(room);
+    }
+
+    // Tries at 1, 3, 7, 15, 31, and 63 minutes, with the pause at 30.
+    expect(alarms.slice(0, 7)).toEqual([1, 3, 7, 15, 30, 31, 63].map((m) => m * MINUTE));
+    const gaps = alarms.slice(1).map((time, i) => time - (alarms[i] ?? 0));
+    expect(Math.max(...gaps)).toBe(HOUR);
+    expect(alarms.at(-1)).toBeGreaterThanOrEqual(DAY);
+    expect(await getClaim(db, made.id)).toBeNull();
+    // One try when the claim was made, and one at each retry.
+    expect(warnings).toHaveBeenCalledTimes(alarms.length - 1);
+    const givenUp = errors.mock.calls.filter((call) => String(call[0]).includes(made.id));
+    expect(givenUp).toHaveLength(1);
+    expect(String(givenUp[0]?.[0])).toContain('gave up');
+  });
+
+  test('a change while a save waits for its retry waits too, and a change after the room gave up tries again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const wanderer = { githubId: 3097, login: 'wanderer' };
+    const made = await claim(wanderer);
+    const mine = { claimId: made.id, githubId: wanderer.githubId };
+    expect(warnings).toHaveBeenCalledTimes(1);
+
+    at(t0 + 10 * SECOND);
+    await room.submit(mine);
+    expect(warnings).toHaveBeenCalledTimes(1);
+
+    // Run the retries until only the 7-day review window is left.
+    const expiry = t0 + 10 * SECOND + 7 * DAY;
+    for (let next = await alarmTime(); next !== null && next !== expiry; next = await alarmTime()) {
+      at(next);
+      await runDurableObjectAlarm(room);
+    }
+    expect(await alarmTime()).toBe(expiry);
+
+    await savePerson(db, wanderer, t0);
+    at(t0 + 2 * DAY);
+    await room.submit(mine);
+
+    expect(await getClaim(db, made.id)).toMatchObject({ id: made.id, state: 'awaiting_review' });
   });
 });
 
