@@ -1,6 +1,6 @@
 import { feedEventSchema, githubLogin, id, issueRef, repoName, validate, type FeedEvent } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
-import { findPersonByLogin, getProject, listProjectsByIssueRepo } from '../db';
+import { findPersonByLogin, getIssue, getProject, listIssueClaims, listProjectsByIssueRepo } from '../db';
 import { homeFeed, personFeed, repoFeed } from '../rooms/feed';
 import { issueRoom } from '../rooms/issue-room';
 import { ndjsonLine, textLine } from './format';
@@ -23,6 +23,8 @@ const HOUR = 60 * 60 * 1000;
 
 /** How long a stream stays open. */
 const STREAM_LIFETIME_MS = HOUR;
+/** How long a line can wait for the reader to take it before the stream ends. */
+const STREAM_READER_WAIT_MS = 60 * 1000;
 
 type Format = 'txt' | 'ndjson';
 
@@ -101,10 +103,11 @@ export function isStreamPath(request: Request): boolean {
 
 /**
  * The feed or room a source reads from, or a text answer saying why there is
- * none. A repo's stream needs the repo to be a project, and an issue's needs
- * a project that keeps its issues in the issue's repo, so a request never
- * makes a feed or room for a repo that has none. A person's stream finds
- * them by their login now, and reads their feed by GitHub ID.
+ * none. A repo's stream needs the repo to be a project. An issue's needs a
+ * claim on the issue, or the issue among the tagged issues of a project that
+ * keeps its issues in that repo. So a request never makes a feed or room
+ * that nothing could fill. A person's stream finds them by their login now,
+ * and reads their feed by GitHub ID.
  */
 async function sourceFor(source: Source): Promise<DurableObjectStub | Response> {
   switch (source.kind) {
@@ -117,9 +120,14 @@ async function sourceFor(source: Source): Promise<DurableObjectStub | Response> 
     }
     case 'issue': {
       const repo = source.issue.slice(0, source.issue.lastIndexOf('#'));
-      if ((await listProjectsByIssueRepo(env.DB, repo)).length === 0) {
-        return text(404, `No project on Good First Token keeps its issues in ${repo}.`);
-      }
+      const known =
+        (await listIssueClaims(env.DB, source.issue)).length > 0 ||
+        (
+          await Promise.all(
+            (await listProjectsByIssueRepo(env.DB, repo)).map((project) => getIssue(env.DB, project.repo, source.issue)),
+          )
+        ).some((issue) => issue !== null);
+      if (!known) return text(404, `${source.issue} has no claim, and no project on Good First Token tagged it.`);
       return issueRoom(env.ISSUE_ROOM, source.issue);
     }
     case 'person': {
@@ -144,11 +152,16 @@ function parseEvent(data: unknown): FeedEvent | null {
 /**
  * Answers a request for a stream: a line for each event the feed or room
  * sends, until the stream's lifetime, an hour, has passed, the feed or room
- * closes the socket, or the reader goes away. `lifetimeMs` is for tests.
+ * closes the socket, or the reader goes away. A reader that leaves a line
+ * untaken for a minute is too slow, and the stream ends, so lines never pile
+ * up in memory. The options are for tests.
  */
 export async function handleStream(
   request: Request,
-  { lifetimeMs = STREAM_LIFETIME_MS }: { lifetimeMs?: number } = {},
+  {
+    lifetimeMs = STREAM_LIFETIME_MS,
+    readerWaitMs = STREAM_READER_WAIT_MS,
+  }: { lifetimeMs?: number; readerWaitMs?: number } = {},
 ): Promise<Response> {
   const route = streamRoute(request);
   if (!route) return text(404, 'There is no such stream.');
@@ -182,6 +195,9 @@ export async function handleStream(
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
   let open = true;
+  // When each line the reader hasn't taken yet was written, oldest first. A
+  // write finishes once the reader takes the line before it.
+  const untaken: number[] = [];
   const end = () => {
     if (!open) return;
     open = false;
@@ -201,7 +217,13 @@ export async function handleStream(
       console.error('A stream skipped a malformed event.');
       return;
     }
-    writer.write(encoder.encode(line(event))).catch(end);
+    const now = Date.now();
+    if (untaken.length > 0 && now - (untaken[0] ?? now) > readerWaitMs) {
+      end();
+      return;
+    }
+    untaken.push(now);
+    writer.write(encoder.encode(line(event))).then(() => untaken.shift(), end);
   });
   socket.addEventListener('close', end);
   socket.addEventListener('error', end);

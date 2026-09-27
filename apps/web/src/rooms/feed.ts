@@ -20,6 +20,8 @@ export const FEED_KEEPS = 1000;
 export const FEED_TAIL = 100;
 /** How long a feed remembers the ID of an event it no longer keeps, to ignore a second copy. */
 export const FEED_REMEMBERS_MS = 7 * DAY;
+// How soon a send to the watchers that D1 kept from going out is tried again.
+const WATCHERS_RETRY_MS = 60 * 1000;
 
 /** An event for a feed, with the GitHub ID of the claimant it is about. */
 export interface FeedEntry {
@@ -96,8 +98,13 @@ export class Feed extends DurableObject<Env> {
       FEED_KEEPS - 1,
     );
     this.sql.exec('DELETE FROM seen WHERE at < ? AND id NOT IN (SELECT id FROM events)', now - FEED_REMEMBERS_MS);
-    if (stored > 0) await sendToWatchers(this.ctx, this.env.DB, (seq) => this.after(seq));
+    if (stored > 0) await this.sendToWatchers();
     return { stored };
+  }
+
+  /** Tries again to send the watchers what D1 kept from going out. */
+  override async alarm(): Promise<void> {
+    await this.sendToWatchers();
   }
 
   /**
@@ -139,6 +146,15 @@ export class Feed extends DurableObject<Env> {
 
   override webSocketClose(socket: WebSocket, code: number, reason: string): void {
     answerClose(socket, code, reason);
+  }
+
+  /**
+   * Sends new events to the watchers. When D1 can't say who is blocked, the
+   * alarm tries again a minute later.
+   */
+  private async sendToWatchers(): Promise<void> {
+    if (await sendToWatchers(this.ctx, this.env.DB, (seq) => this.after(seq))) return;
+    await this.ctx.storage.setAlarm(Date.now() + WATCHERS_RETRY_MS);
   }
 
   /**

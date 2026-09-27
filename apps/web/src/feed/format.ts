@@ -26,14 +26,10 @@ function oneLine(text: string): string {
   for (const char of text) {
     if (unsafe(char.codePointAt(0) ?? 0)) {
       gap = true;
-      continue;
-    }
-    if (gap) {
-      out = `${out.trimEnd()} `;
+    } else if (!gap || char !== ' ') {
+      out = gap ? `${out.trimEnd()} ${char}` : out + char;
       gap = false;
-      if (char === ' ') continue;
     }
-    out += char;
   }
   return out.trim();
 }

@@ -87,19 +87,19 @@ export async function openWatcher(
  *
  * It sends only the events stored before it asks D1 who is blocked. An event
  * stored during that await is sent by the call that stored it. When D1 can't
- * say who is blocked, nothing is sent, and the events go out with the next
- * one, or when the watcher reconnects.
+ * say who is blocked, nothing is sent, and it returns false, for the caller
+ * to try again. The events then go out with the next send that works.
  */
 export async function sendToWatchers(
   ctx: DurableObjectState,
   db: D1Database,
   after: (seq: number) => StoredEvent[],
-): Promise<void> {
+): Promise<boolean> {
   const sockets = ctx.getWebSockets();
-  if (sockets.length === 0) return;
+  if (sockets.length === 0) return true;
   const events = after(Math.min(...sockets.map(cursorOf)));
   const upTo = events.at(-1)?.seq;
-  if (upTo === undefined) return;
+  if (upTo === undefined) return true;
   let blocked: Set<number>;
   try {
     blocked = await blockedAmong(
@@ -108,7 +108,7 @@ export async function sendToWatchers(
     );
   } catch (error) {
     console.warn('New events wait for the next send, because D1 could not say which donors are blocked.', error);
-    return;
+    return false;
   }
   // A socket accepted during the await has its place already.
   for (const socket of ctx.getWebSockets()) {
@@ -119,6 +119,7 @@ export async function sendToWatchers(
     }
     socket.serializeAttachment({ after: upTo } satisfies Cursor);
   }
+  return true;
 }
 
 /** Answers a watcher's close, so its socket finishes closing. */

@@ -1,13 +1,13 @@
-import { runInDurableObject } from 'cloudflare:test';
+import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import type { ClaimRecord, FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, savePerson } from '../../src/db';
+import { blockDonor, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed, type Feed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
-import { readStream } from './helpers';
+import { feedEvent, readStream } from './helpers';
 
 // The live text streams, read through the Worker the way `curl -N` reads
 // them, while the issue room, the feed queue, and the feeds run as they do in
@@ -115,7 +115,7 @@ describe('a text stream', () => {
 
   test('keeps a text with tabs, line breaks, carriage returns, and terminal controls on one line', async () => {
     const priyas = await claim(priya);
-    const reason = `tabs\there,\nnew\r\nlines\rand \u001b[2Jcontrols\u2028too`;
+    const reason = `tabs\there,\nnew\r\n   lines\rand \u001b[2Jcontrols\u2028too`;
     await issueRoom(env.ISSUE_ROOM, issue).release({ claimId: priyas.id, githubId: priya.githubId, reason });
     await delivered(homeFeed(env.FEED), `released: ${reason}`);
 
@@ -212,6 +212,27 @@ describe('a text stream', () => {
     });
   });
 
+  test('ends when a line waits too long for the reader, so a stalled reader holds nothing up', async () => {
+    // A stream gives a reader a minute. This one gives a tenth of a second,
+    // and nothing reads it.
+    const slow = { githubId: 3302, login: 'sample-slow-reader' };
+    await signIn(slow);
+    const feed = personFeed(env.FEED, slow.githubId);
+    const request = new Request(`http://localhost/@${slow.login}/live.txt`);
+    const res = await handleStream(request, { readerWaitMs: 100 });
+    expect(res.status).toBe(200);
+    const entry = () => ({ event: feedEvent({ user: slow.login }), githubId: slow.githubId });
+
+    await feed.deliver([entry()]);
+    expect(await sockets(feed)).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await feed.deliver([entry()]);
+
+    await vi.waitFor(async () => {
+      expect(await sockets(feed)).toBe(0);
+    });
+  });
+
   test('lets go of its socket on the feed when the reader goes away', async () => {
     const feed = personFeed(env.FEED, kenji.githubId);
     const stream = await readStream(`/@${kenji.login}/live.txt`);
@@ -278,10 +299,11 @@ describe('who a stream is for', () => {
 });
 
 describe('asking for a stream', () => {
-  test('a repo that is not a project, an issue in a repo no project keeps, or a login no one signed in with is not found', async () => {
+  test('a repo that is not a project, an issue with no claim that no project tagged, or a login no one signed in with is not found', async () => {
     for (const path of [
       '/sample-owner/not-listed/live.txt',
       '/sample-owner/not-listed/issues/3/live.ndjson',
+      `/${repo}/issues/${String(issueNumber)}/live.txt`,
       '/@nobody-signed-in/live.txt',
       '/@not_a_login/live.txt',
       '/sample-owner/sample-app/issues/0/live.txt',
@@ -289,6 +311,20 @@ describe('asking for a stream', () => {
       const res = await readStream(path);
       expect(res.res.status, path).toBe(404);
     }
+    // Nothing made a room for the issue.
+    const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
+    expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
+  });
+
+  test("an issue a project tagged has a stream before anyone claims it", async () => {
+    await saveIssues(db, [
+      { issue, project: repo, title: 'Sample issue', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+
+    const stream = await readStream(paths().issue);
+
+    expect(stream.res.status).toBe(200);
+    await stream.cancel();
   });
 
   test('since has to be an event ID', async () => {

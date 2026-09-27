@@ -1,4 +1,4 @@
-import { evictDurableObject } from 'cloudflare:test';
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, unblockDonor } from '../../src/db';
@@ -23,6 +23,13 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+// A D1 binding that refuses every query.
+const downDb = {
+  prepare() {
+    throw new Error('D1 is down.');
+  },
+} as unknown as D1Database;
 
 function by(person: { githubId: number; login: string }, text?: string): FeedEntry {
   return { event: feedEvent({ user: person.login, ...(text && { text }) }), githubId: person.githubId };
@@ -120,6 +127,31 @@ describe("a feed's watchers", () => {
       const watcher = await watchSocket(feed, since);
       expect(await watcher.received(FEED_TAIL)).toEqual(newest);
     }
+  });
+
+  test('get what D1 kept from going out a minute later, from the alarm', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const watcher = await watchSocket(feed);
+    // The running feed's D1 refuses every query from here.
+    await runInDurableObject(feed, (instance) => {
+      const live = instance as unknown as { env: Env };
+      live.env = { ...live.env, DB: downDb };
+    });
+    // Far ahead of the real clock, so the alarm doesn't run on its own.
+    const later = Date.UTC(2100, 0, 4, 12, 0, 0);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(later);
+
+    await feed.deliver([by(priya, 'while D1 was down')]);
+
+    expect(await runInDurableObject(feed, (_, state) => state.storage.getAlarm())).toBe(later + 60_000);
+    expect(watcher.events).toEqual([]);
+    await runInDurableObject(feed, (instance) => {
+      (instance as unknown as { env: Env }).env = env;
+    });
+    await runDurableObjectAlarm(feed);
+    expect(await watcher.received(1)).toEqual(['while D1 was down']);
+    warnings.mockRestore();
   });
 
   test('stay connected while the feed hibernates, and get the next event', async () => {

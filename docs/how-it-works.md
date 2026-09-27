@@ -442,7 +442,7 @@ a post, a job, or a reason longer than its limit is cut to the limit.
   call that applies it comes later. Several applied at once are recorded in
   the order of their deadlines, so the times in the history never go back.
 - A room with no claim left to pause or expire, nothing waiting to save, and
-  no event waiting to go to the feed queue, sets no alarm.
+  no event waiting to go to the feed queue or its watchers, sets no alarm.
 
 **Submitting, opening the PR, and releasing**
 
@@ -767,11 +767,13 @@ live. No page shows a feed yet. The [text streams](#text-streams) read them.
 - Once the issue room stores an event, it sends the event to the feed queue.
   The call that made the event doesn't wait for the send, and a send that
   fails fails no call.
-- An event the queue doesn't take stays with the room, which tries it again
-  a minute later, then after 2, 4, 8, 16, and 32 minutes, then every hour,
-  until the queue takes it. A send that never answers is tried again a
-  minute after it started. So no event is lost on the way, and the room's
-  own history has it all along.
+- The room sends its events in the order it stored them. An event waits
+  behind any earlier one the queue hasn't taken.
+- An event the queue doesn't take stays with the room, which tries it again,
+  with every event behind it, a minute later, then after 2, 4, 8, 16, and 32
+  minutes, then every hour, until the queue takes it. A send that never
+  answers is tried again a minute after it started. So no event is lost on
+  the way, and the room's own history has it all along.
 - The queue's consumer delivers each event to the homepage's feed, the feed
   of the project the claim was made in, by its code repo, and the feed of
   the claimant, by GitHub ID. The queue waits at most a second to fill a
@@ -813,8 +815,8 @@ out of what they send watchers, and so of every stream.
   the block is lifted gets them again. A watcher connected all along doesn't
   get the ones that went out while the donor was blocked.
 - When the database can't say who is blocked, nothing goes out. A new
-  watcher is turned away with `503`, and new events wait to go out with the
-  next event, or until the watcher reconnects.
+  watcher is turned away with `503`. New events wait, and the feed or room
+  tries again a minute later, and with each new event.
 
 ## Text streams
 
@@ -846,6 +848,9 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   reads the `.ndjson` form.
 - A stream closes after an hour, and when its feed or room closes the
   socket, as a deploy can. The reader reconnects with `since`.
+- A reader that leaves a line untaken for a minute is too slow, and the
+  stream ends, so lines never pile up waiting for it. It reconnects with
+  `since`.
 - `/@<user>` finds the person by their login now, without case, and reads
   their feed by GitHub ID. So a renamed person's stream moves to their new
   login, and a login that changed hands shows its new owner.
@@ -853,11 +858,12 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   `Cache-Control: no-store, no-transform`, so nothing caches or compresses
   them, and with `Access-Control-Allow-Origin: *`, so any page can read them.
 - A stream is read with `GET` or `HEAD`. Anything else is `405`.
-- A repo that isn't a project, an issue in a repo where no project keeps its
-  issues, a login no one has signed in with, and a path whose owner, repo,
-  number, or login GitHub couldn't have, are `404`. So a request never makes
-  a feed or room for a repo that has none. A `since` that isn't an event ID
-  is `400`. When the database or the feed can't answer, it is `503`.
+- A repo that isn't a project, an issue that has no claim and isn't among
+  the tagged issues of a project that keeps its issues in that repo, a login
+  no one has signed in with, and a path whose owner, repo, number, or login
+  GitHub couldn't have, are `404`. So a request never makes a feed or room
+  that nothing could fill. A `since` that isn't an event ID is `400`. When
+  the database or the feed can't answer, it is `503`.
 
 ## Limits
 

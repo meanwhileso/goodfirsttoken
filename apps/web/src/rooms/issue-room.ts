@@ -200,7 +200,7 @@ interface StoredClaim {
 
 type PrRow = { repo: string; number: number; url: string };
 
-type OutboxRow = { seq: number; message: string };
+type OutboxRow = { seq: number; message: string; tries: number; next_try_at: number };
 
 function refused(code: Refusal['code'], message: string): Refused {
   return { ok: false, refusal: { code, message } };
@@ -433,8 +433,8 @@ export class IssueRoom extends DurableObject<Env> {
    * or one this room never sent, every event.
    */
   history(since?: string | null): FeedEvent[] {
-    const from = typeof since === 'string' ? since : null;
-    return this.eventsAfter(from).map((text) => mustParse(feedEventSchema, JSON.parse(text), 'event'));
+    const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;
+    return this.storedAfter(from).map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
   }
 
   /**
@@ -526,9 +526,7 @@ export class IssueRoom extends DurableObject<Env> {
    */
   private async done<T>(now: number, result: T): Promise<T> {
     void this.sendDue(now);
-    sendToWatchers(this.ctx, this.env.DB, (seq) => this.storedAfter(seq)).catch((error: unknown) => {
-      console.error('Events did not reach the watchers.', error);
-    });
+    void this.sendToWatchers();
     await this.mirror(now);
     await this.schedule(now);
     return result;
@@ -647,14 +645,6 @@ export class IssueRoom extends DurableObject<Env> {
     this.sql.exec('INSERT INTO outbox (seq, message) VALUES (?, ?)', row.seq, JSON.stringify(message));
   }
 
-  private eventsAfter(since: string | null): string[] {
-    const from = since === null ? 0 : (this.placeOf(since) ?? 0);
-    return this.sql
-      .exec<{ event: string }>('SELECT event FROM events WHERE seq > ? ORDER BY seq', from)
-      .toArray()
-      .map((row) => row.event);
-  }
-
   /** Where the event with this ID sits in the room's order, or null for an ID the room never sent. */
   private placeOf(eventId: string): number | null {
     const [row] = this.sql.exec<{ seq: number }>('SELECT seq FROM events WHERE id = ?', eventId).toArray();
@@ -666,7 +656,11 @@ export class IssueRoom extends DurableObject<Env> {
     return row?.seq ?? 0;
   }
 
-  /** The events after a place, oldest first, each with its claimant's GitHub ID, for the watchers. */
+  /**
+   * The events after a place, oldest first, each with its claimant's GitHub
+   * ID, which the watchers' block check needs. Every event is about a claim
+   * the room holds.
+   */
   private storedAfter(seq: number): StoredEvent[] {
     return this.sql
       .exec<{ seq: number; event: string; github_id: number }>(
@@ -724,7 +718,8 @@ export class IssueRoom extends DurableObject<Env> {
     if (due.length === 0) return;
     // If this call dies while a save is out, schedule() never runs. This
     // alarm then brings the room back to try again a minute later.
-    await this.alarmBy(now + SAVE_RETRY_FIRST_MS);
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > now + SAVE_RETRY_FIRST_MS) await this.ctx.storage.setAlarm(now + SAVE_RETRY_FIRST_MS);
     for (const claimId of due) {
       // Read again: the claim may have changed, or another call's try may be
       // out, since the list was made.
@@ -806,49 +801,16 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * Starts sending the events whose send is due to the feed queue, oldest
-   * first, and returns when the send is done. Until then, other calls leave
-   * those events alone, and if this call dies first, they are due again a
-   * minute later, when the alarm sends them. Once the send is done, the alarm
-   * is set again from what is left. A send never throws.
+   * Sends the events whose send is due to the feed queue, in the order the
+   * room stored them, and returns when the send is done. An event never goes
+   * ahead of an earlier one still waiting. Events that come due while a send
+   * is out go with the next one, in the same loop. Once the sends are done,
+   * the alarm is set again from what is left. A send never throws.
    */
   private async sendDue(now: number): Promise<void> {
-    const rows = this.sql
-      .exec<OutboxRow>('SELECT seq, message FROM outbox WHERE next_try_at <= ? ORDER BY seq', now)
-      .toArray();
-    if (rows.length === 0) return;
-    this.sql.exec(
-      'UPDATE outbox SET next_try_at = ? WHERE seq IN (SELECT value FROM json_each(?))',
-      now + SEND_RETRY_FIRST_MS,
-      JSON.stringify(rows.map((row) => row.seq)),
-    );
-    await this.send(rows, now);
-  }
-
-  private async send(rows: OutboxRow[], now: number): Promise<void> {
     try {
-      // If this call dies while the send is out, this alarm tries again.
-      await this.alarmBy(now + SEND_RETRY_FIRST_MS);
-      for (let i = 0; i < rows.length; i += SEND_BATCH) {
-        const batch = rows.slice(i, i + SEND_BATCH);
-        const seqs = JSON.stringify(batch.map((row) => row.seq));
-        try {
-          await this.env.FEED_QUEUE.sendBatch(batch.map((row) => ({ body: JSON.parse(row.message) as unknown })));
-        } catch (error) {
-          // Each event waits a minute, then twice as long each time, up to an
-          // hour, for as long as it takes.
-          console.warn(`${String(batch.length)} events were not sent to the feed queue. The room will try again.`, error);
-          this.sql.exec(
-            `UPDATE outbox SET tries = tries + 1, next_try_at = ? + MIN(? * (1 << MIN(tries, 20)), ?)
-             WHERE seq IN (SELECT value FROM json_each(?))`,
-            Date.now(),
-            SEND_RETRY_FIRST_MS,
-            SEND_RETRY_MAX_MS,
-            seqs,
-          );
-          continue;
-        }
-        this.sql.exec('DELETE FROM outbox WHERE seq IN (SELECT value FROM json_each(?))', seqs);
+      for (let rows = this.takeDue(now); rows.length > 0; rows = this.takeDue(Date.now())) {
+        if (!(await this.send(rows))) break;
       }
       await this.schedule(Date.now());
     } catch (error) {
@@ -856,16 +818,84 @@ export class IssueRoom extends DurableObject<Env> {
     }
   }
 
-  /** Moves the alarm to `time`, unless it is set sooner. */
-  private async alarmBy(time: number): Promise<void> {
-    const alarm = await this.ctx.storage.getAlarm();
-    if (alarm === null || alarm > time) await this.ctx.storage.setAlarm(time);
+  /**
+   * The events at the front of the outbox whose send is due, oldest first,
+   * marked as out for a minute. Other calls leave them alone meanwhile, and
+   * the schedule() at the end of the call counts them as due a minute from
+   * now, so if the call dies while the send is out, the alarm sends them.
+   */
+  private takeDue(now: number): OutboxRow[] {
+    const rows: OutboxRow[] = [];
+    for (const row of this.sql.exec<OutboxRow>('SELECT seq, message, tries, next_try_at FROM outbox ORDER BY seq')) {
+      if (row.next_try_at > now) break;
+      rows.push(row);
+    }
+    if (rows.length > 0) {
+      this.sql.exec(
+        'UPDATE outbox SET next_try_at = ? WHERE seq IN (SELECT value FROM json_each(?))',
+        now + SEND_RETRY_FIRST_MS,
+        JSON.stringify(rows.map((row) => row.seq)),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * Sends events to the queue a batch at a time, and forgets each batch that
+   * lands. When the queue refuses a batch, it and every event after it wait a
+   * minute, then twice as long each try, up to an hour, and false comes back.
+   */
+  private async send(rows: OutboxRow[]): Promise<boolean> {
+    for (let i = 0; i < rows.length; i += SEND_BATCH) {
+      const batch = rows.slice(i, i + SEND_BATCH);
+      try {
+        await this.env.FEED_QUEUE.sendBatch(batch.map((row) => ({ body: JSON.parse(row.message) as unknown })));
+      } catch (error) {
+        const tries = batch[0]?.tries ?? 0;
+        const wait = Math.min(SEND_RETRY_FIRST_MS * 2 ** Math.min(tries, 20), SEND_RETRY_MAX_MS);
+        console.warn(`${String(rows.length - i)} events were not sent to the feed queue. The room will try again.`, error);
+        this.sql.exec(
+          'UPDATE outbox SET tries = tries + 1, next_try_at = ? WHERE seq IN (SELECT value FROM json_each(?))',
+          Date.now() + wait,
+          JSON.stringify(rows.slice(i).map((row) => row.seq)),
+        );
+        return false;
+      }
+      this.sql.exec(
+        'DELETE FROM outbox WHERE seq IN (SELECT value FROM json_each(?))',
+        JSON.stringify(batch.map((row) => row.seq)),
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Sends new events to the watchers. When D1 can't say who is blocked, the
+   * room keeps a fact saying when to try again, a minute later, which the
+   * alarm counts, and clears it once a send goes through.
+   */
+  private async sendToWatchers(): Promise<void> {
+    try {
+      if (await sendToWatchers(this.ctx, this.env.DB, (seq) => this.storedAfter(seq))) {
+        this.sql.exec("DELETE FROM facts WHERE key = 'watchers_retry_at'");
+        return;
+      }
+      this.sql.exec(
+        "INSERT OR REPLACE INTO facts (key, value) VALUES ('watchers_retry_at', ?)",
+        String(Date.now() + SEND_RETRY_FIRST_MS),
+      );
+      await this.schedule(Date.now());
+    } catch (error) {
+      console.error('Events did not reach the watchers.', error);
+    }
   }
 
   /**
    * Sets the alarm for the next timer on any claim, the next try of a save,
-   * or the next try of a send to the feed queue. A send that is out counts
-   * as due a minute after it started, in case its call dies.
+   * the next try of a send to the feed queue, and the next try of a send to
+   * the watchers. The first event in the outbox sets when the queue's next
+   * try is, since no event goes ahead of it. A send that is out counts as due
+   * a minute after it started, in case its call dies.
    */
   private async schedule(now: number): Promise<void> {
     const times: number[] = [];
@@ -876,8 +906,12 @@ export class IssueRoom extends DurableObject<Env> {
       const next = nextTry(stored);
       if (next !== null) times.push(Math.max(next, now));
     }
-    for (const { next_try_at: next } of this.sql.exec<{ next_try_at: number }>('SELECT next_try_at FROM outbox')) {
-      times.push(Math.max(next, now));
+    const [first] = this.sql
+      .exec<{ next_try_at: number }>('SELECT next_try_at FROM outbox ORDER BY seq LIMIT 1')
+      .toArray();
+    if (first) times.push(Math.max(first.next_try_at, now));
+    for (const { value } of this.sql.exec<{ value: string }>("SELECT value FROM facts WHERE key = 'watchers_retry_at'")) {
+      times.push(Math.max(Number(value), now));
     }
     if (times.length === 0) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...times));

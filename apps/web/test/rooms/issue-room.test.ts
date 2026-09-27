@@ -118,6 +118,11 @@ async function alarmTime(): Promise<number | null> {
   return runInDurableObject(room, (_, state) => state.storage.getAlarm());
 }
 
+/** The room's alarm, while events wait for their send. */
+async function alarmTimeWhileUnsent(): Promise<number | null> {
+  return runInDurableObject(room, (_, state) => state.storage.getAlarm());
+}
+
 /**
  * Puts a stand-in for the feed queue in the running room. It records what
  * the room sends, and refuses it while `down` is true. Until the room
@@ -127,10 +132,17 @@ async function standInQueue() {
   const queue = {
     down: false,
     hang: false,
+    /** Refuses only the next batch. */
+    refuseNext: false,
+    batches: 0,
     sent: [] as FeedMessage[],
     sendBatch(messages: Iterable<{ body: unknown }>): Promise<void> {
+      queue.batches += 1;
       if (queue.hang) return new Promise(() => undefined);
-      if (queue.down) return Promise.reject(new Error('The queue is down.'));
+      if (queue.down || queue.refuseNext) {
+        queue.refuseNext = false;
+        return Promise.reject(new Error('The queue is down.'));
+      }
       for (const { body } of messages) queue.sent.push(body as FeedMessage);
       return Promise.resolve();
     },
@@ -645,6 +657,40 @@ describe('watchers', () => {
     expect(res.status).toBe(426);
   });
 
+  test('a watcher gets what D1 kept from going out a minute later, from the alarm', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const made = await claim(priya);
+    const watcher = await watch();
+    await watcher.received(1);
+    // From here, the running room's D1 can't say who is blocked, and still
+    // takes the room's saves.
+    await runInDurableObject(room, (instance) => {
+      const live = instance as unknown as { env: Env };
+      const refusing = {
+        prepare: (query: string) => {
+          if (query.includes('donor_blocks')) throw new Error('D1 is down.');
+          return db.prepare(query);
+        },
+      } as unknown as D1Database;
+      live.env = { ...live.env, DB: refusing };
+    });
+
+    at(t0 + MINUTE);
+    await post(made, 'while D1 was down');
+
+    await vi.waitFor(async () => {
+      expect(await alarmTime()).toBe(t0 + 2 * MINUTE);
+    });
+    expect(watcher.events).toHaveLength(1);
+    await runInDurableObject(room, (instance) => {
+      (instance as unknown as { env: Env }).env = env;
+    });
+    at(t0 + 2 * MINUTE);
+    await runDurableObjectAlarm(room);
+    expect((await watcher.received(2))[1]).toEqual(['update', 'while D1 was down']);
+    warnings.mockRestore();
+  });
+
   test('a watcher stays connected while the room hibernates, and gets the next event', async () => {
     const made = await claim(priya);
     const watcher = await watch();
@@ -923,20 +969,21 @@ describe('the feed queue', () => {
     const made = await claim(priya);
     expect(await post(made, 'one')).toMatchObject({ ok: true, posted: true });
 
-    // Each try that fails waits a minute, then twice as long.
-    const tries = async (n: number) => {
+    // Each try that fails waits a minute, then twice as long. The post waits
+    // behind the claim, which the queue has to take first.
+    const tries = async (...expected: number[]) => {
       await vi.waitFor(async () => {
-        expect((await unsent()).map((row) => row.tries)).toEqual([n, n]);
+        expect((await unsent()).map((row) => row.tries)).toEqual(expected);
       });
       return runInDurableObject(room, (_, state) => state.storage.getAlarm());
     };
-    expect(await tries(1)).toBe(t0 + MINUTE);
+    expect(await tries(1, 0)).toBe(t0 + MINUTE);
     at(t0 + MINUTE);
     await runDurableObjectAlarm(room);
-    expect(await tries(2)).toBe(t0 + 3 * MINUTE);
+    expect(await tries(2, 1)).toBe(t0 + 3 * MINUTE);
     at(t0 + 3 * MINUTE);
     await runDurableObjectAlarm(room);
-    expect(await tries(3)).toBe(t0 + 7 * MINUTE);
+    expect(await tries(3, 2)).toBe(t0 + 7 * MINUTE);
     expect(queue.sent).toEqual([]);
 
     queue.down = false;
@@ -949,6 +996,45 @@ describe('the feed queue', () => {
     // Nothing is left to send, so the alarm is the claim's pause again.
     expect(await alarmTime()).toBe(t0 + 30 * MINUTE);
     expect(warnings).toHaveBeenCalled();
+  });
+
+  test('a batch the queue refuses holds back the events after it, so none reaches the feeds ahead of it', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const queue = await standInQueue();
+    queue.hang = true;
+    // More events than one batch holds, all waiting for their send.
+    const made = await claim(priya);
+    for (let i = 1; i <= 60; i++) {
+      at(t0 + i * 10 * SECOND);
+      await post(made, `line ${String(i)}`);
+    }
+    expect(await unsent()).toHaveLength(61);
+
+    // Every event is due. The first batch is refused, and the second waits.
+    queue.hang = false;
+    queue.refuseNext = true;
+    const before = queue.batches;
+    at(t0 + 3 * HOUR);
+    await runDurableObjectAlarm(room);
+    await vi.waitFor(() => {
+      expect(queue.batches).toBe(before + 1);
+    });
+    await vi.waitFor(async () => {
+      expect(await alarmTimeWhileUnsent()).toBeGreaterThan(t0 + 3 * HOUR);
+    });
+    // The alarm paused the claim, which made one more event.
+    const events = await room.history();
+    expect(events).toHaveLength(62);
+    expect(queue.sent).toEqual([]);
+    expect(await unsent()).toHaveLength(events.length);
+
+    at((await alarmTimeWhileUnsent()) ?? 0);
+    await runDurableObjectAlarm(room);
+    await vi.waitFor(() => {
+      expect(queue.sent).toHaveLength(events.length);
+    });
+    expect(queue.sent.map((m) => m.event.text)).toEqual((await room.history()).map((e) => e.text));
+    warnings.mockRestore();
   });
 
   test("a send that never answers holds up no call, and the alarm sends its event a minute later", async () => {

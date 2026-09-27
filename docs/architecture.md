@@ -543,7 +543,7 @@ it fails.
 
 | Table | One row per |
 |---|---|
-| `facts` | Fact about the room. Today only `issue`, the issue it holds, as the first claim spelled it. |
+| `facts` | Fact about the room: `issue`, the issue it holds, as the first claim spelled it, and `watchers_retry_at`, when to try again a send to the watchers that D1 kept from going out |
 | `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, when the last try started, the time before which no try is made, until when a call's try is out, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
 | `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
@@ -556,10 +556,11 @@ stored claim and event against them when it reads one, so a new required
 field would make every room that holds an older row throw, its alarm
 included. Such a change needs a step that rewrites the stored rows first.
 
-**Timers.** One alarm per room, set again at the end of every call, and
-when a send to the feed queue ends. The alarm runs the same steps as a
-call: apply the due timers, then send and save what is due. When it is set
-for, and what the timers do, is under
+**Timers.** One alarm per room, set again at the end of every call, when a
+send to the feed queue ends, and when D1 keeps a send to the watchers from
+going out. The alarm runs the same steps as a call: apply the due timers,
+then send and save what is due. When it is set for, and what the timers do,
+is under
 [the issue room's timers](how-it-works.md#the-issue-room).
 
 **Saving to D1.** After its writes, each call lists the claims whose save
@@ -588,21 +589,26 @@ alarm behind.
 
 **Sending to the feed queue.** `emit` stores each event with a row in
 `outbox` holding its `FeedMessage`, in the same step as the change. At the
-end of the call, `sendDue` marks the rows whose send is due as out for a
-minute, before any await, so another call leaves them alone. It then sends
-them with `sendBatch`, 50 to a batch, without the call's answer waiting.
-Before the send goes out, it moves the alarm to a minute ahead, unless the
-alarm is sooner, so a send whose call dies, or that never answers, is tried
-again by the alarm. A batch that lands is deleted from `outbox`. One that
-fails gets its next try from its count of failed tries. When the send ends,
-it sets the alarm again with `schedule`, which counts each row's next try.
-The queue may then get an event twice, which the feeds ignore.
+end of the call, `sendDue` takes the rows at the front of `outbox` whose
+send is due, up to the first that isn't, and marks them as out for a
+minute, before any await, so another call leaves them alone. It sends them
+with `sendBatch`, 50 to a batch, without the call's answer waiting. A batch
+that lands is deleted from `outbox`. When one is refused, it and every row
+after it get the same next try, from the failed tries of its first row, and
+the send stops, so no event reaches the queue ahead of an earlier one. Rows
+that came due during a send go out in the same loop. The `schedule` at the
+end of the call counts the first row's next try, which is a minute ahead
+for a row that is out, so a send whose call dies, or that never answers, is
+tried again by the alarm. When the send ends, it calls `schedule` again. The
+queue may then get an event twice, which the feeds ignore.
 
 **Watchers** use the hibernation API, through `src/rooms/watchers.ts`, as
 [The live feeds](#the-live-feeds) describes. What that means for a watcher
 is under [Watchers](how-it-works.md#the-issue-room). The claimant of each
 event, which the block check needs, comes from joining `events` to
-`claims` on the event's claim ID.
+`claims` on the event's claim ID. When D1 can't say who is blocked, the
+room writes `watchers_retry_at`, a minute ahead, which `schedule` counts,
+and the next send that goes through deletes it.
 
 **IDs.** Claim IDs are `c_` and event IDs `e_`, each followed by 20
 URL-safe characters, made the same way as session IDs.
@@ -659,6 +665,8 @@ streams' in [Text streams](how-it-works.md#text-streams).
   repeats until none is new. Then the socket is accepted, sent its history,
   and given its place, with no await in between, so no event falls between
   its history and the live ones.
+- **When D1 can't say who is blocked,** a feed sets its alarm a minute
+  ahead, and the alarm sends what is waiting. A feed has no other alarm.
 - **The block check runs as events go out.** So a block covers the history
   a feed already stores, and lifting it shows that history again. It costs
   one D1 read for each batch of events sent to a feed or room that has
@@ -675,10 +683,20 @@ streams' in [Text streams](how-it-works.md#text-streams).
   ending early.
 - **Ending a stream.** A timer ends it after an hour. The Worker ends it
   when the feed closes the socket, and when the reader goes away, which it
-  learns from `request.signal`. That signal needs the
+  learns from `request.signal`. It also ends it when the reader falls
+  behind: the Worker keeps the time of each line it wrote that the reader
+  hasn't taken, since a write finishes once the reader takes the line
+  before it, and ends the stream when a new line finds the oldest waiting
+  over a minute. So a stalled reader holds at most a minute of lines in
+  memory. That signal needs the
   `enable_request_signal` compatibility flag, which `wrangler.jsonc` turns
   on for the whole Worker. Ending a stream closes the socket to the feed,
   which answers the close.
+- **Which streams exist.** A person's stream needs the person in `people`,
+  a repo's the project in `projects`, and an issue's a claim in `claims` or
+  the issue in `tagged_issues`. Connecting to a feed or room that has never
+  been used makes it, with storage, so a stream for anything else would let
+  anyone make Durable Objects without end.
 - **Compression.** Cloudflare compresses `text/plain` for a browser that
   accepts it, which would hold lines back until a chunk fills.
   `Cache-Control: no-transform` turns that off.
