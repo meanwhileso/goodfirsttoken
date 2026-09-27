@@ -71,6 +71,9 @@ The repo is a pnpm workspace.
   described under [Sample data](#sample-data-in-development).
 - **The MCP server lives in `src/mcp/`,** described under
   [The MCP server](#the-mcp-server).
+- **What registering a project reads from GitHub, and the proposal's rules,
+  live in `src/projects/`,** described under
+  [The maintainer's tools](#the-maintainers-tools).
 
 ### Sign-in
 
@@ -155,7 +158,8 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | File | What it does |
 |---|---|
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
-| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and `start_session` |
+| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, `start_session`, and the tools it serves, each run as the caller |
+| `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
 | `src/routes/oauth/authorize.tsx` | That page |
@@ -288,6 +292,67 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   browser hides it, and the SDK starts a new sign-in.
 - A request to `/mcp` with a token the library doesn't know gets its `401`
   after one KV read, and no limit here counts it.
+
+### The maintainer's tools
+
+The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
+
+| File | What it does |
+|---|---|
+| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, and `pause_project` |
+| `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
+| `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
+
+- **One permission check, one read.** Every tool starts with
+  `requirePermission(caller, 'manage_project', { repo })`, which reads the
+  repo with the caller's token and keeps nothing. For `manage_project` it
+  hands back the repo as GitHub described it, as a `ManagedRepo`, and other
+  permissions hand back nothing. So `register_project` checks visibility,
+  archived, and who can open PRs from that one read, and an issue repo other
+  than the code repo goes through the same check, whose answer gives the
+  name to save and whether the repo is archived.
+- **Refusals and lost tokens.** `asCaller` in `src/mcp/server.ts` runs every
+  tool. It turns a `PermissionRefused` into the tool's refusal, and a GitHub
+  `401` from any call into the end of the connection, as `start_session`
+  did alone before.
+- **Schemas from core.** Each tool is registered with its description and
+  its input and output schemas from `packages/core`. The MCP SDK checks the
+  input against the schema before the tool runs, and reports each issue's
+  message with its field. Core's object schemas set their own message only
+  for a value of the wrong type, so an unknown field keeps zod's message,
+  which names it.
+- **Reading the files takes two GraphQL queries.** The first lists the
+  root, `.github/`, and `docs/` of `HEAD`, the default branch, with each
+  entry's size. The second reads the files the listing found, each by an
+  `object(expression:)` alias. The paths go in as GraphQL variables, so a
+  file's name never becomes part of the query. Paths in a repo compare with
+  case, and the rules match these names without it, so the listing is
+  matched in code. Labels come from the REST API, 100 to a page.
+- **The label is read before it is made.** `createOurLabel` asks for the
+  label by name and creates it only on a `404`, and a `422` on the create
+  is read again. When it runs, and what it does on a refusal, is under
+  [the goodfirsttoken label](how-it-works.md#registering-a-project).
+- **Taking over a listing** is `takeOverListing` in `src/db/projects.ts`. In
+  one batch it adds the new settings version, when the settings changed, and
+  sets the project's source, policy, and who added it. For a rejected
+  listing it also adds a status change and sets the status to `pending`. No
+  other takeover writes a status column. Every statement checks that the row
+  is still a policy listing at the version and status read, so the project
+  the call hands back is the one stored, and the save retries like
+  `changeSettings`. A new registration uses `createProject`,
+  whose insert does nothing when the repo became a project meanwhile, so
+  the tool reads again and takes over or refuses.
+- **A pause or resume is a compare-and-set.** `setProjectStatusFrom` writes
+  the new status only while the project's status, reason, who set it, and
+  when are the ones read, the way `changeSettings` checks the settings
+  version. On a mismatch it writes nothing, and `pause_project` reads the
+  project again and decides again, up to five times. `setProjectStatus`, for
+  the admin's tools, still writes whenever the status or reason differs.
+- **Resuming reads the status history,** newest first, for the change
+  before the pause. The project's row holds only its current status. A
+  status change keeps who made it and no role, so whether a pause was an
+  admin's is worked out when the maintainer resumes, as
+  [Managing a project](how-it-works.md#managing-a-project) says.
 
 ### The design system
 
@@ -652,7 +717,7 @@ pruning after a sync, with no index of its own.
 | `project_status_changes_by_repo` | A project's status changes, newest first |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
 | `claims_by_person` | One person's claims, newest first: `my_work`, their page, and their leaderboard row |
-| `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project |
+| `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project. Its claims working now, for `project_status` |
 | `prs_by_number` | A PR's claim, and one claim per PR |
 | `prs_open` | The open PRs the PR job follows, oldest first |
 | `prs_by_opened` | PRs opened in a time range, like this week |
@@ -1267,9 +1332,9 @@ built from the sample data. Tests import it and run it in-process. `pnpm dev`
 and Playwright run it as a local HTTP server.
 
 - **What it covers.** REST: the authenticated user and users, repos with the
-  caller's `permissions`, labels, issues and their timelines, issue and repo
-  search, file contents, forks, branches and refs, pull requests, reviews,
-  and review comments. GraphQL: `repository`, `viewer`, file reads with
+  caller's `permissions`, labels listed or one by name, issues and their
+  timelines, issue and repo search, file contents, forks, branches and refs,
+  pull requests, reviews, and review comments. GraphQL: `repository`, `viewer`, file reads with
   `object(expression:)` across many repos in one query, and
   `createCommitOnBranch`. The OAuth web flow: the authorize page and the
   token endpoint, with PKCE, and an OAuth app revoking one of its tokens with
@@ -1289,12 +1354,16 @@ and Playwright run it as a local HTTP server.
   timeline, and merging it closes the issues it says it closes. A PR's head
   must be the base repo or a fork of it. Search serves the first 1,000
   results and answers a page past them with a 422. API calls need a
-  User-Agent.
+  User-Agent. A private repo shows only to its owner and collaborators,
+  through a token with the `repo` scope, in REST, GraphQL, and search alike,
+  and answers 404 to everyone else, as GitHub does for a token with
+  `public_repo`.
 - **Where it differs.** Tests that depend on any of these need the fake
   changed first.
   - Forks are ready at once. GitHub makes them in the background.
-  - OAuth scopes are recorded and sent back in `x-oauth-scopes`, and
-    nothing checks them. A token with no scopes can fork and commit.
+  - OAuth scopes are recorded and sent back in `x-oauth-scopes`. Only a
+    private repo checks them, for `repo`. A token with no scopes can fork
+    and commit to a public one.
   - An archived repo accepts writes.
   - `maintainer_can_modify` is kept and sent back, and the base repo's
     maintainers still can't push to the PR's branch.
@@ -1392,6 +1461,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   ends a quiet stream is tested by calling `handleStream` with a lifetime of
   a second. The consumer's tests hand it batches of their own, which record
   each `retry` and its wait. `createMessageBatch` drops the wait.
+- **Project tests** call the proposal's rules directly, and read files and
+  labels from the GitHub fake with the functions in `src/projects/`. They
+  live in `apps/web/test/projects/`. The maintainer's tools are tested
+  through the MCP client SDK with the MCP tests.
 - **Database tests** call the functions in `src/db/` against a real local
   D1. The Vitest config reads `migrations/`, and a setup file applies them
   before each test file. Each test file gets its own storage, and the tests

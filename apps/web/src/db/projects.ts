@@ -315,6 +315,61 @@ export async function setProjectStatus(
   return row === undefined ? null : toProject(row);
 }
 
+/**
+ * Sets a project's status as setProjectStatus does, but only while its
+ * status is still the one in `read`: the same status, reason, who set it, and
+ * when. So a change decided on what was read never lands over a change
+ * someone made since. The project after the change, or null when its status
+ * changed since the read or the project is gone. A change to the status and
+ * reason it already has writes nothing and returns `read`.
+ */
+export async function setProjectStatusFrom(
+  db: D1Database,
+  read: ProjectRecord,
+  change: { status: ProjectStatus; reason: string | null; changedBy: number | null },
+  now: number,
+): Promise<ProjectRecord | null> {
+  const was = mustParse(projectRecordSchema, read, 'read');
+  const next = mustParse(
+    projectStatusChangeSchema,
+    { repo: was.repo, status: change.status, reason: change.reason, changedBy: change.changedBy, changedAt: now },
+    'status change',
+  );
+  if (next.status === was.status && next.reason === was.statusReason) return was;
+  const unchanged = `repo = ?1 AND status = ?6 AND status_reason IS ?7 AND status_changed_by IS ?8
+    AND status_changed_at = ?9`;
+  const values = [
+    next.repo,
+    next.status,
+    next.reason,
+    next.changedBy,
+    next.changedAt,
+    was.status,
+    was.statusReason,
+    was.statusChangedBy,
+    was.statusChangedAt,
+  ];
+  // One transaction. The history row and the update each apply only while
+  // the status is the one read.
+  const [, updated, stored] = await db.batch<ProjectRow>([
+    db
+      .prepare(
+        `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM projects WHERE ${unchanged})`,
+      )
+      .bind(...values),
+    db
+      .prepare(
+        `UPDATE projects SET status = ?2, status_reason = ?3, status_changed_by = ?4, status_changed_at = ?5
+         WHERE ${unchanged}`,
+      )
+      .bind(...values),
+    db.prepare(`${SELECT_PROJECT} WHERE p.repo = ?`).bind(next.repo),
+  ]);
+  const row = stored?.results[0];
+  return updated?.meta.changes === 1 && row !== undefined ? toProject(row) : null;
+}
+
 /** Every change of a project's status, newest first, with who made it and when. */
 export async function statusHistory(db: D1Database, repo: string): Promise<ProjectStatusChange[]> {
   const { results } = await db
@@ -391,6 +446,96 @@ export async function changeSettings(
     }
   }
   throw new Error(`Settings for ${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
+}
+
+/**
+ * A maintainer registers a repo an admin listed from its AI policy. Their
+ * settings replace the listing's, saved as a new version by `by` at `now`,
+ * with settings they left out at their defaults. The project becomes
+ * registered: its policy goes, and it names them as who added it. It keeps
+ * the time it was listed, since it has been listed since then. Its status
+ * stays as it was, except that a rejected listing goes back to `pending`,
+ * changed by them, so an admin reviews it again. Settings the same as the
+ * listing's save no new version. Null when the repo isn't a project listed
+ * from its policy when it saves.
+ */
+export async function takeOverListing(
+  db: D1Database,
+  repo: string,
+  settings: ProjectSettingsInput,
+  by: number,
+  now: number,
+): Promise<{ project: ProjectRecord; changed: SettingKey[] } | null> {
+  const next = mustParse(projectSettingsSchema, settings, 'settings');
+  const addedBy = mustParse(githubId, by, 'by');
+  const at = checkTime(now);
+  for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
+    const current = await getProject(db, repo);
+    if (current?.source !== 'policy') return null;
+    const changed = changedSettings(current.settings, next);
+    const version = changed.length > 0 ? current.settingsVersion + 1 : current.settingsVersion;
+    const reopened = current.status === 'rejected';
+    const status = reopened
+      ? { status: 'pending' as const, statusReason: null, statusChangedBy: addedBy, statusChangedAt: at }
+      : {};
+    const project = mustParse(
+      projectRecordSchema,
+      {
+        ...current,
+        ...status,
+        source: 'registered',
+        policy: null,
+        addedBy,
+        settings: next,
+        settingsVersion: version,
+      },
+      'project',
+    );
+    // Every statement checks that the project is still the listing that was
+    // read, with no other save or status change since, and the batch runs as
+    // one transaction. The update runs last, since it changes what they check.
+    const listing = `repo = ?1 AND source = 'policy' AND settings_version = ?2 AND status = ?3
+      AND status_reason IS ?4 AND status_changed_at = ?5`;
+    const read = [current.repo, current.settingsVersion, current.status, current.statusReason, current.statusChangedAt];
+    const statements: D1PreparedStatement[] = [];
+    if (changed.length > 0) {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
+             SELECT ?1, ?6, ?7, ?8, ?9 WHERE EXISTS (SELECT 1 FROM projects WHERE ${listing})`,
+          )
+          .bind(...read, version, JSON.stringify(next), addedBy, at),
+      );
+    }
+    if (reopened) {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
+             SELECT ?1, 'pending', NULL, ?6, ?7 WHERE EXISTS (SELECT 1 FROM projects WHERE ${listing})`,
+          )
+          .bind(...read, addedBy, at),
+      );
+    }
+    // The status columns change only for a rejected listing going back to
+    // pending. Every other takeover leaves them to whoever sets the status.
+    const reopen = reopened
+      ? `, status = 'pending', status_reason = NULL, status_changed_by = ?6, status_changed_at = ?9`
+      : '';
+    statements.push(
+      db
+        .prepare(
+          `UPDATE projects SET source = 'registered', policy_quote = NULL, policy_url = NULL, policy_tier = NULL,
+             added_by = ?6, settings_version = ?7, issue_repo = ?8${reopen}
+           WHERE ${listing}`,
+        )
+        .bind(...read, addedBy, version, issueRepoOf(current.repo, next), ...(reopened ? [at] : [])),
+    );
+    const results = await db.batch(statements);
+    if (results.at(-1)?.meta.changes === 1) return { project, changed };
+  }
+  throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }
 
 /** Every save of a project's settings, newest first, each with what it changed. */

@@ -45,7 +45,7 @@ Maintainers register projects, admins approve them, and tagged issues sync from 
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 | |
+| [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 | [#55](https://github.com/meanwhileso/goodfirsttoken/pull/55) |
 | [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 | |
 | [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 | |
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10 done
 ```
 
 ## Maintainer steps

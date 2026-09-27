@@ -28,6 +28,8 @@ export interface Ctx {
   webUrl: string;
   // The login of the person whose token made the call, or null for none.
   viewer: string | null;
+  // The OAuth scopes of that token. A private repo needs `repo` to be seen.
+  scopes: readonly string[];
 }
 
 const encoder = new TextEncoder();
@@ -75,7 +77,7 @@ export function userShape(ctx: Ctx, login: string) {
 export function fullUserShape(ctx: Ctx, login: string, self: boolean) {
   const account = findAccount(ctx.state, login);
   if (!account) return null;
-  const repos = Object.values(ctx.state.repos).filter((r) => key(r.owner) === key(login));
+  const repos = Object.values(ctx.state.repos).filter((r) => key(r.owner) === key(login) && r.private !== true);
   const user = {
     ...userShape(ctx, login),
     name: account.name,
@@ -136,7 +138,7 @@ export function repoShape(ctx: Ctx, repo: RepoRecord, full = false): Record<stri
     name: repo.name,
     full_name: name,
     owner: userShape(ctx, repo.owner),
-    private: false,
+    private: repo.private === true,
     html_url: `${ctx.webUrl}/${name}`,
     description: repo.description,
     fork: repo.forkOf !== null,
@@ -202,7 +204,7 @@ export function repoShape(ctx: Ctx, repo: RepoRecord, full = false): Record<stri
     pull_request_creation_policy: repo.pullRequestCreationPolicy,
     archived: repo.archived,
     disabled: false,
-    visibility: 'public',
+    visibility: repo.private === true ? 'private' : 'public',
     pushed_at: repo.pushedAt,
     created_at: repo.createdAt,
     updated_at: repo.updatedAt,

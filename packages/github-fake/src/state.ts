@@ -115,6 +115,9 @@ export interface RepoRecord {
   updatedAt: string;
   pushedAt: string;
   defaultBranch: string;
+  // State saved before the fake had private repos has no `private`, and
+  // every repo in it is public.
+  private?: boolean;
   archived: boolean;
   hasIssues: boolean;
   hasPullRequests: boolean;
@@ -216,11 +219,23 @@ export function findIssue(repo: RepoRecord, number: number): IssueRecord | null 
 }
 
 // The person's role on a repo. Anyone signed in can read a public repo. A
-// repo's owner is its admin. Everyone else gets the role they were given.
+// repo's owner is its admin. Everyone else gets the role they were given, and
+// on a private repo, someone given no role has none.
 export function roleOf(repo: RepoRecord, login: string | null): Role | null {
   if (login === null) return null;
   if (key(repo.owner) === key(login)) return 'admin';
-  return repo.collaborators[key(login)] ?? 'read';
+  return repo.collaborators[key(login)] ?? (repo.private === true ? null : 'read');
+}
+
+// Whether a call can see the repo at all. Anyone can see a public repo. A
+// private repo shows only to its owner and collaborators, and only through a
+// token with the repo scope, since public_repo reaches public repos alone.
+// GitHub answers 404 to everyone else, as if the repo weren't there.
+// https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps#available-scopes
+// https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#404-not-found-for-an-existing-resource
+export function canSee(repo: RepoRecord, login: string | null, scopes: readonly string[]): boolean {
+  if (repo.private !== true) return true;
+  return roleOf(repo, login) !== null && scopes.includes('repo');
 }
 
 export function canPush(role: Role | null): boolean {

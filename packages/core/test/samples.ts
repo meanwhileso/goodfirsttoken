@@ -196,8 +196,8 @@ export const samples: Samples = {
     mentions: ['Nothing is saved yet', 'automatic (your CONTRIBUTING welcomes agent PRs)', 'help wanted, goodfirsttoken'],
   },
   update_project: {
-    output: { repo, status: 'approved', settings, changed: ['prMode'] },
-    mentions: ['Updated', 'prMode'],
+    output: { repo, status: 'approved', settings, changed: ['prMode', 'tags'], createdLabels: ['goodfirsttoken'] },
+    mentions: ['Updated', 'prMode', `Created 1 label in ${repo}: goodfirsttoken.`],
   },
   project_status: {
     output: {
@@ -211,7 +211,7 @@ export const samples: Samples = {
     mentions: ['rejected', 'The notes ask agents to skip tests.', '3 tagged issues', '14 merged'],
   },
   pause_project: {
-    output: { repo, status: 'paused' },
+    output: { repo, status: 'paused', changed: true, resumableBy: 'maintainers' },
     mentions: ['Paused', 'paused: false'],
   },
   admin_queue: {

@@ -85,6 +85,7 @@ function addRepo(state: FakeState, sample: SampleRepo, now: Date): void {
     updatedAt: pushed,
     pushedAt: pushed,
     defaultBranch: branch,
+    private: sample.private ?? false,
     archived: sample.archived ?? false,
     hasIssues: true,
     hasPullRequests: sample.hasPullRequests ?? true,

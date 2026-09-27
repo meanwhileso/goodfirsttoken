@@ -19,6 +19,7 @@ import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
 import {
   FakeError,
   canPush,
+  canSee,
   commitOnBranch,
   findAccount,
   findRepo,
@@ -282,7 +283,7 @@ function repositoryNode(ctx: Ctx, repo: RepoRecord) {
     url: `${ctx.webUrl}/${name}`,
     description: repo.description,
     owner: () => ownerNode(ctx, repo.owner),
-    isPrivate: false,
+    isPrivate: repo.private === true,
     isArchived: repo.archived,
     isFork: repo.forkOf !== null,
     stargazerCount: repo.stars,
@@ -434,7 +435,7 @@ function committableBranch(ctx: Ctx, branch: { id?: string; repositoryNameWithOw
         return [];
       }
     })();
-    const repo = Object.values(ctx.state.repos).find((r) => String(r.id) === id);
+    const repo = Object.values(ctx.state.repos).find((r) => String(r.id) === id && canSee(r, ctx.viewer, ctx.scopes));
     if (!repo || !ref?.startsWith('refs/heads/')) throw fail('NOT_FOUND', `Could not resolve to a node with the global id of '${branch.id}'`);
     return { repo, name: ref.slice('refs/heads/'.length) };
   }
@@ -442,7 +443,7 @@ function committableBranch(ctx: Ctx, branch: { id?: string; repositoryNameWithOw
     throw fail('UNPROCESSABLE', 'Either branch.id or both branch.repositoryNameWithOwner and branch.branchName are required.');
   }
   const repo = findRepoByFullName(ctx.state, branch.repositoryNameWithOwner);
-  if (!repo) {
+  if (!repo || !canSee(repo, ctx.viewer, ctx.scopes)) {
     throw fail('NOT_FOUND', `Could not resolve to a Repository with the name '${branch.repositoryNameWithOwner}'.`);
   }
   return { repo, name: branch.branchName };
@@ -461,8 +462,9 @@ const KIND_TYPE = { not_found: 'NOT_FOUND', forbidden: 'FORBIDDEN', invalid: 'UN
 function rootValue(ctx: Ctx, now: string) {
   return {
     repository: ({ owner, name }: { owner: string; name: string }) => {
+      // A repo the caller can't see is not found, like one that isn't there.
       const repo = findRepo(ctx.state, owner, name);
-      if (!repo) throw fail('NOT_FOUND', `Could not resolve to a Repository with the name '${owner}/${name}'.`);
+      if (!repo || !canSee(repo, ctx.viewer, ctx.scopes)) throw fail('NOT_FOUND', `Could not resolve to a Repository with the name '${owner}/${name}'.`);
       return repositoryNode(ctx, repo);
     },
     viewer: () => ownerNode(ctx, ctx.viewer ?? ''),

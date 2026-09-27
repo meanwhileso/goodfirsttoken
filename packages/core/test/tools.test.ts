@@ -6,11 +6,13 @@ import {
   tools,
   validate,
   type ToolName,
+  type ToolOutput,
   type Validated,
 } from '../src/index';
 import { samples } from './samples';
 
 const names = Object.keys(tools) as ToolName[];
+const repoName = samples.pause_project.output.repo;
 
 function textOf(result: { content: { text: string }[] }): string {
   return result.content.map((c) => c.text).join('\n');
@@ -145,6 +147,59 @@ describe('what each result says', () => {
     expect(text).toContain('Ask the donor to write the PR description, and pass it to open_pr word for word.');
   });
 
+  test('a saved registration says it waits for an admin, and names the label it created', () => {
+    const saved = { ...samples.register_project.output, saved: true, status: 'pending' as const, createdLabels: ['goodfirsttoken'] };
+    const text = textOf(toolResult('register_project', saved));
+    expect(text).toContain('Status: pending. A Good First Token admin reviews it before agents can claim its issues.');
+    expect(text).toContain(`Created 1 label in ${repoName}: goodfirsttoken.`);
+    expect(text).not.toContain('Nothing is saved yet');
+  });
+
+  test('a created label is named with the repo it went into: the issue repo, or the code repo when there is none', () => {
+    const settings = { ...samples.register_project.output.settings, issueRepo: 'sample-owner/sample-issues' };
+    const register = { ...samples.register_project.output, saved: true, status: 'pending' as const, createdLabels: ['goodfirsttoken'] };
+    const update = samples.update_project.output;
+
+    expect(textOf(toolResult('register_project', { ...register, settings }))).toContain(
+      'Created 1 label in sample-owner/sample-issues: goodfirsttoken.',
+    );
+    expect(textOf(toolResult('update_project', { ...update, settings }))).toContain(
+      'Created 1 label in sample-owner/sample-issues: goodfirsttoken.',
+    );
+    expect(textOf(toolResult('update_project', update))).toContain(`Created 1 label in ${update.repo}: goodfirsttoken.`);
+  });
+
+  test('registering a repo listed from its AI policy says the settings apply now, with no wait for an admin', () => {
+    const saved = { ...samples.register_project.output, saved: true, status: 'approved' as const };
+    const text = textOf(toolResult('register_project', saved));
+    expect(text).toContain('Status: approved. Your settings replace the ones it was listed with, and apply now.');
+    expect(text).not.toContain('admin reviews');
+  });
+
+  test('taking over a paused listing says the settings wait for the pause to lift', () => {
+    const saved = { ...samples.register_project.output, saved: true, status: 'paused' as const };
+    const text = textOf(toolResult('register_project', saved));
+    expect(text).toContain('Status: paused. Your settings replace the ones it was listed with. Agents get no new claims on it until the pause is lifted.');
+    expect(text).not.toContain('apply now');
+  });
+
+  test("a pause says who can lift it, and a call that changed nothing says so", () => {
+    const pause = (output: Partial<ToolOutput<'pause_project'>>) =>
+      textOf(toolResult('pause_project', { ...samples.pause_project.output, ...output }));
+
+    expect(pause({})).toBe(
+      `Paused ${repoName}. Agents get no new claims on it until you resume it with pause_project and paused: false.`,
+    );
+    expect(pause({ changed: false, resumableBy: 'admins' })).toBe(
+      `${repoName} was already paused. Agents get no new claims on it until one of Good First Token's admins resumes it.`,
+    );
+    expect(pause({ changed: false })).toContain('was already paused.');
+    expect(pause({ status: 'approved', changed: true, resumableBy: null })).toBe(`Resumed ${repoName}. Status: approved.`);
+    expect(pause({ status: 'pending', changed: false, resumableBy: null })).toBe(
+      `${repoName} isn't paused, so nothing changed. Status: pending.`,
+    );
+  });
+
   test('an empty suggestion list says so', () => {
     expect(textOf(toolResult('suggest_issues', { suggestions: [] }))).toBe('No eligible issues right now.');
   });
@@ -226,6 +281,21 @@ describe('tool inputs', () => {
     const repo = 'meanwhileso/goodfirsttoken';
     expect(problemFields(validate(tools.admin_pause_project.input, { repo }))).toEqual(['reason']);
     expect(validate(tools.admin_pause_project.input, { repo, paused: false }).ok).toBe(true);
+  });
+
+  // The MCP SDK checks a tool's input through the schema's standard
+  // validate, and reports each issue's message as it is.
+  test('an unknown setting sent to a tool is named in the message the MCP SDK reports', async () => {
+    const messages = async (name: 'update_project' | 'register_project', settings: unknown) => {
+      const result = await tools[name].input['~standard'].validate({ repo: 'sample-owner/sample-app', settings });
+      return 'issues' in result ? (result.issues ?? []).map((issue) => issue.message).join('\n') : '';
+    };
+
+    expect(await messages('update_project', { claimsPerIsue: 2 })).toContain('claimsPerIsue');
+    expect(await messages('register_project', { tags: ['help wanted'], disclosure: { trailer: null, prBody: 'x', extra: 1 } })).toContain(
+      'extra',
+    );
+    expect(await messages('update_project', 'automatic')).toBe('must be an object of settings');
   });
 
   test('a settings change through update_project names the setting that failed', () => {
