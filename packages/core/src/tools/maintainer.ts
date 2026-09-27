@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { count, labelName, repoName, trimmedText } from '../primitives';
+import { ISSUE_REFRESH_INTERVAL_MS } from '../issues';
+import { count, isoTime, labelName, repoName, trimmedText } from '../primitives';
 import {
   projectSettingsPatchSchema,
   projectSettingsSchema,
@@ -10,7 +11,7 @@ import {
   type ProjectStatus,
 } from '../projects';
 import { defineTool } from './spec';
-import { lines, plural, renderSettings } from './text';
+import { lines, plural, renderSettings, when } from './text';
 
 // The maintainer's tools (spec section 4). Every call checks with GitHub that
 // the caller is an admin or maintainer of the repo.
@@ -36,6 +37,34 @@ function registeredText(repo: string, status: ProjectStatus): string {
 
 /** Who can lift a pause. */
 const resumers = ['maintainers', 'admins'] as const;
+
+/**
+ * What asking project_status to read the tagged issues again did: read them
+ * all, read some before the server's GitHub budget or its limit for one
+ * call ran out, paused the project because GitHub no longer shows its repo
+ * as public and open, or read nothing: they were read too recently, the
+ * project isn't approved, or the server has no token for reading GitHub.
+ */
+export const refreshOutcomes = ['read', 'partly_read', 'paused', 'too_soon', 'not_approved', 'not_set_up'] as const;
+export type RefreshOutcome = (typeof refreshOutcomes)[number];
+
+function refreshText(outcome: RefreshOutcome): string {
+  const minutes = String(ISSUE_REFRESH_INTERVAL_MS / 60_000);
+  switch (outcome) {
+    case 'read':
+      return 'Read its tagged issues from GitHub just now.';
+    case 'partly_read':
+      return 'Read some of its tagged issues from GitHub just now. The next scheduled sync reads the rest.';
+    case 'paused':
+      return "Reading GitHub showed its repo is no longer public and open, so Good First Token paused it. Only Good First Token's admins can resume it.";
+    case 'too_soon':
+      return `Its tagged issues were read from GitHub less than ${minutes} minutes ago, so they weren't read again.`;
+    case 'not_approved':
+      return "Only an approved project's tagged issues are read from GitHub, so they weren't read.";
+    case 'not_set_up':
+      return "This server has no token for reading GitHub, so its tagged issues weren't read.";
+  }
+}
 
 export const registerProject = defineTool({
   audience: 'maintainer',
@@ -103,9 +132,14 @@ export const updateProject = defineTool({
 
 export const projectStatus = defineTool({
   audience: 'maintainer',
-  description:
-    "Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused.",
-  input: z.object({ repo: repoName }),
+  description: `Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused. The tagged issues are counted as the last sync read them from GitHub. Set refresh to read an approved project's tagged issues from GitHub first, at most once every ${String(ISSUE_REFRESH_INTERVAL_MS / 60_000)} minutes.`,
+  input: z.object({
+    repo: repoName,
+    refresh: z
+      .boolean()
+      .default(false)
+      .describe('Read the tagged issues from GitHub before answering, after a maintainer tagged or untagged some.'),
+  }),
   output: z.object({
     repo: repoName,
     status: projectStatusSchema,
@@ -119,6 +153,10 @@ export const projectStatus = defineTool({
       openPrs: count,
       merged: count,
     }),
+    /** When the sync last finished reading every tagged issue from GitHub, or null before it has. */
+    issuesReadAt: isoTime.nullable(),
+    /** What asking to read the tagged issues again did, or null when the call didn't ask. */
+    refresh: z.enum(refreshOutcomes).nullable(),
   }),
   text: (out) =>
     lines(
@@ -126,12 +164,16 @@ export const projectStatus = defineTool({
         out.source === 'registered' ? 'Registered by its maintainers.' : 'Listed from its AI policy.'
       }`,
       out.statusReason !== null && `Reason: ${out.statusReason}`,
+      out.refresh !== null && refreshText(out.refresh),
       [
         plural(out.counts.taggedIssues, 'tagged issue'),
         `${out.counts.working.toLocaleString('en-US')} working now`,
         plural(out.counts.openPrs, 'open PR'),
         `${out.counts.merged.toLocaleString('en-US')} merged`,
       ].join(' · '),
+      out.issuesReadAt === null
+        ? "Its tagged issues haven't all been read from GitHub yet."
+        : `Tagged issues last read from GitHub ${when(out.issuesReadAt)}.`,
       renderSettings(out.settings),
     ),
 });

@@ -2,9 +2,9 @@ import { env } from 'cloudflare:workers';
 
 // Calls to GitHub's API. Every call names the token it runs with, and there
 // is no default token. A call made for a person passes that person's own
-// token. Reads that act for no one, like issue sync, will pass the read-only
-// service token. Revoking a token runs as the OAuth app, with its client ID
-// and secret.
+// token. Reads that act for no one, like the tagged-issue sync, pass the
+// read-only service token (src/sync/). Revoking a token runs as the OAuth
+// app, with its client ID and secret.
 //
 // GitHub's base URLs come from GH_API_URL and GH_WEB_URL. Local development
 // and tests point them at the fake in packages/github-fake. A deploy that
@@ -13,13 +13,56 @@ import { env } from 'cloudflare:workers';
 // https://docs.github.com/en/rest/about-the-rest-api/api-versions
 const API_VERSION = '2022-11-28';
 
+/**
+ * What GitHub said is left of the token's budget for one resource, like
+ * `core` for REST calls or `graphql`, from the x-ratelimit headers.
+ * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#checking-the-status-of-your-rate-limit
+ */
+export interface RateLimit {
+  resource: string;
+  limit: number;
+  remaining: number;
+  /** When the budget starts over, in milliseconds since the epoch. */
+  resetAt: number;
+}
+
+/** The budget GitHub's headers describe, or null when one is missing or isn't a number. */
+export function rateLimitOf(headers: Headers): RateLimit | null {
+  const number = (name: string) => {
+    const value = headers.get(name);
+    return value !== null && /^[0-9]+$/.test(value) ? Number(value) : null;
+  };
+  const resource = headers.get('x-ratelimit-resource');
+  const limit = number('x-ratelimit-limit');
+  const remaining = number('x-ratelimit-remaining');
+  const reset = number('x-ratelimit-reset');
+  if (resource === null || limit === null || remaining === null || reset === null) return null;
+  return { resource, limit, remaining, resetAt: reset * 1000 };
+}
+
 export class GitHubError extends Error {
   readonly status: number;
+  /** The token's budget as GitHub gave it with the refusal, or null. */
+  readonly rateLimit: RateLimit | null;
+  /** The seconds GitHub said to wait before trying again, or null. */
+  readonly retryAfter: number | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, headers?: Headers) {
     super(message);
     this.name = 'GitHubError';
     this.status = status;
+    this.rateLimit = headers ? rateLimitOf(headers) : null;
+    const wait = headers?.get('retry-after') ?? null;
+    this.retryAfter = wait !== null && /^[0-9]+$/.test(wait) ? Number(wait) : null;
+  }
+
+  /**
+   * GitHub refused because the token's budget ran out, or asked the caller
+   * to slow down: a 429, or a 403 with nothing left or a wait to keep.
+   * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
+   */
+  get rateLimited(): boolean {
+    return this.status === 429 || (this.status === 403 && (this.rateLimit?.remaining === 0 || this.retryAfter !== null));
   }
 }
 
@@ -48,7 +91,31 @@ function apiHeaders(authorization: string, json: boolean): Record<string, string
 
 async function refusal(response: Response): Promise<GitHubError> {
   const body = (await response.json().catch(() => null)) as { message?: string } | null;
-  return new GitHubError(response.status, body?.message ?? response.statusText);
+  return new GitHubError(response.status, body?.message ?? response.statusText, response.headers);
+}
+
+/** One page of a REST read, with the token's budget as GitHub gave it. */
+export interface GitHubPage<T> {
+  data: T;
+  rateLimit: RateLimit | null;
+  /** GitHub's Link header names a next page. */
+  hasNext: boolean;
+}
+
+/**
+ * Reads a REST path, like `/repos/owner/name/issues?page=2`, as the token
+ * given, with what GitHub says is left of the token's budget. Throws a
+ * GitHubError, with the budget too, when GitHub refuses.
+ */
+export async function gitHubRead<T>(token: string, path: string): Promise<GitHubPage<T>> {
+  const response = await fetch(`${gitHubUrls().api}${path}`, { method: 'GET', headers: headers(token, false) });
+  if (!response.ok) throw await refusal(response);
+  const link = response.headers.get('link') ?? '';
+  return {
+    data: (await response.json()) as T,
+    rateLimit: rateLimitOf(response.headers),
+    hasNext: /<[^>]*>;\s*rel="next"/.test(link),
+  };
 }
 
 // Calls the REST API as the person whose token is given. Throws a
@@ -142,6 +209,20 @@ export async function gitHubGraphQL<T>(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<GraphQLResult<T>> {
+  const { data, errors } = await gitHubQuery<T>(token, query, variables);
+  return { data, errors };
+}
+
+/**
+ * Calls the GraphQL API as gitHubGraphQL does, with what GitHub says is
+ * left of the token's budget. A spent budget comes back as a
+ * `RATE_LIMITED` error with status 200.
+ */
+export async function gitHubQuery<T>(
+  token: string,
+  query: string,
+  variables: Record<string, unknown> = {},
+): Promise<GraphQLResult<T> & { rateLimit: RateLimit | null }> {
   const response = await fetch(`${gitHubUrls().api}/graphql`, {
     method: 'POST',
     headers: headers(token, true),
@@ -149,5 +230,5 @@ export async function gitHubGraphQL<T>(
   });
   if (!response.ok) throw await refusal(response);
   const result: { data?: T | null; errors?: GraphQLError[] } = await response.json();
-  return { data: result.data ?? null, errors: result.errors ?? [] };
+  return { data: result.data ?? null, errors: result.errors ?? [], rateLimit: rateLimitOf(response.headers) };
 }

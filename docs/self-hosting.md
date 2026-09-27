@@ -110,6 +110,35 @@ Copy the app's client ID for `OAUTH_CLIENT_ID` in step 4. Then click Generate
 a new client secret, and keep it for `OAUTH_CLIENT_SECRET`, one of
 [the Worker's secrets](#the-workers-secrets).
 
+### The token for reading GitHub
+
+The Worker reads each project's tagged issues and follows each claim's PR on
+a schedule, as no one in particular. It reads public data only, with a token
+of its own, `GH_SERVICE_TOKEN`, one of
+[the Worker's secrets](#the-workers-secrets). Make one for each environment,
+or one for both:
+
+1. Sign in to GitHub as the account the token belongs to. An account of its
+   own, like a bot account, keeps the reads apart from a person's.
+2. In Settings, go to Developer settings, Personal access tokens,
+   Fine-grained tokens, and Generate new token.
+3. Under Repository access, choose Public repositories. Add no permissions.
+   A classic token with no scopes works the same way.
+4. Pick an expiration, and note when it ends. Make a new token before then,
+   and put it in place of the old one.
+
+The token has to see every public repo. When it can't see a project's repo,
+the sync takes that as the repo going private, and pauses the project until
+an admin resumes it. So a token limited to selected repos would pause every
+other project.
+
+GitHub gives the account 5,000 REST calls and 5,000 GraphQL points an hour,
+shared by every token it has. So use an account whose tokens do nothing
+else. The jobs read what is left after each call and stop early when it runs
+low, as [architecture.md](architecture.md#the-sync) describes. When GitHub
+refuses the token, because it expired or was revoked, the jobs stop, pause
+nothing, and the Worker's log says so.
+
 ## 4. Create the GitHub environments
 
 In your repo's settings, go to Environments and create `staging` and
@@ -171,6 +200,7 @@ one is missing.
 |---|---|---|
 | `OAUTH_CLIENT_SECRET` | Environment secret | The client secret of this environment's GitHub OAuth app from step 3. |
 | `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores, the site's own and each connected agent's. Changing it signs everyone out, and makes every stored token unreadable, so neither signing out, signing in again, nor Disconnect can revoke it. Connected agents keep working. Those tokens stay valid at GitHub until each person revokes the app in their GitHub settings, or GitHub revokes them after a year unused. So change it only when you have to. |
+| `GH_SERVICE_TOKEN` | Environment secret | The token for reading GitHub from [step 3](#the-token-for-reading-github). The tagged-issue sync and the PR job read public data with it. |
 
 ### On switches
 

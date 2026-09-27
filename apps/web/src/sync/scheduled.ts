@@ -1,0 +1,83 @@
+import { ISSUE_REFRESH_INTERVAL_MS, type ProjectRecord, type ToolOutput } from '@goodfirsttoken/core';
+import { getDoNotListEntry, takeSyncTurn } from '../db';
+import { ServiceGitHub, SyncStopped, type Allowance } from './github';
+import { syncProject, syncTaggedIssues } from './issues';
+import { followPrs } from './prs';
+
+// The jobs that read GitHub with the read-only service token: the Worker's
+// cron triggers, and the refresh a maintainer asks for with project_status.
+// Each cron in apps/web/wrangler.jsonc names one job here.
+
+/** Every 15 minutes: the tagged-issue sync (src/sync/issues.ts). */
+export const ISSUE_SYNC_CRON = '*/15 * * * *';
+/** Twice an hour, apart from the sync: the PR job (src/sync/prs.ts). */
+export const PR_JOB_CRON = '7,37 * * * *';
+
+/**
+ * What each job may spend of the token's hourly budget. The sync stops
+ * while a fifth is left, so the PR job, which stops at a tenth, still runs.
+ * A maintainer's refresh stops at half, so it never takes what the
+ * scheduled jobs need. The calls cap one run, well inside Cloudflare's 10,000
+ * subrequests for one invocation on the Workers Paid plan. Four sync runs an
+ * hour at 1,000 calls come to the 4,000 a 5,000 budget allows above its
+ * fifth.
+ */
+export const ALLOWANCES = {
+  sync: { leave: 0.2, maxCalls: 1000 },
+  prs: { leave: 0.1, maxCalls: 100 },
+  refresh: { leave: 0.5, maxCalls: 60 },
+} satisfies Record<string, Allowance>;
+
+/** The read-only service token, or null when the deployment has none. */
+function serviceToken(env: Env): string | null {
+  const token = (env as Partial<Pick<Env, 'GH_SERVICE_TOKEN'>>).GH_SERVICE_TOKEN;
+  return token ? token : null;
+}
+
+/** Runs the job for a cron trigger. */
+export async function runScheduled(cron: string, env: Env): Promise<void> {
+  const token = serviceToken(env);
+  if (token === null) {
+    console.error(`No job ran on the cron ${cron}. The GH_SERVICE_TOKEN secret is not set. docs/self-hosting.md lists the Worker's secrets.`);
+    return;
+  }
+  const now = () => Date.now();
+  switch (cron) {
+    case ISSUE_SYNC_CRON:
+      await syncTaggedIssues({ db: env.DB, rooms: env.ISSUE_ROOM, github: new ServiceGitHub(token, ALLOWANCES.sync), now });
+      return;
+    case PR_JOB_CRON:
+      await followPrs({ db: env.DB, rooms: env.ISSUE_ROOM, github: new ServiceGitHub(token, ALLOWANCES.prs), now });
+      return;
+    default:
+      console.error(`No job runs on the cron ${cron}. Each cron trigger in wrangler.jsonc needs one in src/sync/scheduled.ts.`);
+  }
+}
+
+export type RefreshOutcome = NonNullable<ToolOutput<'project_status'>['refresh']>;
+
+/**
+ * Reads an approved project's tagged issues from GitHub now, for a
+ * maintainer who asked with project_status. At most once every 10 minutes
+ * for a project, counting the scheduled sync's runs, and only while half the
+ * token's hourly budget is left.
+ */
+export async function refreshIssues(env: Env, project: ProjectRecord, now: () => number = Date.now): Promise<RefreshOutcome> {
+  const token = serviceToken(env);
+  if (token === null) return 'not_set_up';
+  if (project.status !== 'approved') return 'not_approved';
+  for (const repo of new Set([project.repo, project.settings.issueRepo ?? project.repo])) {
+    if ((await getDoNotListEntry(env.DB, repo)) !== null) return 'not_approved';
+  }
+  if (!(await takeSyncTurn(env.DB, project.repo, now(), ISSUE_REFRESH_INTERVAL_MS))) return 'too_soon';
+  const github = new ServiceGitHub(token, ALLOWANCES.refresh);
+  try {
+    const result = await syncProject({ db: env.DB, rooms: env.ISSUE_ROOM, github, now }, project);
+    if (result.outcome === 'skipped') console.warn(`A refresh of ${project.repo} was skipped. ${result.problem}`);
+    return result.outcome === 'read' ? 'read' : result.outcome === 'paused' ? 'paused' : 'partly_read';
+  } catch (error) {
+    if (!(error instanceof SyncStopped)) throw error;
+    console.warn(`A refresh of ${project.repo} stopped. ${error.message}`);
+    return 'partly_read';
+  }
+}

@@ -9,14 +9,16 @@ import { withPageStatus } from './mcp/page-status';
 import { AUTHORIZE_PATH } from './mcp/paths';
 import { mcpProvider } from './mcp/provider';
 import { redirectToPrimaryDomain } from './redirect';
+import { runScheduled } from './sync/scheduled';
 
 // The Worker's entry point. A request to a redirect domain is answered here,
 // and so is an agent's sign-in over its limit. Everything else goes through
 // the MCP server's OAuth provider (src/mcp/provider.ts), which answers /mcp
 // and the OAuth routes, and hands the rest to the site below. When an agent
 // revokes its grant at the token endpoint, its connection ends here too. The
-// feed queue's consumer is src/feed/queue.ts. Cron jobs and Durable Objects
-// are exported from here as they arrive.
+// feed queue's consumer is src/feed/queue.ts, and the cron triggers' jobs,
+// which read GitHub with the service token, are in src/sync/. The Durable
+// Objects are exported from here.
 
 // The site: sign-in under /auth (src/auth/routes.ts), the live text streams,
 // like /live.txt (src/feed/streams.ts), the form on the page where a person
@@ -45,4 +47,5 @@ export default {
     return response;
   },
   queue: (batch, env) => deliverFeedBatch(batch, env),
+  scheduled: (controller, env) => runScheduled(controller.cron, env),
 } satisfies ExportedHandler<Env>;

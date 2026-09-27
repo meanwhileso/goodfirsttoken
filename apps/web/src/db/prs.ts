@@ -154,6 +154,18 @@ export async function setPrState(
   return row === null ? getPr(db, current.claimId) : toPr(row);
 }
 
+/**
+ * Whether `pr` is a claim's PR that is still open here, so the PR job
+ * follows it and tells the issue's room when it closes.
+ */
+export async function isOpenClaimPr(db: D1Database, pr: PrRef): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 AS found FROM prs WHERE repo = ? AND number = ? AND state = 'open'")
+    .bind(mustParse(repoName, pr.repo, 'pr.repo'), pr.number)
+    .first<{ found: number }>();
+  return row !== null;
+}
+
 /** Every PR still open, oldest first, for the job that follows them. */
 export async function listOpenPrs(db: D1Database): Promise<PrRecord[]> {
   const { results } = await db
