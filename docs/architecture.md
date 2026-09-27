@@ -608,7 +608,9 @@ is under [Watchers](how-it-works.md#the-issue-room). The claimant of each
 event, which the block check needs, comes from joining `events` to
 `claims` on the event's claim ID. When D1 can't say who is blocked, the
 room writes `watchers_retry_at`, a minute ahead, which `schedule` counts,
-and the next send that goes through deletes it.
+and the next send that goes through deletes it. Each send moves a waiting
+`watchers_retry_at` a minute ahead before it asks D1, so while D1 is slow
+the alarm doesn't fire again and again.
 
 **IDs.** Claim IDs are `c_` and event IDs `e_`, each followed by 20
 URL-safe characters, made the same way as session IDs.
@@ -667,6 +669,8 @@ streams' in [Text streams](how-it-works.md#text-streams).
   its history and the live ones.
 - **When D1 can't say who is blocked,** a feed sets its alarm a minute
   ahead, and the alarm sends what is waiting. A feed has no other alarm.
+  `deliver` also sends when every event it got was a copy, since the queue
+  may be trying again after an earlier call stored the events and failed.
 - **The block check runs as events go out.** So a block covers the history
   a feed already stores, and lifting it shows that history again. It costs
   one D1 read for each batch of events sent to a feed or room that has
@@ -688,7 +692,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   hasn't taken, since a write finishes once the reader takes the line
   before it, and ends the stream when a new line finds the oldest waiting
   over a minute. So a stalled reader holds at most a minute of lines in
-  memory. That signal needs the
+  memory. A close waits for the reader to take every line, so ending the
+  stream of a stalled reader aborts it. Any other stream closes, and is
+  aborted after a minute if its reader stalls before it takes the rest. That signal needs the
   `enable_request_signal` compatibility flag, which `wrangler.jsonc` turns
   on for the whole Worker. Ending a stream closes the socket to the feed,
   which answers the close.

@@ -836,8 +836,9 @@ Every feed has a plain-text live stream, readable with `curl -N`:
 - The time, user, agent, and issue can't hold a tab, a line break, or a
   control character. In the text, each run of control characters, tabs and
   line breaks among them, Unicode line and paragraph separators, and the
-  marks that reorder text, with the spaces around it, becomes one space. So
-  every event is one line, and reads in a terminal as it was written.
+  marks that reorder text, with the plain spaces around it, becomes one
+  space, or nothing at the start or end. So every event is one line, and
+  reads in a terminal as it was written.
 - An `.ndjson` line is the feed event as one JSON object, its ID included.
   The same characters are escaped as `\u` and four hex digits, so the line
   parses to the event as it was.
@@ -848,9 +849,9 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   reads the `.ndjson` form.
 - A stream closes after an hour, and when its feed or room closes the
   socket, as a deploy can. The reader reconnects with `since`.
-- A reader that leaves a line untaken for a minute is too slow, and the
-  stream ends, so lines never pile up waiting for it. It reconnects with
-  `since`.
+- A reader that leaves a line untaken for a minute is too slow. The stream
+  is cut off, with the lines it hasn't taken, so lines never pile up
+  waiting for it. It reconnects with `since`.
 - `/@<user>` finds the person by their login now, without case, and reads
   their feed by GitHub ID. So a renamed person's stream moves to their new
   login, and a login that changed hands shows its new owner.

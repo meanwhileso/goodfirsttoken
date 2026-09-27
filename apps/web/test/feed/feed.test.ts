@@ -154,6 +154,25 @@ describe("a feed's watchers", () => {
     warnings.mockRestore();
   });
 
+  test('get what an earlier delivery could not send them when the queue delivers a copy', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const watcher = await watchSocket(feed);
+    await runInDurableObject(feed, (instance) => {
+      const live = instance as unknown as { env: Env };
+      live.env = { ...live.env, DB: downDb };
+    });
+    const entry = by(priya, 'stored, then D1 went down');
+    await feed.deliver([entry]);
+    await runInDurableObject(feed, (instance) => {
+      (instance as unknown as { env: Env }).env = env;
+    });
+
+    expect(await feed.deliver([entry])).toEqual({ stored: 0 });
+
+    expect(await watcher.received(1)).toEqual(['stored, then D1 went down']);
+    warnings.mockRestore();
+  });
+
   test('stay connected while the feed hibernates, and get the next event', async () => {
     await feed.deliver([by(priya, 'before the nap')]);
     const watcher = await watchSocket(feed);

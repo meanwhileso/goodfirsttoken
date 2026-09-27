@@ -19,19 +19,32 @@ function unsafe(code: number): boolean {
   );
 }
 
-/** The text with each run of unsafe characters, and the spaces around it, made one space. */
+/** `text` without the plain spaces at its end. */
+function trimSpaces(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === ' ') end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * The text with each run of unsafe characters, and the plain spaces around
+ * it, made one space. A run at either end of the text is dropped.
+ */
 function oneLine(text: string): string {
   let out = '';
   let gap = false;
   for (const char of text) {
     if (unsafe(char.codePointAt(0) ?? 0)) {
       gap = true;
-    } else if (!gap || char !== ' ') {
-      out = gap ? `${out.trimEnd()} ${char}` : out + char;
+    } else if (!gap) {
+      out += char;
+    } else if (char !== ' ') {
+      const before = trimSpaces(out);
+      out = before === '' ? char : `${before} ${char}`;
       gap = false;
     }
   }
-  return out.trim();
+  return gap ? trimSpaces(out) : out;
 }
 
 /**

@@ -872,12 +872,19 @@ export class IssueRoom extends DurableObject<Env> {
   /**
    * Sends new events to the watchers. When D1 can't say who is blocked, the
    * room keeps a fact saying when to try again, a minute later, which the
-   * alarm counts, and clears it once a send goes through.
+   * alarm counts, and clears it once a send goes through. A try already
+   * waiting moves a minute on while this one is out, so the alarm doesn't
+   * fire again and again while D1 is slow.
    */
   private async sendToWatchers(): Promise<void> {
     try {
+      this.sql.exec(
+        "UPDATE facts SET value = ? WHERE key = 'watchers_retry_at'",
+        String(Date.now() + SEND_RETRY_FIRST_MS),
+      );
       if (await sendToWatchers(this.ctx, this.env.DB, (seq) => this.storedAfter(seq))) {
-        this.sql.exec("DELETE FROM facts WHERE key = 'watchers_retry_at'");
+        const waited = this.sql.exec("DELETE FROM facts WHERE key = 'watchers_retry_at'").rowsWritten > 0;
+        if (waited) await this.schedule(Date.now());
         return;
       }
       this.sql.exec(

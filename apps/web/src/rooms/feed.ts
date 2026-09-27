@@ -77,10 +77,13 @@ export class Feed extends DurableObject<Env> {
    */
   async deliver(entries: FeedEntry[]): Promise<{ stored: number }> {
     const now = Date.now();
+    // Every entry is checked before any is stored.
+    const checked = entries.map((entry) => ({
+      event: mustParse(feedEventSchema, entry.event, 'event'),
+      githubId: mustParse(githubId, entry.githubId, 'githubId'),
+    }));
     let stored = 0;
-    for (const entry of entries) {
-      const event = mustParse(feedEventSchema, entry.event, 'event');
-      const claimant = mustParse(githubId, entry.githubId, 'githubId');
+    for (const { event, githubId: claimant } of checked) {
       const fresh = this.sql.exec('INSERT OR IGNORE INTO seen (id, at) VALUES (?, ?)', event.id, now).rowsWritten > 0;
       if (!fresh) continue;
       this.sql.exec(
@@ -91,14 +94,18 @@ export class Feed extends DurableObject<Env> {
       );
       stored += 1;
     }
-    // Keep the newest events, and the IDs of the last week and of every
-    // event kept.
-    this.sql.exec(
-      'DELETE FROM events WHERE seq < (SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET ?)',
-      FEED_KEEPS - 1,
-    );
-    this.sql.exec('DELETE FROM seen WHERE at < ? AND id NOT IN (SELECT id FROM events)', now - FEED_REMEMBERS_MS);
-    if (stored > 0) await this.sendToWatchers();
+    if (stored > 0) {
+      // Keep the newest events, and the IDs of the last week and of every
+      // event kept.
+      this.sql.exec(
+        'DELETE FROM events WHERE seq < (SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET ?)',
+        FEED_KEEPS - 1,
+      );
+      this.sql.exec('DELETE FROM seen WHERE at < ? AND id NOT IN (SELECT id FROM events)', now - FEED_REMEMBERS_MS);
+    }
+    // Also when every event was a copy: the queue may be trying again
+    // because an earlier call stored the events and then failed.
+    await this.sendToWatchers();
     return { stored };
   }
 

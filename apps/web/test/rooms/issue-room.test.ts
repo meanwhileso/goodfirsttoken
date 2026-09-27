@@ -691,6 +691,38 @@ describe('watchers', () => {
     warnings.mockRestore();
   });
 
+  test('a slow D1 does not make the alarm fire again and again while a send to the watchers is out', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const made = await claim(priya);
+    const watcher = await watch();
+    await watcher.received(1);
+    // D1 can't say who is blocked, then takes forever to say it.
+    let blocks: 'refused' | 'slow' = 'refused';
+    await runInDurableObject(room, (instance) => {
+      const live = instance as unknown as { env: Env };
+      const answering = {
+        prepare: (query: string) => {
+          if (!query.includes('donor_blocks')) return db.prepare(query);
+          if (blocks === 'refused') throw new Error('D1 is down.');
+          const hangs = { bind: () => hangs, all: () => new Promise(() => undefined) };
+          return hangs;
+        },
+      } as unknown as D1Database;
+      live.env = { ...live.env, DB: answering };
+    });
+    at(t0 + MINUTE);
+    await post(made, 'while D1 was down');
+    expect(await alarmTime()).toBe(t0 + 2 * MINUTE);
+
+    blocks = 'slow';
+    at(t0 + 2 * MINUTE);
+    await runDurableObjectAlarm(room);
+
+    // The try that is out waits a minute before the alarm tries again.
+    expect(await alarmTime()).toBe(t0 + 3 * MINUTE);
+    warnings.mockRestore();
+  });
+
   test('a watcher stays connected while the room hibernates, and gets the next event', async () => {
     const made = await claim(priya);
     const watcher = await watch();

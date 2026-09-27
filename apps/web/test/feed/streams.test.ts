@@ -115,7 +115,7 @@ describe('a text stream', () => {
 
   test('keeps a text with tabs, line breaks, carriage returns, and terminal controls on one line', async () => {
     const priyas = await claim(priya);
-    const reason = `tabs\there,\nnew\r\n   lines\rand \u001b[2Jcontrols\u2028too`;
+    const reason = `tabs\there,\nnew\r\n   lines\rand \u001b[2Jcontrols\u2028too\u3000\nend`;
     await issueRoom(env.ISSUE_ROOM, issue).release({ claimId: priyas.id, githubId: priya.githubId, reason });
     await delivered(homeFeed(env.FEED), `released: ${reason}`);
 
@@ -127,7 +127,8 @@ describe('a text stream', () => {
         'priya',
         'claude-code',
         issue,
-        'released: tabs here, new lines and [2Jcontrols too',
+        // The ideographic space is the text's own, so it stays.
+        'released: tabs here, new lines and [2Jcontrols too\u3000 end',
       ]);
       await stream.cancel();
     }
@@ -231,6 +232,8 @@ describe('a text stream', () => {
     await vi.waitFor(async () => {
       expect(await sockets(feed)).toBe(0);
     });
+    // The stream is cut off, and holds no line for the reader.
+    await expect(res.body?.getReader().read()).rejects.toThrow('The reader fell behind.');
   });
 
   test('lets go of its socket on the feed when the reader goes away', async () => {

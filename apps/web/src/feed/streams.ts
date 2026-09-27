@@ -198,6 +198,10 @@ export async function handleStream(
   // When each line the reader hasn't taken yet was written, oldest first. A
   // write finishes once the reader takes the line before it.
   const untaken: number[] = [];
+  const stalled = () => Date.now() - (untaken[0] ?? Date.now()) > readerWaitMs;
+  const cutOff = () => {
+    writer.abort(new Error('The reader fell behind.')).catch(() => undefined);
+  };
   const end = () => {
     if (!open) return;
     open = false;
@@ -207,7 +211,19 @@ export async function handleStream(
     } catch {
       // It closed already.
     }
+    // A close waits for the reader to take every line first. A stalled
+    // reader is cut off, and one that stalls before it takes them all is
+    // cut off then, so nothing waits on a reader for long.
+    if (stalled()) {
+      cutOff();
+      return;
+    }
     writer.close().catch(() => undefined);
+    if (untaken.length > 0) {
+      setTimeout(() => {
+        if (untaken.length > 0) cutOff();
+      }, readerWaitMs);
+    }
   };
   const timer = setTimeout(end, lifetimeMs);
   socket.addEventListener('message', ({ data }) => {
@@ -217,12 +233,11 @@ export async function handleStream(
       console.error('A stream skipped a malformed event.');
       return;
     }
-    const now = Date.now();
-    if (untaken.length > 0 && now - (untaken[0] ?? now) > readerWaitMs) {
+    if (stalled()) {
       end();
       return;
     }
-    untaken.push(now);
+    untaken.push(Date.now());
     writer.write(encoder.encode(line(event))).then(() => untaken.shift(), end);
   });
   socket.addEventListener('close', end);
