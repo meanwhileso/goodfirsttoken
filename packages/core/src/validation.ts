@@ -24,6 +24,17 @@ export function validate<S extends z.ZodType>(
   return { ok: false, problems: result.error.issues.flatMap((issue) => toProblems(issue, root)) };
 }
 
+/**
+ * Checks `input` against `schema` and returns the parsed value, or throws a
+ * TypeError that names every problem. For values that must already be valid,
+ * like a row read from the database, where a problem is a bug.
+ */
+export function mustParse<S extends z.ZodType>(schema: S, input: unknown, root = 'input'): z.output<S> {
+  const result = validate(schema, input, root);
+  if (!result.ok) throw new TypeError(`Malformed ${root}.\n${describeProblems(result.problems)}`);
+  return result.value;
+}
+
 /** One line per problem, like `claimsPerIssue: must be a whole number from 1 to 10`. */
 export function describeProblems(problems: readonly FieldProblem[]): string {
   return problems.map((p) => `${p.field}: ${p.message}`).join('\n');

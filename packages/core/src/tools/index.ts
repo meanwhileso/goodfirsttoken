@@ -93,7 +93,7 @@ export function toolRefusal(refusal: Refusal): ToolRefusal {
 
 export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
-export { budgetSchema, interestsSchema, reviewReasons } from './donor';
-export type { Budget, Interests, Suggestion } from './donor';
+export { reviewReasons } from './donor';
+export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';
 export type { ClaimSummary, FollowUp } from './shared';

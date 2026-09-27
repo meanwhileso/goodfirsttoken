@@ -15,6 +15,14 @@ function pattern(regex: RegExp, message: string) {
 /** A GitHub login: letters, digits, and hyphens, at most 39 characters. */
 export const githubLogin = pattern(new RegExp(`^${LOGIN}$`), 'must be a GitHub login, like octocat');
 
+/**
+ * A GitHub account's numeric ID. A login can change, and a freed login can go
+ * to someone else, so the ID is who a person is.
+ */
+export const githubId = z
+  .int({ error: 'must be a numeric GitHub account ID' })
+  .min(1, 'must be a numeric GitHub account ID');
+
 /** A repository as `owner/name`. */
 export const repoName = pattern(new RegExp(`^${REPO}$`), 'must be a repository as owner/name');
 

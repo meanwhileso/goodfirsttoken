@@ -2,11 +2,14 @@ import { z } from 'zod';
 import {
   agentName,
   commitSha,
+  count,
   epochMs,
+  githubId,
   githubLogin,
   id,
   issueRef,
   prRefSchema,
+  repoName,
   trimmedText,
 } from './primitives';
 import type { Refusal } from './refusals';
@@ -113,9 +116,18 @@ export const claimRecordSchema = z
   .object({
     id,
     issue: issueRef,
+    /** The project's code repo. It differs from the issue's repo when the project keeps issues elsewhere. */
+    project: repoName,
+    /** The claimant's numeric GitHub ID, which stays the same when their login changes. */
+    githubId,
+    /** The claimant's login when they claimed. */
     login: githubLogin,
     agent: agentName,
+    /** The claimant was an admin or maintainer of the project when they claimed. */
+    ownProject: z.boolean(),
     startCommit: commitSha,
+    /** The tokens the work took, as the harness estimated them, or null when it gave no estimate. */
+    tokenEstimate: count.nullable(),
     ...timelineShape,
   })
   .superRefine(checkTimeline);
