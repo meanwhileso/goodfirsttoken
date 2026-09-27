@@ -329,7 +329,11 @@ export const submitWork = defineTool({
     checks: trimmedText(2000).describe('What you checked, like tests and lint runs, in your own words.'),
     agent: agentName,
     model: modelName,
-    tokenEstimate: count.optional().describe('Tokens spent, when the harness can estimate them.'),
+    tokenEstimate: count
+      .optional()
+      .describe(
+        'Tokens spent on this claim since its last submit, or since it was made, when the harness can estimate them. The server adds up the estimates of every submit.',
+      ),
   }),
   output: z.object({
     claimId: id,

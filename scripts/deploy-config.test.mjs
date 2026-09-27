@@ -246,6 +246,21 @@ test('a binding the script does not know stops the deploy, so no local name reac
   assert.throws(() => deployConfig(withOtherWorker, 'staging', withLimiter), /another Worker/);
 });
 
+test("every Durable Object the Worker binds is deployed with the migration that gives it SQLite storage", () => {
+  const real = realLocal();
+  const bindings = real.durable_objects?.bindings ?? [];
+  assert.ok(bindings.length > 0, 'the Worker binds a Durable Object');
+
+  const { config } = deployConfig(real, 'production', withLimiter);
+
+  assert.deepEqual(config.durable_objects, real.durable_objects);
+  assert.deepEqual(config.migrations, real.migrations);
+  const sqliteClasses = config.migrations.flatMap((migration) => migration.new_sqlite_classes ?? []);
+  for (const { class_name: className } of bindings) {
+    assert.ok(sqliteClasses.includes(className), `${className} has a migration with new_sqlite_classes`);
+  }
+});
+
 test('the local config may not carry an account, a route, or a resource ID', () => {
   for (const bad of [
     { ...local, account_id: 'x' },

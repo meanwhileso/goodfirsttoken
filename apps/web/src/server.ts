@@ -31,6 +31,8 @@ const site: ExportedHandler<Env> = {
   },
 };
 
+export { IssueRoom } from './rooms/issue-room';
+
 export default {
   fetch: async (request, env, ctx) =>
     redirectToPrimaryDomain(request, env) ??

@@ -11,6 +11,7 @@ export * from './primitives';
 export * from './projects';
 export * from './prs';
 export * from './refusals';
+export * from './secrets';
 export * from './sessions';
 export * from './tools';
 export * from './validation';

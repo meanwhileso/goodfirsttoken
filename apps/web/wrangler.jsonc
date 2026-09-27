@@ -40,6 +40,12 @@
   // neither (src/auth/settings.ts).
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
+  // One issue room per issue, named by the issue (src/rooms/issue-room.ts).
+  // Class names are code, so they may be here. Each class gets its storage
+  // from a migration, which is never edited once it has run on a deploy. A
+  // new class is a new migration with the next tag.
+  "durable_objects": { "bindings": [{ "name": "ISSUE_ROOM", "class_name": "IssueRoom" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["IssueRoom"] }],
   // The OAuth library's clients, grants, and token hashes, for the MCP
   // server (src/mcp/provider.ts).
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
