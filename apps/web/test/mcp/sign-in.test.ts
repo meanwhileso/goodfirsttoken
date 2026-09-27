@@ -1,4 +1,5 @@
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
+import type { OAuthTokens } from '@modelcontextprotocol/client';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { emptyDatabase } from '../db/helpers';
@@ -9,6 +10,7 @@ import {
   location,
   parseSetCookie,
   pickOnGitHub,
+  randomAddress,
   setEnv,
   signIn,
   startGitHub,
@@ -18,6 +20,7 @@ import {
   MCP_URL,
   MemoryOAuthClient,
   REDIRECT_URI,
+  TOKEN_LIMIT,
   agentFetch,
   appTokens,
   approveInBrowser,
@@ -26,11 +29,14 @@ import {
   connectAgent,
   consentHandle,
   emptyKv,
+  mcpClient,
   pkce,
+  refreshNothing,
   registerClient,
   startSession,
   tokensFor,
   tradeCode,
+  useUpTokenRequests,
 } from './helpers';
 
 // An agent's sign-in to the MCP server: the OAuth metadata, dynamic client
@@ -165,9 +171,30 @@ test('an agent that asks without PKCE gets a page that says so, naming where a l
   expect(back?.pathname).toBe('/landing');
   expect(back?.searchParams.get('error')).toBe('invalid_request');
   expect(back?.searchParams.get('error_description')).toMatch(/PKCE/);
-  expect(textOf(html)).toContain(back?.searchParams.get('error_description') ?? 'a reason');
+  expect(textOf(html)).toContain('like its PKCE challenge');
   expect(back?.searchParams.get('state')).toBe('agent-state');
   expect(github.calls).toEqual([]);
+});
+
+test("the error page gives the site's own reason, and words an agent put in its request go only in the link back to it", async () => {
+  const clientId = await registerClient('Phisher', 'https://phish.example/landing');
+  const { challenge } = await pkce();
+  const planted = 'Your account is locked. Sign in again at https://evil.example/login';
+  const url = authorizeUrl(clientId, { challenge, redirectUri: 'https://phish.example/landing' });
+  url.searchParams.set('response_type', planted);
+
+  const answer = await new Browser().fetch(url.toString());
+  const html = await answer.text();
+  const shown = textOf(html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]*>/g, ' '));
+  const back = links(html).find((link) => link.origin === 'https://phish.example');
+
+  expect(answer.status).toBe(400);
+  expect(shown).toContain("This agent's request to connect isn't right");
+  expect(shown).toContain('It has to ask for a code.');
+  expect(shown).not.toContain('locked');
+  expect(shown).not.toContain('evil.example');
+  expect(back?.searchParams.get('error')).toBe('unsupported_response_type');
+  expect(back?.searchParams.get('error_description')).toContain(planted);
 });
 
 test('an agent with a client secret still has to use PKCE, and gets the same page without it', async () => {
@@ -481,9 +508,22 @@ test('registering an agent and opening the page to approve it count toward the s
 
   expect(answers).toEqual([...Array<number>(9).fill(200), ...Array<number>(10).fill(201)]);
   expect(page.status).toBe(429);
-  expect(registration.status).toBe(429);
-  expect(registration.headers.get('retry-after')).toBe('60');
+  await expectOAuthLimitError(registration);
 });
+
+// The answer over a limit at /oauth/register or /oauth/token: an OAuth error
+// an agent's SDK reads as one to wait out, and never as a reason to start
+// signing in again.
+async function expectOAuthLimitError(answer: Response) {
+  expect(answer.status).toBe(429);
+  expect(answer.headers.get('retry-after')).toBe('60');
+  expect(answer.headers.get('cache-control')).toBe('no-store');
+  expect(answer.headers.get('content-type')).toMatch(/^application\/json/);
+  expect(await answer.json()).toEqual({
+    error: 'temporarily_unavailable',
+    error_description: expect.stringMatching(/\S/) as string,
+  });
+}
 
 test("approving an agent counts toward the sign-in limit of 20 requests a minute from each address", async () => {
   await inOneLimitWindow();
@@ -499,23 +539,67 @@ test("approving an agent counts toward the sign-in limit of 20 requests a minute
   expect(over.headers.get('retry-after')).toBe('60');
 });
 
-test('trading a code or refreshing tokens counts toward the sign-in limit of 20 requests a minute from each address', async () => {
+test('trading a code or refreshing tokens has a limit of its own, 600 requests a minute from each address', async () => {
   await inOneLimitWindow();
-  const fetch = agentFetch();
-  const refresh = () =>
-    fetch(`${ORIGIN}/oauth/token`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'a:b:c', client_id: 'nobody' }),
-    });
-  const answers: number[] = [];
-  for (let i = 0; i < 20; i++) answers.push((await refresh()).status);
+  const address = randomAddress();
+  await useUpTokenRequests(address, TOKEN_LIMIT - 1);
 
-  const over = await refresh();
+  const last = await refreshNothing(agentFetch(address));
+  const over = await refreshNothing(agentFetch(address));
 
-  expect(answers).not.toContain(429);
-  expect(over.status).toBe(429);
-  expect(over.headers.get('retry-after')).toBe('60');
+  expect(last.status).not.toBe(429);
+  await expectOAuthLimitError(over);
+});
+
+test("an address's sign-ins and pages to approve an agent don't use up its token requests, and the other way round", async () => {
+  await inOneLimitWindow();
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  // Ten sign-ins on the site and ten pages to approve an agent use up one
+  // address's sign-in limit.
+  const signingIn = new Browser();
+  for (let i = 0; i < 10; i++) await signingIn.post('/auth/sign-in');
+  for (let i = 0; i < 10; i++) await signingIn.fetch(authorizeUrl(clientId, { challenge }).toString());
+  // Another address used up its token requests.
+  const refreshing = new Browser();
+  await useUpTokenRequests(refreshing.address);
+
+  const signInOver = await signingIn.post('/auth/sign-in');
+  const tokenAfterSignIns = await refreshNothing(agentFetch(signingIn.address));
+  const tokenOver = await refreshNothing(agentFetch(refreshing.address));
+  const signInAfterTokens = await refreshing.post('/auth/sign-in');
+  const pageAfterTokens = await refreshing.fetch(authorizeUrl(clientId, { challenge }).toString());
+
+  expect(signInOver.status).toBe(429);
+  expect(tokenAfterSignIns.status).not.toBe(429);
+  expect(tokenOver.status).toBe(429);
+  expect(signInAfterTokens.status).toBe(303);
+  expect(pageAfterTokens.status).toBe(200);
+});
+
+test("an agent's SDK that meets the token limit on a refresh keeps its tokens and never starts a new sign-in", async () => {
+  const oauth = new MemoryOAuthClient('Shared backend');
+  await connectAgent(github, 'priya', { oauth });
+  // The agent's access token stopped working, so its next call refreshes,
+  // from an address that already used up its token requests.
+  const saved = { ...oauth.saved, access_token: 'expired' } as OAuthTokens;
+  oauth.saved = saved;
+  oauth.authorizationUrl = undefined;
+  const address = randomAddress();
+  await inOneLimitWindow();
+  await useUpTokenRequests(address);
+  const { client, transport } = mcpClient(oauth, agentFetch(address));
+  const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+  const failed = await client.connect(transport).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  expect(failed).toMatchObject({ code: 'temporarily_unavailable' });
+  expect(oauth.authorizationUrl).toBeUndefined();
+  expect(oauth.saved).toEqual(saved);
+  expect(warned).not.toHaveBeenCalledWith(expect.stringContaining('falling back to a new authorization request'));
 });
 
 test("when GitHub won't say whose the new token is, the agent's sign-in stops, and that token is revoked", async () => {

@@ -174,11 +174,14 @@ signs in once with the person's GitHub account, and then acts as them.
   them back to the agent with `access_denied`.
 - A request to `/oauth/authorize` never sends the browser anywhere on its
   own, since any agent can register any redirect URI. A request that isn't
-  right gets an error on the page, with its own status. When the agent
-  should hear about it, like a missing PKCE challenge, the page gives the
-  reason and a link back to the agent with the error, named by the scheme
-  and host it goes to. The person can follow it or not. An unknown client,
-  or a redirect URI the client didn't register, gets the error with no link.
+  right gets an error on the page, with its own status: `400`, `429`, or
+  `503`. When the agent should hear about it, like a missing PKCE
+  challenge, the page gives a reason in the site's own words for that
+  error, and a link back to the agent with the error, named by the scheme
+  and host it goes to. The person can follow it or not. Words from the
+  agent's request never show on the page. They go only in the link, in its
+  `error_description`. An unknown client, or a redirect URI the client
+  didn't register, gets the error with no link.
 - Each step is tied to the browser that started it by a cookie that lasts
   10 minutes, and works once. So the person has 10 minutes to approve, and
   GitHub has to send them back to the same browser. A step taken late, twice,
@@ -205,10 +208,12 @@ GitHub token GitHub gave that sign-in.
   revoked. The person's other agents keep theirs.
 - A connection also ends with its grant, the way Disconnect ends it, so its
   GitHub token is revoked. An agent that revokes its refresh token at
-  `/oauth/token` ends its connection at once. An agent that revokes only an
-  access token stays connected. A connection whose agent never traded its
-  code within the code's 10 minutes, or went 30 days without a refresh, ends
-  the next time the person opens `/me` or connects an agent.
+  `/oauth/token` ends its connection at once, whether its request leaves out
+  `grant_type` or sends it empty. An agent that revokes only an access token
+  stays connected. A connection whose agent never traded its code within
+  the code's 10 minutes and one more, or went 30 days and a minute without
+  getting tokens, ends the next time the person opens `/me` or connects an
+  agent.
 - When a step of an agent's sign-in fails after GitHub gave the token, the
   connection is removed and the token is revoked, and the agent gets
   `server_error`.
@@ -271,16 +276,26 @@ hold one token for the site, and one for each connected agent.
   `Retry-After: 60`. Other people's agents keep theirs.
 - A disconnected agent gets `401` on its next call.
 
-**Limits on an agent's sign-in.** Registering a client, each request to
-`/oauth/token`, opening the page, approving, and GitHub's return each count
-toward the sign-in limit under [Signing in](#signing-in): 20 requests a
-minute from each address. An approval refused for its `Origin` doesn't
-count.
+**Limits on an agent's sign-in.** Registering a client, opening the page,
+approving, and GitHub's return each count toward the sign-in limit under
+[Signing in](#signing-in): 20 requests a minute from each address. An
+approval refused for its `Origin` doesn't count.
 
+- Each registration stores a client, so it counts toward the sign-in limit.
+  One host that signs in agents for many people, like Grok Bot, can
+  register at most 20 clients a minute from one address.
 - The page's data also loads from a server function at a URL of its own,
   under `/_serverFn/`, which anyone can call. Each call there counts the
   same as opening the page.
 - Over the limit, the page says to try again in a minute, with `429`.
+- Trading a code and refreshing tokens at `/oauth/token` have a limit of
+  their own: 600 requests a minute from each address. A shared host
+  refreshes many people's tokens from one address. Sign-ins and pages don't
+  use up that limit, and token requests don't use up the sign-in limit.
+- Over either limit, `/oauth/register` and `/oauth/token` answer `429` with
+  `Retry-After: 60` and an OAuth error in JSON, `temporarily_unavailable`.
+  An agent then waits and tries again, and keeps its tokens. It doesn't
+  send the person to sign in again.
 
 **Cookies.** The page sets a cookie whose name starts with
 `__Host-gft.oauth-consent-`, and approving sets one that starts with

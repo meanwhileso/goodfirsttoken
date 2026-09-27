@@ -242,6 +242,21 @@ test("an agent that revokes its refresh token at /oauth/token is disconnected: i
   expect((await gitHubUser(webToken)).status).toBe(200);
 });
 
+test('a revocation sent with an empty grant_type, which the library also takes as one, disconnects the agent too', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'lena');
+  const webToken = (await storedToken()) ?? '';
+  const agent = await connectAgent(github, 'lena', { oauth: new MemoryOAuthClient('Claude Code') });
+  const agentToken = appTokens(github).find((token) => token !== webToken) ?? '';
+
+  const revoked = await tokenRequest(agent, { grant_type: '', token: agent.oauth.saved?.refresh_token ?? '' });
+
+  expect(revoked.status).toBe(200);
+  expect((await callMcp(agent.oauth.saved?.access_token ?? '')).status).toBe(401);
+  expect(await listedAgents(browser)).toEqual([]);
+  expect((await gitHubUser(agentToken)).status).toBe(401);
+});
+
 test('an agent that revokes only its access token stays connected, and refreshes to go on', async () => {
   const browser = new Browser();
   await signIn(browser, github, 'kenji');
@@ -278,6 +293,55 @@ test('an agent that never trades its code is disconnected once the code expires,
   expect(after).toEqual([]);
   expect((await gitHubUser(agentToken)).status).toBe(401);
   expect((await gitHubUser(webToken)).status).toBe(200);
+});
+
+test("an approved agent that hasn't traded its code stays connected for the code's 10 minutes and one more, and no longer", async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'kenji');
+  const webToken = (await storedToken()) ?? '';
+  const { challenge } = await pkce();
+  const inside = await registerClient('Inside the window');
+  const outside = await registerClient('Outside the window');
+  await approveInBrowser(new Browser(), github, authorizeUrl(inside, { challenge }), 'kenji');
+  const [insideToken = ''] = appTokens(github).filter((token) => token !== webToken);
+  await approveInBrowser(new Browser(), github, authorizeUrl(outside, { challenge }), 'kenji');
+  const [outsideToken = ''] = appTokens(github).filter((token) => token !== webToken && token !== insideToken);
+  const age = (name: string, by: number) =>
+    env.DB.prepare('UPDATE connected_agents SET connected_at = connected_at - ?1 WHERE client_name = ?2').bind(by, name).run();
+  await age('Inside the window', 11 * MINUTE - 30_000);
+  await age('Outside the window', 11 * MINUTE + 30_000);
+
+  const listed = await listedAgents(browser);
+
+  expect(listed.map((agent) => agent.name)).toEqual(['Inside the window']);
+  expect((await gitHubUser(insideToken)).status).toBe(200);
+  expect((await gitHubUser(outsideToken)).status).toBe(401);
+});
+
+test('a connection lasts 30 days and a minute after the agent last got tokens, and no longer', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const webToken = (await storedToken()) ?? '';
+  const inside = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Inside the window') });
+  const outside = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Outside the window') });
+  const [insideToken = '', outsideToken = ''] = appTokens(github).filter((token) => token !== webToken);
+  // Each connected, and last got tokens, that long ago.
+  const age = (name: string, by: number) =>
+    env.DB.prepare(
+      'UPDATE connected_agents SET connected_at = connected_at - ?1, renewed_at = renewed_at - ?1 WHERE client_name = ?2',
+    )
+      .bind(by, name)
+      .run();
+  await age('Inside the window', 30 * DAY + MINUTE - 30_000);
+  await age('Outside the window', 30 * DAY + MINUTE + 30_000);
+
+  const listed = await listedAgents(browser);
+
+  expect(listed.map((agent) => agent.name)).toEqual(['Inside the window']);
+  expect((await gitHubUser(insideToken)).status).toBe(200);
+  expect((await gitHubUser(outsideToken)).status).toBe(401);
+  expect((await startSession(inside)).structuredContent).toMatchObject({ login: 'priya' });
+  expect((await callMcp(outside.oauth.saved?.access_token ?? '')).status).toBe(401);
 });
 
 test('a connection ends when its grant runs out, 30 days after the agent last got tokens, and a refresh before then keeps it', async () => {

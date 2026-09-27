@@ -263,7 +263,8 @@ export async function endLapsedConnections(origin: string, githubId: number, now
 /**
  * The token an agent asks to revoke, when `request` is a revocation at the
  * token endpoint: a form with a token and no grant_type, as the library reads
- * one. Null for any other request.
+ * one. An empty grant_type counts as none there, so it does here too. Null
+ * for any other request.
  */
 export async function revocationToken(request: Request): Promise<string | null> {
   if (request.method !== 'POST' || new URL(request.url).pathname !== TOKEN_PATH) return null;
@@ -272,7 +273,7 @@ export async function revocationToken(request: Request): Promise<string | null> 
     .formData()
     .catch(() => null);
   const token = form?.get('token');
-  return typeof token === 'string' && token !== '' && !form?.has('grant_type') ? token : null;
+  return typeof token === 'string' && token !== '' && !form?.get('grant_type') ? token : null;
 }
 
 /**

@@ -36,9 +36,7 @@ function ConnectAgent() {
             </p>
             {page.back && (
               <>
-                <p className="account__note">
-                  The reason: <span className="mono">{page.back.reason}</span>
-                </p>
+                <p className="account__note">{page.back.reason}</p>
                 <p className="account__note">
                   To tell the agent, go back to{' '}
                   <a className="mono" href={page.back.href}>

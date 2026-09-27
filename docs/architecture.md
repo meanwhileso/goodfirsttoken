@@ -65,7 +65,7 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
 |---|---|
 | `src/auth/auth.ts` | Sets up Better Auth with its GitHub provider and D1 |
 | `src/auth/routes.ts` | Answers every request under `/auth`: the allowed routes, the same-site check on forms, sign-out's revocation, the dev sign-in, and the routes an agent's sign-in and Disconnect use |
-| `src/auth/rate-limit.ts` | The sign-in rate limit, counted by client address |
+| `src/auth/rate-limit.ts` | The sign-in rate limit and the MCP server's token endpoint limit, each counted by client address |
 | `src/auth/session.ts` | Reads who is signed in from a request |
 | `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav |
 | `src/auth/SiteNav.tsx` | The nav with the signed-in person in it |
@@ -124,7 +124,8 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   turned on outright and the tests see it.
 - **Cloudflare rate limiting,** through the `SIGN_IN_LIMITER` binding
   (`src/auth/rate-limit.ts`), counted per `cf-connecting-ip`, with an IPv6 address cut to its /64, and
-  an IPv4 address written as IPv6 read as the IPv4 address.
+  an IPv4 address written as IPv6 read as the IPv4 address. The MCP
+  server's token endpoint counts against `TOKEN_LIMITER`, keyed the same way.
   Better Auth's own limiter is off, since it counts in each isolate's memory.
 - **Development** is checked in `src/auth/settings.ts`: `ENVIRONMENT` and a
   loopback `http` `GH_WEB_URL` both. The dev sign-in and the stand-ins for
@@ -143,6 +144,7 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
 | `src/routes/oauth/authorize.tsx` | That page |
+| `src/mcp/page-status.ts` | Sets the status that page names for itself |
 | `src/mcp/connections.ts` | The `connected_agents` table, Disconnect, and ending connections whose grants ended |
 | `src/mcp/agents.ts` | The server function that lists a person's agents on `/me` |
 | `src/mcp/paths.ts` | The paths, with no imports, so pages can use them |
@@ -190,7 +192,9 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   ends the connection the way Disconnect does.
   - The agent revokes its refresh token at `/oauth/token`, which the
     library answers by deleting the grant. `src/server.ts` reads the token
-    from the form before the provider answers, and after a `200` checks the
+    from the form before the provider answers, taking the form as a
+    revocation the way the library does: a `token` and no `grant_type`, or
+    an empty one. After a `200` it checks the
     grant's key, `grant:<user ID>:<grant ID>`, in `OAUTH_KV`. The library's
     helpers have no lookup by ID, and a KV list can miss a key made in the
     last minute. When the grant is gone, the row with that `grant_id` ends.
@@ -213,7 +217,12 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   agent on the page, which only the person follows.
 - **The page's status.** TanStack Start renders every page with `200`. So
   the server function names the page's status in the `x-gft-page-status`
-  header, and `src/server.ts` sets it and removes the header.
+  header, and `src/server.ts` sets it with `src/mcp/page-status.ts`, only
+  when it is `400`, `429`, or `503`, and always removes the header.
+- **The error page's reason** is a sentence the site wrote for each OAuth
+  error code, with one for any other. The library's `error_description`
+  repeats parts of the request, like its `response_type`, which anyone can
+  write, so it goes only in the link back to the agent.
 - **The server function has a URL of its own,** under `/_serverFn/`, which
   the client bundle names and anyone can call. So `openConsent` counts the
   sign-in limit itself, for the page and for each call there alike.
@@ -243,11 +252,24 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 - **Rate limiting.** `MCP_LIMITER` counts each request to `/mcp` that has a
   valid token, by the person's GitHub ID, since agents on a shared host, like
   Grok Bot's, can share an address. An agent's sign-in counts against
-  `SIGN_IN_LIMITER`, by address: `src/server.ts` counts registration and
-  each request to the token endpoint before the library sees them,
-  `openConsent` counts the page, and the form and GitHub's return count where
-  they are answered. A request to `/mcp` with a token the library doesn't
-  know gets its `401` after one KV read, and no limit here counts it.
+  `SIGN_IN_LIMITER`, by address: `src/server.ts` counts registration before
+  the library sees it, since each one writes a client to KV, `openConsent`
+  counts the page, and the form and GitHub's return count where they are
+  answered. So a shared host can register at most 20 clients a minute from
+  one address.
+- **The token endpoint has a limit of its own.** `TOKEN_LIMITER` counts each
+  request to `/oauth/token`, by address, 600 a minute. A shared host
+  refreshes many people's tokens from one address, and at 20 a minute some
+  of them would fail.
+- **Over a limit, the OAuth routes answer in OAuth's terms.** At
+  `/oauth/register` and `/oauth/token` the answer is `429` with a JSON body
+  whose `error` is `temporarily_unavailable`, `Retry-After: 60`, and
+  `no-store`. `@modelcontextprotocol/client` 2.1.0 reads any other body as a
+  server error, and on a refresh a server error makes it drop to a new sign-in
+  in the browser, which a headless agent can't finish. With this body it
+  throws, keeps its tokens, and can refresh again later.
+- A request to `/mcp` with a token the library doesn't know gets its `401`
+  after one KV read, and no limit here counts it.
 
 ### The design system
 
@@ -403,6 +425,7 @@ that leaves their settings empty gives them empty strings, and
 | `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, and the issue room |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
+| `TOKEN_LIMITER` | Rate limiter: 600 requests to `/oauth/token` a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | The MCP tools, from #15 on |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer | #14 |
@@ -749,7 +772,8 @@ and secrets, so no variable or secret of the Worker can start with it.
 The rate limiters' namespace IDs are the only IDs `wrangler.jsonc` has to
 carry, since Wrangler refuses a limiter without one. Each is a placeholder
 that local development simulates, and a deploy replaces them with the
-`SIGN_IN_LIMITER_NAMESPACE_ID` and `MCP_LIMITER_NAMESPACE_ID` settings.
+`SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`, and
+`TOKEN_LIMITER_NAMESPACE_ID` settings.
 
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every

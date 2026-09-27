@@ -57,12 +57,15 @@
   },
   // Cloudflare rate limiting. SIGN_IN_LIMITER counts sign-ins on the site and
   // agents' sign-ins to the MCP server, per client address
-  // (src/auth/rate-limit.ts). MCP_LIMITER counts calls to the MCP server, per
-  // person (src/mcp/server.ts). Wrangler needs a namespace ID for each, so
-  // these are placeholders that local development simulates. A deploy
-  // replaces each with the <name>_NAMESPACE_ID setting.
+  // (src/auth/rate-limit.ts). TOKEN_LIMITER counts requests to the MCP
+  // server's token endpoint, per client address, apart from sign-ins, since
+  // one host can refresh tokens for many people's agents. MCP_LIMITER counts
+  // calls to the MCP server, per person (src/mcp/server.ts). Wrangler needs a
+  // namespace ID for each, so these are placeholders that local development
+  // simulates. A deploy replaces each with the <name>_NAMESPACE_ID setting.
   "ratelimits": [
     { "name": "SIGN_IN_LIMITER", "namespace_id": "1", "simple": { "limit": 20, "period": 60 } },
-    { "name": "MCP_LIMITER", "namespace_id": "2", "simple": { "limit": 120, "period": 60 } }
+    { "name": "MCP_LIMITER", "namespace_id": "2", "simple": { "limit": 120, "period": 60 } },
+    { "name": "TOKEN_LIMITER", "namespace_id": "3", "simple": { "limit": 600, "period": 60 } }
   ]
 }

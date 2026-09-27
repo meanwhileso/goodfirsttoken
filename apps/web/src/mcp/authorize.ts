@@ -6,7 +6,7 @@ import {
 } from '@cloudflare/workers-oauth-provider';
 import { env } from 'cloudflare:workers';
 import { AUTH_BASE_PATH, failureReason, GITHUB_SCOPE } from '../auth/auth';
-import { tooManySignIns, underSignInLimit } from '../auth/rate-limit';
+import { tooManySignIns, underSignInLimit, underTokenLimit } from '../auth/rate-limit';
 import { oauthApp, SignInNotSetUp, siteOrigin } from '../auth/settings';
 import { savePerson } from '../db';
 import { exchangeGitHubCode, GitHubError, gitHubRest, gitHubUrls, revokeGitHubToken } from '../github';
@@ -53,18 +53,32 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 }
 
 /**
- * Counts an agent's registration and each request to the token endpoint
- * toward the sign-in limit, since anyone can send them: a registration
- * stores a client in OAUTH_KV, and a token request tries a code or a refresh
- * token. The page to approve an agent counts where it starts, in
- * openConsent, and the approval and GitHub's return count where they are
- * answered. Returns the 429 for an address over the limit, or null.
+ * Counts the two OAuth requests an agent sends itself, since anyone can send
+ * them. A registration stores a client in OAUTH_KV, so it counts toward the
+ * sign-in limit. A request to the token endpoint tries a code or a refresh
+ * token, and one host can refresh tokens for many people's agents, so it
+ * counts toward a limit of its own. The page to approve an agent counts
+ * where it starts, in openConsent, and the approval and GitHub's return
+ * count where they are answered. Returns the answer for an address over its
+ * limit, or null.
  */
 export async function limitAgentSignIn(request: Request): Promise<Response | null> {
+  if (request.method !== 'POST') return null;
   const { pathname } = new URL(request.url);
-  const counted = request.method === 'POST' && (pathname === REGISTER_PATH || pathname === TOKEN_PATH);
-  if (!counted || (await underSignInLimit(request))) return null;
-  return tooManySignIns();
+  if (pathname === REGISTER_PATH && !(await underSignInLimit(request))) return overOAuthLimit();
+  if (pathname === TOKEN_PATH && !(await underTokenLimit(request))) return overOAuthLimit();
+  return null;
+}
+
+// The answer over a limit at /oauth/register or /oauth/token, as an OAuth
+// error. An agent's SDK reads temporarily_unavailable as one to wait out. It
+// reads a body that isn't an OAuth error as a server error, and on a refresh
+// that makes it start a new sign-in, which a headless agent can't finish.
+function overOAuthLimit(): Response {
+  return Response.json(
+    { error: 'temporarily_unavailable', error_description: 'Too many requests from here. Try again in a minute.' },
+    { status: 429, headers: { 'cache-control': 'no-store', 'retry-after': '60' } },
+  );
 }
 
 const START_AGAIN =
@@ -78,7 +92,7 @@ export interface WayBack {
   href: string;
   /** Where that goes, as the page shows it. */
   to: string;
-  /** The error, in the words the agent gets. */
+  /** What went wrong, in the site's own words for the error. */
   reason: string;
 }
 
@@ -174,6 +188,17 @@ function errorPage(status: number, message: string, back: WayBack | null = null)
   return { page: { kind: 'error', message, back }, status, headers };
 }
 
+// What the page says went wrong, for each OAuth error an agent's request can
+// get back. The library's own description repeats parts of the request,
+// which anyone can write, so it goes only in the link back to the agent.
+const REASONS: Record<string, string> = {
+  invalid_request: 'It left out something the request needs, like its PKCE challenge, or sent it wrong.',
+  unsupported_response_type: 'It asked for a kind of answer the site never gives. It has to ask for a code.',
+  unauthorized_client: "It asked for a kind of answer it didn't register for.",
+  invalid_target: "It asked for access to something other than this site's MCP server.",
+};
+const ANY_REASON = "The site can't use the request as it is.";
+
 // The error page for a request whose error the agent should hear: it says
 // what went wrong and links back to the agent.
 function wayBack(request: AuthRequest | AuthorizationError, error: string, description: string): ConsentOutcome {
@@ -181,7 +206,7 @@ function wayBack(request: AuthRequest | AuthorizationError, error: string, descr
   return errorPage(400, "This agent's request to connect isn't right, so nothing was connected.", {
     href,
     to: destination(href).sendsTo,
-    reason: description,
+    reason: REASONS[error] ?? ANY_REASON,
   });
 }
 

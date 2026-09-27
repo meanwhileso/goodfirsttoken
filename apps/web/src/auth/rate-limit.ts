@@ -2,7 +2,9 @@ import { env } from 'cloudflare:workers';
 
 // Cloudflare rate limiting on the sign-in endpoints: the site's sign-in, and
 // an agent's sign-in to the MCP server. Both count against SIGN_IN_LIMITER,
-// per client address.
+// per client address. Requests to the MCP server's token endpoint count
+// against TOKEN_LIMITER, per client address too, with a limit of their own,
+// since one host can refresh tokens for many people's agents.
 
 const DOTTED_TAIL = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
@@ -37,7 +39,7 @@ function ipv6Groups(address: string): number[] | null {
  * address. Cloudflare sets cf-connecting-ip on every request that reaches
  * the Worker.
  */
-function limiterKey(address: string | null): string {
+export function limiterKey(address: string | null): string {
   if (!address) return 'unknown';
   const lower = address.trim().toLowerCase();
   if (!lower.includes(':')) return lower;
@@ -57,6 +59,12 @@ function limiterKey(address: string | null): string {
 /** True while the request's client is under the sign-in limit, counting this request. */
 export async function underSignInLimit(request: Request): Promise<boolean> {
   const { success } = await env.SIGN_IN_LIMITER.limit({ key: limiterKey(request.headers.get('cf-connecting-ip')) });
+  return success;
+}
+
+/** True while the request's client is under the limit on the MCP server's token endpoint, counting this request. */
+export async function underTokenLimit(request: Request): Promise<boolean> {
+  const { success } = await env.TOKEN_LIMITER.limit({ key: limiterKey(request.headers.get('cf-connecting-ip')) });
   return success;
 }
 

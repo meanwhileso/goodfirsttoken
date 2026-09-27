@@ -52,6 +52,7 @@ const withLimiter = {
   LOGIN_LIMITER_NAMESPACE_ID: '1001',
   SIGN_IN_LIMITER_NAMESPACE_ID: '1002',
   MCP_LIMITER_NAMESPACE_ID: '1003',
+  TOKEN_LIMITER_NAMESPACE_ID: '1004',
   OAUTH_CLIENT_ID: 'Ov23sampleclient',
 };
 
@@ -316,6 +317,7 @@ const sentinels = {
   OAUTH_KV_ID: KV_ID,
   SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
   MCP_LIMITER_NAMESPACE_ID: '5550004',
+  TOKEN_LIMITER_NAMESPACE_ID: '5550005',
   PRIMARY_DOMAIN: 'sentinel-primary.example',
   REDIRECT_DOMAINS: 'sentinel-second.example',
   OAUTH_CLIENT_ID: 'Ov23sentinelclient',
@@ -358,6 +360,7 @@ test("a deploy's GitHub URLs come from the settings or are empty, and never from
     WORKER_NAME: 'sentinel-worker',
     SIGN_IN_LIMITER_NAMESPACE_ID: '5550003',
     MCP_LIMITER_NAMESPACE_ID: '5550004',
+    TOKEN_LIMITER_NAMESPACE_ID: '5550005',
     OAUTH_CLIENT_ID: 'Ov23sentinelclient',
   });
   const set = written(sentinels);

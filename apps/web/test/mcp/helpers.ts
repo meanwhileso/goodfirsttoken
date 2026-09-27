@@ -10,6 +10,7 @@ import {
 } from '@modelcontextprotocol/client';
 import { env, exports } from 'cloudflare:workers';
 import { expect } from 'vitest';
+import { limiterKey } from '../../src/auth/rate-limit';
 import { APP, Browser, ORIGIN, location, pickOnGitHub, randomAddress } from '../auth/helpers';
 
 // An agent that connects to the MCP server with the official MCP client SDK:
@@ -231,6 +232,28 @@ export async function tokensFor(github: GitHubFake, login: string, browser = new
   const traded = await tradeCode(clientId, back.searchParams.get('code') ?? '', verifier);
   expect(traded.status).toBe(200);
   return { clientId, accessToken: String(traded.body.access_token), refreshToken: String(traded.body.refresh_token) };
+}
+
+/** How many requests to /oauth/token each address gets a minute. */
+export const TOKEN_LIMIT = 600;
+
+/** A refresh at /oauth/token with a token and client that don't exist, which the library refuses. */
+export function refreshNothing(fetch = agentFetch()): Promise<Response> {
+  return fetch(`${ORIGIN}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'a:b:c', client_id: 'nobody' }),
+  });
+}
+
+/**
+ * Counts `count` requests to /oauth/token from `address` against its limit,
+ * straight on TOKEN_LIMITER, as if the address had sent them. Hundreds of
+ * requests through the Worker would slow every later test in the file.
+ */
+export async function useUpTokenRequests(address: string, count = TOKEN_LIMIT): Promise<void> {
+  const key = limiterKey(address);
+  for (let i = 0; i < count; i++) await env.TOKEN_LIMITER.limit({ key });
 }
 
 /** Sends one MCP request to /mcp with `accessToken`, as an agent on the 2025 protocol does: a tools/list. */
