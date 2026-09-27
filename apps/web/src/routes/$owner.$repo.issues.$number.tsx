@@ -12,12 +12,14 @@ import { SlotRing } from '../components/SlotRing';
 import { Slots } from '../components/Slots';
 import { useLiveFeed } from '../feed/useLiveFeed';
 import { getIssuePage, type IssuePage } from '../issue/data';
+import { issueFromPath } from '../issue/path';
 import {
   applyEvent,
   clockTime,
   dayAndTime,
   lanesInPlay,
   prFromText,
+  prUrl,
   slotsTaken,
   timesClaimed,
   type IssueView,
@@ -72,17 +74,29 @@ function IssueRoute() {
   );
 }
 
+// A path that names an issue says why it has no page. One that names none,
+// like one whose owner's paths belong to the site, says only that there is
+// nothing here, since a claim on it can exist all the same.
 function NotFoundIssue() {
   const { owner, repo, number } = Route.useParams();
+  const issue = issueFromPath(owner, repo, number);
   return (
     <>
       <SiteNav />
       <main className="wrap issue">
-        <h1 className="issue-title">Not on Good First Token</h1>
-        <p className="issue-lede">
-          No project on Good First Token tagged <span className="mono">{`${owner}/${repo}#${number}`}</span>, and no
-          one has claimed it.
-        </p>
+        {issue === null ? (
+          <>
+            <h1 className="issue-title">Not found</h1>
+            <p className="issue-lede">There is no issue page at this address.</p>
+          </>
+        ) : (
+          <>
+            <h1 className="issue-title">Not on Good First Token</h1>
+            <p className="issue-lede">
+              No project on Good First Token tagged <span className="mono">{issue}</span>, and no one has claimed it.
+            </p>
+          </>
+        )}
       </main>
       <Footer />
     </>
@@ -116,6 +130,7 @@ function Issue({ page }: { page: IssuePage }) {
   const taken = slotsTaken(view);
   const claimed = timesClaimed(view);
   const prOpen = view.openPrs.length > 0;
+  const closed = prOpen || page.closedBecause !== null;
   const free = page.slots === null ? 0 : Math.max(0, page.slots - taken);
   const issue = `${page.repo}#${String(page.number)}`;
   const path = `/${page.repo}/issues/${String(page.number)}`;
@@ -135,9 +150,9 @@ function Issue({ page }: { page: IssuePage }) {
         {page.labels.map((label) => (
           <Tag key={label}>{label}</Tag>
         ))}
-        {page.slots !== null && <Slots taken={Math.min(taken, page.slots)} total={page.slots} size="lg" closed={prOpen} />}
+        {page.slots !== null && <Slots taken={Math.min(taken, page.slots)} total={page.slots} size="lg" closed={closed} />}
         <span className="mono small issue-meta__slots">
-          {prOpen
+          {closed
             ? 'claims closed'
             : page.slots === null
               ? `${taken.toLocaleString('en-US')} taken`
@@ -155,14 +170,16 @@ function Issue({ page }: { page: IssuePage }) {
             {view.openPrs.map((pr, i) => (
               <span key={`${pr.repo}#${String(pr.number)}`}>
                 {i > 0 && ', '}
-                <a href={pr.url}>PR {prName(pr, page.repo)}</a>
+                <a href={prUrl(pr)}>PR {prName(pr, page.repo)}</a>
               </span>
             ))}{' '}
             {view.openPrs.length === 1 ? 'is' : 'are'} open. If {view.openPrs.length === 1 ? 'it closes' : 'they close'}{' '}
             without merging, the slots open again.
           </ClosedSlot>
-        ) : !page.takingClaims ? (
+        ) : page.closedBecause === 'project' ? (
           <ClosedSlot>The project isn&apos;t taking claims right now.</ClosedSlot>
+        ) : page.closedBecause === 'issue' ? (
+          <ClosedSlot>This issue isn&apos;t among the project&apos;s open tagged issues, so it takes no claims.</ClosedSlot>
         ) : (
           free > 0 && <OpenSlot free={free} issue={issue} />
         )}
@@ -211,10 +228,10 @@ function StateChip({ lane, issueRepo }: { lane: Lane; issueRepo: string }) {
   if (lane.state === 'active') return <Chip variant="live">working</Chip>;
   if (lane.state === 'awaiting_review') return <Chip variant="tint">submitted</Chip>;
   if (lane.state === 'pr_opened' && lane.pr) {
-    if (lane.prOutcome === 'merged') return <Chip variant="merged" href={lane.pr.url}>merged</Chip>;
-    if (lane.prOutcome === 'closed') return <Chip href={lane.pr.url}>PR closed</Chip>;
+    if (lane.prOutcome === 'merged') return <Chip variant="merged" href={prUrl(lane.pr)}>merged</Chip>;
+    if (lane.prOutcome === 'closed') return <Chip href={prUrl(lane.pr)}>PR closed</Chip>;
     return (
-      <Chip variant="opened" href={lane.pr.url}>
+      <Chip variant="opened" href={prUrl(lane.pr)}>
         PR {prName(lane.pr, issueRepo)} opened
       </Chip>
     );
@@ -261,7 +278,7 @@ function LaneView({
       {lane.lines.length === 0 && <p className="issue-lane__empty">No lines yet.</p>}
       {openPrs.map((pr) => (
         <p key={`${pr.repo}#${String(pr.number)}`} className="issue-lane__pr">
-          <a href={pr.url}>PR {prName(pr, issueRepo)}</a> is open, so claims are closed.
+          <a href={prUrl(pr)}>PR {prName(pr, issueRepo)}</a> is open, so claims are closed.
         </p>
       ))}
     </article>
@@ -307,7 +324,7 @@ function TimelineRow({ entry, issueRepo }: { entry: TimelineEntry; issueRepo: st
         <span className="issue-event__text">
           {pr ? (
             <>
-              opened <a href={pr.url}>PR {prName(pr, issueRepo)}</a>
+              opened <a href={prUrl(pr)}>PR {prName(pr, issueRepo)}</a>
             </>
           ) : (
             entry.text

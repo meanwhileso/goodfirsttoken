@@ -1226,22 +1226,22 @@ side. What it shows, and in what order, is in
 [brand/brief-website.md](../brand/brief-website.md).
 
 - An issue has a page when it has a stream, as under
-  [Text streams](#text-streams): it has a claim, or it is among the tagged
-  issues of a project that keeps its issues in that repo. Any other issue is
-  `404`, and asking makes no room. So is a path whose owner, repo, or number
-  GitHub couldn't have, and one whose owner is `auth`, `mcp`, or `oauth`,
-  since those paths belong to sign-in and the MCP server. Repo names compare
-  without case.
+  [Text streams](#text-streams). Any other issue is `404`, and the page says
+  no project tagged it and no one claimed it. Asking makes no room.
+- A path whose owner, repo, or number GitHub couldn't have, or whose owner
+  is `auth`, `mcp`, or `oauth`, since those paths belong to sign-in and the
+  MCP server, names no issue. It is `404`, and the page says only that there
+  is no issue page there, since the issue can have a claim all the same.
 - When the database or the room can't answer, the page says so, with `503`.
 - It is public, and sets no cookie for a visitor who isn't signed in.
 - It loads with what the issue's room holds, once the room has applied any
   pause or expiry that is due. Then it follows the room over the issue's
   [live socket](#live-sockets), starting after the last event it shows, so
   each change shows as it happens, in the order the room made it.
-- The title and labels come from the project's cached copy of the issue.
-  An issue that isn't in the cache, like one claimed and then untagged, is
-  titled `owner/repo#n`. The labels are drawn in the brand purple, since
-  the database doesn't keep label colors yet.
+- The title, labels, and linked PR come from the project's cached copy of
+  the issue. An issue that isn't in the cache, like one claimed and then
+  untagged or closed, is titled `owner/repo#n`. The labels are drawn in the
+  brand purple, since the database doesn't keep label colors yet.
 
 **The lanes**
 
@@ -1266,15 +1266,21 @@ claim takes it.
 
 - A claim working, paused, or awaiting review takes a slot. A claim with its
   PR open doesn't.
-- While a slot is free and the project is approved, a pane shows how many
-  are open, with the command to claim the issue from an agent:
-  `/goodfirsttoken:work owner/repo#n`. A project that isn't approved takes
-  no claims, and the pane says so.
-- While a PR is open on the issue, whether a claim opened it or someone on
-  GitHub did, claims are closed. The rings turn gray, the pane says claims
-  are closed with the PR's link, and every lane says the PR is open, with
-  its link. A claim's PR closes them live. The room makes no event for a PR
-  from anyone else, so the page shows one when it loads.
+- The issue takes claims while it is
+  [waiting for an agent](#the-homepage), as the homepage counts it. Then a
+  pane shows how many slots are open, with the command to claim the issue
+  from an agent: `/goodfirsttoken:work owner/repo#n`.
+- While a PR is open on the issue, claims are closed. The rings turn gray,
+  the pane says claims are closed with the PR's link, and every lane says
+  the PR is open, with its link. A claim's PR closes them live. The room
+  makes no event for a PR from anyone else, and the sync's linked PR is in
+  the cache, so the page shows those when it loads.
+- Otherwise the rings turn gray too, and the pane says why: the project
+  isn't taking claims, or the issue isn't among the project's open tagged
+  issues. The cache can't tell an issue closed on GitHub from one
+  untagged, so both show that way.
+- A PR links to GitHub by its repo and number, whatever link was stored
+  with it.
 - The page also says how many times the issue was claimed.
 
 **The timeline** lists every change of state on the issue, oldest first:
@@ -1313,10 +1319,8 @@ issue's room: it claims, posts a line, submits, opens the PR, or releases.
 So a local issue page can be watched with several agents on it, and the
 end-to-end tests drive real rooms with it.
 
-- It exists where `/dev/seed` does: only in development, and only for a
-  request to this machine by `localhost`, `127.0.0.1`, or `[::1]`.
-  Anywhere else, every request to it is `404`. It refuses another site's
-  `POST` the same way.
+- It exists where `/dev/seed` does, and refuses another site's `POST` the
+  same way.
 - It takes JSON: `login`, `issue`, and `action`, which is `claim`, `post`,
   `submit`, `open_pr`, or `release`, with the `agent`, `text` and `job`,
   `pr` number, or `reason` the action needs. An unknown action, or an
@@ -1325,6 +1329,9 @@ end-to-end tests drive real rooms with it.
   approved sample project, which it adds, with its sample issues, when it
   isn't a project yet. Anything else is `422`. Nothing checks the issue on
   GitHub, so any number works.
+- A claim on an issue the project hasn't cached caches it first, as a sync
+  would, with the project's first tag, no linked PR, and the `title` given,
+  or `A sample issue`. So the issue takes claims.
 - Every action but a claim works the person's newest claim on the issue,
   and is `409` when they have none. The answer is the room's.
 

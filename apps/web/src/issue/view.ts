@@ -12,11 +12,13 @@ export const LANE_LINES = 20;
 /** A claim's state, as the page follows it from the room's events. */
 export type LaneState = 'active' | 'paused' | 'awaiting_review' | 'pr_opened' | 'released' | 'expired';
 
-/** A PR, with its link. */
+/**
+ * A PR, by its repo and number. The page links it to GitHub with prUrl, and
+ * never to a link stored with it.
+ */
 export interface PrLink {
   repo: string;
   number: number;
-  url: string;
 }
 
 /** One line a claimant's agent posted. */
@@ -101,9 +103,9 @@ export function timesClaimed(view: IssueView): number {
   return view.hidden.claims + view.lanes.length;
 }
 
-/** GitHub's link for a PR. */
-export function prUrl(repo: string, number: number): string {
-  return `https://github.com/${repo}/pull/${String(number)}`;
+/** GitHub's link for a PR, the only link the page gives one. */
+export function prUrl(pr: PrLink): string {
+  return `https://github.com/${pr.repo}/pull/${String(pr.number)}`;
 }
 
 /** The PR in a `pr_opened` event's text, `opened PR owner/name#57`, or null. */
@@ -111,7 +113,7 @@ export function prFromText(text: string): PrLink | null {
   const match = /^opened PR ([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)#([1-9][0-9]{0,9})$/.exec(text);
   if (!match) return null;
   const [, repo = '', number = ''] = match;
-  return { repo, number: Number(number), url: prUrl(repo, Number(number)) };
+  return { repo, number: Number(number) };
 }
 
 export function samePr(a: Pick<PrLink, 'repo' | 'number'>, b: Pick<PrLink, 'repo' | 'number'>): boolean {
@@ -149,7 +151,10 @@ function withLane(view: IssueView, event: FeedEvent): { lanes: Lane[]; lane: Lan
 
 /**
  * The view after one more event from the room. An event it already has
- * changes nothing, so an event sent twice shows once.
+ * changes nothing: a change of state in the timeline, or a line among its
+ * lane's newest lines. A line older than those, sent again, would show
+ * again. None is: the page's socket starts after the last event the page
+ * loaded with, and useLiveFeed hands the page each event once.
  */
 export function applyEvent(view: IssueView, event: FeedEvent, lineCap = LANE_LINES): IssueView {
   const known = view.lanes.find((lane) => lane.claim === event.claim);

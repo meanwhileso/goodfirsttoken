@@ -1,7 +1,7 @@
 import { issueRef, validate } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { createProject, getProject, saveIssues, savePerson } from '../db';
+import { createProject, getIssue, getProject, saveIssues, savePerson } from '../db';
 import { issueRoom } from '../rooms/issue-room';
 import { devOnlyRequest } from './gate';
 import { SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleProject } from './sample-work';
@@ -22,10 +22,14 @@ import { SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleProject } from './sample-wor
 //
 // The issue has to be in an approved sample project's repo, which is added
 // with its sample issues when it isn't there yet. Nothing checks the issue
-// on GitHub, so any number works. Every action but a claim works the
-// person's newest claim on the issue. The answer is the room's.
+// on GitHub, so any number works. A claim on an issue the project hasn't
+// cached caches it first, as a sync would, with the project's first tag and
+// the `title` given, so the issue takes claims. Every action but a claim
+// works the person's newest claim on the issue. The answer is the room's.
 
 const ACTIONS = ['claim', 'post', 'submit', 'open_pr', 'release'] as const;
+/** The title a claim caches an issue with when the request gives none. */
+const SAMPLE_TITLE = 'A sample issue';
 type Action = (typeof ACTIONS)[number];
 
 // A sample commit to start the work from.
@@ -40,6 +44,7 @@ interface Work {
   job: string | null;
   pr: number;
   reason: string;
+  title: string;
 }
 
 function text(status: number, body: string): Response {
@@ -66,6 +71,7 @@ function readWork(body: unknown): Work | string {
     job: typeof work.job === 'string' ? work.job : null,
     pr: typeof work.pr === 'number' ? work.pr : 0,
     reason: field('reason', ''),
+    title: field('title', SAMPLE_TITLE),
   };
 }
 
@@ -127,6 +133,18 @@ export async function handleDevWork(request: Request): Promise<Response> {
   const room = issueRoom(env.ISSUE_ROOM, work.issue);
 
   if (work.action === 'claim') {
+    if (!(await getIssue(env.DB, project.repo, work.issue))) {
+      await saveIssues(env.DB, [
+        {
+          issue: work.issue,
+          project: project.repo,
+          title: work.title,
+          labels: project.settings.tags.slice(0, 1),
+          linkedPr: null,
+          syncedAt: now,
+        },
+      ]);
+    }
     return Response.json(
       await room.claim({
         issue: work.issue,

@@ -1,29 +1,26 @@
-import { issueRef, validate, type ClaimRecord } from '@goodfirsttoken/core';
+import type { ClaimRecord, ProjectRecord, TaggedIssue } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { getPerson, getProject } from '../db';
+import { getDoNotListEntry, getPerson, getProject } from '../db';
 import { siteAddress } from '../home/load';
 import { issueRoom } from '../rooms/issue-room';
 import { findIssue } from './find';
-import { foldEvents, samePr, type IssueView } from './view';
+import { issueFromPath } from './path';
+import { foldEvents, samePr, type IssueView, type PrLink } from './view';
+
+export { issueFromPath } from './path';
 
 // What the issue page shows when it loads. It runs on the server only: the
 // route calls it through the server function in ./data.ts.
 //
 // The claims, their lines, the timeline, and the open PRs come from the
-// issue's room, which holds them: its snapshot, which first applies any
-// pause or expiry that is due, then its history, which leaves out blocked
-// donors. D1 says whether the issue is on the site at all, with the check
-// the issue's text stream uses (./find.ts), so a page never makes a room
-// that nothing could fill. It also gives the issue's title and labels from
-// the tagged issues cache, the project's claims per issue, and each
-// claimant's login now.
-
-/**
- * Owners whose paths belong to the site: sign-in and the MCP server. The
- * Worker answers them before any page, and the page answers 404 for them too.
- */
-const RESERVED_OWNERS = new Set(['auth', 'mcp', 'oauth']);
+// issue's room, which holds them, in one glance of one moment: the room
+// first applies any pause or expiry that is due, and leaves out blocked
+// donors' events. D1 says whether the issue is on the site at all, with the
+// check the issue's text stream uses (./find.ts), so a page never makes a
+// room that nothing could fill. It also gives the issue's title, labels, and
+// linked PR from the tagged issues cache, the project and its claims per
+// issue, and each claimant's login now.
 
 export interface IssuePage {
   state: 'ready';
@@ -39,8 +36,12 @@ export interface IssuePage {
   origin: string;
   /** The project's claims per issue, or null when the project isn't known. */
   slots: number | null;
-  /** True when the project is approved, so it takes claims. */
-  takingClaims: boolean;
+  /**
+   * Why the issue takes no claims, whatever its slots: the project isn't
+   * asking for help, or the issue isn't among its open tagged issues. Null
+   * when it takes them while a slot is free and no PR is open.
+   */
+  closedBecause: 'project' | 'issue' | null;
   view: IssueView;
 }
 
@@ -50,19 +51,37 @@ export type IssuePageResult =
   /** The database or the room couldn't answer. */
   | { state: 'unavailable'; issue: string };
 
-/** The issue a page's path names, like `owner/name#12`, or null when it names none. */
-export function issueFromPath(owner: string, repo: string, number: string): string | null {
-  if (RESERVED_OWNERS.has(owner.toLowerCase())) return null;
-  const issue = `${owner}/${repo}#${number}`;
-  return validate(issueRef, issue).ok ? issue : null;
-}
-
 function splitIssue(issue: string): { repo: string; number: number } {
   const hash = issue.lastIndexOf('#');
   return { repo: issue.slice(0, hash), number: Number(issue.slice(hash + 1)) };
 }
 
 const HOLDS_SLOT = new Set<ClaimRecord['state']>(['active', 'paused', 'awaiting_review']);
+
+// Labels compare without case, folding ASCII letters as the homepage's
+// query does with SQLite's lower().
+const fold = (label: string) => label.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
+
+/**
+ * Why the issue takes no claims, by the rule the homepage uses for an issue
+ * waiting for an agent (src/db/projects.ts), less the open PRs and the free
+ * slot, which the page follows live. Null when it takes them.
+ */
+async function closedBecause(
+  project: ProjectRecord | null,
+  tagged: { project: ProjectRecord; copy: TaggedIssue } | undefined,
+  issueRepo: string,
+): Promise<IssuePage['closedBecause']> {
+  if (project?.status !== 'approved') return 'project';
+  if (!tagged) return 'issue';
+  const labels = new Set(tagged.copy.labels.map(fold));
+  const { tags, excludedTags } = tagged.project.settings;
+  if (!tags.some((tag) => labels.has(fold(tag))) || excludedTags.some((tag) => labels.has(fold(tag)))) return 'issue';
+  const listed = await Promise.all(
+    [project.repo, issueRepo].map((repo) => getDoNotListEntry(env.DB, repo)),
+  );
+  return listed.some((entry) => entry !== null) ? 'project' : null;
+}
 
 /** Everything the issue page shows when it loads. */
 export async function loadIssue(request: Request, owner: string, repo: string, number: string): Promise<IssuePageResult> {
@@ -81,45 +100,42 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   if (!found) return { state: 'not_found' };
   const { claims: mirrored, copies } = found;
 
-  const room = issueRoom(env.ISSUE_ROOM, asked);
-  // The snapshot first, so a pause or expiry that is due is in the history.
-  const snapshot = await room.snapshot();
-  const events = await room.history();
-  const view = foldEvents(events);
+  const glance = await issueRoom(env.ISSUE_ROOM, asked).glance();
+  if (glance === null) throw new Error('The room could not say which donors are blocked.');
+  const view = foldEvents(glance.events);
 
   const tagged = copies[0];
-  const latest = snapshot.claims.at(-1) ?? mirrored.at(-1);
+  const latest = glance.claims.at(-1) ?? mirrored.at(-1);
   const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
 
-  // Blocked donors' claims have no event in the history, so no lane. One
+  // Blocked donors' claims have no event the page may see, so no lane. One
   // that holds a slot still takes it.
   const visible = new Set(view.lanes.map((lane) => lane.claim));
-  const hidden = snapshot.claims.filter((claim) => !visible.has(claim.id));
+  const hidden = glance.claims.filter((claim) => !visible.has(claim.id));
   view.hidden = { claims: hidden.length, holding: hidden.filter((claim) => HOLDS_SLOT.has(claim.state)).length };
 
-  // Each lane names its claimant by their login now, since a login can
-  // change and a freed one can go to someone else. The room's own record of
-  // each claim's PR has its link.
-  const claims = new Map(snapshot.claims.map((claim) => [claim.id, claim]));
-  const people = await Promise.all(
-    view.lanes.map(async (lane) => {
-      const claim = claims.get(lane.claim);
-      return claim ? getPerson(env.DB, claim.githubId) : null;
-    }),
+  // Each lane, and the timeline, names its claimant by their login now,
+  // since a login can change and a freed one can go to someone else. One
+  // read for each person who claimed it.
+  const claimants = new Map(glance.claims.map((claim) => [claim.id, claim.githubId]));
+  const shown = [...new Set(view.lanes.flatMap((lane) => claimants.get(lane.claim) ?? []))];
+  const logins = new Map(
+    await Promise.all(shown.map(async (id) => [id, (await getPerson(env.DB, id))?.login] as const)),
   );
-  view.lanes = view.lanes.map((lane, i) => {
-    const pr = claims.get(lane.claim)?.pr ?? null;
-    return {
-      ...lane,
-      login: people[i]?.login ?? lane.login,
-      pr: lane.pr && pr && samePr(lane.pr, pr) ? pr : lane.pr,
-    };
-  });
-  const logins = new Map(view.lanes.map((lane) => [lane.claim, lane.login]));
-  view.timeline = view.timeline.map((entry) => ({ ...entry, login: logins.get(entry.claim) ?? entry.login }));
-  view.openPrs = snapshot.prs;
+  const loginOf = (claim: string, fallback: string) => logins.get(claimants.get(claim) ?? 0) ?? fallback;
+  view.lanes = view.lanes.map((lane) => ({ ...lane, login: loginOf(lane.claim, lane.login) }));
+  view.timeline = view.timeline.map((entry) => ({ ...entry, login: loginOf(entry.claim, entry.login) }));
 
-  const issue = tagged?.copy.issue ?? snapshot.issue ?? mirrored[0]?.issue ?? asked;
+  // The open PRs: the room's, and the one the last sync saw linked to the
+  // issue, as the homepage counts them. Each by its repo and number only.
+  const linked = tagged?.copy.linkedPr;
+  const open: PrLink[] = [];
+  for (const pr of [...glance.prs, ...(linked ? [linked] : [])]) {
+    if (!open.some((known) => samePr(known, pr))) open.push({ repo: pr.repo, number: pr.number });
+  }
+  view.openPrs = open;
+
+  const issue = tagged?.copy.issue ?? glance.issue ?? mirrored[0]?.issue ?? asked;
   const { repo, number } = splitIssue(issue);
   return {
     state: 'ready',
@@ -131,7 +147,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
-    takingClaims: project?.status === 'approved',
+    closedBecause: await closedBecause(project, tagged, repo),
     view,
   };
 }

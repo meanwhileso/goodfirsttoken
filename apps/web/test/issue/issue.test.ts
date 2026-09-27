@@ -1,8 +1,16 @@
 import type { ClaimRecord, PrRef } from '@goodfirsttoken/core';
-import { listDurableObjectIds } from 'cloudflare:test';
+import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, changeSettings, getProject, saveIssues, savePerson, setProjectStatus } from '../../src/db';
+import {
+  addToDoNotList,
+  blockDonor,
+  changeSettings,
+  getProject,
+  saveIssues,
+  savePerson,
+  setProjectStatus,
+} from '../../src/db';
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
 import { applyEvent, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
 import { issueRoom } from '../../src/rooms/issue-room';
@@ -92,6 +100,25 @@ function prRef(n: number): PrRef {
   return { repo, number: n, url: `https://github.com/${repo}/pull/${String(n)}` };
 }
 
+/** A PR as the page holds it: its repo and number, and no link. */
+function prLink(n: number): { repo: string; number: number } {
+  return { repo, number: n };
+}
+
+/** Caches the test's issue as the project's open tagged issue, as a sync would. */
+async function tag(changes: { labels?: string[]; linkedPr?: PrRef | null } = {}): Promise<void> {
+  await saveIssues(db, [
+    {
+      issue,
+      project: repo,
+      title: 'Handle trailing slashes in rewrites',
+      labels: changes.labels ?? ['help wanted'],
+      linkedPr: changes.linkedPr ?? null,
+      syncedAt: t0,
+    },
+  ]);
+}
+
 async function openPr(claimed: ClaimRecord, n: number): Promise<void> {
   const submitted = await room().submit({ claimId: claimed.id, githubId: claimed.githubId });
   if (!submitted.ok) throw new Error(submitted.refusal.message);
@@ -133,6 +160,19 @@ describe('the lanes', () => {
       ['kenji', 'codex', 'active'],
       ['sam', 'opencode', 'active'],
     ]);
+  });
+
+  test("a lane keeps its claim's newest 20 lines, oldest first", async () => {
+    const p = await claim(priya);
+    for (let i = 1; i <= 21; i++) {
+      at(start + i * 11 * SECOND);
+      await post(p, `line ${String(i)}`);
+    }
+
+    const lines = lanes((await load()).view).priya ?? [];
+
+    expect(lines).toHaveLength(20);
+    expect([lines[0], lines.at(-1)]).toEqual(['line 2', 'line 21']);
   });
 
   test("a subagent's line carries its job", async () => {
@@ -210,10 +250,11 @@ describe('the lanes', () => {
 describe('the slots', () => {
   test("count the claims holding a slot against the project's claims per issue", async () => {
     await changeSettings(db, repo, { claimsPerIssue: 2 }, maintainer.githubId, t0);
+    await tag();
     await claim(priya, 'claude-code', 2);
 
     const one = await load();
-    expect([slotsTaken(one.view), one.slots, one.takingClaims]).toEqual([1, 2, true]);
+    expect([slotsTaken(one.view), one.slots, one.closedBecause]).toEqual([1, 2, null]);
 
     await claim(kenji, 'codex', 2);
     const full = await load();
@@ -227,9 +268,9 @@ describe('the slots', () => {
 
     const page = await load();
 
-    expect(page.view.openPrs).toEqual([prRef(57)]);
+    expect(page.view.openPrs).toEqual([prLink(57)]);
     expect(lanesInPlay(page.view).map((lane) => [lane.login, lane.state, lane.pr])).toEqual([
-      ['priya', 'pr_opened', prRef(57)],
+      ['priya', 'pr_opened', prLink(57)],
       ['kenji', 'active', null],
     ]);
     // A claim with its PR open holds no slot.
@@ -241,17 +282,69 @@ describe('the slots', () => {
     const outside = { repo, number: 61, url: `https://github.com/${repo}/pull/61` };
     await room().prOpened(outside);
 
-    expect((await load()).view.openPrs).toEqual([outside]);
+    expect((await load()).view.openPrs).toEqual([prLink(61)]);
 
     await room().prClosed(outside);
     expect((await load()).view.openPrs).toEqual([]);
   });
 
   test('a project that is not approved takes no claims', async () => {
+    await tag();
     await claim(priya);
     await setProjectStatus(db, repo, { status: 'paused', reason: 'taking a break', changedBy: maintainer.githubId }, t0);
 
-    expect((await load()).takingClaims).toBe(false);
+    expect((await load()).closedBecause).toBe('project');
+  });
+
+  test('a PR the last sync saw linked to the issue is open, so the slots close and every lane says so', async () => {
+    await tag({ linkedPr: prRef(70) });
+    await claim(priya);
+
+    const page = await load();
+
+    expect(page.view.openPrs).toEqual([prLink(70)]);
+    expect(page.closedBecause).toBeNull();
+  });
+
+  test("an issue takes claims only as the homepage counts it waiting: a copy with a project's tag, and none excluded", async () => {
+    await changeSettings(db, repo, { excludedTags: ['needs design'] }, maintainer.githubId, t0);
+    await claim(priya);
+    // Claimed, and not in the cache: untagged since, or closed.
+    expect((await load()).closedBecause).toBe('issue');
+
+    await tag({ labels: ['Help Wanted'] });
+    expect((await load()).closedBecause).toBeNull();
+
+    await tag({ labels: ['help wanted', 'Needs Design'] });
+    expect((await load()).closedBecause).toBe('issue');
+
+    await tag({ labels: ['question'] });
+    expect((await load()).closedBecause).toBe('issue');
+  });
+
+  test('a project on the do-not-list takes no claims', async () => {
+    await tag();
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await load()).closedBecause).toBe('project');
+  });
+
+  test('a PR is linked to GitHub by its repo and number, never by a link stored with it', async () => {
+    const elsewhere = (n: number) => ({ repo, number: n, url: `https://elsewhere.example/${repo}/pull/${String(n)}` });
+    await tag({ linkedPr: elsewhere(80) });
+    const p = await claim(priya);
+    await room().prOpened(elsewhere(81));
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    const opened = await room().openPr({ claimId: p.id, githubId: priya.githubId, pr: elsewhere(82) });
+    if (!opened.ok) throw new Error(opened.refusal.message);
+
+    const loaded = await load();
+    expect(JSON.stringify(loaded)).not.toContain('elsewhere.example');
+    const html = await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text();
+
+    expect(html).not.toContain('elsewhere.example');
+    for (const n of [80, 81, 82]) expect(html).toContain(`href="https://github.com/${repo}/pull/${String(n)}"`);
   });
 });
 
@@ -337,6 +430,7 @@ describe('the page, through the Worker', () => {
   const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
 
   test('shows the lanes, the slots, and the timeline, and sets no cookie for a visitor', async () => {
+    await tag();
     const p = await claim(priya);
     await post(p, 'wrote failing test: a rewrite from /docs/ keeps its slash');
 
@@ -349,6 +443,22 @@ describe('the page, through the Worker', () => {
     expect(html).toContain('1 of 3 slots taken');
     expect(html).toContain(`/goodfirsttoken:work ${issue}`);
     expect(html).toContain(`curl -N primary.example/${repo}/issues/${number}/live.txt`);
+  });
+
+  test('offers the claim command only for an issue that takes claims', async () => {
+    await claim(priya);
+    const untagged = await (await page(`/${repo}/issues/${number}`)).text();
+    expect(untagged).not.toContain('/goodfirsttoken:work');
+    expect(untagged).toContain('the project&#x27;s open tagged issues, so it takes no claims');
+
+    await tag({ linkedPr: prRef(70) });
+    const linked = await (await page(`/${repo}/issues/${number}`)).text();
+    expect(linked).not.toContain('/goodfirsttoken:work');
+    expect(linked).toContain('Claims closed');
+    expect(linked).toContain(`href="https://github.com/${repo}/pull/70"`);
+
+    await tag();
+    expect(await (await page(`/${repo}/issues/${number}`)).text()).toContain(`/goodfirsttoken:work ${issue}`);
   });
 
   test('answers 404 for an issue that is not on the site, and 503 when the database is down', async () => {
@@ -378,7 +488,87 @@ describe('the page, through the Worker', () => {
     expect((await page(`/mcp/sample-app/issues/${number}`)).status).toBe(401);
     const oauth = await page(`/oauth/sample-app/issues/${number}`);
     expect(oauth.status).toBe(404);
-    expect(await oauth.text()).not.toContain('slots taken');
+    const words = await oauth.text();
+    expect(words).not.toContain('slots taken');
+    // The issue has a claim, so the page doesn't say no one claimed it.
+    expect(words).not.toContain('no one has claimed it');
+    expect(words).toContain('There is no issue page at this address.');
+  });
+
+  test('says why an issue it names has no page, and only that there is none for a path that names no issue', async () => {
+    const missing = await (await page(`/${repo}/issues/${number}`)).text();
+    expect(missing).toContain('no one has claimed it');
+
+    const malformed = await page(`/sample_owner/sample-app/issues/${number}`);
+    expect(malformed.status).toBe(404);
+    const words = await malformed.text();
+    expect(words).not.toContain('no one has claimed it');
+    expect(words).toContain('There is no issue page at this address.');
+  });
+});
+
+describe("the room's glance, which the page loads with", () => {
+  test('holds a PR that opens while the page loads exactly when it holds the PR\'s event', async () => {
+    const p = await claim(priya);
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    // The room's check for blocked donors waits until the test lets it go,
+    // and says when it starts.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let started: () => void = () => undefined;
+    const asked = new Promise<void>((resolve) => { started = resolve; });
+    await runInDurableObject(room(), (instance) => {
+      const live = instance as unknown as { env: Env };
+      const real = live.env.DB;
+      const slow = {
+        prepare: (sql: string) =>
+          sql.includes('donor_blocks')
+            ? {
+                bind: (...values: unknown[]) => ({
+                  all: async () => {
+                    started();
+                    await held;
+                    return real.prepare(sql).bind(...values).all();
+                  },
+                }),
+              }
+            : real.prepare(sql),
+      } as unknown as D1Database;
+      live.env = new Proxy(live.env, { get: (target, key) => (key === 'DB' ? slow : (Reflect.get(target, key) as unknown)) });
+    });
+    try {
+      const loading = room().glance();
+      await asked;
+      const opened = await room().openPr({ claimId: p.id, githubId: priya.githubId, pr: prRef(57) });
+      if (!opened.ok) throw new Error(opened.refusal.message);
+      release();
+      const glance = await loading;
+
+      // It read the room before the PR opened, all at once.
+      expect(glance?.prs).toEqual([]);
+      expect(glance?.events.map((event) => event.kind)).toEqual(['claimed', 'submitted']);
+    } finally {
+      release();
+      await runInDurableObject(room(), (instance) => {
+        (instance as unknown as { env: Env }).env = env;
+      });
+    }
+    // A glance after it has both.
+    const after = await room().glance();
+    expect(after?.prs).toEqual([prRef(57)]);
+    expect(after?.events.at(-1)?.kind).toBe('pr_opened');
+  });
+
+  test("leaves out blocked donors' events, and holds every claim", async () => {
+    await claim(priya);
+    await claim(kenji, 'codex');
+    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0);
+
+    const glance = await room().glance();
+
+    expect(glance?.events.map((event) => event.user)).toEqual(['priya']);
+    expect(glance?.claims.map((claim) => claim.login)).toEqual(['priya', 'kenji']);
   });
 });
 
@@ -429,8 +619,8 @@ describe("the room's live socket, as the page follows it", () => {
     await openPr(p, 57);
     await socket.event(`opened PR ${repo}#57`);
     live = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
-    expect(live.openPrs).toEqual([prRef(57)]);
-    expect(lanesInPlay(live).find((lane) => lane.login === 'priya')?.pr).toEqual(prRef(57));
+    expect(live.openPrs).toEqual([prLink(57)]);
+    expect(lanesInPlay(live).find((lane) => lane.login === 'priya')?.pr).toEqual(prLink(57));
 
     const released = await room().release({ claimId: k.id, githubId: kenji.githubId, reason: 'saw PR #57, stopping' });
     if (!released.ok) throw new Error(released.refusal.message);
@@ -519,8 +709,10 @@ describe('the dev-only route that works an issue as a sample person', () => {
     }
 
     const page = await load();
+    // The first claim cached the issue as the project's tagged issue, as a sync would.
+    expect(page).toMatchObject({ title: 'A sample issue', labels: ['help wanted'], closedBecause: null });
     expect(lanes(page.view)).toEqual({ priya: ['read AGENTS.md'] });
-    expect(page.view.openPrs).toEqual([prRef(57)]);
+    expect(page.view.openPrs).toEqual([prLink(57)]);
     expect(page.view.timeline.map((entry) => `@${entry.login} ${entry.text}`)).toEqual([
       '@priya claimed the issue',
       '@kenji claimed the issue',
@@ -542,7 +734,7 @@ describe('the dev-only route that works an issue as a sample person', () => {
     }
 
     const page = ready(await loadIssue(request, 'sample-owner', 'sample-desktop', '1431'));
-    expect(page).toMatchObject({ title: 'Suspend fails on the second resume', labels: ['ready'], slots: 3, takingClaims: true });
+    expect(page).toMatchObject({ title: 'Suspend fails on the second resume', labels: ['ready'], slots: 3, closedBecause: null });
     expect(lanesInPlay(page.view).map((lane) => lane.login)).toEqual(['priya']);
   });
 

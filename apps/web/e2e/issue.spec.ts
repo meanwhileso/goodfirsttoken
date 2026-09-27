@@ -169,6 +169,7 @@ test.describe('a paused claim', () => {
     await work(request, issue, 'priya', { action: 'claim', agent: 'claude-code' });
     const answer = await work(request, issue, 'kenji', { action: 'claim', agent: 'codex' });
     const kenji = { id: (answer.claim as { id: string }).id, issue, login: 'kenji', agent: 'codex' };
+    await work(request, issue, 'kenji', { action: 'post', text: 'reading the feed Durable Object' });
     const sockets: WebSocketRoute[] = [];
     await page.routeWebSocket(/\/live\.ndjson/, (socket) => {
       sockets.push(socket);
@@ -176,11 +177,17 @@ test.describe('a paused claim', () => {
     await page.goto(path);
     await expect.poll(() => sockets.length).toBe(1);
     await expect(lane(page, 'kenji')).toHaveAttribute('data-state', 'active');
+    const lines = lane(page, 'kenji').locator('.issue-lane__lines');
+    // text-body while working.
+    await expect(lines).toHaveCSS('color', 'rgb(36, 41, 47)');
 
     sockets[0]?.send(JSON.stringify(roomEvent(kenji, 'paused', 'paused: no update for 30 minutes')));
 
     await expect(lane(page, 'kenji')).toHaveAttribute('data-state', 'paused');
     await expect(lane(page, 'kenji').locator('.issue-lane__state')).toHaveText('paused');
+    // Its lines dim, to text-muted.
+    await expect(lane(page, 'kenji')).toHaveClass(/issue-lane--paused/);
+    await expect(lines).toHaveCSS('color', 'rgb(87, 96, 106)');
     await expect(lane(page, 'priya').locator('.issue-lane__state')).toHaveText('working');
     await expect(page.locator('.issue-event').last()).toContainText('@kenji codex paused: no update for 30 minutes');
     // A paused claim still holds its slot.
@@ -189,7 +196,11 @@ test.describe('a paused claim', () => {
     sockets[0]?.send(JSON.stringify(roomEvent(kenji, 'update', 'back: reading the feed Durable Object')));
 
     await expect(lane(page, 'kenji').locator('.issue-lane__state')).toHaveText('working');
-    await expect(lane(page, 'kenji').locator('.issue-line__text')).toHaveText(['back: reading the feed Durable Object']);
+    await expect(lines).toHaveCSS('color', 'rgb(36, 41, 47)');
+    await expect(lane(page, 'kenji').locator('.issue-line__text')).toHaveText([
+      'reading the feed Durable Object',
+      'back: reading the feed Durable Object',
+    ]);
   });
 });
 

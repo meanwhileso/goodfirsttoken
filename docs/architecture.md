@@ -699,7 +699,8 @@ before 2026-03-15. The ID comparison holds either way.
 
 **Its interface** is RPC methods on the stub, for the MCP tools to call:
 `claim`, `postUpdate`, `submit`, `openPr`, `release`, `prOpened`, `prClosed`,
-`snapshot`, and `history`. `fetch` takes a WebSocket upgrade for a watcher,
+`snapshot`, and `history`, and `glance` for the
+[issue page](#the-issue-page). `fetch` takes a WebSocket upgrade for a watcher,
 with `?since=<event ID>`. Who is asking comes in as a numeric GitHub ID. A
 refusal comes back as `{ ok: false, refusal }` with a code from core, a
 malformed argument included. The runtime reports an error thrown in a
@@ -920,10 +921,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   stream rate limits.
   Each open stream holds a Worker request and a hibernating WebSocket on a
   feed or room, for up to an hour. Opening one reads D1 to find its feed or
-  room: once for a person or a project, and for an issue, its claims and
-  the projects that keep issues in its repo at the same time, then each of
-  those projects' cached copy of the issue. Then once for each round of the
-  block check. It
+  room: once for a person or a project, and for an issue, the reads
+  `findIssue` makes, under [The issue page](#the-issue-page). Then once for
+  each round of the block check. It
   sends at most 100 events from a feed with no `since`, at most 1,000 with
   one, and an issue room's whole history. Each line costs the feed or room
   one D1 read per batch it sends, shared by its watchers, and each stream a
@@ -1034,18 +1034,23 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 | `src/issue/data.ts` | `getIssuePage`, the server function the route's loader calls |
 | `src/issue/load.ts` | `loadIssue`, which reads what the page shows, on the server only |
 | `src/issue/find.ts` | `findIssue`, which says whether an issue is on the site, for the page and the issue's stream |
+| `src/issue/path.ts` | `issueFromPath`, the issue a page's path names, for the server and the 404 page |
 | `src/issue/view.ts` | The lanes, slots, timeline, and open PRs, folded from the room's events, for the server and the page alike |
 | `src/styles/issue-page.css` | The page's layout |
 
 - **The room is the source.** `loadIssue` reads the claims, their lines,
-  the timeline, and the open PRs from the issue's room, with two calls:
-  `snapshot`, which applies any pause or expiry that is due, then `history`,
-  which leaves out blocked donors and throws when D1 can't say who they are.
-  The claims table in D1 would do for the claims, but it can lag behind a
-  save that waits for a retry, it holds no lines, and it has no PR someone
-  opened outside Good First Token. And the page's socket resumes from the
-  room's own event IDs, so the history the page loads with and the events
-  after it come from one place.
+  the timeline, and the open PRs from the issue's room, in one call,
+  `glance`. The room applies any pause or expiry that is due, reads the
+  claims, the open PRs, and the events with no await between them, then
+  leaves out blocked donors' events, and answers null when D1 can't say who
+  they are. So a PR that opens while the page loads is in its open PRs
+  exactly when its event is in the history, and the socket, which starts
+  after the last event, brings it otherwise. A test holds the block check
+  while a PR opens, to show it. The claims table in D1 would do for the
+  claims, but it can lag behind a save that waits for a retry, it holds no
+  lines, and it has no PR someone opened outside Good First Token. And the
+  page's socket resumes from the room's own event IDs, so the history the
+  page loads with and the events after it come from one place.
 - **One fold for the server and the page.** `foldEvents` in
   `src/issue/view.ts` turns the room's events into the lanes and the
   timeline. The server folds the history, and the page folds in each event
@@ -1062,8 +1067,19 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `src/feed/streams.ts` calls too. It reads the claims table and the
   projects that keep their issues in the repo, at the same time, then each
   one's cached copy. The page uses the claims and copies it found, for the
-  project and the title. Tests check that an issue with neither gets a
-  `404` from the page and from the stream, and that no room is made.
+  project, the title, and the linked PR. Tests check that an issue with
+  neither gets a `404` from the page and from the stream, and that no room
+  is made. The one difference is the path: the page answers `404` for the
+  owners `auth`, `mcp`, and `oauth`, with `issueFromPath` in
+  `src/issue/path.ts`. `src/server.ts` answers `/auth` and `/mcp` paths
+  before any stream, but a stream on an `/oauth/...` path answers as any
+  other.
+- **Whether it takes claims** follows the homepage's rule for an issue
+  waiting for an agent, in `listProjectsAskingForHelp`, less the open PRs
+  and the free slot, which the page follows live: an approved project, not
+  on the do-not-list, and a cached copy with one of its tags and none of its
+  excluded ones, folding ASCII letters as SQLite's `lower()` does. The copy's
+  linked PR joins the room's open PRs.
 - **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
   OAuth routes before any page, and the route answers `404` for `auth`,
   `mcp`, and `oauth` as owners too, so a path like `/oauth/<repo>/issues/1`
@@ -1071,9 +1087,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 - **Logins now.** Events carry the login a claimant had when they claimed.
   Each lane, and the timeline, shows the login in `people` for the claim's
   GitHub ID, since a renamed login can later belong to someone else.
-- **PR links.** On load they come from the room. The event for a claim's PR
-  carries only `opened PR owner/name#57`, so the page links a PR that opens
-  while it is open to GitHub's URL for that PR.
+- **PR links.** A PR reaches the page as its repo and number only, and
+  `prUrl` in `src/issue/view.ts` builds its link to GitHub, whether it came
+  from the room, the cache's linked PR, or a `pr_opened` event, whose text
+  carries only `opened PR owner/name#57`. The link stored with a PR can be
+  on any host, so it never reaches the page.
 - **The status.** The loader throws TanStack Router's `notFound()` for an
   issue with no page, which renders the route's not-found component with
   `404`. When D1 or the room throws, the server function names `503` in
@@ -1084,11 +1102,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   there changes its screenshots, which have to come from CI's Playwright
   build. The page builds the lanes from `Chip`, `Slots`, `SlotRing`,
   `Prompt`, `Marker`, and `Rail`.
-- **What a view costs.** Two D1 queries to find the issue, at the same
-  time, and one more for each project that keeps its issues in the repo. One for the project when
-  the issue isn't cached, and one for each claimant's login. Then the
-  room's snapshot, its whole history, whose block check reads D1 once, and
-  a socket on the room for as long as the page is open. Each lane keeps its
+- **What a view costs.** The reads `findIssue` makes. One for the project
+  when the issue isn't cached, one for each person who claimed it, since the
+  timeline names every claimant, and two for the do-not-list when the issue
+  could take claims. Then the room's glance, which reads its whole history
+  and D1 once for its block check, and a socket on the room for as long as
+  the page is open. Each lane keeps its
   newest 20 lines, so the page carries at most that many per claim. Nothing
   caches any of it yet.
 
@@ -1140,11 +1159,10 @@ end-to-end tests. The rules are in
 - **`/dev/work` adds what an action needs.** It records the person, and the
   sample project with the person who added it and its sample issues, the
   way `/dev/seed` does, so it works on an empty database. It finds the
-  person's claim for them with the room's `snapshot`. The issue page's
-  end-to-end tests call it, so their events reach the homepage's feed.
-  They run after every other test, in a Playwright project of their own, so
-  the homepage's tests see only what they expect. A run that starts the
-  preview empties its data first.
+  person's claim for them with the room's `snapshot`. A claim caches an
+  issue the project hasn't, with `saveIssues`, so the issue takes claims.
+  The issue page's end-to-end tests call it, and run last, as under
+  [Tests](#tests).
 
 ## Configuration and secrets
 
@@ -1388,10 +1406,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   feeds. `issue.spec.ts` works real issue rooms through `/dev/work`, as
   several sample people at once, and the page follows them over the real
   socket. A pause needs 30 minutes, so that one test stands in for the
-  room's socket and sends a pause shaped like the room's. It runs in the
-  `rooms` project, which depends on the `chromium` project, so it runs
-  once the rest are done, as under
-  [Sample data](#sample-data-in-development).
+  room's socket and sends a pause shaped like the room's. Their events
+  reach the homepage's feed, so they run in the `rooms` project, which
+  depends on the `chromium` project, once the rest are done, and the
+  homepage's tests see only what they expect. A run that starts the preview
+  empties its data first.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
