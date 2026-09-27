@@ -38,22 +38,30 @@ The repo is a pnpm workspace.
 
 - **Components are React components in `src/components/`,** one file per
   component, which any route imports. `/design` (`src/routes/design.tsx`)
-  shows every one of them with sample data. It replaced the prototype's
+  shows every one of them with sample data from `src/design/samples.ts`,
+  which the end-to-end tests read too. It replaced the prototype's
   design-system page.
 - **Styles are plain CSS in `src/styles/`.** `tokens.css` holds the tokens
   from the YAML in `brand/design.md` as CSS variables. `app.css` bundles it
   with the fonts, the base styles, and every component's styles, and the
   root route links it on every page. CSS for one page, like
-  `design-page.css`, is linked from that route's `head`. Class names follow
-  the prototype's.
+  `design-page.css`, is linked from that route's `head`.
+- **Class names are BEM-style:** a block like `wall-line`, its parts like
+  `wall-line__time`, and its variants like `chip--live`. State lives in
+  attributes, like `aria-pressed`, `aria-current`, and the token field's
+  `data-level`. The layout and text helpers in `base.css`, like `wrap`,
+  `stack`, and `mono`, are single words.
 - **The fonts are self-hosted.** `src/fonts/` holds the Geist and Geist Mono
   variable fonts from the `geist` npm package, version 1.7.2, under the SIL
   Open Font License in `src/fonts/OFL.txt`. Vite gives each file a content
   hash, the Worker's static assets serve it, and the root route preloads
   both. #33 moves them to the static host.
-- **The nav folds on its own width,** with a container query, so the same
-  component works full width at the top of a page and inside a narrower
-  frame.
+- **Widths come from containers.** The nav is a container and folds on its
+  own width, so the same component works at the top of a page and inside a
+  narrower frame. `body` is a container too, and the gutter switches on its
+  width. A media query would count the scrollbar, so with a classic
+  scrollbar the nav could fold at a different width than the gutter
+  switches.
 
 ### packages/core
 
@@ -219,10 +227,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
   clock paused so the live wall holds still. Up to 2% of pixels may differ,
-  because Chromium builds draw text a little differently. A change in page
-  height always fails. After a deliberate visual change, run
-  `pnpm --filter @goodfirsttoken/web exec playwright test --update-snapshots=all`
-  and commit the new images.
+  for antialiasing, and a change in page height always fails. The baselines
+  must come from the Playwright build CI uses, because other Chromium builds
+  can wrap text differently. To update them, after a deliberate visual
+  change and after every Playwright upgrade, let the `e2e` job fail, take
+  each `design-<width>-actual.png` from `test-results/` in the job's
+  `playwright-report` artifact, check them by eye, and commit them as the
+  baselines.
 - **The core package's tests** run with plain Vitest in Node, since the
   package is pure. They live in `packages/core/test/`.
 - **The tests for `scripts/`**, the static server and the skill build, use

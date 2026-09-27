@@ -282,22 +282,28 @@ Every page is built from one set of components. `/design` shows each of
 them, with sample data that the page says is sample.
 
 - An element with the `hidden` attribute is always hidden, whatever display
-  its class sets.
+  its class sets. No other rule sets `display` with `!important`.
+- All text has at least 4.5:1 contrast on its background, or 3:1 when it is
+  large, except a project's label, whose colors come from GitHub.
+- Every link and button shows a focus ring with at least 3:1 contrast, on
+  paper and on the dark prompt.
 - Geist and Geist Mono are served by the site itself, so a page view makes no
   third-party requests.
 - Only live things move. Under `prefers-reduced-motion: reduce`, nothing
   animates: live dots don't pulse, carets don't blink, and new lines appear
   in full without rising or typing.
 - The wall shows the newest line first, and each older line is dimmer than
-  the one above. A line that arrives after the page loads rises in. On a
-  wall set to type, the newest of those types itself out, one character
-  every 18 ms.
+  the one above, down to `text-faint` and no lighter. A line that arrives
+  after the page loads rises in. On a wall set to type, the newest of those
+  types itself out, one character every 18 ms.
 - A project's label is drawn in its GitHub color. Its text is white or ink,
   whichever has the higher WCAG contrast on that color.
 - A prompt's copy button puts the prompt's full text on the clipboard, and
   says `copied`, or `select it` when the browser refuses, then goes back to
-  `copy` after 1.6 seconds. A command can show a shorter form than it
-  copies, like a URL without `https://`.
+  `copy` after 1.6 seconds. A command's box can show a shorter form than the
+  button copies, like a URL without `https://`. A screen reader hears each
+  button by what it copies, like `Copy prompt` or `Copy command`, and a
+  status says whether the copy worked.
 - The open-in links open each harness with the prompt filled in, encoded as
   a URL parameter: Claude Code at `claude://code/new?q=`, Codex at
   `codex://new?prompt=`, and Cursor at
@@ -307,6 +313,11 @@ them, with sample data that the page says is sample.
 - The nav marks the current page with a dot. Signed in, it shows the
   person's avatar and login where the GitHub mark would be. When the nav is
   880px wide or narrower, its links fold into a menu that opens from a
-  checkbox, so it works before any script runs.
+  checkbox, so it works before any script runs. The page's side gutter
+  narrows at the same width.
 - Tabs show one panel at a time. The left and right arrow keys, Home, and
   End move between them.
+- Filter chips have one chip pressed at a time, filled with ink. Pressing
+  another lets go of the first.
+- A stat line's numbers and a rank's name and agent have real spaces between
+  them, so a screen reader says `3 tagged` and `@priya claude-code`.
