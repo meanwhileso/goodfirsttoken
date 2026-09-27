@@ -29,6 +29,9 @@ export const refusalCodes = [
   // Maintainers and admins (spec sections 3 and 4).
   'not_maintainer',
   'repo_not_eligible',
+  'already_registered',
+  'listed_from_policy',
+  'label_not_created',
   'invalid_settings',
   'not_admin',
   'not_found',

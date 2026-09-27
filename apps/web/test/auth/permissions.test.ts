@@ -24,7 +24,7 @@ function caller(githubId: number, login: string, token: string | null = null): C
 }
 
 /** The refusal code, or null when the check passes. */
-async function refusal(check: Promise<void>): Promise<string | null> {
+async function refusal(check: Promise<unknown>): Promise<string | null> {
   try {
     await check;
     return null;
@@ -79,6 +79,15 @@ test("managing a project needs admin or maintain on the repo, asked of GitHub wi
     ['GET /repos/{owner}/{repo}', 'octo-maintainer'],
     ['GET /repos/{owner}/{repo}', 'kenji'],
   ]);
+});
+
+test('a check that passes hands back the repo as GitHub described it to the caller, so a tool reads it once', async () => {
+  const maintainer = caller(1008, 'octo-maintainer', github.tokenFor('octo-maintainer'));
+
+  const found = await requirePermission(maintainer, 'manage_project', { repo: 'MeanwhileSo/GoodFirstToken' });
+
+  expect(found).toMatchObject({ full_name: 'meanwhileso/goodfirsttoken', archived: false, permissions: { admin: true } });
+  expect(github.calls).toHaveLength(1);
 });
 
 test('an admin of Good First Token is no maintainer of a repo GitHub says they only read', async () => {

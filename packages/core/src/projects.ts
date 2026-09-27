@@ -56,6 +56,15 @@ const labelList = z
     if (repeat !== undefined) ctx.addIssue({ code: 'custom', message: `lists "${repeat}" twice` });
   });
 
+/**
+ * The message for an object of the wrong type. Any other problem, like an
+ * unknown field, keeps zod's own message, which names the field. The MCP SDK
+ * reports those messages as they are.
+ */
+function wrongType(message: string) {
+  return (issue: { code?: string }) => (issue.code === 'invalid_type' ? message : undefined);
+}
+
 /** A git trailer name, like `Assisted-by`. */
 const trailerName = z
   .string({ error: 'must be a trailer name like Assisted-by, or null for none' })
@@ -74,7 +83,7 @@ export const disclosureSchema = z
       trailer: trailerName.nullable(),
       prBody: trimmedText(MAX_PR_BODY_DISCLOSURE).nullable(),
     },
-    { error: 'must be an object with trailer and prBody' },
+    { error: wrongType('must be an object with trailer and prBody') },
   )
   .refine((d) => d.trailer !== null || d.prBody !== null, {
     message: 'must use a commit trailer, text in the PR body, or both',
@@ -129,7 +138,7 @@ export const projectSettingsSchema = z
       claimsPerIssue: settingFields.claimsPerIssue.default(3),
       openPrsPerDonor: settingFields.openPrsPerDonor.default(2),
     },
-    { error: 'must be an object of settings' },
+    { error: wrongType('must be an object of settings') },
   )
   .superRefine((settings, ctx) => {
     const both = settings.excludedTags.find((ex) => settings.tags.some((tag) => sameLabel(tag, ex)));
@@ -149,7 +158,7 @@ export type ProjectSettings = z.output<typeof projectSettingsSchema>;
 
 /** A change to some settings. Settings left out keep their current value. */
 export const projectSettingsPatchSchema = z
-  .strictObject(settingFields, { error: 'must be an object of settings' })
+  .strictObject(settingFields, { error: wrongType('must be an object of settings') })
   .partial();
 export type ProjectSettingsPatch = z.output<typeof projectSettingsPatchSchema>;
 

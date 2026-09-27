@@ -20,6 +20,7 @@ import {
 } from './shapes.ts';
 import {
   FakeError,
+  canSee,
   findIssue,
   findRepo,
   forkRepo,
@@ -57,10 +58,15 @@ interface Route {
 
 const DOCS = 'https://docs.github.com/en/rest';
 
+// A repo the call can't see answers 404, like one that isn't there.
 function repoOf(req: RestRequest, params: Params): RepoRecord {
   const repo = findRepo(req.ctx.state, params.owner ?? '', params.repo ?? '');
-  if (!repo) throw new FakeError('not_found', 'Not Found');
+  if (!repo || !canSee(repo, req.ctx.viewer, req.ctx.scopes)) throw new FakeError('not_found', 'Not Found');
   return repo;
+}
+
+function visibleTo(req: RestRequest) {
+  return (repo: RepoRecord) => canSee(repo, req.ctx.viewer, req.ctx.scopes);
 }
 
 function issueOf(repo: RepoRecord, params: Params): IssueRecord {
@@ -167,6 +173,18 @@ const routes: Route[] = [
     },
   },
   {
+    // Finds the label without case, the way GitHub matches label names.
+    method: 'GET',
+    path: '/repos/{owner}/{repo}/labels/{name}',
+    docs: `${DOCS}/issues/labels#get-a-label`,
+    handle: (req, params) => {
+      const repo = repoOf(req, params);
+      const label = repo.labels.find((l) => key(l.name) === key(params.name ?? ''));
+      if (!label) throw new FakeError('not_found', 'Not Found');
+      return json(labelShape(req.ctx, repo, label));
+    },
+  },
+  {
     // Needs push access, like every write to a repo.
     method: 'POST',
     path: '/repos/{owner}/{repo}/labels',
@@ -243,7 +261,7 @@ const routes: Route[] = [
       const q = req.url.searchParams.get('q');
       if (!q) throw new FakeError('invalid', 'Validation Failed', [{ resource: 'Search', field: 'q', code: 'missing' }]);
       const sort = req.url.searchParams.get('sort') === 'updated' ? 'updatedAt' : 'createdAt';
-      const results = searchIssues(req.ctx.state, q).sort((a, b) =>
+      const results = searchIssues(req.ctx.state, q, visibleTo(req)).sort((a, b) =>
         byDate(sort, req.url.searchParams.get('order') ?? 'desc')(a.issue, b.issue),
       );
       // search_type is required here. The fake always searches the lexical way.
@@ -261,7 +279,7 @@ const routes: Route[] = [
       if (!q) throw new FakeError('invalid', 'Validation Failed', [{ resource: 'Search', field: 'q', code: 'missing' }]);
       const sign = req.url.searchParams.get('order') === 'asc' ? 1 : -1;
       const updated = req.url.searchParams.get('sort') === 'updated';
-      const results = searchRepos(req.ctx.state, q).sort(
+      const results = searchRepos(req.ctx.state, q, visibleTo(req)).sort(
         (a, b) => sign * (updated ? Date.parse(a.updatedAt) - Date.parse(b.updatedAt) : a.stars - b.stars) || a.id - b.id,
       );
       return searchPage(req, results, (repo) => ({ ...repoShape(req.ctx, repo), score: 1 }));

@@ -49,6 +49,28 @@ test('a label list has the fields GitHub sends for each label', async () => {
   });
 });
 
+test("a test can commit files to a repo's default branch, as a maintainer would push them", async () => {
+  fake.commitFiles('sample-owner/sample-harbor', { 'docs/AI_POLICY.md': '# AI policy\n' }, 'octo-maintainer');
+
+  const file = await rest<{ content: string }>(fake, 'GET', '/repos/sample-owner/sample-harbor/contents/docs/AI_POLICY.md');
+  const kept = await rest(fake, 'GET', '/repos/sample-owner/sample-harbor/contents/justfile');
+
+  expect(fromBase64(file.body.content)).toBe('# AI policy\n');
+  expect(kept.status).toBe(200);
+});
+
+test('one label is found by name without case, and a label the repo lacks answers 404', async () => {
+  const found = await rest(fake, 'GET', `${UPSTREAM}/labels/GoodFirstToken`);
+  const spaced = await rest(fake, 'GET', `${UPSTREAM}/labels/${encodeURIComponent('help wanted')}`);
+  const missing = await rest(fake, 'GET', '/repos/sample-owner/sample-app/labels/goodfirsttoken');
+
+  // https://docs.github.com/en/rest/issues/labels#get-a-label
+  expect(found.body).toMatchObject({ name: 'goodfirsttoken', color: '7057ff' });
+  expect(spaced.body).toMatchObject({ name: 'help wanted' });
+  expect(missing.status).toBe(404);
+  expect(missing.body).toMatchObject({ documentation_url: 'https://docs.github.com/en/rest/issues/labels#get-a-label' });
+});
+
 test('search finds open tagged issues across repos with no PR linked to them', async () => {
   const q = encodeURIComponent('is:issue is:open label:"help wanted" -linked:pr');
 

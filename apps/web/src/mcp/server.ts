@@ -1,11 +1,12 @@
-import { githubId, productName, tools } from '@goodfirsttoken/core';
+import { githubId, productName, toolRefusal, tools, type ToolSpec } from '@goodfirsttoken/core';
 import { createMcpHandler, McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
-import type { Caller } from '../auth/permissions';
+import { PermissionRefused, type Caller } from '../auth/permissions';
 import { siteOrigin } from '../auth/settings';
 import { savePerson } from '../db';
 import { GitHubError, gitHubRest } from '../github';
 import { disconnect, markConnectionUsed } from './connections';
+import { pauseProject, projectStatus, registerProject, updateProject } from './maintainer';
 import { MCP_PATH } from './paths';
 import type { AgentProps } from './provider';
 
@@ -31,18 +32,20 @@ function answer(text: string, isError = false): Answer {
   return { content: [{ type: 'text', text }], ...(isError ? { isError } : {}) };
 }
 
-async function startSession(props: AgentProps, origin: string): Promise<Answer> {
-  const caller = callerOf(props);
-  const token = (await caller.gitHubToken()) ?? '';
-  let profile: { id: number; login: string };
+/**
+ * Runs a tool as the connection's person. A permission check that says no
+ * becomes the tool's refusal. When GitHub stops accepting the connection's
+ * token, because the person revoked the app or GitHub revoked the token to
+ * keep them at 10, the connection can't work again. So it ends, and the
+ * agent's next call gets a 401 and signs in.
+ */
+async function asCaller(props: AgentProps, origin: string, tool: () => Promise<Answer>): Promise<Answer> {
   try {
-    profile = await gitHubRest<{ id: number; login: string }>(token, 'GET', '/user');
+    return await tool();
   } catch (error) {
-    // GitHub stopped accepting the token: the person revoked the app, or
-    // GitHub revoked the token to keep them at 10. The connection can't work
-    // again, so it ends, and the agent's next call gets a 401 and signs in.
+    if (error instanceof PermissionRefused) return { ...toolRefusal({ code: error.code, message: error.message }) };
     if (error instanceof GitHubError && error.status === 401) {
-      await disconnect(origin, caller.githubId, props.connectionId, { revoke: false });
+      await disconnect(origin, props.githubId, props.connectionId, { revoke: false });
       return answer(
         `GitHub no longer accepts this connection's token, so ${productName} disconnected it. Reconnect the MCP server to sign in again.`,
         true,
@@ -50,14 +53,26 @@ async function startSession(props: AgentProps, origin: string): Promise<Answer> 
     }
     throw error;
   }
+}
+
+async function startSession(caller: Caller): Promise<Answer> {
+  const token = (await caller.gitHubToken()) ?? '';
+  const profile = await gitHubRest<{ id: number; login: string }>(token, 'GET', '/user');
   if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
   await savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, Date.now());
   const output = startSessionOutput.parse({ githubId: caller.githubId, login: profile.login });
   return { ...answer(`Signed in as @${output.login}.`), structuredContent: output };
 }
 
+/** A tool's description and schemas, as packages/core defines them. */
+function specOf<I extends ToolSpec['input'], O extends ToolSpec['output']>(spec: ToolSpec<I, O>) {
+  return { description: spec.description, inputSchema: spec.input, outputSchema: spec.output };
+}
+
 function buildServer(props: AgentProps, origin: string): McpServer {
   const server = new McpServer({ name: productName, version: '0.1.0' });
+  const caller = callerOf(props);
+  const run = (tool: () => Promise<Answer>) => asCaller(props, origin, tool);
   server.registerTool(
     'start_session',
     {
@@ -66,7 +81,21 @@ function buildServer(props: AgentProps, origin: string): McpServer {
       inputSchema: tools.start_session.input,
       outputSchema: startSessionOutput,
     },
-    () => startSession(props, origin),
+    () => run(() => startSession(caller)),
+  );
+  // The maintainer's tools. Each asks GitHub for the caller's permission on
+  // the repo, with their own token, on every call.
+  server.registerTool('register_project', specOf(tools.register_project), (input) =>
+    run(() => registerProject(caller, input, Date.now())),
+  );
+  server.registerTool('update_project', specOf(tools.update_project), (input) =>
+    run(() => updateProject(caller, input, Date.now())),
+  );
+  server.registerTool('project_status', specOf(tools.project_status), (input) =>
+    run(() => projectStatus(caller, input, Date.now())),
+  );
+  server.registerTool('pause_project', specOf(tools.pause_project), (input) =>
+    run(() => pauseProject(caller, input, Date.now())),
   );
   return server;
 }

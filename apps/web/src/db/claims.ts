@@ -1,5 +1,14 @@
-import { claimRecordSchema, count, githubId, id, mustParse, type ClaimRecord } from '@goodfirsttoken/core';
-import { joinIssue, prColumns, prFromColumns, splitIssue } from './shared';
+import {
+  claimRecordSchema,
+  count,
+  githubId,
+  holdsSlot,
+  id,
+  mustParse,
+  repoName,
+  type ClaimRecord,
+} from '@goodfirsttoken/core';
+import { checkTime, joinIssue, prColumns, prFromColumns, splitIssue } from './shared';
 
 // The claims table: a mirror of each issue room's claims, for search and the
 // leaderboard. The issue room holds the claim and decides every change, and
@@ -175,4 +184,20 @@ export async function listPersonClaims(db: D1Database, person: number): Promise<
     .bind(mustParse(githubId, person, 'githubId'))
     .all<ClaimRow>();
   return results.map(toClaim);
+}
+
+/**
+ * How many claims in a project hold a slot at `now`: people working on its
+ * issues. A claim the table still has as working but whose deadline passed
+ * doesn't count, as the issue room would free its slot.
+ */
+export async function countWorkingClaims(db: D1Database, project: string, now: number): Promise<number> {
+  const at = checkTime(now);
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM claims WHERE project = ? AND state IN ('active', 'paused', 'awaiting_review')`,
+    )
+    .bind(mustParse(repoName, project, 'project'))
+    .all<ClaimRow>();
+  return results.map(toClaim).filter((claim) => holdsSlot(claim, at)).length;
 }

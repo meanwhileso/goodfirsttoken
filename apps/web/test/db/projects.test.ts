@@ -9,6 +9,8 @@ import {
   setProjectStatus,
   settingsHistory,
   statusHistory,
+  setProjectStatusFrom,
+  takeOverListing,
 } from '../../src/db';
 import {
   admin,
@@ -399,5 +401,113 @@ describe('project settings', () => {
     expect(await refusal(getProject(db, repo))).toContain(
       'settings.claimsPerIssue: must be a whole number from 1 to 10',
     );
+  });
+});
+
+describe('a maintainer taking over a listing made from a policy', () => {
+  async function listing() {
+    return createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'], prMode: 'automatic' }, addedBy: admin.githubId },
+      t0,
+    );
+  }
+
+  test("the maintainer's settings replace the listing's, the project becomes registered with no policy, and its status stays", async () => {
+    await listing();
+
+    const took = await takeOverListing(db, repo, { tags: ['help wanted'], claimsPerIssue: 2 }, maintainer.githubId, t0 + HOUR);
+
+    const stored = await getProject(db, repo);
+    expect(took?.project).toEqual(stored);
+    expect(stored).toMatchObject({
+      source: 'registered',
+      policy: null,
+      status: 'approved',
+      statusChangedBy: admin.githubId,
+      addedBy: maintainer.githubId,
+      // Listed since the admin listed it, so it keeps that time.
+      addedAt: t0,
+      settingsVersion: 2,
+    });
+    // Whole settings: prMode, which the maintainer left out, is back to its default.
+    expect(stored?.settings).toMatchObject({ tags: ['help wanted'], claimsPerIssue: 2, prMode: 'reviewed' });
+    expect(took?.changed.sort()).toEqual(['claimsPerIssue', 'prMode', 'tags']);
+    expect((await settingsHistory(db, repo))[0]).toMatchObject({ version: 2, changedBy: maintainer.githubId, changedAt: t0 + HOUR });
+    expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
+  test("settings the same as the listing's save no new version, and the project still becomes registered", async () => {
+    await listing();
+
+    const took = await takeOverListing(db, repo, { tags: ['ready'], prMode: 'automatic' }, maintainer.githubId, t0 + HOUR);
+
+    expect(took?.changed).toEqual([]);
+    expect(await getProject(db, repo)).toMatchObject({ source: 'registered', policy: null, settingsVersion: 1 });
+    expect(await settingsHistory(db, repo)).toHaveLength(1);
+  });
+
+  test('a registered project, or a repo that is no project, is not taken over', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+
+    expect(await takeOverListing(db, repo, { tags: ['ready'] }, coMaintainer.githubId, t0 + HOUR)).toBeNull();
+    expect(await takeOverListing(db, 'sample-owner/sample-tools', { tags: ['ready'] }, coMaintainer.githubId, t0)).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ addedBy: maintainer.githubId, settings: { tags: ['help wanted'] } });
+  });
+
+  test('a rejected listing taken over goes back to pending, changed by the maintainer, so an admin reviews it again', async () => {
+    await listing();
+    await setProjectStatus(db, repo, { status: 'rejected', reason: 'The policy changed.', changedBy: admin.githubId }, t0 + HOUR);
+
+    const took = await takeOverListing(db, repo, { tags: ['help wanted'] }, maintainer.githubId, t0 + 2 * HOUR);
+
+    const stored = await getProject(db, repo);
+    expect(took?.project).toEqual(stored);
+    expect(stored).toMatchObject({
+      source: 'registered',
+      status: 'pending',
+      statusReason: null,
+      statusChangedBy: maintainer.githubId,
+      statusChangedAt: t0 + 2 * HOUR,
+    });
+    expect((await statusHistory(db, repo)).map((c) => [c.status, c.changedBy])).toEqual([
+      ['pending', maintainer.githubId],
+      ['rejected', admin.githubId],
+      ['approved', admin.githubId],
+    ]);
+  });
+});
+
+describe('a status change decided on what was read', () => {
+  test('lands when the status is still the one read, and is kept in the history', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+    const read = await getProject(db, repo);
+    if (read === null) throw new Error('no project');
+
+    const paused = await setProjectStatusFrom(db, read, { status: 'paused', reason: 'Release week.', changedBy: maintainer.githubId }, t0 + HOUR);
+
+    expect(paused).toEqual(await getProject(db, repo));
+    expect(paused).toMatchObject({ status: 'paused', statusReason: 'Release week.', statusChangedBy: maintainer.githubId });
+    expect(await statusHistory(db, repo)).toHaveLength(2);
+  });
+
+  test('changes nothing when someone changed the status since it was read', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+    const read = await getProject(db, repo);
+    if (read === null) throw new Error('no project');
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'Spam reports.', changedBy: admin.githubId }, t0 + HOUR);
+
+    const resumed = await setProjectStatusFrom(db, read, { status: 'paused', reason: 'Mine.', changedBy: maintainer.githubId }, t0 + 2 * HOUR);
+
+    expect(resumed).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ status: 'paused', statusReason: 'Spam reports.', statusChangedBy: admin.githubId });
+    expect(await statusHistory(db, repo)).toHaveLength(2);
+  });
+
+  test('a change to the status and reason it already has writes nothing', async () => {
+    const project = await registeredProject({ tags: ['help wanted'] });
+
+    expect(await setProjectStatusFrom(db, project, { status: 'approved', reason: null, changedBy: coMaintainer.githubId }, t0 + HOUR)).toEqual(project);
+    expect(await statusHistory(db, repo)).toHaveLength(1);
   });
 });
