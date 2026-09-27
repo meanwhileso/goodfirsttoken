@@ -105,7 +105,7 @@ Deploys, the static host, a security review, and the launch video.
 | [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | [#43](https://github.com/meanwhileso/goodfirsttoken/pull/43) |
 | [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | [#49](https://github.com/meanwhileso/goodfirsttoken/pull/49) |
 | [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
-| [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | |
+| [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | [#57](https://github.com/meanwhileso/goodfirsttoken/pull/57) |
 
 ## Dependency graph
 
@@ -211,7 +211,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n12 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12 done
 ```
 
 ## Maintainer steps
@@ -255,6 +255,8 @@ Once #33 merges, for staging and then production:
 
 Before launch, once #34 merges:
 
+- Open the three seed issues the launch video shows, set their numbers, and their titles if they differ,
+  in `DEMO` in `video/index.html`, and run `pnpm video:render`.
 - Register `meanwhileso/goodfirsttoken` as project number one and tag its seed issues.
 - Run the real harnesses against staging. These runs spend real tokens, so they are never automatic.
 - Set the repository variable `DEPLOY_PRODUCTION` to `true`. The first production deploy is the launch.
