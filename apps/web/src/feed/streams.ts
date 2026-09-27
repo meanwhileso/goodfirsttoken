@@ -171,7 +171,7 @@ export async function handleStream(
   }
   const since = new URL(request.url).searchParams.get('since') || null;
   if (since !== null && !validate(id, since).ok) {
-    return text(400, 'since has to be the ID of an event, as the .ndjson form gives it.');
+    return text(400, 'since has to be the ID of an event, as a line of the stream gives it.');
   }
   const { type, line } = FORMATS[format];
   const headers = { 'content-type': type, ...HEADERS };
@@ -191,16 +191,17 @@ export async function handleStream(
   }
   socket.accept();
 
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = writable.getWriter();
   const encoder = new TextEncoder();
+  const deadline = Date.now() + lifetimeMs;
+  // The lines the reader hasn't taken yet, oldest first, with when each came.
+  const waiting: { bytes: Uint8Array; at: number }[] = [];
   let open = true;
-  // When each line the reader hasn't taken yet was written, oldest first. A
-  // write finishes once the reader takes the line before it.
-  const untaken: number[] = [];
-  const stalled = () => Date.now() - (untaken[0] ?? Date.now()) > readerWaitMs;
+  let wake: (() => void) | null = null;
+  let body: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const stalled = () => Date.now() - (waiting[0]?.at ?? Date.now()) > readerWaitMs;
   const cutOff = () => {
-    writer.abort(new Error('The reader fell behind.')).catch(() => undefined);
+    waiting.length = 0;
+    body?.error(new Error('The reader fell behind.'));
   };
   const end = () => {
     if (!open) return;
@@ -211,17 +212,17 @@ export async function handleStream(
     } catch {
       // It closed already.
     }
-    // A close waits for the reader to take every line first. A stalled
-    // reader is cut off, and one that stalls before it takes them all is
-    // cut off then, so nothing waits on a reader for long.
+    // The stream closes once the reader has taken every line. A stalled
+    // reader is cut off, and one that stalls before it takes them all is cut
+    // off then, so nothing waits on a reader for long.
     if (stalled()) {
       cutOff();
       return;
     }
-    writer.close().catch(() => undefined);
-    if (untaken.length > 0) {
+    wake?.();
+    if (waiting.length > 0) {
       setTimeout(() => {
-        if (untaken.length > 0) cutOff();
+        if (waiting.length > 0) cutOff();
       }, readerWaitMs);
     }
   };
@@ -233,17 +234,42 @@ export async function handleStream(
       console.error('A stream skipped a malformed event.');
       return;
     }
-    if (stalled()) {
+    // A line that comes after the hour, or finds the reader stalled, ends the
+    // stream in its place. The timer ends a quiet stream.
+    if (Date.now() >= deadline || stalled()) {
       end();
       return;
     }
-    untaken.push(Date.now());
-    writer.write(encoder.encode(line(event))).then(() => untaken.shift(), end);
+    waiting.push({ bytes: encoder.encode(line(event)), at: Date.now() });
+    wake?.();
   });
   socket.addEventListener('close', end);
   socket.addEventListener('error', end);
-  // The reader went away. The signal needs the enable_request_signal flag.
-  request.signal.addEventListener('abort', end);
-  writer.closed.catch(end);
+  const readable = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        body = controller;
+      },
+      // The reader asks for a line. Give the oldest waiting, or wait for one.
+      async pull(controller) {
+        while (waiting.length === 0 && open) {
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+          });
+        }
+        wake = null;
+        const next = waiting.shift();
+        try {
+          if (next) controller.enqueue(next.bytes);
+          else controller.close();
+        } catch {
+          // The stream was cut off meanwhile.
+        }
+      },
+      // The reader went away, and the runtime cancels the body.
+      cancel: end,
+    },
+    { highWaterMark: 0 },
+  );
   return new Response(readable, { headers });
 }

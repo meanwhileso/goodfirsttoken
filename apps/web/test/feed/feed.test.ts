@@ -2,9 +2,9 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'c
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, unblockDonor } from '../../src/db';
-import { FEED_KEEPS, FEED_REMEMBERS_MS, FEED_TAIL, repoFeed, type Feed, type FeedEntry } from '../../src/rooms/feed';
-import { admin, db, emptyDatabase, kenji, priya, signIn, t0 } from '../db/helpers';
-import { feedEvent, watchSocket } from './helpers';
+import { repoFeed, type Feed, type FeedEntry } from '../../src/rooms/feed';
+import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0 } from '../db/helpers';
+import { feedEvent, storedEvents, watchSocket } from './helpers';
 
 // A feed on its own, as the queue's consumer calls it. Every person, repo,
 // and line here is made up.
@@ -54,7 +54,7 @@ describe('a feed', () => {
     vi.setSystemTime(t0);
     const first = by(priya, 'first');
     await feed.deliver([first]);
-    vi.setSystemTime(t0 + FEED_REMEMBERS_MS + 1);
+    vi.setSystemTime(t0 + 7 * DAY + 1);
     await feed.deliver([by(kenji, 'second')]);
 
     expect(await feed.deliver([first])).toEqual({ stored: 0 });
@@ -78,21 +78,30 @@ describe('a feed', () => {
     expect(await watcher.received(2)).toEqual(['one', 'two']);
   });
 
-  test(`keeps its newest ${String(FEED_KEEPS)} events, and still ignores a copy of one it dropped`, async () => {
-    const entries = Array.from({ length: FEED_KEEPS + 1 }, (_, i) => by(priya, `line ${String(i)}`));
+  test('keeps its newest 1,000 events, and ignores a copy of one it dropped for 7 days', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const entries = Array.from({ length: 1001 }, (_, i) => by(priya, `line ${String(i)}`));
     for (let i = 0; i < entries.length; i += 100) await feed.deliver(entries.slice(i, i + 100));
 
     const kept = await texts();
-    expect(kept).toHaveLength(FEED_KEEPS);
+    expect(kept).toHaveLength(1000);
     expect(kept[0]).toBe('line 1');
-    expect(kept.at(-1)).toBe(`line ${String(FEED_KEEPS)}`);
+    expect(kept.at(-1)).toBe('line 1000');
 
     const [dropped] = entries;
     if (!dropped) throw new Error('No entries were made.');
     expect(await feed.deliver([dropped])).toEqual({ stored: 0 });
+    // Nearly 7 days on, a new event has the feed let go of what it no longer
+    // needs, and the copy is still ignored.
+    vi.setSystemTime(t0 + 7 * DAY - 1);
+    await feed.deliver([by(kenji, 'a week later')]);
+    expect(await feed.deliver([dropped])).toEqual({ stored: 0 });
+    kept.shift();
+    kept.push('a week later');
     // A watcher who last saw the dropped event gets everything the feed keeps.
     const watcher = await watchSocket(feed, dropped.event.id);
-    expect(await watcher.received(FEED_KEEPS)).toEqual(kept);
+    expect(await watcher.received(1000)).toEqual(kept);
   });
 });
 
@@ -118,14 +127,14 @@ describe("a feed's watchers", () => {
     expect(await watcher.received(3)).toEqual(['two', 'three', 'four']);
   });
 
-  test(`a watcher with no last event ID, or one the feed never had, gets the newest ${String(FEED_TAIL)} first`, async () => {
-    const entries = Array.from({ length: FEED_TAIL + 20 }, (_, i) => by(priya, `line ${String(i)}`));
+  test('a watcher with no last event ID, or one the feed never had, gets the newest 100 first', async () => {
+    const entries = Array.from({ length: 120 }, (_, i) => by(priya, `line ${String(i)}`));
     await feed.deliver(entries);
-    const newest = entries.slice(-FEED_TAIL).map((e) => e.event.text);
+    const newest = entries.slice(-100).map((e) => e.event.text);
 
     for (const since of [undefined, 'e_never_sent_here']) {
       const watcher = await watchSocket(feed, since);
-      expect(await watcher.received(FEED_TAIL)).toEqual(newest);
+      expect(await watcher.received(100)).toEqual(newest);
     }
   });
 
@@ -195,8 +204,15 @@ describe('a blocked donor', () => {
     expect(await watcher.received(1)).toEqual(['kenji before']);
     await feed.deliver([by(priya, 'priya during'), by(kenji, 'kenji during')]);
     expect(await watcher.received(2)).toEqual(['kenji before', 'kenji during']);
-    // The feed still stores them, so lifting the block shows them again.
-    expect(await texts()).toEqual(['priya before', 'kenji before', 'priya during', 'kenji during']);
+    // The feed still stores them, so lifting the block shows them again. Its
+    // history leaves them out too.
+    expect((await storedEvents(feed)).map((e) => e.text)).toEqual([
+      'priya before',
+      'kenji before',
+      'priya during',
+      'kenji during',
+    ]);
+    expect(await texts()).toEqual(['kenji before', 'kenji during']);
 
     await unblockDonor(db, priya.githubId);
     await feed.deliver([by(priya, 'priya after')]);
@@ -206,12 +222,12 @@ describe('a blocked donor', () => {
   });
 
   test('a watcher who gives no last event ID still gets the newest events it may see', async () => {
-    const kenjis = Array.from({ length: FEED_TAIL }, (_, i) => by(kenji, `kenji ${String(i)}`));
+    const kenjis = Array.from({ length: 100 }, (_, i) => by(kenji, `kenji ${String(i)}`));
     await feed.deliver([...kenjis, ...Array.from({ length: 30 }, (_, i) => by(priya, `priya ${String(i)}`))]);
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
 
     const watcher = await watchSocket(feed);
 
-    expect(await watcher.received(FEED_TAIL)).toEqual(kenjis.map((e) => e.event.text));
+    expect(await watcher.received(100)).toEqual(kenjis.map((e) => e.event.text));
   });
 });

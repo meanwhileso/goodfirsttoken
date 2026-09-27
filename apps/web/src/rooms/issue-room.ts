@@ -30,6 +30,7 @@ import {
   type Refusal,
   type ToolOutput,
 } from '@goodfirsttoken/core';
+import { blockedAmong } from '../db/blocks';
 import { saveClaim } from '../db/claims';
 import { newId } from '../db/shared';
 import { answerClose, openWatcher, sendToWatchers, type StoredEvent } from './watchers';
@@ -429,12 +430,20 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * The events after the one with ID `since`, oldest first. With no `since`,
-   * or one this room never sent, every event.
+   * The events after the one with ID `since`, oldest first, without blocked
+   * donors' events. With no `since`, or one this room never sent, every
+   * event. Throws when D1 can't say who is blocked.
    */
-  history(since?: string | null): FeedEvent[] {
+  async history(since?: string | null): Promise<FeedEvent[]> {
     const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;
-    return this.storedAfter(from).map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
+    const events = this.storedAfter(from);
+    const blocked = await blockedAmong(
+      this.env.DB,
+      events.map((event) => event.githubId),
+    );
+    return events
+      .filter((event) => !blocked.has(event.githubId))
+      .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
   }
 
   /**
@@ -872,9 +881,11 @@ export class IssueRoom extends DurableObject<Env> {
   /**
    * Sends new events to the watchers. When D1 can't say who is blocked, the
    * room keeps a fact saying when to try again, a minute later, which the
-   * alarm counts, and clears it once a send goes through. A try already
-   * waiting moves a minute on while this one is out, so the alarm doesn't
-   * fire again and again while D1 is slow.
+   * alarm counts. A try already waiting moves a minute on while this one is
+   * out, so the alarm doesn't fire again and again while D1 is slow. The fact
+   * is cleared only by a send that leaves every watcher at the last event
+   * stored. A send that read the events before a newer one was stored, and
+   * whose D1 answer came late, leaves the try for the newer one in place.
    */
   private async sendToWatchers(): Promise<void> {
     try {
@@ -882,7 +893,9 @@ export class IssueRoom extends DurableObject<Env> {
         "UPDATE facts SET value = ? WHERE key = 'watchers_retry_at'",
         String(Date.now() + SEND_RETRY_FIRST_MS),
       );
-      if (await sendToWatchers(this.ctx, this.env.DB, (seq) => this.storedAfter(seq))) {
+      const reached = await sendToWatchers(this.ctx, this.env.DB, (seq) => this.storedAfter(seq));
+      if (reached !== null) {
+        if (reached < this.lastPlace()) return;
         const waited = this.sql.exec("DELETE FROM facts WHERE key = 'watchers_retry_at'").rowsWritten > 0;
         if (waited) await this.schedule(Date.now());
         return;

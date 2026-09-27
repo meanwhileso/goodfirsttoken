@@ -4,8 +4,19 @@ import { homeFeed, personFeed, repoFeed, type Feed, type FeedEntry } from '../ro
 // The feed queue's consumer (spec section 8). An issue room sends each event
 // it stores to the queue, as a FeedMessage. The consumer delivers it to three
 // feeds: the homepage's, the project's, and the claimant's. A message is
-// acknowledged once all three have it. Otherwise it is tried again, and after
-// the tries wrangler.jsonc allows, it goes to the dead-letter queue.
+// acknowledged once all three have it. Otherwise it is tried again, later
+// each time, and after the tries wrangler.jsonc allows, it goes to the
+// dead-letter queue. How long that takes is in docs/how-it-works.md.
+
+/** How long a message waits before its first retry. Each later wait is twice as long. */
+const RETRY_FIRST_SECONDS = 30;
+/** The longest wait between two tries of a message. */
+const RETRY_MAX_SECONDS = 60 * 60;
+
+/** The wait before the next try of a message delivered `attempts` times. */
+function retryDelay(attempts: number): number {
+  return Math.min(RETRY_FIRST_SECONDS * 2 ** Math.min(Math.max(attempts, 1) - 1, 20), RETRY_MAX_SECONDS);
+}
 
 interface Delivery {
   feed: DurableObjectStub<Feed>;
@@ -29,13 +40,12 @@ export async function deliverFeedBatch(batch: MessageBatch, env: Pick<Env, 'FEED
   };
 
   const failed = new Set<Message>();
+  const malformed = new Set<Message>();
   for (const message of batch.messages) {
     const checked = validate(feedMessageSchema, message.body, 'message');
     if (!checked.ok) {
-      // Trying again can't fix it, but the tries take it to the dead-letter
-      // queue, where it can be read.
       console.error(`Feed message ${message.id} is malformed.\n${describeProblems(checked.problems)}`);
-      failed.add(message);
+      malformed.add(message);
       continue;
     }
     const { event, githubId, project } = checked.value;
@@ -57,7 +67,10 @@ export async function deliverFeedBatch(batch: MessageBatch, env: Pick<Env, 'FEED
   );
 
   for (const message of batch.messages) {
-    if (failed.has(message)) message.retry();
+    // Trying a malformed message again can't fix it. Its tries go at once, to
+    // take it to the dead-letter queue, where it can be read.
+    if (malformed.has(message)) message.retry({ delaySeconds: 0 });
+    else if (failed.has(message)) message.retry({ delaySeconds: retryDelay(message.attempts) });
     else message.ack();
   }
 }

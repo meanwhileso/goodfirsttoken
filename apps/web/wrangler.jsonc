@@ -13,7 +13,7 @@
   // which can be older than the one dev and preview use. A date newer than
   // it supports makes `pnpm test` fail, so move this only as far as it allows.
   "compatibility_date": "2026-08-15",
-  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  "compatibility_flags": ["nodejs_compat"],
   // Every variable the Worker reads, with its local value. A deploy sets
   // ENVIRONMENT to staging or production, and each other one from the GitHub
   // environment setting of the same name, so no local value reaches a
@@ -60,18 +60,15 @@
       { "binding": "FEED_QUEUE", "queue": "feed" },
       { "binding": "CRAWL_QUEUE", "queue": "crawl" }
     ],
-    // The feed queue's consumer delivers each event to its three feeds
-    // (src/feed/queue.ts). A batch waits at most a second, so a line reaches
-    // the feeds about a second after it is posted. A message a feed doesn't
-    // take is tried again 30 seconds later, up to 10 times, and then goes to
-    // the dead-letter queue, which nothing reads.
+    // The feed queue's consumer (src/feed/queue.ts). What these settings
+    // mean for a line on its way to the feeds is under Live feeds in
+    // docs/how-it-works.md. src/feed/queue.ts sets each retry's wait.
     "consumers": [
       {
         "queue": "feed",
         "max_batch_size": 100,
         "max_batch_timeout": 1,
-        "max_retries": 10,
-        "retry_delay": 30,
+        "max_retries": 100,
         "dead_letter_queue": "feed-dlq"
       }
     ]

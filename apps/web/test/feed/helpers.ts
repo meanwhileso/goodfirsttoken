@@ -1,4 +1,5 @@
 import type { FeedEvent } from '@goodfirsttoken/core';
+import { runInDurableObject } from 'cloudflare:test';
 import { exports } from 'cloudflare:workers';
 import { expect, vi } from 'vitest';
 
@@ -47,6 +48,33 @@ export async function watchSocket(stub: { fetch: (url: string, init: RequestInit
       return events.map((e) => e.text);
     },
   };
+}
+
+/** The columns of a text stream's line, which has to have exactly these eight. */
+export function fields(line: string) {
+  const columns = line.split('\t');
+  expect(columns, `the columns of ${JSON.stringify(line)}`).toHaveLength(8);
+  const [time, id, kind, user, agent, job, issue, text] = columns as [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  return { time, id, kind, user, agent, job, issue, text };
+}
+
+/** Every event a feed or room stores, blocked donors' included, oldest first. */
+export async function storedEvents(stub: DurableObjectStub): Promise<FeedEvent[]> {
+  return runInDurableObject(stub, (_, state) =>
+    state.storage.sql
+      .exec<{ event: string }>('SELECT event FROM events ORDER BY seq')
+      .toArray()
+      .map((row) => JSON.parse(row.event) as FeedEvent),
+  );
 }
 
 /**

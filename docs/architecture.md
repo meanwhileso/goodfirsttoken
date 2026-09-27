@@ -607,8 +607,10 @@ queue may then get an event twice, which the feeds ignore.
 is under [Watchers](how-it-works.md#the-issue-room). The claimant of each
 event, which the block check needs, comes from joining `events` to
 `claims` on the event's claim ID. When D1 can't say who is blocked, the
-room writes `watchers_retry_at`, a minute ahead, which `schedule` counts,
-and the next send that goes through deletes it. Each send moves a waiting
+room writes `watchers_retry_at`, a minute ahead, which `schedule` counts.
+Only a send that leaves every watcher at the last event stored deletes it,
+so a slow send that read its events before a newer one was stored leaves
+the retry for the newer one in place. Each send moves a waiting
 `watchers_retry_at` a minute ahead before it asks D1, so while D1 is slow
 the alarm doesn't fire again and again.
 
@@ -648,12 +650,20 @@ streams' in [Text streams](how-it-works.md#text-streams).
   room's stored events rewritten. The consumer checks each message with the
   schema, groups the batch by feed, and calls each feed's `deliver` once,
   all at the same time. It acknowledges each message whose three feeds took
-  it and retries the rest. A malformed message is retried too, so its tries
-  take it to the dead-letter queue, where it can be read.
-- **The queue's settings** are in `wrangler.jsonc`: batches of up to 100,
-  waiting at most a second, so a line reaches the feeds about a second after
-  it is posted. A retry waits 30 seconds, and a message goes to `feed-dlq`
-  after 10.
+  it, and asks for the rest again with `retry({ delaySeconds })`, the wait
+  worked out from the message's `attempts`. A malformed message is asked for
+  again at once, so its tries take it to the dead-letter queue, where it can
+  be read.
+- **The queue's settings** are in `wrangler.jsonc`, and each retry's wait is
+  in `src/feed/queue.ts`. What they add up to is under
+  [Live feeds](how-it-works.md#live-feeds). Cloudflare allows at most 100
+  retries, and a wait of at most 24 hours. The deploy makes the queue with
+  no retention setting, so it keeps messages for Cloudflare's default time,
+  which bounds the tries too.
+- **Order.** Queues promises no order, and with no `max_concurrency` set,
+  batches can run at the same time. A feed stores events in the order they
+  arrive, and a watcher resumes by the feed's own order, so a reader who
+  reconnects misses nothing, even when the lines came out of order.
 - **Watchers and the block check.** Each watcher's socket carries, as its
   attachment, the place of the last event it was sent, which survives
   hibernation. Events go out after the call that stored them, with an await
@@ -662,42 +672,66 @@ streams' in [Text streams](how-it-works.md#text-streams).
   which of their claimants are blocked, and sends each socket what it hasn't
   had, up to the last event it read before the await. An event stored
   during the await goes out with the send of the call that stored it. So
-  each watcher gets each event once, in order. A new watcher's history is
-  read, D1 is asked about any claimant in it not yet asked about, and this
-  repeats until none is new. Then the socket is accepted, sent its history,
-  and given its place, with no await in between, so no event falls between
-  its history and the live ones.
+  each watcher gets each event once, in order. A send returns the lowest
+  place a watcher is at once it is done, so a room can tell whether it
+  reached the last event stored.
+- **A new watcher's history.** The feed or room is told which donors are
+  known to be blocked, and reads only the events it will send: a feed with
+  no `since` reads its newest 100 of the others, in one query. D1 is asked
+  about any claimant in them not yet asked about, and the read repeats until
+  none is new. Then the socket is accepted, sent its history, and given its
+  place, with no await in between, so no event falls between its history
+  and the live ones.
 - **When D1 can't say who is blocked,** a feed sets its alarm a minute
   ahead, and the alarm sends what is waiting. A feed has no other alarm.
   `deliver` also sends when every event it got was a copy, since the queue
   may be trying again after an earlier call stored the events and failed.
 - **The block check runs as events go out.** So a block covers the history
-  a feed already stores, and lifting it shows that history again. It costs
-  one D1 read for each batch of events sent to a feed or room that has
-  watchers, and one for each watcher that connects. `blockedAmong` passes
-  the IDs as one JSON array, since D1 binds at most 100 values in a
-  statement.
+  a feed already stores, and lifting it shows that history again.
+  `blockedAmong` passes the IDs as one JSON array, since D1 binds at most
+  100 values in a statement. The `history()` RPC of a room and of a feed
+  leaves blocked donors out too, and throws when D1 can't say who they are.
+  Tests read what is stored straight from the object's SQLite.
 - **The Worker holds each stream.** It connects to the feed or room over the
-  WebSocket a page uses, accepts it, and writes each message it gets to a
-  `TransformStream` as a line, after checking it with `feedEventSchema`. So
-  the Durable Object can hibernate while the stream is open, and the Worker
-  spends CPU only on the lines. A Worker that answers HTTP has no time limit
-  while its client is connected, but Cloudflare gives it 30 seconds to
-  finish when the runtime is updated, which a reader sees as the stream
-  ending early.
-- **Ending a stream.** A timer ends it after an hour. The Worker ends it
-  when the feed closes the socket, and when the reader goes away, which it
-  learns from `request.signal`. It also ends it when the reader falls
-  behind: the Worker keeps the time of each line it wrote that the reader
-  hasn't taken, since a write finishes once the reader takes the line
-  before it, and ends the stream when a new line finds the oldest waiting
-  over a minute. So a stalled reader holds at most a minute of lines in
-  memory. A close waits for the reader to take every line, so ending the
-  stream of a stalled reader aborts it. Any other stream closes, and is
-  aborted after a minute if its reader stalls before it takes the rest. That signal needs the
-  `enable_request_signal` compatibility flag, which `wrangler.jsonc` turns
-  on for the whole Worker. Ending a stream closes the socket to the feed,
-  which answers the close.
+  WebSocket a page uses, accepts it, and keeps each message it gets as a
+  line, after checking it with `feedEventSchema`. The response body is a
+  `ReadableStream` that gives the reader the oldest waiting line each time
+  it asks. So the Durable Object can hibernate while the stream is open, and
+  the Worker spends CPU only on the lines. A Worker that answers HTTP has no
+  time limit while its client is connected, but Cloudflare gives it 30
+  seconds to finish when the runtime is updated, which a reader sees as the
+  stream ending early.
+- **Ending a stream.** A timer ends it an hour after it opened, and a line
+  that comes after the hour ends it too, which a test can reach with a fake
+  `Date`. The Worker ends it when the feed closes the socket, when the body
+  is cancelled, and when a new line finds the oldest waiting over a minute.
+  Ending a stream closes the socket to the feed, which answers the close.
+  The stream closes once the reader has taken every line. A stalled reader
+  is cut off with an error, and so is one that stalls before it takes the
+  rest, a minute later.
+- **When the reader goes away.** The runtime is meant to cancel the body,
+  which ends the stream. workerd since 1.20260619.1 doesn't, as
+  [workerd issue 6832](https://github.com/cloudflare/workerd/issues/6832)
+  reports, and the runtime the unit tests use shows the same. Until that is
+  fixed, the Worker learns a reader left from the minute rule, once a line
+  has waited that long and another comes, or at the hour. The
+  `enable_request_signal` compatibility flag would tell it at once. It is
+  not on. It applies to every route of the Worker, and workerd calls it
+  still experimental with no date to turn it on by default, though
+  `compatibility-date.capnp` doesn't mark it `$experimental`, so a deploy
+  would take it.
+- **What a stream costs,** for the security review in
+  [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34), which takes
+  stream rate limits.
+  Each open stream holds a Worker request and a hibernating WebSocket on a
+  feed or room, for up to an hour. Opening one reads D1 once or twice to
+  find its feed or room, and once for each round of the block check. It
+  sends at most 100 events from a feed with no `since`, at most 1,000 with
+  one, and an issue room's whole history. Each line costs the feed or room
+  one D1 read per batch it sends, shared by its watchers, and each stream a
+  schema check. A stalled reader holds up to a minute of lines in memory,
+  and a reader that went away holds its socket until the minute rule or the
+  hour ends it. Nothing limits how many streams a client opens.
 - **Which streams exist.** A person's stream needs the person in `people`,
   a repo's the project in `projects`, and an issue's a claim in `claims` or
   the issue in `tagged_issues`. Connecting to a feed or room that has never
@@ -710,9 +744,6 @@ streams' in [Text streams](how-it-works.md#text-streams).
   `vite preview` and `pnpm dev`. A `HEAD` answers at once. The Workers
   runtime itself hands back the answer before any line, as the unit tests
   show.
-- **No event ID in a text line.** The spec gives a text line five fields,
-  so a reader who reconnects with `since` reads the `.ndjson` form, which
-  has the ID.
 
 ## Configuration and secrets
 
@@ -910,13 +941,16 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   stand-in that records, refuses, or never answers, the way the crash test
   swaps D1.
 - **Feed tests** are in `apps/web/test/feed/`. They call a feed through its
-  stub, run the Worker's `queue` handler on batches made with
-  `createMessageBatch`, and read the text streams through the Worker while
-  the room, the queue, and the feeds run as they do deployed. The local
-  queue waits a second for a batch, as a deployed one does. The test of a
-  stream's close calls `handleStream` with a lifetime of a second. A fake
+  stub, run the Worker's `queue` handler on batches, and read the text
+  streams through the Worker while the room, the queue, and the feeds run as
+  they do deployed. The local
+  queue waits a second for a batch, as a deployed one does. The hour's close
+  is tested with a fake `Date`, which the Worker's request reads too. A fake
   timer can't stand in for the hour: it would fire in the test's I/O
-  context, where the Worker's stream can't be closed.
+  context, where the Worker's stream can't be closed. So the timer that
+  ends a quiet stream is tested by calling `handleStream` with a lifetime of
+  a second. The consumer's tests hand it batches of their own, which record
+  each `retry` and its wait. `createMessageBatch` drops the wait.
 - **Database tests** call the functions in `src/db/` against a real local
   D1. The Vitest config reads `migrations/`, and a setup file applies them
   before each test file. Each test file gets its own storage, and the tests

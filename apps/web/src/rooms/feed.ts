@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { feedEventSchema, githubId, mustParse, repoName, type FeedEvent } from '@goodfirsttoken/core';
+import { blockedAmong } from '../db/blocks';
 import { answerClose, openWatcher, sendToWatchers, type StoredEvent } from './watchers';
 
 // A live feed (spec section 8). One class serves three kinds of feed: the
@@ -15,11 +16,11 @@ import { answerClose, openWatcher, sendToWatchers, type StoredEvent } from './wa
 const DAY = 24 * 60 * 60 * 1000;
 
 /** How many events a feed keeps. Older ones are dropped as new ones arrive. */
-export const FEED_KEEPS = 1000;
+const FEED_KEEPS = 1000;
 /** How many of its newest events a feed sends a watcher who gives no `since`. */
-export const FEED_TAIL = 100;
+const FEED_TAIL = 100;
 /** How long a feed remembers the ID of an event it no longer keeps, to ignore a second copy. */
-export const FEED_REMEMBERS_MS = 7 * DAY;
+const FEED_REMEMBERS_MS = 7 * DAY;
 // How soon a send to the watchers that D1 kept from going out is tried again.
 const WATCHERS_RETRY_MS = 60 * 1000;
 
@@ -115,13 +116,20 @@ export class Feed extends DurableObject<Env> {
   }
 
   /**
-   * The events the feed keeps after the one with ID `since`, oldest first.
-   * With no `since`, or one the feed doesn't keep, every event it keeps.
-   * Blocked donors' events are included. Watchers never get those.
+   * The events the feed keeps after the one with ID `since`, oldest first,
+   * without blocked donors' events. With no `since`, or one the feed doesn't
+   * keep, every event it keeps. Throws when D1 can't say who is blocked.
    */
-  history(since?: string | null): FeedEvent[] {
+  async history(since?: string | null): Promise<FeedEvent[]> {
     const at = typeof since === 'string' ? this.placeOf(since) : null;
-    return this.after(at ?? 0).map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
+    const events = this.after(at ?? 0);
+    const blocked = await blockedAmong(
+      this.env.DB,
+      events.map((event) => event.githubId),
+    );
+    return events
+      .filter((event) => !blocked.has(event.githubId))
+      .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
   }
 
   /**
@@ -136,13 +144,12 @@ export class Feed extends DurableObject<Env> {
       return new Response('Connect with a WebSocket.\n', { status: 426, headers: { Upgrade: 'websocket' } });
     }
     const since = new URL(request.url).searchParams.get('since');
+    const resumes = since !== null && this.remembers(since);
     return openWatcher(this.ctx, this.env.DB, {
-      history: () => {
-        const at = since === null ? null : this.placeOf(since);
-        return this.after(at ?? 0);
-      },
+      // Only the events it sends are read: every one after `since`, or the
+      // newest 100 of donors not known to be blocked.
+      history: (blocked) => (resumes ? this.after(this.placeOf(since) ?? 0) : this.newest(FEED_TAIL, blocked)),
       last: () => this.last(),
-      tail: since !== null && this.remembers(since) ? undefined : FEED_TAIL,
     });
   }
 
@@ -160,7 +167,7 @@ export class Feed extends DurableObject<Env> {
    * alarm tries again a minute later.
    */
   private async sendToWatchers(): Promise<void> {
-    if (await sendToWatchers(this.ctx, this.env.DB, (seq) => this.after(seq))) return;
+    if ((await sendToWatchers(this.ctx, this.env.DB, (seq) => this.after(seq))) !== null) return;
     await this.ctx.storage.setAlarm(Date.now() + WATCHERS_RETRY_MS);
   }
 
@@ -183,6 +190,20 @@ export class Feed extends DurableObject<Env> {
       .exec<EventRow>('SELECT seq, github_id, event FROM events WHERE seq > ? ORDER BY seq', seq)
       .toArray()
       .map(toStored);
+  }
+
+  /** The newest `count` events, oldest first, leaving out the donors in `skip`. */
+  private newest(count: number, skip: ReadonlySet<number>): StoredEvent[] {
+    return this.sql
+      .exec<EventRow>(
+        `SELECT seq, github_id, event FROM events
+         WHERE github_id NOT IN (SELECT value FROM json_each(?)) ORDER BY seq DESC LIMIT ?`,
+        JSON.stringify([...skip]),
+        count,
+      )
+      .toArray()
+      .map(toStored)
+      .reverse();
   }
 
   private last(): number {

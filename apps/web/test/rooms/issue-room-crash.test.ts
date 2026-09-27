@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { getClaim, savePerson } from '../../src/db';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { db, repo, sha } from '../db/helpers';
+import { storedEvents } from '../feed/helpers';
 
 // A room whose call dies while its save to D1 is out. Every person and repo
 // here is made up.
@@ -68,9 +69,10 @@ test('a change whose save was out when its call died is saved by the alarm a min
   });
   vi.setSystemTime(t0 + 2 * HOUR);
   const dying = room.postUpdate({ ...mine, text: 'answered the review' }).catch(() => undefined);
-  // The post is stored before its save goes out.
+  // The post is stored before its save goes out. D1 answers nothing now, so
+  // the test reads the room's own storage.
   const posted = await vi.waitFor(async () => {
-    const last = (await room.history()).at(-1);
+    const last = (await storedEvents(room)).at(-1);
     expect(last?.text).toBe('answered the review');
     return Date.parse(last?.time ?? '');
   });

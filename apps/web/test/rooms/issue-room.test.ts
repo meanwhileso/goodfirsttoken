@@ -2,9 +2,10 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'c
 import { env } from 'cloudflare:workers';
 import type { ClaimRecord, FeedEvent, FeedMessage, PrRef } from '@goodfirsttoken/core';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, getClaim, listIssueClaims, savePerson } from '../../src/db';
+import { blockDonor, getClaim, listIssueClaims, savePerson, unblockDonor } from '../../src/db';
 import { issueRoom, type ClaimRequest, type ClaimResult, type IssueRoom } from '../../src/rooms/issue-room';
 import { db, repo, sha } from '../db/helpers';
+import { storedEvents } from '../feed/helpers';
 
 // Every person, repo, and token here is made up.
 //
@@ -657,6 +658,56 @@ describe('watchers', () => {
     expect(res.status).toBe(426);
   });
 
+  test("a slow send to the watchers that covered only older events leaves the retry of newer ones in place", async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const made = await claim(priya);
+    const watcher = await watch();
+    await watcher.received(1);
+    // From here, the first block check answers after a while, and the next
+    // one fails. The wait runs in the room, whose socket the answer reaches.
+    let checks = 0;
+    await runInDurableObject(room, (instance) => {
+      const live = instance as unknown as { env: Env };
+      const slowThenDown = {
+        prepare: (query: string) => {
+          if (!query.includes('donor_blocks')) return db.prepare(query);
+          checks += 1;
+          if (checks > 1) throw new Error('D1 is down.');
+          const statement = {
+            bind: () => statement,
+            all: () =>
+              new Promise((resolve) => {
+                setTimeout(() => {
+                  resolve({ results: [] });
+                }, 300);
+              }),
+          };
+          return statement;
+        },
+      } as unknown as D1Database;
+      live.env = { ...live.env, DB: slowThenDown };
+    });
+
+    at(t0 + MINUTE);
+    // Each call asks D1 before it answers. A wait here would move the clock.
+    await post(made, 'first');
+    expect(checks).toBe(1);
+    await room.release({ claimId: made.id, githubId: priya.githubId, reason: 'done here' });
+    expect(checks).toBe(2);
+    // The slow check answers. Its send covered the post, and not the release.
+    expect((await watcher.received(2))[1]).toEqual(['update', 'first']);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await runInDurableObject(room, (instance) => {
+      (instance as unknown as { env: Env }).env = env;
+    });
+
+    expect(await alarmTime()).toBe(t0 + 2 * MINUTE);
+    at(t0 + 2 * MINUTE);
+    await runDurableObjectAlarm(room);
+    expect((await watcher.received(3))[2]).toEqual(['released', 'released: done here']);
+    warnings.mockRestore();
+  });
+
   test('a watcher gets what D1 kept from going out a minute later, from the alarm', async () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const made = await claim(priya);
@@ -1108,8 +1159,11 @@ describe('a blocked donor', () => {
     await post(priyas, 'priya after');
     await post(kenjis, 'kenji after');
     expect((await watcher.received(3))[2]).toEqual(['update', 'kenji after']);
-    // The room keeps every event.
-    expect((await room.history()).map((e) => e.text)).toContain('priya after');
+    // The room keeps every event, and its history leaves hers out too.
+    expect((await storedEvents(room)).map((e) => e.text)).toContain('priya after');
+    expect((await room.history()).map((e) => e.user)).toEqual(['kenji', 'kenji', 'kenji']);
+    // The tests after this one post as her.
+    await unblockDonor(db, priya.githubId);
   });
 });
 

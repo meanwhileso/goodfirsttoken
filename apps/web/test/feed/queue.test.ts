@@ -1,4 +1,3 @@
-import { createExecutionContext, createMessageBatch, getQueueResult } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import type { FeedMessage } from '@goodfirsttoken/core';
 import { describe, expect, test, vi } from 'vitest';
@@ -9,39 +8,64 @@ import { feedEvent } from './helpers';
 // The feed queue's consumer, given batches the way Queues gives them. Every
 // person, repo, and line here is made up.
 
-let sent = 0;
+const HOUR_IN_SECONDS = 60 * 60;
 
-function message(body: unknown) {
-  sent += 1;
-  return { id: `m${String(sent)}`, timestamp: new Date(), attempts: 1, body };
-}
+let sent = 0;
 
 function feedMessage(changes: Partial<FeedMessage> = {}): FeedMessage {
   return { event: feedEvent(), githubId: 4001, project: 'sample-owner/queue-app', ...changes };
 }
 
-// What getQueueResult gives. The pool's types name it, and the Workers types
-// no longer define it.
-interface QueueResult {
-  explicitAcks: string[];
-  retryMessages: { msgId: string }[];
-}
-
-/** Runs the Worker's queue handler on a batch, and says what it did with each message. */
-async function consume(bodies: unknown[], bindings: Env = env) {
-  const batch = createMessageBatch('feed', bodies.map(message));
-  const ctx = createExecutionContext();
-  await worker.queue(batch, bindings);
-  const result = (await getQueueResult(batch, ctx)) as QueueResult;
-  return {
-    acked: result.explicitAcks,
-    retried: result.retryMessages.map((m) => m.msgId),
-    ids: batch.messages.map((m) => m.id),
+/**
+ * Runs the Worker's queue handler on a batch, and says what it did with each
+ * message: acknowledged it, or asked for it again after how many seconds.
+ * Each message is on its first delivery unless it says otherwise.
+ */
+async function consume(messages: unknown[], bindings: Env = env) {
+  const acked: string[] = [];
+  const retried: { id: string; delaySeconds: number | undefined }[] = [];
+  const batch = {
+    queue: 'feed',
+    metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } },
+    messages: messages.map((given) => {
+      sent += 1;
+      const id = `m${String(sent)}`;
+      const { body, attempts } =
+        typeof given === 'object' && given !== null && 'attempts' in given
+          ? (given as { body: unknown; attempts: number })
+          : { body: given, attempts: 1 };
+      return {
+        id,
+        timestamp: new Date(),
+        attempts,
+        body,
+        ack: () => acked.push(id),
+        retry: (options?: QueueRetryOptions) => retried.push({ id, delaySeconds: options?.delaySeconds }),
+      };
+    }),
+    ackAll: () => undefined,
+    retryAll: () => undefined,
   };
+  await worker.queue(batch, bindings);
+  return { acked, retried, ids: batch.messages.map((m) => m.id) };
 }
 
 async function inFeed(feed: DurableObjectStub<Feed>, id: string) {
   return (await feed.history()).filter((e) => e.id === id).length;
+}
+
+/** The Worker's bindings with the feed of this name refusing every delivery. */
+function refusing(name: string): Env {
+  return {
+    ...env,
+    FEED: new Proxy(env.FEED, {
+      get(target, key) {
+        if (key !== 'getByName') return Reflect.get(target, key) as unknown;
+        return (asked: string) =>
+          asked === name ? { deliver: () => Promise.reject(new Error('The feed is down.')) } : target.getByName(asked);
+      },
+    }),
+  };
 }
 
 describe('the feed queue', () => {
@@ -73,43 +97,52 @@ describe('the feed queue', () => {
     expect(await inFeed(personFeed(env.FEED, 4003), twice.event.id)).toBe(1);
   });
 
-  test("a message whose feed doesn't take it is tried again, and the others in the batch are acknowledged", async () => {
+  test.each([
+    ['homepage', 'home', { githubId: 4005, project: 'sample-owner/refusing-home' }],
+    ['project', 'repo:sample-owner/refusing-repo', { githubId: 4006, project: 'Sample-Owner/Refusing-Repo' }],
+    ['person', 'person:4099', { githubId: 4099, project: 'sample-owner/refusing-person' }],
+  ] as const)(
+    "a message the %s feed doesn't take is tried again, and one that feed isn't in is acknowledged",
+    async (_, name, facts) => {
+      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const fails = feedMessage(facts);
+      // Every message is in the homepage's feed, so none gets past it.
+      const lands = feedMessage({ githubId: 4004, project: 'sample-owner/queue-app' });
+
+      const { acked, retried, ids } = await consume(name === 'home' ? [fails] : [fails, lands], refusing(name));
+
+      expect(retried.map((r) => r.id)).toEqual([ids[0]]);
+      expect(acked).toEqual(name === 'home' ? [] : [ids[1]]);
+      expect(warnings).toHaveBeenCalled();
+      warnings.mockRestore();
+      // The retry reaches the feeds that took it already, which ignore it.
+      await consume([fails]);
+      expect(await inFeed(homeFeed(env.FEED), fails.event.id)).toBe(1);
+      expect(await inFeed(repoFeed(env.FEED, fails.project), fails.event.id)).toBe(1);
+      expect(await inFeed(personFeed(env.FEED, fails.githubId), fails.event.id)).toBe(1);
+    },
+  );
+
+  test("a message a feed doesn't take comes again after 30 seconds, then twice as long each time, up to an hour", async () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    // Person 4099's feed refuses every delivery.
-    const refusing: Env = {
-      ...env,
-      FEED: new Proxy(env.FEED, {
-        get(target, key) {
-          if (key !== 'getByName') return Reflect.get(target, key) as unknown;
-          return (name: string) =>
-            name === 'person:4099'
-              ? { deliver: () => Promise.reject(new Error('The feed is down.')) }
-              : target.getByName(name);
-        },
-      }),
-    };
-    const fails = feedMessage({ githubId: 4099 });
-    const lands = feedMessage({ githubId: 4004 });
+    const tries = [1, 2, 3, 7, 8, 50, 100];
 
-    const { acked, retried, ids } = await consume([fails, lands], refusing);
+    const { retried } = await consume(
+      tries.map((attempts) => ({ body: feedMessage({ githubId: 4099 }), attempts })),
+      refusing('person:4099'),
+    );
 
-    expect(retried).toEqual([ids[0]]);
-    expect(acked).toEqual([ids[1]]);
-    expect(warnings).toHaveBeenCalled();
+    expect(retried.map((r) => r.delaySeconds)).toEqual([30, 60, 120, 1920, HOUR_IN_SECONDS, HOUR_IN_SECONDS, HOUR_IN_SECONDS]);
     warnings.mockRestore();
-    // The retry reaches the feeds that took it already, which ignore it.
-    await consume([fails]);
-    expect(await inFeed(homeFeed(env.FEED), fails.event.id)).toBe(1);
-    expect(await inFeed(personFeed(env.FEED, 4099), fails.event.id)).toBe(1);
   });
 
-  test('a malformed message is tried again, so its tries take it to the dead-letter queue', async () => {
+  test('a malformed message is tried again at once, so its tries take it to the dead-letter queue', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const good = feedMessage();
 
     const { acked, retried, ids } = await consume([{ event: { text: 'no ID' } }, good]);
 
-    expect(retried).toEqual([ids[0]]);
+    expect(retried).toEqual([{ id: ids[0], delaySeconds: 0 }]);
     expect(acked).toEqual([ids[1]]);
     expect(errors).toHaveBeenCalledOnce();
     errors.mockRestore();

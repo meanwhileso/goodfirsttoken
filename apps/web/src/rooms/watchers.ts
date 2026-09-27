@@ -40,31 +40,33 @@ function send(socket: WebSocket, json: string): void {
 }
 
 /**
- * Opens a WebSocket for a new watcher. `history` gives the events to send
- * first, and `last` the place of the last event stored. `tail`, when set,
- * sends only that many of the newest events the watcher may see.
+ * Opens a WebSocket for a new watcher. `history(blocked)` gives the events to
+ * send first, leaving out any it likes of the donors it is told are blocked,
+ * and `last` the place of the last event stored.
  *
- * Which donors are blocked is read before the socket is accepted. Once every
- * donor in the history is known, the socket is accepted, sent its history,
- * and given its place with no await in between, so no event can fall between
- * the history and the live events. When D1 can't say who is blocked, the
- * answer is 503 and nothing is sent.
+ * Which donors are blocked is read before the socket is accepted. D1 is
+ * asked about each donor in the history not yet asked about, and the history
+ * is read again, until no donor in it is new. Then the socket is accepted,
+ * sent its history, and given its place with no await in between, so no
+ * event can fall between the history and the live events. When D1 can't say
+ * who is blocked, the answer is 503 and nothing is sent.
  */
 export async function openWatcher(
   ctx: DurableObjectState,
   db: D1Database,
-  { history, last, tail }: { history: () => StoredEvent[]; last: () => number; tail?: number },
+  { history, last }: { history: (blocked: ReadonlySet<number>) => StoredEvent[]; last: () => number },
 ): Promise<Response> {
   const known = new Set<number>();
   const blocked = new Set<number>();
   for (;;) {
-    const events = history();
+    const events = history(blocked);
     const unknown = [...new Set(events.map((event) => event.githubId))].filter((id) => !known.has(id));
     if (unknown.length === 0) {
-      const visible = events.filter((event) => !blocked.has(event.githubId));
       const { 0: client, 1: server } = new WebSocketPair();
       ctx.acceptWebSocket(server);
-      for (const event of tail === undefined ? visible : visible.slice(-tail)) server.send(event.json);
+      for (const event of events) {
+        if (!blocked.has(event.githubId)) server.send(event.json);
+      }
       server.serializeAttachment({ after: last() } satisfies Cursor);
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -86,20 +88,22 @@ export async function openWatcher(
  * after that place, oldest first.
  *
  * It sends only the events stored before it asks D1 who is blocked. An event
- * stored during that await is sent by the call that stored it. When D1 can't
- * say who is blocked, nothing is sent, and it returns false, for the caller
- * to try again. The events then go out with the next send that works.
+ * stored during that await is sent by the call that stored it. Returns the
+ * lowest place any watcher is at once it is done, which is past every event
+ * stored when there is no watcher. When D1 can't say who is blocked, nothing
+ * is sent, and it returns null, for the caller to try again.
  */
 export async function sendToWatchers(
   ctx: DurableObjectState,
   db: D1Database,
   after: (seq: number) => StoredEvent[],
-): Promise<boolean> {
+): Promise<number | null> {
+  const lowest = () => Math.min(Number.MAX_SAFE_INTEGER, ...ctx.getWebSockets().map(cursorOf));
   const sockets = ctx.getWebSockets();
-  if (sockets.length === 0) return true;
-  const events = after(Math.min(...sockets.map(cursorOf)));
+  if (sockets.length === 0) return lowest();
+  const events = after(lowest());
   const upTo = events.at(-1)?.seq;
-  if (upTo === undefined) return true;
+  if (upTo === undefined) return lowest();
   let blocked: Set<number>;
   try {
     blocked = await blockedAmong(
@@ -108,7 +112,7 @@ export async function sendToWatchers(
     );
   } catch (error) {
     console.warn('New events wait for the next send, because D1 could not say which donors are blocked.', error);
-    return false;
+    return null;
   }
   // A socket accepted during the await has its place already.
   for (const socket of ctx.getWebSockets()) {
@@ -119,7 +123,7 @@ export async function sendToWatchers(
     }
     socket.serializeAttachment({ after: upTo } satisfies Cursor);
   }
-  return true;
+  return lowest();
 }
 
 /** Answers a watcher's close, so its socket finishes closing. */

@@ -780,9 +780,14 @@ live. No page shows a feed yet. The [text streams](#text-streams) read them.
   batch, so a line reaches the feeds about a second after the room stores
   it.
 - A message is done once all three of its feeds have it. When one of them
-  can't take it, the message comes again 30 seconds later, to all three, up
-  to 10 times, and then goes to the dead-letter queue. Nothing reads the
-  dead-letter queue yet. The other messages in the batch are done.
+  can't take it, the message comes again to all three: after 30 seconds,
+  then twice as long each time, up to an hour between tries, for 100 tries,
+  which take about 4 days. After the last try, it goes to the dead-letter
+  queue, which nothing reads yet. The other messages in the batch are done.
+- A queue keeps a message at most 4 days, or 24 hours on Cloudflare's
+  Workers Free plan, and deletes it after that, tried or not. So a feed can
+  be down about 4 days, or a day on the Free plan, and still get every
+  event. The room keeps every event whatever happens.
 - Queues can deliver a message twice. A feed ignores an event it keeps, or
   got in the last 7 days, so it never shows an event twice.
 
@@ -791,8 +796,10 @@ live. No page shows a feed yet. The [text streams](#text-streams) read them.
 - A feed keeps its newest 1,000 events, through restarts. Older ones are
   dropped as new ones come, so a feed stays small however long it runs. The
   issue room keeps its whole history.
-- A feed keeps events in the order it got them. A delivery the queue tried
-  again can come after events that happened later.
+- The room sends its events in order, but Queues promises no order, and can
+  deliver two batches at once. A feed keeps events in the order they
+  arrive, which can differ from the order they happened. A watcher resumes
+  by the feed's own order, so it misses nothing.
 
 **Watchers**
 
@@ -814,6 +821,7 @@ out of what they send watchers, and so of every stream.
 - Feeds and rooms still store those events. A watcher that connects after
   the block is lifted gets them again. A watcher connected all along doesn't
   get the ones that went out while the donor was blocked.
+- A room's or feed's history, read directly, leaves them out too.
 - When the database can't say who is blocked, nothing goes out. A new
   watcher is turned away with `503`. New events wait, and the feed or room
   tries again a minute later, and with each new event.
@@ -831,24 +839,31 @@ Every feed has a plain-text live stream, readable with `curl -N`:
 
 - Each has an `.ndjson` form at the same path, with `.ndjson` in place of
   `.txt`.
-- A text line is one event: time, user, agent, issue, and text, separated by
-  tabs. The user is the login the claimant had when they claimed.
-- The time, user, agent, and issue can't hold a tab, a line break, or a
-  control character. In the text, each run of control characters, tabs and
-  line breaks among them, Unicode line and paragraph separators, and the
-  marks that reorder text, with the plain spaces around it, becomes one
-  space, or nothing at the start or end. So every event is one line, and
-  reads in a terminal as it was written.
-- An `.ndjson` line is the feed event as one JSON object, its ID included.
-  The same characters are escaped as `\u` and four hex digits, so the line
-  parses to the event as it was.
-- `?since=<event ID>` backfills. The stream starts with the events after
-  that one, as a watcher's `since` does. Without it, a feed's stream starts
-  with the newest 100 events, and an issue's with its whole history.
-- A text line carries no event ID. A reader that reconnects with `since`
-  reads the `.ndjson` form.
-- A stream closes after an hour, and when its feed or room closes the
-  socket, as a deploy can. The reader reconnects with `since`.
+- A text line is one event, in eight columns separated by tabs: time, event
+  ID, kind, user, agent, job, issue, and text.
+  - The kind is the event's, like `update` for a line the agent posted, or
+    `released` for a claim its claimant gave up. So a post that reads like a
+    change of state still shows as `update`.
+  - The user is the login the claimant had when they claimed.
+  - The job is a subagent's, and empty for the main agent's lines and for
+    changes of state.
+- The time, event ID, kind, user, agent, and issue can't hold a tab, a line
+  break, or a control character. In the job and the text, each run of
+  control characters, tabs and line breaks among them, Unicode line and
+  paragraph separators, and the marks that reorder text, like U+200E,
+  U+200F, and U+061C, with the plain spaces around it, becomes one space, or
+  nothing at the start or end. So every event is one line, and reads in a
+  terminal as it was written. A text of nothing but those characters shows
+  as an empty text column, and its kind still says what it was.
+- An `.ndjson` line is the feed event as one JSON object. The same
+  characters are escaped as `\u` and four hex digits, so the line parses to
+  the event as it was.
+- `?since=<event ID>` backfills, with the ID from a text line's second
+  column or an `.ndjson` line. The stream starts with the events after that
+  one, as a watcher's `since` does. Without it, a feed's stream starts with
+  the newest 100 events, and an issue's with its whole history.
+- A stream closes an hour after it opened, and when its feed or room closes
+  the socket, as a deploy can. The reader reconnects with `since`.
 - A reader that leaves a line untaken for a minute is too slow. The stream
   is cut off, with the lines it hasn't taken, so lines never pile up
   waiting for it. It reconnects with `since`.

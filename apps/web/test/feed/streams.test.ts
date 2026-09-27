@@ -4,10 +4,10 @@ import type { ClaimRecord, FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
-import { homeFeed, personFeed, type Feed } from '../../src/rooms/feed';
+import { homeFeed, personFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
-import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
-import { feedEvent, readStream } from './helpers';
+import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
+import { feedEvent, fields, readStream, storedEvents } from './helpers';
 
 // The live text streams, read through the Worker the way `curl -N` reads
 // them, while the issue room, the feed queue, and the feeds run as they do in
@@ -44,11 +44,12 @@ async function claim(person: { githubId: number; login: string }, agent = 'claud
   return result.claim;
 }
 
-async function post(claimed: ClaimRecord, text: string): Promise<void> {
+async function post(claimed: ClaimRecord, text: string, job?: string): Promise<void> {
   const result = await issueRoom(env.ISSUE_ROOM, issue).postUpdate({
     claimId: claimed.id,
     githubId: claimed.githubId,
     text,
+    job,
   });
   if (!result.ok || !result.posted) throw new Error(`The post was not stored: ${JSON.stringify(result)}`);
 }
@@ -60,11 +61,11 @@ function nextPostTime(): void {
   vi.setSystemTime(now + 11_000);
 }
 
-/** Waits until an event with this text is in a feed, so the queue has delivered it. */
-async function delivered(feed: DurableObjectStub<Feed>, text: string) {
+/** Waits until an event with this text is stored in a feed, so the queue has delivered it. */
+async function delivered(feed: DurableObjectStub, text: string): Promise<FeedEvent> {
   return vi.waitFor(
     async () => {
-      const found = (await feed.history()).find((e) => e.text === text);
+      const found = (await storedEvents(feed)).find((e) => e.text === text);
       expect(found, `"${text}" in the feed`).toBeDefined();
       return found as FeedEvent;
     },
@@ -94,22 +95,45 @@ describe('a text stream', () => {
     await post(priyas, text);
 
     for (const stream of streams) {
-      const line = await stream.line(text);
-      expect(line.split('\t')).toEqual([expect.any(String), 'priya', 'claude-code', issue, text]);
+      expect(fields(await stream.line(text))).toMatchObject({ user: 'priya', agent: 'claude-code', issue, text });
       await stream.cancel();
     }
   });
 
-  test('is one line per event: time, user, agent, issue, and text, separated by tabs', async () => {
+  test('is one line per event: time, event ID, kind, user, agent, job, issue, and text, separated by tabs', async () => {
     const kenjis = await claim(kenji, 'codex');
     const stream = await readStream(paths().issue);
 
-    const line = await stream.line('claimed the issue');
+    const line = fields(await stream.line('claimed the issue'));
 
-    const [time, ...rest] = line.split('\t');
-    expect(rest).toEqual(['kenji', 'codex', issue, 'claimed the issue']);
-    expect(new Date(time ?? '').getTime()).toBe(kenjis.claimedAt);
+    const [claimed] = await issueRoom(env.ISSUE_ROOM, issue).history();
+    expect(line).toEqual({
+      time: new Date(kenjis.claimedAt).toISOString(),
+      id: claimed?.id,
+      kind: 'claimed',
+      user: 'kenji',
+      agent: 'codex',
+      job: '',
+      issue,
+      text: 'claimed the issue',
+    });
     expect(stream.res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    await stream.cancel();
+  });
+
+  test("tells a post from a change of state, and shows a subagent's job", async () => {
+    const priyas = await claim(priya);
+    const stream = await readStream(paths().issue);
+
+    await post(priyas, 'released: nothing, this is a post', 'tests\tfor\nparseRange');
+    await issueRoom(env.ISSUE_ROOM, issue).release({ claimId: priyas.id, githubId: priya.githubId, reason: 'done' });
+
+    expect(fields(await stream.line('this is a post'))).toMatchObject({
+      kind: 'update',
+      job: 'tests for parseRange',
+      text: 'released: nothing, this is a post',
+    });
+    expect(fields(await stream.line('released: done'))).toMatchObject({ kind: 'released', job: '' });
     await stream.cancel();
   });
 
@@ -121,15 +145,10 @@ describe('a text stream', () => {
 
     for (const path of [paths().issue, paths().home]) {
       const stream = await readStream(path);
-      const line = await stream.line('released: tabs');
-      expect(line.split('\t')).toEqual([
-        expect.any(String),
-        'priya',
-        'claude-code',
-        issue,
-        // The ideographic space is the text's own, so it stays.
+      // The ideographic space is the text's own, so it stays.
+      expect(fields(await stream.line('released: tabs')).text).toBe(
         'released: tabs here, new lines and [2Jcontrols too\u3000 end',
-      ]);
+      );
       await stream.cancel();
     }
 
@@ -139,6 +158,26 @@ describe('a text stream', () => {
     for (const raw of ['\u001b', '\u2028']) expect(json).not.toContain(raw);
     expect((JSON.parse(json) as FeedEvent).text).toBe(`released: ${reason}`);
     await ndjson.cancel();
+  });
+
+  test('turns the marks that reorder text into spaces, and shows a text of nothing but controls as an empty text', async () => {
+    const priyas = await claim(priya);
+    const stream = await readStream(paths().issue);
+
+    await post(priyas, 'left\u200eright\u200fand\u061cmore\u2067then\u2069done');
+    nextPostTime();
+    await post(priyas, '\u200e\u0007\u061c');
+
+    expect(fields(await stream.line('left')).text).toBe('left right and more then done');
+    await vi.waitFor(() => {
+      expect(stream.lines).toHaveLength(3);
+    });
+    expect(fields(stream.lines[2] ?? '')).toMatchObject({ kind: 'update', text: '' });
+    const ndjson = await readStream(paths().issue.replace('.txt', '.ndjson'));
+    const json = await ndjson.line('left');
+    for (const mark of ['\u200e', '\u200f', '\u061c']) expect(json).not.toContain(mark);
+    expect((JSON.parse(json) as FeedEvent).text).toBe('left\u200eright\u200fand\u061cmore\u2067then\u2069done');
+    await Promise.all([stream.cancel(), ndjson.cancel()]);
   });
 
   test('shows a key or token in a post only as [redacted], in the streams and in what the feeds store', async () => {
@@ -154,24 +193,28 @@ describe('a text stream', () => {
       await stream.cancel();
     }
     for (const feed of [homeFeed(env.FEED), personFeed(env.FEED, priya.githubId)]) {
-      expect(JSON.stringify(await feed.history())).not.toContain(token.slice(4));
+      expect(JSON.stringify(await storedEvents(feed))).not.toContain(token.slice(4));
     }
   });
 
-  test('backfills from an event ID with ?since=', async () => {
+  test('backfills with ?since= from the event ID a line gives, so a reader can pick up where it stopped', async () => {
     const priyas = await claim(priya);
-    for (const text of ['one', 'two', 'three']) {
-      nextPostTime();
-      await post(priyas, `${text} of #${String(issueNumber)}`);
-    }
-    const two = await delivered(personFeed(env.FEED, priya.githubId), `two of #${String(issueNumber)}`);
-    await delivered(personFeed(env.FEED, priya.githubId), `three of #${String(issueNumber)}`);
 
     for (const path of Object.values(paths())) {
-      const stream = await readStream(`${path}?since=${two.id}`);
-      await stream.line(`three of #${String(issueNumber)}`);
-      expect(stream.lines.map((line) => line.split('\t')[4])).toEqual([`three of #${String(issueNumber)}`]);
-      await stream.cancel();
+      nextPostTime();
+      await post(priyas, `seen on ${path}`);
+      // A reader sees that line, and goes away.
+      const first = await readStream(path);
+      const { id } = fields(await first.line(`seen on ${path}`));
+      await first.cancel();
+      nextPostTime();
+      await post(priyas, `missed on ${path}`);
+
+      const again = await readStream(`${path}?since=${id}`);
+
+      await again.line(`missed on ${path}`);
+      expect(again.lines.map((line) => fields(line).text)).toEqual([`missed on ${path}`]);
+      await again.cancel();
     }
   });
 
@@ -189,10 +232,39 @@ describe('a text stream', () => {
     }
   });
 
-  test('closes when its lifetime ends, and not before', async () => {
-    // A stream lasts an hour. This one is given a second, which a timer in
-    // the Worker's own request can count. A fake timer would run in the
-    // test's, where the stream can't be closed.
+  test('closes an hour after it opened, and not before', async () => {
+    const reader = { githubId: 3303, login: 'sample-hour-reader' };
+    await signIn(reader);
+    const feed = personFeed(env.FEED, reader.githubId);
+    const entry = (text: string) => ({ event: feedEvent({ user: reader.login, text }), githubId: reader.githubId });
+    // Far ahead of the real clock. Only Date is fake, which the Worker's own
+    // request reads too.
+    const opened = Date.UTC(2100, 0, 4, 12, 0, 0);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(opened);
+    const stream = await readStream(`/@${reader.login}/live.txt`);
+
+    vi.setSystemTime(opened + HOUR - 1);
+    await feed.deliver([entry('the last line of the hour')]);
+    await stream.line('the last line of the hour');
+    expect(stream.ended()).toBe(false);
+
+    vi.setSystemTime(opened + HOUR);
+    await feed.deliver([entry('a line after the hour')]);
+
+    await vi.waitFor(() => {
+      expect(stream.ended()).toBe(true);
+    });
+    expect(stream.lines.some((line) => line.includes('a line after the hour'))).toBe(false);
+    await vi.waitFor(async () => {
+      expect(await sockets(feed)).toBe(0);
+    });
+  });
+
+  test('closes when its lifetime ends on a quiet feed', async () => {
+    // A quiet stream's hour is counted by a timer in the Worker's request.
+    // This one is given a second. A fake timer would fire in the test's
+    // request, where the stream can't be closed.
     const reader = { githubId: 3301, login: 'sample-reader' };
     await signIn(reader);
     const feed = personFeed(env.FEED, reader.githubId);
@@ -204,9 +276,12 @@ describe('a text stream', () => {
     expect(stream.ended()).toBe(false);
     expect(await sockets(feed)).toBe(1);
 
-    await vi.waitFor(() => {
-      expect(stream.ended()).toBe(true);
-    }, { timeout: 3000 });
+    await vi.waitFor(
+      () => {
+        expect(stream.ended()).toBe(true);
+      },
+      { timeout: 3000 },
+    );
     // The feed answered the close, so no socket stays open.
     await vi.waitFor(async () => {
       expect(await sockets(feed)).toBe(0);
@@ -236,12 +311,15 @@ describe('a text stream', () => {
     await expect(res.body?.getReader().read()).rejects.toThrow('The reader fell behind.');
   });
 
-  test('lets go of its socket on the feed when the reader goes away', async () => {
+  test('lets go of its socket on the feed when the reader cancels the stream', async () => {
+    // The Workers runtime cancels the body when the reader hangs up, where
+    // it passes that on (docs/architecture.md, The live feeds). Here the test
+    // holds the body the Worker made, and cancels it.
     const feed = personFeed(env.FEED, kenji.githubId);
-    const stream = await readStream(`/@${kenji.login}/live.txt`);
+    const res = await handleStream(new Request(`http://localhost/@${kenji.login}/live.txt`));
     expect(await sockets(feed)).toBe(1);
 
-    await stream.cancel();
+    await res.body?.cancel();
 
     await vi.waitFor(async () => {
       expect(await sockets(feed)).toBe(0);
@@ -264,7 +342,7 @@ describe('who a stream is for', () => {
     await savePerson(db, newNadia, t0 + 2);
 
     const renamed = await readStream('/@nadia-renamed/live.txt');
-    expect(await renamed.line(text)).toContain('\tnadia\t');
+    expect(fields(await renamed.line(text)).user).toBe('nadia');
     const taken = await readStream('/@NADIA/live.txt');
     expect(taken.res.status).toBe(200);
     await taken.line(text, 300).then(
@@ -319,7 +397,7 @@ describe('asking for a stream', () => {
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
   });
 
-  test("an issue a project tagged has a stream before anyone claims it", async () => {
+  test('an issue a project tagged has a stream before anyone claims it', async () => {
     await saveIssues(db, [
       { issue, project: repo, title: 'Sample issue', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
     ]);
