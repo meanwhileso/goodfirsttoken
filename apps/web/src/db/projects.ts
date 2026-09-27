@@ -1,5 +1,6 @@
 import {
   changedSettings,
+  count,
   githubId,
   mustParse,
   policySchema,
@@ -195,6 +196,52 @@ export async function listProjects(db: D1Database, status: ProjectStatus): Promi
     .bind(mustParse(projectStatusSchema, status, 'status'))
     .all<ProjectRow>();
   return results.map(toProject);
+}
+
+/** A project asking for help, with how many of its tagged issues wait for an agent. */
+export interface ProjectAskingForHelp {
+  project: ProjectRecord;
+  /**
+   * Its cached issues that carry one of its tags, none of its excluded tags,
+   * and no linked open PR.
+   */
+  waiting: number;
+}
+
+/**
+ * The projects asking for help: every approved project, paused ones left
+ * out, and any whose repo or issue repo is on the do-not-list. The ones with
+ * the most issues waiting for an agent come first, then the most recently
+ * added, then by repo. `total` is how many there are, and `projects` the
+ * first `limit` of them.
+ */
+export async function listProjectsAskingForHelp(
+  db: D1Database,
+  limit: number,
+): Promise<{ total: number; projects: ProjectAskingForHelp[] }> {
+  // Labels compare without case. SQLite's lower() folds ASCII letters.
+  const { results } = await db
+    .prepare(
+      `SELECT p.*, s.settings, COUNT(*) OVER () AS total,
+         (SELECT COUNT(*) FROM tagged_issues t
+          WHERE t.project = p.repo AND t.linked_pr_number IS NULL
+            AND EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.tags') g
+                        WHERE lower(l.value) = lower(g.value))
+            AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x
+                            WHERE lower(l.value) = lower(x.value))) AS waiting
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       WHERE p.status = 'approved'
+         AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))
+       ORDER BY waiting DESC, p.added_at DESC, p.repo
+       LIMIT ?`,
+    )
+    .bind(mustParse(count, limit, 'limit'))
+    .all<ProjectRow & { total: number; waiting: number }>();
+  return {
+    total: mustParse(count, results[0]?.total ?? 0, 'total'),
+    projects: results.map((row) => ({ project: toProject(row), waiting: mustParse(count, row.waiting, 'waiting') })),
+  };
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */

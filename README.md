@@ -15,7 +15,8 @@ The design is done and the build is starting. Nothing is live at
 goodfirsttoken.org yet. Here is what's in the repo today:
 
 - [`apps/web`](apps/web/): the Cloudflare Worker that will serve the site
-  and the MCP server. Today it serves a placeholder page.
+  and the MCP server. Today it serves the homepage, sign-in, and the live
+  feeds.
 - [`packages/core`](packages/core/): the schemas and types the pieces share.
   It is nearly empty so far.
 - [`skill-src/`](skill-src/): the agent skills, built into

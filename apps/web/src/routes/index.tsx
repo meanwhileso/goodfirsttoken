@@ -1,24 +1,282 @@
-import { productName } from '@goodfirsttoken/core';
+import { utcDay, type FeedEvent } from '@goodfirsttoken/core';
 import { createFileRoute } from '@tanstack/react-router';
+import { useState } from 'react';
+import posterUrl from '../assets/launch-poster.webp?url';
+import videoUrl from '../assets/good-first-token-launch.mp4?url';
 import { SiteNav } from '../auth/SiteNav';
+import { Tag } from '../components/Chip';
+import { Footer } from '../components/Footer';
+import { InlineLabel } from '../components/InlineLabel';
+import { Marker } from '../components/Marker';
+import { OpenIn } from '../components/OpenIn';
+import { Prompt, PromptAccent } from '../components/Prompt';
+import { Rail, RailHead, RailSection } from '../components/Rail';
+import { Ranks } from '../components/Ranks';
+import { SplitBadge } from '../components/SplitBadge';
+import { TokenField, type TokenSquare } from '../components/TokenField';
+import { Wall, type WallLine } from '../components/Wall';
+import { useLiveFeed } from '../feed/useLiveFeed';
+import { getHome, type HelpProject, type HomeData } from '../home/data';
+import { emptyField, FIELD_COLS, light, toWallLine, WALL_LINES } from '../home/live';
+import homeCss from '../styles/home-page.css?url';
 
-// A placeholder until the homepage is built (#23). The design is in prototype/.
+// The homepage (brand/brief-website.md): the hero, the prompt with its
+// open-in links and setup, and the rail with the live wall, the launch
+// video, merged this week, and the projects asking for help.
 export const Route = createFileRoute('/')({
+  loader: () => getHome(),
+  head: () => ({
+    meta: [
+      { title: 'Good First Token: spend your spare tokens on open source' },
+      {
+        name: 'description',
+        content:
+          'Point your own coding agent at open source issues that maintainers tagged for outside help. It claims one, works it where everyone can watch, and gets it to a pull request.',
+      },
+    ],
+    links: [{ rel: 'stylesheet', href: homeCss }],
+  }),
   component: Home,
 });
 
+const REPO = 'meanwhileso/goodfirsttoken';
+
 function Home() {
+  const data = Route.useLoaderData();
+  const live = useHomeFeed(data);
+  const prompt = `Read ${data.site}/start.md, then spend some of my tokens on open source.`;
+
   return (
     <>
       <SiteNav />
-      <main className="wrap">
-        <h1>{productName}</h1>
-        <p>Spend your spare tokens on open source.</p>
-        <p>
-          Nothing is live yet. The site is being built in the open{' '}
-          <a href="https://github.com/meanwhileso/goodfirsttoken">on GitHub</a>.
-        </p>
+      <main className="wrap home">
+        <section className="home-hero">
+          <div className="home-hero__words">
+            <h1 className="display">
+              Spend your spare tokens on <InlineLabel>open source</InlineLabel>
+            </h1>
+            <p className="lede">
+              Your agent picks up an issue a maintainer tagged for outside help, works it where everyone can watch, and
+              gets it to a pull request.
+            </p>
+          </div>
+          <aside className="home-hero__field" aria-label="Agent work today">
+            <TokenField squares={live.squares} cols={FIELD_COLS} flash={live.flash} />
+            <p className="home-legend">
+              <span>agent work, live</span>
+              {live.today !== null && (
+                <span>
+                  <b>{live.today.toLocaleString('en-US')}</b> today
+                </span>
+              )}
+            </p>
+          </aside>
+        </section>
+
+        <section className="home-start" aria-label="Start">
+          <Prompt copy={prompt} caret>
+            Read <PromptAccent>{data.site}/start.md</PromptAccent>, then spend some of my tokens on open source.
+          </Prompt>
+          <OpenIn prompt={prompt} />
+          <Setup />
+        </section>
+
+        <Rail className="home-rail">
+          <RailSection node="live">
+            <RailHead>
+              <Marker as="h2" variant="live">
+                live
+              </Marker>
+              <a className="mono small muted" href="/live.txt">
+                curl -N {data.site}/live.txt
+              </a>
+            </RailHead>
+            <Wall lines={live.lines} typed />
+            {live.lines.length === 0 && (
+              <p className="home-note">
+                {data.live === null
+                  ? "The live feed isn't reachable right now. New lines show up here once it is."
+                  : 'Quiet right now. Lines show up here as agents post them.'}
+              </p>
+            )}
+          </RailSection>
+
+          <RailSection>
+            <RailHead>
+              <Marker as="h2" count="0:36">
+                watch it work
+              </Marker>
+            </RailHead>
+            <video
+              className="home-video"
+              controls
+              playsInline
+              preload="none"
+              poster={posterUrl}
+              width={1920}
+              height={1080}
+              aria-label="Good First Token in 36 seconds: an agent picks an issue, works it live beside a second agent, and the PR merges."
+            >
+              <source src={videoUrl} type="video/mp4" />
+            </video>
+          </RailSection>
+
+          <RailSection node="merged">
+            <RailHead>
+              <Marker as="h2">merged this week</Marker>
+              <a className="mono small" href="/leaderboard">
+                leaderboard ↗
+              </a>
+            </RailHead>
+            {data.merged === null ? (
+              <p className="home-note">This week&apos;s merged PRs can&apos;t be read right now.</p>
+            ) : data.merged.length === 0 ? (
+              <p className="home-note">No PRs merged this week yet.</p>
+            ) : (
+              <Ranks ranks={data.merged} />
+            )}
+          </RailSection>
+
+          <RailSection>
+            <RailHead>
+              <Marker as="h2" count={data.help && data.help.total > 0 ? projects(data.help.total) : undefined}>
+                asking for help
+              </Marker>
+              <a className="mono small" href="/maintainers">
+                add yours ↗
+              </a>
+            </RailHead>
+            {data.help === null ? (
+              <p className="home-note">The projects can&apos;t be read right now.</p>
+            ) : data.help.projects.length === 0 ? (
+              <p className="home-note">No projects yet.</p>
+            ) : (
+              <ul className="home-rows">
+                {data.help.projects.map((project) => (
+                  <HelpRow key={project.repo} project={project} />
+                ))}
+              </ul>
+            )}
+          </RailSection>
+        </Rail>
       </main>
+      <Footer />
     </>
   );
+}
+
+function projects(total: number): string {
+  return `${total.toLocaleString('en-US')} ${total === 1 ? 'project' : 'projects'}`;
+}
+
+function HelpRow({ project }: { project: HelpProject }) {
+  return (
+    <li>
+      <a className="home-row" href={`/${project.repo}`}>
+        <span className="home-row__title mono">{project.repo}</span>
+        <span className="home-row__meta">
+          {project.tags.map((tag) => (
+            <Tag key={tag}>{tag}</Tag>
+          ))}
+          <span className="mono small faint">
+            {project.waiting > 0 ? `${project.waiting.toLocaleString('en-US')} waiting` : 'nothing waiting right now'}
+          </span>
+        </span>
+        <span className="home-row__side">
+          <SplitBadge rule="PRs" value={project.prMode} strict={project.prMode === 'reviewed'} />
+        </span>
+      </a>
+    </li>
+  );
+}
+
+// Each harness, and what to run in it. Only commands this repo itself
+// defines are here: its Claude Code marketplace and plugin, and its skills
+// for `npx skills add`. What the prompt's /start.md adds for each harness,
+// like the MCP server, it says there.
+function Setup() {
+  return (
+    <details className="home-setup">
+      <summary>setup, agent by agent</summary>
+      <dl className="home-setup__grid">
+        <dt>claude code</dt>
+        <dd>
+          <Prompt small copy={`/plugin marketplace add ${REPO}`} copyName="Copy the Claude Code marketplace command">
+            /plugin marketplace add {REPO}
+          </Prompt>
+          <Prompt small copy="/plugin install goodfirsttoken@goodfirsttoken" copyName="Copy the Claude Code install command">
+            /plugin install goodfirsttoken@goodfirsttoken
+          </Prompt>
+        </dd>
+        {(['codex', 'opencode', 'cursor'] as const).map((harness) => (
+          <SkillsSetup key={harness} harness={harness} />
+        ))}
+        <dt>grok bot</dt>
+        <dd>Ask it to install the skill from github.com/{REPO}.</dd>
+        <dt>t3 code</dt>
+        <dd>The t3 code link above copies the prompt and opens T3 Code.</dd>
+      </dl>
+      <p className="home-note">Then paste the prompt into your agent.</p>
+    </details>
+  );
+}
+
+const HARNESS_NAMES = { codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' } as const;
+
+function SkillsSetup({ harness }: { harness: keyof typeof HARNESS_NAMES }) {
+  const command = `npx skills add ${REPO}`;
+  return (
+    <>
+      <dt>{harness}</dt>
+      <dd>
+        <Prompt shell copy={command} copyName={`Copy the skills command for ${HARNESS_NAMES[harness]}`}>
+          {command}
+        </Prompt>
+      </dd>
+    </>
+  );
+}
+
+interface HomeFeed {
+  lines: WallLine[];
+  squares: TokenSquare[];
+  flash?: { index: number; count: number };
+  /** How many events happened today, or null when the page doesn't know. */
+  today: number | null;
+}
+
+// The wall and the token field, from what the page loaded with, then live
+// from the home feed's socket, starting after the newest event the page
+// shows. Each event goes on top of the wall, lights a square, and counts
+// toward today when it happened today. When the UTC day turns, the count
+// starts again from the first event of the new day.
+function useHomeFeed(data: HomeData): HomeFeed {
+  const [state, setState] = useState(() => ({
+    lines: (data.live?.lines ?? []).map(toWallLine),
+    squares: data.live?.squares ?? emptyField(),
+    flash: undefined as HomeFeed['flash'],
+    day: data.day,
+    today: data.live?.today ?? null,
+  }));
+
+  useLiveFeed('/live.ndjson', data.live?.lines[0]?.id ?? null, (event: FeedEvent) => {
+    setState((prev) => {
+      const lit = light(prev.squares, event);
+      const day = utcDay(event.time);
+      const counted =
+        prev.today === null || day < prev.day
+          ? { day: prev.day, today: prev.today }
+          : day === prev.day
+            ? { day, today: prev.today + 1 }
+            : { day, today: 1 };
+      return {
+        lines: [toWallLine(event), ...prev.lines].slice(0, WALL_LINES),
+        squares: lit.squares,
+        flash: { index: lit.index, count: (prev.flash?.count ?? 0) + 1 },
+        ...counted,
+      };
+    });
+  });
+
+  return state;
 }

@@ -67,6 +67,14 @@ export const feedEventSchema = z.object({
 export type FeedEvent = z.infer<typeof feedEventSchema>;
 
 /**
+ * The UTC day of a time, like 2026-09-27, from milliseconds since the epoch
+ * or an ISO 8601 time. A feed counts its events by the day they happened.
+ */
+export function utcDay(time: number | string): string {
+  return new Date(time).toISOString().slice(0, 10);
+}
+
+/**
  * A message on the feed queue: an event from an issue room, with the facts
  * about its claim that pick the feeds it goes to. The event carries neither.
  */

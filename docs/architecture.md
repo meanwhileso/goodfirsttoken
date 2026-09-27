@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, sign-in with GitHub, the design system at `/design`, `/healthz`, and the live text streams, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The site, the MCP server, other queue consumers, and scheduled jobs all join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, sign-in with GitHub, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, and the feed queue's consumer. The site, the MCP server, other queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -29,7 +29,8 @@ The repo is a pnpm workspace.
 - **`src/server.ts` is the Worker's entry point.** It answers a request to a
   redirect domain itself, with `src/redirect.ts`, sends every request under
   `/auth` to `src/auth/routes.ts`, and every path shaped like a text stream
-  to `src/feed/streams.ts`, and hands every other request to TanStack Start.
+  to `src/feed/streams.ts`, which also takes a page's live socket there, and
+  hands every other request to TanStack Start.
   Its `queue` handler is the feed queue's consumer. The Durable Object
   classes are exported from it. Cron handlers join it as they arrive.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
@@ -54,6 +55,11 @@ The repo is a pnpm workspace.
   in its place. Sign-in trades codes for tokens at github.com itself, in
   `src/auth/auth.ts`.
 - **Sign-in lives in `src/auth/`,** described under [Sign-in](#sign-in).
+- **The homepage is `src/routes/index.tsx`,** with what it reads in
+  `src/home/`, described under [The homepage](#the-homepage).
+- **`src/dev/` is for local development only:** the sample work `pnpm seed`
+  gives a local site, described under
+  [Sample data](#sample-data-in-development).
 
 ### Sign-in
 
@@ -630,8 +636,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
 | `src/rooms/feed.ts` | `Feed`, the Durable Object for every feed, and `homeFeed`, `repoFeed`, and `personFeed`, which name them |
 | `src/rooms/watchers.ts` | Opening a watcher's socket and sending new events to watchers, with the block check, for rooms and feeds alike |
 | `src/feed/queue.ts` | The feed queue's consumer |
-| `src/feed/streams.ts` | The text streams |
+| `src/feed/streams.ts` | The text streams, and the live sockets pages open on them |
 | `src/feed/format.ts` | The two line formats |
+| `src/feed/useLiveFeed.ts` | The page's side of a live socket, as a React hook |
 
 - **One class, three kinds of feed.** `getByName` names each: `home`,
   `repo:` and the project's code repo in lower case, and `person:` and the
@@ -644,6 +651,18 @@ streams' in [Text streams](how-it-works.md#text-streams).
   event it no longer keeps. A feed reads its rows back with the core schema,
   so the rule under [The issue room](#the-issue-room) about changing
   `feedEventSchema` covers feeds too.
+- **Day counts.** A feed also keeps `day_counts`: for each UTC day and
+  claimant, how many events it stored. `deliver` adds to it in the same step
+  as the event, so a copy the feed ignores isn't counted, and drops the days
+  older than a week. The events themselves are capped at 1,000, so a count
+  over them would stop at 1,000 on a busy day. Keeping the claimant lets the
+  block check leave a blocked donor's events out of a count, and lifting the
+  block brings them back.
+- **A glance for a page.** `glance({ count, day })` gives a page the newest
+  events a watcher may see and the day's count, with the same block check a
+  new watcher gets. When D1 can't say who is blocked, it answers null. The
+  runtime reports an error thrown in a Durable Object as uncaught, even when
+  the caller catches it, so it throws only for a bug.
 - **The queue message** is core's `feedMessageSchema`: the event, the
   claimant's GitHub ID, and the project's code repo. The event carries
   neither of those, and adding them to `feedEventSchema` would need every
@@ -738,6 +757,28 @@ streams' in [Text streams](how-it-works.md#text-streams).
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
   hour ends it. Nothing limits how many streams a client opens.
+  A live socket costs the same to open, then holds only a hibernating socket
+  on the feed or room, for as long as the page is open, with no hour limit.
+  Every homepage view opens one on the homepage's feed, so that one object
+  sends every event to every open homepage. It also takes one `glance` per
+  homepage view. Nothing limits how many sockets a client opens either.
+- **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
+  `handleStream` sees the upgrade, finds the feed or room and checks `since`
+  the same way as for a stream, and forwards the upgrade to it. The Worker
+  answers with the `101` and the socket the feed or room accepted, so the
+  browser holds the feed's own hibernating socket, and no Worker request
+  stays open for it. That is why the socket has no hour limit, and why the
+  block check is the one every watcher gets. The socket lives on the
+  stream's own URL, so each feed has one address, one resolver, and one set
+  of `404`s, for people, programs, and pages alike. Issue pages (#25),
+  person pages, and `/live` (#26) can open theirs with `useLiveFeed`.
+- **`useLiveFeed(path, since, onEvent)`** opens the socket from the page,
+  hands each new event to the page once, and reconnects after a drop with
+  the last event's ID, backing off as
+  [Live sockets](how-it-works.md#live-sockets) says. It closes the socket
+  when the component unmounts. It checks only the shape of each message,
+  since the feed checked each event with core's schema when it stored it, and
+  core's schemas would add zod to the page's scripts.
 - **Which streams exist.** A person's stream needs the person in `people`,
   a repo's the project in `projects`, and an issue's a claim in `claims` or
   the issue in `tagged_issues`. Connecting to a feed or room that has never
@@ -750,6 +791,87 @@ streams' in [Text streams](how-it-works.md#text-streams).
   `vite preview` and `pnpm dev`. A `HEAD` answers at once. The Workers
   runtime itself hands back the answer before any line, as the unit tests
   show.
+
+## The homepage
+
+The rules are in [how-it-works.md](how-it-works.md#the-homepage).
+
+| File | What it does |
+|---|---|
+| `src/routes/index.tsx` | The page, built from the components in `src/components/`, and the live state of its wall and token field |
+| `src/home/data.ts` | `getHome`, the server function the route's loader calls |
+| `src/home/load.ts` | `loadHome`, which reads what the page shows, on the server only |
+| `src/home/live.ts` | The wall's lines and the token field's squares, for the server and the page alike |
+| `src/styles/home-page.css` | The page's layout |
+
+- **What the page reads.** `loadHome` reads its three parts at the same
+  time: a `glance` at the homepage's feed, `topMergers` in `src/db/prs.ts`,
+  and `listProjectsAskingForHelp` in `src/db/projects.ts`. A part that
+  throws is null, and the page says it can't be read, so the prompt always
+  shows. Each view costs one call to the homepage's feed, which reads D1 for
+  its block check when it has events, and two D1 queries. Nothing caches
+  them yet.
+- **Merged this week** filters `prs` on `closed_at` with `state = 'merged'`,
+  which reads `prs_by_closed`, and joins each PR to its claim and the
+  claimant's row in `people`. It takes the agent of each person's latest
+  merge from SQLite's bare column with `MAX()`: in a query with one `MAX()`,
+  a column that isn't aggregated comes from the row that has the maximum.
+  `startOfWeek` in the same file gives the Monday.
+- **Asking for help** counts each approved project's waiting issues in the
+  same query, with `json_each` over the issue's labels and the project's
+  current settings. SQLite's `lower()` folds only ASCII letters, so two
+  labels that differ in the case of other letters don't match there. `COUNT(*)
+  OVER ()` gives the total before the limit.
+- **The live parts.** The loader gives the wall's newest events and the
+  field's squares as the server lit them. The page then opens `/live.ndjson`
+  with `useLiveFeed`, starting after the newest event it shows, and lights
+  squares with the same function the server used. The squares come from a
+  hash of each event's ID, so the page and the server agree on them with
+  nothing stored.
+- **The prompt's site** comes from `siteOrigin` in `src/auth/settings.ts`,
+  the primary domain or the request's origin, so no deployment domain is in
+  the code.
+- **The launch video and its poster** are imported with `?url`, so they come
+  from [the static host](#the-static-host), and `preload="none"` keeps the
+  browser from fetching any of the video before a click.
+- **The Claude Code install command** names the plugin with its marketplace,
+  `goodfirsttoken@goodfirsttoken`, Claude Code's form for a plugin from a
+  given marketplace. Both names come from `.claude-plugin/marketplace.json`.
+  The setup gives no command for the MCP server. `/start.md` (#21) will.
+
+## Sample data in development
+
+`POST /dev/seed` is a path for local development only. `pnpm seed` resets the
+GitHub fake, then calls it when `pnpm dev` is running. The rules are in
+[how-it-works.md](how-it-works.md#sample-data-in-development).
+
+| File | What it does |
+|---|---|
+| `src/routes/dev.seed.ts` | The route, which hands every method to `handleDevSeed` |
+| `src/dev/seed.ts` | `handleDevSeed`, and `seedSampleWork`, which writes the sample data |
+| `src/dev/sample-work.ts` | The sample people, projects, issues, and claims |
+| `apps/web/scripts/seed-local.mjs` | What `pnpm seed` runs to call the route |
+
+- **Only in development.** `handleDevSeed` answers `404` unless
+  `isDevelopment()` in `src/auth/settings.ts` holds, the check the dev
+  sign-in uses: `ENVIRONMENT` is `development` and `GH_WEB_URL` is the
+  GitHub fake on this machine. A test runs the Worker as staging and as
+  production with GitHub on this machine, and sees `404` and nothing seeded.
+- **Through the issue rooms.** The claims, their lines, and the merges go
+  through the same room calls the MCP tools will make, so the lines reach
+  the feeds through the queue, and the claims reach D1 from the room. The
+  PRs are recorded with `addPr` and `setPrState`, and the room is told each
+  one closed.
+- **The GitHub fake's people.** The sample work names the fake's sample
+  people, with their GitHub IDs, so signing in locally as one shows their
+  work. A test checks that every person, repo, and issue it names is in
+  `packages/github-fake/src/sample-data.ts`. Its projects are the fake's
+  made-up repos under `sample-owner`.
+- **The end-to-end tests don't seed.** Their homepage has what CI's fresh
+  database has, so its screenshots match CI's. Locally, `vite preview` uses
+  the same database as `pnpm dev`, under `apps/web/.wrangler/state/`, so
+  after `pnpm seed` the homepage's screenshots fail until that folder is
+  removed.
 
 ## Configuration and secrets
 
@@ -898,10 +1020,12 @@ and Playwright run it as a local HTTP server.
   the person's login in its `login` field.
 - **Local state.** The server `pnpm dev` starts keeps its state in
   `apps/web/.wrangler/github-fake/state.json`, next to Miniflare's, so forks
-  and commits survive a restart. `pnpm seed` resets it to the sample data.
-  In CI, Playwright starts a fresh fake with the sample data. Locally it
-  reuses a fake that is already running, like the one `pnpm dev` started,
-  with whatever state that one has.
+  and commits survive a restart. `pnpm seed` resets it to the sample data,
+  then gives the running site its sample work, as
+  [Sample data](#sample-data-in-development) says. In CI, Playwright starts
+  a fresh fake with the sample data. Locally it reuses a fake that is
+  already running, like the one `pnpm dev` started, with whatever state
+  that one has.
 - **It never ships.** `apps/web` lists it as a dev dependency, and a lint
   rule refuses an import of it from `apps/web/src`.
 
@@ -972,7 +1096,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   server. The web server applies the D1 migrations first. They live in
   `apps/web/e2e/`. `streams.spec.ts` asks for the streams that exist with
   `HEAD`, since the local server holds a stream's headers until its first
-  line, and no line comes there.
+  line, and no line comes there. `home.spec.ts` stands in for the homepage's
+  feed with Playwright's `routeWebSocket`, and hands the page events of its
+  own. The feed's side of the socket is tested in the unit tests, with real
+  feeds.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has
@@ -1012,7 +1139,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   anywhere else, so a lint rule allows them only in `cookies.spec.ts`.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
-  clock paused so the live wall holds still. Up to 2% of pixels may differ,
+  clock paused so the live wall holds still. The homepage's, in
+  `home.spec.ts-snapshots/`, run under reduced motion, with the same three
+  live lines on a day long gone, the setup open, and the video masked, since
+  each Chromium build draws its own video controls. They show what a fresh
+  database has, which is what CI's has. Up to 2% of pixels may differ,
   for antialiasing, and a change in page height always fails. The baselines
   must come from the Playwright build CI uses, because other Chromium builds
   can wrap text differently. To update them, after a deliberate visual

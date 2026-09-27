@@ -231,3 +231,57 @@ describe('a blocked donor', () => {
     expect(await watcher.received(100)).toEqual(kenjis.map((e) => e.event.text));
   });
 });
+
+describe('a glance at a feed, which a page shows first', () => {
+  // The day feedEvent's times fall on.
+  const day = '2100-01-04';
+
+  async function glanceAt(count: number, on = day) {
+    const glance = await feed.glance({ count, day: on });
+    if (glance === null) throw new Error('The feed could not say who is blocked.');
+    return glance;
+  }
+
+  test('gives the newest events a watcher may see, oldest first, and how many happened on a UTC day', async () => {
+    const entries = ['one', 'two', 'three', 'four'].map((text) => by(priya, text));
+    const late = { event: feedEvent({ time: '2100-01-03T23:59:59.999Z', text: 'late' }), githubId: kenji.githubId };
+    await feed.deliver([...entries, late]);
+
+    const glance = await glanceAt(3);
+
+    expect(glance.events.map((e) => e.text)).toEqual(['three', 'four', 'late']);
+    expect(glance.dayCount).toBe(4);
+    expect((await glanceAt(3, '2100-01-03')).dayCount).toBe(1);
+  });
+
+  test('counts every event of the day, the ones the feed has dropped since included, and a copy once', async () => {
+    const entries = Array.from({ length: 1001 }, (_, i) => by(priya, `line ${String(i)}`));
+    for (let i = 0; i < entries.length; i += 100) await feed.deliver(entries.slice(i, i + 100));
+    await feed.deliver(entries.slice(999));
+
+    expect(await storedEvents(feed)).toHaveLength(1000);
+    expect((await glanceAt(1)).dayCount).toBe(1001);
+  });
+
+  test("leaves a blocked donor's events out of both", async () => {
+    await feed.deliver([by(priya, 'priya'), by(kenji, 'kenji'), by(priya, 'priya again')]);
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
+
+    const glance = await glanceAt(100);
+
+    expect(glance.events.map((e) => e.text)).toEqual(['kenji']);
+    expect(glance.dayCount).toBe(1);
+  });
+
+  test('is null when D1 cannot say who is blocked, so nothing that should be hidden shows', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await feed.deliver([by(priya, 'one')]);
+    await runInDurableObject(feed, (instance) => {
+      const live = instance as unknown as { env: Env };
+      live.env = { ...live.env, DB: downDb };
+    });
+
+    expect(await feed.glance({ count: 5, day })).toBeNull();
+    warnings.mockRestore();
+  });
+});

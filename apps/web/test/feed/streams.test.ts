@@ -1,5 +1,5 @@
 import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
-import { env } from 'cloudflare:workers';
+import { env, exports } from 'cloudflare:workers';
 import type { ClaimRecord, FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, saveIssues, savePerson } from '../../src/db';
@@ -7,7 +7,7 @@ import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
-import { feedEvent, fields, readStream, storedEvents } from './helpers';
+import { feedEvent, fields, liveSocket, readStream, storedEvents } from './helpers';
 
 // The live text streams, read through the Worker the way `curl -N` reads
 // them, while the issue room, the feed queue, and the feeds run as they do in
@@ -431,5 +431,108 @@ describe('asking for a stream', () => {
       expect(stream.res.headers.get('access-control-allow-origin'), path).toBe('*');
       await stream.cancel();
     }
+  });
+});
+
+describe('a live socket, which a page opens on the .ndjson form of a stream', () => {
+  const socketPaths = () => Object.values(paths()).map((path) => path.replace(/\.txt$/, '.ndjson'));
+
+  test('gets each new event on the homepage, project, issue, and person feeds as one JSON message', async () => {
+    const priyas = await claim(priya);
+    const sockets = await Promise.all(socketPaths().map((path) => liveSocket(path)));
+    for (const socket of sockets) expect(socket.res.status).toBe(101);
+
+    const text = `wrote failing test for #${String(issueNumber)}: the socket gets it too`;
+    await post(priyas, text);
+
+    const event = await delivered(homeFeed(env.FEED), text);
+    for (const socket of sockets) {
+      expect(await socket.event(text)).toEqual(event);
+      socket.socket.close(1000);
+    }
+  });
+
+  test('picks up where it left off with ?since=, getting only what it missed', async () => {
+    const priyas = await claim(priya);
+    for (const path of socketPaths()) {
+      nextPostTime();
+      await post(priyas, `seen on ${path}`);
+      const first = await liveSocket(path);
+      const { id } = await first.event(`seen on ${path}`);
+      first.socket.close(1000);
+      nextPostTime();
+      await post(priyas, `missed on ${path}`);
+
+      const again = await liveSocket(`${path}?since=${id}`);
+
+      await again.event(`missed on ${path}`);
+      expect(again.events.map((e) => e.text)).toEqual([`missed on ${path}`]);
+      again.socket.close(1000);
+    }
+  });
+
+  test("never sends a blocked donor's events, those posted before the block included", async () => {
+    const priyas = await claim(priya);
+    const kenjis = await claim(kenji);
+    const tag = `#${String(issueNumber)}`;
+    await post(priyas, `priya before ${tag}`);
+    await post(kenjis, `kenji before ${tag}`);
+    await delivered(homeFeed(env.FEED), `priya before ${tag}`);
+    await delivered(homeFeed(env.FEED), `kenji before ${tag}`);
+
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
+
+    const sockets = await Promise.all(socketPaths().map((path) => liveSocket(path)));
+    nextPostTime();
+    await post(priyas, `priya after ${tag}`);
+    await post(kenjis, `kenji after ${tag}`);
+    const [home, project, room, person] = sockets;
+    for (const socket of [home, project, room]) await socket?.event(`kenji after ${tag}`);
+    await delivered(personFeed(env.FEED, priya.githubId), `priya after ${tag}`);
+    for (const socket of sockets) {
+      expect(socket.events.filter((e) => e.user === 'priya')).toEqual([]);
+      socket.socket.close(1000);
+    }
+    expect(person?.res.status).toBe(101);
+  });
+
+  test('ignores what the page sends, and keeps sending events', async () => {
+    const priyas = await claim(priya);
+    const socket = await liveSocket(`/@${priya.login}/live.ndjson`);
+
+    socket.socket.send('hello');
+    socket.socket.send(JSON.stringify({ kind: 'update', text: 'not a post' }));
+    await post(priyas, `after the page spoke on #${String(issueNumber)}`);
+
+    await socket.event(`after the page spoke on #${String(issueNumber)}`);
+    expect(socket.events.some((e) => e.text === 'not a post')).toBe(false);
+    socket.socket.close(1000);
+  });
+
+  test('is public: it answers with no cookie', async () => {
+    await claim(priya);
+    for (const path of socketPaths()) {
+      const socket = await liveSocket(path);
+      expect(socket.res.status, path).toBe(101);
+      expect(socket.res.headers.get('set-cookie'), path).toBeNull();
+      socket.socket.close(1000);
+    }
+  });
+
+  test('opens only on the .ndjson form, with an event ID as since, for a stream that exists', async () => {
+    const answer = (path: string) => exports.default.fetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
+
+    expect((await answer('/live.txt')).status).toBe(400);
+    expect((await answer('/live.ndjson?since=not%20an%20id')).status).toBe(400);
+    for (const path of [
+      '/sample-owner/not-listed/live.ndjson',
+      `/${repo}/issues/${String(issueNumber)}/live.ndjson`,
+      '/@nobody-signed-in/live.ndjson',
+    ]) {
+      expect((await answer(path)).status, path).toBe(404);
+    }
+    // Nothing made a room for the issue.
+    const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
+    expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
   });
 });

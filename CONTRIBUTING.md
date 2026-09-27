@@ -21,7 +21,7 @@ You need Node 24. pnpm comes through corepack.
 corepack enable
 pnpm install
 pnpm dev         # the site, at http://localhost:5173, and a fake GitHub
-pnpm seed        # reset the fake GitHub to the sample data
+pnpm seed        # reset the fake GitHub, and give the running site sample work
 pnpm prototype   # the clickable prototype, at http://localhost:8943
 pnpm check       # lint, typecheck, and a check that the skills match skill-src/
 pnpm test        # unit tests, the Worker's inside the Workers runtime
