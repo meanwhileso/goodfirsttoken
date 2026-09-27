@@ -7,9 +7,10 @@ staging, checks it, and then deploys production.
 You need:
 
 - A GitHub account, with a copy of this repo under it.
-- A Cloudflare account whose plan includes Workers, D1, KV, and Queues.
+- A Cloudflare account whose plan includes Workers, D1, KV, and Queues, and
+  R2 if you want a static host.
 - A domain on Cloudflare, if you want the site on your own domain. Without
-  one, it is served on workers.dev.
+  one, it is served on workers.dev. A static host needs one too.
 
 Local development needs none of this. [CONTRIBUTING.md](../CONTRIBUTING.md)
 covers it.
@@ -53,10 +54,12 @@ in step 5.
 5. **Make a credential.** Each environment uses one of these two forms:
    - **An API token.** In the dashboard, go to My Profile, API Tokens, and
      Create Token. Start from the Edit Cloudflare Workers template, and add
-     two permissions: Account, D1, Edit, and Account, Queues, Edit. Under
-     Account Resources, pick your account. Under Zone Resources, pick the
-     zones of your domains, or all zones if you have none. Staging and
-     production can share one token or have one each.
+     two permissions: Account, D1, Edit, and Account, Queues, Edit. With a
+     static host, check that it also has Account, Workers R2 Storage, Edit,
+     and add it if not. Under Account Resources, pick your account. Under
+     Zone Resources, pick the zones of your domains, or all zones if you
+     have none. Staging and production can share one token or have one
+     each.
    - **A credential broker.** This is a service you run that trades the deploy
      job's GitHub OIDC token for a short-lived Cloudflare token, so no
      long-lived token sits in GitHub. [The credential broker](#the-credential-broker)
@@ -66,6 +69,10 @@ in step 5.
    environment that also has its own API token then has both forms, and its
    deploy stops with "Keep only one". Set the broker URL on the repository
    only when both environments use the broker.
+6. **Set up a static host, if you want one.** It serves the site's scripts,
+   styles, fonts, and video from a hostname of its own, with long caching
+   and no cookies. [The static host](#the-static-host) says how. Without
+   one, the Worker serves them.
 
 ## 3. Create the GitHub OAuth apps
 
@@ -120,6 +127,7 @@ variables. In a private repo, either works.
 | `OAUTH_KV_ID` | No | The ID of a KV namespace for sign-in grants. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
+| `STATIC_ORIGIN` | No | The static host's origin, like `https://static.example.org`, set up as [The static host](#the-static-host) says. Pages then load the built files from there, and the deploy uploads them to `<WORKER_NAME>-static`. When it's empty, the Worker serves them. |
 | `OAUTH_CLIENT_ID` | No | The client ID of this environment's GitHub OAuth app. Sign-in (#8) reads it. |
 | `ADMIN_GITHUB_IDS` | No | The numeric GitHub user IDs of the site's admins, separated by commas. `https://api.github.com/users/<username>` shows a user's `id`. Sign-in (#8) reads it. |
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
@@ -180,6 +188,53 @@ variable or set it to anything else.
   by hand.
 - A deploy reuses the database, the KV namespace, and the queues it finds, so
   running it again loses nothing.
+- The static host keeps every file a deploy uploaded, so a page an older
+  deploy rendered still finds its files. A deploy uploads only the files
+  that are new.
+
+## The static host
+
+A static host serves the site's built files from an R2 bucket on a hostname
+of its own, like `static.example.org`. Cloudflare's cache keeps them close
+to visitors, browsers keep them for a year, and the site's cookies never
+reach them. R2 attaches a custom domain only from a zone in the same
+Cloudflare account. Set it up once for each environment:
+
+1. **Create the bucket.** In the Cloudflare dashboard, go to R2 and create a
+   bucket named `<WORKER_NAME>-static`, with that environment's Worker name.
+   The deploy uploads to it and never creates it.
+2. **Attach its hostname.** In the bucket's settings, under Custom Domains,
+   connect a hostname in one of your zones. Use one the site doesn't use.
+   Leave the bucket's r2.dev URL turned off.
+3. **Let the site's pages use the files.** A browser loads fonts and
+   scripts from another origin only when the answer carries
+   `Access-Control-Allow-Origin`. In the zone, go to Rules and create a
+   response header transform rule. Match requests whose hostname equals the
+   static host's, and set the static header `Access-Control-Allow-Origin`
+   to `*`.
+4. **Keep cookies off the hostname.** Leave off every Cloudflare feature
+   that sets a cookie there. Bot Fight Mode sets `__cf_bm` and covers the
+   whole zone, so turn it off. A challenge sets `cf_clearance`, so keep
+   custom rules that challenge away from the hostname.
+5. **Set `STATIC_ORIGIN`** in the environment to `https://` and the
+   hostname, like `https://static.example.org`, and deploy.
+
+The end-to-end tests check the files, their headers, and the cookie rules
+against a stand-in on your machine. Only a real deployment can show what
+Cloudflare adds. After the first deploy with the static host, and after any
+change to the zone's settings, check it by hand. Open the site, find the URL
+of a file under `/assets/` in the page source, and run:
+
+```bash
+curl -sI https://static.example.org/assets/<file>
+```
+
+It answers `200`, with `cache-control: public, max-age=31536000, immutable`,
+the file's `content-type`, `access-control-allow-origin: *`, and no
+`set-cookie`. No page links to the launch video yet. Its name starts with
+`good-first-token-launch-`, and the deploy's build step lists it. Check it
+with `-H 'Range: bytes=0-99'` added. It answers `206`, with no `set-cookie`
+either.
 
 ## The credential broker
 

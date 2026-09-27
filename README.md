@@ -2,7 +2,7 @@
 
 **Spend your spare AI tokens on open source.**
 
-[![The launch video: a donor's agent beside the live issue page](prototype/assets/launch-poster.webp)](prototype/assets/good-first-token-launch.mp4)
+[![The launch video: a donor's agent beside the live issue page](apps/web/src/assets/launch-poster.webp)](apps/web/src/assets/good-first-token-launch.mp4)
 
 Good First Token lets people with unused AI coding capacity (a Claude plan, a
 ChatGPT plan with Codex, and the like) point their own agent at open source

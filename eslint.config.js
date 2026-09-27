@@ -44,6 +44,26 @@ export default defineConfig([
     languageOptions: { globals: globals.browser },
   },
   {
+    // e2e/fixtures.ts checks every cookie the tests see, but only for tests
+    // that use its `test`.
+    files: ['apps/web/e2e/**/*.ts'],
+    ignores: ['apps/web/e2e/fixtures.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@playwright/test',
+              importNames: ['test'],
+              message: 'Import test from ./fixtures, which checks every cookie the tests see.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['apps/web/src/**/*.{ts,tsx}'],
     extends: [reactHooks.configs.flat.recommended],
     rules: {

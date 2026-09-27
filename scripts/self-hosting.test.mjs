@@ -55,6 +55,28 @@ test('staging and production deploys each stay off until their repository variab
   assert.match(jobs.production, /^ {4}needs: staging$/m);
 });
 
+test('the build and the upload read the same STATIC_ORIGIN, and the files reach the static host before the Worker that links to them', () => {
+  // The deploy job's steps, in order, without YAML comments.
+  const steps = read('.github/workflows/deploy-environment.yml')
+    .split('\n')
+    .map((line) => line.replace(/(^|\s)#.*$/, ''))
+    .join('\n')
+    .split(/\n(?= {6}- )/)
+    .slice(1);
+  const step = (run) => steps.findIndex((text) => text.includes(`run: ${run}`));
+  const [build, upload, deploy] = [
+    step('pnpm --filter @goodfirsttoken/web build'),
+    step('node scripts/deploy.mjs static-assets'),
+    step('pnpm exec wrangler deploy'),
+  ];
+  const setting = 'STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}';
+
+  assert.ok(build >= 0 && upload >= 0 && deploy >= 0, 'the job builds, uploads, and deploys');
+  assert.ok(steps[build]?.includes(setting), 'the build step gets STATIC_ORIGIN');
+  assert.ok(steps[upload]?.includes(setting), 'the upload step gets STATIC_ORIGIN');
+  assert.ok(build < upload && upload < deploy, 'the upload runs after the build and before the Worker deploys');
+});
+
 test('the deploy workflows never run on pull_request_target', () => {
   assert.equal(workflow.includes('pull_request_target'), false);
 });

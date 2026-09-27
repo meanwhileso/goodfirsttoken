@@ -6,13 +6,15 @@
 //   node scripts/deploy.mjs resources            # D1 database and queues, when missing
 //   node scripts/deploy.mjs migrations           # D1 migrations, when there are any
 //   node scripts/deploy.mjs secrets              # the Worker's secrets, one at a time
+//   node scripts/deploy.mjs static-assets        # built files to the static host's bucket
 //   node scripts/deploy.mjs smoke-test staging   # /healthz reports the right environment
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { DEPLOY_CONFIG, REPO_ROOT, TARGETS } from './deploy-config.mjs';
+import { DEPLOY_CONFIG, REPO_ROOT, STATIC_BUCKET, STATIC_ORIGIN, TARGETS, staticBucketName } from './deploy-config.mjs';
+import { ASSETS_DIR, CLIENT_DIR, staticObjects } from './static-host.mjs';
 
 const API = 'https://api.cloudflare.com/client/v4';
 // A token goes into $GITHUB_ENV, so it can't carry a line break or a space
@@ -168,6 +170,49 @@ export function putSecrets({ config, env, wrangler, log }) {
   }
 }
 
+// Uploads the files the build named after their content to the static host's
+// R2 bucket, <WORKER_NAME>-static, with the headers the static host sends:
+// their type, and a year of immutable caching. It runs before the Worker
+// deploys, so no page links to a file the bucket doesn't have yet. A file the
+// bucket already has is left alone, since a changed file gets a new name.
+// With STATIC_ORIGIN empty, the Worker serves the files itself, so nothing is
+// uploaded.
+export async function uploadStaticAssets({ config, staticOrigin, clientDir, token, fetch, log }) {
+  if (!staticOrigin) {
+    log(`${STATIC_ORIGIN} is not set, so the Worker serves the built files itself.`);
+    return;
+  }
+  if (!token) throw new Error('CLOUDFLARE_API_TOKEN is not set. Run the credential step first.');
+  const objects = staticObjects(clientDir);
+  if (!objects.length) throw new Error(`${CLIENT_DIR}/${ASSETS_DIR} has no files. Build the Worker first.`);
+
+  const bucket = `/r2/buckets/${encodeURIComponent(staticBucketName(config.name))}`;
+  if (!(await cloudflare({ token, account: config.account_id, fetch })('GET', bucket))) {
+    throw new Error(
+      `The static host's R2 bucket, <WORKER_NAME>-${STATIC_BUCKET}, does not exist. Create it as docs/self-hosting.md describes, or leave ${STATIC_ORIGIN} empty.`,
+    );
+  }
+  const authorization = `Bearer ${token}`;
+  let uploaded = 0;
+  for (const object of objects) {
+    const url = `${API}/accounts/${config.account_id}${bucket}/objects/${object.key.split('/').map(encodeURIComponent).join('/')}`;
+    const found = await fetch(url, { headers: { authorization } });
+    // Only the answer's status matters, so the file itself is not downloaded.
+    await found.body?.cancel();
+    if (found.ok) continue;
+    if (found.status !== 404) throw new Error(`Cloudflare answered ${found.status} when asked for ${object.key}.`);
+    const put = await fetch(url, {
+      method: 'PUT',
+      headers: { authorization, ...object.headers },
+      body: readFileSync(object.file),
+    });
+    await put.body?.cancel();
+    if (!put.ok) throw new Error(`Cloudflare answered ${put.status} to the upload of ${object.key}.`);
+    uploaded += 1;
+  }
+  log(`Uploaded ${uploaded} new files to the static host. ${objects.length - uploaded} were there already.`);
+}
+
 // The Worker's /healthz URL: on the primary domain, or else the workers.dev
 // URL Wrangler reported when it deployed.
 export function smokeTestUrl({ config, wranglerOutput }) {
@@ -251,6 +296,15 @@ async function main([step, target]) {
       return applyMigrations({ config: readDeployConfig(root), root, wrangler: wranglerIn(root), log });
     case 'secrets':
       return putSecrets({ config: readDeployConfig(root), env, wrangler: wranglerIn(root), log });
+    case 'static-assets':
+      return uploadStaticAssets({
+        config: readDeployConfig(root),
+        staticOrigin: (env[STATIC_ORIGIN] ?? '').trim(),
+        clientDir: path.join(root, CLIENT_DIR),
+        token: env.CLOUDFLARE_API_TOKEN,
+        fetch,
+        log,
+      });
     case 'smoke-test': {
       if (!TARGETS.includes(target)) throw new Error('Name the environment to check: staging or production.');
       const output = env.WRANGLER_OUTPUT_FILE_PATH;
@@ -259,7 +313,7 @@ async function main([step, target]) {
       return smokeTest({ url, target, fetch, log });
     }
     default:
-      throw new Error('Name a step: credential, resources, migrations, secrets, or smoke-test.');
+      throw new Error('Name a step: credential, resources, migrations, secrets, static-assets, or smoke-test.');
   }
 }
 

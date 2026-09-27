@@ -1,7 +1,7 @@
 import type { RecordedCall } from '@goodfirsttoken/github-fake';
 import { LOCAL_API_URL, LOCAL_WEB_URL } from '@goodfirsttoken/github-fake/local';
 import { localOAuthApp } from '@goodfirsttoken/github-fake/sample-data';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 // The GitHub fake that `pnpm dev` and these tests run beside the app. Its
 // sign-in page is how local development signs in as a sample person. The

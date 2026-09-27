@@ -4,11 +4,13 @@
 //       writes video/stills/t-<seconds>.png for a quick layout check
 //   pnpm video:render
 //       writes every frame at 30 fps, encodes the MP4 with ffmpeg, and writes
-//       the WebP poster, both into ../prototype/assets/
+//       the WebP poster, both into ../apps/web/src/assets/, which the site's
+//       build puts on its static host. It copies both into
+//       ../prototype/assets/ for the prototype's homepage.
 //
 // Needs ffmpeg and cwebp on PATH (brew install ffmpeg webp).
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -17,7 +19,8 @@ const { chromium } = await import('playwright');
 
 const FPS = 30;
 const POSTER_AT = 23.9;
-const assets = path.resolve(here, '../prototype/assets');
+const assets = path.resolve(here, '../apps/web/src/assets');
+const prototypeAssets = path.resolve(here, '../prototype/assets');
 const [mode = 'stills', ...rest] = process.argv.slice(2);
 
 const browser = await chromium.launch();
@@ -56,7 +59,10 @@ if (mode === 'stills') {
   ], { stdio: 'inherit' });
   execFileSync('cwebp', ['-quiet', '-q', '82', path.join(frames, 'poster.png'), '-o', path.join(assets, 'launch-poster.webp')], { stdio: 'inherit' });
   rmSync(frames, { recursive: true, force: true });
-  console.log(`Rendered ${total} frames to prototype/assets/good-first-token-launch.mp4`);
+  for (const file of ['good-first-token-launch.mp4', 'launch-poster.webp']) {
+    copyFileSync(path.join(assets, file), path.join(prototypeAssets, file));
+  }
+  console.log(`Rendered ${total} frames to apps/web/src/assets/good-first-token-launch.mp4`);
 } else {
   await browser.close();
   throw new Error(`Unknown mode "${mode}". Use "stills" or "render".`);

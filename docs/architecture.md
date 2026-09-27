@@ -13,7 +13,7 @@ The repo is a pnpm workspace.
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves a placeholder home page, the design system at `/design`, and `/healthz`. The site, the MCP server, queue consumers, and scheduled jobs all join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, the input, output, and text of every MCP tool, feed events, and refusal codes. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
-| `scripts/` | The static server behind `pnpm prototype`, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
+| `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
 | `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
@@ -61,8 +61,8 @@ The repo is a pnpm workspace.
 - **The fonts are self-hosted.** `src/fonts/` holds the Geist and Geist Mono
   variable fonts from the `geist` npm package, version 1.7.2, under the SIL
   Open Font License in `src/fonts/OFL.txt`. Vite gives each file a content
-  hash, the Worker's static assets serve it, and the root route preloads
-  both. #33 moves them to the static host.
+  hash, [the static host](#the-static-host) serves it, and the root route
+  preloads both.
 - **Widths come from containers.** The nav is a container and folds on its
   own width, so the same component works at the top of a page and inside a
   narrower frame. `body` is a container too, and the gutter switches on its
@@ -193,9 +193,10 @@ that leaves their settings empty gives them empty strings, and
 | `FEED_QUEUE` | Queue producer | #14 |
 | `CRAWL_QUEUE` | Queue producer | #30 |
 
-The feed's dead-letter queue arrives with the feed consumer in #14, and the
-static host's R2 bucket with #33. Durable Objects, cron triggers, and rate
-limiters arrive with the issues that use them.
+The feed's dead-letter queue arrives with the feed consumer in #14. Durable
+Objects, cron triggers, and rate limiters arrive with the issues that use
+them. The static host's R2 bucket is not a binding, since the Worker never
+reads it. [The static host](#the-static-host) covers it.
 
 ## Configuration and secrets
 
@@ -217,6 +218,44 @@ which simulates every binding and keeps D1 and KV data on disk under
 `http://127.0.0.1:8944`, which `wrangler.jsonc` points the Worker at. The
 variables the app reads, with safe local defaults, are listed in
 `apps/web/.dev.vars.example`.
+
+## The static host
+
+Pages load the built files from a static host: an R2 bucket behind a
+Cloudflare custom domain, on a hostname the site doesn't use. Cloudflare's
+cache keeps the files at the edge, and the site's cookies never reach them.
+A deployment without one serves the same files from the Worker.
+
+- **The build sets every URL.** `apps/web/vite.config.ts` reads
+  `STATIC_ORIGIN` from its environment and makes it Vite's `base`. So the
+  scripts, the styles, the fonts they name, TanStack Start's manifest, and
+  each `?url` import point at that origin, in the HTML the Worker renders
+  and in the files themselves. Unset, `base` is `/`, as in `pnpm dev`. The
+  Worker never reads the setting, and each environment's build gets its
+  own.
+- **What goes there.** Everything under `dist/client/assets/`, which holds
+  only files Vite names after their content. A plugin in `vite.config.ts`
+  adds every file in `src/assets/` to the build, so the launch video and
+  its poster are there before a page links to them. A page that imports one
+  with `?url` gets the same file. The Worker's static assets hold the same
+  files, so emptying `STATIC_ORIGIN` again needs nothing else.
+- **The upload.** `scripts/deploy.mjs static-assets` runs after the build
+  and before `wrangler deploy`, with Cloudflare's API. It checks that the
+  bucket, `<WORKER_NAME>-static`, exists. Then it asks R2 for each file by
+  its path and uploads each one R2 doesn't have, with its content type and
+  `Cache-Control: public, max-age=31536000, immutable`. R2 sends both back
+  with the file. `scripts/static-host.mjs` lists the files and their
+  headers for the upload and for the tests' stand-in alike. The upload
+  never deletes a file, and never creates the bucket, whose custom domain
+  is attached by hand.
+- **Fonts and scripts load across origins.** A browser fetches fonts and
+  module scripts in CORS mode, so the static host has to send
+  `Access-Control-Allow-Origin`. A response header rule on its hostname
+  adds `*`. R2's own CORS policy sends the header only when a request
+  carries an `Origin`, so a copy Cloudflare cached for another request
+  could lack it. Stylesheets load without CORS, so a page keeps its styles
+  if the header goes missing.
+- **Byte ranges** are R2's own. Nothing in the repo adds them.
 
 ## The GitHub fake
 
@@ -318,6 +357,28 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. They live in `apps/web/e2e/`.
+- **The static host in end-to-end tests** is a stand-in,
+  `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
+  from the site's `localhost:4173`. The build under test has
+  `STATIC_ORIGIN` set to it. It serves the files the upload would send, with
+  the headers the upload stores, byte ranges, and the
+  `Access-Control-Allow-Origin` header the hostname rule adds. So the tests
+  show that pages load every built file from the static origin and still
+  work, and that the upload's files and headers are right. They can't show
+  what only Cloudflare does: that R2 and its cache send those headers and
+  byte ranges, and that nothing on the hostname adds a cookie.
+  [self-hosting.md](self-hosting.md#the-static-host) has the check for a
+  real deployment.
+- **Every cookie the tests see is checked** by `apps/web/e2e/fixtures.ts`.
+  Every spec takes `test` from it, which a lint rule enforces. It reads each
+  `Set-Cookie` header on every response in every browser context and from
+  the `request` fixture, and the cookie jar of each context still open when
+  a test ends, which catches a cookie set from a script. A cookie from the
+  site that is not host-only, `Secure`, and `Path=/` with the `__Host-`
+  prefix fails the test, and so does any cookie from the static host.
+  Other origins, like the GitHub fake, are not checked. The site sets no
+  cookies yet, so a test checks that the fixture sees the responses of
+  pages and requests from both hosts.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
   clock paused so the live wall holds still. Up to 2% of pixels may differ,
@@ -482,14 +543,16 @@ The job runs these steps. The scripts are in `scripts/`.
    `REDIRECT_DOMAINS` as custom domains and turns workers.dev off when there
    is a domain. It refuses a `GH_API_URL` or `GH_WEB_URL` that isn't an
    `https` URL, and leaves each empty when its setting is, so the Worker
-   calls GitHub itself. It masks the account ID, resource names and IDs, and
-   the value of every variable but `ENVIRONMENT` for the later steps,
-   Wrangler's output included. A key or binding it does not know stops the
-   deploy, so a new kind of binding never reaches Cloudflare with its local
-   name.
+   calls GitHub itself. It checks `STATIC_ORIGIN`, which has to be an
+   `https` origin on a hostname the site doesn't use, though the config
+   doesn't hold it. It masks the account ID, resource names and IDs, the
+   static origin, and the value of every variable but `ENVIRONMENT` for the
+   later steps, Wrangler's output included. A key or binding it does not
+   know stops the deploy, so a new kind of binding never reaches Cloudflare
+   with its local name.
 3. The Vite build reads that file through
-   `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and writes the config Wrangler
-   deploys from.
+   `CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH`, and `STATIC_ORIGIN` from the
+   setting, and writes the config Wrangler deploys from.
 4. `deploy.mjs credential` puts a Cloudflare token in `$GITHUB_ENV` for the
    later steps: the `CLOUDFLARE_API_TOKEN` secret, or a short-lived token from
    the credential broker, traded for the job's GitHub OIDC token. It masks
@@ -504,12 +567,15 @@ The job runs these steps. The scripts are in `scripts/`.
 7. `deploy.mjs secrets` puts each secret in `secrets.required` with
    `wrangler secret put`, one at a time, from the environment secret of the
    same name. The value reaches Wrangler on stdin only.
-8. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
+8. `deploy.mjs static-assets` uploads the built files the static host
+   doesn't have yet, as [The static host](#the-static-host) describes. It
+   does nothing when `STATIC_ORIGIN` is empty.
+9. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
    when `OAUTH_KV_ID` is empty, and reuses it after that.
-9. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
-   workers.dev URL Wrangler reported, until it answers ok from the target
-   environment. It fails at once if another environment answers, and after
-   three minutes otherwise.
+10. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
+    workers.dev URL Wrangler reported, until it answers ok from the target
+    environment. It fails at once if another environment answers, and after
+    three minutes otherwise.
 
 Choices:
 
