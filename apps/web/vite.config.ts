@@ -23,11 +23,12 @@ function base(staticOrigin = ''): string {
   return url.href;
 }
 
-// Every file in src/assets goes into the build, named after its content like
-// any file a page imports, whether a page links to it yet or not. So the
-// static host has the launch video and its poster before the homepage (#23)
-// shows them. A page that imports one with ?url gets the same file. Hidden
-// files, like a .DS_Store, stay out.
+// Each file directly in src/assets goes into the build, named after its
+// content like any file a page imports, whether a page links to it yet or
+// not. So the static host has the launch video and its poster before the
+// homepage (#23) shows them. A page that imports one with ?url gets the same
+// file. Hidden files, like a .DS_Store, stay out, and so do folders under
+// it, whose files go in only when a page imports them.
 function everyAsset(dir: string): Plugin {
   return {
     name: 'goodfirsttoken:every-asset',

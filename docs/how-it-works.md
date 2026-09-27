@@ -482,12 +482,16 @@ A deployment can serve them from a static host, on a hostname of its own.
 - With the `STATIC_ORIGIN` setting, every page loads the built files from
   that origin, and none from the site. Without it, as in local development,
   the site serves them itself.
-- Every file in `apps/web/src/assets` but hidden ones is a built file,
-  whether a page links to it yet or not. So the launch video and its poster
-  are on the static host before the homepage (#23) shows them.
+- Every file directly in `apps/web/src/assets`, hidden ones aside, is a
+  built file, whether a page links to it yet or not. So the launch video
+  and its poster are on the static host before the homepage (#23) shows
+  them. Files in folders under it are built only when a page imports them.
 - Each file is uploaded with `Cache-Control: public, max-age=31536000,
   immutable`, and the static host sends it. A file's name changes whenever
   its content does, so a browser keeps it for a year without asking again.
+- A file the static host already has under a name must hold the same bytes
+  as the build's. If it doesn't, the deploy stops and names the file, since
+  browsers would keep the old one for a year.
 - The static host answers byte ranges, which Safari needs to play video.
 - The static host sets no cookie. Every cookie the site sets is host-only
   with the `__Host-` prefix, so a browser never sends one to the static
@@ -495,10 +499,11 @@ A deployment can serve them from a static host, on a hostname of its own.
 - A deploy uploads the new files before the Worker whose pages link to them
   goes live, and never deletes a file. So a page an older Worker rendered
   still finds its files.
-- Before the new Worker goes live, the deploy asks the static host for one
-  file of each kind. If one is missing, lacks its type, its caching, or
-  `Access-Control-Allow-Origin: *`, or comes with a cookie, the deploy
-  stops and the Worker already live stays.
+- Before anything else in the environment changes, the deploy asks the
+  static host for one file of each kind. If one is missing, lacks its type,
+  its caching, or `Access-Control-Allow-Origin: *`, or comes with a cookie,
+  the deploy stops. The database, the Worker's secrets, and the Worker
+  already live stay as they were.
 
 ## Calls to GitHub
 

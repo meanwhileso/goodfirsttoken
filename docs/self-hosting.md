@@ -188,9 +188,6 @@ variable or set it to anything else.
   by hand.
 - A deploy reuses the database, the KV namespace, and the queues it finds, so
   running it again loses nothing.
-- The static host keeps every file a deploy uploaded, so a page an older
-  deploy rendered still finds its files. A deploy uploads only the files
-  that are new.
 
 ## The static host
 
@@ -212,18 +209,33 @@ Cloudflare account. Set it up once for each environment:
    response header transform rule. Match requests whose hostname equals the
    static host's, and set the static header `Access-Control-Allow-Origin`
    to `*`.
-4. **Keep cookies off the hostname.** Leave off every Cloudflare feature
-   that sets a cookie there. Bot Fight Mode sets `__cf_bm` and covers the
-   whole zone, so turn it off. A challenge sets `cf_clearance`, so keep
-   custom rules that challenge away from the hostname.
+4. **Keep cookies away from the hostname.** Leave off every Cloudflare
+   feature that sets a cookie. Bot Fight Mode sets `__cf_bm`, and a
+   challenge sets `cf_clearance`. Bot Fight Mode covers the whole zone.
+
+   Cloudflare's docs don't say which domain these cookies are set for.
+   Examples published outside them show `__cf_bm` set with the zone's own
+   domain as its `Domain`, and a browser sends such a cookie to every
+   hostname in the zone, the static host's included. We have not confirmed
+   this. Until someone does, take one of two ways:
+   - Put the static host on a domain of its own, in a zone that serves
+     nothing else. Then challenges and Bot Fight Mode on the site's zone
+     can't reach it.
+   - Or keep Bot Fight Mode and every challenge off for the whole zone the
+     site and the static host share, the site's hostname included.
+
+   The deploy's check sees only the cookies the static host itself sets.
+   It can't see one the site's hostname sets for the whole zone.
 5. **Set `STATIC_ORIGIN`** in the environment to `https://` and the
    hostname, like `https://static.example.org`, and deploy.
 
-Each deploy asks the static host for one file of each kind before the new
-Worker goes live. If an answer is missing, lacks its type, its caching, or
-`Access-Control-Allow-Origin: *`, or comes with a cookie, the deploy stops,
-names what is wrong, and the Worker already live stays. If a new hostname's
-certificate isn't ready yet, run the deploy again in a few minutes.
+Each deploy checks the static host before it changes anything else, as
+[how-it-works.md](how-it-works.md#static-assets) describes. When the step
+"Upload the built files to the static host, and check it" fails, its log
+names each problem. Fix it on the hostname or in the bucket, and run the
+deploy again. A new hostname's certificate can take a few minutes, so a
+static host that can't be reached right after you attach it may only need
+another run.
 
 Byte ranges, which Safari needs to play the video, are checked by hand. No
 page links to the launch video yet. Its name starts with

@@ -20,10 +20,16 @@ export { expect };
 // `setCookies` is null when the browser could not give the headers.
 export type SeenResponse = { url: string; setCookies: string[] | null; contextClosed?: () => boolean };
 
+// The origins of the site and the static host, as the cookie check knows
+// them. Every test uses the ones in hosts.ts but one in cookies.spec.ts,
+// which serves bad cookies from servers of its own.
+export type CookieHosts = { site: string; staticHost: string };
+const HOSTS: CookieHosts = { site: SITE, staticHost: STATIC_HOST };
+
 // What is wrong with one Set-Cookie header from the given origin.
-export function cookieProblems(origin: string, setCookie: string): string[] {
-  if (origin === STATIC_HOST) return [`the static host set a cookie: ${setCookie}`];
-  if (origin !== SITE) return [];
+export function cookieProblems(origin: string, setCookie: string, hosts: CookieHosts = HOSTS): string[] {
+  if (origin === hosts.staticHost) return [`the static host set a cookie: ${setCookie}`];
+  if (origin !== hosts.site) return [];
   const [pair = '', ...attributes] = setCookie.split(';').map((part) => part.trim());
   const name = pair.split('=')[0]?.trim() ?? '';
   const attribute = (key: string) =>
@@ -37,8 +43,8 @@ export function cookieProblems(origin: string, setCookie: string): string[] {
 }
 
 // What is wrong with the cookies a jar holds for the site's host.
-function jarProblems(cookies: Cookie[], jar: string): string[] {
-  const site = new URL(SITE).hostname;
+function jarProblems(cookies: Cookie[], jar: string, hosts: CookieHosts): string[] {
+  const site = new URL(hosts.site).hostname;
   return cookies
     .filter((cookie) => cookie.domain.replace(/^\./, '') === site)
     .filter(
@@ -93,6 +99,11 @@ function watchRequests(request: APIRequestContext) {
 type TestFixtures = {
   // The responses the current test has seen so far.
   responses: () => Promise<SeenResponse[]>;
+  // What the cookie check has to find after the test, in any order. Every
+  // test expects nothing. Only the test in cookies.spec.ts that serves bad
+  // cookies sets it and cookieHosts, to show the check reports them.
+  expectedCookieProblems: string[];
+  cookieHosts: CookieHosts;
 };
 
 export const test = base.extend<TestFixtures, { watchContexts: undefined }>({
@@ -112,31 +123,37 @@ export const test = base.extend<TestFixtures, { watchContexts: undefined }>({
     await use(watchRequests(request));
   },
 
+  expectedCookieProblems: [[], { option: true }],
+  cookieHosts: [HOSTS, { option: true }],
+
   // Checks the cookies after each test. It depends on the context and the
   // request fixture, so it finishes while both are open and their cookie
   // jars can be read.
   responses: [
-    async ({ context, request }, use) => {
+    async ({ context, request, expectedCookieProblems, cookieHosts }, use) => {
       seen = [];
       await use(() => Promise.all(seen));
       const problems = (await Promise.all(seen)).flatMap(({ url, setCookies, contextClosed }) => {
         const origin = new URL(url).origin;
-        if (setCookies) return setCookies.flatMap((header) => cookieProblems(origin, header));
+        if (setCookies) return setCookies.flatMap((header) => cookieProblems(origin, header, cookieHosts));
         // A context a test closed while a response was on its way takes the
         // headers with it, and nothing can send that cookie anywhere after.
         // Otherwise a response whose headers can't be read can't pass.
         if (contextClosed?.()) return [];
-        return origin === SITE || origin === STATIC_HOST ? [`the headers of ${url} could not be read`] : [];
+        const known = origin === cookieHosts.site || origin === cookieHosts.staticHost;
+        return known ? [`the headers of ${url} could not be read`] : [];
       });
       // A cookie set from a script, or on a redirect, has no Set-Cookie
       // header here, so the cookie jars are read too.
       for (const open of context.browser()?.contexts() ?? [context]) {
-        problems.push(...jarProblems(await open.cookies(), "a browser's cookie jar"));
+        problems.push(...jarProblems(await open.cookies(), "a browser's cookie jar", cookieHosts));
       }
-      problems.push(...jarProblems((await request.storageState()).cookies, "the request fixture's cookie jar"));
-      expect(problems, 'every cookie from the site is a host-only __Host- cookie, and the static host sets none').toEqual(
-        [],
-      );
+      const requestJar = (await request.storageState()).cookies;
+      problems.push(...jarProblems(requestJar, "the request fixture's cookie jar", cookieHosts));
+      expect(
+        problems.toSorted(),
+        'every cookie from the site is a host-only __Host- cookie, and the static host sets none',
+      ).toEqual(expectedCookieProblems.toSorted());
     },
     { auto: true },
   ],

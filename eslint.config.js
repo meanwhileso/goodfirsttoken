@@ -45,20 +45,28 @@ export default defineConfig([
   },
   {
     // e2e/fixtures.ts checks every cookie the tests see, but only for tests
-    // that use its `test`.
-    files: ['apps/web/e2e/**/*.ts'],
+    // that use its `test`. Playwright runs specs with any of these
+    // extensions, and both packages export the same `test`, as a named
+    // export and as the default.
+    files: ['apps/web/e2e/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
     ignores: ['apps/web/e2e/fixtures.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
-          paths: [
-            {
-              name: '@playwright/test',
-              importNames: ['test'],
-              message: 'Import test from ./fixtures, which checks every cookie the tests see.',
-            },
-          ],
+          paths: ['@playwright/test', 'playwright/test'].map((name) => ({
+            name,
+            importNames: ['test', 'default'],
+            message: 'Import test from ./fixtures, which checks every cookie the tests see.',
+          })),
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            ':matches(CallExpression[callee.name="require"], ImportExpression) > Literal[value=/^(@playwright\\u002Ftest|playwright\\u002Ftest)$/]',
+          message: 'Import test from ./fixtures, which checks every cookie the tests see.',
         },
       ],
     },

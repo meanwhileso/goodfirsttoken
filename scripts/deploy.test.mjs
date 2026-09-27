@@ -344,8 +344,10 @@ function sampleBuild(t) {
   return dir;
 }
 
-// Cloudflare's R2 API for one bucket, keeping its objects in memory.
-function fakeR2({ bucket = 'site-static', exists = true, objects = {} } = {}) {
+// Cloudflare's R2 API for one bucket, keeping its objects in memory. `refuse`
+// answers every request for an object with that method with the given
+// status, like { PUT: 403 }.
+function fakeR2({ bucket = 'site-static', exists = true, objects = {}, refuse = {} } = {}) {
   const state = { objects: new Map(Object.entries(objects)), puts: [] };
   const prefix = `/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${bucket}`;
   const fetch = async (url, init = {}) => {
@@ -356,6 +358,7 @@ function fakeR2({ bucket = 'site-static', exists = true, objects = {} } = {}) {
       return json({ success: false, errors: [{ code: 10006, message: 'The specified bucket does not exist.' }] }, 404);
     }
     if (pathname === prefix && method === 'GET') return json({ success: true, result: { name: bucket } });
+    if (refuse[method]) return json({ success: false, errors: [{ message: 'refused' }] }, refuse[method]);
     const key = decodeURIComponent(pathname.slice(`${prefix}/objects/`.length));
     if (method === 'GET') {
       if (!state.objects.has(key)) return json({ success: false, errors: [{ code: 10007, message: 'not found' }] }, 404);
@@ -446,9 +449,31 @@ test('an upload with no built files stops the deploy', async (t) => {
   assert.deepEqual(r2.state.puts, []);
 });
 
+test('an upload Cloudflare refuses stops the deploy', async (t) => {
+  const r2 = fakeR2({ refuse: { PUT: 403 } });
+
+  await assert.rejects(upload(t, r2.fetch), /Cloudflare answered 403 to the upload of assets\//);
+});
+
+test('an answer other than 404 when the upload looks for a file stops the deploy before anything goes up', async (t) => {
+  for (const status of [401, 403, 500, 503]) {
+    const r2 = fakeR2({ refuse: { GET: status } });
+
+    await assert.rejects(upload(t, r2.fetch), new RegExp(`Cloudflare answered ${String(status)} when asked for assets/`));
+    assert.deepEqual(r2.state.puts, [], String(status));
+  }
+});
+
+test('a file the static host already has with other bytes stops the deploy, naming it, before anything goes up', async (t) => {
+  const r2 = fakeR2({ objects: { 'assets/nested/chunk-Ef56Gh78.js': { body: 'export const changed = 1' } } });
+
+  await assert.rejects(upload(t, r2.fetch), /assets\/nested\/chunk-Ef56Gh78\.js/);
+  assert.deepEqual(r2.state.puts, []);
+});
+
 // The static host as a browser sees it, serving the fake bucket's objects.
-// `change` edits each answer's headers.
-function fakeStaticHost(r2, change = () => {}) {
+// `change` edits each answer's headers, and `status` replaces its 200.
+function fakeStaticHost(r2, change = () => {}, { status = 200 } = {}) {
   const requests = [];
   const fetch = async (url, init = {}) => {
     const { origin, pathname } = new URL(url);
@@ -458,7 +483,7 @@ function fakeStaticHost(r2, change = () => {}) {
     if (!object) return new Response('Not found', { status: 404 });
     const headers = new Headers({ ...object.headers, 'access-control-allow-origin': '*' });
     change(headers, pathname);
-    return new Response(object.body, { headers });
+    return new Response(object.body, { status, headers });
   };
   return { fetch, requests };
 }
@@ -501,6 +526,27 @@ test('a static host that lacks a file, the caching, the type, or Access-Control-
 
   const empty = fakeR2();
   await assert.rejects(check(t, fakeStaticHost(empty).fetch), /answered 404/);
+});
+
+test('a static host that cannot be reached, like one whose certificate is not ready, stops the deploy', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  const fetch = async (url, init) => {
+    if (new URL(url).origin === 'https://static.example') throw new TypeError('fetch failed');
+    return r2.fetch(url, init);
+  };
+
+  await assert.rejects(check(t, fetch), /the Worker was not deployed[\s\S]*could not be fetched from the static host/);
+});
+
+test('a redirect from the static host stops the deploy, even with every header right', async (t) => {
+  const r2 = fakeR2();
+  await upload(t, r2.fetch);
+  for (const status of [301, 302, 307, 308]) {
+    const host = fakeStaticHost(r2, (headers) => headers.set('location', 'https://elsewhere.example/'), { status });
+
+    await assert.rejects(check(t, host.fetch), new RegExp(`answered ${String(status)}`), String(status));
+  }
 });
 
 test('with STATIC_ORIGIN empty, the static host is not checked', async (t) => {

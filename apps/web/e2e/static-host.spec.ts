@@ -1,8 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cookieProblems, expect, test } from './fixtures';
-import { SITE, STATIC_HOST } from './hosts';
+import { expect, test } from './fixtures';
+import { STATIC_HOST } from './hosts';
 
 // Pages load every built file from the static host, which serves the files a
 // deploy uploads. Here the host is the stand-in in scripts/static-host.mjs,
@@ -68,34 +68,4 @@ test('the launch video and its poster answer byte ranges, which Safari needs to 
     expect(Buffer.compare(await response.body(), file.subarray(100, 200)), name).toBe(0);
     expect(setCookies(response.headersArray()), name).toEqual([]);
   }
-});
-
-test('the cookie check reads the responses of every page and request, from the site and the static host', async ({
-  page,
-  request,
-  responses,
-}) => {
-  await page.goto('/design');
-  await page.evaluate(() => document.fonts.ready);
-  await request.get('/healthz');
-
-  const origins = new Set((await responses()).map(({ url }) => new URL(url).origin));
-  expect([...origins]).toEqual(expect.arrayContaining([SITE, STATIC_HOST]));
-  const urls = (await responses()).map(({ url }) => url);
-  expect(urls).toContain(`${SITE}/healthz`);
-});
-
-test('a cookie from the site without the __Host- prefix, Secure, or Path=/, or with a Domain, fails the check', () => {
-  expect(cookieProblems(SITE, '__Host-session=abc; Path=/; Secure; HttpOnly; SameSite=Lax')).toEqual([]);
-
-  for (const bad of [
-    'session=abc; Path=/; Secure; HttpOnly',
-    '__Host-session=abc; Path=/; HttpOnly',
-    '__Host-session=abc; Secure; HttpOnly',
-    '__Host-session=abc; Path=/app; Secure',
-    '__Host-session=abc; Path=/; Secure; Domain=localhost',
-  ]) {
-    expect(cookieProblems(SITE, bad), bad).not.toEqual([]);
-  }
-  expect(cookieProblems(STATIC_HOST, '__Host-session=abc; Path=/; Secure')).not.toEqual([]);
 });

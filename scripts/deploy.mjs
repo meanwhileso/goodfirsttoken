@@ -3,10 +3,10 @@
 // apps/web/wrangler.deploy.json, and each reads that file.
 //
 //   node scripts/deploy.mjs credential           # CLOUDFLARE_API_TOKEN for later steps
+//   node scripts/deploy.mjs static-assets        # built files to the static host, then a check of it
 //   node scripts/deploy.mjs resources            # D1 database and queues, when missing
 //   node scripts/deploy.mjs migrations           # D1 migrations, when there are any
 //   node scripts/deploy.mjs secrets              # the Worker's secrets, one at a time
-//   node scripts/deploy.mjs static-assets        # built files to the static host's bucket
 //   node scripts/deploy.mjs smoke-test staging   # /healthz reports the right environment
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
@@ -174,8 +174,10 @@ export function putSecrets({ config, env, wrangler, log }) {
 // R2 bucket, <WORKER_NAME>-static, with the headers the static host sends:
 // their type, and a year of immutable caching. It runs before the Worker
 // deploys, so no page links to a file the bucket doesn't have yet. A file the
-// bucket already has is left alone, since a changed file gets a new name.
-// With STATIC_ORIGIN empty, the Worker serves the files itself, so nothing is
+// bucket already has must hold the same bytes, since browsers keep it for a
+// year under that name. One with other bytes stops the deploy before
+// anything goes up, and one with the same bytes is left alone. With
+// STATIC_ORIGIN empty, the Worker serves the files itself, so nothing is
 // uploaded.
 export async function uploadStaticAssets({ config, staticOrigin, clientDir, token, fetch, log }) {
   if (!staticOrigin) {
@@ -193,24 +195,43 @@ export async function uploadStaticAssets({ config, staticOrigin, clientDir, toke
     );
   }
   const authorization = `Bearer ${token}`;
-  let uploaded = 0;
+  const urlOf = (key) =>
+    `${API}/accounts/${config.account_id}${bucket}/objects/${key.split('/').map(encodeURIComponent).join('/')}`;
+
+  // Every file is looked for first, so nothing goes up when one is wrong.
+  // The bytes are compared in full. The object endpoint Wrangler uses is not
+  // in Cloudflare's API reference, so an ETag from it is not relied on.
+  const missing = [];
+  const changed = [];
   for (const object of objects) {
-    const url = `${API}/accounts/${config.account_id}${bucket}/objects/${object.key.split('/').map(encodeURIComponent).join('/')}`;
-    const found = await fetch(url, { headers: { authorization } });
-    // Only the answer's status matters, so the file itself is not downloaded.
-    await found.body?.cancel();
-    if (found.ok) continue;
-    if (found.status !== 404) throw new Error(`Cloudflare answered ${found.status} when asked for ${object.key}.`);
-    const put = await fetch(url, {
+    const bytes = readFileSync(object.file);
+    const found = await fetch(urlOf(object.key), { headers: { authorization } });
+    if (found.status === 404) {
+      await found.body?.cancel();
+      missing.push({ ...object, bytes });
+    } else if (!found.ok) {
+      await found.body?.cancel();
+      throw new Error(`Cloudflare answered ${found.status} when asked for ${object.key}.`);
+    } else if (!Buffer.from(await found.arrayBuffer()).equals(bytes)) {
+      changed.push(object.key);
+    }
+  }
+  if (changed.length) {
+    throw new Error(
+      `The static host already has ${changed.join(', ')} with other bytes than this build's. Browsers keep a file for a year under its name, so a file whose content changes needs a new name. Check that the build names it after its content.`,
+    );
+  }
+
+  for (const object of missing) {
+    const put = await fetch(urlOf(object.key), {
       method: 'PUT',
       headers: { authorization, ...object.headers },
-      body: readFileSync(object.file),
+      body: object.bytes,
     });
     await put.body?.cancel();
     if (!put.ok) throw new Error(`Cloudflare answered ${put.status} to the upload of ${object.key}.`);
-    uploaded += 1;
   }
-  log(`Uploaded ${uploaded} new files to the static host. ${objects.length - uploaded} were there already.`);
+  log(`Uploaded ${missing.length} new files to the static host. ${objects.length - missing.length} were there already.`);
 }
 
 // Asks the static host itself for one uploaded file of each kind, the way a
@@ -249,7 +270,9 @@ export async function checkStaticHost({ staticOrigin, clientDir, fetch, log }) {
     const expected = { ...headers, 'access-control-allow-origin': '*' };
     for (const [name, value] of Object.entries(expected)) {
       const actual = answer.headers.get(name);
-      if (actual !== value) problems.push(`${key} has ${name} ${actual === null ? 'missing' : `"${actual}"`}, not "${value}".`);
+      if (actual === value) continue;
+      const found = actual === null ? `has no ${name}` : `has ${name} "${actual}"`;
+      problems.push(`${key} ${found}. It needs "${value}".`);
     }
   }
   if (problems.length) {
@@ -363,7 +386,7 @@ async function main([step, target]) {
       return smokeTest({ url, target, fetch, log });
     }
     default:
-      throw new Error('Name a step: credential, resources, migrations, secrets, static-assets, or smoke-test.');
+      throw new Error('Name a step: credential, static-assets, resources, migrations, secrets, or smoke-test.');
   }
 }
 

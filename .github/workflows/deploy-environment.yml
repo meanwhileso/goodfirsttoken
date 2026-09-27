@@ -71,6 +71,16 @@ jobs:
           CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ secrets.CLOUDFLARE_CREDENTIAL_BROKER_URL || vars.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
         run: node scripts/deploy.mjs credential
 
+      # Right after the credential, before any step that changes the
+      # environment. So the Worker's pages never link to a file the static
+      # host doesn't have yet, and a static host that fails its check stops
+      # the deploy with the database, the secrets, and the Worker untouched.
+      # With STATIC_ORIGIN empty, it does nothing.
+      - name: Upload the built files to the static host, and check it
+        env:
+          STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
+        run: node scripts/deploy.mjs static-assets
+
       - name: Create the D1 database and queues when missing
         run: node scripts/deploy.mjs resources
 
@@ -82,15 +92,6 @@ jobs:
       # Worker reads none yet.
       - name: Put the Worker's secrets
         run: node scripts/deploy.mjs secrets
-
-      # Before the Worker deploys, so its pages never link to a file the
-      # static host doesn't have yet. It then asks the static host for one
-      # file of each kind, and stops the deploy if one comes back wrong or
-      # with a cookie. With STATIC_ORIGIN empty, it does nothing.
-      - name: Upload the built files to the static host, and check it
-        env:
-          STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
-        run: node scripts/deploy.mjs static-assets
 
       - name: Deploy the Worker
         working-directory: apps/web
