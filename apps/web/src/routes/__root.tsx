@@ -2,11 +2,14 @@ import { productName } from '@goodfirsttoken/core';
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import markUrl from '../assets/mark.svg?url';
+import { getViewer } from '../auth/viewer';
 import geistMonoUrl from '../fonts/GeistMono-Variable.woff2?url';
 import geistUrl from '../fonts/Geist-Variable.woff2?url';
 import appCss from '../styles/app.css?url';
 
 export const Route = createRootRoute({
+  // Who is signed in, for every page's nav.
+  beforeLoad: async () => ({ viewer: await getViewer() }),
   head: () => ({
     meta: [
       { charSet: 'utf-8' },

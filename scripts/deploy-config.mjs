@@ -50,6 +50,12 @@ const DOMAIN_VARS = ['PRIMARY_DOMAIN', 'REDIRECT_DOMAINS'];
 const GITHUB_URL_VARS = ['GH_API_URL', 'GH_WEB_URL'];
 const HTTPS_URL = /^https:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/;
 
+// Variables a deploy can't go without, and what each is. The Worker's
+// secrets are required the same way, when the deploy puts them.
+const REQUIRED_VARS = {
+  OAUTH_CLIENT_ID: "the client ID of this environment's GitHub OAuth app, which sign-in needs",
+};
+
 // The static host's origin, like https://static.example.org. It is not one
 // of the Worker's variables. The build reads it to give every built file's
 // URL that origin, and the upload step reads it to find the bucket. This
@@ -92,7 +98,7 @@ export function settingsFor(local) {
     { name: STATIC_ORIGIN, required: false },
     ...Object.keys(local.vars ?? {})
       .filter((name) => name !== 'ENVIRONMENT' && !DOMAIN_VARS.includes(name))
-      .map((name) => ({ name, required: false })),
+      .map((name) => ({ name, required: name in REQUIRED_VARS })),
   ];
   const seen = new Set();
   for (const { name } of settings) {
@@ -198,7 +204,9 @@ export function deployConfig(local, target, env) {
       if (url && !HTTPS_URL.test(url)) problems.push(`${name} is not an https URL, like https://api.github.com.`);
       config.vars[name] = mask(url);
     } else {
-      config.vars[name] = mask(read(name));
+      const value = read(name);
+      if (!value && name in REQUIRED_VARS) problems.push(`${name} is not set. It is ${REQUIRED_VARS[name]}.`);
+      config.vars[name] = mask(value);
     }
   }
 

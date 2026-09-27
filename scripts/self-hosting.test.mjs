@@ -39,6 +39,19 @@ test('docs/self-hosting.md lists every setting the deploy workflows read, and no
   assert.deepEqual([...inGuide].sort(), [...readByWorkflows].sort());
 });
 
+test("docs/self-hosting.md says a setting is needed exactly when the deploy won't run without it", () => {
+  const needed = new Map(
+    [...read('docs/self-hosting.md').matchAll(/^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|\s*(Yes|No)\s*\|/gm)].map((m) => [
+      m[1],
+      m[2] === 'Yes',
+    ]),
+  );
+
+  for (const { name, required } of settingsFor(local)) {
+    assert.equal(needed.get(name), required, `the guide's Needed column for ${name}`);
+  }
+});
+
 test('staging and production deploys each stay off until their repository variable is true', () => {
   // deploy.yml split at each name indented two spaces, which includes every
   // job.

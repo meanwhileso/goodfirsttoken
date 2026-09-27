@@ -1,0 +1,10 @@
+/* Layout for /sign-in and /me. The components they use are styled in
+   components.css. */
+
+.account { padding-block: 56px 96px; }
+.account__title { font: var(--display-lg); letter-spacing: var(--display-lg-tracking); overflow-wrap: anywhere; }
+.account__lede { margin-top: 20px; }
+.account__section { margin-top: 48px; }
+.account__note { margin-top: 12px; max-width: 34em; }
+.account__error { margin-top: 20px; color: var(--danger); }
+.account form { margin-top: 32px; }

@@ -38,6 +38,9 @@ export interface RestRequest {
   method: string;
   url: URL;
   body: Record<string, unknown>;
+  // The OAuth app's client ID and secret, when the call sent them with Basic
+  // authentication.
+  app?: { clientId: string; clientSecret: string } | null;
   now: string;
 }
 
@@ -113,6 +116,30 @@ const routes: Route[] = [
     docs: `${DOCS}/users/users#get-the-authenticated-user`,
     auth: true,
     handle: (req) => json(fullUserShape(req.ctx, viewer(req), true)),
+  },
+  {
+    // An OAuth app revokes one of its own tokens, with its client ID and
+    // secret as Basic authentication and the token in the body. The fake
+    // answers 404 when those credentials are wrong or the app didn't issue
+    // the token, and the token keeps working.
+    method: 'DELETE',
+    path: '/applications/{client_id}/token',
+    docs: `${DOCS}/apps/oauth-applications#delete-an-app-token`,
+    handle: (req, params) => {
+      const app = req.ctx.state.oauthApps[params.client_id ?? ''];
+      if (!app || req.app?.clientId !== app.clientId || req.app.clientSecret !== app.clientSecret) {
+        throw new FakeError('not_found', 'Not Found');
+      }
+      const token = str(req.body.access_token);
+      if (!token) {
+        throw new FakeError('invalid', 'Validation Failed', [
+          { resource: 'OauthAccess', code: 'missing_field', field: 'access_token' },
+        ]);
+      }
+      if (req.ctx.state.tokens[token]?.clientId !== app.clientId) throw new FakeError('not_found', 'Not Found');
+      Reflect.deleteProperty(req.ctx.state.tokens, token);
+      return new Response(null, { status: 204 });
+    },
   },
   {
     method: 'GET',

@@ -1,7 +1,8 @@
 // The parts of github.com the app uses: the OAuth web flow, avatars, and
 // raw files. GitHub's authorize page asks the signed-in person to approve
 // the app. The fake's page asks which sample person to sign in as instead,
-// which is how local development signs in as anyone in the sample data.
+// which is how local development signs in as anyone in the sample data. The
+// app's dev sign-in posts that page's form itself, with `login` set.
 
 import { base64ToBytes, bytesToBase64, lookupPath, readObject } from './git.ts';
 import { json } from './http.ts';

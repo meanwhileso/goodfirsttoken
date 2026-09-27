@@ -5,9 +5,10 @@ import { SITE, STATIC_HOST } from './e2e/hosts';
 // End-to-end tests run against the production build, served by Vite preview
 // inside the Workers runtime, with the GitHub fake that wrangler.jsonc
 // points the Worker at. The build puts its files on a stand-in for the static
-// host, the way a deploy with STATIC_ORIGIN set does. Locally, servers you
-// already started are reused, so a preview you built without STATIC_ORIGIN
-// fails the static host's tests.
+// host, the way a deploy with STATIC_ORIGIN set does. The D1 migrations are
+// applied to the local database first, since sign-in reads it. Locally,
+// servers you already started are reused, so a preview you built without
+// STATIC_ORIGIN fails the static host's tests.
 export default defineConfig({
   testDir: './e2e',
   forbidOnly: !!process.env.CI,
@@ -33,7 +34,7 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: 'pnpm build && pnpm preview',
+      command: 'node scripts/migrate-local.mjs && pnpm build && pnpm preview',
       env: { STATIC_ORIGIN: STATIC_HOST },
       url: `${SITE}/healthz`,
       reuseExistingServer: !process.env.CI,
