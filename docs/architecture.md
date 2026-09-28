@@ -1938,11 +1938,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   new execution context, and waits for the work the Worker hands to
   `waitUntil`. The response comes back as the Worker made it, redirects
   included. The request comes in as the runtime hands one over: its
-  redirect mode is `manual`, its headers refuse changes, and the caller's
-  `AbortSignal` doesn't reach it. Requests through `exports.default.fetch`
-  from `cloudflare:workers` get slower one after another in a test file, in
-  `@cloudflare/vitest-pool-workers` 0.22.0, even for a Worker with none of
-  this code. A direct call runs in the test's own I/O context, so these
+  redirect mode is `manual`, its headers and its clones' headers refuse
+  changes, and the caller's `AbortSignal` doesn't reach it. Requests
+  through `exports.default.fetch` from `cloudflare:workers` get slower one
+  after another in a test file, in `@cloudflare/vitest-pool-workers`
+  0.22.0, even for a Worker with none of this code. A direct call runs in
+  the test's own I/O context, so these
   tests can't show that the Worker keeps no stream, body, or socket from one
   request for the next, which the runtime refuses.
   `apps/web/test/runtime.test.ts` sends a few requests through

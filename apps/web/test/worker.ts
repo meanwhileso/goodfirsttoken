@@ -22,14 +22,28 @@ export async function workerFetch(input: RequestInfo | URL, init?: RequestInit):
   // The type of a request that reaches the Worker has the cf properties
   // Cloudflare adds. A test's request has none, as over
   // exports.default.fetch, and the Worker reads none.
-  const request = new Request(input, { ...init, redirect: 'manual', signal: null }) as Parameters<typeof worker.fetch>[0];
-  for (const change of ['set', 'append', 'delete'] as const) {
-    Object.defineProperty(request.headers, change, { value: refuseChange });
-  }
+  const request = frozen(new Request(input, { ...init, redirect: 'manual', signal: null })) as Parameters<typeof worker.fetch>[0];
   const ctx = createExecutionContext();
   const response = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+/**
+ * Makes the headers of `request` refuse set, append, and delete, as the
+ * runtime's do, and the headers of each clone of it and of their clones. A
+ * copy made with new Request(request) takes changes, as in the runtime.
+ * Headers.prototype.set.call(request.headers, ...) still changes them, which
+ * the runtime refuses. Nothing the Worker uses calls it that way.
+ */
+function frozen(request: Request): Request {
+  for (const change of ['set', 'append', 'delete'] as const) {
+    Object.defineProperty(request.headers, change, { value: refuseChange });
+  }
+  // Bound before it is replaced, so the replacement calls the real clone.
+  const clone = request.clone.bind(request) as () => Request;
+  Object.defineProperty(request, 'clone', { value: () => frozen(clone()) });
+  return request;
 }
 
 // What the runtime throws when a Worker changes the headers of the request

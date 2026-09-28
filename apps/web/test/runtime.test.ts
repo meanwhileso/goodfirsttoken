@@ -16,10 +16,10 @@ import { workerFetch } from './worker';
 // which runs the Worker in the test's own I/O context, because requests
 // through exports.default.fetch get slower one after another in a test
 // file. The first few in a file are quick, so this file sends only a few.
-// The end-to-end tests reach pages, sign-in, the OAuth routes, disconnecting
-// an agent, the admin forms, and the issue page's socket through the
-// runtime. This file covers /mcp and the body of a text stream, and checks
-// that workerFetch hands the Worker a request like the runtime's.
+// It covers /mcp and the body of a text stream, which the end-to-end tests
+// don't reach. docs/architecture.md, under Tests, says what they do reach
+// through the runtime. It also checks that workerFetch hands the Worker a
+// request like the runtime's.
 
 beforeEach(async () => {
   await emptyDatabase();
@@ -30,18 +30,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("workerFetch hands the Worker a request like the runtime's: its headers refuse changes, and the caller's abort doesn't reach it", async () => {
+test("workerFetch hands the Worker a request like the runtime's: its headers and its clones' refuse changes, and the caller's abort doesn't reach it", async () => {
   const original = worker.fetch;
+  const attempt = (change: () => void): string => {
+    try {
+      change();
+      return 'changed';
+    } catch (error) {
+      return String(error);
+    }
+  };
   // What the Worker saw, recorded as plain values, since the runtime's
   // request belongs to another I/O context.
-  const seen: { headers: string; redirect: string; aborted: boolean }[] = [];
+  const seen: { set: string; append: string; delete: string; cloneSet: string; redirect: string; aborted: boolean }[] = [];
   worker.fetch = (request, e, ctx) => {
-    const saw = { headers: 'changed', redirect: request.redirect, aborted: request.signal.aborted };
-    try {
-      request.headers.set('x-changed', 'yes');
-    } catch (error) {
-      saw.headers = String(error);
-    }
+    const saw = {
+      set: attempt(() => {
+        request.headers.set('x-changed', 'yes');
+      }),
+      append: attempt(() => {
+        request.headers.append('x-changed', 'yes');
+      }),
+      delete: attempt(() => {
+        request.headers.delete('x-sent');
+      }),
+      cloneSet: attempt(() => {
+        request.clone().headers.set('x-changed', 'yes');
+      }),
+      redirect: request.redirect,
+      aborted: request.signal.aborted,
+    };
     request.signal.addEventListener('abort', () => {
       saw.aborted = true;
     });
@@ -54,7 +72,7 @@ test("workerFetch hands the Worker a request like the runtime's: its headers ref
       (url: string, init: RequestInit) => workerFetch(url, init),
     ]) {
       const caller = new AbortController();
-      const res = await send('http://localhost/healthz', { signal: caller.signal });
+      const res = await send('http://localhost/healthz', { signal: caller.signal, headers: { 'x-sent': 'yes' } });
       expect(res.status).toBe(200);
       await res.text();
       caller.abort();
@@ -64,7 +82,8 @@ test("workerFetch hands the Worker a request like the runtime's: its headers ref
   }
 
   const [runtime, direct] = seen;
-  expect(runtime).toEqual({ headers: expect.stringContaining('TypeError') as string, redirect: 'manual', aborted: false });
+  const refused = expect.stringContaining('TypeError') as string;
+  expect(runtime).toEqual({ set: refused, append: refused, delete: refused, cloneSet: refused, redirect: 'manual', aborted: false });
   expect(direct).toEqual(runtime);
 });
 
@@ -106,6 +125,9 @@ test("a text stream's lines come through the runtime to two readers, each in a r
 
   for (const stream of [first, second]) {
     expect(fields(await stream.line('read through the runtime'))).toMatchObject({ user: reader.login });
+    // The runtime doesn't pass a cancel on to the Worker yet, as workerd
+    // issue 6832 reports, so both streams keep their sockets on this feed
+    // until the file ends. Count no sockets on it after this.
     await stream.cancel();
   }
 });
