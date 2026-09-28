@@ -10,6 +10,7 @@ import {
   listProjectsAskingForHelp,
   saveIssues,
   savePerson,
+  setDelisted,
   setProjectStatus,
 } from '../../src/db';
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
@@ -1054,12 +1055,9 @@ describe("the page's breadcrumb", () => {
 
   test('leads nowhere when the project has no page', async () => {
     await tag();
-    await setProjectStatus(
-      db,
-      repo,
-      { status: 'paused', reason: `GitHub shows no public repo named ${repo}. It went private or was deleted.`, changedBy: null },
-      t0,
-    );
+    const delisted = `GitHub shows no public repo named ${repo}. It went private or was deleted.`;
+    await setProjectStatus(db, repo, { status: 'paused', reason: delisted, changedBy: null }, t0);
+    await setDelisted(db, repo, delisted, t0);
 
     const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-app', number));
     const html = await (await page(`/${repo}/issues/${number}`)).text();

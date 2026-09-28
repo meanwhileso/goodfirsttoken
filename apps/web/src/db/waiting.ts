@@ -36,8 +36,19 @@ import { CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS } from '@goodfirsttoken/core';
  */
 export const ON_THE_DO_NOT_LIST = `EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))`;
 
-/** True when the project asks for help: it is approved, and not on the do-not-list. */
-export const ASKING_FOR_HELP = `(p.status = 'approved' AND NOT ${ON_THE_DO_NOT_LIST})`;
+/**
+ * True when the sync last found the project's repo or issue repo private,
+ * archived, blocked, or gone on GitHub, as hasPage reads the mark too. What
+ * the site cached from them stays hidden until the sync sees them public
+ * and open again, so a project resumed meanwhile asks no one for help.
+ */
+export const DELISTED = `EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = p.repo AND u.delisted IS NOT NULL)`;
+
+/**
+ * True when the project asks for help: it is approved, not on the
+ * do-not-list, and not delisted.
+ */
+export const ASKING_FOR_HELP = `(p.status = 'approved' AND NOT ${ON_THE_DO_NOT_LIST} AND NOT ${DELISTED})`;
 
 /** The first of the copy's labels that is one of the project's excluded tags, or NULL. */
 export const EXCLUDED_LABEL = `(SELECT l.value FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x
