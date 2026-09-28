@@ -8,10 +8,11 @@ import {
   type OAuthClientProvider,
   type OAuthTokens,
 } from '@modelcontextprotocol/client';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import { expect } from 'vitest';
 import { limiterKey } from '../../src/auth/rate-limit';
 import { APP, Browser, ORIGIN, location, pickOnGitHub, randomAddress } from '../auth/helpers';
+import { workerFetch } from '../worker';
 
 // An agent that connects to the MCP server with the official MCP client SDK:
 // it finds the server's OAuth metadata, registers itself, and signs in with
@@ -85,7 +86,7 @@ export function agentFetch(address = randomAddress()) {
   return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init);
     request.headers.set('cf-connecting-ip', address);
-    return exports.default.fetch(request);
+    return workerFetch(request);
   };
 }
 
@@ -248,8 +249,8 @@ export function refreshNothing(fetch = agentFetch()): Promise<Response> {
 
 /**
  * Counts `count` requests to /oauth/token from `address` against its limit,
- * straight on TOKEN_LIMITER, as if the address had sent them. Hundreds of
- * requests through the Worker would slow every later test in the file.
+ * straight on TOKEN_LIMITER, as if the address had sent them. That is
+ * quicker than sending hundreds of requests through the Worker.
  */
 export async function useUpTokenRequests(address: string, count = TOKEN_LIMIT): Promise<void> {
   const key = limiterKey(address);

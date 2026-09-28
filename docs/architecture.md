@@ -1247,9 +1247,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **When the reader goes away.** The runtime is meant to cancel the body,
   which ends the stream. workerd since 1.20260619.1 doesn't, as
   [workerd issue 6832](https://github.com/cloudflare/workerd/issues/6832)
-  reports, and the runtime the unit tests use shows the same. Until that is
-  fixed, the Worker learns a reader left from the minute rule, once a line
-  has waited that long and another comes, or at the hour. The
+  reports, and the runtime the unit tests use shows the same through
+  `exports.default.fetch`. Until that is fixed, the Worker learns a reader
+  left from the minute rule, once a line has waited that long and another
+  comes, or at the hour. The
   `enable_request_signal` compatibility flag would tell it at once. It is
   not on. It applies to every route of the Worker, and workerd calls it
   still experimental with no date to turn it on by default, though
@@ -2086,11 +2087,33 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 
 - **Unit and integration tests** run with Vitest inside `workerd`, through
   `@cloudflare/vitest-pool-workers`, with the bindings from `wrangler.jsonc`.
-  HTTP tests call the whole Worker through `exports.default.fetch` from
-  `cloudflare:workers`, so a test sees the same routing and headers a
-  browser does. Code no route uses yet, like `src/github.ts`, is called
-  directly. They live in `apps/web/test/`. A test that calls GitHub creates
-  the GitHub fake in-process and puts `fake.fetch` in place of the global
+  They live in `apps/web/test/`. HTTP tests call the whole Worker with
+  `workerFetch` from `apps/web/test/worker.ts`, so a test sees the same
+  routing and headers a browser does. It calls the `fetch` of the Worker's
+  default export in `src/server.ts` itself, with the Worker's bindings and a
+  new execution context, and waits for the work the Worker hands to
+  `waitUntil`. The response comes back as the Worker made it, redirects
+  included. The request comes in as the runtime hands one over: its
+  redirect mode is `manual`, its headers and its clones' headers refuse
+  changes, and the caller's `AbortSignal` doesn't reach it. Requests
+  through `exports.default.fetch` from `cloudflare:workers` get slower one
+  after another in a test file, in `@cloudflare/vitest-pool-workers`
+  0.22.0, even for a Worker with none of this code. A direct call runs in
+  the test's own I/O context, so these
+  tests can't show that the Worker keeps no stream, body, or socket from one
+  request for the next, which the runtime refuses.
+  `apps/web/test/runtime.test.ts` sends a few requests through
+  `exports.default.fetch` on purpose, early in its file while they are
+  still quick: two calls to `/mcp` from a connected agent, and a text
+  stream's body, read by two readers. It also checks that `workerFetch`
+  hands the Worker a request like the runtime's. The end-to-end tests reach
+  pages, sign-in, the OAuth routes, disconnecting an agent, the admin
+  forms, and the issue page's socket through the runtime. When a test
+  cancels a stream's body through `workerFetch`, the Worker's stream ends at
+  once. Behind the runtime it doesn't yet, as
+  [The live feeds](#the-live-feeds) says. Code no route uses yet, like
+  `src/github.ts`, is called directly. A test that calls GitHub creates the
+  GitHub fake in-process and puts `fake.fetch` in place of the global
   `fetch`. `vitest.config.ts` points GitHub's URLs at hosts under `.test`.
 - **Issue room tests** call a room's methods through its stub, in
   `apps/web/test/rooms/`. They set the clock with Vitest's fake `Date`, which
@@ -2108,12 +2131,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   streams through the Worker while the room, the queue, and the feeds run as
   they do deployed. The local
   queue waits a second for a batch, as a deployed one does. The hour's close
-  is tested with a fake `Date`, which the Worker's request reads too. A fake
-  timer can't stand in for the hour: it would fire in the test's I/O
-  context, where the Worker's stream can't be closed. So the timer that
-  ends a quiet stream is tested by calling `handleStream` with a lifetime of
-  a second. The consumer's tests hand it batches of their own, which record
-  each `retry` and its wait. `createMessageBatch` drops the wait.
+  is tested with a fake `Date`, which the Worker's request reads too. The
+  timer that ends a quiet stream is tested by calling `handleStream` with a
+  lifetime of a second on the real clock, which ends the stream in whichever
+  I/O context the request runs. A fake timer fires in the test's own
+  context, and could close the stream only while the Worker runs there too,
+  as it does through `workerFetch`. The consumer's tests hand it batches of
+  their own, which record each `retry` and its wait. `createMessageBatch`
+  drops the wait.
 - **Project tests** call the proposal's rules directly, and read files and
   labels from the GitHub fake with the functions in `src/projects/`. They
   live in `apps/web/test/projects/`. The maintainer's tools are tested

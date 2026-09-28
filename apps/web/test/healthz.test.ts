@@ -1,8 +1,8 @@
-import { exports } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
+import { workerFetch } from './worker';
 
 test('healthz reports the environment the Worker is configured as and is never cached', async () => {
-  const res = await exports.default.fetch('http://localhost/healthz');
+  const res = await workerFetch('http://localhost/healthz');
 
   expect(res.status).toBe(200);
   expect(res.headers.get('content-type')).toBe('application/json');

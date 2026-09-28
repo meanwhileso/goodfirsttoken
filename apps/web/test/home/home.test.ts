@@ -1,7 +1,7 @@
 import type { FeedEvent } from '@goodfirsttoken/core';
 import { people as fakePeople, repos as fakeRepos } from '@goodfirsttoken/github-fake/sample-data';
 import { runInDurableObject } from 'cloudflare:test';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, getProject, listProjectsAskingForHelp, startOfWeek, topMergers } from '../../src/db';
 import { SAMPLE_CANDIDATES, SAMPLE_CLAIMS, SAMPLE_PEOPLE, SAMPLE_PROJECTS } from '../../src/dev/sample-work';
@@ -11,6 +11,7 @@ import { homeFeed } from '../../src/rooms/feed';
 import { storedEvents } from '../feed/helpers';
 import { admin, DAY, emptyDatabase, HOUR, kenji, priya, signIn } from '../db/helpers';
 import { LOCAL_FAKE, runAsDevelopment, setEnv } from '../auth/helpers';
+import { workerFetch } from '../worker';
 
 // What the homepage loads, and the dev-only route that gives a local site
 // its sample work. Every person, repo, and line here is made up.
@@ -172,7 +173,7 @@ describe('the token field', () => {
 
 describe('the dev-only seed', () => {
   const seed = (headers: HeadersInit = {}) =>
-    exports.default.fetch('http://localhost:5173/dev/seed', { method: 'POST', headers });
+    workerFetch('http://localhost:5173/dev/seed', { method: 'POST', headers });
 
   test.each(['staging', 'production'])('outside development, as in %s, does not exist and seeds nothing', async (environment) => {
     // GitHub is the fake on this machine, as for pnpm dev. Only the
@@ -246,7 +247,7 @@ describe('the dev-only seed', () => {
     restore = runAsDevelopment();
 
     for (const host of ['gft.example', 'gft.workers.test', '192.0.2.10:5173']) {
-      const res = await exports.default.fetch(`http://${host}/dev/seed`, { method: 'POST' });
+      const res = await workerFetch(`http://${host}/dev/seed`, { method: 'POST' });
       expect(res.status, host).toBe(404);
     }
     expect(await getProject(env.DB, 'sample-owner/sample-app')).toBeNull();
