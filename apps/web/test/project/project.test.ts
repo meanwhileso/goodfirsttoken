@@ -11,7 +11,7 @@ import {
   REVIEW_WINDOW_MS,
 } from '@goodfirsttoken/core';
 import { repos as fakeRepos } from '@goodfirsttoken/github-fake/sample-data';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   addPr,
@@ -47,6 +47,7 @@ import {
   signIn,
   t0,
 } from '../db/helpers';
+import { workerFetch } from '../worker';
 
 // The projects list and a project's page: what they load from the database
 // and the project's feed, and the pages themselves through the Worker.
@@ -220,7 +221,7 @@ describe('the projects list', () => {
   test('is the page at /projects, which sets no cookie, and says so when the database is down', async () => {
     await registeredProject({ tags: ['help wanted'], prMode: 'automatic' });
 
-    const res = await exports.default.fetch('http://localhost/projects');
+    const res = await workerFetch('http://localhost/projects');
     const html = await res.text();
 
     expect(res.status).toBe(200);
@@ -230,7 +231,7 @@ describe('the projects list', () => {
     expect(html).toContain('<span class="badge__rule">PRs</span><span class="badge__value">automatic</span>');
 
     databaseDown();
-    const down = await exports.default.fetch('http://localhost/projects');
+    const down = await workerFetch('http://localhost/projects');
     expect(down.status).toBe(503);
     expect(await down.text()).toContain('can&#x27;t be read right now');
   });
@@ -286,7 +287,7 @@ describe('which projects have a page', () => {
     await setProjectStatus(db, repo, { status: 'paused', reason: delisted, changedBy: null }, t0 + 2);
 
     expect(await load()).toEqual({ state: 'not_found' });
-    const res = await exports.default.fetch(`http://localhost/${repo}`);
+    const res = await workerFetch(`http://localhost/${repo}`);
     expect(res.status).toBe(404);
     // Nothing cached from the repo shows.
     expect(await res.text()).not.toContain(`Issue ${repo}#1`);
@@ -336,9 +337,9 @@ describe('which projects have a page', () => {
     expect((await load()).state).toBe('ready');
     expect(await load(removed)).toEqual({ state: 'not_found' });
     // Its row on the list leads to its page.
-    const list = await (await exports.default.fetch('http://localhost/projects')).text();
+    const list = await (await workerFetch('http://localhost/projects')).text();
     expect(list).toContain(`href="/${repo}"`);
-    const res = await exports.default.fetch(`http://localhost/${repo}`);
+    const res = await workerFetch(`http://localhost/${repo}`);
     await res.body?.cancel();
     expect(res.status).toBe(200);
     // Its issue's page shows the cached copy, leads back to the project, and takes claims.
@@ -577,7 +578,7 @@ describe("a project's live feed", () => {
 });
 
 describe('the page, through the Worker', () => {
-  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
 
   test('shows the issues with their slots, the rules as split badges, and who registered it and set them, and sets no cookie', async () => {
     await registeredProject({
@@ -726,7 +727,7 @@ describe('the page, through the Worker', () => {
 });
 
 describe("the site's own paths", () => {
-  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
 
   test('an owner whose paths belong to the site has no project page and no issue page, even as a project with a claim', async () => {
     for (const owner of ['auth', 'mcp', 'oauth', 'dev']) {

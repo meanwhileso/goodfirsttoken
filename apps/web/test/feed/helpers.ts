@@ -1,7 +1,7 @@
 import type { FeedEvent } from '@goodfirsttoken/core';
 import { runInDurableObject } from 'cloudflare:test';
-import { exports } from 'cloudflare:workers';
 import { expect, vi } from 'vitest';
+import { workerFetch } from '../worker';
 
 // Shared setup for the feed tests. Every person, repo, and line here is made
 // up.
@@ -35,7 +35,7 @@ export async function watchSocket(stub: { fetch: (url: string, init: RequestInit
 
 /** Opens a live socket through the Worker on a stream's URL, as a page does, and collects every event it is sent. */
 export async function liveSocket(path: string) {
-  const res = await exports.default.fetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
+  const res = await workerFetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
   return { res, ...collect(res) };
 }
 
@@ -103,7 +103,7 @@ export async function storedEvents(stub: DurableObjectStub): Promise<FeedEvent[]
  * path, or a response already made.
  */
 export async function readStream(path: string | Response, init?: RequestInit) {
-  const res = typeof path === 'string' ? await exports.default.fetch(`http://localhost${path}`, init) : path;
+  const res = typeof path === 'string' ? await workerFetch(`http://localhost${path}`, init) : path;
   const lines: string[] = [];
   let ended = false;
   let reader: ReadableStreamDefaultReader<string> | null = null;
