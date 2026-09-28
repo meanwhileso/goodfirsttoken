@@ -1906,10 +1906,21 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
 - A posted update is one line. Tabs and line breaks fold into single spaces.
   `post_update` takes an optional job, for a line a subagent posts.
 - Submitted files are paths inside the repo: no leading slash, no
-  backslashes, no control characters, and no empty, `.`, or `..` parts.
-  No part names Git's own folder: `.git` in any case, also with dots or
-  spaces after it, or `git~1`. No two paths in a submit can be the same,
-  differ only in case, or be a file and a path under it.
+  backslashes, no control characters, no characters that change the
+  direction text shows in (U+202A to U+202E and U+2066 to U+2069), no
+  empty, `.`, or `..` parts, and no part that ends in a dot or a space,
+  which Windows drops.
+- No part names Git's own folder, by the rules Git checks a tree with
+  before it writes one out, `is_ntfs_dotgit` and `is_hfs_dotgit`: `.git`,
+  or `git~1`, its short name on Windows, in any case, once the characters
+  HFS+ leaves out of a name are gone, like U+200C and U+FEFF, and up to a
+  colon, which starts an NTFS stream, and any dots and spaces before it.
+  So `.git:foo/config`, `GIT~1 /config`, and a `.git` with U+200C in it
+  are all refused.
+- No two paths in a submit can be the same, differ only in case or in how
+  an accent is written, as é in one character or as e and a combining
+  accent, or be a file and a path under it. Paths are compared in Unicode
+  NFC form, lowercased.
 - A submitted file's content is its full new text, taken as sent, spaces
   and line endings included, or null to delete the file. An empty text is
   an empty file. Only text is taken: a text with a NUL character, which Git

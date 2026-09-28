@@ -371,11 +371,57 @@ describe('tool inputs', () => {
     expect(problemFields(submit(['Src/a.ts', 'src/a.ts/b.ts']))).toEqual(['files']);
   });
 
-  test("a submit writes nothing into Git's own folder, however it is spelled, and no path with a control character", () => {
-    for (const path of ['.GIT/config', 'src/.Git/hooks/pre-commit', '.git./config', '.git /config', 'GIT~1/config', 'src/a\u0001.ts', 'src/a\n.ts', 'src/a\u007f.ts']) {
-      expect(problemFields(submit([path])), JSON.stringify(path)).toEqual(['files[0].path']);
+  test('a submit can not list two paths that differ only in how an accent is written', () => {
+    // é as one character, and as e and a combining accent.
+    expect(problemFields(submit(['caf\u00E9.md', 'cafe\u0301.md']))).toEqual(['files']);
+    expect(problemFields(submit(['r\u00E9sum\u00E9/a.md', 're\u0301sume\u0301']))).toEqual(['files']);
+    expect(submit(['caf\u00E9.md', 'cafe.md']).ok).toBe(true);
+  });
+
+  /** The first problem with a submit of one path, or null when it is taken. */
+  const pathProblem = (path: string) => {
+    const result = submit([path]);
+    return result.ok ? null : (result.problems.find((p) => p.field === 'files[0].path')?.message ?? null);
+  };
+
+  test("a submit writes nothing into Git's own folder, however Windows or macOS would spell it", () => {
+    const gitDirs = [
+      '.GIT/config',
+      'src/.Git/hooks/pre-commit',
+      '.git./config',
+      '.git /config',
+      'GIT~1/config',
+      // NTFS streams of the folder, one of them its index.
+      '.git:foo/config',
+      '.git::$INDEX_ALLOCATION/config',
+      '.git . :x/config',
+      // Its short name on Windows, with dots, spaces, or a stream after it.
+      'git~1./config',
+      'GIT~1 /config',
+      'git~1:x/config',
+      // Characters HFS+ leaves out of a name.
+      '.g\u200Cit/config',
+      '\uFEFF.git/config',
+      '.git\u200C/config',
+      '.\u206Fgit/config',
+    ];
+    for (const path of gitDirs) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain("outside Git's own folder");
     }
-    expect(submit(['.gitignore', '.github/CODEOWNERS', 'docs/.gitkeep', 'src/git~2.ts']).ok).toBe(true);
+    expect(submit(['.gitignore', '.github/CODEOWNERS', 'docs/.gitkeep', 'src/git~2.ts', 'git~1a/b.ts', '.gitx/a.ts']).ok).toBe(true);
+  });
+
+  test('a submitted path has no control characters, none that turn text around, and no part that ends in a dot or a space', () => {
+    for (const path of ['src/a\u0001.ts', 'src/a\u000A.ts', 'src/a\u007F.ts']) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain('no control characters');
+    }
+    for (const path of ['src/\u202Egnp.ts', 'src/a\u202A.ts', 'src/a\u202C.ts', 'src/\u2066a.ts', 'src/a\u2069.ts']) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain('change the direction text shows in');
+    }
+    for (const path of ['src./a.ts', 'docs /a.md', 'a.ts.', 'a.ts ', 'src/...']) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain('ends in a dot or a space');
+    }
+    expect(submit(['src/a.b.ts', 'src/a b.ts', 'docs/.well-known/x', 'src/.env.example']).ok).toBe(true);
   });
 
   const submitFiles = (files: { path: string; content: string | null }[]) =>

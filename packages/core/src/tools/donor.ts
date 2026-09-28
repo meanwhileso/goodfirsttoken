@@ -328,38 +328,76 @@ export function utf8Length(text: string): number {
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 /**
- * A part of a path that names Git's own folder: `.git` in any case, also
- * with dots or spaces after it, which Windows drops, and `git~1`, its short
- * name there. Git refuses to check out a tree that has one.
+ * Characters HFS+, the older macOS filesystem, leaves out of a name, so
+ * `.g\u200Cit` names Git's own folder there. Git skips the same ones
+ * (is_hfs_dotgit, in its utf8.c).
+ */
+const HFS_IGNORED = /[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g;
+
+/** Characters that change the direction text shows in, so a path can read as another. */
+const BIDI = /[\u202A-\u202E\u2066-\u2069]/;
+
+// eslint-disable-next-line no-control-regex -- control characters are what it looks for
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** The text before any dots and spaces it ends with, which Windows drops from a name. */
+function withoutTrailingDots(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === '.' || text[end - 1] === ' ')) end--;
+  return text.slice(0, end);
+}
+
+/**
+ * A part of a path that names Git's own folder, by the rules Git checks a
+ * tree with before it writes one out (is_hfs_dotgit and is_ntfs_dotgit):
+ * `.git`, or `git~1`, its short name on Windows, in any case, once the
+ * characters HFS+ ignores are out, and up to a colon, which starts an NTFS
+ * stream, and any dots and spaces before it or the end.
  */
 function isGitDir(part: string): boolean {
-  const name = part.toLowerCase();
-  return name.replace(/[. ]+$/, '') === '.git' || name === 'git~1';
+  const name = part.replace(HFS_IGNORED, '').toLowerCase();
+  const colon = name.indexOf(':');
+  const stem = withoutTrailingDots(colon === -1 ? name : name.slice(0, colon));
+  return stem === '.git' || stem === 'git~1';
+}
+
+/** What is wrong with a path in the repo, or null when nothing is. */
+function pathProblem(path: string): string | null {
+  const inside = 'must be a path inside the repo, like src/index.ts';
+  if (path.startsWith('/') || path.includes('\\')) return `${inside}, with / between its parts`;
+  if (CONTROL.test(path)) return `${inside}, with no control characters`;
+  if (BIDI.test(path)) return `${inside}, with no characters that change the direction text shows in`;
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.' || part === '..') return `${inside}, with no empty, ., or .. part`;
+    if (isGitDir(part)) return `${inside}, outside Git's own folder: no part can name .git, however it is spelled`;
+    if (part.endsWith('.') || part.endsWith(' ')) {
+      return `${inside}, with no part that ends in a dot or a space, which Windows drops`;
+    }
+  }
+  return null;
 }
 
 const repoPath = z
   .string({ error: 'must be a path in the repo, like src/index.ts' })
-  .max(MAX_PATH, `must be at most ${MAX_PATH.toLocaleString('en-US')} characters`)
-  .refine(
-    (path) =>
-      !path.startsWith('/') &&
-      !path.includes('\\') &&
-      // eslint-disable-next-line no-control-regex -- control characters are what it looks for
-      !/[\u0000-\u001f\u007f]/.test(path) &&
-      path.split('/').every((part) => part !== '' && part !== '.' && part !== '..' && !isGitDir(part)),
-    'must be a path inside the repo, like src/index.ts, with no empty, ., .., or .git part and no control characters',
-  );
+  .max(MAX_PATH, { error: `must be at most ${MAX_PATH.toLocaleString('en-US')} characters`, abort: true })
+  .superRefine((path, ctx) => {
+    const problem = pathProblem(path);
+    if (problem !== null) ctx.addIssue({ code: 'custom', message: problem });
+  });
 
 /**
  * The first pair of paths that can't both be files in one commit: the same
- * path twice, two paths that differ only in case, or a file and a path under
- * it. Case counts as the same because some filesystems ignore it.
+ * path twice, two paths that differ only in case or in how their accents
+ * are written, or a file and a path under it. Those count as the same
+ * because some filesystems ignore case, and macOS's keep each name in one
+ * Unicode form, so é written as one character or as e and an accent is one
+ * name there.
  */
 function firstClash(paths: readonly string[]): string | undefined {
   const files = new Map<string, string>();
   const dirs = new Map<string, string>();
   for (const path of paths) {
-    const lower = path.toLowerCase();
+    const lower = path.normalize('NFC').toLowerCase();
     const parts = lower.split('/');
     const parents = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'));
     const other =
