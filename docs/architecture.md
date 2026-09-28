@@ -1077,13 +1077,16 @@ streams' in [Text streams](how-it-works.md#text-streams).
   with `doNotListedAmong` in `src/db/do-not-list.ts`, which takes the repos
   as one JSON array the same way. An event names its issue, and a feed
   reads the issue's repo from the event's JSON in SQL, so no stored event
-  needed rewriting. The do-not-list names code repos, so the query also
-  covers an issue repo when every project that keeps its issues there has
-  its code repo on the list. It is the simpler of two rules that never hide
-  another project's events. The other judges each event by its claim's
-  project, which would also hide a removed project's own events on a shared
-  issue repo, but would change how every feed and room reads its history,
-  since they skip hidden repos in SQL. The `history()` RPC
+  needed rewriting. A repo on the list is covered whole, the issues of
+  other projects that keep them there included, as the homepage's query
+  and the issue page leave those projects out. The do-not-list names code
+  repos, so the query also covers the issue repo of a project on the list,
+  unless an approved or paused project off the list keeps its issues there
+  too, since only those have claims. That keeps a listed project's events
+  on a shared issue repo shown. Judging each event by its claim's project
+  would also hide a removed project's own events there, but would change
+  how every feed and room reads its history, since they skip hidden repos
+  in SQL. The `history()` RPC
   of a room and of a feed leaves blocked donors out too, and throws when D1
   can't say who they are.
   Tests read what is stored straight from the object's SQLite.

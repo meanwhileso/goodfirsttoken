@@ -1369,10 +1369,13 @@ repo by removing it, under [The admin queue](#the-admin-queue), and
 approving a maintainer's registration of it takes it off, under
 [Registering a project](#registering-a-project).
 
-- It covers the repo itself, and an issue repo when every project that
-  keeps its issues there has its code repo on the list now. Two projects
-  can share an issue repo, so removing one leaves the other's issues, and
-  the events on them, shown.
+- It covers the repo itself. A project that keeps its issues in a repo on
+  the list is left out with it, even when the project itself isn't on the
+  list.
+- It covers the issue repo of a project on the list, unless an approved or
+  paused project off the list keeps its issues there too. Only those have
+  claims, so removing one project leaves the issues of a listed project
+  that shares its issue repo, and the events on them, shown.
 - The homepage's lists, the live feeds, and the issue pages leave out what
   it covers.
 
@@ -1595,8 +1598,11 @@ live socket, and of a room's or feed's history read directly.
   then on. Feeds and rooms still store them, and a watcher that connects
   after the repo comes off the list gets them again.
 - An event is judged by the repo its issue is in, as the event names it.
-  So while a project that isn't on the list keeps its issues in the same
-  repo as a removed one, the events on both projects' issues there show.
+  So while an approved or paused project off the list keeps its issues in
+  the same issue repo as a removed one, the events on both projects' issues
+  there show. When the repo on the list is the removed project's own code
+  repo, the events on it are hidden, those of other projects that keep
+  their issues there included.
 - A feed counts its events by day and claimant, so a day's count still
   counts events on issues the list covers.
 - When the database can't say what the list covers, nothing goes out, as

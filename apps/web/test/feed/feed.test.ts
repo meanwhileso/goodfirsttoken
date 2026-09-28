@@ -277,6 +277,60 @@ describe('a repo on the do-not-list', () => {
     expect(await watcher.received(1)).toEqual(['tools']);
   });
 
+  test("hides a removed project's events on an issue repo it shares with a rejected project, which has no claims to show", async () => {
+    const shared = 'sample-owner/sample-issues';
+    const removed = 'sample-owner/sample-code';
+    const rejected = 'sample-owner/sample-other';
+    for (const [code, status] of [[removed, 'approved'], [rejected, 'pending']] as const) {
+      await createProject(
+        db,
+        { repo: code, status, source: 'registered', policy: null, settings: { tags: ['help wanted'], issueRepo: shared }, addedBy: kenji.githubId },
+        Date.now(),
+      );
+    }
+    await setProjectStatus(db, rejected, { status: 'rejected', reason: 'Not ready.', changedBy: admin.githubId }, Date.now());
+    // As admin_remove_project leaves it: on the list, and rejected.
+    await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, removed, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+    await feed.deliver([on(`${shared}#5`, 'removed project work')]);
+
+    const watcher = await watchSocket(feed);
+    await feed.deliver([on('sample-owner/sample-tools#1', 'marker')]);
+
+    expect(await watcher.received(1)).toEqual(['marker']);
+  });
+
+  test('removing a project leaves out, with it, a project that keeps its issues in its repo: off the homepage, and its events there hidden', async () => {
+    const main = 'sample-owner/sample-main';
+    const plugin = 'sample-owner/sample-plugin';
+    for (const [code, issueRepo] of [[main, null], [plugin, main]] as const) {
+      await createProject(
+        db,
+        {
+          repo: code,
+          status: 'approved',
+          source: 'registered',
+          policy: null,
+          settings: { tags: ['help wanted'], ...(issueRepo === null ? {} : { issueRepo }) },
+          addedBy: kenji.githubId,
+        },
+        Date.now(),
+      );
+    }
+    const before = await listProjectsAskingForHelp(db, 10, Date.now());
+    await addToDoNotList(db, { repo: main, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, main, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+    await feed.deliver([on(`${main}#7`, 'plugin work')]);
+
+    const watcher = await watchSocket(feed);
+    await feed.deliver([on('sample-owner/sample-tools#1', 'marker')]);
+    const listed = await listProjectsAskingForHelp(db, 10, Date.now());
+
+    expect(before.projects.map(({ project }) => project.repo)).toContain(plugin);
+    expect(listed.projects.map(({ project }) => project.repo)).not.toContain(plugin);
+    expect(await watcher.received(1)).toEqual(['marker']);
+  });
+
   test("leaves the events on an issue repo another project shares in that project's feed, when one project is removed", async () => {
     const shared = 'sample-owner/sample-issues';
     const removed = 'sample-owner/sample-code';

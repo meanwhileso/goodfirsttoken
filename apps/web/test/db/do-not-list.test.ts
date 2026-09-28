@@ -6,6 +6,7 @@ import {
   getDoNotListEntry,
   getProject,
   leaveDoNotListWhenApproved,
+  setProjectStatus,
   setProjectStatusFrom,
 } from '../../src/db';
 import { admin, db, emptyDatabase, HOUR, maintainer, repo, signIn, t0 } from './helpers';
@@ -112,5 +113,50 @@ describe('the do-not-list', () => {
 
     expect(one).toEqual(new Set(['sample-owner/sample-code']));
     expect(both).toEqual(new Set(['sample-owner/sample-issues']));
+  });
+
+  test('only an approved or paused project keeps an issue repo it shares with a removed project shown, since only they have claims', async () => {
+    await signIn(maintainer);
+    const base = { source: 'registered' as const, policy: null, addedBy: maintainer.githubId };
+    const sharing = async (code: string, issues: string, status: 'approved' | 'paused' | 'pending' | 'rejected') => {
+      const settings = { tags: ['help wanted'], issueRepo: issues };
+      await createProject(db, { ...base, repo: code, status: status === 'paused' ? 'approved' : status === 'rejected' ? 'pending' : status, settings }, t0);
+      if (status === 'paused' || status === 'rejected') {
+        await setProjectStatus(db, code, { status, reason: 'Checking.', changedBy: admin.githubId }, t0 + HOUR);
+      }
+    };
+    for (const status of ['approved', 'paused', 'pending', 'rejected'] as const) {
+      const issues = `sample-owner/issues-${status}`;
+      await sharing(`sample-owner/removed-${status}`, issues, 'approved');
+      await sharing(`sample-owner/other-${status}`, issues, status);
+      await addToDoNotList(db, { repo: `sample-owner/removed-${status}`, reason: null, addedBy: admin.githubId }, t0);
+    }
+    // An issue repo only a pending project uses, with no project removed.
+    await sharing('sample-owner/waiting', 'sample-owner/issues-waiting', 'pending');
+
+    const covered = await doNotListedAmong(db, [
+      'sample-owner/issues-approved',
+      'sample-owner/issues-paused',
+      'sample-owner/issues-pending',
+      'sample-owner/issues-rejected',
+      'sample-owner/issues-waiting',
+    ]);
+
+    expect(covered).toEqual(new Set(['sample-owner/issues-pending', 'sample-owner/issues-rejected']));
+  });
+
+  test("covers a repo on it, and with it every project that keeps its issues there, even one that isn't on it", async () => {
+    await signIn(maintainer);
+    const base = { status: 'approved' as const, source: 'registered' as const, policy: null, addedBy: maintainer.githubId };
+    await createProject(db, { ...base, repo: 'sample-owner/sample-main', settings: { tags: ['help wanted'] } }, t0);
+    await createProject(
+      db,
+      { ...base, repo: 'sample-owner/sample-plugin', settings: { tags: ['help wanted'], issueRepo: 'sample-owner/sample-main' } },
+      t0,
+    );
+
+    await addToDoNotList(db, { repo: 'sample-owner/sample-main', reason: null, addedBy: admin.githubId }, t0);
+
+    expect(await doNotListedAmong(db, ['sample-owner/sample-main'])).toEqual(new Set(['sample-owner/sample-main']));
   });
 });

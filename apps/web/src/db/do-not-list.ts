@@ -82,11 +82,13 @@ export function leaveDoNotListWhenApproved(db: D1Database, repo: string, by: num
 
 /**
  * Which of these repos the do-not-list covers, as the repos where issues
- * live: a repo on the list, and an issue repo when every project that keeps
- * its issues there has its code repo on the list. So removing one project
- * never hides the events of another that shares its issue repo. Each comes
- * back in lower case. The repos go in as one JSON array, so any number of
- * them takes one query, under D1's limit on bound values.
+ * live. A repo on the list is covered, and so is every project's issue there,
+ * whether or not that project is on the list. An issue repo is covered when
+ * a project on the list keeps its issues there, and no approved or paused
+ * project off the list does. Only those have claims, so removing one project
+ * never hides the events of a listed project that shares its issue repo.
+ * Each comes back in lower case. The repos go in as one JSON array, so any
+ * number of them takes one query, under D1's limit on bound values.
  */
 export async function doNotListedAmong(db: D1Database, repos: Iterable<string>): Promise<Set<string>> {
   const checked = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
@@ -95,8 +97,8 @@ export async function doNotListedAmong(db: D1Database, repos: Iterable<string>):
     .prepare(
       `SELECT j.value AS repo FROM json_each(?) j
        WHERE EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = j.value)
-          OR (EXISTS (SELECT 1 FROM projects p WHERE p.issue_repo = j.value)
-            AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.issue_repo = j.value
+          OR (EXISTS (SELECT 1 FROM projects p JOIN do_not_list d ON d.repo = p.repo WHERE p.issue_repo = j.value)
+            AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.issue_repo = j.value AND p.status IN ('approved', 'paused')
               AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = p.repo)))`,
     )
     .bind(JSON.stringify(checked))
