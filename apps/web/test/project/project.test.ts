@@ -20,6 +20,7 @@ import {
   changeSettings,
   createProject,
   listProjectsAskingForHelp,
+  listWaitingIssues,
   saveClaim,
   saveIssues,
   setPrState,
@@ -398,7 +399,7 @@ describe("a project's tagged issues", () => {
     ]);
   });
 
-  test('take claims exactly when the homepage counts them waiting', async () => {
+  test('take claims exactly when the homepage counts them waiting, and suggest_issues starts from them', async () => {
     await registeredProject({ tags: ['help wanted'], claimsPerIssue: 2 });
     const issues = [1, 2, 3, 4, 5].map((n) => `${repo}#${String(n)}`);
     const [open = '', full = '', linked = '', claimPr = '', mergedAgain = ''] = issues;
@@ -412,6 +413,7 @@ describe("a project's tagged issues", () => {
 
     const page = ready(await load());
     const help = await listProjectsAskingForHelp(db, 5, now);
+    const suggestable = await listWaitingIssues(db, now);
 
     expect(page.issues.rows.map((row) => [row.issue, row.takesClaims])).toEqual([
       [open, true],
@@ -421,6 +423,10 @@ describe("a project's tagged issues", () => {
       [mergedAgain, true],
     ]);
     expect(help.projects[0]?.waiting).toBe(page.issues.rows.filter((row) => row.takesClaims).length);
+    // The issues suggest_issues ranks and checks on GitHub.
+    expect(suggestable.map((waiting) => waiting.copy.issue)).toEqual(
+      page.issues.rows.filter((row) => row.takesClaims).map((row) => row.issue),
+    );
     expect(page.issues.rows.map((row) => row.openPr)).toEqual([null, null, { repo, number: 70 }, { repo, number: 71 }, null]);
   });
 

@@ -12,6 +12,7 @@ interface SyncRow {
   read_at: number | null;
   refreshed_at: number | null;
   reading_until: number | null;
+  language: string | null;
 }
 
 function toSync(row: SyncRow): IssueSync {
@@ -23,9 +24,24 @@ function toSync(row: SyncRow): IssueSync {
       readAt: row.read_at,
       refreshedAt: row.refreshed_at,
       readingUntil: row.reading_until,
+      language: row.language,
     },
     'issue sync',
   );
+}
+
+const languageOf = issueSyncSchema.shape.language;
+
+/** Keeps the code repo's main language as GitHub named it, or null when it names none. */
+export async function setProjectLanguage(db: D1Database, project: string, language: string | null): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until, language)
+       VALUES (?1, NULL, NULL, NULL, NULL, ?2)
+       ON CONFLICT (project) DO UPDATE SET language = ?2`,
+    )
+    .bind(mustParse(repoName, project, 'project'), mustParse(languageOf, language, 'language'))
+    .run();
 }
 
 /** Where the sync stands for the project, or null before any run started on it. */
