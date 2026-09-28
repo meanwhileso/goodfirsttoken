@@ -1,4 +1,13 @@
-import { count, crawlSeedSchema, githubId, mustParse, repoName, type CrawlSeed } from '@goodfirsttoken/core';
+import {
+  count,
+  crawlSeedOutcomeSchema,
+  crawlSeedSchema,
+  githubId,
+  mustParse,
+  repoName,
+  type CrawlSeed,
+  type CrawlSeedOutcome,
+} from '@goodfirsttoken/core';
 import { checkTime } from './shared';
 
 // The crawl_seeds table: repos an admin asked the policy crawler to read,
@@ -8,13 +17,14 @@ interface SeedRow {
   repo: string;
   added_by: number;
   added_at: number;
-  queued_at: number | null;
+  handled_at: number | null;
+  outcome: string | null;
 }
 
 function toSeed(row: SeedRow): CrawlSeed {
   return mustParse(
     crawlSeedSchema,
-    { repo: row.repo, addedBy: row.added_by, addedAt: row.added_at, queuedAt: row.queued_at },
+    { repo: row.repo, addedBy: row.added_by, addedAt: row.added_at, handledAt: row.handled_at, outcome: row.outcome },
     'crawl seed',
   );
 }
@@ -32,7 +42,7 @@ export async function addSeed(
   const repo = mustParse(repoName, seed.repo, 'repo');
   const row = await db
     .prepare(
-      `INSERT INTO crawl_seeds (repo, added_by, added_at, queued_at) VALUES (?, ?, ?, NULL)
+      `INSERT INTO crawl_seeds (repo, added_by, added_at, handled_at, outcome) VALUES (?, ?, ?, NULL, NULL)
        ON CONFLICT (repo) DO NOTHING
        RETURNING *`,
     )
@@ -53,21 +63,39 @@ export async function getSeed(db: D1Database, repo: string): Promise<CrawlSeed |
   return row === null ? null : toSeed(row);
 }
 
-/** Up to `limit` seeds the crawler hasn't queued yet, oldest first. */
-export async function listSeedsToQueue(db: D1Database, limit: number): Promise<CrawlSeed[]> {
+/** Up to `limit` seeds the crawler's cron job hasn't handled yet, oldest first. */
+export async function listSeedsToHandle(db: D1Database, limit: number): Promise<CrawlSeed[]> {
   const { results } = await db
-    .prepare('SELECT * FROM crawl_seeds WHERE queued_at IS NULL ORDER BY added_at, repo LIMIT ?')
+    .prepare('SELECT * FROM crawl_seeds WHERE handled_at IS NULL ORDER BY added_at, repo LIMIT ?')
     .bind(mustParse(count, limit, 'limit'))
     .all<SeedRow>();
   return results.map(toSeed);
 }
 
-/** Records that the crawler queued these seeds at `now`. A seed queued before keeps its time. */
-export async function markSeedsQueued(db: D1Database, repos: readonly string[], now: number): Promise<void> {
-  const checked = repos.map((repo) => mustParse(repoName, repo, 'repo'));
-  if (checked.length === 0) return;
-  await db
-    .prepare('UPDATE crawl_seeds SET queued_at = ? WHERE queued_at IS NULL AND repo IN (SELECT value FROM json_each(?))')
-    .bind(checkTime(now), JSON.stringify(checked))
-    .run();
+/**
+ * Records what the cron job did with each seed at `now`: queued it, or left
+ * it alone, and why. A seed handled before keeps its time and outcome.
+ */
+export async function markSeedsHandled(
+  db: D1Database,
+  handled: readonly { repo: string; outcome: CrawlSeedOutcome }[],
+  now: number,
+): Promise<void> {
+  const byOutcome = new Map<CrawlSeedOutcome, string[]>();
+  for (const { repo, outcome } of handled) {
+    const checked = mustParse(crawlSeedOutcomeSchema, outcome, 'outcome');
+    byOutcome.set(checked, [...(byOutcome.get(checked) ?? []), mustParse(repoName, repo, 'repo')]);
+  }
+  if (byOutcome.size === 0) return;
+  const at = checkTime(now);
+  await db.batch(
+    [...byOutcome].map(([outcome, repos]) =>
+      db
+        .prepare(
+          `UPDATE crawl_seeds SET handled_at = ?, outcome = ?
+           WHERE handled_at IS NULL AND repo IN (SELECT value FROM json_each(?))`,
+        )
+        .bind(at, outcome, JSON.stringify(repos)),
+    ),
+  );
 }

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   changedSettings,
   crawlCandidateSchema,
+  crawlSeedSchema,
   mustParse,
   parseProjectSettings,
   prRecordSchema,
@@ -190,6 +191,30 @@ describe('crawl candidates', () => {
     expect(fields(validate(crawlCandidateSchema, { ...candidate, settings: { prMode: 'yolo' } }))).toEqual([
       'settings.prMode',
     ]);
+  });
+
+  test('a candidate stored before it had source lines has none, and a source line is at most 500 characters', () => {
+    const stored = validate(crawlCandidateSchema, candidate);
+    expect(stored.ok && stored.value.sources).toEqual([]);
+    const source = { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [source] }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [{ ...source, line: 'x'.repeat(501) }] }))).toEqual([
+      'sources[0].line',
+    ]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [{ ...source, about: 'agentNotes' }] }))).toEqual([
+      'sources[0].about',
+    ]);
+  });
+});
+
+describe('crawl seeds', () => {
+  const seed = { repo: 'sample-owner/sample-app', addedBy: 9001, addedAt: at, handledAt: null, outcome: null };
+
+  test('a seed the cron job handled says what it did, and one it has not handled says nothing', () => {
+    expect(fields(validate(crawlSeedSchema, seed))).toEqual([]);
+    expect(fields(validate(crawlSeedSchema, { ...seed, handledAt: at + DAY, outcome: 'project' }))).toEqual([]);
+    expect(fields(validate(crawlSeedSchema, { ...seed, handledAt: at + DAY }))).toEqual(['outcome']);
+    expect(fields(validate(crawlSeedSchema, { ...seed, outcome: 'queued' }))).toEqual(['outcome']);
   });
 });
 

@@ -88,10 +88,11 @@
       },
       // The crawl queue's consumer (src/crawl/queue.ts), which reads
       // GitHub. One batch at a time, since GitHub asks for one call at a
-      // time from a token. src/crawl/queue.ts sets the wait for a message
-      // it asks for again: until the budget starts over, at most an hour.
-      // max_retries keeps the last retry inside the time the queue keeps a
-      // message, as for the feed.
+      // time from a token. src/crawl/queue.ts sends the repos that wait for
+      // the budget back as a new message, which takes none of a message's
+      // tries, and sets the wait for a message it asks for again, at most
+      // an hour. max_retries keeps the last retry inside the time the queue
+      // keeps a message, as for the feed.
       {
         "queue": "crawl",
         "max_batch_size": 5,

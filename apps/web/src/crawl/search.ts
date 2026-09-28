@@ -1,5 +1,13 @@
 import { repoName, SEARCH_PAGES, type CrawlMessage, type CrawlPass } from '@goodfirsttoken/core';
-import { crawlerSkips, latestCrawlPass, listSeedsToQueue, markSeedsQueued, moveCrawlPass, startCrawlPass } from '../db';
+import {
+  crawlerSkips,
+  latestCrawlPass,
+  listSeedsToHandle,
+  markSeedsHandled,
+  moveCrawlPass,
+  startCrawlPass,
+  type CrawlerSkip,
+} from '../db';
 import { SyncStopped, type ServiceGitHub, type StopReason } from '../sync/github';
 
 // The policy crawler's cron job (spec section 5). It fills the crawl queue
@@ -51,24 +59,25 @@ export interface FillRun {
 // https://docs.github.com/en/rest/search/search#search-repositories
 interface SearchAnswer {
   total_count?: unknown;
+  incomplete_results?: unknown;
   items?: { full_name?: unknown; archived?: unknown; private?: unknown }[];
 }
 
 /**
  * Puts the repos in the queue, in messages of CRAWL_BATCH repos, leaving out
  * the ones the crawler leaves alone: on the do-not-list, a project already,
- * or proposed before. Their consumer checks again. Returns how many it
- * queued.
+ * or proposed before. Their consumer checks again. Returns the repos it
+ * queued, and why it left each other one out.
  */
-async function send(deps: FillDeps, repos: readonly string[]): Promise<number> {
+async function send(deps: FillDeps, repos: readonly string[]): Promise<{ queued: string[]; skips: Map<string, CrawlerSkip> }> {
   const skips = await crawlerSkips(deps.db, repos);
-  const kept = repos.filter((repo) => !skips.has(repo.toLowerCase()));
+  const queued = repos.filter((repo) => !skips.has(repo.toLowerCase()));
   const messages: { body: CrawlMessage }[] = [];
-  for (let start = 0; start < kept.length; start += CRAWL_BATCH) {
-    messages.push({ body: { repos: kept.slice(start, start + CRAWL_BATCH) } });
+  for (let start = 0; start < queued.length; start += CRAWL_BATCH) {
+    messages.push({ body: { repos: queued.slice(start, start + CRAWL_BATCH) } });
   }
   if (messages.length > 0) await deps.queue.sendBatch(messages);
-  return kept.length;
+  return { queued, skips };
 }
 
 function newPass(now: number): CrawlPass {
@@ -108,6 +117,11 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
   if (typeof total !== 'number' || !Number.isInteger(total) || total < 0 || !Array.isArray(data.items)) {
     throw new SyncStopped('github_error', "GitHub's API answered a search in a form GitHub doesn't use.");
   }
+  // A search that ran out of time counts and serves only part of what it
+  // finds. The pass stays where it is, and the next run asks again.
+  if (data.incomplete_results === true) {
+    throw new SyncStopped('github_error', "GitHub's search ran out of time and gave only part of its results.");
+  }
   const next: CrawlPass = { ...pass };
   if (pass.open && pass.low === CRAWL_MIN_STARS && pass.page === 1) next.pool = total;
   if (pass.page === 1 && total > SEARCH_LIMIT) {
@@ -120,9 +134,9 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
     const name = repoName.safeParse(item.full_name);
     return name.success ? [name.data] : [];
   });
-  const queued = await send(deps, repos);
-  run.queued += queued;
-  next.queued += queued;
+  const { queued } = await send(deps, repos);
+  run.queued += queued.length;
+  next.queued += queued.length;
   const pages = Math.min(SEARCH_PAGES, Math.ceil(Math.min(total, SEARCH_LIMIT) / PER_PAGE));
   if (pass.page < pages) return { ...next, page: pass.page + 1 };
   // The band is done. The pass is done when the band had no upper end.
@@ -132,20 +146,26 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
 }
 
 /**
- * The cron job: queues the seeds an admin added that aren't queued yet, then
- * reads the pool on from where the pass stands, until the pass is done or
- * the run has to stop. It starts a pass when there has never been one. A
- * pass that is done stays done. Reading the pool again is for re-crawls
- * (#31).
+ * The cron job: queues the seeds an admin added that it hasn't handled yet,
+ * and records for each seed whether it queued it or left it alone, and why.
+ * Then it reads the pool on from where the pass stands, until the pass is
+ * done or the run has to stop. It starts a pass when there has never been
+ * one. A pass that is done stays done. Reading the pool again is for
+ * re-crawls (#31).
  */
 export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   const { db, github, now } = deps;
   const run: FillRun = { seeds: 0, searches: 0, queued: 0, pass: null, calls: 0, stopped: null };
 
   // The seeds need no call to GitHub.
-  const seeds = (await listSeedsToQueue(db, SEEDS_PER_RUN)).map((seed) => seed.repo);
-  run.seeds = await send(deps, seeds);
-  await markSeedsQueued(db, seeds, now());
+  const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN)).map((seed) => seed.repo);
+  const { queued: seeded, skips } = await send(deps, seeds);
+  run.seeds = seeded.length;
+  await markSeedsHandled(
+    db,
+    seeds.map((repo) => ({ repo, outcome: skips.get(repo.toLowerCase()) ?? 'queued' })),
+    now(),
+  );
 
   let pass = await latestCrawlPass(db);
   pass ??= (await startCrawlPass(db, newPass(now()))) ?? (await latestCrawlPass(db));

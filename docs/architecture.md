@@ -690,8 +690,8 @@ in `people`.
 | `donor_sessions` | Donor session: harness, budget, start time, and issues claimed | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
-| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, status, and the admin's decision | `id` |
-| `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler queued it | `repo` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, status, and the admin's decision | `id` |
+| `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
 | `crawl_passes` | Pass of the crawler's search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
 
 Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns the
@@ -711,7 +711,7 @@ that break the rules, so it returns the problems for the caller to show.
   are, which a week's range on the leaderboard needs, and SQLite has no time
   type. ISO 8601 stays the form on the wire, in tool results and feed events.
 - **Lists and small objects are JSON text:** settings, interests, labels,
-  budgets, suggested settings, and suggested tags. A PR is three columns,
+  budgets, suggested settings, suggested tags, and a find's source lines. A PR is three columns,
   repo, number, and link, so it can be found by number. So is a policy.
 - **Every repo and login column uses `COLLATE NOCASE`,** which gives the
   case rules in how-it-works.md. An index on such a column compares the same
@@ -739,8 +739,11 @@ that break the rules, so it returns the problems for the caller to show.
   null with no linked PR.
 - **The crawler's tables** came with migration `0005_crawl.sql`: the seed
   list in `crawl_seeds`, owned by `src/db/seeds.ts`, the passes in
-  `crawl_passes`, owned by `src/db/crawls.ts`, and the index
-  `crawl_candidates_by_repo`. `crawl_passes.open` is 1 or 0. A pass keeps
+  `crawl_passes`, owned by `src/db/crawls.ts`, the index
+  `crawl_candidates_by_repo`, and `crawl_candidates.sources`, JSON text
+  that a find stored before it reads as an empty list. `crawl_passes.open`
+  is 1 or 0. A seed's `handled_at` and `outcome` are null until the cron
+  job handles it, and set together. A pass keeps
   where it stands in its own row, and moves on only with a compare-and-set
   on the band and page it read, so two runs never both move it.
   `crawlerSkips` in `src/db/candidates.ts` asks the do-not-list, the
@@ -753,8 +756,9 @@ The spec says everything the site shows is public GitHub data or the public
 live feed. It says crawl results stay in the deployment's database, and only
 listed projects and their policy quotes are public, so `crawl_candidates`,
 `crawl_seeds`, and `crawl_passes` stay private, a rejection's reason
-included. The crawler keeps no verdict on a repo it doesn't propose, and its
-log names none. The reason an admin gives for
+included. The crawler keeps no verdict on a repo it doesn't propose. Its log
+names the repos it proposed, and a repo it couldn't read whole or GitHub
+failed on, with no verdict on it. The reason an admin gives for
 rejecting a registration reaches the maintainer's agent, and so does the
 reason a removed project is rejected with. The note an admin keeps with a
 do-not-list entry reaches no one else.
@@ -1728,31 +1732,51 @@ admin queue as crawl candidates. The rules are in
   `crawl_passes.pool`. The push date is set when the pass starts.
 - **What a batch reads.** One GraphQL query for all its repos: each one's
   `nameWithOwner`, whether it is archived or private, its stars, when it
-  was made and last pushed, its default branch, its owner's `createdAt`
-  through `... on User` and `... on Organization`, and the listings of its
-  root, `.github/`, `docs/`, and `.github/ISSUE_TEMPLATE/`, and of each
-  folder under `.claude/skills/` and `skills/`. Then one query for each 50
-  files, each an `object(expression:)` alias with its path as a variable,
-  as `readDocs` does for a proposal, with the same folders and names from
-  `src/projects/docs.ts`. Only a repo in a listed tier costs more:
-  `GET /repos/{owner}/{repo}`, since GitHub's GraphQL doesn't give who can
-  open pull requests, checked with the `whyNotEligible` an admin's listing
-  uses, then its labels, 100 to a query, each with
-  `issues(states: [OPEN]) { totalCount }`.
-- **An error never lets a ban slip by.** A repo GitHub doesn't show comes
-  back null with a `NOT_FOUND` error, and is left out. Any other GraphQL
-  error in a batch's reads fails the batch, which goes back to the queue,
-  since the file GitHub didn't give could be the one that bans AI.
-- **Retries.** The consumer acknowledges a batch once it is read, and asks
-  for it again otherwise, with `retry({ delaySeconds })`. A stop for the
-  budget carries when the budget starts over, from GitHub's
-  `x-ratelimit-reset` or `retry-after`, in `SyncStopped.resetAt`, and the
-  wait runs to then. Each wait is an hour at most, and `max_retries` is 90,
-  so the last retry comes inside the 4 days a queue keeps a message by
-  default, as for the feed. A batch that comes back is read from the
-  start. `crawlerSkips` leaves out the finds it wrote before it stopped,
-  before any read, so a stop costs the rest of the batch's two GraphQL
-  queries again.
+  was made and last pushed, its default branch and the commit it points
+  to, its owner's `createdAt` through `... on User` and
+  `... on Organization`, and the listings of its root, `.github/`, `docs/`,
+  `PULL_REQUEST_TEMPLATE/`, `docs/PULL_REQUEST_TEMPLATE/`,
+  `.claude/skills/`, and `skills/`, each entry with its `mode` and `size`.
+  The listings of `.github/` and the skills folders go one level deeper,
+  for the template folders and each skill. Then one query for each 50
+  files, each an `object(expression:)` alias with `<commit>:<path>` as a
+  variable, so every file is read at the commit the first query named. It
+  asks for each file's `text`, `isBinary`, and `isTruncated`, and for each
+  listed folder's `oid` at that commit, to check that the first query
+  listed that commit. The folders and names come from
+  `src/projects/docs.ts`, which a proposal uses too. Only a repo in a
+  listed tier costs more: `GET /repos/{owner}/{repo}`, since GitHub's
+  GraphQL doesn't give who can open pull requests, checked with the
+  `whyNotEligible` an admin's listing uses, then its labels, 100 to a
+  query, each with `issues(states: [OPEN]) { totalCount }`.
+- **No verdict on what it can't read.** `readRepos` and `readFiles` say
+  why a repo can't be read whole: a file over the size limit, a symbolic
+  link by its mode, `0o120000`, more templates or skills than it reads, no
+  text or a NUL character, or a folder whose `oid` differs at the commit.
+  The consumer counts such a repo as `unreadable_docs`, logs why, and
+  gives it no tier. A symbolic link in a folder the crawler doesn't list,
+  like a linked `.claude/`, isn't seen, so a skill behind one is not read.
+- **Errors, repo by repo.** GitHub puts each error at the path of the
+  alias it came from, like `r3`. A `NOT_FOUND` at a repo's own alias means
+  GitHub doesn't show it, and it is left out as not public. Any other error
+  at a repo's alias, in the listing, the files, or the labels, fails that
+  repo alone, which goes back to the queue by itself, since the file GitHub
+  didn't give could be the one that bans AI. An error at no repo's alias
+  fails the batch.
+- **Retries.** A budget stop, a rate limit, or the run's 60 calls running
+  out send the repos a batch hasn't finished back with `send({ repos },
+  { delaySeconds })` on `CRAWL_QUEUE`, and acknowledge the batch, so the
+  wait uses none of its tries. A stop for the budget carries when the
+  budget starts over, from GitHub's `x-ratelimit-reset` or `retry-after`,
+  in `SyncStopped.resetAt`, and the wait runs to then. A repo GitHub failed
+  on is sent back alone. A batch of one repo that fails, any other stop,
+  and any other error ask for the batch again with `retry({ delaySeconds
+  })`, which takes a try. Each wait is an hour at most, and `max_retries`
+  is 90, so the last retry comes inside the 4 days a queue keeps a message
+  by default, as for the feed. When sending back fails, the batch is asked
+  for again. `crawlerSkips` leaves out the finds a batch wrote before it
+  stopped, before any read, so a repo that comes back after it was proposed
+  costs no reads.
 - **Only candidates.** The consumer writes with `addCandidate` alone, whose
   insert checks the do-not-list in the same statement. Nothing in
   `src/crawl/` writes a project.
@@ -1760,9 +1784,21 @@ admin queue as crawl candidates. The rules are in
   whatever `GH_WEB_URL` says, since the policy schema takes https links
   only and the GitHub fake serves plain http locally. The branch and each
   part of the path are URL-encoded.
-- **The rules' speed.** Every pattern runs on one clause or sentence, with
-  a few words of slack at most, so the time a file takes grows with its
-  length alone. A test reads files at the size limit full of near misses.
+- **The rules' speed.** Every pattern runs on one sentence, with a few
+  words of slack at most, and a sentence's end is one mark before a space,
+  so no pattern tries a start again after it fails. Each file's lines are
+  found once, each heading is read once, and the label names are looked
+  for in the first 2,000 characters of the welcome, so the time a file
+  takes grows with its length alone. A test reads a file at the size limit
+  for each run of space and mark and each phrase a pattern starts with, as
+  an AI policy, an `AGENTS.md`, and a PR template, and each takes well
+  under a second.
+- **Repo text reaches settings only as a label name, a trailer name, or a
+  CLA link.** The canary and the line behind each suggestion go in
+  `crawl_candidates.sources`, shown to the admin as the repo's words, and
+  no setting holds them. `admin_queue` marks each line of a quote or a
+  source line with `> `, and puts label names in quotes, so no line of a
+  repo's text can pass for a line of the result.
 - **The queue's name.** The Worker tells a crawl batch by its queue's name:
   `crawl`, or one ending `-crawl`, as the deploy's `<WORKER_NAME>-crawl`
   does.
@@ -2203,12 +2239,15 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   them directly on made-up files, for every tier and condition. The rest
   run the search against the GitHub fake with a stand-in for the crawl
   queue that records each batch, then hand the batches to the consumer the
-  way Queues does, with D1 as it runs deployed, and read the admin queue.
-  They use the fake's made-up `sample-policies` repos, and add made-up
-  repos to its state to fill bands of stars. A stand-in for `fetch` records
-  every request, so a test shows which repos the crawler read. They set the
-  clock with a fake `Date`, as the sync's tests do, to let a budget start
-  over.
+  way Queues does, with a stand-in for `CRAWL_QUEUE` that records what the
+  consumer sends back, with D1 as it runs deployed, and read the admin
+  queue. They use the fake's made-up `sample-policies` repos, commit
+  made-up files to them, and add made-up repos to its state to fill bands
+  of stars. A stand-in for `fetch` records every request, so a test shows
+  which repos the crawler read, or changes GitHub's answer, to stand in for
+  a symbolic link, a binary file, a push while the crawler reads, or an
+  error GitHub gives for one repo. They set the clock with a fake `Date`,
+  as the sync's tests do, to let a budget start over.
 - **Issue page tests** load the page's data from real rooms, fetch the page
   through the Worker, and read an issue's live socket with the page's own
   fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake

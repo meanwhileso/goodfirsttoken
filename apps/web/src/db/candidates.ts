@@ -4,6 +4,7 @@ import {
   id,
   mustParse,
   repoName,
+  type CandidateSource,
   type CandidateStatus,
   type CrawlCandidate,
   type Policy,
@@ -29,6 +30,7 @@ interface CandidateRow {
   policy_tier: string;
   settings: string;
   suggested_tags: string;
+  sources: string;
   status: string;
   decided_by: number | null;
   decided_at: number | null;
@@ -51,6 +53,7 @@ function toCandidate(row: CandidateRow): CrawlCandidate {
       policy: { quote: row.policy_quote, url: row.policy_url, tier: row.policy_tier },
       settings: fromJson(row.settings),
       suggestedTags: fromJson(row.suggested_tags),
+      sources: fromJson(row.sources),
       status: row.status,
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
@@ -66,6 +69,8 @@ export interface NewCandidate {
   policy: Policy;
   settings: ProjectSettingsPatch;
   suggestedTags: SuggestedTag[];
+  /** The line behind each suggestion the docs gave, and any canary. None when left out. */
+  sources?: CandidateSource[];
 }
 
 /**
@@ -96,9 +101,9 @@ export async function addCandidate(
   const result = await db
     .prepare(
       `INSERT INTO crawl_candidates (id, repo, found_at, stars, repo_created_at, repo_pushed_at,
-         owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, status,
+         owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, sources, status,
          decided_by, decided_at, reason)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'waiting', NULL, NULL, NULL
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'waiting', NULL, NULL, NULL
        WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?2)
        ON CONFLICT DO NOTHING`,
     )
@@ -115,6 +120,7 @@ export async function addCandidate(
       c.policy.tier,
       JSON.stringify(c.settings),
       JSON.stringify(c.suggestedTags),
+      JSON.stringify(c.sources),
     )
     .run();
   return result.meta.changes === 1 ? c : null;

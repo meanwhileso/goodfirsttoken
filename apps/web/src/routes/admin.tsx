@@ -135,6 +135,37 @@ function ReasonField({ label, placeholder }: { label: string; placeholder: strin
   );
 }
 
+const SOURCE_LABELS: Record<QueueItem['sources'][number]['about'], string> = {
+  excludedTags: 'excluded tags',
+  whoCanClaim: 'who can claim',
+  disclosure: 'disclosure',
+  personWrittenDescription: 'person-written PR description',
+  claUrl: 'CLA',
+  prMode: 'PR mode',
+  canary: 'a canary for agents that read the file. No setting comes from it',
+};
+
+/** The line in the repo's files behind each suggested setting, and any canary, as the files have them. */
+function Sources({ item }: { item: QueueItem }) {
+  if (item.sources.length === 0) return null;
+  return (
+    <Block label="the lines behind them, from the repo's files">
+      {item.sources.map((source) => (
+        <div
+          key={`${source.about} ${source.path} ${source.line ?? ''}`}
+          className="stack"
+          style={{ '--gap': '6px' } as CSSProperties}
+        >
+          <span className="mono small muted">
+            {SOURCE_LABELS[source.about]} · {source.path}
+          </span>
+          {source.line !== null && <Quote>{source.line}</Quote>}
+        </div>
+      ))}
+    </Block>
+  );
+}
+
 function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
@@ -168,6 +199,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         </SplitBadges>
         <SettingsBadges settings={item.settings} />
       </Block>
+      <Sources item={item} />
       {item.suggestedTags.length > 0 && (
         <Block label="labels that could mean ready for help">
           <div className="admin-item__labels">

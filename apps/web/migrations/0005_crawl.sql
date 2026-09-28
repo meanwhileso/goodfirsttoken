@@ -1,14 +1,17 @@
 -- The policy crawler (src/crawl/). docs/architecture.md describes both
--- tables and the index.
+-- tables, the index, and the new column.
 
 -- Repos an admin asked the crawler to read, whatever their stars or last
--- push. queued_at is when the crawler put the repo in its queue, or null
--- until it has.
+-- push. handled_at is when the crawler's cron job handled the seed, and
+-- outcome what it did: queued it for the crawler to read, or left it alone,
+-- as on the do-not-list, a project, or proposed before. Both are null until
+-- then.
 CREATE TABLE crawl_seeds (
   repo TEXT PRIMARY KEY COLLATE NOCASE,
   added_by INTEGER NOT NULL REFERENCES people (github_id),
   added_at INTEGER NOT NULL,
-  queued_at INTEGER
+  handled_at INTEGER,
+  outcome TEXT
 ) STRICT;
 
 -- Each pass of the crawler's search over the pool of repos, and where it
@@ -33,3 +36,7 @@ CREATE TABLE crawl_passes (
 -- Every crawler find for a repo, waiting or decided, which the crawler looks
 -- for before it reads the repo.
 CREATE INDEX crawl_candidates_by_repo ON crawl_candidates (repo);
+
+-- The line in the repo's files behind each setting the crawler suggests,
+-- and any canary, as JSON. A find stored before has none.
+ALTER TABLE crawl_candidates ADD COLUMN sources TEXT NOT NULL DEFAULT '[]';

@@ -27,6 +27,31 @@ export type CandidateStatus = z.infer<typeof candidateStatusSchema>;
 /** The longest reason for rejecting a candidate or adding a repo to the do-not-list. */
 export const MAX_CRAWL_REASON = 500;
 
+/** What a line behind a crawler's suggestion is about: a setting it suggests, or a canary for the admin to see. */
+export const candidateSourceAbouts = [
+  'excludedTags',
+  'whoCanClaim',
+  'disclosure',
+  'personWrittenDescription',
+  'claUrl',
+  'prMode',
+  /** A line in AGENTS.md or CLAUDE.md that asks an agent reading it to prove it did. Nothing follows from it. */
+  'canary',
+] as const;
+
+/** The longest line the crawler keeps from a repo's file. */
+export const MAX_SOURCE_LINE = 500;
+
+/** The line in a repo's file behind a crawler's suggestion, as the file has it, for the admin to check. */
+export const candidateSourceSchema = z.object({
+  about: z.enum(candidateSourceAbouts),
+  /** The file's path in the repo. */
+  path: trimmedText(MAX_SOURCE_LINE),
+  /** The line, cut to MAX_SOURCE_LINE characters, or null when the file itself is the reason, as a vouch file is. */
+  line: trimmedText(MAX_SOURCE_LINE).nullable(),
+});
+export type CandidateSource = z.infer<typeof candidateSourceSchema>;
+
 /** A repo whose own docs welcome AI help, waiting for an admin or decided by one. */
 export const crawlCandidateSchema = z
   .object({
@@ -39,6 +64,8 @@ export const crawlCandidateSchema = z
     /** The settings the crawler's rules suggest. The admin confirms them and picks the tags. */
     settings: projectSettingsPatchSchema,
     suggestedTags: z.array(suggestedTagSchema),
+    /** The line behind each suggestion the docs gave, and any canary. */
+    sources: z.array(candidateSourceSchema).default([]),
     status: candidateStatusSchema,
     /** The admin who decided, or null while it waits. */
     decidedBy: githubId.nullable(),
@@ -64,14 +91,28 @@ export const crawlCandidateSchema = z
   });
 export type CrawlCandidate = z.infer<typeof crawlCandidateSchema>;
 
+/** What the crawler's cron job did with a seed. */
+export const crawlSeedOutcomes = ['queued', 'do_not_list', 'project', 'proposed'] as const;
+export const crawlSeedOutcomeSchema = z.enum(crawlSeedOutcomes);
+export type CrawlSeedOutcome = z.infer<typeof crawlSeedOutcomeSchema>;
+
 /** A repo an admin asked the crawler to read, whatever its stars or last push. */
 export const crawlSeedSchema = z.object({
   repo: repoName,
   /** The admin who added it. */
   addedBy: githubId,
   addedAt: epochMs,
-  /** When the crawler put it in its queue, or null until then. */
-  queuedAt: epochMs.nullable(),
+  /** When the crawler's cron job handled it, or null until then. */
+  handledAt: epochMs.nullable(),
+  /**
+   * What the cron job did with it: `queued` for the crawler to read, or left
+   * alone, as on the do-not-list, a project already, or proposed before.
+   * Null until it did.
+   */
+  outcome: crawlSeedOutcomeSchema.nullable(),
+}).refine((seed) => (seed.handledAt === null) === (seed.outcome === null), {
+  path: ['outcome'],
+  message: 'must be set once the seed is handled, and only then',
 });
 export type CrawlSeed = z.infer<typeof crawlSeedSchema>;
 

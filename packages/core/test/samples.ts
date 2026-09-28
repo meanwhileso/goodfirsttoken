@@ -242,6 +242,10 @@ export const samples: Samples = {
           },
           suggestedTags: [{ name: 'ready for help', openIssues: 8 }],
           onDoNotList: false,
+          sources: [
+            { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' },
+            { about: 'whoCanClaim', path: 'VOUCHED.td', line: null },
+          ],
         },
         {
           id: 'reg_7',
@@ -255,6 +259,7 @@ export const samples: Samples = {
           policy: null,
           suggestedTags: [],
           onDoNotList: true,
+          sources: [],
         },
       ],
     },
@@ -263,7 +268,9 @@ export const samples: Samples = {
       'cand_1',
       '1,200 stars',
       'Agent pull requests are welcome once a person has read the diff.',
-      'ready for help (8 open)',
+      '"ready for help" (8 open)',
+      '> Sign the CLA at https://cla.example.org/sample-app.',
+      'the repo has the file "VOUCHED.td"',
       'reg_7',
       'from @octo-maintainer',
       'GitHub showed no public repo named sample-owner/sample-harbor when asked.',
@@ -291,7 +298,7 @@ export const samples: Samples = {
     mentions: ['Removed', repo, 'do-not-list'],
   },
   admin_seed_repo: {
-    output: { repo, added: true },
+    output: { repo, added: true, leftAlone: null },
     mentions: ['Added', repo, 'seed list'],
   },
 };

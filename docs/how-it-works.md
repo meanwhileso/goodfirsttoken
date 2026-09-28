@@ -909,8 +909,11 @@ table, and each takes its value from the first file that gives one:
   description or pull request description with `yourself`, `by hand`, or
   `in your own words` after it in the same sentence.
 - **CLA** is the first https link on a line that says `CLA` or
-  `Contributor License Agreement`, without the punctuation that ends the
-  sentence around it.
+  `Contributor License Agreement`, and that it must be signed, with sign,
+  signed, require, must, or need to, without the punctuation that ends the
+  sentence around it. A line with no, not, never, none, without, or n't
+  gives none, whatever link it has, so "There is no CLA to sign" sets no
+  CLA.
 - Every other setting keeps its default. So the proposal's PR mode is always
   `reviewed`, and the maintainer chooses `automatic` if they want it.
 
@@ -1196,9 +1199,10 @@ stars or last push.
   admin who added it and when. Adding it again changes nothing, and the
   answer says so.
 - A repo on the do-not-list is refused with `repo_not_eligible`.
-- It asks GitHub nothing. The crawler reads the repo when it queues it, and
-  leaves it alone there when it is a project already, or was proposed
-  before.
+- A repo that is a project already, whatever its status, or that the
+  crawler put in the admin queue before, isn't added, since the crawler
+  reads it no further. The answer says which, and that nothing changed.
+- It asks GitHub nothing. The crawler reads the repo when it queues it.
 
 ## The admin pages
 
@@ -1346,7 +1350,7 @@ the first question included.
 | The PR job | A tenth of the hour's | 100 |
 | A maintainer's refresh | Half of the hour's | 60 |
 | The crawler's search | A tenth of the minute's searches | 20 |
-| The crawler's queue, each batch it reads | Three fifths of the hour's | 60 |
+| The crawler's queue, each run of up to 5 batches | Three fifths of the hour's | 60 |
 
 - A run also stops when GitHub refuses a call for the rate limit, primary
   or secondary, refuses the token, can't be reached, answers with an error
@@ -1376,8 +1380,9 @@ A candidate is a repo the crawler found whose own docs welcome AI help. The
 
 - A candidate has the repo's stars, when it was made, its last push, and
   when its owner's account was made. It has the policy quote, link, and tier,
-  the settings the crawler's rules suggest, and labels that could mean ready
-  for help, with their open issue counts.
+  the settings the crawler's rules suggest, labels that could mean ready
+  for help, with their open issue counts, and the line in the repo's files
+  behind each suggestion, and any canary, as the files have them.
 - Suggested settings can leave out any setting, tags included. The admin
   picks the tags.
 - A repo on the do-not-list never enters the admin queue.
@@ -1416,9 +1421,10 @@ token it reads nothing, and the log names the secret.
 **Which repos it reads.** Once an hour, at 52 minutes past, a scheduled run
 puts repos in the crawl queue, 10 to a batch.
 
-- First the seeds admins added that it hasn't queued yet, under The seed
+- First the seeds admins added that it hasn't handled yet, under The seed
   list in [The admin queue](#the-admin-queue), whatever their stars or last
-  push. It queues each seed once.
+  push. It records what it did with each: queued it, or left it alone, and
+  why.
 - Then the public repos GitHub's search finds with at least 1,000 stars and
   a push in the 30 days before the pass started, and not archived. Search
   leaves out forks, as it does by default.
@@ -1440,90 +1446,160 @@ puts repos in the crawl queue, 10 to a batch.
 - A run stops before a search when less than a tenth of the minute's
   searches is left, or after 20 calls, the first question to GitHub
   included. The next run picks up where it stopped.
+- A search GitHub says ran out of time, with `incomplete_results`, stops
+  the run. The pass stays where it was, and the next run asks again.
 - A pass that is done stays done, so nothing reads the pool a second time
   yet, and a seed added later is still read.
 - A repo whose stars change while a pass reads the pool can land in two
-  bands, or in none. A repo read twice is put in the admin queue once.
+  bands, or in none. Search gives repos with the same stars in no set
+  order, so a band read over several pages can give one of them twice, or
+  skip it.
+- Two runs at once, as when one outlasts the hour, can queue the same seed
+  or page twice. A repo read twice is put in the admin queue once.
 
 **What it reads in each repo.** The crawl queue's consumer reads each batch
-from the repo's default branch:
+from the repo's default branch. It lists the folders, then reads every
+file at the commit the branch was on, so a push while it reads is left for
+the next crawl. It reads:
 
-- the four files a proposal reads, found the same way, under
-  [Registering a project](#registering-a-project),
+- every file with a name a proposal reads, in each folder a proposal looks
+  in, under [Registering a project](#registering-a-project). A proposal
+  takes the first it finds, and the crawler reads them all,
 - `CLAUDE.md` in the root, found without case,
-- up to 3 agent skills, each a `SKILL.md` in a folder under
-  `.claude/skills/` or `skills/`,
-- up to 3 issue templates in `.github/ISSUE_TEMPLATE/` ending `.md`,
+- the pull request templates in a `PULL_REQUEST_TEMPLATE` folder in the
+  root, `docs/`, or `.github/`, ending `.md`, `.markdown`, or `.txt`,
+- each agent skill, a `SKILL.md` in a folder under `.claude/skills/` or
+  `skills/`,
+- the issue templates in `.github/ISSUE_TEMPLATE/` ending `.md`,
   `.markdown`, `.yml`, or `.yaml`, leaving out `config`, and
 - whether it has a vouch file, `VOUCHED.td` in the root or `.github/`,
   without reading it.
 
-A file over 100 KB is left unread. A repo GitHub shows archived, or doesn't
-show at all, is read no further. The consumer checks the do-not-list, the
-projects, and the crawler's earlier finds again before it reads a batch,
-and a repo on any of them is read no further. It checks once more before it
-puts a repo in the admin queue, under the name GitHub gives the repo now,
-since a repo can be renamed.
+**A repo it can't read whole gets no verdict.** Any file it skips could be
+the one that bans AI, so the repo stays out of the admin queue, and the log
+names it and says why. That is when:
+
+- a file it would read is over 100 KB, or is a symbolic link,
+- a folder it lists is a symbolic link or a file, or a pull request
+  template folder in the root or `docs/` has its name in another case than
+  `PULL_REQUEST_TEMPLATE`,
+- it has more than 10 pull request templates in a folder, more than 10
+  issue templates, or more than 10 skills in a skills folder,
+- GitHub gives no text for a listed file at that commit, as for a file
+  that is binary, gone, or cut short, or gives text with a NUL character,
+  as UTF-16 text has, or
+- GitHub listed a folder from another commit than the one it named, as
+  when a push lands while it answers.
+
+It follows no path through a folder that is a symbolic link, like skills
+under a linked `.claude/`. A repo GitHub shows archived or private, or
+doesn't show at all, is read no further. The consumer checks the
+do-not-list, the projects, and the crawler's earlier finds again before it
+reads a batch, and a repo on any of them is read no further. It checks once
+more before it puts a repo in the admin queue, under the name GitHub gives
+the repo now, since a repo can be renamed.
 
 **How it sorts them.** Plain rules over the text, with no model, in the
-order the files are read: the AI policy file, CONTRIBUTING, `AGENTS.md`,
-`CLAUDE.md`, the PR template, the skills, then the issue templates.
+order the files are read: the AI policy files, CONTRIBUTING, `AGENTS.md`,
+`CLAUDE.md`, the PR templates, the skills, then the issue templates. The
+rules err toward a ban. A missed welcome costs a find, and a missed ban
+would put a repo that said no in front of an admin.
 
+- Before it matches, it takes out Markdown's emphasis and strike marks,
+  `*`, `~`, and `_` at the edge of a word, and the HTML tags `strong`, `em`,
+  `b`, `i`, `u`, `s`, `del`, `ins`, `mark`, and `strike`. It straightens
+  curly quotes and folds runs of space. The quote keeps the file's own
+  text.
 - A sentence ends at a period, question mark, or exclamation mark followed
   by a space, at a blank line, or where a list item, a heading, a quote, or
-  a table row starts. It runs on over a line that is only wrapped. A clause
-  ends at a semicolon, or at one of these words: but, however, unless,
-  except, although, though, as long as, so long as, provided.
-- A clause names AI when it has `AI` in capitals, `LLM`,
-  `large language model`, `artificial intelligence`, `generative`,
-  `machine-generated`, `ChatGPT`, or `Copilot`. Outside `AGENTS.md`,
-  `CLAUDE.md`, and the skills, `agent`, `Claude`, `Codex`, and `Gemini`
-  name AI too. Those files talk to agents, so a rule there for how an agent
-  works, like "Claude should not use emojis", names no AI. A bot names no
-  AI anywhere, so "stale PRs are closed by a bot" is no ban.
-- **A clause says no to AI** when it names AI and has one of these:
-  - not, n't, never, or no longer before a form of accept, allow, permit,
-    welcome, tolerate, merge, review, consider, or want, with at most one
-    word between,
-  - use, submit, send, open, file, contribute, contain, include, or
-    involve after one of those negatives, with at most one word between,
-    or avoid or refrain from, when AI is named in the words after it,
-  - not before generated, written, produced, created, made, or used, as in
-    "must not be AI-generated",
-  - prohibited, forbidden, banned, ban, disallowed, unwelcome,
-    unacceptable, zero tolerance, no-AI, or AI-free,
-  - closed, rejected, removed, deleted, locked, banned, blocked, declined,
-    or ignored after is, are, will be, or get, or close, reject, delete,
-    lock, ban, block, decline, or ignore after we, or after the right to,
-  - or no right before an AI name, as in "No AI-generated code."
-- These say no to something else, and are no ban:
-  - A checkbox a contributor ticks, a Markdown task list item or an issue
-    form's option, like "I did not use AI". It is their choice, unless it
-    confirms, certifies, agrees, attests, declares, promises, or affirms
-    something. Anywhere else, a sentence in the first person counts like
-    any other.
-  - A clause with a negative that keeps AI off issues with a label it
-    names in quotes or backticks, after "on issues labeled" or the like, or
-    as in "on `good first issue` issues". So "Don't use AI on issues
-    labeled `good first issue`" is no ban, and the label becomes an
-    excluded tag.
-  - A clause that keeps agents from working on their own, and names no AI
-    but agents. That is one with a negative and autonomous,
-    unsupervised, unattended, fully automated, on its own, on their own, or
-    without a person, a human, review, supervision, or oversight. It is
-    also one that says agents or bots may not open, submit, create, send,
-    or file pull requests, and, in `AGENTS.md`, `CLAUDE.md`, or a skill,
-    one that starts "Do not open pull requests" or the like.
+  a table row starts. It runs on over a line that is only wrapped.
+- **A sentence names AI** when it has `AI` in capitals or `A.I.`, `ai-`
+  before a word like generated, assisted, written, tools, or agents in any
+  case, `LLM`, `language model`, `artificial intelligence`, `genAI`,
+  `generative`, `neural network`, `chatbot`, `vibe-coded`, `Cursor` with its
+  capital, `agent`, or a product like ChatGPT, GPT-4, OpenAI, Copilot,
+  Claude, Codex, Gemini, Llama, Mistral, DeepSeek, Devin, Aider, or
+  Windsurf.
+  - It names AI too when it sits under a heading that does, until a heading
+    of the same level or higher, and anywhere in an AI policy file.
+  - It names AI when the sentence before it in its paragraph does, and it
+    has 4 words or fewer, like "No thanks.", or points back with it, them,
+    these, those, they, or such.
+  - A bot, or a machine-generated file, names no AI, so "stale PRs are
+    closed by a bot" and "Don't edit machine-generated files" are no ban.
+  - `AGENTS.md`, `CLAUDE.md`, and the skills talk to agents. There, only
+    words for work AI made name AI, like AI-generated, Claude-written, or
+    vibe-coded, and headings count for nothing. So a rule there for how an
+    agent works, like "Claude should not use emojis", is no ban.
+- **A sentence says no** when it has a word that says no, limits, or
+  refuses, in any of its forms: not, n't, cannot, no, never, none, nor,
+  neither, nobody, nothing, unable, unwilling, refuse, reject, ban,
+  prohibit, forbid, disallow, decline, deny, avoid, refrain, discourage,
+  stop, only, except, unless, restrict, limit, unwelcome, unacceptable,
+  intolerable, close, closed, delete, remove, revert, lock, blocked,
+  ignore, spam, slop, against, instead, rather, or zero tolerance.
+- **A sentence bans AI** when it names AI and says no, whatever it says no
+  to, unless it has one of the forms below. So "AI tools help you avoid
+  typos" is a ban. In `AGENTS.md`, `CLAUDE.md`, and the skills, a sentence
+  that says no and talks about contributing bans AI too: one with
+  contribute, accept, open or submit a pull request, pull requests from or
+  by, or write code for this.
+- **These forms say no to something else**, and are no ban. A test shows
+  each one both ways.
+  1. A checkbox a contributor ticks, a Markdown task list item or an issue
+     form's option, like "I did not use AI". It is their choice, unless it
+     asks them to confirm, certify, agree, attest, declare, promise, affirm,
+     understand, acknowledge, or accept, says will, shall, must, am aware,
+     or have read, or refuses outright, as closed or rejected do.
+  2. A whole sentence that keeps AI off issues with one label, named in
+     quotes or backticks, like "Don't use AI on issues labeled
+     `good first issue`." The label becomes an excluded tag. A word more
+     makes it a ban.
+  3. A sentence that keeps agents from working on their own, with
+     autonomous, unsupervised, unattended, fully automated, on its own, on
+     their own, on your own, or without a person, a human, review,
+     supervision, or oversight. It names no AI but agents, and refuses
+     nothing outright.
+  4. A sentence that starts like "Never open a PR without running the
+     tests": do not, don't, or never, then open, submit, create, send, or
+     file a pull request, then before, without, or until, then running,
+     passing, checking, testing, reading, or the like. The rest of it names
+     no AI and says no to nothing.
+  5. "Don't submit code you don't understand" and the like. It asks for a
+     person in the loop.
+  6. A reminder: don't forget to, don't hesitate to, don't be afraid to,
+     no need to, or no problem.
+  7. Keeping a template whole: don't delete, remove, edit, change, modify,
+     or skip this section, template, line, heading, checklist, or the like.
+  8. A rule to disclose: don't submit, open, send, use, contribute, or post
+     something without disclosing, mentioning, noting, or the like, or
+     undisclosed, then is or are not allowed or the like.
+
+  Forms 5 to 8 are taken out of the sentence, and what is left is read
+  again, so "Don't forget to never use AI" is a ban. None is taken out when
+  it holds a second word that says no.
+- **A sentence refuses outside pull requests** when it says the project
+  doesn't accept, take, merge, review, consider, want, or welcome pull
+  requests, PRs, patches, or contributions, isn't accepting, taking, or
+  interested in them, has no pull requests, that pull requests are not
+  accepted or won't be, or that it is closed to contributions, or when it
+  says do not open or submit a pull request. The words right after that can
+  narrow it: without, that, which, unless, if, until, before, except, with,
+  on your own, on issues, or for or to anything but the project or a time
+  like now, and a few more. So "Don't open PRs without tests" refuses no
+  one, and "We don't take pull requests for this project" is a ban.
 - **A sentence invites agents** when it says agents may, can, or are
   welcome, invited, encouraged, free, or allowed to open, submit, send,
   make, create, file, contribute, or work, that agent pull requests or
-  contributions are welcome, or that the project welcomes pull requests
-  from agents, or welcomes agents.
+  contributions, or pull requests from agents, are welcome, that agents
+  are welcome, or that the project welcomes pull requests from agents, or
+  welcomes agents.
 - **A sentence allows AI help** when it says AI help, assistance, tools, or
   use is fine, welcome, allowed, accepted, okay, permitted, or encouraged,
   that AI-assisted or AI-generated work is, that AI is, that using AI is,
-  that you may, can, or are welcome to use AI, or that the project
-  welcomes, accepts, allows, or encourages AI-assisted work.
+  that you may, can, or are welcome to use AI or a tool it names, like
+  Claude Code, Codex, Copilot, ChatGPT, Cursor, or Gemini, or that the
+  project welcomes, accepts, allows, or encourages AI-assisted work.
 - **A person in the loop** is a sentence that says a person, a human, or
   you must, should, need to, or have to review, understand, explain, stand
   behind, or take responsibility, or that says human in the loop, or human
@@ -1533,7 +1609,7 @@ The tiers:
 
 | Tier | When | Reaches the admin queue |
 |---|---|---|
-| Bans or restricts | A clause anywhere says no to AI, or a sentence says the project doesn't accept pull requests or contributions and ends there, like "This project does not accept pull requests." Whatever else the docs say | Never |
+| Bans or restricts | A sentence anywhere bans AI, or refuses outside pull requests, like "This project does not accept pull requests." Whatever else the docs say | Never |
 | Invites agents | A sentence invites agents, and nothing keeps agents from working on their own, asks for a person in the loop, or asks for a person-written PR description | Yes |
 | Allows with conditions | A sentence invites agents with one of those conditions, or a sentence allows AI help | Yes |
 | No policy | None of these, whether the docs mention AI or not | Never |
@@ -1556,7 +1632,8 @@ queue with:
 - The suggested settings:
   - PR mode `automatic` for invites agents, and `reviewed` otherwise.
   - The disclosure trailer, the person-written PR description, and the
-    CLA, by the rules a proposal uses.
+    CLA, by the rules a proposal uses. The CLA link comes only from a line
+    that says a CLA must be signed.
   - Who can claim `vouched` when it has a vouch file.
   - Excluded tags: the repo's labels the docs keep AI off, or name in
     quotes or backticks in a sentence that keeps them for people, as in
@@ -1565,43 +1642,60 @@ queue with:
     labeled, label, or tagged, or in quotes or backticks, then the labels a
     proposal takes as ready for outside help, up to 20, none of them
     excluded. With none, it suggests no tags, and the admin picks them.
-  - Notes for agents, when `AGENTS.md` or `CLAUDE.md` has a canary: a
-    sentence that says if or when you are an AI, an LLM, a language model,
-    an agent, an assistant, or a bot, then asks it to include, add, put,
-    mention, say, write, start, end, begin, use, append, prefix, or sign
-    something. The note is in our words, and names the file, as in "Read
-    AGENTS.md before you start, and follow what it tells agents to do." It
-    never copies the file's words.
+  - No notes for agents. Nothing from a repo's files goes in a setting
+    but a label name, a trailer name, and a CLA link.
 - The suggested tags: the labels the sentence names, and the labels that
   mean ready for outside help, `good first issue` included, each with its
   open issue count, up to 20, none of them excluded.
+- The lines behind them: for each suggestion the docs gave, the line of the
+  file it came from, as the file has it, up to 500 characters, for the
+  admin to check. That covers the excluded tags, the disclosure trailer,
+  the person-written description, the CLA, and a condition that made PR
+  mode `reviewed`. Who can claim names the vouch file.
+- A canary, when `AGENTS.md` or `CLAUDE.md` has one, with its line: a
+  sentence that says if or when you are an AI, an LLM, a language model,
+  an agent, an assistant, or a bot, then asks it to include, add, put,
+  mention, say, write, start, end, begin, use, append, prefix, or sign
+  something. No setting comes from it. An admin who wants agents told
+  about it writes the note.
+
+`admin_queue` marks each line of a quote and of each source line with
+`> `, as the repo's words for the admin's agent to read as data, and puts
+each label name the repo gave in quotes.
 
 **The queue.** The consumer takes up to 5 batches at a time, one run at a
 time, and first asks GitHub what is left of the budget.
 
 - It stops before a call when less than three fifths of the hour's limit is
-  left, or after 60 calls. The batch it was on, and each one after it, go
-  back to the queue, to be read again:
-  - when the budget starts over, if the budget stopped it, at least a
-    minute and at most an hour later, or 15 minutes later when GitHub
-    didn't say when,
-  - at once, after 60 calls,
-  - after 30 seconds, and twice as long on each later try up to an hour,
-    when GitHub failed or refused the token.
+  left, or after 60 calls in one run of up to 5 batches.
+- When the budget or GitHub's rate limit stopped it, or its 60 calls ran
+  out, the repos each batch hasn't finished go back to the queue in a new
+  batch, and the old batch is done, so the wait takes none of its tries. They come back when the
+  budget starts over, at least a minute and at most an hour later, or 15
+  minutes later when GitHub didn't say when, or at once after 60 calls.
+- When GitHub failed or refused the token, the batch it was on, and each
+  one after it, go back as they are, after 30 seconds, and twice as long on
+  each later try up to an hour.
+- A repo GitHub answers with an error of its own, of any kind but not
+  found, like one whose access GitHub blocked, goes back alone after 30
+  seconds, and the rest of its batch is read. A batch of that repo alone
+  goes back later on each try, so a lasting error takes it to the
+  dead-letter queue and holds no other repo back. An error GitHub gives
+  for no one repo sends the whole batch back.
 - The finds a batch made before it stopped stay in the admin queue, and
-  when the batch comes back, those repos are read no further.
-- A batch GitHub read with any error but a repo it doesn't show goes back
-  too, since the file GitHub missed could be the one that bans AI.
+  when their repos come back, they are read no further.
 - A malformed batch goes back at once. A batch goes to the dead-letter
   queue after 90 retries.
 - With no service token, it reads nothing, and asks for each batch again in
   an hour.
 - Each run logs one line: the batches it read, the repos, what it left out
   and why, how many repos fell in each tier, the repos it put in the admin
-  queue, its calls, what is left of the budget, and why it stopped. It names
-  no repo it didn't put in the admin queue. The search's run logs one line
-  too: the seeds and repos it queued, its searches, where the pass stands,
-  how many repos the pool has, and why it stopped.
+  queue, the repos it sent back alone, its calls, what is left of the
+  budget, and why it stopped. A repo it gave no verdict, a repo GitHub
+  failed on, and a find it couldn't write each get a line that names it.
+  It names no other repo it left out. The search's run logs one line too:
+  the seeds and repos it queued, its searches, where the pass stands, how
+  many repos the pool has, and why it stopped.
 
 ## MCP tools
 

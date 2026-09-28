@@ -7,8 +7,8 @@ import {
   crawlerSkips,
   decideCandidate,
   latestCrawlPass,
-  listSeedsToQueue,
-  markSeedsQueued,
+  listSeedsToHandle,
+  markSeedsHandled,
   moveCrawlPass,
   startCrawlPass,
 } from '../../src/db';
@@ -39,22 +39,36 @@ describe('the seed list', () => {
     const first = await addSeed(db, { repo: 'sample-owner/seeded', addedBy: admin.githubId }, t0);
     const again = await addSeed(db, { repo: 'Sample-Owner/Seeded', addedBy: maintainer.githubId }, t0 + HOUR);
 
-    expect(first).toEqual({ seed: { repo: 'sample-owner/seeded', addedBy: admin.githubId, addedAt: t0, queuedAt: null }, added: true });
+    expect(first).toEqual({
+      seed: { repo: 'sample-owner/seeded', addedBy: admin.githubId, addedAt: t0, handledAt: null, outcome: null },
+      added: true,
+    });
     expect(again).toEqual({ seed: first.seed, added: false });
   });
 
-  test('the seeds to queue are the ones not queued yet, oldest first, and queuing one again keeps its first time', async () => {
+  test('the seeds to handle are the ones not handled yet, oldest first, and handling one again keeps its first time and outcome', async () => {
     await addSeed(db, { repo: 'sample-owner/second', addedBy: admin.githubId }, t0 + HOUR);
     await addSeed(db, { repo: 'sample-owner/first', addedBy: admin.githubId }, t0);
     await addSeed(db, { repo: 'sample-owner/third', addedBy: admin.githubId }, t0 + 2 * HOUR);
+    await addSeed(db, { repo: 'sample-owner/fourth', addedBy: admin.githubId }, t0 + 2 * HOUR);
 
-    await markSeedsQueued(db, ['Sample-Owner/Second'], t0 + 3 * HOUR);
-    await markSeedsQueued(db, ['sample-owner/second'], t0 + 4 * HOUR);
+    await markSeedsHandled(
+      db,
+      [
+        { repo: 'Sample-Owner/Second', outcome: 'queued' },
+        { repo: 'sample-owner/fourth', outcome: 'project' },
+      ],
+      t0 + 3 * HOUR,
+    );
+    await markSeedsHandled(db, [{ repo: 'sample-owner/second', outcome: 'proposed' }], t0 + 4 * HOUR);
 
-    expect((await listSeedsToQueue(db, 10)).map((seed) => seed.repo)).toEqual(['sample-owner/first', 'sample-owner/third']);
-    expect((await listSeedsToQueue(db, 1)).map((seed) => seed.repo)).toEqual(['sample-owner/first']);
-    const second = await db.prepare("SELECT queued_at FROM crawl_seeds WHERE repo = 'sample-owner/second'").first<number>('queued_at');
-    expect(second).toBe(t0 + 3 * HOUR);
+    expect((await listSeedsToHandle(db, 10)).map((seed) => seed.repo)).toEqual(['sample-owner/first', 'sample-owner/third']);
+    expect((await listSeedsToHandle(db, 1)).map((seed) => seed.repo)).toEqual(['sample-owner/first']);
+    const { results } = await db.prepare('SELECT repo, handled_at, outcome FROM crawl_seeds WHERE handled_at IS NOT NULL ORDER BY repo').all();
+    expect(results).toEqual([
+      { repo: 'sample-owner/fourth', handled_at: t0 + 3 * HOUR, outcome: 'project' },
+      { repo: 'sample-owner/second', handled_at: t0 + 3 * HOUR, outcome: 'queued' },
+    ]);
   });
 
   test('only a numeric GitHub ID of someone who signed in can add a seed', async () => {

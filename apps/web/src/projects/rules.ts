@@ -43,21 +43,46 @@ const TRAILER = /(?<![A-Za-z0-9-])(assisted-by|generated-by):/i;
 const DESCRIPTION = /\b(?:PR|pull request) description\b/i;
 const BY_THE_CONTRIBUTOR = /\b(?:yourself|by hand|in your own words)\b/i;
 const CLA = /\bCLA\b|contributor license agreement/i;
+// A line that says the CLA must be signed, and nothing that says there is none.
+const MUST_SIGN = /\bsign(?:s|ed|ing)?\b|\brequire[sd]?\b|\bmust\b|\bneeds? to\b/i;
+const NONE = /\b(?:no|not|never|none|without|dont|doesnt)\b|n['’]t\b/i;
 const LINK = /https:\/\/[^\s<>()[\]"'`]+/;
 const CLOSING = '.,;:!?';
 
+/** What a rule found in a text, and where. */
+export interface Found<T> {
+  found: T;
+  /** Where in the text it was found. */
+  index: number;
+}
+
+/** The trailer a text names for AI help, spelled as the text spells it, and where, or null. */
+export function findTrailer(text: string): Found<string> | null {
+  const match = TRAILER.exec(text);
+  return match?.[1] === undefined ? null : { found: match[1], index: match.index };
+}
+
 /** The trailer a text names for AI help, spelled as the text spells it, or null. */
 export function disclosureTrailer(text: string): string | null {
-  return TRAILER.exec(text)?.[1] ?? null;
+  return findTrailer(text)?.found ?? null;
+}
+
+/** Where a sentence names the PR description, then says the contributor writes it, or null. */
+export function findPersonWritten(text: string): Found<true> | null {
+  let offset = 0;
+  for (const sentence of text.split(/[.\n]/)) {
+    const named = DESCRIPTION.exec(sentence);
+    if (named && BY_THE_CONTRIBUTOR.test(sentence.slice(named.index + named[0].length))) {
+      return { found: true, index: offset + named.index };
+    }
+    offset += sentence.length + 1;
+  }
+  return null;
 }
 
 /** Whether a sentence names the PR description, then says the contributor writes it. */
 export function personWritten(text: string): true | null {
-  for (const sentence of text.split(/[.\n]/)) {
-    const named = DESCRIPTION.exec(sentence);
-    if (named && BY_THE_CONTRIBUTOR.test(sentence.slice(named.index + named[0].length))) return true;
-  }
-  return null;
+  return findPersonWritten(text)?.found ?? null;
 }
 
 /** The link without the punctuation that closes the sentence around it. */
@@ -67,15 +92,29 @@ function trimClosing(link: string): string {
   return link.slice(0, end);
 }
 
-/** The first https link on a line that names a CLA, or null. */
-export function claLink(text: string): string | null {
+/**
+ * The first https link on a line that names a CLA and says it must be
+ * signed, and where, or null. A line that says there is no CLA, or that it
+ * isn't needed, gives none, whatever link it has.
+ */
+export function findClaLink(text: string): Found<string> | null {
+  let offset = 0;
   for (const line of text.split('\n')) {
-    if (!CLA.test(line)) continue;
-    const found = LINK.exec(line)?.[0];
-    const link = found === undefined ? undefined : trimClosing(found);
-    if (link !== undefined && httpsUrl.safeParse(link).success) return link;
+    if (CLA.test(line) && MUST_SIGN.test(line) && !NONE.test(line)) {
+      const match = LINK.exec(line);
+      const link = match === null ? undefined : trimClosing(match[0]);
+      if (match !== null && link !== undefined && httpsUrl.safeParse(link).success) {
+        return { found: link, index: offset + match.index };
+      }
+    }
+    offset += line.length + 1;
   }
   return null;
+}
+
+/** The first https link on a line that says a CLA must be signed, or null. */
+export function claLink(text: string): string | null {
+  return findClaLink(text)?.found ?? null;
 }
 
 /** The first file, in the order the rules read them, whose text gives a match. */
