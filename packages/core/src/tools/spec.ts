@@ -18,9 +18,9 @@ export interface ToolSpec<I extends z.ZodObject = z.ZodObject, O extends z.ZodOb
   input: I;
   output: O;
   /**
-   * Every refusal the tool can answer with. A skill that names the tool says
-   * what to do with each one, and a test holds both the skills and the
-   * server to this list.
+   * Every refusal an agent can get from the tool. A skill that names the
+   * tool says what to do with each one, and tests hold both the skills and
+   * the server to this list.
    */
   refusals?: readonly RefusalCode[];
   /** The result as plain text. */

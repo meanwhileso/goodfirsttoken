@@ -1180,6 +1180,30 @@ how they asked, and only admins see it.
 - The events on its issues leave the live feeds, as
   [Live feeds](#live-feeds) says.
 
+**Checking a request to be removed.** `admin_remove_project` doesn't check
+who asked, so the skills make a request something an admin can check.
+
+- The maintainer asks in an issue on `meanwhileso/goodfirsttoken`, and saves
+  notes for agents that name the issue. Only an admin or maintainer of the
+  repo on GitHub can save a project's notes, since every save asks GitHub
+  for their role. A registered project's notes change with
+  `update_project`. A listing made from its policy is taken over with
+  `register_project`, with the notes in its settings. A repo that isn't a
+  project, or a rejected one, is registered with them.
+- The maintainer also pauses an approved project with `pause_project`, with
+  a reason that names the issue, so agents get no new claims on it while
+  they wait. No admin tool or page shows a paused project's reason, or who
+  paused it, so the notes are what the admin checks.
+- The admin reads the notes where they show: on the
+  [project page](#the-project-page), with who saved the current settings,
+  for an approved or paused project, and in `admin_queue` for a
+  registration waiting. The admin removes the repo only when the notes name
+  the request.
+- The tools can't check a request with no such notes, like one for a
+  crawler find that nobody registered, or a rejected project. The admin
+  asks its maintainers to register the repo, or take its listing over,
+  first.
+
 ## The admin pages
 
 `/admin` is the admin queue on the site. What it shows, and in what order,
@@ -1461,23 +1485,33 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 `not_admin`, `not_found`, `repo_not_eligible`, `already_registered`,
 `invalid_settings`, `project_not_open`, and `invalid_input`.
 
-Each maintainer's and admin's tool lists the refusals it can answer with, in
-its spec in `packages/core`, and answers with no other. The skills that use
-a tool say what to do with each one on its list, under
+Each maintainer's and admin's tool lists the refusals an agent can get from
+it, in its spec in `packages/core`, and answers an agent with no other. The
+skills that use a tool say what to do with each one on its list, under
 [Skills and plugins](#skills-and-plugins).
 
-| Tool | Can refuse with |
+| Tool | An agent can be refused with |
 |---|---|
 | `register_project` | `not_maintainer`, `repo_not_eligible`, `already_registered`, `label_not_created` |
 | `update_project` | `not_maintainer`, `not_found`, `listed_from_policy`, `invalid_settings`, `repo_not_eligible`, `label_not_created` |
 | `project_status` | `not_maintainer`, `not_found` |
 | `pause_project` | `not_maintainer`, `not_found`, `project_not_open`, `not_admin`, `repo_not_eligible` |
-| `admin_queue` | `not_admin` |
-| `admin_decide` | `not_admin`, `invalid_input`, `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered` |
-| `admin_add_project` | `not_admin`, `repo_not_eligible`, `already_registered`, `invalid_settings` |
-| `admin_block_donor` | `not_admin`, `not_found` |
-| `admin_pause_project` | `not_admin`, `not_found`, `project_not_open` |
-| `admin_remove_project` | `not_admin` |
+| `admin_queue` | None |
+| `admin_decide` | `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered` |
+| `admin_add_project` | `repo_not_eligible`, `already_registered`, `invalid_settings` |
+| `admin_block_donor` | `not_found` |
+| `admin_pause_project` | `not_found`, `project_not_open` |
+| `admin_remove_project` | None |
+
+- No agent gets `not_admin` from an admin's tool. The server serves those
+  tools only to an agent whose person is an admin, read on every request,
+  so any other agent's call gets the MCP SDK's error
+  `Tool <name> not found`. The admins' actions still check the permission
+  themselves, and the admin pages get `not_admin` from them.
+- No agent gets `invalid_input` from `admin_decide`. Its input schema
+  refuses a rejection with no reason first, with an error that starts
+  `Input validation error` and names `reason`. The admin pages check the
+  same schema.
 
 | Code | When |
 |---|---|
@@ -2182,9 +2216,10 @@ skills are written.
   Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
   tools aren't there, it says how to add the MCP server in each of them.
 - Each names only the tools the server serves the person it is for, and the
-  fields and values those tools take or return. It names every refusal each
-  of those tools can answer with, under [Refusals](#refusals), with what to
-  do about it.
+  fields, values, and refusals of those tools. Its Refusals section has one
+  entry for each refusal those tools can give an agent, under
+  [Refusals](#refusals), with what to do about it. Each call it shows as an
+  example is one the tool takes.
 - Their examples use made-up repos, so neither states a verdict or a
   setting for a real project.
 
@@ -2202,8 +2237,8 @@ skills are written.
   It pauses and resumes with `pause_project`, and asks `project_status` to
   read the tagged issues again after the maintainer tags some.
 - No tool removes a project for its maintainers. To have one removed for
-  good, the skill tells the maintainer to ask Good First Token's admins in
-  an issue on `meanwhileso/goodfirsttoken`. An admin then removes it, under
+  good, the skill has the maintainer ask Good First Token's admins in an
+  issue, and save notes for agents that name it, as under
   [The admin queue](#the-admin-queue).
 
 **admin** works with one of Good First Token's admins, and only an admin's
@@ -2218,6 +2253,8 @@ agent is served its tools.
 - It calls `admin_decide` only with what the admin decided. A rejection
   carries a reason the admin confirmed. It lists, pauses, blocks, and
   removes only on the admin's word, too.
+- It removes a repo only when its notes for agents name the maintainers'
+  request, as under [The admin queue](#the-admin-queue).
 
 ## The design system
 

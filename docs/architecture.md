@@ -515,7 +515,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   maintainers, and admins: who sees it, a description for agents, input and
   output schemas, and a function that renders the output as text. A
   maintainer's or admin's tool also lists, in `refusals`, every refusal code
-  it can answer with. The skills are checked against those lists, under
+  an agent can get from it. The skills are checked against those lists, under
   [Skills and plugins](#skills-and-plugins). The donor's tools can add
   theirs when their skills name them.
   `src/tools/index.ts` lists them all, and its `toolResult` and
@@ -588,19 +588,31 @@ together.
   `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`. It
   connects the agent of the person the skill is for, a maintainer with no
   admin role for maintain and the sample admin for admin, and lists that
-  agent's tools from the server with their schemas. Every snake_case name
-  in the skill, and every word it puts in backticks on its own, has to be
-  one of those tools, a refusal code, or a field or value in the tools'
-  schemas, like `prMode` or `too_soon`. JSON's literals and
-  `goodfirsttoken`, our label and plugin, are the only other words allowed.
-  The skill has to name every tool of its audience, and every refusal on
-  the `refusals` list of each tool it names. So a skill that names a tool
-  its reader isn't served, or a field no tool has, or leaves out a refusal
-  its tools can give, fails.
+  agent's tools from the server with their schemas. The skill's `## Connect`
+  section is left out, since it tells an agent how to add the server in its
+  own harness, in that harness's words. In the rest:
+  - Every snake_case name has to be a tool that agent is served, a refusal
+    on the `refusals` list of a tool the skill names, or a value in those
+    tools' schemas, like `too_soon`.
+  - Every word in backticks on its own, and every key in a JSON object in
+    backticks, has to be a field or value in those tools' schemas, like
+    `prMode`. JSON's literals and `goodfirsttoken`, our label and plugin,
+    are the only other words allowed. A word in the same sentence as a
+    tool, after it, as in "`admin_block_donor` with `login`", has to be
+    that tool's own field, value, or refusal.
+  - The `## Refusals` section has one entry, a list item that starts with
+    the code in backticks and a colon, for each refusal on the lists of the
+    tools the skill names, and no other.
+  - Each line of a code block is a call, `tool {json}`, whose JSON the
+    tool's input schema from `packages/core` takes.
+  - The skill names every tool of its audience, and each tool it names has
+    a `refusals` list.
 - **Every tool call in the MCP tests** goes through `mcpClient` in
   `test/mcp/helpers.ts`, which fails the test when a tool refuses with a
-  code its `refusals` list leaves out. So a list can't fall behind the
-  server while the tests exercise the refusal.
+  code its `refusals` list leaves out. Every code on the lists has a test
+  that gets it through `mcpClient`, so a list can't fall behind the server.
+  A refusal no agent can get, like `not_admin` from an admin's tool, stays
+  off the lists.
 
 ### Following the skills' steps
 

@@ -26,23 +26,29 @@ paused, blocked, or removed until the admin says so.
   rewrite. A registration's maintainers read it, so say what they can
   change.
 - Work one item at a time, in the order the queue lists them.
-- Use only the tools, fields, and values in this skill.
+- Use only the Good First Token tools, fields, and values in this skill. To
+  read a repo's files or a page on the Good First Token site, use your
+  harness's own way to read the web when it has one, or ask the admin to
+  read it.
 
 ## Connect
 
 The admin tools come from the Good First Token MCP server at https://goodfirsttoken.org/mcp.
 Add it as a remote MCP server at that URL, the way your harness does:
 
-- Claude Code: `/plugin install goodfirsttoken-admin` brings the
-  `goodfirsttoken` plugin, which carries the server.
+- Claude Code: `/plugin marketplace add meanwhileso/goodfirsttoken`, then
+  `/plugin install goodfirsttoken-admin`, which brings the `goodfirsttoken`
+  plugin. That plugin carries the server.
 - Codex: `codex mcp add goodfirsttoken --url https://goodfirsttoken.org/mcp`, then
   `codex mcp login goodfirsttoken`.
 - OpenCode: add `"goodfirsttoken": {"type": "remote", "url": "https://goodfirsttoken.org/mcp"}`
   under `"mcp"` in `opencode.json`.
 - Cursor: add `"goodfirsttoken": {"url": "https://goodfirsttoken.org/mcp"}` under
   `"mcpServers"` in `~/.cursor/mcp.json`.
-- Grok Bot: add the remote MCP server https://goodfirsttoken.org/mcp in the chat, then press
-  Connect and Authorize on the card it posts.
+- Grok Bot: ask it in the chat to add the remote MCP server https://goodfirsttoken.org/mcp. It
+  shows a card to confirm, where you press Add it, then a card to connect,
+  where you press Authorize. Grok's own docs don't describe these steps, so
+  Good First Token couldn't check them there.
 - Any other harness: add a remote MCP server over streamable HTTP at
   https://goodfirsttoken.org/mcp.
 
@@ -126,6 +132,9 @@ the server checked. The settings are theirs.
 - On the do-not-list, its maintainers asked to be removed before. This
   registration asks to list it again, and approving it takes the repo off
   the list.
+- Notes that ask Good First Token to remove the repo, with a link to an
+  issue, are a request to be removed. Follow Remove at the maintainers'
+  request.
 
 ### Deciding
 
@@ -176,10 +185,26 @@ blocks a donor. They get no new claims, and their live posts are hidden.
 
 ## Remove at the maintainers' request
 
-When a repo's maintainers ask to be removed, call `admin_remove_project`
-with `repo` and a `note` saying where and how they asked. Only admins see
-the note. Check first that the request came from an admin or maintainer of
-the repo on GitHub.
+Remove a repo only when its maintainers asked in a way you can check.
+`admin_remove_project` doesn't check who asked. The maintain skill has them
+open an issue at https://github.com/meanwhileso/goodfirsttoken/issues, and
+save notes for agents that name it. Only an admin or maintainer of the repo
+on GitHub can save a project's notes, since the server checks that role on
+every save. So check the notes:
+
+- An approved or paused project: its page on the Good First Token site, at
+  `/owner/repo`, shows its notes for agents, and who saved its current
+  settings, by their login.
+- A registration waiting for an admin: `admin_queue` shows its notes in
+  full, and who registered it.
+- Anything else, like a crawler find, a rejected project, or a project whose
+  notes don't name the request: the tools can't check who asked. Ask the
+  maintainers to register the repo, or take its listing over, with notes
+  that name the request, then check again.
+
+Once the notes name the request, and the admin says so, call
+`admin_remove_project` with `repo` and a `note` with the issue's link. Only
+admins see the note.
 
 The repo goes on the do-not-list, its project is rejected with the reason
 "Removed at its maintainers' request.", and a crawler find for it that
@@ -191,13 +216,11 @@ registers it.
 A refusal reads `Refused (code): message`. Tell the admin the message,
 then:
 
-- `not_admin`: The account the agent signed in with isn't one of Good First
-  Token's admins. Stop.
 - `not_found`: The queue item no longer waits, because someone decided or
-  changed it after you read the queue, or the project or the person to
-  block doesn't exist. Read the queue again with `admin_queue`, or check
-  the name.
-- `invalid_input`: A rejection came with no reason. Ask the admin for one.
+  changed it after you read the queue. Read the queue again with
+  `admin_queue`. Or the repo to pause isn't a project, or nobody has signed
+  in to Good First Token with the login to block. Check the name with the
+  admin.
 - `invalid_settings`: The message names each setting and its problem. The
   approval of a registration takes no `tier` and no `settings`. A crawler
   find or a new listing needs its `tags`. Fix it with the admin, then call
@@ -213,8 +236,16 @@ then:
 
 Other errors:
 
-- An error that names a field, like `reason: is required to reject`, means
-  the call broke the tool's input rules. Fix that field, then call again.
+- An error that starts `Input validation error` and names a field, like
+  `reason: is required to reject`, means the call broke the tool's input
+  rules, and the server did nothing. Fix that field with the admin, then
+  call again.
+- An error that says a tool isn't found, like `Tool admin_queue not found`:
+  the server didn't serve that tool to this agent. The account the agent
+  signed in with is no longer one of Good First Token's admins, or the
+  agent's list of tools is out of date. Reconnect the MCP server, or start
+  a new session, and check that the admin tools are back. When they
+  aren't, tell the admin, and stop.
 - `GitHub no longer accepts this connection's token`: reconnect the MCP
   server, then call again.
 - Too many calls: wait a minute, then try again.
@@ -222,17 +253,23 @@ Other errors:
 
 ## Example
 
-The repo is made up.
+The repo is made up. You read the queue:
 
-1. `admin_queue` lists a crawler find for sample-owner/sample-cli, with
-   the quote "Agents may open pull requests on issues labeled agents
-   welcome." from its AGENTS.md, the tier `invites_agents`, and the label
-   `agents welcome` with its open issues.
-2. You open the link, find the quote in AGENTS.md, and propose: approve,
-   with the tier `invites_agents`, `prMode` `automatic`, and the tag
-   `agents welcome`, since the quote invites agents to open pull requests
-   on issues with that label.
-3. The admin says approve.
-4. `admin_decide` with
-   `{"id": "<the item's id>", "decision": "approve", "tier": "invites_agents", "settings": {"tags": ["agents welcome"], "prMode": "automatic"}}`
-   answers that sample-owner/sample-cli is listed now.
+```
+admin_queue {}
+```
+
+It lists a crawler find for sample-owner/sample-cli, with the quote "Agents
+may open pull requests on issues labeled agents welcome." from its
+AGENTS.md, the tier `invites_agents`, and the label `agents welcome` with
+its open issues. You open the link and find the quote in AGENTS.md. You
+propose to approve it, with the tier `invites_agents`, `prMode`
+`automatic`, and the tag `agents welcome`, since the quote invites agents
+to open pull requests on issues with that label. The admin says approve,
+and you approve it with the item's `id`:
+
+```
+admin_decide {"id": "cand_Fq9Lw2Xr7Tb4Mz6Kp1Vd", "decision": "approve", "tier": "invites_agents", "settings": {"tags": ["agents welcome"], "prMode": "automatic"}}
+```
+
+It answers that sample-owner/sample-cli is listed now.

@@ -692,6 +692,19 @@ describe('update_project', () => {
     expect(hasLabel(APP_REPO, 'goodfirsttoken')).toBe(true);
   });
 
+  test('an update to a project whose issue repo GitHub now shows archived is refused, and nothing changes', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+    sampleRepo(TOOLS).archived = true;
+
+    const result = await call(agent, 'update_project', { repo: APP_REPO, settings: { claimsPerIssue: 2 } });
+
+    expect(textOf(result)).toBe(
+      `Refused (repo_not_eligible): The issue repo ${TOOLS} is archived on GitHub. Keep this project's issues in a repo that takes changes.`,
+    );
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ settingsVersion: 1, settings: { claimsPerIssue: 3 } });
+  });
+
   test('a repo that is not a project is not found', async () => {
     const agent = await connectAgent(github, 'octo-maintainer');
 
@@ -847,6 +860,16 @@ describe('project_status', () => {
     expect(textOf(result)).toMatch(/^Refused \(not_maintainer\)/);
     expect(result.structuredContent).toBeUndefined();
   });
+
+  test("a repo its caller maintains that isn't a project is not found", async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const result = await call(agent, 'project_status', { repo: TOOLS });
+
+    expect(textOf(result)).toBe(
+      `Refused (not_found): ${TOOLS} is not a project on Good First Token. Register it with register_project.`,
+    );
+  });
 });
 
 describe('pause_project', () => {
@@ -916,6 +939,32 @@ describe('pause_project', () => {
     expect(statusAfter).toMatchObject({ status: 'paused', statusReason: 'Release week.', statusChangedBy: 1009 });
     expect(pause.structuredContent).toEqual({ repo: APP_REPO, status: 'paused', changed: true, resumableBy: 'maintainers' });
     expect(await getProject(env.DB, APP_REPO)).toMatchObject({ status: 'paused', statusChangedBy: 1008 });
+  });
+
+  test('resuming a project whose issue repo GitHub now shows archived is refused, and it stays paused', async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+    await call(agent, 'register_project', { repo: APP_REPO, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+    await approve(APP_REPO);
+    await call(agent, 'pause_project', { repo: APP_REPO, reason: 'Release week.' });
+    sampleRepo(TOOLS).archived = true;
+
+    const resume = await call(agent, 'pause_project', { repo: APP_REPO, paused: false });
+
+    expect(textOf(resume)).toBe(
+      `Refused (repo_not_eligible): The issue repo ${TOOLS} is archived on GitHub. Keep this project's issues in a repo that takes changes.`,
+    );
+    expect(await getProject(env.DB, APP_REPO)).toMatchObject({ status: 'paused', statusReason: 'Release week.' });
+  });
+
+  test("pausing or resuming a repo its caller maintains that isn't a project is not found", async () => {
+    const agent = await connectAgent(github, 'sample-maintainer');
+
+    const pause = await call(agent, 'pause_project', { repo: TOOLS, reason: 'Release week.' });
+    const resume = await call(agent, 'pause_project', { repo: TOOLS, paused: false });
+
+    const notFound = `Refused (not_found): ${TOOLS} is not a project on Good First Token. Register it with register_project.`;
+    expect([textOf(pause), textOf(resume)]).toEqual([notFound, notFound]);
+    expect(await getProject(env.DB, TOOLS)).toBeNull();
   });
 
   test("someone who isn't a maintainer of the repo can neither pause nor resume it, and its status stays", async () => {

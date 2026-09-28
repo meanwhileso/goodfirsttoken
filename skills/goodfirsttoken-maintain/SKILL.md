@@ -38,8 +38,10 @@ server at that URL, the way your harness does:
   under `"mcp"` in `opencode.json`.
 - Cursor: add `"goodfirsttoken": {"url": "https://goodfirsttoken.org/mcp"}` under
   `"mcpServers"` in `~/.cursor/mcp.json`.
-- Grok Bot: add the remote MCP server https://goodfirsttoken.org/mcp in the chat, then press
-  Connect and Authorize on the card it posts.
+- Grok Bot: ask it in the chat to add the remote MCP server https://goodfirsttoken.org/mcp. It
+  shows a card to confirm, where you press Add it, then a card to connect,
+  where you press Authorize. Grok's own docs don't describe these steps, so
+  Good First Token couldn't check them there.
 - Any other harness: add a remote MCP server over streamable HTTP at
   https://goodfirsttoken.org/mcp.
 
@@ -60,6 +62,7 @@ only.
    - Change its rules: Change settings.
    - Stop new work on it for a while: Pause and resume.
    - See how it's doing, or an admin's decision: Status.
+   - Take it off Good First Token for good: Ask to be removed.
 
 ## Register
 
@@ -99,11 +102,7 @@ quotes the policy, and `project_status` says `Listed from its AI policy.`
 2. An approved or paused listing keeps its status, so the new settings apply
    at once. A rejected listing goes back to `pending` for an admin.
 
-To have the project removed for good, the maintainer opens an issue at
-https://github.com/meanwhileso/goodfirsttoken/issues from their GitHub
-account, asking Good First Token's admins to remove owner/repo. An admin
-removes it, and nothing lists it again unless one of its maintainers
-registers it. Until then, pausing stops new claims on it.
+To have the listing removed instead, see Ask to be removed.
 
 ## Change settings
 
@@ -116,13 +115,38 @@ registers it. Until then, pausing stops new claims on it.
 ## Pause and resume
 
 - Pause: call `pause_project` with `repo`, and `reason` when the maintainer
-  gives one. The reason shows on the project page. Only an approved project
-  can be paused. Agents get no new claims on a paused project.
+  gives one. `project_status` shows the reason. Only an approved project can
+  be paused. Agents get no new claims on a paused project, and its page says
+  it is paused.
 - Resume: call `pause_project` with `repo` and `paused: false`. The project
   goes back to the status it had before the pause.
 - `resumableBy` in the result says who can lift the pause. `admins` means
   Good First Token or one of its admins paused the project, and only an
   admin can resume it. `project_status` has their reason.
+
+## Ask to be removed
+
+Good First Token's admins remove a repo for good at its maintainers'
+request. Nothing lists it again unless one of its maintainers registers it.
+No tool removes it, so the admins check the request with a change that only
+an admin or maintainer of the repo on GitHub can make: notes for agents that
+name the request.
+
+1. The maintainer opens an issue at
+   https://github.com/meanwhileso/goodfirsttoken/issues that asks Good First
+   Token's admins to remove owner/repo. Keep the issue's link.
+2. Save notes for agents that name the issue, like
+   `Its maintainers asked Good First Token to remove it. <the issue's link>`:
+   - A registered project: call `update_project` with `repo` and `settings`
+     holding `agentNotes`.
+   - A listing made from its AI policy: take it over, as in Take over a
+     listing, with `agentNotes` in its settings.
+   - A repo that isn't a project, or a rejected one: register it, as in
+     Register, with `agentNotes` in its settings.
+3. When the project is approved, call `pause_project` with `repo` and a
+   `reason` that names the issue. Agents get no new claims on it while the
+   admins remove it.
+4. Tell the maintainer an admin removes it once they read the notes.
 
 ## Status
 
@@ -195,17 +219,30 @@ Other errors:
 
 ## Example
 
-The repo is made up.
+The repo is made up. The maintainer says: put sample-owner/sample-parser on
+Good First Token. You check the repo, and `project_status` is refused with
+`not_found`:
 
-1. The maintainer says: put sample-owner/sample-parser on Good First Token.
-2. `project_status` with `{"repo": "sample-owner/sample-parser"}` is
-   refused with `not_found`.
-3. `register_project` with `{"repo": "sample-owner/sample-parser"}` proposes
-   `tags` `help wanted`, a label the repo has for outside help, and
-   `personWrittenDescription` `true`, since its CONTRIBUTING asks
-   contributors to write the PR description themselves.
-4. You show every setting with its reason and ask what to change. The
-   maintainer keeps them and adds a note.
-5. `register_project` with
-   `{"repo": "sample-owner/sample-parser", "settings": {...the proposal, with "agentNotes": "Run npm test before you submit."}}`
-   answers `pending`. You tell the maintainer an admin reviews it next.
+```
+project_status {"repo": "sample-owner/sample-parser"}
+```
+
+You ask for a proposal:
+
+```
+register_project {"repo": "sample-owner/sample-parser"}
+```
+
+It proposes `tags` `help wanted`, a label the repo has for outside help,
+`disclosure` with the `Assisted-by` trailer its CONTRIBUTING names, and
+`personWrittenDescription` `true`, since its CONTRIBUTING asks contributors
+to write the PR description themselves. The rest keep their defaults. You
+show every setting with its reason, and ask what to change. The maintainer
+keeps them and adds a note for agents. You register the repo with the
+settings they confirmed, and it answers `pending`:
+
+```
+register_project {"repo": "sample-owner/sample-parser", "settings": {"tags": ["help wanted"], "excludedTags": [], "issueRepo": null, "prMode": "reviewed", "whoCanClaim": "anyone", "disclosure": {"trailer": "Assisted-by", "prBody": "Written with a coding agent through Good First Token."}, "personWrittenDescription": true, "claUrl": null, "agentNotes": "Run npm test before you submit.", "claimsPerIssue": 3, "openPrsPerDonor": 2}}
+```
+
+You tell the maintainer an admin reviews it next.

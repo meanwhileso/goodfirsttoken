@@ -449,13 +449,14 @@ export const repos: SampleRepo[] = [
     // A repo no sample work touches. `pnpm skills:run` registers it as its
     // maintainer and approves it as the sample admin, following the maintain
     // and admin skills. Its CONTRIBUTING gives the proposal reasons to show.
-    // It has no issues, so a search over the sample issues finds none here.
+    // It has no issues, so a search over the sample issues finds none here,
+    // and fewer than 1,000 stars, so the crawler never proposes it.
     owner: 'sample-owner',
     name: 'sample-parser',
     description: 'A sample parser for tests and local development.',
     language: 'TypeScript',
     license: 'MIT',
-    stars: 1500,
+    stars: 800,
     created: '4y',
     pushed: '6h',
     collaborators: { 'sample-maintainer': 'admin' },
