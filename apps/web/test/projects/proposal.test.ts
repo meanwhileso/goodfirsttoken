@@ -117,9 +117,9 @@ test('four files at the size limit, each one long line with no period, are read 
   // Every file at the size limit: the phrase over and over, with no words
   // after it, and in the PR template a CLA line whose link ends in a run of
   // dots and a letter. Each read gets files of its own, with the read's
-  // number at the end of every file and at the start of the link's path, so
-  // nothing that remembers a text or a line between reads can make a slow
-  // pattern look fast.
+  // number at the end of each file's long first line and at the start of the
+  // link's path, so nothing that remembers a text or a line between reads
+  // can make a slow pattern look fast.
   const phrase = 'PR description ';
   const filesFor = (read: number) => {
     const mark = String(read).padStart(2, '0');
