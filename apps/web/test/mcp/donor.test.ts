@@ -1154,9 +1154,7 @@ describe('suggest_issues', () => {
     expect(suggested(next)).toEqual([open]);
   });
 
-  // Four agents sign in, and each sign-in in this file takes longer than
-  // the one before, so this test, near the end, gets more time.
-  test('donors asking in turn are each offered issues from draws of their own, so they spread out over the issues', { timeout: 60_000 }, async () => {
+  test('donors asking in turn are each offered issues from draws of their own, so they spread out over the issues', async () => {
     await project(APP);
     const issues = [];
     for (let i = 0; i < 10; i++) issues.push(await tagged(APP));
