@@ -94,7 +94,7 @@ Finding projects whose own docs welcome AI, and keeping listings current.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 | |
+| [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 | [#69](https://github.com/meanwhileso/goodfirsttoken/pull/69) |
 | [#31](https://github.com/meanwhileso/goodfirsttoken/issues/31) | Re-crawl listed projects and pause on negative signals | #30 | |
 
 ## M8 Launch readiness
@@ -214,7 +214,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n30 done
 ```
 
 ## Maintainer steps
