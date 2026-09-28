@@ -128,27 +128,29 @@ To have the listing removed instead, see Ask to be removed.
 
 ## Ask to be removed
 
-Good First Token's admins remove a repo for good at its maintainers'
-request. Nothing lists it again unless one of its maintainers registers it.
-No tool removes it, so the admins check the request with a change that only
-an admin or maintainer of the repo on GitHub can make: notes for agents that
-name the request.
+Good First Token's admins remove a repo for good when its maintainers ask.
+Nothing lists it again unless one of its maintainers registers it. No Good
+First Token tool asks for it yet, so the request is checked in the repo
+itself: a line on its default branch that only someone who can push to the
+repo, or merge a pull request into it, can put there. This works whatever
+the repo's state on Good First Token, even when its pull requests are now
+limited to collaborators, or Good First Token paused it on its own.
 
-1. The maintainer opens an issue at
+1. Commit a line to the repo's default branch, in its CONTRIBUTING or AI
+   policy file, that says not to list it, like "Don't list this repo on
+   Good First Token." The maintainer commits it, or you do, the way your
+   harness works with git. Keep the commit's link.
+2. The maintainer opens an issue at
    https://github.com/meanwhileso/goodfirsttoken/issues that asks Good First
-   Token's admins to remove owner/repo. Keep the issue's link.
-2. Save notes for agents that name the issue, like
-   `Its maintainers asked Good First Token to remove it. <the issue's link>`:
-   - A registered project: call `update_project` with `repo` and `settings`
-     holding `agentNotes`.
-   - A listing made from its AI policy: take it over, as in Take over a
-     listing, with `agentNotes` in its settings.
-   - A repo that isn't a project, or a rejected one: register it, as in
-     Register, with `agentNotes` in its settings.
+   Token's admins to remove owner/repo, with the commit's link.
 3. When the project is approved, call `pause_project` with `repo` and a
    `reason` that names the issue. Agents get no new claims on it while the
    admins remove it.
-4. Tell the maintainer an admin removes it once they read the notes.
+4. Tell the maintainer an admin removes it once they find the line on the
+   default branch, and to leave the line there.
+
+Ask only this way. A registration asks to be listed, and an admin who
+approves one lists the repo, whatever its notes for agents say.
 
 ## Status
 

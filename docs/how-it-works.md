@@ -1189,28 +1189,36 @@ how they asked, and only admins see it.
   [Live feeds](#live-feeds) says.
 
 **Checking a request to be removed.** `admin_remove_project` doesn't check
-who asked, so the skills make a request something an admin can check.
+who asked, and no tool lets a maintainer ask yet.
+[#70](https://github.com/meanwhileso/goodfirsttoken/issues/70) plans one
+that checks their role on GitHub and shows the request in `admin_queue`.
+Until it replaces this, the skills check a request in the repo itself.
 
-- The maintainer asks in an issue on `meanwhileso/goodfirsttoken`, and saves
-  notes for agents that name the issue. Only an admin or maintainer of the
-  repo on GitHub can save a project's notes, since every save asks GitHub
-  for their role. A registered project's notes change with
-  `update_project`. A listing made from its policy is taken over with
-  `register_project`, with the notes in its settings. A repo that isn't a
-  project, or a rejected one, is registered with them.
-- The maintainer also pauses an approved project with `pause_project`, with
-  a reason that names the issue, so agents get no new claims on it while
-  they wait. No admin tool or page shows a paused project's reason, or who
-  paused it, so the notes are what the admin checks.
-- The admin reads the notes where they show: on the
-  [project page](#the-project-page), with who saved the current settings,
-  for an approved or paused project, and in `admin_queue` for a
-  registration waiting. The admin removes the repo only when the notes name
-  the request.
-- The tools can't check a request with no such notes, like one for a
-  crawler find that nobody registered, or a rejected project. The admin
-  asks its maintainers to register the repo, or take its listing over,
-  first.
+- The maintainer commits a line to the repo's default branch, in a file
+  like its CONTRIBUTING or AI policy, that says not to list the repo on
+  Good First Token, and links the commit in an issue on
+  `meanwhileso/goodfirsttoken`. When the project is approved, they also
+  pause it with `pause_project`, so agents get no new claims on it while
+  they wait.
+- The admin removes the repo only once they find the line in that file on
+  the repo's default branch. GitHub lets only someone with write, maintain,
+  or admin access push there or merge a pull request there. That is wider
+  than the admin or maintainer role the maintainer's tools require, and it
+  is the check until #70.
+- The same check works whatever the repo's state here: a registered
+  project, a listing made from its policy, a crawler find, a rejected
+  project, a project Good First Token paused on its own, which has no page
+  and isn't in the queue, and a repo whose pull requests are now limited
+  to collaborators, which can't be registered or taken over.
+- Notes for agents prove nothing, since admins save a listing's notes with
+  `admin_add_project`, or with `admin_decide` when they approve a crawler
+  find.
+- A registration is a request to be listed. One sent to ask for removal,
+  with notes that say so, looks like any other registration, and an admin
+  who approves it on `/admin` without reading the notes lists the repo its
+  maintainers asked to leave. So the maintain skill never asks that way,
+  and the admin skill proposes to reject such a registration. #70 closes
+  that gap too.
 
 ## The admin pages
 
@@ -2485,10 +2493,11 @@ skills are written.
   Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
   tools aren't there, it says how to add the MCP server in each of them.
 - Each names only the tools the server serves the person it is for, and the
-  fields, values, and refusals of those tools. Its Refusals section has one
-  entry for each refusal those tools can give an agent, under
-  [Refusals](#refusals), with what to do about it. Each call it shows as an
-  example is one the tool takes.
+  fields, values, and refusals of those tools. It calls the tools of its
+  own audience, and its Refusals section has one entry for each refusal
+  those tools can give an agent, under [Refusals](#refusals), with what to
+  do about it. Each call it shows as an example is one the tool takes, and
+  each sentence it quotes from the server is the server's own.
 - Their examples use made-up repos, so neither states a verdict or a
   setting for a real project.
 
@@ -2506,8 +2515,8 @@ skills are written.
   It pauses and resumes with `pause_project`, and asks `project_status` to
   read the tagged issues again after the maintainer tags some.
 - No tool removes a project for its maintainers. To have one removed for
-  good, the skill has the maintainer ask Good First Token's admins in an
-  issue, and save notes for agents that name it, as under
+  good, the skill has the maintainer commit a line to the repo that says
+  not to list it, and ask Good First Token's admins in an issue, as under
   [The admin queue](#the-admin-queue).
 
 **admin** works with one of Good First Token's admins, and only an admin's
@@ -2522,8 +2531,8 @@ agent is served its tools.
 - It calls `admin_decide` only with what the admin decided. A rejection
   carries a reason the admin confirmed. It lists, pauses, blocks, and
   removes only on the admin's word, too.
-- It removes a repo only when its notes for agents name the maintainers'
-  request, as under [The admin queue](#the-admin-queue).
+- It removes a repo only once the line its maintainers committed is on the
+  repo's default branch, as under [The admin queue](#the-admin-queue).
 
 ## The design system
 

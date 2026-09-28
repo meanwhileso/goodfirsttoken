@@ -713,27 +713,38 @@ refusal, so a skill and the server can drift apart. Two checks hold them
 together.
 
 - **`apps/web/test/mcp/skills.test.ts`** reads each skill's source, which
-  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`. It
-  connects the agent of the person the skill is for, a maintainer with no
-  admin role for maintain and the sample admin for admin, and lists that
-  agent's tools from the server with their schemas. The skill's `## Connect`
-  section is left out, since it tells an agent how to add the server in its
-  own harness, in that harness's words. In the rest:
-  - Every snake_case name has to be a tool that agent is served, a refusal
-    on the `refusals` list of a tool the skill names, or a value in those
-    tools' schemas, like `too_soon`.
+  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`, with the
+  source of the tools' answers as `TEST_SERVER_TEXT`. It connects the agent
+  of the person the skill is for, a maintainer with no admin role for
+  maintain and the sample admin for admin, and lists that agent's tools
+  from the server with their schemas. The tools a skill calls are the ones
+  of its audience, from their specs in `packages/core`. It may name
+  another tool its reader is served, to say what someone else sees.
+  - The skill's `## Connect` section tells an agent how to add the server in
+    its own harness, in that harness's words. There only a snake_case name
+    alone in backticks is checked, and it has to be a tool the reader is
+    served.
+  - In the rest, every snake_case name has to be a tool the reader is
+    served, a refusal on the `refusals` list of a tool the skill calls, or
+    a value in the schemas of the tools it names, like `too_soon`.
   - Every word in backticks on its own, and every key in a JSON object in
-    backticks, has to be a field or value in those tools' schemas, like
-    `prMode`. JSON's literals and `goodfirsttoken`, our label and plugin,
-    are the only other words allowed. A word in the same sentence as a
-    tool, after it, as in "`admin_block_donor` with `login`", has to be
-    that tool's own field, value, or refusal.
+    backticks, has to be a field or value in those schemas, like `prMode`.
+    JSON's literals and `goodfirsttoken`, our label and plugin, are the
+    only other words allowed. In a sentence that names tools, as in
+    "`admin_block_donor` with `login`", each has to be a field, value, or
+    refusal of one of those tools. A value after a field, as in
+    "`prMode` `reviewed`", has to be one that field takes, when the field
+    takes a fixed set.
   - The `## Refusals` section has one entry, a list item that starts with
     the code in backticks and a colon, for each refusal on the lists of the
-    tools the skill names, and no other.
-  - Each line of a code block is a call, `tool {json}`, whose JSON the
-    tool's input schema from `packages/core` takes.
-  - The skill names every tool of its audience, and each tool it names has
+    tools the skill calls, and no other.
+  - Each line of a code block is a call, `tool {json}`, to a tool the skill
+    calls, whose input schema from `packages/core` takes the JSON.
+  - Each sentence the skill quotes in backticks, one that starts with a
+    capital and ends with a full stop, like `Listed from its AI policy.`,
+    has to be in the source of the tools' answers. Server text built from
+    parts at run time, like `Tool admin_queue not found`, isn't checked.
+  - The skill calls every tool of its audience, and each tool it calls has
     a `refusals` list.
 - **Every tool call in the MCP tests** goes through `mcpClient` in
   `test/mcp/helpers.ts`, which fails the test when a tool refuses with a

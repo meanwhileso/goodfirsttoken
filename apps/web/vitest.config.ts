@@ -14,8 +14,9 @@ import { defineConfig } from 'vitest/config';
 // the in-process GitHub fake. The D1 migrations are read here, in Node, and a
 // setup file applies them to the test database. So are the cron triggers in
 // wrangler.jsonc, so a test can run each one's job, and the skill sources in
-// skill-src/, so a test can check the tools and refusals they name against
-// the MCP server. Browser tests are in e2e/ and use Playwright.
+// skill-src/ with the source of the tools' answers, so a test can check what
+// the skills name and quote against the MCP server. Browser tests are in e2e/
+// and use Playwright.
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(fileURLToPath(new URL('migrations', import.meta.url)));
   const wrangler = ts.parseConfigFileTextToJson('wrangler.jsonc', readFileSync(new URL('wrangler.jsonc', import.meta.url), 'utf8'));
@@ -26,6 +27,17 @@ export default defineConfig(async () => {
       .filter((file) => file.endsWith('.md'))
       .map((file) => [file.slice(0, -'.md'.length), readFileSync(new URL(file, skillSources), 'utf8')]),
   );
+  // The source of every tool's answers, so a test can find the sentences a
+  // skill quotes from the server. An escaped quote reads as the quote.
+  const serverText = ['../../packages/core/src/tools/', 'src/mcp/', 'src/admin/', 'src/projects/']
+    .map((dir) => new URL(dir, import.meta.url))
+    .flatMap((dir) =>
+      readdirSync(dir)
+        .filter((file) => file.endsWith('.ts'))
+        .map((file) => readFileSync(new URL(file, dir), 'utf8')),
+    )
+    .join('\n')
+    .replaceAll("\\'", "'");
   return {
     plugins: [
       tanstackStart(),
@@ -46,6 +58,7 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             TEST_CRONS: crons,
             TEST_SKILLS: skills,
+            TEST_SERVER_TEXT: serverText,
           },
         },
       }),

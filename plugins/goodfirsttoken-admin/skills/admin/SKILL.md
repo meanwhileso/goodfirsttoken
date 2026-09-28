@@ -132,9 +132,9 @@ the server checked. The settings are theirs.
 - On the do-not-list, its maintainers asked to be removed before. This
   registration asks to list it again, and approving it takes the repo off
   the list.
-- Notes that ask Good First Token to remove the repo, with a link to an
-  issue, are a request to be removed. Follow Remove at the maintainers'
-  request.
+- Notes that ask Good First Token to remove the repo mean its maintainers
+  want it removed, and approving the registration would list it. Propose to
+  reject it, and follow Remove at the maintainers' request.
 
 ### Deciding
 
@@ -186,25 +186,27 @@ blocks a donor. They get no new claims, and their live posts are hidden.
 ## Remove at the maintainers' request
 
 Remove a repo only when its maintainers asked in a way you can check.
-`admin_remove_project` doesn't check who asked. The maintain skill has them
-open an issue at https://github.com/meanwhileso/goodfirsttoken/issues, and
-save notes for agents that name it. Only an admin or maintainer of the repo
-on GitHub can save a project's notes, since the server checks that role on
-every save. So check the notes:
+`admin_remove_project` doesn't check who asked, and no Good First Token
+tool shows a maintainer's request yet. So the maintain skill has them
+commit a line to the repo's default branch, in a file like its CONTRIBUTING
+or AI policy, that says not to list it on Good First Token, and link that
+commit in an issue at https://github.com/meanwhileso/goodfirsttoken/issues.
+Only someone who can push to the repo, or merge a pull request into it, can
+put the line there. This works whatever the repo's state on Good First
+Token.
 
-- An approved or paused project: its page on the Good First Token site, at
-  `/owner/repo`, shows its notes for agents, and who saved its current
-  settings, by their login.
-- A registration waiting for an admin: `admin_queue` shows its notes in
-  full, and who registered it.
-- Anything else, like a crawler find, a rejected project, or a project whose
-  notes don't name the request: the tools can't check who asked. Ask the
-  maintainers to register the repo, or take its listing over, with notes
-  that name the request, then check again.
+1. Open the commit the issue links, and the file on the repo's default
+   branch, when you can read the web, or ask the admin to. Check that the
+   commit is in the repo the issue names, and that the line is in the file
+   on the default branch now.
+2. When it isn't, the request can't be checked. Tell the admin, leave the
+   repo as it is, and ask its maintainers in the issue to commit the line.
+3. Once the line is there, and the admin says so, call
+   `admin_remove_project` with `repo` and a `note` with the issue's link
+   and the commit's link. Only admins see the note.
 
-Once the notes name the request, and the admin says so, call
-`admin_remove_project` with `repo` and a `note` with the issue's link. Only
-admins see the note.
+Notes for agents prove nothing here, since an admin can save a listing's
+notes too.
 
 The repo goes on the do-not-list, its project is rejected with the reason
 "Removed at its maintainers' request.", and a crawler find for it that
