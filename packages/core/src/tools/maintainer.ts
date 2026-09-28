@@ -214,7 +214,7 @@ export const pauseProject = defineTool({
   input: z.object({
     repo: repoName,
     paused: z.boolean().default(true),
-    reason: trimmedText(500).optional().describe('Why, shown on the project page.'),
+    reason: trimmedText(500).optional().describe('Why, which project_status shows.'),
   }),
   output: z.object({
     repo: repoName,
