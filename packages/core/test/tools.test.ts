@@ -4,6 +4,7 @@ import {
   MAX_FILE_BYTES,
   MAX_PR_DESCRIPTION,
   MAX_SUBMIT_BYTES,
+  foldLines,
   toolRefusal,
   toolResult,
   tools,
@@ -438,6 +439,43 @@ describe('tool inputs', () => {
     ]);
     expect(withTitle('x'.repeat(256)).ok).toBe(true);
     expect(problemFields(withTitle('x'.repeat(257)))).toEqual(['title']);
+  });
+
+  test('a title or a model name longer than four times its limit is refused before its line breaks fold', () => {
+    const notes = (title: string, model: string) =>
+      validate(tools.submit_work.input, {
+        claimId: 'c_1',
+        files: [{ path: 'a.txt', content: 'x' }],
+        title,
+        summary: 'Adds the NDJSON formatter.',
+        checks: 'pnpm test',
+        agent: 'claude-code',
+        model,
+      });
+    const folds = (length: number) => `x${'\n'.repeat(length - 2)}y`;
+    const taken = notes(folds(1024), folds(400));
+    expect(taken.ok && [taken.value.title, taken.value.model]).toEqual(['x y', 'x y']);
+    const refused = notes(folds(1025), folds(401));
+    expect(refused.ok ? [] : refused.problems).toEqual([
+      { field: 'title', message: 'must be at most 1024 characters before its line breaks fold' },
+      { field: 'model', message: 'must be at most 400 characters before its line breaks fold' },
+    ]);
+    // Refused text isn't folded, so no other problem follows.
+    expect(problemFields(notes(' '.repeat(1025), 'claude-opus-5-5'))).toEqual(['title']);
+  });
+
+  test('a run of spaces, tabs, and line breaks folds into one space, and spaces with no line break stay', () => {
+    expect(foldLines(' Keep \n \t\r\n  the  hash\n')).toBe('Keep the  hash');
+  });
+
+  test('folding a line takes one pass over the text, however many spaces it holds', () => {
+    // A run of spaces with no line break is the slowest text for a fold
+    // that backtracks, about 20 billion steps at this length. One pass
+    // takes a few milliseconds.
+    const spaces = ' '.repeat(200_000);
+    const started = Date.now();
+    expect(foldLines(`a${spaces}b\n${spaces}c`)).toBe(`a${spaces}b c`);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   test("a PR description the donor wrote is at most 60,000 characters, leaving room for the closing line and the disclosure in GitHub's 65,536", () => {

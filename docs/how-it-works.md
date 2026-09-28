@@ -1921,6 +1921,9 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   the bytes of the text it carries. A deletion counts nothing.
 - A submit lists 1 to 300 files. `submit_work` takes a title, one line,
   and `open_pr` a description the donor wrote.
+- The title, at most 256 characters, and the model name, at most 100, fold
+  their tabs and line breaks into single spaces. Before that, each is
+  refused when it is longer than four times its limit.
 - `register_project` with no settings returns a proposal and saves nothing.
 - `project_status` takes `refresh`, false unless set, to read the tagged
   issues from GitHub first.

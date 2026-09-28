@@ -61,15 +61,36 @@ export function trimmedText(max: number) {
 }
 
 /**
+ * Text as one line: each run of whitespace that holds a tab or a line break
+ * becomes one space, and the ends are trimmed, in one pass over the text.
+ */
+export function foldLines(text: string): string {
+  return text
+    .split(/[\t\r\n]+/)
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+    .join(' ');
+}
+
+/**
+ * One line of text, at most `max` characters once its line breaks fold.
+ * Longer text than four times that is refused before it folds.
+ */
+export function oneLine(max: number, limit = `must be at most ${String(max)} characters`) {
+  const raw = 4 * max;
+  return z
+    .string({ error: 'must be text' })
+    .max(raw, { error: `must be at most ${String(raw)} characters before its line breaks fold`, abort: true })
+    .overwrite(foldLines)
+    .min(1, 'must not be empty')
+    .max(max, limit);
+}
+
+/**
  * The model an agent used, like `claude-opus-5-5`. It goes into a commit
  * trailer, so tabs and line breaks fold into single spaces.
  */
-export const modelName = z
-  .string({ error: 'must be text' })
-  .overwrite((text) => text.replace(/\s*[\t\r\n]+\s*/g, ' '))
-  .trim()
-  .min(1, 'must not be empty')
-  .max(100, 'must be at most 100 characters');
+export const modelName = oneLine(100);
 
 /** A time in UTC, as ISO 8601, like `2026-09-26T13:02:00.000Z`. */
 export const isoTime = z.iso.datetime({ error: 'must be an ISO 8601 time in UTC' });

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { agentName, commitSha, count, epochMs, id, modelName, repoName, trimmedText } from './primitives';
+import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName, trimmedText } from './primitives';
 
 // The work a claim submitted (spec section 7, steps 5 and 6). submit_work
 // commits it to a branch as the donor, then opens the PR or puts the work in
@@ -40,12 +40,7 @@ export const MAX_SUBMIT_NOTES = 1000;
 export const MAX_PR_TITLE = 256;
 
 /** A PR title, and the commit's first line: one line of text. */
-export const prTitle = z
-  .string({ error: 'must be text' })
-  .overwrite((text) => text.replace(/\s*[\t\r\n]+\s*/g, ' '))
-  .trim()
-  .min(1, 'must not be empty')
-  .max(MAX_PR_TITLE, `must be at most ${String(MAX_PR_TITLE)} characters, the GitHub limit`);
+export const prTitle = oneLine(MAX_PR_TITLE, `must be at most ${String(MAX_PR_TITLE)} characters, the GitHub limit`);
 
 /** A branch the server made, like `goodfirsttoken/issue-12-c_2x8Qm0vT4kLp9aZr1yWc`. */
 export const branchName = z.string({ error: 'must be a branch name' }).min(1).max(255);
