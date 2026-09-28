@@ -14,7 +14,7 @@
     {
       "name": "goodfirsttoken-admin",
       "source": "./plugins/goodfirsttoken-admin",
-      "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, and blocks."
+      "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, blocks, and the crawler's seed list."
     }
   ]
 }

@@ -314,6 +314,7 @@ export const adminSeedRepo = defineTool({
   audience: 'admin',
   description:
     "Add a repo to the policy crawler's seed list. The crawler reads a seed's docs whatever its stars or last push, and puts it in the admin queue when they welcome AI help. A repo that is a project already, or one the crawler put in the queue before, isn't added, since the crawler reads it no further. A repo on the do-not-list is refused.",
+  refusals: ['repo_not_eligible'],
   input: z.object({ repo: repoName }),
   output: z.object({
     repo: repoName,
