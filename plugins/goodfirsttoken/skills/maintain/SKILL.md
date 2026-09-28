@@ -17,7 +17,9 @@ every call whether they are an admin or maintainer of the repo.
 
 ## Rules
 
-- Use only the tools, fields, and values in this skill.
+- Use only the Good First Token tools, fields, and values in this skill.
+  Change the maintainer's repo only when they ask, and only after they say
+  yes to the change you show them.
 - The settings come from the server's proposal and from the maintainer.
   Never make up a setting or a value, and save only what the maintainer
   confirmed.
@@ -132,14 +134,22 @@ Good First Token's admins remove a repo for good when its maintainers ask.
 Nothing lists it again unless one of its maintainers registers it. No Good
 First Token tool asks for it yet, so the request is checked in the repo
 itself: a line on its default branch that only someone who can push to the
-repo, or merge a pull request into it, can put there. This works whatever
-the repo's state on Good First Token, even when its pull requests are now
-limited to collaborators, or Good First Token paused it on its own.
+repo, or merge a pull request into it, can put there. This works for a
+registered project, a listing made from its AI policy, a repo the admins
+found themselves, a rejected project, and a repo whose pull requests are
+now limited to collaborators.
 
-1. Commit a line to the repo's default branch, in its CONTRIBUTING or AI
-   policy file, that says not to list it, like "Don't list this repo on
-   Good First Token." The maintainer commits it, or you do, the way your
-   harness works with git. Keep the commit's link.
+Good First Token pauses a project on its own when its repo went private, is
+gone, GitHub blocked access to it, or it's archived. Then the admins can't
+check the line until the repo is public and not archived again, unless the
+line was on the default branch before it was archived. Until then the
+project stays paused, with no page, and only an admin can resume it.
+
+1. The maintainer commits a line to the repo's default branch, in its
+   CONTRIBUTING or AI policy file, that says not to list it, like "Don't
+   list this repo on Good First Token." When they ask you to commit it,
+   show them the file and the line first, and commit it only once they say
+   yes. Keep the commit's link.
 2. The maintainer opens an issue at
    https://github.com/meanwhileso/goodfirsttoken/issues that asks Good First
    Token's admins to remove owner/repo, with the commit's link.

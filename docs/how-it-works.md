@@ -1201,18 +1201,31 @@ Until it replaces this, the skills check a request in the repo itself.
   pause it with `pause_project`, so agents get no new claims on it while
   they wait.
 - The admin removes the repo only once they find the line in that file on
-  the repo's default branch. GitHub lets only someone with write, maintain,
-  or admin access push there or merge a pull request there. That is wider
-  than the admin or maintainer role the maintainer's tools require, and it
-  is the check until #70.
-- The same check works whatever the repo's state here: a registered
-  project, a listing made from its policy, a crawler find, a rejected
-  project, a project Good First Token paused on its own, which has no page
-  and isn't in the queue, and a repo whose pull requests are now limited
-  to collaborators, which can't be registered or taken over.
-- Notes for agents prove nothing, since admins save a listing's notes with
+  the default branch of the repo the issue names. A commit link alone
+  proves nothing, since GitHub also shows a fork's commit under the parent
+  repo's address. GitHub lets only people with write, maintain, or admin
+  access push to the branch or merge a pull request into it, and apps and
+  workflows the repo gave write access. That is wider than the admin or
+  maintainer role the maintainer's tools require, and it is the check until
+  #70.
+- The check works for a registered project, a listing made from its
+  policy, a crawler find, a rejected project, and a repo whose pull
+  requests are now limited to collaborators, which can't be registered or
+  taken over.
+- It doesn't work for a project Good First Token paused on its own, under
+  Delisting in [Tagged issues](#tagged-issues): its repo went private, is
+  gone, GitHub blocked access to it, or it's archived. The admin can't read
+  the file of a repo that isn't public, and an archived repo takes no new
+  commit. So the check waits until the repo is public and not archived
+  again, unless the line was on the default branch before the repo was
+  archived. Until then the project stays paused, with no page, and only an
+  admin can resume it.
+- A listing's notes for agents prove nothing, since admins save them, with
   `admin_add_project`, or with `admin_decide` when they approve a crawler
-  find.
+  find. A registration's notes come from an admin or maintainer of the repo,
+  as the server checked, but a registration asks to be listed. So the admin
+  skill proposes to reject a registration whose notes ask for removal, and
+  asks its maintainers for the commit.
 - A registration is a request to be listed. One sent to ask for removal,
   with notes that say so, looks like any other registration, and an admin
   who approves it on `/admin` without reading the notes lists the repo its
@@ -2493,11 +2506,11 @@ skills are written.
   Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
   tools aren't there, it says how to add the MCP server in each of them.
 - Each names only the tools the server serves the person it is for, and the
-  fields, values, and refusals of those tools. It calls the tools of its
-  own audience, and its Refusals section has one entry for each refusal
-  those tools can give an agent, under [Refusals](#refusals), with what to
-  do about it. Each call it shows as an example is one the tool takes, and
-  each sentence it quotes from the server is the server's own.
+  fields, values, and refusals of those tools. Its Refusals section has one
+  entry for each refusal the tools of its own audience can give an agent,
+  under [Refusals](#refusals), with what to do about it. Each call it shows
+  as an example is to one of those tools, and one the tool takes, and each
+  sentence it quotes from the server is the server's own.
 - Their examples use made-up repos, so neither states a verdict or a
   setting for a real project.
 

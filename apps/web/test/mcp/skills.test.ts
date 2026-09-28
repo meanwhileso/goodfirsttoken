@@ -9,22 +9,31 @@ import { connectAgent, emptyKv } from './helpers';
 // The maintain and admin skills in skill-src/, checked against the MCP
 // server they drive. Each is read by the agent of the person it is for: a
 // maintainer with no admin role, and one of Good First Token's admins. The
-// tools a skill calls are the ones of its audience. It may name another
-// tool its reader is served, to say what someone else sees.
+// tools a skill calls are the ones of its own audience, as their specs in
+// packages/core say.
 //
-// - A skill names only tools its reader's agent is served. The refusal codes
-//   it names are ones the tools it calls can give, and the fields and values
-//   it names are in the schemas of the tools it names. In a sentence that
-//   names tools, like "`admin_block_donor` with `login`", each field is one
-//   of those tools'. A value paired with a field, like "`prMode` `reviewed`",
-//   is one that field takes.
+// - A skill names only tools its reader's agent is served. The fields and
+//   values it names are in the schemas of the tools it names. The refusal
+//   codes it names are ones the tools it calls can give, or, in a sentence
+//   that names another tool, ones that tool can give, as when the admin
+//   skill says what a maintainer gets.
+// - In a sentence that names tools, like "`admin_block_donor` with
+//   `login`", each field, value, or code is one of those tools'. A value
+//   after a field, like "`prMode` `reviewed`", is one that field takes, when
+//   the field takes a fixed set: an enum, or true or false. A value after a
+//   free field, like `id`, isn't checked.
 // - Its `## Refusals` section has one entry, a list item that starts with the
 //   code in backticks, for each refusal the tools it calls can give, as their
-//   specs in packages/core list them, and no other.
+//   specs list them, and no other.
 // - Each call it shows in a code block, as `tool {json}`, is to a tool it
-//   calls, and one that tool's input schema takes.
-// - Each sentence it quotes from the server in backticks is in the source of
-//   the tools' answers.
+//   calls, and one that tool's input schema takes. Only there, and in the
+//   Refusals entries, does the audience limit which tools a skill calls.
+//   Prose that tells an agent to call another tool it is served passes.
+// - Each sentence it quotes from the server in backticks, one that starts
+//   with a capital and ends with a full stop, is among the strings of the
+//   code that writes the MCP tools' answers. The Vitest config reads the
+//   strings of those files, and no comments or other pages. Across the
+//   skills, at least one such sentence is checked.
 // - It names every tool of its audience.
 //
 // Its `## Connect` section tells an agent how to add the server in its own
@@ -33,9 +42,9 @@ import { connectAgent, emptyKv } from './helpers';
 // refuses with a code its spec doesn't list. The Vitest config reads the
 // sources in Node and passes them in.
 
-const { TEST_SKILLS: skills, TEST_SERVER_TEXT: serverText } = env as Env & {
+const { TEST_SKILLS: skills, TEST_ANSWER_TEXT: answerText } = env as Env & {
   TEST_SKILLS: Record<string, string>;
-  TEST_SERVER_TEXT: string;
+  TEST_ANSWER_TEXT: string;
 };
 
 const READERS: Record<string, { login: string; audience: Audience }> = {
@@ -103,15 +112,22 @@ function snakeNames(text: string): string[] {
 }
 
 /**
- * The prose's sentences, each as the words and JSON keys it puts in
+ * The prose's sentences, each with its text and the spans it puts in
  * backticks. A sentence ends at a full stop, a blank line, or a new item of
  * a list. A backticked span keeps its own full stops.
  */
-function sentencesOf(prose: string): { spans: string[] }[] {
-  const found: { spans: string[] }[] = [{ spans: [] }];
+function sentencesOf(prose: string): { text: string; spans: string[] }[] {
+  const found: { text: string; spans: string[] }[] = [{ text: '', spans: [] }];
+  const current = () => found[found.length - 1] ?? { text: '', spans: [] };
   for (const token of prose.split(/(`[^`\n]+`)/)) {
-    if (token.startsWith('`')) found[found.length - 1]?.spans.push(token.slice(1, -1));
-    else if (/[.!?](\s|$)|\n\s*\n|\n\s*(?:-|\d+\.)\s/.test(token)) found.push({ spans: [] });
+    if (token.startsWith('`')) {
+      current().text += token;
+      current().spans.push(token.slice(1, -1));
+      continue;
+    }
+    const [first = '', ...rest] = token.split(/(?<=[.!?])(?=\s|$)|\n\s*\n|\n(?=\s*(?:-|\d+\.)\s)/);
+    current().text += first;
+    for (const piece of rest) found.push({ text: piece, spans: [] });
   }
   return found;
 }
@@ -244,17 +260,20 @@ test.each(skillNames)(
       const name = match[1] ?? '';
       if (!served.has(name)) unknown.push(`Connect: ${name}`);
     }
-    // Snake_case names anywhere in the rest.
-    for (const name of snakeNames(prose)) if (!known(name)) unknown.push(name);
-    // Words and JSON keys in backticks, sentence by sentence.
-    for (const { spans } of sentencesOf(prose)) {
+    // The rest, sentence by sentence: every snake_case name, and the words
+    // and JSON keys in backticks. A sentence that names a tool may also name
+    // that tool's refusals.
+    for (const { text, spans } of sentencesOf(prose)) {
       const toolsHere = spans.filter((span) => served.has(span));
+      const codesHere = new Set(toolsHere.flatMap(refusalsOf));
+      const knownHere = (word: string) => known(word) || codesHere.has(word);
+      for (const name of snakeNames(text)) if (!knownHere(name)) unknown.push(name);
       let field: string | null = null;
       for (const span of spans) {
         if (served.has(span)) continue;
         const words = span.startsWith('{') ? [...span.matchAll(/"([A-Za-z_]+)"\s*:/g)].map((m) => m[1] ?? '') : [span];
         for (const word of words.filter((w) => CHECKED_WORD.test(w))) {
-          if (!known(word)) {
+          if (!knownHere(word)) {
             unknown.push(word);
             continue;
           }
@@ -321,11 +340,15 @@ test.each(skillNames)('every call the %s skill shows in a code block is one a to
   expect(problems).toEqual([]);
 });
 
-test.each(skillNames)('every sentence the %s skill quotes from the server is in the source of its answers', (skill) => {
-  const { prose } = readSkill(skills[skill] ?? '');
+test('every sentence a skill quotes from the server is among the strings the MCP tools answer with, and some are checked', () => {
+  const quoted = Object.entries(skills)
+    .filter(([skill]) => skill in READERS)
+    .flatMap(([skill, text]) =>
+      [...readSkill(text).prose.matchAll(/`([A-Z][^`\n]* [^`\n]*\.)`/g)].map((match) => ({ skill, sentence: match[1] ?? '' })),
+    );
 
-  const quoted = [...prose.matchAll(/`([A-Z][^`\n]* [^`\n]*\.)`/g)].map((match) => match[1] ?? '');
-  const missing = quoted.filter((sentence) => !serverText.includes(sentence));
+  const missing = quoted.filter(({ sentence }) => !answerText.includes(sentence));
 
+  expect(quoted.length).toBeGreaterThan(0);
   expect(missing).toEqual([]);
 });

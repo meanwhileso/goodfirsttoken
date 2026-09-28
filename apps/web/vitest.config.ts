@@ -14,9 +14,21 @@ import { defineConfig } from 'vitest/config';
 // the in-process GitHub fake. The D1 migrations are read here, in Node, and a
 // setup file applies them to the test database. So are the cron triggers in
 // wrangler.jsonc, so a test can run each one's job, and the skill sources in
-// skill-src/ with the source of the tools' answers, so a test can check what
+// skill-src/ with the text of the tools' answers, so a test can check what
 // the skills name and quote against the MCP server. Browser tests are in e2e/
 // and use Playwright.
+/** Every string, and each fixed part of every template, in a TypeScript file. */
+function stringsIn(path: string, source: string): string[] {
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) found.push(node.text);
+    else if (ts.isTemplateExpression(node)) found.push(node.head.text, ...node.templateSpans.map((span) => span.literal.text));
+    ts.forEachChild(node, visit);
+  };
+  visit(ts.createSourceFile(path, source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS));
+  return found;
+}
+
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(fileURLToPath(new URL('migrations', import.meta.url)));
   const wrangler = ts.parseConfigFileTextToJson('wrangler.jsonc', readFileSync(new URL('wrangler.jsonc', import.meta.url), 'utf8'));
@@ -27,17 +39,24 @@ export default defineConfig(async () => {
       .filter((file) => file.endsWith('.md'))
       .map((file) => [file.slice(0, -'.md'.length), readFileSync(new URL(file, skillSources), 'utf8')]),
   );
-  // The source of every tool's answers, so a test can find the sentences a
-  // skill quotes from the server. An escaped quote reads as the quote.
-  const serverText = ['../../packages/core/src/tools/', 'src/mcp/', 'src/admin/', 'src/projects/']
-    .map((dir) => new URL(dir, import.meta.url))
-    .flatMap((dir) =>
-      readdirSync(dir)
+  // The text in the code that writes the MCP tools' answers, so a test can
+  // find each sentence a skill quotes from the server: every string and each
+  // fixed part of every template in these files, and nothing else from them.
+  const toolAnswers = [
+    ...['../../packages/core/src/tools/', 'src/projects/'].flatMap((dir) =>
+      readdirSync(new URL(dir, import.meta.url))
         .filter((file) => file.endsWith('.ts'))
-        .map((file) => readFileSync(new URL(file, dir), 'utf8')),
-    )
-    .join('\n')
-    .replaceAll("\\'", "'");
+        .map((file) => `${dir}${file}`),
+    ),
+    '../../packages/core/src/projects.ts',
+    'src/auth/permissions.ts',
+    'src/mcp/server.ts',
+    'src/mcp/maintainer.ts',
+    'src/mcp/admin.ts',
+    'src/mcp/donor.ts',
+    'src/admin/actions.ts',
+  ];
+  const answerText = toolAnswers.flatMap((path) => stringsIn(path, readFileSync(new URL(path, import.meta.url), 'utf8'))).join('\n');
   return {
     plugins: [
       tanstackStart(),
@@ -58,7 +77,7 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             TEST_CRONS: crons,
             TEST_SKILLS: skills,
-            TEST_SERVER_TEXT: serverText,
+            TEST_ANSWER_TEXT: answerText,
           },
         },
       }),

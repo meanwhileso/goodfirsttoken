@@ -713,20 +713,20 @@ refusal, so a skill and the server can drift apart. Two checks hold them
 together.
 
 - **`apps/web/test/mcp/skills.test.ts`** reads each skill's source, which
-  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`, with the
-  source of the tools' answers as `TEST_SERVER_TEXT`. It connects the agent
-  of the person the skill is for, a maintainer with no admin role for
-  maintain and the sample admin for admin, and lists that agent's tools
-  from the server with their schemas. The tools a skill calls are the ones
-  of its audience, from their specs in `packages/core`. It may name
-  another tool its reader is served, to say what someone else sees.
+  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`. It
+  connects the agent of the person the skill is for, a maintainer with no
+  admin role for maintain and the sample admin for admin, and lists that
+  agent's tools from the server with their schemas. The tools a skill calls
+  are the ones of its own audience, from their specs in `packages/core`.
   - The skill's `## Connect` section tells an agent how to add the server in
     its own harness, in that harness's words. There only a snake_case name
     alone in backticks is checked, and it has to be a tool the reader is
     served.
-  - In the rest, every snake_case name has to be a tool the reader is
-    served, a refusal on the `refusals` list of a tool the skill calls, or
-    a value in the schemas of the tools it names, like `too_soon`.
+  - In the rest, sentence by sentence, every snake_case name has to be a
+    tool the reader is served, a value in the schemas of the tools the
+    skill names, like `too_soon`, or a refusal on the `refusals` list of a
+    tool the skill calls, or of a tool named in the same sentence, as when
+    the admin skill says what a maintainer gets.
   - Every word in backticks on its own, and every key in a JSON object in
     backticks, has to be a field or value in those schemas, like `prMode`.
     JSON's literals and `goodfirsttoken`, our label and plugin, are the
@@ -734,16 +734,28 @@ together.
     "`admin_block_donor` with `login`", each has to be a field, value, or
     refusal of one of those tools. A value after a field, as in
     "`prMode` `reviewed`", has to be one that field takes, when the field
-    takes a fixed set.
+    takes a fixed set: an enum, or true or false. A value after a free
+    field, like `id`, isn't checked.
   - The `## Refusals` section has one entry, a list item that starts with
     the code in backticks and a colon, for each refusal on the lists of the
     tools the skill calls, and no other.
   - Each line of a code block is a call, `tool {json}`, to a tool the skill
-    calls, whose input schema from `packages/core` takes the JSON.
+    calls, whose input schema from `packages/core` takes the JSON. The
+    Refusals entries and the code blocks are the only places the audience
+    limits what a skill calls. Prose that tells an agent to call another
+    tool its reader is served, like `start_session`, passes.
   - Each sentence the skill quotes in backticks, one that starts with a
     capital and ends with a full stop, like `Listed from its AI policy.`,
-    has to be in the source of the tools' answers. Server text built from
-    parts at run time, like `Tool admin_queue not found`, isn't checked.
+    has to be one of the strings in the code that writes the MCP tools'
+    answers, or part of one. `vitest.config.ts` reads every string, and
+    each fixed part of every template, in `packages/core/src/tools/`,
+    `packages/core/src/projects.ts`, `src/projects/`,
+    `src/auth/permissions.ts`, `src/mcp/server.ts`, `maintainer.ts`,
+    `admin.ts`, and `donor.ts`, and `src/admin/actions.ts`, and passes them
+    in as `TEST_ANSWER_TEXT`. Comments and the admin pages' text aren't
+    read. Server text built from parts at run time, like
+    `Tool admin_queue not found`, isn't checked. At least one sentence
+    across the skills has to be checked, so the test can't pass on none.
   - The skill calls every tool of its audience, and each tool it calls has
     a `refusals` list.
 - **Every tool call in the MCP tests** goes through `mcpClient` in

@@ -132,9 +132,11 @@ the server checked. The settings are theirs.
 - On the do-not-list, its maintainers asked to be removed before. This
   registration asks to list it again, and approving it takes the repo off
   the list.
-- Notes that ask Good First Token to remove the repo mean its maintainers
-  want it removed, and approving the registration would list it. Propose to
-  reject it, and follow Remove at the maintainers' request.
+- Notes that ask Good First Token to remove the repo come from an admin or
+  maintainer of the repo, whose role the server checked when they saved
+  them, and approving the registration would list it. Propose to reject it,
+  and ask its maintainers for the commit, as in Remove at the maintainers'
+  request.
 
 ### Deciding
 
@@ -192,21 +194,31 @@ commit a line to the repo's default branch, in a file like its CONTRIBUTING
 or AI policy, that says not to list it on Good First Token, and link that
 commit in an issue at https://github.com/meanwhileso/goodfirsttoken/issues.
 Only someone who can push to the repo, or merge a pull request into it, can
-put the line there. This works whatever the repo's state on Good First
-Token.
+put the line there. This works for a registered project, a listing made
+from its AI policy, a crawler find, a rejected project, and a repo whose
+pull requests are now limited to collaborators.
 
-1. Open the commit the issue links, and the file on the repo's default
-   branch, when you can read the web, or ask the admin to. Check that the
-   commit is in the repo the issue names, and that the line is in the file
-   on the default branch now.
-2. When it isn't, the request can't be checked. Tell the admin, leave the
+When Good First Token paused the project on its own, because its repo went
+private, is gone, GitHub blocked access to it, or it's archived, the line
+can't be checked until the repo is public and not archived again, unless it
+was on the default branch before the repo was archived. Until then the
+project stays paused, with no page. Leave it paused.
+
+1. Open the file on the default branch of the repo the issue names, when
+   you can read the web, or ask the admin to, and find the line there. Only
+   the line in that file counts. A commit link alone proves nothing, since
+   GitHub also shows a fork's commit under the parent repo's address.
+2. When the line isn't there, the request can't be checked. Tell the admin, leave the
    repo as it is, and ask its maintainers in the issue to commit the line.
 3. Once the line is there, and the admin says so, call
    `admin_remove_project` with `repo` and a `note` with the issue's link
    and the commit's link. Only admins see the note.
 
-Notes for agents prove nothing here, since an admin can save a listing's
-notes too.
+Notes for agents prove nothing here, when an admin saved them, as for a
+listing, which admins save with `admin_add_project` or `admin_decide`. A
+registration's notes that ask for removal come from a maintainer the server
+checked, so they are a reason to reject the registration and ask for the
+commit. Only the line on the default branch is enough to remove the repo.
 
 The repo goes on the do-not-list, its project is rejected with the reason
 "Removed at its maintainers' request.", and a crawler find for it that
