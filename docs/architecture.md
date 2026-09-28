@@ -2098,8 +2098,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   changes, and the caller's `AbortSignal` doesn't reach it. Requests
   through `exports.default.fetch` from `cloudflare:workers` get slower one
   after another in a test file, in `@cloudflare/vitest-pool-workers`
-  0.22.0, even for a Worker with none of this code. A direct call runs in
-  the test's own I/O context, so these
+  0.22.0, even for a Worker with none of this code, as
+  [workers-sdk issue 15446](https://github.com/cloudflare/workers-sdk/issues/15446)
+  reports. A direct call runs in the test's own I/O context, so these
   tests can't show that the Worker keeps no stream, body, or socket from one
   request for the next, which the runtime refuses.
   `apps/web/test/runtime.test.ts` sends a few requests through

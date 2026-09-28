@@ -9,7 +9,7 @@ function nav(page: Page) {
 }
 
 // Signing out ends every session the person has, so this test signs in as
-// @lena, whom no other test signs in as. mcp.spec.ts runs beside it as @priya.
+// @lena, whom no other e2e test signs in as. mcp.spec.ts runs beside it as @priya.
 test('signing in with GitHub through the fake shows your login in the nav, and signing out takes it away', async ({
   page,
   context,
