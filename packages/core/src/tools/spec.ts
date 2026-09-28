@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { RefusalCode } from '../refusals';
 
 /** Who sees a tool. Admin tools are listed only for admins. */
 export const audiences = ['donor', 'maintainer', 'admin'] as const;
@@ -16,6 +17,12 @@ export interface ToolSpec<I extends z.ZodObject = z.ZodObject, O extends z.ZodOb
   description: string;
   input: I;
   output: O;
+  /**
+   * Every refusal an agent can get from the tool. A skill that names the
+   * tool says what to do with each one, and tests hold both the skills and
+   * the server to this list.
+   */
+  refusals?: readonly RefusalCode[];
   /** The result as plain text. */
   text(output: z.output<O>): string;
 }
