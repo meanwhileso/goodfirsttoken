@@ -23,7 +23,7 @@ interface Resources {
   block_donors: undefined;
   /** Pause any project. */
   pause_any_project: undefined;
-  /** Register a repo as a project, change its settings, pause it, or have its tagged issues read now. */
+  /** Register a repo as a project, change its settings, pause it, have its tagged issues read now, or ask for it to be removed. */
   manage_project: { repo: string };
   /** Post to a claim, submit its work, release it, or open its PR. */
   work_claim: { claimantGithubId: number };
@@ -84,7 +84,8 @@ type Granted<P extends Permission> = P extends 'manage_project' ? ManagedRepo : 
  * - `manage_project` asks GitHub, with the caller's own token, for their
  *   permission on the repo, and needs admin or maintain. It asks every time
  *   and keeps nothing. It hands back the repo as GitHub described it, so a
- *   tool reads it once.
+ *   tool reads it once. A repo GitHub doesn't show, or blocked access to,
+ *   is refused.
  * - `work_claim` goes to the person who made the claim.
  */
 export async function requirePermission<P extends Permission>(
@@ -118,6 +119,15 @@ export async function requirePermission<P extends Permission>(
           'not_maintainer',
           permission,
           `GitHub shows you no public repo named ${name}. Only an admin or maintainer of a public repo can do this.`,
+        );
+      }
+      // GitHub answers 451 for a repo it blocked access to, so it says
+      // nothing of anyone's role there.
+      if (error instanceof GitHubError && error.status === 451) {
+        throw new PermissionRefused(
+          'not_maintainer',
+          permission,
+          `GitHub blocked access to ${name}, so it can't say whether you are an admin or maintainer of it.`,
         );
       }
       throw error;

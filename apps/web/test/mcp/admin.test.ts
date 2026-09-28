@@ -259,6 +259,7 @@ describe('admin_queue', () => {
           policy: null,
           suggestedTags: [],
           onDoNotList: false,
+          removal: null,
         },
       ],
     });

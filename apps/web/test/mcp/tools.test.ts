@@ -56,6 +56,7 @@ test("a tools/list answers with the donor's tools and the maintainer's tools, ea
     'update_project',
     'project_status',
     'pause_project',
+    'request_removal',
   ]);
   expect(tool('start_session')?.inputSchema).toMatchObject({ required: ['agent', 'budget'] });
   expect(tool('start_session')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['sessionId', 'login']) as string[] });

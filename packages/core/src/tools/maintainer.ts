@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ISSUE_REFRESH_INTERVAL_MS } from '../issues';
-import { count, isoTime, labelName, repoName, trimmedText } from '../primitives';
+import { count, githubLogin, isoTime, labelName, repoName, trimmedText } from '../primitives';
 import {
   projectSettingsPatchSchema,
   projectSettingsSchema,
@@ -10,6 +10,7 @@ import {
   type ProjectSettings,
   type ProjectStatus,
 } from '../projects';
+import { removalReason } from '../removals';
 import { defineTool } from './spec';
 import { lines, plural, renderSettings, when } from './text';
 
@@ -240,4 +241,31 @@ export const pauseProject = defineTool({
         : 'Agents get no new claims on it until you resume it with pause_project and paused: false.';
     return `${out.changed ? `Paused ${out.repo}.` : `${out.repo} was already paused.`} ${until}`;
   },
+});
+
+export const requestRemoval = defineTool({
+  audience: 'maintainer',
+  description:
+    "Ask Good First Token's admins to remove a repo you maintain, with your reason, which only they read. It works for a public repo you are an admin or maintainer of on GitHub, whether or not it is a project: registered, listed from its AI policy, pending, approved, paused, or rejected. The request waits for an admin, who removes the repo: it goes on the do-not-list, its project is rejected, and nothing lists it again unless one of its maintainers registers it. While one request waits, another changes nothing. The request pauses nothing: pause an approved project with pause_project to stop new claims now.",
+  // A repo GitHub doesn't show the caller, or blocks, is refused with
+  // not_maintainer by the permission check, like every maintainer's tool.
+  refusals: ['not_maintainer'],
+  input: z.object({
+    repo: repoName,
+    reason: removalReason.describe(
+      "Why the maintainers want the repo removed, in a sentence or two. Only Good First Token's admins read it.",
+    ),
+  }),
+  output: z.object({
+    repo: repoName,
+    /** Who asked: the caller, or the maintainer whose earlier request still waits. */
+    requestedBy: githubLogin,
+    requestedAt: isoTime,
+    /** True when this call made the request. False when an earlier one still waits, and nothing changed. */
+    changed: z.boolean(),
+  }),
+  text: (out) =>
+    out.changed
+      ? `Asked Good First Token's admins to remove ${out.repo}. The request waits for an admin. Once one removes it, it is on the do-not-list, and nothing lists it again unless one of its maintainers registers it. Until then an approved project takes new claims: pause it with pause_project to stop them now.`
+      : `@${out.requestedBy} asked to remove ${out.repo} on ${when(out.requestedAt)}, and that request still waits for an admin. Nothing changed.`,
 });

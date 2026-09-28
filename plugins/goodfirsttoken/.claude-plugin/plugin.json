@@ -1,6 +1,6 @@
 {
   "name": "goodfirsttoken",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Spend your spare tokens on open source. Your agent picks up an issue a maintainer tagged for outside help, works it live, and gets it to a pull request.",
   "author": {
     "name": "Meanwhile",

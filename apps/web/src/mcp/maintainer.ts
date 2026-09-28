@@ -16,11 +16,13 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller, type ManagedRepo } from '../auth/permissions';
 import {
+  askRemoval,
   changeSettings,
   countProjectPrs,
   countWorkingClaims,
   createProject,
   getIssueSync,
+  getPerson,
   getProject,
   listIssues,
   reopenRegistration,
@@ -43,10 +45,10 @@ import { resumableBy, statusBeforePause } from '../projects/status';
 import { refreshIssues } from '../sync/scheduled';
 
 // The maintainer's tools: register_project, update_project, project_status,
-// and pause_project. Each one first asks GitHub, with the caller's own token,
-// whether they are an admin or maintainer of the repo, through
-// requirePermission. The rules are in docs/how-it-works.md, under
-// Registering a project and Managing a project.
+// pause_project, and request_removal. Each one first asks GitHub, with the
+// caller's own token, whether they are an admin or maintainer of the repo,
+// through requirePermission. The rules are in docs/how-it-works.md, under
+// Registering a project, Managing a project, and Asking to be removed.
 
 /** A tool's answer, as the MCP SDK takes it. */
 export type Answer = CallToolResult;
@@ -346,4 +348,40 @@ export async function pauseProject(caller: Caller, input: ToolInput<'pause_proje
     if (updated !== null) return pauseAnswer(updated, true);
   }
   throw new Error(`${input.repo} kept changing status while it was paused or resumed.`);
+}
+
+/**
+ * Asks Good First Token's admins to remove a repo. The caller must be an
+ * admin or maintainer of it on GitHub, asked with their own token, and
+ * nothing else about the repo counts: a project in any status, a listing
+ * made from its policy, a repo whose pull requests are limited to
+ * collaborators or that is archived, and a repo that isn't on Good First
+ * Token at all can each be asked for. The request waits in the admin queue
+ * until an admin removes the repo. It pauses nothing.
+ */
+export async function requestRemoval(
+  caller: Caller,
+  input: ToolInput<'request_removal'>,
+  now: number,
+): Promise<Answer> {
+  const found = await requirePermission(caller, 'manage_project', { repo: input.repo });
+  // A project keeps the name it was added with, so the request takes that
+  // name, and the admin removes the project by it. Otherwise GitHub's.
+  const project = await getProject(env.DB, input.repo);
+  const repo = project?.repo ?? found.full_name;
+  const { request, created } = await askRemoval(
+    env.DB,
+    { repo, reason: input.reason, requestedBy: caller.githubId },
+    now,
+  );
+  const asker = created ? caller.login : (await getPerson(env.DB, request.requestedBy))?.login;
+  if (asker === undefined) throw new Error(`${repo}'s request to be removed names someone who isn't recorded.`);
+  return answer(
+    toolResult('request_removal', {
+      repo: request.repo,
+      requestedBy: asker,
+      requestedAt: new Date(request.requestedAt).toISOString(),
+      changed: created,
+    }),
+  );
 }

@@ -2,7 +2,16 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { loadAdminPage } from '../../src/admin/page';
-import { addToDoNotList, createProject, getBlock, getDoNotListEntry, getProject, savePerson } from '../../src/db';
+import {
+  addToDoNotList,
+  askRemoval,
+  createProject,
+  getBlock,
+  getDoNotListEntry,
+  getProject,
+  getWaitingRemoval,
+  savePerson,
+} from '../../src/db';
 import { Browser, ORIGIN, location, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 
@@ -298,5 +307,42 @@ describe("the admin page's forms", () => {
     expect(block).toMatchObject({ reason: 'Spam.', blockedBy: 1010 });
     expect(unblocked).toContain('Unblocked @priya.');
     expect(await getBlock(env.DB, 1001)).toBeNull();
+  });
+});
+
+describe("maintainers' requests to be removed on /admin", () => {
+  const reason = 'We review every pull request by hand now, so please take us off.';
+
+  test("an admin sees who asked, when, and their reason, and removing the repo closes the request", async () => {
+    await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1008 }, Date.now() - 3 * 60 * 60 * 1000);
+    const browser = await signedIn('sample-admin');
+
+    const page = await (await browser.fetch('/admin')).text();
+    const answer = await back(browser, await browser.post('/admin', { action: 'remove', repo: HARBOR }));
+
+    expect(page).toContain('asking to be removed');
+    expect(page).toContain('@<!-- -->octo-maintainer<!-- --> · <!-- -->3 hours<!-- --> ago');
+    expect(page).toContain(reason);
+    expect(page).toContain('Its project is pending, registered by its maintainers.');
+    expect(answer).toContain(`Removed ${HARBOR} at its maintainers&#x27; request.`);
+    expect(answer).toContain('No requests to be removed.');
+    expect(await getWaitingRemoval(env.DB, HARBOR)).toBeNull();
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
+    expect(await getDoNotListEntry(env.DB, HARBOR)).toMatchObject({ addedBy: 1010 });
+  });
+
+  test("someone who isn't an admin sees no request, and their form removes nothing", async () => {
+    await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1008 }, Date.now());
+    const maintainer = await signedIn('octo-maintainer');
+
+    const page = await maintainer.fetch('/admin');
+    const html = await page.text();
+    const answer = await maintainer.post('/admin', { action: 'remove', repo: HARBOR });
+
+    expect(page.status).toBe(404);
+    expect(html).not.toContain(reason);
+    expect(answer.status).toBe(404);
+    expect(await getWaitingRemoval(env.DB, HARBOR)).toMatchObject({ reason });
+    expect(await getDoNotListEntry(env.DB, HARBOR)).toBeNull();
   });
 });
