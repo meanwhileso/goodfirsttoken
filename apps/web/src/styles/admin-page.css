@@ -1,0 +1,48 @@
+/* Layout for /admin, which replaced prototype/admin.html. The components it uses are
+   styled in components.css. Its form fields are the admin page's own. */
+
+.admin { padding-block: 56px 96px; }
+.admin__head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.admin__title { font: var(--display-lg); font-size: clamp(36px, 6vw, 64px); letter-spacing: var(--display-lg-tracking); }
+.admin__notice {
+  margin-top: 32px; padding: 14px 16px; border-radius: var(--r-md); background: var(--label-tint); color: var(--text-body);
+  font-size: 15px; max-width: 44em; overflow-wrap: anywhere;
+}
+.admin__split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 64px; align-items: start; margin-top: 56px; }
+.admin__main { display: flex; flex-direction: column; gap: 80px; min-width: 0; }
+.admin__aside { display: flex; flex-direction: column; gap: 56px; min-width: 0; }
+@media (max-width: 960px) {
+  .admin__split { grid-template-columns: minmax(0, 1fr); gap: 64px; }
+}
+.admin__empty { color: var(--text-muted); font-size: 15px; }
+
+/* One item in the queue. */
+.admin-item { display: flex; flex-direction: column; gap: 22px; padding-block: 32px; border-top: 1px solid var(--line-soft); }
+.admin-item:first-of-type { padding-top: 0; border-top: 0; }
+.admin-item__repo { font: 600 32px/1.1 var(--font-mono); letter-spacing: -0.03em; overflow-wrap: anywhere; }
+.admin-item__block { display: flex; flex-direction: column; gap: 10px; }
+.admin-item__note {
+  font: 14px/1.55 var(--font-mono); color: var(--text-body); padding: 14px 16px; border-radius: var(--r-md);
+  background: #F3F4F6; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.admin-item__warning { color: var(--attention); font-size: 15px; }
+.admin-item__labels { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.admin-item__buttons { justify-content: flex-end; }
+
+/* Lists in the aside. */
+.admin-list > li { padding-block: 14px; border-top: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.admin-list > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.admin-list__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Form fields. */
+.admin form { display: flex; flex-direction: column; gap: 12px; }
+.admin-field { display: flex; flex-direction: column; gap: 6px; }
+.admin-field label { font: 500 13px/1.4 var(--font-mono); }
+.admin-input, .admin-textarea, .admin-select {
+  width: 100%; font: 15px/1.5 var(--font-sans); padding: 10px 14px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.admin-input, .admin-select { height: 44px; }
+.admin-input--mono { font-family: var(--font-mono); font-size: 14px; }
+.admin-textarea { min-height: 72px; resize: vertical; }
+.admin-input:focus, .admin-textarea:focus, .admin-select:focus { outline: none; border-color: var(--label); box-shadow: var(--focus); }

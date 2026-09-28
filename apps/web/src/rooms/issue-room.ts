@@ -30,10 +30,18 @@ import {
   type Refusal,
   type ToolOutput,
 } from '@goodfirsttoken/core';
-import { blockedAmong } from '../db/blocks';
 import { saveClaim } from '../db/claims';
 import { newId } from '../db/shared';
-import { answerClose, openWatcher, sendToWatchers, type StoredEvent } from './watchers';
+import {
+  answerClose,
+  hiddenFor,
+  openWatcher,
+  repoOfIssue,
+  sendToWatchers,
+  shows,
+  type Hidden,
+  type StoredEvent,
+} from './watchers';
 
 // One issue room per issue (spec sections 6 and 8). It holds every claim on
 // the issue and is the lock for the claim cap. It runs each claim's timers
@@ -436,18 +444,16 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after the one with ID `since`, oldest first, without blocked
-   * donors' events. With no `since`, or one this room never sent, every
-   * event. Throws when D1 can't say who is blocked.
+   * donors' events, and none while the do-not-list covers the issue's repo.
+   * With no `since`, or one this room never sent, every event. Throws when D1
+   * can't say what to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;
     const events = this.storedAfter(from);
-    const blocked = await blockedAmong(
-      this.env.DB,
-      events.map((event) => event.githubId),
-    );
+    const hidden = await hiddenFor(this.env.DB, events);
     return events
-      .filter((event) => !blocked.has(event.githubId))
+      .filter((event) => shows(event, hidden))
       .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event'));
   }
 
@@ -457,8 +463,8 @@ export class IssueRoom extends DurableObject<Env> {
    * issue, and every event a watcher may see, oldest first. The timers that
    * are due apply first. The claims, the PRs, and the events are read with
    * no await between them, so no call lands in between, and a PR is in the
-   * PRs exactly when its event is in the events. Null when D1 can't say who
-   * is blocked.
+   * PRs exactly when its event is in the events. Null when D1 can't say what
+   * to hide.
    */
   async glance(): Promise<RoomGlance | null> {
     const now = Date.now();
@@ -470,20 +476,17 @@ export class IssueRoom extends DurableObject<Env> {
     };
     const stored = this.storedAfter(0);
     await this.done(now, undefined);
-    let blocked: Set<number>;
+    let hidden: Hidden;
     try {
-      blocked = await blockedAmong(
-        this.env.DB,
-        stored.map((event) => event.githubId),
-      );
+      hidden = await hiddenFor(this.env.DB, stored);
     } catch (error) {
-      console.warn('A glance at an issue room was turned away, because D1 could not say which donors are blocked.', error);
+      console.warn('A glance at an issue room was turned away, because D1 could not say which events to hide.', error);
       return null;
     }
     return {
       ...read,
       events: stored
-        .filter((event) => !blocked.has(event.githubId))
+        .filter((event) => shows(event, hidden))
         .map((event) => mustParse(feedEventSchema, JSON.parse(event.json), 'event')),
     };
   }
@@ -492,7 +495,8 @@ export class IssueRoom extends DurableObject<Env> {
    * Opens a WebSocket for a watcher. `?since=<event ID>` sends the events
    * after that one first, then every new event as it happens. Without it, the
    * whole history comes first. Each message is one feed event as JSON. A
-   * blocked donor's events are left out. The socket uses the hibernation API,
+   * blocked donor's events are left out, and every event while the
+   * do-not-list covers the issue's repo. The socket uses the hibernation API,
    * so a quiet room can sleep with watchers connected.
    */
   override async fetch(request: Request): Promise<Response> {
@@ -709,19 +713,20 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after a place, oldest first, each with its claimant's GitHub
-   * ID, which the watchers' block check needs. Every event is about a claim
-   * the room holds.
+   * ID and the repo its issue is in, in lower case, which the watchers'
+   * checks need. Every event is about a claim the room holds.
    */
   private storedAfter(seq: number): StoredEvent[] {
     return this.sql
-      .exec<{ seq: number; event: string; github_id: number }>(
-        `SELECT e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id
+      .exec<{ seq: number; event: string; github_id: number; issue: string }>(
+        `SELECT e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id,
+           json_extract(e.event, '$.issue') AS issue
          FROM events e JOIN claims c ON c.id = json_extract(e.event, '$.claim')
          WHERE e.seq > ? ORDER BY e.seq`,
         seq,
       )
       .toArray()
-      .map((row) => ({ seq: row.seq, githubId: row.github_id, json: row.event }));
+      .map((row) => ({ seq: row.seq, githubId: row.github_id, repo: repoOfIssue(row.issue), json: row.event }));
   }
 
   private readClaims(): StoredClaim[] {

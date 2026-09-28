@@ -15,8 +15,10 @@ import {
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
 import { applyEvent, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
 import { issueRoom } from '../../src/rooms/issue-room';
-import { LOCAL_FAKE, runAsDevelopment, setEnv } from '../auth/helpers';
+import { syncTaggedIssues } from '../../src/sync/issues';
+import { LOCAL_FAKE, runAsDevelopment, setEnv, startGitHub } from '../auth/helpers';
 import { liveSocket } from '../feed/helpers';
+import { jobDeps } from '../sync/helpers';
 import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
 
 // The issue page: what it loads from the issue's room and the database, the
@@ -497,6 +499,36 @@ describe('the slots', () => {
     expect((await load()).closedBecause).toBe('project');
   });
 
+  test("a removed project that kept its issues in another project's repo leaves that project's lanes, and a removed project's own issue repo shows none", async () => {
+    const web = 'sample-owner/sample-web';
+    const docs = 'sample-owner/sample-docs';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, web);
+    await registeredProject({ tags: ['help wanted'], issueRepo: 'sample-owner/sample-docs-issues' }, docs);
+    const p = await claim(priya);
+    await post(p, 'read AGENTS.md and CONTRIBUTING');
+    const docsIssue = `sample-owner/sample-docs-issues#${number}`;
+    const made = await issueRoom(env.ISSUE_ROOM, docsIssue).claim({
+      issue: docsIssue,
+      project: docs,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'codex',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!made.ok) throw new Error(made.refusal.message);
+    const docsBefore = ready(await loadIssue(request, 'sample-owner', 'sample-docs-issues', number));
+
+    await addToDoNotList(db, { repo: web, reason: null, addedBy: admin.githubId }, t0);
+    await addToDoNotList(db, { repo: docs, reason: null, addedBy: admin.githubId }, t0);
+    const docsPage = ready(await loadIssue(request, 'sample-owner', 'sample-docs-issues', number));
+
+    expect(lanes((await load()).view)).toEqual({ priya: ['read AGENTS.md and CONTRIBUTING'] });
+    expect(lanesInPlay(docsBefore.view).map((lane) => lane.login)).toEqual(['kenji']);
+    expect(lanesInPlay(docsPage.view)).toEqual([]);
+  });
+
   test('a project on the do-not-list takes no claims', async () => {
     await tag();
     await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
@@ -566,7 +598,7 @@ describe('which issues have a page', () => {
     await claim(priya);
     // Accounts named like the site's own paths could exist on GitHub, and
     // even with a claim, their issues get no page.
-    for (const owner of ['mcp', 'oauth', 'auth']) await claimUnder(owner);
+    for (const owner of ['mcp', 'oauth', 'auth', 'admin']) await claimUnder(owner);
     for (const [owner, name, n] of [
       ['sample-owner', 'sample-app', '0'],
       ['sample-owner', 'sample-app', `0${number}`],
@@ -574,6 +606,7 @@ describe('which issues have a page', () => {
       ['mcp', 'sample-app', number],
       ['OAuth', 'sample-app', number],
       ['auth', 'sample-app', number],
+      ['Admin', 'sample-app', number],
     ] as const) {
       expect(await loadIssue(request, owner, name, n), `${owner}/${name}#${n}`).toEqual({ state: 'not_found' });
     }
@@ -653,9 +686,12 @@ describe('the page, through the Worker', () => {
     }
   });
 
-  test("leaves the site's own paths to the site: sign-in, the MCP server, and the OAuth routes", async () => {
+  test("leaves the site's own paths to the site: sign-in, the MCP server, the OAuth routes, and the admin pages", async () => {
     // Accounts named like the site's own paths, with a claim each.
-    for (const owner of ['auth', 'mcp', 'oauth']) await claimUnder(owner);
+    for (const owner of ['auth', 'mcp', 'oauth', 'admin']) await claimUnder(owner);
+    const admin = await page(`/admin/sample-app/issues/${number}`);
+    expect(admin.status).toBe(404);
+    expect(await admin.text()).toContain('There is no issue page at this address.');
 
     const auth = await page(`/auth/sample-app/issues/${number}`);
     expect(auth.status).toBe(404);
@@ -987,5 +1023,117 @@ describe('the dev-only route that works an issue as a sample person', () => {
       restore();
     }
     expect(await loadIssue(request, 'sample-owner', 'sample-app', number)).toEqual({ state: 'not_found' });
+  });
+});
+
+describe("the page's breadcrumb", () => {
+  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+
+  /** Where the breadcrumb on an issue page's HTML leads, or null when it leads nowhere. */
+  function breadcrumb(html: string): string | null {
+    return /aria-label="Breadcrumb"[^>]*><a href="([^"]+)"/.exec(html)?.[1] ?? null;
+  }
+
+  test("leads to the project's page, when the project keeps its issues in another repo too", async () => {
+    const project = 'sample-owner/sample-elsewhere';
+    const issueRepo = 'sample-owner/sample-issues';
+    await registeredProject({ tags: ['help wanted'], issueRepo }, project);
+    await saveIssues(db, [
+      { issue: `${issueRepo}#${number}`, project, title: 'Keep the cursor in place', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+
+    const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-issues', number));
+    const html = await (await page(`/${issueRepo}/issues/${number}`)).text();
+
+    expect(loaded.project).toBe(project);
+    expect(breadcrumb(html)).toBe(`/${project}`);
+    expect((await page(`/${project}`)).status).toBe(200);
+    expect((await page(`/${issueRepo}`)).status).toBe(404);
+  });
+
+  test('leads nowhere when the project has no page', async () => {
+    await tag();
+    await setProjectStatus(
+      db,
+      repo,
+      { status: 'paused', reason: `GitHub shows no public repo named ${repo}. It went private or was deleted.`, changedBy: null },
+      t0,
+    );
+
+    const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-app', number));
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+
+    expect(loaded.project).toBeNull();
+    expect(breadcrumb(html)).toBeNull();
+    expect(html).toContain('aria-label="Breadcrumb"');
+    expect((await page(`/${repo}`)).status).toBe(404);
+  });
+});
+
+describe('an issue of a project with no page', () => {
+  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+
+  test("shows nothing cached from the repo once the sync delists the project, and keeps its lanes and timeline", async () => {
+    await tag();
+    const p = await claim(priya);
+    await post(p, 'read AGENTS.md and CONTRIBUTING');
+    // The repo goes private, and the sync, reading it with the service
+    // token, pauses the project on its own.
+    const github = startGitHub();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const fake = github.state.repos[repo];
+      if (!fake) throw new Error(`the fake has no repo ${repo}`);
+      fake.private = true;
+      await syncTaggedIssues(jobDeps(github));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(await getProject(db, repo)).toMatchObject({ status: 'paused', statusChangedBy: null });
+
+    const res = await page(`/${repo}/issues/${number}`);
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect((await page(`/${repo}`)).status).toBe(404);
+    // Not in the page, its title, or its description.
+    expect(html).not.toContain('Handle trailing slashes in rewrites');
+    expect(html).not.toContain('<span class="tag">help wanted</span>');
+    expect(html).toContain(`<title>${repo}#${number} · Good First Token</title>`);
+    // The lanes and the timeline are the room's, and stay.
+    expect(html).toContain('read AGENTS.md and CONTRIBUTING');
+    expect(html).toContain('claimed the issue');
+  });
+
+  test("says the project isn't taking claims when it is on the do-not-list, whatever its cached labels say", async () => {
+    await changeSettings(db, repo, { excludedTags: ['good first issue'] }, maintainer.githubId, t0);
+    await tag({ labels: ['help wanted', 'good first issue'] });
+    await claim(priya);
+    expect((await load()).closedBecause).toBe('issue');
+
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await load()).closedBecause).toBe('project');
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+    expect(html).toContain('The project isn&#x27;t taking claims right now.');
+    expect(html).not.toContain('among the project&#x27;s open tagged issues');
+  });
+
+  test("on the do-not-list shows no cached title, labels, or linked PR, and keeps the room's PRs and slots", async () => {
+    await tag({ labels: ['help wanted', 'bug'], linkedPr: prRef(70) });
+    const p = await claim(priya);
+    await post(p, 'read AGENTS.md and CONTRIBUTING');
+    const k = await claim(kenji, 'codex');
+    await openPr(k, 71);
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    const loaded = await load();
+
+    expect([loaded.title, loaded.labels, loaded.project, loaded.closedBecause]).toEqual([null, [], null, 'project']);
+    expect(loaded.view.openPrs).toEqual([prLink(71)]);
+    // Every event on an issue the do-not-list covers is hidden, so its
+    // claims have no lane, and priya's, which is working, still takes a slot.
+    expect(lanes(loaded.view)).toEqual({});
+    expect(loaded.view.hidden).toEqual({ claims: 2, holding: 1 });
   });
 });

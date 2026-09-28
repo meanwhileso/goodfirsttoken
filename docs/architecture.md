@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, and the scheduled jobs that read GitHub. The rest of the site and other queue consumers join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, and the scheduled jobs that read GitHub. The rest of the site and other queue consumers join it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -70,6 +70,9 @@ The repo is a pnpm workspace.
 - **The issue page is `src/routes/$owner.$repo.issues.$number.tsx`,** with
   what it reads in `src/issue/`, described under
   [The issue page](#the-issue-page).
+- **The projects list is `src/routes/projects.tsx`, and a project's page
+  `src/routes/$owner.$repo.index.tsx`,** with what they read in
+  `src/project/`, described under [The project pages](#the-project-pages).
 - **`src/dev/` is for local development only:** the sample work `pnpm seed`
   gives a local site, and a route that works an issue as a sample person,
   described under [Sample data](#sample-data-in-development).
@@ -77,10 +80,13 @@ The repo is a pnpm workspace.
   [The MCP server](#the-mcp-server).
 - **What registering a project reads from GitHub, and the proposal's rules,
   live in `src/projects/`,** described under
-  [The maintainer's tools](#the-maintainers-tools).
+  [The maintainer's tools](#the-maintainers-tools), with the rules for who
+  may change a project's status.
 - **What the donor's tools check and read, and how they order
   suggestions, live in `src/donor/`,** described under
   [The donor's tools](#the-donors-tools).
+- **The admin's actions and the admin pages live in `src/admin/`,**
+  described under [The admin's tools and pages](#the-admins-tools-and-pages).
 
 ### Sign-in
 
@@ -91,11 +97,11 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
 | `src/auth/auth.ts` | Sets up Better Auth with its GitHub provider and D1 |
 | `src/auth/routes.ts` | Answers every request under `/auth`: the allowed routes, the same-site check on forms, sign-out's revocation, the dev sign-in, and the routes an agent's sign-in and Disconnect use |
 | `src/auth/rate-limit.ts` | The sign-in rate limit and the MCP server's token endpoint limit, each counted by client address |
-| `src/auth/session.ts` | Reads who is signed in from a request |
-| `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav |
+| `src/auth/session.ts` | Reads who is signed in from a request, and makes them the caller a permission check takes, with the token from their sign-in |
+| `src/auth/viewer.ts` | The server function the root route calls on every page load, for the nav, with whether the person is an admin |
 | `src/auth/SiteNav.tsx` | The nav with the signed-in person in it |
 | `src/auth/permissions.ts` | `requirePermission` and the named permissions |
-| `src/auth/settings.ts` | Reads the settings sign-in needs, with the development stand-ins |
+| `src/auth/settings.ts` | Reads the settings sign-in needs, with the development stand-ins, and the admins' GitHub IDs |
 
 - **Better Auth 1.7.6, pinned,** with its GitHub provider and
   `encryptOAuthTokens` on. It talks to D1 through its Kysely adapter, which
@@ -165,9 +171,10 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | File | What it does |
 |---|---|
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
-| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and the tools it serves, each run as the caller |
+| `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and the tools it serves, each run as the caller, the admin's to admins only |
 | `src/mcp/donor.ts` | The donor's tools, under [The donor's tools](#the-donors-tools) |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
+| `src/mcp/admin.ts` | The admin's tools, under [The admin's tools and pages](#the-admins-tools-and-pages) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
 | `src/routes/oauth/authorize.tsx` | That page |
@@ -310,6 +317,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, and `pause_project`. `project_status` with `refresh` runs the sync for its project, under [The sync](#the-sync) |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
+| `src/projects/status.ts` | Who can lift a pause, and the status a resume puts back, for the maintainer's tools and the admin's alike |
 
 - **One permission check, one read.** Every tool starts with
   `requirePermission(caller, 'manage_project', { repo })`, which reads the
@@ -348,13 +356,27 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   the call hands back is the one stored, and the save retries like
   `changeSettings`. A new registration uses `createProject`,
   whose insert does nothing when the repo became a project meanwhile, so
-  the tool reads again and takes over or refuses.
+  the tool reads again and takes over or refuses. A rejected registration
+  registered again is `reopenRegistration`, which checks the row the same
+  way, against the rejection read.
+- **The do-not-list changes with the status.** A registration leaves the
+  list alone, so the admin who decides it sees the request to be removed.
+  An approval runs `leaveDoNotListWhenApproved` from
+  `src/db/do-not-list.ts` through `setProjectStatusFrom`'s `alongside`, a
+  delete that applies only when the row is a registered project that this
+  admin approved at this time. So the list and the status change in one
+  transaction, and an approval that lost its compare-and-set takes nothing
+  off.
 - **A pause or resume is a compare-and-set.** `setProjectStatusFrom` writes
   the new status only while the project's status, reason, who set it, and
   when are the ones read, the way `changeSettings` checks the settings
   version. On a mismatch it writes nothing, and `pause_project` reads the
-  project again and decides again, up to five times. `setProjectStatus`, for
-  the admin's tools, still writes whenever the status or reason differs.
+  project again and decides again, up to five times. The admin's tools make
+  every status change the same way. A change to the status and reason
+  already there writes nothing when the same person set them, and is a
+  change of its own when someone else did, so an admin's pause over a
+  maintainer's names the admin. `setProjectStatus` writes whenever the
+  status or reason differs, and only the tests use it now.
 - **Resuming reads the status history,** newest first, for the change
   before the pause. The project's row holds only its current status. A
   status change keeps who made it and no role, so whether a pause was an
@@ -482,6 +504,90 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   approved project's cached issues, through `projects_by_status` and the
   key of `tagged_issues`. Nothing caches any of it yet.
 
+### The admin's tools and pages
+
+The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
+
+| File | What it does |
+|---|---|
+| `src/admin/actions.ts` | The admin's actions: the queue, deciding, listing from a policy, blocking, pausing, and removing |
+| `src/mcp/admin.ts` | The admin's MCP tools, each an action's answer as a tool result |
+| `src/admin/page.ts` | What `/admin` reads, and the answer to its forms |
+| `src/admin/data.ts` | `getAdminPage`, the server function the route's loader calls |
+| `src/admin/paths.ts` | The page's path, with no imports, so pages can use it |
+| `src/routes/admin.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler |
+| `src/styles/admin-page.css` | The page's layout and its form fields |
+
+- **One set of actions.** The MCP tools and the page's forms call the same
+  functions in `src/admin/actions.ts`, with a `Caller`: the agent's grant,
+  or the web session through `siteCaller` in `src/auth/session.ts`. Each
+  action calls `requirePermission` before it reads or writes anything, and
+  answers with the tool's output from core or a refusal.
+- **Listed for admins only.** `buildServer` is async and asks
+  `requirePermission` for `review_projects` on every request, and registers
+  the admin tools only when it passes. A tool that isn't registered is one
+  the SDK refuses to call.
+- **Queue IDs.** A crawler find's ID is its candidate ID. A registration's
+  is `reg_` and the ID of its latest row in `project_status_changes`, which
+  `listPendingProjects` reads with each pending project, so the queue needs
+  no table of its own, and `getPendingProject` finds the project only while
+  that change is still its latest.
+- **The repo's facts** for a registration come from two REST calls with
+  the admin's token, `GET /repos/{owner}/{repo}` and `GET /users/{owner}`,
+  in `readStanding` in `src/projects/repo.ts`. Every registration's are
+  read at once, so the queue costs two GitHub calls for each registration,
+  on every read of the queue. Only a `404` for the repo gives
+  `factsMissing: 'not_public'`. Any other failure, the owner's `404`
+  included, gives `no_answer`, logged with `console.warn`, in
+  `factsFromGitHub`. A `401` goes on up, so an agent's connection ends,
+  and the page reads the queue again with no token and says to sign in
+  again.
+- **Every status change is a compare-and-set,** through
+  `setProjectStatusFrom`, retried up to five times, as for the maintainer's
+  pause. So a maintainer's pause or resume that lands at the same moment as
+  an admin's never undoes it.
+- **Editing a listing** is `relistFromPolicy` in `src/db/projects.ts`,
+  which applies the settings sent over the listing's, with
+  `updateProjectSettings`, and checks the listing's source and settings
+  version in the same statements as its writes, the way `takeOverListing`
+  does.
+- **The do-not-list is checked in SQL.** A listing from a policy reads the
+  list before it asks GitHub, and again before each write, and the writes
+  check it too: `createProject`'s insert and `relistFromPolicy`'s
+  statements carry `NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)`,
+  so the check and the write are one step. A removal adds the entry on its own, before
+  anything else, and its rejection runs `doNotListWhenRejected` in the same
+  batch, through `setProjectStatusFrom`'s `alongside`, which adds the entry
+  again only when that rejection landed. So an approval that took the
+  repo off the list between them can't leave a removed project off it.
+- **Blocked donors** come from `listBlocks`, one query that joins
+  `donor_blocks` to `people` for each login.
+- **Forms, with no script.** The page's forms post to `/admin`, which the
+  route answers with a `server.handlers.POST`, and TanStack Start leaves
+  `GET` to the page. The handler checks `Origin` first, then the session
+  and `review_projects`, and sends the admin back to `/admin` with `303`.
+  Rejecting needs a reason, which the textarea's `required` asks for, and
+  the approve button skips with `formnovalidate`. The handler checks it
+  too, through the tool's input schema from core.
+- **Notices in the address.** The page says what a form did with a notice
+  in the address it sends the admin back to, beside an HMAC-SHA256 of it
+  keyed with `AUTH_SECRET`. The server function shows the notice only when
+  the signature matches, so a link made elsewhere can't put words on the
+  page. The notice's dismiss link is a router link, so it reads the page's
+  data again through the server function.
+- **The server function** runs `loadAdminPage`, which reads the session
+  and checks the permission before anything else, and answers
+  `signed_out` or `not_found` with no data. The route turns those into a
+  redirect to `/sign-in` and a `404`. So calling the server function on its
+  own, under `/_serverFn/`, gives a non-admin nothing, which an end-to-end
+  test checks by replaying the page's own call as someone else.
+- **The nav's admin link** comes from `getViewer`, which checks
+  `review_projects` with no token and reads nothing more.
+- **A sample admin in development.** `adminGithubIds` adds the GitHub
+  fake's `@sample-admin` when `isDevelopment()` holds, the check the dev
+  sign-in and the secret stand-ins use. So `pnpm dev` and the end-to-end
+  tests have an admin, and `wrangler.jsonc` names none.
+
 ### The design system
 
 - **Components are React components in `src/components/`,** one file per
@@ -605,8 +711,8 @@ its version did not go up.
 - **Two ways around that default** install a plugin copy: naming it with
   `--skill`, like `--skill admin` or `--skill give`, and setting
   `INSTALL_INTERNAL_SKILLS=1`. The admin skill holds nothing secret. The
-  server checks that the caller is an admin on every admin tool call, which
-  #11 builds.
+  server lists the admin tools only to admins, and checks that the caller
+  is an admin on every admin tool call.
 - **Claude Code** reads `.claude-plugin/marketplace.json` and each plugin's
   `.claude-plugin/plugin.json`, and loads each plugin's `skills/` folder.
   It ignores `metadata` in a skill. A plugin from a marketplace added as a
@@ -755,7 +861,9 @@ The spec says everything the site shows is public GitHub data or the public
 live feed. It says crawl results stay in the deployment's database, and only
 listed projects and their policy quotes are public, so `crawl_candidates`
 stays private, a rejection's reason included. The reason an admin gives for
-rejecting a registration reaches the maintainer's agent.
+rejecting a registration reaches the maintainer's agent, and so does the
+reason a removed project is rejected with. The note an admin keeps with a
+do-not-list entry reaches no one else.
 
 These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
@@ -847,10 +955,10 @@ pruning after a sync, with no index of its own.
 | `people_by_login` | A person by login, for `/@<login>` pages and admin blocks |
 | `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first |
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync, and the copies of an issue the sync checks before a room forgets its PR |
-| `project_status_changes_by_repo` | A project's status changes, newest first |
+| `project_status_changes_by_repo` | A project's status changes, newest first, and its latest, which names a registration in the admin queue |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
 | `claims_by_person` | One person's claims, newest first: `my_work`, the claims `start_session` offers to resume, a donor's open PRs by project, their page, and their leaderboard row |
-| `claims_by_project` | One project's claims in a time range: its page and its row on the leaderboard by project. Its claims working now, for `project_status` |
+| `claims_by_project` | One project's claims: its page's claims working now, merged PRs, and top helpers, its claims working now for `project_status`, and, in a time range, its row on the leaderboard by project |
 | `prs_by_number` | A PR's claim, and one claim per PR |
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
@@ -873,6 +981,8 @@ Merge rate reads the same index.
 Some views have no index of their own. Issues worked per person this week
 scans every claim. The all-time views scan `claims` or `prs` and look up the
 other by key, and hiding blocked donors looks up `donor_blocks` by key.
+Hiding what the do-not-list covers looks up `do_not_list` by key, and the
+projects whose issues live in each repo through `projects_by_issue_repo`.
 
 ### Migrations
 
@@ -1071,19 +1181,21 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **Watchers and the block check.** Each watcher's socket carries, as its
   attachment, the place of the last event it was sent, which survives
   hibernation. Events go out after the call that stored them, with an await
-  for D1's `donor_blocks` in between, so calls can finish out of order. Each
-  send reads the events after the lowest place among the sockets, asks D1
-  which of their claimants are blocked, and sends each socket what it hasn't
+  for D1's `donor_blocks` and `do_not_list` in between, so calls can finish
+  out of order. Each send reads the events after the lowest place among the
+  sockets, asks D1 which of their claimants are blocked and which of their
+  issues' repos the do-not-list covers, and sends each socket what it hasn't
   had, up to the last event it read before the await. An event stored
   during the await goes out with the send of the call that stored it. So
   each watcher gets each event once, in order. A send returns the lowest
   place a watcher is at once it is done, so a room can tell whether it
   reached the last event stored.
 - **A new watcher's history.** The feed or room is told which donors are
-  known to be blocked, and reads only the events it will send: a feed with
-  no `since` reads its newest 100 of the others, in one query. D1 is asked
-  about any claimant in them not yet asked about, and the read repeats until
-  none is new. Then the socket is accepted, sent its history, and given its
+  known to be blocked and which repos the do-not-list is known to cover,
+  and reads only the events it will send: a feed with no `since` reads its
+  newest 100 of the others, in one query. D1 is asked about any claimant or
+  repo in them not yet asked about, and the read repeats until none is
+  new. Then the socket is accepted, sent its history, and given its
   place, with no await in between, so no event falls between its history
   and the live ones.
 - **When D1 can't say who is blocked,** a feed sets its alarm a minute
@@ -1093,8 +1205,23 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **The block check runs as events go out.** So a block covers the history
   a feed already stores, and lifting it shows that history again.
   `blockedAmong` passes the IDs as one JSON array, since D1 binds at most
-  100 values in a statement. The `history()` RPC of a room and of a feed
-  leaves blocked donors out too, and throws when D1 can't say who they are.
+  100 values in a statement.
+- **The do-not-list check runs beside it,** in `src/rooms/watchers.ts`,
+  with `doNotListedAmong` in `src/db/do-not-list.ts`, which takes the repos
+  as one JSON array the same way. An event names its issue, and a feed
+  reads the issue's repo from the event's JSON in SQL, so no stored event
+  needed rewriting. A repo on the list is covered whole, the issues of
+  other projects that keep them there included, as the homepage's query
+  and the issue page leave those projects out. The do-not-list names code
+  repos, so the query also covers the issue repo of a project on the list,
+  unless an approved or paused project off the list keeps its issues there
+  too, since only those have claims. That keeps an approved or paused
+  project's events on a shared issue repo shown. Judging each event by its
+  claim's project would also hide a removed project's own events there, but
+  would change how every feed and room reads its history, since they skip
+  hidden repos in SQL. The `history()` RPC
+  of a room and of a feed leaves blocked donors out too, and throws when D1
+  can't say who they are.
   Tests read what is stored straight from the object's SQLite.
 - **The Worker holds each stream.** It connects to the feed or room over the
   WebSocket a page uses, accepts it, and keeps each message it gets as a
@@ -1130,11 +1257,12 @@ streams' in [Text streams](how-it-works.md#text-streams).
   Each open stream holds a Worker request and a hibernating WebSocket on a
   feed or room, for up to an hour. Opening one reads D1 to find its feed or
   room: once for a person or a project, and for an issue, the reads
-  `findIssue` makes, under [The issue page](#the-issue-page). Then once for
-  each round of the block check. It
+  `findIssue` makes, under [The issue page](#the-issue-page). Then twice for
+  each round of the block check, once for blocked donors and once for the
+  do-not-list, at the same time. It
   sends at most 100 events from a feed with no `since`, at most 1,000 with
   one, and an issue room's whole history. Each line costs the feed or room
-  one D1 read per batch it sends, shared by its watchers, and each stream a
+  two D1 reads per batch it sends, shared by its watchers, and each stream a
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
   hour ends it. Nothing limits how many streams a client opens.
@@ -1142,9 +1270,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   on the feed or room, for as long as the page is open, with no hour limit.
   Every homepage view opens one on the homepage's feed, so that one object
   sends every event to every open homepage. It also takes one `glance` per
-  homepage view. Every issue page view opens one on its issue's room. Each
-  message a page sends on its socket wakes the feed or room from
-  hibernation, which Cloudflare bills, though the feed ignores the message.
+  homepage view. Every project page view opens one on its project's feed,
+  and takes one `glance`, and every issue page view opens one on its
+  issue's room. Each message a page sends on its socket wakes the feed or
+  room from hibernation, which Cloudflare bills, though the feed ignores
+  the message.
   Nothing limits how many sockets a client opens, or how many messages it
   sends on one, yet. #34 takes those limits.
 - **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
@@ -1155,9 +1285,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   stays open for it. That is why the socket has no hour limit, and why the
   block check is the one every watcher gets. The socket lives on the
   stream's own URL, so each feed has one address, one resolver, and one set
-  of `404`s, for people, programs, and pages alike. The homepage and the
-  issue page open theirs with `useLiveFeed`, and person pages and `/live`
-  (#26) can too.
+  of `404`s, for people, programs, and pages alike. The homepage, a
+  project's page, and the issue page open theirs with `useLiveFeed`, and
+  person pages and `/live` (#26) can too.
 - **`useLiveFeed(path, since, onEvent)`** opens the socket from the page,
   hands each new event to the page once, and reconnects after a drop with
   the last event's ID, backing off as
@@ -1189,7 +1319,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
 | `src/home/data.ts` | `getHome`, the server function the route's loader calls |
 | `src/home/load.ts` | `loadHome`, which reads what the page shows, on the server only |
 | `src/home/live.ts` | The wall's lines and the token field's squares, for the server and the page alike |
+| `src/project/ProjectRow.tsx` | A project asking for help as a row, which the projects list shows too |
 | `src/styles/home-page.css` | The page's layout |
+| `src/styles/project-rows.css` | The rows' layout, which the projects list links too |
 
 - **What the page reads.** `loadHome` reads its three parts at the same
   time: a `glance` at the homepage's feed, `topMergers` in `src/db/prs.ts`,
@@ -1206,8 +1338,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
   `startOfWeek` in the same file gives the Monday.
 - **Asking for help** counts each approved project's waiting issues in the
   same query, with `json_each` over the issue's labels and the project's
-  current settings. SQLite's `lower()` folds only ASCII letters, so two
-  labels that differ in the case of other letters don't match there. The
+  current settings. The rule for an issue waiting is SQL in
+  `src/db/waiting.ts`, which a project page's tagged issues use too.
+  SQLite's `lower()` folds only ASCII letters, so two labels that differ in
+  the case of other letters don't match there. The
   claims that hold a slot come from the claims mirror, through
   `claims_by_issue`. The query applies the 24 hours and the 7 days from
   core's `CLAIM_LIFETIME_MS` and `REVIEW_WINDOW_MS` itself, as `holdsSlot`
@@ -1283,20 +1417,64 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   neither gets a `404` from the page and from the stream, and that no room
   is made. The one difference is the path, under The site's own paths.
 - **Whether it takes claims** follows the homepage's rule for an issue
-  waiting for an agent, in `listProjectsAskingForHelp`. `closedBecause` in
-  `src/issue/waiting.ts` judges each copy with its own project, less the
-  open PRs and the free slot, which the page follows live: an approved
-  project, not on the do-not-list, and a cached copy with one of its tags
-  and none of its excluded ones, folding ASCII letters as SQLite's `lower()`
-  does. `followedCopy` there then picks the copy the page follows, as
-  how-it-works says, checking the slots taken against each copy's own
-  claims per issue. That copy's linked PR joins the room's open PRs.
-  `claim_issue` makes the same two calls.
-- **The site's own paths.** `src/server.ts` answers `/auth`, `/mcp`, and the
-  OAuth routes before any page or stream. The page also answers `404` for
-  `auth`, `mcp`, and `oauth` as owners, with `issueFromPath` in
-  `src/issue/path.ts`, so a path like `/oauth/<repo>/issues/1` never shows
-  an issue. A stream on an `/oauth/...` path answers as any other.
+  waiting for an agent, which `listProjectsAskingForHelp` applies with the
+  SQL in `src/db/waiting.ts`. `closedBecause` in
+  `src/issue/load.ts` judges each copy with its own project, less the open
+  PRs and the free slot, which the page follows live: an approved project
+  with a page, so off the do-not-list by `hasPage`, and then a cached copy
+  with one of its tags and none of its excluded ones, folding ASCII letters
+  as SQLite's `lower()` does. The project comes first, so the page says the
+  project isn't taking claims whatever the copy's labels are.
+  `followedCopy` in `src/issue/waiting.ts` then picks the copy the page
+  follows, as how-it-works says, checking the slots taken against each
+  copy's own claims per issue. That copy's linked PR joins the room's open
+  PRs. `claim_issue` picks its copy with `followedCopy` too, and judges
+  each with `closedBecause` in `src/issue/waiting.ts`.
+- **The site's own paths.** A project's page is at `/<owner>/<repo>`, with
+  its issues' pages and its streams under it, so a path the site keeps for
+  itself could name a repo. `src/issue/path.ts` holds one rule for the
+  project page and the issue page: an owner whose paths belong to the site
+  has neither, and both answer `404` for it, through `repoFromPath` and
+  `issueFromPath`. Each of the site's paths, and whether it can meet a
+  project's:
+  - `/auth/...` and `/mcp/...` go to sign-in and the MCP server in
+    `src/server.ts` before any page or stream, whatever follows. The OAuth
+    library matches `/mcp` as a prefix, so `/mcp/<repo>` gets its `401`.
+    `auth` and `mcp` are reserved.
+  - `/oauth/token` and `/oauth/register` go to the OAuth library, and
+    `/oauth/authorize` is the page where a person approves an agent. Only
+    those three repo names meet, but `oauth` is reserved whole, like the
+    others, so one rule covers every owner.
+  - `/admin` is the admin pages, where their forms post too. It has one
+    part, so no project page can be it, and nothing under it is the
+    site's. `admin` is reserved all the same, like every owner named for a
+    page of the site's own.
+  - `/dev/seed` and `/dev/work` are routes of their own, which TanStack
+    Router matches ahead of `/$owner/$repo/`. They exist in every
+    environment, and answer `404` outside development, so `dev` is
+    reserved too. Sending `/mcp/<anything>` to the site ahead of the OAuth
+    library would still leave `auth`, `oauth`, and `dev` to reserve, so the
+    rule reserves owners.
+  - `/_serverFn/...`, where TanStack Start answers server functions, and
+    `/.well-known/...`, where the OAuth library answers its metadata, can't
+    name a repo: no GitHub login starts with `_` or `.`. Nor can
+    `/@<user>/...`, since no login has `@`.
+  - `/`, `/projects`, `/design`, `/me`, `/sign-in`, `/healthz`,
+    `/live.txt`, and `/live.ndjson` have one part, like `/admin`, and a project's page
+    two. A path under one of them, like `/projects/<name>`, is a project's
+    page, since the site has no route there.
+  - `src/server.ts` sends every path shaped like a stream to
+    `src/feed/streams.ts` first: `/<owner>/<repo>/live.txt` and its issue's
+    have more parts than a page. A repo named `live.txt` has its page at
+    `/<owner>/live.txt`, which no stream's pattern matches.
+  - `/assets/<file>`, when a deployment serves its own built files, is
+    answered by Cloudflare before the Worker when the file exists. Only a
+    repo named exactly like a built file, whose name carries a hash of its
+    content, would lose its page, so `assets` isn't reserved.
+
+  A stream doesn't follow the rule. One on an `/oauth/...` or `/dev/...`
+  path answers as any other, and one on `/mcp/...` gets the MCP server's
+  `401`.
 - **Logins now.** Events carry the login a claimant had when they claimed.
   Each lane, and the timeline, shows the login in `people` for the claim's
   GitHub ID, since a renamed login can later belong to someone else.
@@ -1322,12 +1500,116 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
-  timeline names every claimant, and two for the do-not-list when the issue
-  could take claims. Then the room's glance, which reads its whole history
-  and D1 once for its block check, and a socket on the room for as long as
-  the page is open. Each lane keeps its
-  newest 20 lines, so the page carries at most that many per claim. Nothing
-  caches any of it yet.
+  timeline names every claimant, and one or two for the do-not-list for
+  each project with a cached copy that is approved or paused by a person,
+  or for the project of the latest claim when none has a copy, as
+  `hasPage` looks up its repo and its issue repo. That one answer decides
+  the breadcrumb, the cached copy, and whether the project takes claims.
+  Then the room's glance, which reads its whole history and asks D1 which
+  donors are blocked and whether the do-not-list covers the issue's repo,
+  two queries at once, and a socket on the room for as long as the page is
+  open. Each lane keeps its newest 20 lines, so the page carries at most
+  that many per claim. Nothing caches any of it yet.
+
+## The project pages
+
+The rules are in [how-it-works.md](how-it-works.md#the-projects-list),
+under The projects list and The project page.
+
+| File | What it does |
+|---|---|
+| `src/routes/projects.tsx` | The projects list, with its filter and search |
+| `src/routes/$owner.$repo.index.tsx` | A project's page, built from the components in `src/components/`, with its issue rows, merged PRs, rules, and live wall |
+| `src/project/data.ts` | `getProjectsList` and `getProjectPage`, the server functions the routes' loaders call |
+| `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
+| `src/project/list.ts` | The list's filter and search |
+| `src/project/rules.ts` | A project's settings as split badges |
+| `src/project/shown.ts` | `hasPage`, which projects have a page by their status and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
+| `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
+| `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
+| `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
+
+- **The list is the homepage's.** `loadProjectsList` calls
+  `listProjectsAskingForHelp` with a limit of 1,000, so the list has the
+  homepage's projects, order, and waiting counts, and adds how each got in
+  from the project's record. The filter and the search run in the page
+  over what it loaded, with `filterProjects` in `src/project/list.ts`.
+  Their controls sit in a `fieldset` that is disabled in the server's
+  render and enabled from the page's first render after hydration, so
+  they look off until they work, and a test can wait for them.
+- **One waiting rule.** `src/db/waiting.ts` holds the SQL for a cached copy
+  that carries a tag, the slots its claims hold at a time, a claim's PR
+  that is still open, and the whole rule for an issue waiting for an
+  agent. `listProjectsAskingForHelp` counts each project's copies that
+  wait, and `listProjectIssues` in `src/db/issues.ts` says for each copy
+  of one project how many slots are taken, which claim's PR is open, and
+  whether it waits. A test checks that the page's issues that take claims
+  are as many as the homepage counts waiting.
+- **What the page reads.** `loadProject` reads the project, then asks
+  `hasPage` in `src/project/shown.ts` whether it has a page, by its status,
+  who set that status, and whether its repo or its issue repo has an entry
+  of its own on the do-not-list, as the homepage's query checks. For a
+  project that could have a page, that agrees with `doNotListedAmong`, the
+  rule the rooms and feeds hide events by, on its issue repo, since the
+  project keeps its issues there and is off the list. `doNotListedAmong`
+  reads every repo as an issue repo, so `hasPage` doesn't ask it about the
+  code repo, where a project on the list that kept its issues there would
+  take the page away. A pause with no person in `status_changed_by` is
+  Good First Token's own, as the maintainer's `pause_project` reads it
+  too. Then, at the same time, its
+  tagged issues with `listProjectIssues`, the claims working now with
+  `countWorkingClaims`, the merged PRs with `listMergedPrs`, the top
+  helpers with `topHelpers`, the save of its current settings with
+  `getSettingsSave`, and a `glance` at the project's feed. Then each
+  person it names, by their login now. A failed read of the feed leaves
+  the wall empty with a note, and any other failed read makes the page
+  answer `503`, through `PAGE_STATUS_HEADER`, as the issue page does.
+- **Merged work and top helpers** come from `claims` and `prs` in
+  `src/db/prs.ts`. `topHelpers` and the homepage's `topMergers` share one
+  ranking query and one filter for what shows, which leaves out blocked
+  donors and PRs the do-not-list names. Only the scope differs: a time
+  range read through `prs_by_closed`, or a project read through
+  `claims_by_project`. `listMergedPrs` counts them all with
+  `COUNT(*) OVER ()` as it takes the first 10. Only PRs from claims are in
+  `prs`. The sync keeps a linked PR from anyone only while it is open, and
+  the PR job reads only the PRs in `prs`, so a PR from outside Good First
+  Token is never recorded as merged.
+- **The live wall** is the homepage's `Wall`, fed by the project's feed:
+  the page loads with a `glance` of 6 events, then opens
+  `/<owner>/<repo>/live.ndjson` with `useLiveFeed`, starting after the
+  newest line it shows, and puts each event on top with `toWallLine` from
+  `src/home/live.ts`. The feed's `glance` leaves blocked donors' events
+  out.
+- **The route's file** is `$owner.$repo.index.tsx`, an index route. A file
+  named `$owner.$repo.tsx` would make every issue page a child of it, with
+  its loader run first.
+- **The takeover link** goes to `/maintainers`, the page
+  [brand/brief-website.md](../brand/brief-website.md) gives the job of
+  saying how to take over a listing from an agent. A maintainer takes a
+  listing over with `register_project`, under
+  [Registering a project](how-it-works.md#registering-a-project).
+- **What a view costs.** The list is one D1 query, the homepage's, which
+  counts the waiting issues of every approved project. A project's page
+  reads the project, and the do-not-list once or twice, by key. Then it
+  makes six reads at once. Its tagged issues are one query, through the
+  table's key, with each issue's claims through `claims_by_issue`. The
+  claims working now, the merged PRs, and the top helpers are one query
+  each, through
+  `claims_by_project`, with each PR, person, block, and do-not-list entry
+  by key. The save of its settings is one read by key. The `glance` at the
+  project's feed asks D1 which of the donors in the events it reads are
+  blocked and which of their repos the do-not-list covers, two queries at
+  once, and reads again for as long as a round names donors or repos it
+  hasn't asked about, so once when nothing is hidden, and never when the
+  feed has no events. Then it reads `people` once or twice. So a view
+  costs about eleven D1 queries, one call to a feed, and a socket on the
+  feed for as long as the page is open.
+  The three queries through `claims_by_project` read every claim the
+  project ever had, since the index keys claims by project and claim time,
+  and none of them is limited in time. The working claims are filtered by
+  state after the index, and the merged PRs and top helpers look up each
+  claim's PR. So the rows a view reads grow with the project's claim
+  history, three times over. Nothing caches any of it yet.
 
 ## The sync
 
@@ -1561,7 +1843,9 @@ end-to-end tests. The rules are in
   [how-it-works.md](how-it-works.md#sample-data-in-development).
 - **The end-to-end tests seed their own preview.** `home.spec.ts` checks
   the empty homepage first, then posts to `/dev/seed` and checks the page
-  with its ranks and projects. The preview keeps its data apart from
+  with its ranks and projects. `admin.spec.ts` seeds too, and works the
+  admin queue the sample work leaves: two registrations and a crawler
+  find, which `addCandidate` adds. The preview keeps its data apart from
   `pnpm dev`'s, as [Tests](#tests) describes, so seeding `pnpm dev` changes
   nothing there.
 - **`/dev/work` adds what an action needs.** It records the person, and the
@@ -1737,11 +2021,12 @@ and Playwright run it as a local HTTP server.
   Every URL in its responses, including avatars and raw files, points back
   at the fake.
 - **The sample data** in `src/sample-data.ts` takes the shapes of the
-  prototype's: donors and maintainers, a project with tagged issues, one
-  with nothing tagged, a popular repo that invites contributions, and a
-  registration waiting for an admin. `sample-owner/sample-desktop` keeps a
-  vouch file at `.github/VOUCHED.td`, in the format Ghostty uses, which the
-  fake serves like any file. It is the one place later issues add
+  prototype's: donors, maintainers, and an admin, a project with tagged
+  issues, one with nothing tagged, a popular repo that invites
+  contributions, two registrations waiting for an admin, and a repo whose
+  AGENTS.md invites agents, for a crawler find. `sample-owner/sample-desktop`
+  keeps a vouch file at `.github/VOUCHED.td`, in the format Ghostty uses,
+  which the fake serves like any file. It is the one place later issues add
   to. Every account and repo in it is made up, under `sample-owner`, except
   this project's own repo. That repo's sample issues and PRs are numbered
   from 900 up, clear of its real ones.
@@ -1833,7 +2118,16 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   tests give each test's issues numbers of their own, as the sync tests do,
   since rooms keep their storage across a file, and stub `Math.random` to
   fix the random order. The vouch file's format and the random order are
-  also tested alone, in `apps/web/test/donor/`.
+  also tested alone, in `apps/web/test/donor/`. The admin's tools are
+  tested there too, and their actions are also called directly, with a spy
+  on D1 and `fetch`, to show each checks the permission before it reads
+  anything.
+- **Admin page tests** fetch `/admin` and post its forms through the Worker
+  with the same small browser, signed in with the GitHub fake, and call
+  `loadAdminPage` on its own for the server function's side. They live in
+  `apps/web/test/admin/`. Server functions have no URL in the unit tests,
+  since the Vitest build sets no base for them, so the end-to-end tests
+  call the page's own.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. The web server applies the D1 migrations first. They live in
@@ -1845,10 +2139,18 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   feeds. `issue.spec.ts` works real issue rooms through `/dev/work`, as
   several sample people at once, and the page follows them over the real
   socket. A pause needs 30 minutes, so that one test stands in for the
-  room's socket and sends a pause shaped like the room's. Their events
-  reach the homepage's feed, so they run in the `rooms` project, which
-  depends on the `chromium` project, once the rest are done, and the
-  homepage's tests see only what they expect.
+  room's socket and sends a pause shaped like the room's. `projects.spec.ts`
+  seeds the sample projects through `/dev/seed`, and works an issue through
+  `/dev/work` to see a line reach a project's page over the real socket.
+  Their events reach the homepage's feed, and the seed lists projects
+  there, so both run in the `rooms` project, which depends on the
+  `chromium` project, once the rest are done, and the homepage's tests see
+  only what they expect. `admin.spec.ts` signs in as the fake's sample
+  admin, approves and rejects the seeded registrations, and replays the
+  admin page's server function call as a donor. Approving lists a project
+  on the homepage, so it runs last, in the `admin` project, which depends
+  on `rooms`. It signs in three times, since every dev sign-in counts
+  toward the sign-in limit of 20 a minute from one address.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
@@ -1873,6 +2175,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   through the Worker, and read an issue's live socket with the page's own
   fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake
   `Date`, as the room tests do.
+- **Project page tests** write claims, PRs, and cached issues to D1 and
+  events to a project's feed, then load the projects list and a project's
+  page, and fetch both through the Worker, in `apps/web/test/project/`.
 - **The static host in end-to-end tests** is a stand-in,
   `scripts/static-host.mjs`, at `http://127.0.0.1:4174`, a different host
   from the site's `localhost:4173`. The build under test has

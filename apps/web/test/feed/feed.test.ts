@@ -1,9 +1,9 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, unblockDonor } from '../../src/db';
+import { addToDoNotList, blockDonor, createProject, listProjectsAskingForHelp, setProjectStatus, unblockDonor } from '../../src/db';
 import { repoFeed, type Feed, type FeedEntry } from '../../src/rooms/feed';
-import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0 } from '../db/helpers';
+import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0, takeOffDoNotList } from '../db/helpers';
 import { feedEvent, storedEvents, watchSocket } from './helpers';
 
 // A feed on its own, as the queue's consumer calls it. Every person, repo,
@@ -229,6 +229,149 @@ describe('a blocked donor', () => {
     const watcher = await watchSocket(feed);
 
     expect(await watcher.received(100)).toEqual(kenjis.map((e) => e.event.text));
+  });
+});
+
+describe('a repo on the do-not-list', () => {
+  function on(issue: string, text: string): FeedEntry {
+    return { event: feedEvent({ issue, text }), githubId: kenji.githubId };
+  }
+
+  test("has the events on its issues hidden from the feed's watchers, the history stored before included, and they stay stored", async () => {
+    await feed.deliver([on('sample-owner/sample-app#1', 'app before'), on('sample-owner/sample-tools#2', 'tools before')]);
+
+    await addToDoNotList(db, { repo: 'Sample-Owner/Sample-App', reason: null, addedBy: admin.githubId }, Date.now());
+
+    const watcher = await watchSocket(feed);
+    expect(await watcher.received(1)).toEqual(['tools before']);
+    await feed.deliver([on('sample-owner/sample-app#3', 'app during'), on('sample-owner/sample-tools#4', 'tools during')]);
+    expect(await watcher.received(2)).toEqual(['tools before', 'tools during']);
+    expect(await texts()).toEqual(['tools before', 'tools during']);
+    expect((await storedEvents(feed)).map((e) => e.text)).toEqual(['app before', 'tools before', 'app during', 'tools during']);
+
+    // Taking the repo off the list, as approving its maintainer's
+    // registration does, shows them to a new watcher again.
+    await takeOffDoNotList('sample-owner/sample-app');
+    const later = await watchSocket(feed);
+    expect(await later.received(4)).toEqual(['app before', 'tools before', 'app during', 'tools during']);
+  });
+
+  test('covers the issues of a project whose code repo is on it, where the project keeps them in another repo', async () => {
+    await createProject(
+      db,
+      {
+        repo: 'sample-owner/sample-code',
+        status: 'approved',
+        source: 'registered',
+        policy: null,
+        settings: { tags: ['help wanted'], issueRepo: 'sample-owner/sample-issues' },
+        addedBy: kenji.githubId,
+      },
+      Date.now(),
+    );
+    await addToDoNotList(db, { repo: 'sample-owner/sample-code', reason: null, addedBy: admin.githubId }, Date.now());
+    await feed.deliver([on('sample-owner/sample-issues#5', 'elsewhere'), on('sample-owner/sample-tools#6', 'tools')]);
+
+    const watcher = await watchSocket(feed);
+
+    expect(await watcher.received(1)).toEqual(['tools']);
+  });
+
+  test("hides a removed project's events on an issue repo it shares with a rejected project, which has no claims to show", async () => {
+    const shared = 'sample-owner/sample-issues';
+    const removed = 'sample-owner/sample-code';
+    const rejected = 'sample-owner/sample-other';
+    for (const [code, status] of [[removed, 'approved'], [rejected, 'pending']] as const) {
+      await createProject(
+        db,
+        { repo: code, status, source: 'registered', policy: null, settings: { tags: ['help wanted'], issueRepo: shared }, addedBy: kenji.githubId },
+        Date.now(),
+      );
+    }
+    await setProjectStatus(db, rejected, { status: 'rejected', reason: 'Not ready.', changedBy: admin.githubId }, Date.now());
+    // As admin_remove_project leaves it: on the list, and rejected.
+    await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, removed, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+    await feed.deliver([on(`${shared}#5`, 'removed project work')]);
+
+    const watcher = await watchSocket(feed);
+    await feed.deliver([on('sample-owner/sample-tools#1', 'marker')]);
+
+    expect(await watcher.received(1)).toEqual(['marker']);
+  });
+
+  test('removing a project leaves out, with it, a project that keeps its issues in its repo: off the homepage, and its events there hidden', async () => {
+    const main = 'sample-owner/sample-main';
+    const plugin = 'sample-owner/sample-plugin';
+    for (const [code, issueRepo] of [[main, null], [plugin, main]] as const) {
+      await createProject(
+        db,
+        {
+          repo: code,
+          status: 'approved',
+          source: 'registered',
+          policy: null,
+          settings: { tags: ['help wanted'], ...(issueRepo === null ? {} : { issueRepo }) },
+          addedBy: kenji.githubId,
+        },
+        Date.now(),
+      );
+    }
+    const before = await listProjectsAskingForHelp(db, 10, Date.now());
+    await addToDoNotList(db, { repo: main, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, main, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+    await feed.deliver([on(`${main}#7`, 'plugin work')]);
+
+    const watcher = await watchSocket(feed);
+    await feed.deliver([on('sample-owner/sample-tools#1', 'marker')]);
+    const listed = await listProjectsAskingForHelp(db, 10, Date.now());
+
+    expect(before.projects.map(({ project }) => project.repo)).toContain(plugin);
+    expect(listed.projects.map(({ project }) => project.repo)).not.toContain(plugin);
+    expect(await watcher.received(1)).toEqual(['marker']);
+  });
+
+  test("leaves the events on an issue repo another project shares in that project's feed, when one project is removed", async () => {
+    const shared = 'sample-owner/sample-issues';
+    const removed = 'sample-owner/sample-code';
+    const stays = 'sample-owner/sample-other';
+    for (const code of [removed, stays]) {
+      await createProject(
+        db,
+        {
+          repo: code,
+          status: 'approved',
+          source: 'registered',
+          policy: null,
+          settings: { tags: ['help wanted'], issueRepo: shared },
+          addedBy: kenji.githubId,
+        },
+        Date.now(),
+      );
+    }
+    // As admin_remove_project leaves it: on the list, and rejected.
+    await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, removed, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+    await feed.deliver([on(`${shared}#5`, 'still listed')]);
+
+    const watcher = await watchSocket(feed);
+    const listed = await listProjectsAskingForHelp(db, 10, Date.now());
+
+    expect(listed.projects.map(({ project }) => project.repo)).toContain(stays);
+    expect(await watcher.received(1)).toEqual(['still listed']);
+  });
+
+  test('a watcher who gives no last event ID still gets the newest events it may see, and a glance leaves them out', async () => {
+    const tools = Array.from({ length: 100 }, (_, i) => on('sample-owner/sample-tools#1', `tools ${String(i)}`));
+    const app = Array.from({ length: 30 }, (_, i) => on('sample-owner/sample-app#1', `app ${String(i)}`));
+    await feed.deliver([...tools, ...app]);
+    await addToDoNotList(db, { repo: 'sample-owner/sample-app', reason: null, addedBy: admin.githubId }, Date.now());
+
+    const watcher = await watchSocket(feed);
+    const glance = await feed.glance({ count: 5, day: '2100-01-04' });
+
+    expect(await watcher.received(100)).toEqual(tools.map((e) => e.event.text));
+    expect(glance?.events.map((e) => e.text)).toEqual(tools.slice(-5).map((e) => e.event.text));
   });
 });
 

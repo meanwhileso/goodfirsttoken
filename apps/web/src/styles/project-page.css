@@ -1,0 +1,85 @@
+/* Layout for a project's page only. The components it uses are styled in
+   components.css. */
+
+.project { padding-top: 48px; }
+
+.project-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.project-title {
+  margin-top: 18px; font: 600 clamp(28px, 5vw, 56px)/1.08 var(--font-mono); letter-spacing: -0.03em; overflow-wrap: anywhere;
+}
+/* A title in words, where there is no project to name. */
+.project-title--words { font: var(--display-lg); font-size: clamp(36px, 6vw, 64px); letter-spacing: var(--display-lg-tracking); }
+.project-lede { margin-top: 16px; max-width: 34em; font-size: 18px; color: var(--text-muted); }
+.project-stats { margin-top: 40px; }
+
+/* The issues and merged PRs, with the live feed, the rules, how it got in,
+   and the top helpers beside them, and under them on narrow screens. */
+.project-split {
+  display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 72px; align-items: start; margin-top: var(--section);
+}
+.project-main, .project-aside { display: flex; flex-direction: column; gap: 72px; min-width: 0; }
+.project-section { min-width: 0; }
+@container page (max-width: 960px) {
+  .project-split { grid-template-columns: minmax(0, 1fr); gap: 64px; }
+}
+
+/* Said once, in mono, at the bottom of a section. */
+.project-note { margin-top: 14px; font: 14px/1.5 var(--font-mono); color: var(--text-faint); overflow-wrap: anywhere; }
+.project-note:first-child { margin-top: 0; }
+.project-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+
+/* A label can be long. It wraps, so the page never scrolls sideways. */
+.project .tag { height: auto; min-height: 24px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+/* The tagged issues, as rows grouped by hairlines, with their slots. */
+.project-issues > li, .project-merged > li { border-top: 1px solid var(--line-soft); }
+.project-issues > li:last-child, .project-merged > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.project-issue {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: center; padding: 16px 0;
+  color: inherit;
+}
+.project-issue:hover { text-decoration: none; }
+.project-issue:hover .project-issue__title { color: var(--label-ink); }
+.project-issue__title { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); overflow-wrap: anywhere; }
+.project-issue__meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; grid-column: 1; min-width: 0; font-size: 14px;
+  color: var(--text-muted);
+}
+.project-issue__side { grid-row: 1 / span 2; grid-column: 2; }
+
+/* The merged PRs. */
+.project-pr {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; padding: 14px 0;
+}
+.project-pr__name { font-size: 16px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.project-pr__meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; grid-column: 1; min-width: 0; font-size: 14px;
+  color: var(--text-muted);
+}
+.project-pr__side { grid-row: 1 / span 2; grid-column: 2; }
+@container page (max-width: 720px) {
+  .project-issue, .project-pr { grid-template-columns: minmax(0, 1fr); }
+  .project-issue__side, .project-pr__side { grid-row: auto; grid-column: 1; }
+}
+
+/* The live feed is narrower here than on the homepage. */
+.project-aside .wall { font-size: 15px; }
+.project-aside .wall-line { grid-template-columns: 72px minmax(0, 1fr); gap: 4px 12px; }
+.project-aside .wall-line__time { font-size: 13px; }
+@container page (max-width: 720px) {
+  .project-aside .wall-line { grid-template-columns: minmax(0, 1fr); }
+}
+.project-stream { color: var(--text-muted); }
+
+/* The rules. A value can be long, like the repo the issues live in. It
+   wraps, so the page never scrolls sideways. */
+.project-aside .badge { max-width: 100%; }
+.project-aside .badge__value { height: auto; min-height: 24px; white-space: normal; overflow-wrap: anywhere; }
+.project-rules { display: grid; gap: 4px; margin: 18px 0 0; font-size: 14px; }
+.project-rules dt { margin-top: 8px; font: 13px var(--font-mono); color: var(--text-faint); }
+.project-rules dt:first-child { margin-top: 0; }
+.project-rules dd { margin: 0; color: var(--text-body); overflow-wrap: anywhere; }
+.project-rules__notes { white-space: pre-line; }
+
+.project-policy { display: flex; flex-direction: column; gap: 12px; }
+.project-policy .quote { overflow-wrap: anywhere; }

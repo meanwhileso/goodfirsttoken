@@ -4,6 +4,7 @@ import {
   githubId,
   githubLogin,
   id,
+  issueRef,
   mustParse,
   prRecordSchema,
   prStateSchema,
@@ -12,7 +13,7 @@ import {
   type PrRef,
   type PrState,
 } from '@goodfirsttoken/core';
-import { checkTime, prFromColumns, splitIssue } from './shared';
+import { checkTime, joinIssue, prFromColumns, splitIssue } from './shared';
 
 // The prs table: the PR opened for each claim, followed until it merges or
 // closes.
@@ -240,6 +241,48 @@ interface MergerRow {
   merged: number;
 }
 
+// A merged PR the site shows, over a PR `p` and its claim `c`: not a blocked
+// donor's, and not one the do-not-list names by its repo, its claim's
+// project or issue repo, or the project's issue repo now.
+const SHOWN = `NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)
+  AND NOT EXISTS (SELECT 1 FROM do_not_list d
+    WHERE d.repo IN (c.project, c.issue_repo, p.repo)
+      OR d.repo = (SELECT issue_repo FROM projects WHERE repo = c.project))`;
+
+/**
+ * The people with the most shown PRs merged that `scope` picks, most first,
+ * at most `limit` of them. A PR from a claim on the claimant's own project
+ * doesn't count. Ties go to whoever reached the count first, then by login.
+ */
+async function rankMergers(
+  db: D1Database,
+  scope: { sql: string; binds: (string | number)[] },
+  limit: number,
+): Promise<Merger[]> {
+  // With MAX() in the select list, SQLite takes the bare column c.agent from
+  // the row that has the latest merge. A merged PR's close time is when it
+  // merged.
+  const { results } = await db
+    .prepare(
+      `SELECT c.github_id, pe.login, c.agent, COUNT(*) AS merged, MAX(p.closed_at) AS last_merged
+       FROM prs p
+       JOIN claims c ON c.id = p.claim_id
+       JOIN people pe ON pe.github_id = c.github_id
+       WHERE p.state = 'merged' AND ${scope.sql} AND c.own_project = 0 AND ${SHOWN}
+       GROUP BY c.github_id
+       ORDER BY merged DESC, last_merged, pe.login, c.github_id
+       LIMIT ?`,
+    )
+    .bind(...scope.binds, mustParse(count, limit, 'limit'))
+    .all<MergerRow>();
+  return results.map((row) => ({
+    githubId: mustParse(githubId, row.github_id, 'githubId'),
+    login: mustParse(githubLogin, row.login, 'login'),
+    agent: mustParse(agentName, row.agent, 'agent'),
+    merged: mustParse(count, row.merged, 'merged'),
+  }));
+}
+
 /**
  * The people with the most PRs merged from `from` up to `until`, most first,
  * at most `limit` of them. A PR counts when it merged in the range, from a
@@ -252,30 +295,81 @@ export async function topMergers(
   db: D1Database,
   { from, until, limit }: { from: number; until: number; limit: number },
 ): Promise<Merger[]> {
-  // A merged PR's close time is when it merged, and only closed_at is
-  // indexed. With MAX() in the select list, SQLite takes the bare column
-  // c.agent from the row that has the latest merge.
+  // Only closed_at is indexed, so the range reads prs_by_closed.
+  return rankMergers(
+    db,
+    { sql: 'p.closed_at >= ? AND p.closed_at < ?', binds: [checkTime(from, 'from'), checkTime(until, 'until')] },
+    limit,
+  );
+}
+
+/**
+ * A project's top helpers: the people with the most PRs merged from claims
+ * on it, of all time, most first, at most `limit` of them. The rest is as
+ * for topMergers: a claim on the claimant's own project doesn't count,
+ * blocked donors are left out, and so are PRs the do-not-list names.
+ */
+export async function topHelpers(db: D1Database, project: string, limit: number): Promise<Merger[]> {
+  // The project's claims through claims_by_project, and each one's PR by key.
+  return rankMergers(db, { sql: 'c.project = ?', binds: [mustParse(repoName, project, 'project')] }, limit);
+}
+
+/** A merged PR from a claim, as a project page lists it. */
+export interface MergedPr {
+  pr: { repo: string; number: number };
+  /** The issue the claim was on, like `owner/name#12`. */
+  issue: string;
+  githubId: number;
+  /** The claimant's login now, from people. */
+  login: string;
+  agent: string;
+  mergedAt: number;
+}
+
+/**
+ * The PRs merged from claims on a project, newest merge first, left out as
+ * for topMergers: a blocked donor's, or one the do-not-list names. Work on
+ * the claimant's own project is in. `total` is how many there are, and
+ * `prs` the first `limit` of them.
+ */
+export async function listMergedPrs(
+  db: D1Database,
+  project: string,
+  limit: number,
+): Promise<{ total: number; prs: MergedPr[] }> {
   const { results } = await db
     .prepare(
-      `SELECT c.github_id, pe.login, c.agent, COUNT(*) AS merged, MAX(p.closed_at) AS last_merged
-       FROM prs p
-       JOIN claims c ON c.id = p.claim_id
+      `SELECT p.repo, p.number, p.merged_at, p.claim_id, c.issue_repo, c.issue_number, c.github_id, c.agent,
+         pe.login, COUNT(*) OVER () AS total
+       FROM claims c
+       JOIN prs p ON p.claim_id = c.id
        JOIN people pe ON pe.github_id = c.github_id
-       WHERE p.state = 'merged' AND p.closed_at >= ?1 AND p.closed_at < ?2 AND c.own_project = 0
-         AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)
-         AND NOT EXISTS (SELECT 1 FROM do_not_list d
-           WHERE d.repo IN (c.project, c.issue_repo, p.repo)
-             OR d.repo = (SELECT issue_repo FROM projects WHERE repo = c.project))
-       GROUP BY c.github_id
-       ORDER BY merged DESC, last_merged, pe.login, c.github_id
-       LIMIT ?3`,
+       WHERE c.project = ? AND p.state = 'merged' AND ${SHOWN}
+       ORDER BY p.merged_at DESC, p.claim_id
+       LIMIT ?`,
     )
-    .bind(checkTime(from, 'from'), checkTime(until, 'until'), mustParse(count, limit, 'limit'))
-    .all<MergerRow>();
-  return results.map((row) => ({
-    githubId: mustParse(githubId, row.github_id, 'githubId'),
-    login: mustParse(githubLogin, row.login, 'login'),
-    agent: mustParse(agentName, row.agent, 'agent'),
-    merged: mustParse(count, row.merged, 'merged'),
-  }));
+    .bind(mustParse(repoName, project, 'project'), mustParse(count, limit, 'limit'))
+    .all<{
+      repo: string;
+      number: number;
+      merged_at: number;
+      claim_id: string;
+      issue_repo: string;
+      issue_number: number;
+      github_id: number;
+      agent: string;
+      login: string;
+      total: number;
+    }>();
+  return {
+    total: mustParse(count, results[0]?.total ?? 0, 'total'),
+    prs: results.map((row) => ({
+      pr: splitIssue(joinIssue(row.repo, row.number)),
+      issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+      githubId: mustParse(githubId, row.github_id, 'githubId'),
+      login: mustParse(githubLogin, row.login, 'login'),
+      agent: mustParse(agentName, row.agent, 'agent'),
+      mergedAt: checkTime(row.merged_at, 'mergedAt'),
+    })),
+  };
 }

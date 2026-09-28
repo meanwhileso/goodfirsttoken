@@ -427,7 +427,7 @@ test.describe('the homepage with the sample work on it', () => {
       await expect(page.locator('.wall-line').first()).toContainText('a rewrite from /docs/');
       await expect(page.locator('.wall-line')).toHaveCount(6);
       await expect(page.locator('.ranks > li')).toHaveText([/@kenji.*2$/, /@priya.*1$/, /@lena.*1$/, /@sam.*1$/]);
-      await expect(page.locator('.home-rows > li')).toHaveCount(4);
+      await expect(page.locator('.project-rows > li')).toHaveCount(4);
       await page.locator('.home-setup summary').click();
       await page.evaluate(() => document.fonts.ready);
 

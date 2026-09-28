@@ -4,7 +4,6 @@ import { useState } from 'react';
 import posterUrl from '../assets/launch-poster.webp?url';
 import videoUrl from '../assets/good-first-token-launch.mp4?url';
 import { SiteNav } from '../auth/SiteNav';
-import { Tag } from '../components/Chip';
 import { Footer } from '../components/Footer';
 import { InlineLabel } from '../components/InlineLabel';
 import { Marker } from '../components/Marker';
@@ -12,13 +11,14 @@ import { OpenIn } from '../components/OpenIn';
 import { Prompt, PromptAccent } from '../components/Prompt';
 import { Rail, RailHead, RailSection } from '../components/Rail';
 import { Ranks } from '../components/Ranks';
-import { SplitBadge } from '../components/SplitBadge';
 import { TokenField, type TokenSquare } from '../components/TokenField';
 import { Wall, type WallLine } from '../components/Wall';
 import { useLiveFeed } from '../feed/useLiveFeed';
-import { getHome, type HelpProject, type HomeData } from '../home/data';
+import { getHome, type HomeData } from '../home/data';
 import { emptyField, FIELD_COLS, light, toWallLine, WALL_LINES } from '../home/live';
+import { ProjectRow } from '../project/ProjectRow';
 import homeCss from '../styles/home-page.css?url';
+import projectRowsCss from '../styles/project-rows.css?url';
 
 // The homepage (brand/brief-website.md): the hero, the prompt with its
 // open-in links and setup, and the rail with the live wall, the launch
@@ -34,7 +34,10 @@ export const Route = createFileRoute('/')({
           'Point your own coding agent at open source issues that maintainers tagged for outside help. It claims one, works it where everyone can watch, and gets it to a pull request.',
       },
     ],
-    links: [{ rel: 'stylesheet', href: homeCss }],
+    links: [
+      { rel: 'stylesheet', href: homeCss },
+      { rel: 'stylesheet', href: projectRowsCss },
+    ],
   }),
   component: Home,
 });
@@ -151,9 +154,9 @@ function Home() {
             ) : data.help.projects.length === 0 ? (
               <p className="home-note">No projects yet.</p>
             ) : (
-              <ul className="home-rows">
+              <ul className="project-rows">
                 {data.help.projects.map((project) => (
-                  <HelpRow key={project.repo} project={project} />
+                  <ProjectRow key={project.repo} project={project} />
                 ))}
               </ul>
             )}
@@ -167,27 +170,6 @@ function Home() {
 
 function projects(total: number): string {
   return `${total.toLocaleString('en-US')} ${total === 1 ? 'project' : 'projects'}`;
-}
-
-function HelpRow({ project }: { project: HelpProject }) {
-  return (
-    <li>
-      <a className="home-row" href={`/${project.repo}`}>
-        <span className="home-row__title mono">{project.repo}</span>
-        <span className="home-row__meta">
-          {project.tags.map((tag) => (
-            <Tag key={tag}>{tag}</Tag>
-          ))}
-          <span className="mono small faint">
-            {project.waiting > 0 ? `${project.waiting.toLocaleString('en-US')} waiting` : 'nothing waiting right now'}
-          </span>
-        </span>
-        <span className="home-row__side">
-          <SplitBadge rule="PRs" value={project.prMode} strict={project.prMode === 'reviewed'} />
-        </span>
-      </a>
-    </li>
-  );
 }
 
 // Each harness, and what to run in it. Only commands this repo itself

@@ -1,5 +1,7 @@
+import { symmetricDecrypt } from 'better-auth/crypto';
 import { env } from 'cloudflare:workers';
 import { getPerson } from '../db';
+import type { Caller } from './permissions';
 import { COOKIE_PREFIX, getAuth, type Auth } from './auth';
 import { SignInNotSetUp, siteOrigin } from './settings';
 
@@ -17,6 +19,25 @@ export async function gitHubAccount(auth: Auth, userId: string) {
   const context = await auth.$context;
   const accounts = await context.internalAdapter.findAccounts(userId);
   return accounts.find((account) => account.providerId === 'github') ?? null;
+}
+
+/**
+ * The signed-in person as a permission check sees them. Their GitHub token
+ * is the one from their last sign-in on the site, decrypted only when a
+ * check or an action asks GitHub something as them.
+ */
+export function siteCaller(signedIn: SignedIn, origin: string): Caller {
+  return {
+    githubId: signedIn.githubId,
+    login: signedIn.login,
+    gitHubToken: async () => {
+      const auth = getAuth(origin);
+      const stored = (await gitHubAccount(auth, signedIn.userId))?.accessToken;
+      if (!stored) return null;
+      const context = await auth.$context;
+      return symmetricDecrypt({ key: context.secretConfig, data: stored });
+    },
+  };
 }
 
 const SESSION_COOKIE = `${COOKIE_PREFIX}.session_token`;

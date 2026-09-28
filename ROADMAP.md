@@ -46,7 +46,7 @@ Maintainers register projects, admins approve them, and tagged issues sync from 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
 | [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 | [#55](https://github.com/meanwhileso/goodfirsttoken/pull/55) |
-| [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 | |
+| [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 | [#60](https://github.com/meanwhileso/goodfirsttoken/pull/60) |
 | [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 | [#59](https://github.com/meanwhileso/goodfirsttoken/pull/59) |
 
 ## M4 Claims and live feeds
@@ -80,12 +80,13 @@ Every public page, the markdown and JSON versions, and share cards.
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
 | [#23](https://github.com/meanwhileso/goodfirsttoken/issues/23) | Build the homepage | #7, #14 | [#54](https://github.com/meanwhileso/goodfirsttoken/pull/54) |
-| [#24](https://github.com/meanwhileso/goodfirsttoken/issues/24) | Build the projects list and the project pages | #7, #12, #14 | |
+| [#24](https://github.com/meanwhileso/goodfirsttoken/issues/24) | Build the projects list and the project pages | #7, #12, #14 | [#62](https://github.com/meanwhileso/goodfirsttoken/pull/62) |
 | [#25](https://github.com/meanwhileso/goodfirsttoken/issues/25) | Build the issue page with live lanes | #7, #14 | [#56](https://github.com/meanwhileso/goodfirsttoken/pull/56) |
 | [#26](https://github.com/meanwhileso/goodfirsttoken/issues/26) | Build person pages, the leaderboard, and /live | #7, #14, #17 | |
 | [#27](https://github.com/meanwhileso/goodfirsttoken/issues/27) | Build /me and /maintainers | #7, #9, #16 | |
 | [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 | |
 | [#29](https://github.com/meanwhileso/goodfirsttoken/issues/29) | Generate share cards | #26 | |
+| [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) | Delist a paused project whose repo went private | #24 | |
 
 ## M7 Policy crawler
 
@@ -150,6 +151,7 @@ flowchart TD
   n27["#27 /me and /maintainers"]:::m6
   n28["#28 Markdown and JSON"]:::m6
   n29["#29 Share cards"]:::m6
+  n65["#65 Delist paused private repos"]:::m6
   n30["#30 Policy crawler"]:::m7
   n31["#31 Re-crawls"]:::m7
   n32["#32 Deploy workflow"]:::m8
@@ -201,6 +203,7 @@ flowchart TD
   n23 --> n28
   n23 --> n35
   n24 --> n28
+  n24 --> n65
   n25 --> n28
   n25 --> n35
   n26 --> n28
@@ -211,7 +214,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n15 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15 done
 ```
 
 ## Maintainer steps

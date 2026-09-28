@@ -57,6 +57,14 @@ export async function registeredProject(
   return project;
 }
 
+/**
+ * Takes a repo off the do-not-list, whatever the case of its name, as an
+ * admin's approval of its maintainer's registration does.
+ */
+export async function takeOffDoNotList(name: string): Promise<void> {
+  await db.prepare('DELETE FROM do_not_list WHERE repo = ?').bind(name).run();
+}
+
 /** The message of the error a call throws, which fails the test if it doesn't throw. */
 export async function refusal(promise: Promise<unknown>): Promise<string> {
   try {
