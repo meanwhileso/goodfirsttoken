@@ -1,4 +1,5 @@
 import {
+  MAX_AI_SENTENCES,
   MAX_POLICY_QUOTE,
   MAX_SOURCE_LINE,
   MAX_TAGS,
@@ -23,6 +24,10 @@ import { findClaLink, findPersonWritten, findTrailer, keptForPeople, meansReady,
 // no to something else. A missed welcome costs a find. A missed ban would put
 // a repo that said no in front of an admin.
 //
+// Plain rules can't know every way to say no. So the reading also keeps
+// every sentence that names AI, for the admin to read before a repo is
+// listed, and nothing is listed without an admin.
+//
 // Every pattern runs on one sentence at a time, with a few words of slack at
 // most, and none ends in a run of optional space, so the time a file takes
 // grows with its length alone.
@@ -40,7 +45,8 @@ export interface PolicyFile extends RepoFile {
 /**
  * Files written for the agents that work in the repo. Their rules for how an
  * agent works there, like "Claude should not use emojis", talk to an agent,
- * so in them the words that name the reader name no AI.
+ * so in them the words that name the reader name no AI unless the sentence
+ * refuses.
  */
 const FOR_AGENTS: ReadonlySet<PolicyFileKind> = new Set(['agents', 'claude', 'skill']);
 
@@ -69,8 +75,16 @@ export interface PolicyReading {
   personWritten: SourceLine | null;
   /** A line in AGENTS.md or CLAUDE.md with instructions for an agent to prove it read the file, or null. */
   canary: SourceLine | null;
-  /** Label names the docs keep away from AI or keep for people, as they spell them, with their lines. */
+  /** Label names the docs keep away from AI or keep for people, as they spell them, each once, with its first line. */
   reserved: { name: string; source: SourceLine }[];
+  /**
+   * The first MAX_AI_SENTENCES sentences in the files that name AI, or that
+   * the rules read as about AI, each as the file has it, cut to
+   * MAX_SOURCE_LINE characters, for the admin to read.
+   */
+  aiSentences: { file: PolicyFile; text: string }[];
+  /** How many more such sentences the files have. */
+  moreAiSentences: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,37 +104,70 @@ const AI_PRODUCTS =
 // Cursor, the editor, only with its capital, since a cursor is a word too.
 const CURSOR = /\bCursor\b/;
 const AGENT_WORDS = /\b(?:agents?|agentic|AI assistants?|coding assistants?)\b/i;
-// In a file written for agents, only words for work AI made name AI.
+// In a file written for agents, words for work AI made name AI.
 const AI_MADE =
   /\b(?:AI|A\.I\.|LLM|GPT|ChatGPT|Copilot|Claude|Codex|Gemini|Cursor|agent|model)[- ](?:generated|written|made|assisted|authored|created|produced|aided)\b|\bvibe[- ]?cod\w*/i;
-const AGENT_PHRASES = /\b(?:(?:AI|coding|autonomous|LLM|software)[- ])?(?:agents?|bots?|assistants?)\b/gi;
 
 /** Whether the text names AI, leaving out agents. */
 function namesAiItself(text: string): boolean {
   return AI_ACRONYM.test(text) || AI_COMPOUND.test(text) || AI_WORDS.test(text) || AI_PRODUCTS.test(text) || CURSOR.test(text);
 }
 
-/** Whether the text names AI. In a file written for agents, only work AI made does. */
+/**
+ * Whether the text names AI. In a file written for agents, work AI made
+ * does, and so does any AI word or agent in a sentence that refuses, like
+ * "AI coding assistants are not allowed to modify this repository".
+ */
 function namesAi(text: string, forAgents: boolean): boolean {
-  return forAgents ? AI_MADE.test(text) : namesAiItself(text) || AGENT_WORDS.test(text);
+  if (!forAgents) return namesAiItself(text) || AGENT_WORDS.test(text);
+  return AI_MADE.test(text) || ((namesAiItself(text) || AGENT_WORDS.test(text)) && AGENT_REFUSAL.test(text));
 }
 
 // ---------------------------------------------------------------------------
 // Words that say no.
 
+// Phrases that keep something out without a word like "not".
+const KEEPS_OUT = String.raw`\boff[- ]limits\b|\boff the table\b|\bat the door\b|\bkeep\s+(?:[\w'-]+\s+){0,3}?out\b|\bhard (?:no|pass)\b`;
+
 /** Any word that says no, limits, or refuses. */
-const NEGATIVE =
-  /\bnot\b|n't\b|\b(?:cannot|dont|doesnt|didnt|wont|cant|isnt|arent|wasnt|werent|shouldnt|mustnt|wouldnt|couldnt|hasnt|havent|no|never|none|nor|neither|nobody|nothing|unable|unwilling|refus\w*|reject\w*|ban|bans|banned|banning|prohibit\w*|forbid\w*|forbade|disallow\w*|declin\w*|deny|denied|denies|avoid\w*|refrain\w*|discourag\w*|stop|only|except|unless|restrict\w*|limit\w*|unwelcome|unacceptable|intolerable|close|closed|delet\w*|remov\w*|revert\w*|lock|locked|blocked|ignor\w*|spam|slop|against|instead|rather)\b|zero[- ]tolerance/i;
+const NEGATIVE = new RegExp(
+  String.raw`\bnot\b|n't\b|\b(?:cannot|dont|doesnt|didnt|wont|cant|isnt|arent|wasnt|werent|shouldnt|mustnt|wouldnt|couldnt|hasnt|havent|no|never|none|nor|neither|nobody|nothing|unable|unwilling|refus\w*|reject\w*|ban|bans|banned|banning|prohibit\w*|forbid\w*|forbade|disallow\w*|declin\w*|deny|denied|denies|avoid\w*|refrain\w*|discourag\w*|stop|only|except|unless|restrict\w*|limit\w*|unwelcome|unacceptable|intolerable|close|closed|delet\w*|remov\w*|revert\w*|lock|locked|blocked|ignor\w*|spam|slop|against|instead|rather)\b|zero[- ]tolerance|${KEEPS_OUT}`,
+  'i',
+);
 
 /** The words that refuse outright, beyond a plain negative. */
-const REFUSAL =
-  /\b(?:refus\w*|reject\w*|ban|bans|banned|banning|prohibit\w*|forbid\w*|forbade|disallow\w*|declin\w*|unwelcome|unacceptable|intolerable|closed|deleted|removed|reverted|locked|blocked|ignored|spam|slop)\b|zero[- ]tolerance|\bnot\s+(?:be\s+|being\s+)?(?:accepted|allowed|permitted|welcome|welcomed|tolerated|merged|reviewed|considered|wanted)\b|(?:\bnot|n't|\bnever|\bcannot)\s+(?:[\w'-]+\s+)?(?:accept|allow|permit|welcome|tolerate|merge|review|consider|take|want)\b/i;
+const REFUSAL = new RegExp(
+  String.raw`\b(?:refus\w*|reject\w*|ban|bans|banned|banning|prohibit\w*|forbid\w*|forbade|disallow\w*|declin\w*|unwelcome|unacceptable|intolerable|closed|deleted|removed|reverted|locked|blocked|ignored|spam|slop)\b|zero[- ]tolerance|${KEEPS_OUT}|\bnot\s+(?:be\s+|being\s+)?(?:accepted|allowed|permitted|welcome|welcomed|tolerated|merged|reviewed|considered|wanted)\b|(?:\bnot|n't|\bnever|\bcannot)\s+(?:[\w'-]+\s+)?(?:accept|allow|permit|welcome|tolerate|merge|review|consider|take|want)\b`,
+  'i',
+);
+
+/** In a file written for agents, the words that make an AI word or an agent name AI: a refusal of AI itself. */
+const AGENT_REFUSAL = new RegExp(
+  String.raw`\b(?:prohibit\w*|forbid\w*|forbade|banned|disallow\w*|unwelcome|refus\w*|reject\w*|declin\w*)\b|${KEEPS_OUT}|\bnot\s+(?:be\s+|being\s+)?(?:allowed|permitted|welcome|welcomed|wanted|accepted|tolerated)\b|(?:\bnot|n't|\bnever|\bcannot)\s+(?:[\w'-]+\s+)?(?:allow|permit|welcome|want|accept|tolerate)\b`,
+  'i',
+);
+
+// Bans with no AI word of their own: work a tool made, turned away; work a
+// person must write alone; and a project free of AI.
+const GENERATED_WORK =
+  /\b(?:fully\s+|auto[- ]?|machine[- ]|tool[- ])?generated\s+(?:code|pull requests?|PRs?|contributions?|patch(?:es)?|issues?|changes|commits?|content|text|comments?|reviews?)\b|\b(?:code|pull requests?|PRs?|contributions?|patch(?:es)?|issues|changes|content|output|text)\s+(?:(?:that|which)\s+(?:was|were|is|are)\s+)?generated\s+by\s+(?:a\s+|an\s+|any\s+)?(?:tools?|models?|machines?|assistants?)\b/i;
+const HUMAN_ONLY =
+  /\b100\s?%\s+(?:human|hand)[- ]?(?:written|made|authored|crafted|coded)\b|\b(?:human|hand)[- ](?:written|made|authored|crafted|coded)\s+only\b|\bonly\s+(?:[\w'-]+\s+){0,2}?(?:human|hand)[- ](?:written|made|authored|crafted|coded)\b|\b(?:written|made|authored|created|typed|coded)\s+(?:entirely|only|solely|fully|completely|wholly|exclusively)\s+by\s+(?:a\s+)?(?:humans?|persons?|people|hand)\b|\b(?:must|should|has to|have to|needs? to)\s+be\s+(?:written|made|authored|created|typed|coded)\s+by\s+(?:a\s+)?(?:humans?|persons?|people|hand)\b/i;
+// A person-written PR description is a condition, under personWritten.
+const ABOUT_DESCRIPTION = /\b(?:descriptions?|messages?|summary|summaries|titles?|explanations?)\b/i;
+const AI_FREE = /\b(?:AI|A\.I\.|LLM|GenAI|gen[- ]AI)[- ]free\b/i;
+
+/** Whether a sentence bans AI with no word that names it: it turns away generated work, asks for work only a person wrote, or calls the project AI-free. */
+function bansWithoutNaming(text: string): boolean {
+  return (GENERATED_WORK.test(text) && REFUSAL.test(text)) || (HUMAN_ONLY.test(text) && !ABOUT_DESCRIPTION.test(text)) || AI_FREE.test(text);
+}
 
 // ---------------------------------------------------------------------------
 // The forms known to say no to something else. Each is tested both ways.
 
 // 1. A checkbox a contributor ticks, like "- [ ] I did not use AI", is their
 //    choice, unless it asks them to confirm or promise, or refuses outright.
+//    Only the item's first sentence is the choice.
 const CHECKBOX = /^\s*(?:(?:[-*+]|\d+[.)])\s+\[[ xX]?\]|-\s+label:)/;
 const PLEDGE = /\b(?:confirm|certify|agree|attest|declare|promise|affirm|understand|acknowledge|accept|will|shall|must)\b|\bam aware\b|\bhave read\b/i;
 
@@ -134,31 +181,65 @@ const LABEL_SCOPES = [
   new RegExp(String.raw`^${AI_NAME}(?:\s+tools?)?\s+(?:may|must|should|can)\s*not\s+be\s+used\s+(?:on|for)\s+(?:issues?\s+)?(?:labell?ed|tagged|with the label)\s+${LABEL}(?:\s+issues?)?[.!]?$`, 'i'),
 ];
 
-// 3. A negative that keeps agents from working on their own. The sentence
-//    names no AI but agents, and refuses nothing outright.
-const AUTONOMY =
-  /\b(?:autonomous(?:ly)?|unsupervised|unattended|fully[- ]automated|on (?:its|their|your) own|without (?:a |any )?(?:human|person|people|review|supervision|oversight))\b/gi;
+// 3. A whole sentence that keeps agents from working on their own, like
+//    "Autonomous agents may not open pull requests" or "Agents must not open
+//    PRs without a person". A word more makes it a ban.
+const AGENT_SUBJECT = String.raw`(?:(?:AI|coding|LLM)[- ])?(?:agents?|bots?|assistants?)`;
+const WORK = String.raw`(?:open|submit|create|send|file|make|merge|push)\s+(?:(?:a|any)\s+)?(?:PRs?|pull requests?|changes|commits?|patch(?:es)?)`;
+const AUTONOMY_TAIL = String.raw`(?:on (?:its|their|your) own|autonomously|unsupervised|unattended|without (?:a |any )?(?:human review|human|person|people|review|supervision|oversight))`;
+const AUTONOMY_FORMS = [
+  new RegExp(String.raw`^(?:${AGENT_SUBJECT}|you)\s+(?:may|must|should|can|will)\s*(?:not|never)\s+(?:${WORK}|work|operate|run|contribute)\s+${AUTONOMY_TAIL}[.!]?$`, 'i'),
+  new RegExp(String.raw`^(?:autonomous|unsupervised|unattended|fully[- ]automated)\s+${AGENT_SUBJECT}\s+(?:may|must|should|can|will)\s*(?:not|never)\s+${WORK}[.!]?$`, 'i'),
+  new RegExp(String.raw`^(?:please\s+)?(?:do not|don't|dont|never)\s+${WORK}\s+${AUTONOMY_TAIL}[.!]?$`, 'i'),
+];
 
 // 4. Opening a pull request only once it's ready, like "Never open a PR
-//    without running the tests". The rest of the sentence names no AI and
-//    has no negative.
+//    without running the tests". The rest of the sentence names no AI, has
+//    no negative, and says nothing of who wrote the work.
 const PR_PREP =
-  /^(?:please\s+)?(?:do not|don't|dont|never)\s+(?:open|submit|create|send|file)\s+(?:a\s+|any\s+|your\s+)?(?:PR|PRs|pull requests?|patch(?:es)?)\s+(?:before|without|until)\s+(?:you\s+(?:have\s+)?)?(?:running|run|passing|checking|testing|reading|updating|adding|writing|discussing|opening|filing|signing)\b/i;
+  /^(?:please\s+)?(?:do not|don't|dont|never)\s+(?:open|submit|create|send|file)\s+(?:a\s+|any\s+|your\s+)?(?:PR|PRs|pull requests?|patch(?:es)?)\s+(?:before|without|until)\s+(?:you\s+(?:have\s+)?)?(?:running|run|passing|checking|testing|reading|updating|adding|discussing|opening|filing|signing)\b/i;
+const AUTHORSHIP = /\b(?:generat\w*|written|writ\w*|authored|made|created|produced|models?|tools?|bots?|assistants?|automat\w*|hand|yourself|humans?|persons?|people)\b/i;
+
+// 9. A whole sentence that is a rule for how to work, with nothing about AI:
+//    secrets, branches, where a pull request goes, how many are open, whose
+//    issue it is, folders, whom to tag, build output, and a pull request
+//    that fails its checks. A subject may come first, like "Agents should
+//    not push to main", and a few plain words after.
+const NEG = String.raw`(?:please\s+)?(?:do not|don't|dont|never|must not|mustn't|should not|shouldn't|may not|cannot|can't|will not|won't|(?:are|is) not (?:allowed|permitted) to)`;
+const WORD = String.raw`[\w./\x60'"-]+`;
+const PROCESS_SUBJECT = String.raw`(?:(?:please|${AGENT_SUBJECT}|you|we|contributors|they|maintainers)\s+)?`;
+const PROCESS_RULES = [
+  String.raw`${NEG}\s+(?:include|commit|share|post|paste|expose|leak|add|put|push|upload|check in)\s+(?:any\s+|your\s+)?(?:secrets?|tokens?|credentials?|passwords?|API keys?|private keys?|keys|personal (?:data|information))(?:\s+or\s+(?:secrets?|tokens?|credentials?|passwords?|API keys?|private keys?|keys))?`,
+  String.raw`${NEG}\s+(?:force[- ])?(?:push|commit|merge)\s+(?:(?:directly|anything|changes|code)\s+)?(?:to|into|on|onto)\s+(?:the\s+|a\s+|any\s+)?(?:${WORD}\s+)?(?:main|master|trunk|branch(?:es)?)`,
+  String.raw`${NEG}\s+(?:open|submit|send|create|file|target)\s+(?:a\s+|any\s+|your\s+)?(?:PRs?|pull requests?)\s+(?:against|to|into|on|at)\s+(?:the\s+|a\s+)?(?:${WORD}\s+)?(?:branch(?:es)?|main|master)`,
+  String.raw`${NEG}\s+(?:open|submit|have|keep|send)\s+more than\s+(?:one|two|three|four|five|\d+)\s+(?:open\s+)?(?:PRs?|pull requests?|issues)`,
+  String.raw`${NEG}\s+(?:open|submit|send)\s+(?:a\s+|any\s+)?(?:PRs?|pull requests?)\s+(?:for|on)\s+(?:an?\s+|the\s+)?(?:issues?|tickets?)\s+(?:that|which|someone|another|already|assigned|claimed)`,
+  String.raw`${NEG}\s+(?:edit|modify|change|touch)\s+(?:any\s+|the\s+)?(?:files?|anything|code)\s+(?:in|under|inside)\s+(?:the\s+)?(?:[\w.\x60-]*\/[\w./\x60-]*|${WORD}\s+(?:folder|directory))`,
+  String.raw`${NEG}\s+(?:ping|tag|mention|@-?mention|email|DM|message)\s+(?:the\s+|individual\s+)?(?:maintainers?|reviewers?|us|team members?)`,
+  String.raw`${NEG}\s+(?:commit|edit|modify|check in)\s+(?:the\s+|any\s+)?(?:generated|build|compiled|vendored|minified)\s+(?:build\s+)?(?:files?|output|artifacts?|assets?|bundles?|lockfiles?)`,
+  String.raw`${NEG}\s+(?:merge|accept|review)\s+(?:a\s+|any\s+|your\s+)?(?:PRs?|pull requests?|changes|patch(?:es)?)\s+(?:that|which|until|unless|if|with|without)\s+(?:fails?|breaks?|lacks?|has no|have no|tests?|passing|passes|CI|a test|failing)`,
+].map((rule) => new RegExp(String.raw`^${PROCESS_SUBJECT}${rule}((?:[\s,;:]+[^\s,.!?;:]+){0,8})[.!]?$`, 'i'));
 
 // Phrases taken out before the rest of the sentence is looked at again. Each
 // holds a negative that says no to something else, and none is taken out
-// when the words it spans hold another, beyond the words it `owns`.
+// when the words it spans hold another, beyond the words it `owns`. A form
+// marked as ending the sentence holds only there.
 const SAFE_PHRASES: { name: string; pattern: RegExp; owns?: RegExp; means?: 'personInLoop' }[] = [
-  // 5. Code you don't understand: a person in the loop.
+  // 5. Code you don't understand, haven't read, or haven't tested: a person in the loop.
   {
     name: 'understanding',
     pattern:
-      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:submit|open|send|contribute|push|commit|post)\s+(?:any\s+)?(?:code|changes|work|anything|a PR|PRs|pull requests|a pull request|a change)\s+(?:that\s+)?you\s+(?:do not|don't|dont|can't|cannot|could not|couldn't)\s+(?:fully\s+)?(?:understand|explain|stand behind|vouch for|review)\b/gi,
-    owns: /\byou\s+(?:do not|don't|dont|can't|cannot|could not|couldn't)\b/gi,
+      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:submit|open|send|contribute|push|commit|post|paste)\s+(?:(?:any|large|big|long|whole)\s+)*(?:blocks? of\s+)?(?:code|changes|work|anything|output|text|a PR|PRs|pull requests|a pull request|a change)\s+(?:that\s+)?you\s+(?:do not|don't|dont|can't|cannot|could not|couldn't|have not|haven't|did not|didn't)\s+(?:fully\s+|yet\s+)?(?:understand|explain|stand behind|vouch for|review|reviewed|read|tested|test|run|checked|check)\b/gi,
+    owns: /\byou\s+(?:do not|don't|dont|can't|cannot|could not|couldn't|have not|haven't|did not|didn't)\b/gi,
     means: 'personInLoop',
   },
-  // 6. Reminders: "don't forget to", "don't hesitate to", "no need to".
-  { name: 'reminder', pattern: /\b(?:do not|don't|dont|never)\s+(?:forget|hesitate|be afraid)\s+to\b|\bno need to\b|\bno problem\b/gi },
+  // 6. Reminders: "don't forget to", "no need to", "you don't need to ask
+  //    first", and "we only ask that you".
+  {
+    name: 'reminder',
+    pattern:
+      /\b(?:do not|don't|dont|never)\s+(?:forget|hesitate|be afraid)\s+to\b|\bno need to\b|\bno problem\b|\b(?:do not|don't|dont|does not|doesn't)\s+need\s+to\s+(?:ask|wait|check|tell|mention|sign|get|request|open an issue)\b|\b(?:we|I)\s+only\s+(?:ask|request|need|want)\s+(?:that\s+)?(?:you|contributors|agents|people)\b/gi,
+  },
   // 7. Keeping a template whole: "don't delete this section".
   {
     name: 'template',
@@ -166,14 +247,48 @@ const SAFE_PHRASES: { name: string; pattern: RegExp; owns?: RegExp; means?: 'per
       /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:delete|remove|edit|change|modify|skip)\s+(?:this|the|these|any of the|any)\s+(?:section|template|line|lines|heading|headings|checklist|checkbox(?:es)?|box(?:es)?|comment|comments|questions?)\b/gi,
     owns: /\b(?:delete|remove)\b/gi,
   },
-  // 8. Disclosure: "don't submit AI-assisted code without disclosing it",
-  //    "undisclosed AI use is not allowed".
+  // 8. Disclosure, ending the sentence: "don't submit AI-assisted code
+  //    without disclosing it", "undisclosed AI use is not allowed". A few
+  //    plain words between, with no comma, "and", "or", or "with".
   {
     name: 'disclosure',
     pattern:
-      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:submit|open|send|use|contribute|post)\b[^.!?]{0,80}?\bwithout\s+(?:first\s+)?(?:disclosing|disclosure|saying so|mentioning|noting|telling us|marking|labell?ing)(?:\s+(?:it|that|this|so))?|\bundisclosed\b[^.!?]{0,60}?\b(?:is|are)\s+not\s+(?:allowed|accepted|permitted|welcome|ok|okay)\b/gi,
+      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:submit|open|send|use|contribute|post)\s+(?:(?!with\b|or\b|and\b)[\w'-]+\s+){0,5}?without\s+(?:first\s+)?(?:disclosing|disclosure|saying so|mentioning|noting|telling us|marking|labell?ing)(?:\s+(?:it|that|this|so|them))?(?=[.!]?$)|\bundisclosed\s+(?:(?!and\b|or\b)[\w'-]+\s+){0,3}?(?:is|are)\s+not\s+(?:allowed|accepted|permitted|welcome|ok|okay)(?=[.!]?$)/gi,
+  },
+  // 10. Review, ending the sentence: "Do not use AI to write commit messages
+  //     without reading them." A person in the loop.
+  {
+    name: 'review',
+    pattern:
+      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:use|submit|open|send|post|paste|commit)\s+(?:(?!with\b|or\b|and\b)[\w'-]+\s+){0,6}?without\s+(?:first\s+)?(?:reading|reviewing|checking|testing|understanding|editing|verifying|running)(?:\s+(?:it|them|the output|the result|each line|every line|the code|the changes))?(?:\s+yourself)?(?=[.!]?$)/gi,
+    means: 'personInLoop',
+  },
+  // 11. A condition that opens the sentence: "If an agent cannot run the
+  //     tests, say so in the pull request." The rest is read again.
+  {
+    name: 'condition',
+    pattern:
+      /^if\s+(?:you|an?\s+agent|the\s+agent|your\s+agent|it|they)\s+(?:cannot|can't|can not|could not|couldn't|does not|doesn't|do not|don't|did not|didn't|is not|isn't|are not|aren't)\s+(?:(?!and\b|or\b)[\w'-]+\s+){0,8}?[\w'-]+,\s*/gi,
+  },
+  // 12. A label that scopes where agents work: "Agents may only work on
+  //     issues labeled `agent ready`."
+  {
+    name: 'label only',
+    pattern:
+      /\bonly\s+(?:work\s+)?(?:on|for|with)\s+(?:(?:open|the)\s+)?(?:issues?|tickets?)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with the label)\s+["`][^"`]{1,50}["`]/gi,
   },
 ];
+
+/** Whether the sentence is a whole rule for how to work, as in form 9, with a few plain words after it. */
+function processRule(text: string): boolean {
+  for (const rule of PROCESS_RULES) {
+    const match = rule.exec(text);
+    if (match === null) continue;
+    const after = match[1] ?? '';
+    if (!NEGATIVE.test(after) && !namesAiItself(after) && !AUTHORSHIP.test(after)) return true;
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Refusing pull requests altogether, whatever the reason.
@@ -241,7 +356,7 @@ const ABOUT_CONTRIBUTING =
 
 const WELCOMES_ANY = /\b(?:AI|LLMs?|agents?|agent|ai)\b|\b(?:Claude|Codex|Copilot|ChatGPT|Cursor|Gemini)\b/i;
 const INVITES = [
-  /\b(?:(?:AI|coding|autonomous|LLM)[- ])?agents\s+(?:may|can|are (?:welcome|invited|encouraged|free|allowed) to)\s+(?:open|submit|send|make|create|file|contribute|work)\b/i,
+  /\b(?:(?:AI|coding|autonomous|LLM)[- ])?agents\s+(?:may|can|are (?:welcome|invited|encouraged|free|allowed) to)\s+(?:only\s+)?(?:open|submit|send|make|create|file|contribute|work)\b/i,
   /\ban? (?:(?:AI|coding|autonomous)[- ])?agent\s+(?:may|can|is (?:welcome|invited|encouraged|free|allowed) to)\s+(?:open|submit|send|make|create|file|contribute|work)\b/i,
   /\b(?:(?:AI|coding)[- ])?agent[- ]?(?:made |written |opened |authored )?(?:pull requests|PRs|contributions|patches)\s+(?:are|is)\s+(?:welcome|accepted|encouraged|fine|allowed)\b/i,
   /\b(?:pull requests|PRs|contributions|patches)\s+(?:from|by)\s+(?:(?:AI|coding|autonomous)[- ])?agents\s+(?:are|is)\s+(?:welcome|accepted|encouraged|fine|allowed)\b/i,
@@ -257,6 +372,10 @@ const ALLOWS = [
   /\b(?:using|use of)\s+(?:AI|LLMs?|(?:AI |coding )?(?:agents|assistants|tools))\s+(?:is|are)\s+(?:fine|welcome|allowed|okay|ok|permitted|encouraged)\b/i,
   new RegExp(String.raw`\b(?:you may|you can|feel free to|you're welcome to|you are welcome to|it's fine to|it is fine to)\s+use\s+${TOOLS}`, 'i'),
   /\b(?:we|this project|this repo(?:sitory)?)\s+(?:welcome|welcomes|accept|accepts|allow|allows|encourage|encourages)\s+(?:AI|LLM)[- ](?:assisted|generated|written|made|aided)\b/i,
+  new RegExp(
+    String.raw`\b(?:we|this project|this repo(?:sitory)?)\s+(?:welcome|welcomes|accept|accepts|(?:are|is) happy to (?:take|accept|review)|take|takes)\s+(?:contributions|pull requests|PRs|changes|patches)\s+(?:made|written|created|built|drafted)\s+(?:with|using)\s+(?:the help of\s+)?${TOOLS}`,
+    'i',
+  ),
 ];
 
 // A person in the loop.
@@ -271,7 +390,7 @@ const CANARY =
 const FOR_PEOPLE =
   /\b(?:(?:reserved|kept|set aside|saved|meant|intended|only)\s+for|(?:is|are)\s+for)\s+(?:people|humans|human contributors|newcomers|new contributors|first[- ]time contributors|beginners|people new)\b/i;
 const QUOTED = /["`]([^"`\n]{1,50})["`]/g;
-const PRONOUN = /\b(?:it|them|these|those|they|such)\b/i;
+const PRONOUN = /\b(?:it|its|that|them|these|those|they|such)\b/i;
 
 // ---------------------------------------------------------------------------
 // Reading a file.
@@ -288,7 +407,9 @@ interface Sentence {
   paragraph: number;
   /** Whether a heading the sentence sits under names AI. */
   underAi: boolean;
-  /** Part of a checkbox a contributor ticks. */
+  /** Part of a list: a list item, a checkbox, or an issue form's option. */
+  item: boolean;
+  /** The first sentence of a checkbox a contributor ticks. */
   choice: boolean;
 }
 
@@ -296,6 +417,7 @@ interface Sentence {
 // a table row. Any other line goes on the one before it, since text is often
 // wrapped in the middle of a sentence.
 const BLOCK_START = /^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|>|\|)/;
+const LIST_ITEM = /^\s*(?:[-*+]\s|\d+[.)]\s)/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 // A sentence ends at the last of its closing marks, before a space. One
 // mark at a time, so a long run of them takes one step each.
@@ -329,16 +451,19 @@ function scan(text: string): { paragraphs: { start: number; end: number }[]; sen
     const { start, end } = block;
     block = null;
     const original = text.slice(start, end);
-    const choice = CHECKBOX.test(original);
+    const checkbox = CHECKBOX.test(original);
+    const item = checkbox || LIST_ITEM.test(original);
     const underAi = headings.some((h) => h.ai);
     let from = 0;
+    let first = true;
     const add = (to: number) => {
       const piece = original.slice(from, to);
       const lead = piece.length - piece.trimStart().length;
       const trimmed = piece.trim();
       if (trimmed !== '') {
         const s = start + from + lead;
-        sentences.push({ text: plain(trimmed), start: s, end: s + trimmed.length, paragraph: paragraphs.length, underAi, choice });
+        sentences.push({ text: plain(trimmed), start: s, end: s + trimmed.length, paragraph: paragraphs.length, underAi, item, choice: checkbox && first });
+        first = false;
       }
     };
     for (const match of original.matchAll(SENTENCE_END)) {
@@ -457,15 +582,13 @@ function judge(sentence: Sentence, forAgents: boolean): Judgement {
     const match = scope.exec(text);
     if (match?.[1] !== undefined) return { ban: false, reserved: [match[1].trim()] };
   }
-  if (new RegExp(AUTONOMY.source, 'i').test(text) && !REFUSAL.test(text)) {
-    const rest = text.replace(AGENT_PHRASES, ' ').replace(AUTONOMY, ' ');
-    if (!namesAiItself(rest)) return { ban: false, noAutonomy: true };
-  }
+  if (AUTONOMY_FORMS.some((form) => form.test(text))) return { ban: false, noAutonomy: true };
   const prep = PR_PREP.exec(text);
   if (prep) {
     const rest = text.slice(prep.index + prep[0].length);
-    if (!NEGATIVE.test(rest) && !namesAi(rest, forAgents)) return { ban: false };
+    if (!NEGATIVE.test(rest) && !namesAi(rest, forAgents) && !namesAiItself(rest) && !AUTHORSHIP.test(rest)) return { ban: false };
   }
+  if (processRule(text)) return { ban: false };
   const { rest, personInLoop } = withoutSafePhrases(text);
   if (NEGATIVE.test(rest)) return { ban: true };
   return personInLoop ? { ban: false, personInLoop: true } : { ban: false };
@@ -480,7 +603,9 @@ function words(text: string): number {
  *
  * - A sentence that names AI, or sits under a heading or in a file that
  *   does, and says no, makes it a ban, whatever else the files say. So does
- *   one that says the project takes no pull requests.
+ *   one that says the project takes no pull requests, one that turns away
+ *   generated work, one that asks for work only a person wrote, and one
+ *   that calls the project AI-free.
  * - Otherwise a sentence that invites agents makes it invite agents, unless
  *   a file keeps agents from working on their own, asks for a person in the
  *   loop, or asks for a person-written PR description. Then, like a sentence
@@ -494,25 +619,52 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
   let noAutonomy: SourceLine | null = null;
   let personInLoop: SourceLine | null = null;
   let canary: SourceLine | null = null;
-  const reserved: PolicyReading['reserved'] = [];
+  const reserved = new Map<string, { name: string; source: SourceLine }>();
+  const keep = (name: string, source: SourceLine) => {
+    const key = name.toLowerCase();
+    if (!reserved.has(key)) reserved.set(key, { name, source });
+  };
+  const aiSentences: PolicyReading['aiSentences'] = [];
+  const seenSentences = new Set<string>();
+  let moreAiSentences = 0;
 
   for (const file of files) {
     const forAgents = FOR_AGENTS.has(file.kind);
     const aboutAi = file.kind === 'aiPolicy';
     const { paragraphs, sentences } = scan(file.text);
     const lineAt = linesOf(file);
-    let previous: { paragraph: number; named: boolean } | null = null;
+    // Whether a sentence before, in the paragraph, names AI, and whether a
+    // lead-in that names AI and ends with a colon carries to the list after it.
+    let paragraph = -1;
+    let paragraphNamed = false;
+    let listCarry = false;
     for (const sentence of sentences) {
       const text = sentence.text;
       const source = lineAt(sentence.start);
+      if (sentence.paragraph !== paragraph) {
+        paragraph = sentence.paragraph;
+        paragraphNamed = false;
+        if (!sentence.item) listCarry = false;
+      }
       const own = namesAi(text, forAgents);
-      const inherited: boolean =
-        previous !== null && previous.paragraph === sentence.paragraph && previous.named && (words(text) <= 4 || PRONOUN.test(text));
+      const inherited = paragraphNamed && (words(text) <= 4 || PRONOUN.test(text));
       const underAi = !forAgents && sentence.underAi;
-      const named: boolean = own || aboutAi || underAi || inherited;
-      previous = { paragraph: sentence.paragraph, named };
+      const listed = listCarry && sentence.item;
+      const named: boolean = own || aboutAi || underAi || inherited || listed;
+      if (named) paragraphNamed = true;
+      if (named && /:$/.test(text)) listCarry = true;
 
-      if (refusesPullRequests(text)) ban ??= source;
+      if (named || bansWithoutNaming(text) || namesAiItself(text) || AGENT_WORDS.test(text)) {
+        const whole = file.text.slice(sentence.start, sentence.end).slice(0, MAX_SOURCE_LINE).trim();
+        const key = `${file.path}\n${whole}`;
+        if (!seenSentences.has(key)) {
+          seenSentences.add(key);
+          if (aiSentences.length < MAX_AI_SENTENCES) aiSentences.push({ file, text: whole });
+          else moreAiSentences += 1;
+        }
+      }
+
+      if (refusesPullRequests(text) || bansWithoutNaming(text)) ban ??= source;
       const topic = named || (forAgents && ABOUT_CONTRIBUTING.test(text));
       if (topic && NEGATIVE.test(text)) {
         const judged = judge(sentence, forAgents);
@@ -520,10 +672,10 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
         else {
           if (judged.noAutonomy) noAutonomy ??= source;
           if (judged.personInLoop) personInLoop ??= source;
-          for (const name of judged.reserved ?? []) reserved.push({ name, source });
+          for (const name of judged.reserved ?? []) keep(name, source);
         }
       }
-      if (FOR_PEOPLE.test(text)) for (const name of quotedNames(text)) reserved.push({ name, source });
+      if (FOR_PEOPLE.test(text)) for (const name of quotedNames(text)) keep(name, source);
       if (PERSON_IN_LOOP.test(text)) personInLoop ??= source;
       if (forAgents && file.kind !== 'skill' && CANARY.test(text)) canary ??= source;
       if (WELCOMES_ANY.test(text)) {
@@ -555,7 +707,9 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
     personInLoop,
     personWritten: written === null ? null : written.source,
     canary,
-    reserved,
+    reserved: [...reserved.values()],
+    aiSentences,
+    moreAiSentences,
   };
 }
 
@@ -632,9 +786,11 @@ export function suggestSettings(
   };
   if (tags.length > 0) settings.tags = tags.map((label) => label.name);
   if (excluded.length > 0) {
-    settings.excludedTags = excluded.slice(0, MAX_TAGS).map((label) => label.name);
-    for (const kept of reading.reserved) {
-      if (excluded.some((label) => lower(label.name) === lower(kept.name))) sources.push(source('excludedTags', kept.source));
+    const kept = excluded.slice(0, MAX_TAGS);
+    settings.excludedTags = kept.map((label) => label.name);
+    const keptNames = new Set(kept.map((label) => lower(label.name)));
+    for (const reason of reading.reserved) {
+      if (keptNames.has(lower(reason.name))) sources.push(source('excludedTags', reason.source));
     }
   }
   if (vouch !== null) {

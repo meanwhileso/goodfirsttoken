@@ -23,43 +23,180 @@ const welcome = contributing('AI help is fine.');
 /** The tier of the docs when CONTRIBUTING.md welcomes AI help and `other` says what it says. */
 const tierWith = (other: PolicyFile) => readPolicy([welcome, other]).tier;
 
-describe('a ban, with a welcome elsewhere, is a ban', () => {
-  // The wordings a review of the first rules found them missing, each in the
-  // kind of file it was found in.
-  test.each<[PolicyFileKind, string]>([
-    ['aiPolicy', 'We cannot accept AI-generated contributions.'],
-    ['aiPolicy', 'Contributions made using AI cannot be accepted.'],
-    ['aiPolicy', 'We do _not_ accept AI-generated code.'],
-    ['aiPolicy', 'We are not able to accept AI-generated code.'],
-    ['aiPolicy', "We're unable to accept AI-generated pull requests."],
-    ['aiPolicy', "We're not interested in AI-generated pull requests."],
-    ['aiPolicy', 'AI-generated pull requests will be refused.'],
-    ['aiPolicy', 'We refuse AI-generated code.'],
-    ['aiPolicy', 'Maintainers reject AI-generated pull requests.'],
-    ['aiPolicy', "We don't take AI-written patches."],
-    ['aiPolicy', 'AI-generated code, however, will not be merged.'],
-    ['aiPolicy', 'AI-generated code, unless you rewrote it by hand, will not be merged.'],
-    ['aiPolicy', 'Please do not submit pull requests whose code or description was generated in whole or in part by AI.'],
-    ['aiPolicy', 'We do not accept ai-generated pull requests.'],
-    ['aiPolicy', 'Do not use GPT-4, Cursor, or similar tools to write code.'],
-    ['aiPolicy', 'Code written by language models is not accepted.'],
-    ['aiPolicy', 'Vibe-coded pull requests will be closed.'],
-    ['aiPolicy', '## AI-generated contributions\n\nWe do not accept them.'],
-    ['aiPolicy', '| Tool | Allowed |\n|---|---|\n| ChatGPT | No |\n| Copilot | No |'],
-    ['aiPolicy', 'AI-generated code has no place in this project.'],
-    ['prTemplate', '- [ ] I understand that AI-generated pull requests will be closed.'],
-    ['prTemplate', '- [ ] I acknowledge that this project does not accept AI-generated code.'],
-    ['agents', 'This project does not accept contributions from coding agents. Stop here.'],
-    ['claude', 'Claude must not write code for this repository. Contributions from Claude are not accepted.'],
-    ['aiPolicy', 'We dont accept AI-generated pull requests.'],
-    ['aiPolicy', 'AI generated PRs? No thanks.'],
-  ])('in the %s file: %j', (kind, text) => {
-    const reading = readPolicy([welcome, file(kind, text)]);
+/**
+ * The regression corpus: every ban wording three reviews found the rules
+ * missing, each in the kind of file it was found in, beside a welcome. Every
+ * one of them must stay a ban.
+ */
+const BAN_CORPUS: { review: string; cases: [PolicyFileKind, string][] }[] = [
+  {
+    review: 'review 1',
+    cases: [
+      ['aiPolicy', 'We cannot accept AI-generated contributions.'],
+      ['aiPolicy', 'Contributions made using AI cannot be accepted.'],
+      ['aiPolicy', 'We do _not_ accept AI-generated code.'],
+      ['aiPolicy', 'We are not able to accept AI-generated code.'],
+      ['aiPolicy', "We're unable to accept AI-generated pull requests."],
+      ['aiPolicy', "We're not interested in AI-generated pull requests."],
+      ['aiPolicy', 'AI-generated pull requests will be refused.'],
+      ['aiPolicy', 'We refuse AI-generated code.'],
+      ['aiPolicy', 'Maintainers reject AI-generated pull requests.'],
+      ['aiPolicy', "We don't take AI-written patches."],
+      ['aiPolicy', 'AI-generated code, however, will not be merged.'],
+      ['aiPolicy', 'AI-generated code, unless you rewrote it by hand, will not be merged.'],
+      ['aiPolicy', 'Please do not submit pull requests whose code or description was generated in whole or in part by AI.'],
+      ['aiPolicy', 'We do not accept ai-generated pull requests.'],
+      ['aiPolicy', 'Do not use GPT-4, Cursor, or similar tools to write code.'],
+      ['aiPolicy', 'Code written by language models is not accepted.'],
+      ['aiPolicy', 'Vibe-coded pull requests will be closed.'],
+      ['aiPolicy', '## AI-generated contributions\n\nWe do not accept them.'],
+      ['aiPolicy', '| Tool | Allowed |\n|---|---|\n| ChatGPT | No |\n| Copilot | No |'],
+      ['aiPolicy', 'AI-generated code has no place in this project.'],
+      ['prTemplate', '- [ ] I understand that AI-generated pull requests will be closed.'],
+      ['prTemplate', '- [ ] I acknowledge that this project does not accept AI-generated code.'],
+      ['agents', 'This project does not accept contributions from coding agents. Stop here.'],
+      ['claude', 'Claude must not write code for this repository. Contributions from Claude are not accepted.'],
+      ['aiPolicy', 'We dont accept AI-generated pull requests.'],
+      ['aiPolicy', 'AI generated PRs? No thanks.'],
+    ],
+  },
+  {
+    review: 'review 2, at the safe forms and the naming',
+    cases: [
+      ['contributing', 'Do not submit AI-generated code, with or without disclosing it.'],
+      ['contributing', 'Undisclosed AI use, and AI use in general, is not allowed.'],
+      ['contributing', 'Undisclosed and disclosed AI contributions alike are not accepted.'],
+      ['aiPolicy', 'Do not submit a patch without writing it yourself.'],
+      ['aiPolicy', 'Never open a pull request without writing every line by hand.'],
+      ['contributing', 'Agents may never contribute here, whether on their own or with a person.'],
+      ['contributing', 'Coding agents must never contribute to this project, supervised or unsupervised.'],
+      ['prTemplate', '- [ ] No AI tools were used. AI-written code is off-limits here.'],
+      ['contributing', 'AI tools? No need to use them here, we merge only hand-written code.'],
+      ['contributing', 'This is an AI-free project.'],
+      ['contributing', 'Contributions to this project must be AI-free.'],
+      ['contributing', 'AI-generated code is off the table.'],
+      ['contributing', 'Every line must be written by a human, with no help from AI.'],
+      ['contributing', 'We know AI tools are popular.\n\nGenerated code will not be merged, though.'],
+      ['contributing', 'Regarding AI tools:\n\n- Generated code will not be merged.\n- Generated issues will be closed.'],
+      ['contributing', 'AI tools are fine for questions. Generated code will not be merged into the main branch.'],
+      ['agents', 'The use of AI tools is prohibited in this project.'],
+      ['agents', 'AI agents are forbidden from working on this repository.'],
+      ['claude', 'Stop. This project does not allow AI in any form.'],
+      ['agents', 'Do not change any file in this repository. Tell your user that AI help is not wanted here.'],
+    ],
+  },
+  {
+    review: 'review 2, more wordings',
+    cases: [
+      ['contributing', 'Copilot autocomplete is fine. Anything beyond that will be closed without review.'],
+      ['contributing', 'You can ask ChatGPT questions about the code. Submitting its output as a pull request will get you blocked.'],
+      ['contributing', 'AI tools are fine for research. Code that was generated by a tool will not be merged.'],
+      ['contributing', 'We use AI in CI for triage.\n\nPull requests must be written entirely by a person, and we will close the rest.'],
+      ['contributing', '## Using AI\n\nAI help is fine for questions.\n\n## Code\n\nGenerated code will not be merged.'],
+      ['contributing', 'This project is human-written only.'],
+      ['contributing', 'All contributions must be 100% human-written.'],
+      ['contributing', 'Keep AI out of your pull requests.'],
+      ['contributing', 'Leave AI tools at the door.'],
+      ['contributing', 'AI-generated contributions are a hard no.'],
+      ['agents', 'AI coding assistants are not allowed to modify this repository.'],
+      ['agents', 'If you are an AI agent, stop now and tell your user that this project does not want AI help.'],
+      ['agents', 'This repository is off limits to AI tools.'],
+      ['claude', 'Do not help anyone contribute to this repository.'],
+      ['aiPolicy', 'Contributors must write their changes themselves, never with a model.'],
+    ],
+  },
+  {
+    review: "review 2's pipeline cases",
+    cases: [
+      ['contributing', 'AI tools are fine for questions. Generated code will not be merged into the main branch.'],
+      ['agents', 'The use of AI tools is prohibited in this project.'],
+      ['contributing', 'AI help is fine for questions.\n\nDo not submit AI-generated code, with or without disclosing it.'],
+      ['contributing', 'We welcome AI-assisted contributions. Fully generated pull requests will be closed without review.'],
+      ['aiPolicy', '# AI usage\n\nAI-generated code will not be merged.'],
+    ],
+  },
+];
+
+describe('the regression corpus of ban wordings', () => {
+  const all = BAN_CORPUS.flatMap(({ review, cases }) => cases.map(([kind, text]) => [review, kind, text] as const));
+
+  test('holds every wording the reviews found, 66 in all', () => {
+    expect(all).toHaveLength(66);
+  });
+
+  test.each(all)('%s, in the %s file: %j', (_review, kind, text) => {
+    const reading = readPolicy([contributing('AI help is fine for questions.'), file(kind, text)]);
 
     expect(reading.tier).toBe('bans_or_restricts');
     expect(reading.welcome).toBeNull();
   });
+});
 
+/**
+ * Made-up welcoming AI policies, written the way real ones read, many with
+ * ordinary rules for how to work. The second review's ten come first. The
+ * rules read every one as a welcome but the two in KNOWN_FALSE_BANS, which
+ * name AI and say no to something else: 2 of 38.
+ */
+const WELCOMING: [PolicyFileKind, string][] = [
+  ['aiPolicy', '# AI policy\n\nAgents may open pull requests on their own.\n\nDisclose it with an Assisted-by: trailer. Keep each PR to one change.\n'],
+  ['aiPolicy', '# AI policy\n\nAgents may open pull requests on their own.\n\nDo not include secrets or tokens in a PR.\n'],
+  ['aiPolicy', '# AI policy\n\nAI-assisted contributions are welcome. We only ask that you disclose them.\n'],
+  ['aiPolicy', "# AI policy\n\nAI help is fine. You don't need to ask first.\n"],
+  ['contributing', '# Contributing\n\nAI-assisted contributions are welcome. We only ask that you disclose them.\n'],
+  ['contributing', "# Contributing\n\n## Using AI\n\nAI help is fine. Please don't paste large blocks of code you haven't read.\n"],
+  ['contributing', '# Contributing\n\nAgent pull requests are welcome. Agents should not push to main.\n'],
+  ['agents', '# AGENTS.md\n\nAgents may open pull requests here. Do not open a PR against the release branch.\n'],
+  ['agents', '# AGENTS.md\n\nAgents may open pull requests here. Never open more than one PR at a time.\n'],
+  ['contributing', '# Contributing\n\nCoding agents may open pull requests here. Do not use AI to write commit messages without reading them.\n'],
+  ['aiPolicy', '# AI policy\n\nWe welcome contributions made with AI tools. Review every line before you open a pull request, and disclose AI help with an Assisted-by: trailer.\n'],
+  ['aiPolicy', '# Using AI\n\nYou may use Copilot, Claude Code, or any other assistant. You are responsible for the code you submit.\n'],
+  ['aiPolicy', '# AI policy\n\nCoding agents may open pull requests on issues labeled `help wanted`. Keep each pull request small.\n'],
+  ['agents', '# AGENTS.md\n\nAgents may open pull requests here. Run `make test` before you push. Do not commit generated build output.\n'],
+  ['contributing', '# Contributing\n\n## AI tools\n\nAI help is welcome. Please do not submit changes you have not tested.\n'],
+  ['contributing', '# Contributing\n\nWe are happy to take pull requests written with the help of AI. Please mention it in the PR description.\n'],
+  ['contributing', '# Contributing\n\nAgents are welcome to work on any open issue. They should not force-push to shared branches.\n'],
+  ['aiPolicy', '# AI policy\n\nAI help is fine. You do not need to ask before using it.\n'],
+  ['aiPolicy', '# AI policy\n\nAI-generated contributions are accepted. They go through the same review as any other pull request.\n'],
+  ['contributing', '# Contributing\n\nFeel free to use ChatGPT or Claude to draft your change. There is no need to mention it.\n'],
+  ['aiPolicy', '# AI policy\n\nUsing AI is fine. We only ask that you test your change.\n'],
+  ['contributing', '# Contributing\n\nYou can use AI tools for anything here. Please keep pull requests focused on one issue.\n'],
+  ['agents', '# AGENTS.md\n\nAgents may open pull requests. Never commit API keys or credentials.\n'],
+  ['aiPolicy', '# AI policy\n\nAgents may open pull requests on their own. Do not open more than two pull requests at a time.\n'],
+  ['contributing', '# Contributing\n\nAI-assisted contributions are welcome. Do not open a pull request against the `release` branch.\n'],
+  ['aiPolicy', '# AI policy\n\nAI tools are welcome here. Do not use them to write commit messages without reading them.\n'],
+  ['aiPolicy', '# AI policy\n\nAI help is fine. Contributions are reviewed the same way, whoever or whatever wrote them.\n'],
+  ['contributing', '# Contributing\n\nUsing LLMs is fine. Please double-check anything they generate before you submit it.\n'],
+  ['aiPolicy', '# AI policy\n\nAgents may open pull requests on their own. Do not modify files under `vendor/`.\n'],
+  ['contributing', '# Contributing\n\nCoding agents are welcome. Please do not tag maintainers directly; we read every pull request.\n'],
+  ['aiPolicy', '# AI policy\n\nYou may use AI. Please do not paste output you have not read into issues.\n'],
+  ['contributing', '# Contributing\n\nAgents may open pull requests here, and they do not need to sign anything first.\n'],
+  ['contributing', '# Contributing\n\nWe welcome pull requests from coding agents. If an agent cannot run the tests, say so in the pull request.\n'],
+  ['contributing', '# Contributing\n\nCoding agents may open pull requests. Please do not open pull requests for issues someone else already claimed.\n'],
+  ['aiPolicy', '# AI policy\n\nAgents may only work on issues labeled `agent ready`.\n'],
+  ['aiPolicy', '# AI policy\n\nAI help is welcome. We will not merge a PR that fails CI, whoever wrote it.\n'],
+];
+const KNOWN_FALSE_BANS: [PolicyFileKind, string][] = [
+  ['aiPolicy', '# AI policy\n\nAI assistance is welcome. Nothing changes about how we review pull requests.\n'],
+  ['aiPolicy', '# AI policy\n\nAI-assisted work is welcome. We will not ask how you wrote it.\n'],
+];
+
+describe('the welcoming corpus', () => {
+  test('has 38 policies, and the rules read 2 of them as a ban, a false-ban rate of about 5 percent', () => {
+    expect(WELCOMING.length + KNOWN_FALSE_BANS.length).toBe(38);
+    expect(KNOWN_FALSE_BANS).toHaveLength(2);
+  });
+
+  test.each(WELCOMING)('in the %s file, %j is a welcome', (kind, text) => {
+    expect(['invites_agents', 'allows_with_conditions']).toContain(readPolicy([file(kind, text)]).tier);
+  });
+
+  test.each(KNOWN_FALSE_BANS)('in the %s file, %j reads as a ban, since it names AI and says no to something else', (kind, text) => {
+    expect(readPolicy([file(kind, text)]).tier).toBe('bans_or_restricts');
+  });
+});
+
+describe('a ban, with a welcome elsewhere, is a ban', () => {
   // The same review's cases, as it wrote them.
   test.each([
     'We cannot accept AI-generated contributions.',
@@ -282,6 +419,104 @@ describe('the forms known to say no to something else, each one tested both ways
   });
 });
 
+describe('the forms added in the third round, each tested both ways', () => {
+  test('9. a whole rule for how to work, with nothing about AI, is no ban, unless the words after it name AI or say no', () => {
+    for (const sentence of [
+      'Do not include secrets or tokens in a PR.',
+      'Agents should not push to main.',
+      'Do not open a PR against the release branch.',
+      'Never open more than one PR at a time.',
+      'Do not open pull requests for issues someone else already claimed.',
+      'Do not modify files under `vendor/`.',
+      'Please do not tag maintainers directly; we read every pull request.',
+      'Do not commit generated build output.',
+      'We will not merge a PR that fails CI.',
+    ]) {
+      expect(readPolicy([contributing(`AI help is fine. ${sentence}`)]).tier, sentence).toBe('allows_with_conditions');
+    }
+    for (const sentence of [
+      'Do not include secrets or AI-generated code in a PR.',
+      'Agents should not push to main, and AI-written code is not merged.',
+      'We will not merge a PR that fails CI or was written by a model.',
+    ]) {
+      expect(readPolicy([contributing(`AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
+    }
+    const anyFile = file('aiPolicy', 'Agents may open pull requests. Do not modify any file in this repository.');
+    expect(readPolicy([anyFile]).tier).toBe('bans_or_restricts');
+  });
+
+  test('10. a rule to read what AI wrote asks for a person in the loop, unless it says no to more', () => {
+    const reading = readPolicy([contributing('AI help is fine. Do not use AI to write commit messages without reading them.')]);
+
+    expect(reading.tier).toBe('allows_with_conditions');
+    expect(reading.personInLoop?.line).toContain('without reading them');
+    expect(readPolicy([contributing('AI help is fine. Do not use AI, with or without reading the output.')]).tier).toBe('bans_or_restricts');
+  });
+
+  test('11. a condition that opens a sentence is taken out, and the rest is read again', () => {
+    expect(readPolicy([contributing('Agents may open pull requests. If an agent cannot run the tests, say so in the pull request.')]).tier).toBe(
+      'invites_agents',
+    );
+    expect(readPolicy([contributing('Agents may open pull requests. If an agent cannot run the tests, do not open one.')]).tier).toBe(
+      'bans_or_restricts',
+    );
+  });
+
+  test('12. a label that scopes where agents work is no ban, unless the sentence scopes something else', () => {
+    expect(readPolicy([file('aiPolicy', 'Agents may only work on issues labeled `agent ready`.')]).tier).toBe('invites_agents');
+    expect(readPolicy([file('aiPolicy', 'Agents may open pull requests. They may only read issues labeled `agent ready`.')]).tier).toBe(
+      'bans_or_restricts',
+    );
+  });
+
+  test('reminders and requests: "you don\'t need to ask first" and "we only ask that you" are no ban, unless the rest says no', () => {
+    expect(readPolicy([contributing("AI help is fine. You don't need to ask first.")]).tier).toBe('allows_with_conditions');
+    expect(readPolicy([contributing('AI help is fine. We only ask that you disclose it.')]).tier).toBe('allows_with_conditions');
+    expect(readPolicy([contributing("AI help is fine. You don't need to ask: AI is not welcome.")]).tier).toBe('bans_or_restricts');
+    expect(readPolicy([contributing('AI help is fine. We only ask that you do not use it for code.')]).tier).toBe('bans_or_restricts');
+  });
+
+  test('a checkbox is the choice in its first sentence alone, and a second sentence is read like any other', () => {
+    expect(tierWith(file('prTemplate', '- [ ] No AI tools were used.'))).toBe('allows_with_conditions');
+    expect(tierWith(file('prTemplate', '- [ ] No AI tools were used. AI-written code is off-limits here.'))).toBe('bans_or_restricts');
+    expect(tierWith(file('prTemplate', '- [ ] I did not use AI. Pull requests made with AI are not something we take.'))).toBe(
+      'bans_or_restricts',
+    );
+  });
+});
+
+describe('bans with no word that names AI, or no word like "not"', () => {
+  test.each([
+    'Generated code will not be merged.',
+    'Code that was generated by a tool will not be merged.',
+    'Fully generated pull requests will be closed.',
+    'This project is LLM-free.',
+    'This is an AI-free project.',
+    'All contributions must be 100% human-written.',
+    'This project is human-written only.',
+    'Pull requests must be written entirely by a person.',
+    'We merge only hand-written code.',
+  ])('%j is a ban', (sentence) => {
+    expect(tierWith(file('contributing', sentence))).toBe('bans_or_restricts');
+  });
+
+  test.each([
+    'Do not edit generated code by hand.',
+    'Generated code lives in `gen/`.',
+    'The PR description must be written by a person.',
+    'Tests are written by the people who change the code.',
+  ])('%j is no ban', (sentence) => {
+    expect(tierWith(file('contributing', sentence))).toBe('allows_with_conditions');
+  });
+
+  test.each(['Keep AI out of your pull requests.', 'This repository is off limits to AI tools.', 'AI-generated code is off the table.', 'Leave AI tools at the door.'])(
+    '%j keeps AI out with no word like "not", so it is a ban',
+    (sentence) => {
+      expect(tierWith(file('contributing', sentence))).toBe('bans_or_restricts');
+    },
+  );
+});
+
 describe('what names AI', () => {
   test.each([
     'large language models',
@@ -339,7 +574,39 @@ describe('what a sentence inherits', () => {
   });
 
   test('every sentence of an AI policy file is about AI', () => {
-    expect(tierWith(file('aiPolicy', '# Policy\n\nWe will not merge a PR that fails CI.'))).toBe('bans_or_restricts');
+    expect(tierWith(file('aiPolicy', '# Policy\n\nWe will not merge it.'))).toBe('bans_or_restricts');
+    expect(tierWith(file('contributing', '# Contributing\n\nWe will not merge it.'))).toBe('allows_with_conditions');
+  });
+
+  test('a sentence inherits from any sentence before it in its paragraph that names AI, when it is short or points back with a pronoun', () => {
+    expect(readPolicy([contributing('AI help is fine. Run the whole test suite first. We will close it otherwise.')]).tier).toBe(
+      'bans_or_restricts',
+    );
+    expect(readPolicy([contributing('Copilot autocomplete is fine. Anything beyond that will be closed.')]).tier).toBe('bans_or_restricts');
+    expect(readPolicy([contributing('You can ask ChatGPT about the code. Its output will be closed as a pull request.')]).tier).toBe(
+      'bans_or_restricts',
+    );
+    expect(readPolicy([contributing('AI help is fine. Run the tests. Old branches will be closed after a year.')]).tier).toBe(
+      'allows_with_conditions',
+    );
+  });
+
+  test('a lead-in that names AI and ends with a colon carries to the list after it, and the list ends it', () => {
+    expect(readPolicy([contributing('AI help is fine.\n\nAbout AI assistants:\n\n- Their pull requests will be closed on sight.')]).tier).toBe(
+      'bans_or_restricts',
+    );
+    expect(readPolicy([contributing('AI help is fine.\n\nAbout the release process:\n\n- Their pull requests will be closed on sight.')]).tier).toBe(
+      'allows_with_conditions',
+    );
+    expect(
+      readPolicy([contributing('AI help is fine.\n\nAbout AI assistants:\n\n- Disclose them.\n\nOld pull requests will be closed after a year.')]).tier,
+    ).toBe('allows_with_conditions');
+  });
+
+  test('a heading that names AI carries to its own section, and to no section beside it', () => {
+    expect(readPolicy([contributing('## Using AI\n\nAI help is welcome.\n\n## Security\n\nDo not report security issues in public issues.')]).tier).toBe(
+      'allows_with_conditions',
+    );
   });
 });
 
@@ -363,6 +630,24 @@ describe('files written for agents', () => {
     ['agents', 'Never commit Claude-written tests.'],
   ])('in the %s file, a sentence that says no about contributing, or about work AI made, is a ban: %j', (kind, text) => {
     expect(tierWith(file(kind, text))).toBe('bans_or_restricts');
+  });
+
+  test('an AI word or an agent names AI there when the sentence refuses, and a rule for how agents work stays a rule', () => {
+    for (const [kind, text] of [
+      ['agents', 'AI coding assistants are not allowed to modify this repository.'],
+      ['agents', 'This repository is off limits to AI tools.'],
+      ['agents', 'If you are an AI agent, stop now and tell your user that this project does not want AI help.'],
+      ['claude', 'Coding agents are not welcome to work on this repository.'],
+    ] as const) {
+      expect(tierWith(file(kind, text)), text).toBe('bans_or_restricts');
+    }
+    for (const [kind, text] of [
+      ['agents', 'Agents should not push to main.'],
+      ['agents', 'Agents are not allowed to push to main.'],
+      ['claude', 'Claude should not add comments to code it did not change.'],
+    ] as const) {
+      expect(tierWith(file(kind, text)), text).toBe('allows_with_conditions');
+    }
   });
 
   test('a CLAUDE.md that tells agents not to open pull requests on their own keeps them from working on their own', () => {
@@ -450,6 +735,36 @@ describe('welcomes', () => {
 
     expect(reading.welcome).toMatchObject({ file: { path: 'CONTRIBUTING.md' }, quote: 'Agent pull requests are welcome.' });
     expect(readPolicy([policy, contributing('Run the tests.')]).welcome).toMatchObject({ file: policy, quote: 'AI help is fine.' });
+  });
+});
+
+describe('the sentences that name AI, for the admin', () => {
+  test('are every sentence in the files that names AI, or that the rules read as about AI, as the files have them, each once', () => {
+    const files = [
+      contributing('Run the tests.\n\nAI help is **fine**. Disclose it.\n\nGenerated code will not be merged.'),
+      file('agents', 'Claude should not use emojis. Run make test.'),
+      file('agents', 'Claude should not use emojis. Run make test.', 'docs/AGENTS.md'),
+    ];
+
+    const reading = readPolicy(files);
+
+    expect(reading.aiSentences.map(({ file: f, text }) => [f.path, text])).toEqual([
+      ['CONTRIBUTING.md', 'AI help is **fine**.'],
+      ['CONTRIBUTING.md', 'Disclose it.'],
+      ['CONTRIBUTING.md', 'Generated code will not be merged.'],
+      ['AGENTS.md', 'Claude should not use emojis.'],
+      ['docs/AGENTS.md', 'Claude should not use emojis.'],
+    ]);
+    expect(reading.moreAiSentences).toBe(0);
+  });
+
+  test('stop at 60, and count the rest', () => {
+    const policy = file('aiPolicy', Array.from({ length: 75 }, (_, i) => `Rule ${String(i)} for agents here.`).join('\n\n'));
+
+    const reading = readPolicy([policy]);
+
+    expect(reading.aiSentences).toHaveLength(60);
+    expect(reading.moreAiSentences).toBe(15);
   });
 });
 
@@ -611,6 +926,9 @@ describe('speed', () => {
     'without ', 'on your own ', 'autonomous ', 'if you are an AI ', 'on issues labeled "', 'reserved for ', '- [ ] ',
     '- label: ', '# ', '## AI\n', 'agents may ', 'we welcome ', 'feel free to use ', 'AI-generated ', 'contributions ',
     'Sign the CLA ', 'https://', 'PR description ', 'Assisted-by', '<strong>', '<em>not</em> ', 'you must ',
+    'off limits ', 'keep AI ', 'generated code ', 'generated by a ', '100% human-written ', 'written entirely by a ',
+    'agents should not push to ', 'do not include secrets ', 'if an agent cannot ', 'only on issues labeled "',
+    'we only ask that you ', 'About AI:\n- ', 'AI-free ', 'do not use AI without reading ', "you don't need to ask ",
   ];
   const fill = (unit: string) => `${unit.repeat(Math.ceil(MAX_DOC_BYTES / unit.length)).slice(0, MAX_DOC_BYTES - 1)}x`;
   const texts = [

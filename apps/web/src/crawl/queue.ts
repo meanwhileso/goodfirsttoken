@@ -218,7 +218,12 @@ export async function crawlRepos(
     };
     let candidate;
     try {
-      candidate = await addCandidate(db, { repo: repo.name, facts: repo.standing, policy, settings, suggestedTags, sources }, deps.now());
+      const aiSentences = reading.aiSentences.map(({ file, text }) => ({ path: file.path, text }));
+      candidate = await addCandidate(
+        db,
+        { repo: repo.name, facts: repo.standing, policy, settings, suggestedTags, sources, aiSentences, moreAiSentences: reading.moreAiSentences },
+        deps.now(),
+      );
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
       console.error(`The crawler couldn't put ${repo.name} in the admin queue.`, error);

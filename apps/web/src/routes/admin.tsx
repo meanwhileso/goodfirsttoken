@@ -166,6 +166,26 @@ function Sources({ item }: { item: QueueItem }) {
   );
 }
 
+/** Every sentence in the repo's docs that names AI, as the files have them, for the admin to read before a verdict. */
+function AiSentences({ item }: { item: QueueItem }) {
+  if (item.aiSentences.length === 0 && item.moreAiSentences === 0) return null;
+  return (
+    <Block label="every sentence in its docs that names AI. Read them before you decide">
+      {item.aiSentences.map((sentence, i) => (
+        <div key={`${String(i)} ${sentence.path}`} className="stack" style={{ '--gap': '6px' } as CSSProperties}>
+          <span className="mono small muted">{sentence.path}</span>
+          <Quote>{sentence.text}</Quote>
+        </div>
+      ))}
+      {item.moreAiSentences > 0 && (
+        <span className="mono small muted">
+          {item.moreAiSentences.toLocaleString('en-US')} more in the files. Read them there.
+        </span>
+      )}
+    </Block>
+  );
+}
+
 function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
@@ -200,6 +220,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         <SettingsBadges settings={item.settings} />
       </Block>
       <Sources item={item} />
+      <AiSentences item={item} />
       {item.suggestedTags.length > 0 && (
         <Block label="labels that could mean ready for help">
           <div className="admin-item__labels">

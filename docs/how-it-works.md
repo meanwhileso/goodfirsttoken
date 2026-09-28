@@ -1103,8 +1103,11 @@ waited longest first, each with an ID that `admin_decide` takes.
   full. Its ID names the status change that made it pending, so once its
   status changes, the ID names nothing, and a decision on it is `not_found`.
 - A **crawler find** is a waiting [candidate](#crawl-candidates), with its
-  policy quote, link, and tier, the settings the crawler suggests, and the
-  labels that could mean ready for help. The
+  policy quote, link, and tier, the settings the crawler suggests, the
+  labels that could mean ready for help, the line behind each suggestion,
+  and every sentence in the repo's docs that names AI, the first 60 of
+  them. The crawler's rules can miss a ban worded in a way they don't know,
+  so the admin reads those sentences before a verdict. The
   [policy crawler](#the-policy-crawler) makes them, and so does the sample
   data.
 - Each item has the repo's facts: its stars, when it was made, its last
@@ -1680,8 +1683,10 @@ A candidate is a repo the crawler found whose own docs welcome AI help. The
 - A candidate has the repo's stars, when it was made, its last push, and
   when its owner's account was made. It has the policy quote, link, and tier,
   the settings the crawler's rules suggest, labels that could mean ready
-  for help, with their open issue counts, and the line in the repo's files
-  behind each suggestion, and any canary, as the files have them.
+  for help, with their open issue counts, the line in the repo's files
+  behind each suggestion, and any canary, as the files have them, and the
+  first 60 sentences in the repo's docs that name AI, with how many more
+  there are.
 - Suggested settings can leave out any setting, tags included. The admin
   picks the tags.
 - A repo on the do-not-list never enters the admin queue.
@@ -1720,7 +1725,15 @@ approving a maintainer's registration of it takes it off, under
 The crawler looks for popular projects whose own docs welcome AI help, and
 puts each one in the admin queue as a [candidate](#crawl-candidates). It
 never lists a project. An admin does, under
-[The admin queue](#the-admin-queue). It reads public data only, with the
+[The admin queue](#the-admin-queue).
+
+**What the rules can't do.** The crawler sorts a repo with plain rules over
+its text, and plain rules can miss a ban worded in a way they don't know.
+Three reviews found new wordings in turn. The rules catch every one of
+them now, and the tests keep them as a corpus, but a repo can still say no
+in words the rules have never seen. So the crawler keeps every sentence in
+the repo's docs that names AI, and the admin reads them before a verdict.
+Nothing is listed without an admin. It reads public data only, with the
 service token, under [Calls to GitHub](#calls-to-github). With no service
 token it reads nothing, and the log names the secret.
 
@@ -1771,6 +1784,10 @@ the next crawl. It reads:
 - every file with a name a proposal reads, in each folder a proposal looks
   in, under [Registering a project](#registering-a-project). A proposal
   takes the first it finds, and the crawler reads them all,
+- every other text file in the root, `.github/`, or `docs/` with an AI word
+  among the parts of its name, split at dots, dashes, and underscores:
+  `ai`, `llm`, `llms`, or `genai`, like `AI_USAGE.md`, `LLM_POLICY.md`, or
+  `GENAI-CONTRIBUTIONS.md`. It reads them as AI policy files,
 - `CLAUDE.md` in the root, found without case,
 - the pull request templates in a `PULL_REQUEST_TEMPLATE` folder in the
   root, `docs/`, or `.github/`, ending `.md`, `.markdown`, or `.txt`. In
@@ -1779,7 +1796,8 @@ the next crawl. It reads:
 - each agent skill, a `SKILL.md` in a folder under `.claude/skills/` or
   `skills/`,
 - the issue templates in `.github/ISSUE_TEMPLATE/` ending `.md`,
-  `.markdown`, `.yml`, or `.yaml`, leaving out `config`, and
+  `.markdown`, `.yml`, or `.yaml`, `config.yml` too, since its contact
+  links carry text the repo writes, and
 - whether it has a vouch file, `VOUCHED.td` in the root or `.github/`,
   without reading it.
 
@@ -1792,7 +1810,8 @@ names it and says why. That is when:
   template folder in the root or `docs/` has its name in another case than
   `PULL_REQUEST_TEMPLATE`,
 - it has more than 10 pull request templates in a folder, more than 10
-  issue templates, or more than 10 skills in a skills folder,
+  issue templates, more than 10 skills in a skills folder, or more than 10
+  files named for AI in a folder,
 - GitHub gives no text for a listed file at that commit, as for a file
   that is binary, gone, or cut short, or gives text with a NUL character,
   as UTF-16 text has, or
@@ -1829,63 +1848,120 @@ would put a repo that said no in front of an admin.
   Claude, Codex, Gemini, Llama, Mistral, DeepSeek, Devin, Aider, or
   Windsurf.
   - It names AI too when it sits under a heading that does, until a heading
-    of the same level or higher, and anywhere in an AI policy file.
-  - It names AI when the sentence before it in its paragraph does, and it
-    has 4 words or fewer, like "No thanks.", or points back with it, them,
-    these, those, they, or such.
+    of the same level or higher, and anywhere in an AI policy file. A
+    heading that names AI carries to its own section and no further. Tried
+    on sections that follow an AI section in welcoming docs, carrying it
+    further turned 4 of 4 into bans and caught no ban the other rules miss.
+  - It names AI when any sentence before it in its paragraph does, and it
+    has 4 words or fewer, like "No thanks.", or points back with it, its,
+    that, them, these, those, they, or such.
+  - A sentence that names AI and ends with a colon carries to the list
+    after it, until a paragraph that isn't a list item.
   - A bot, or a machine-generated file, names no AI, so "stale PRs are
     closed by a bot" and "Don't edit machine-generated files" are no ban.
-  - `AGENTS.md`, `CLAUDE.md`, and the skills talk to agents. There, only
-    words for work AI made name AI, like AI-generated, Claude-written, or
-    vibe-coded, and headings count for nothing. So a rule there for how an
-    agent works, like "Claude should not use emojis", is no ban.
+  - `AGENTS.md`, `CLAUDE.md`, and the skills talk to agents. There, words
+    for work AI made name AI, like AI-generated, Claude-written, or
+    vibe-coded, and so does any other AI word, or an agent, in a sentence
+    that refuses: prohibited, forbidden, banned, not allowed, not welcome,
+    not wanted, off limits, or the like. Headings count for nothing there.
+    So "AI coding assistants are not allowed to modify this repository" is
+    a ban, and a rule for how an agent works, like "Claude should not use
+    emojis" or "Agents should not push to main", is no ban.
 - **A sentence says no** when it has a word that says no, limits, or
   refuses, in any of its forms: not, n't, cannot, no, never, none, nor,
   neither, nobody, nothing, unable, unwilling, refuse, reject, ban,
   prohibit, forbid, disallow, decline, deny, avoid, refrain, discourage,
   stop, only, except, unless, restrict, limit, unwelcome, unacceptable,
   intolerable, close, closed, delete, remove, revert, lock, blocked,
-  ignore, spam, slop, against, instead, rather, or zero tolerance.
+  ignore, spam, slop, against, instead, rather, or zero tolerance, or a
+  phrase that keeps something out with no such word: off limits, off the
+  table, at the door, keep it out, or hard no.
 - **A sentence bans AI** when it names AI and says no, whatever it says no
   to, unless it has one of the forms below. So "AI tools help you avoid
   typos" is a ban. In `AGENTS.md`, `CLAUDE.md`, and the skills, a sentence
   that says no and talks about contributing bans AI too: one with
   contribute, accept, open or submit a pull request, pull requests from or
   by, or write code for this.
+- **Some bans need no word that names AI**, anywhere:
+  - generated code, pull requests, contributions, patches, issues, or the
+    like, or work generated by a tool, a model, or a machine, in a
+    sentence that refuses it, like "Generated code will not be merged",
+  - work that only a person may write: 100% human-written, human-written
+    only, only hand-written, written entirely by a person, or must be
+    written by a human, unless the sentence is about a description,
+    message, title, or summary, which is the person-written PR description,
+  - and AI-free, LLM-free, or GenAI-free.
 - **These forms say no to something else**, and are no ban. A test shows
   each one both ways.
-  1. A checkbox a contributor ticks, a Markdown task list item or an issue
-     form's option, like "I did not use AI". It is their choice, unless it
-     asks them to confirm, certify, agree, attest, declare, promise, affirm,
-     understand, acknowledge, or accept, says will, shall, must, am aware,
-     or have read, or refuses outright, as closed or rejected do.
+  1. The first sentence of a checkbox a contributor ticks, a Markdown task
+     list item or an issue form's option, like "I did not use AI". It is
+     their choice, unless it asks them to confirm, certify, agree, attest,
+     declare, promise, affirm, understand, acknowledge, or accept, says
+     will, shall, must, am aware, or have read, or refuses outright, as
+     closed or rejected do. A second sentence in the item is read like any
+     other.
   2. A whole sentence that keeps AI off issues with one label, named in
      quotes or backticks, like "Don't use AI on issues labeled
      `good first issue`." The label becomes an excluded tag. A word more
      makes it a ban.
-  3. A sentence that keeps agents from working on their own, with
-     autonomous, unsupervised, unattended, fully automated, on its own, on
-     their own, on your own, or without a person, a human, review,
-     supervision, or oversight. It names no AI but agents, and refuses
-     nothing outright.
+  3. A whole sentence that keeps agents from working on their own, in one
+     of three shapes: agents, or you, may, must, should, can, or will not
+     or never open pull requests, work, or contribute on their own,
+     autonomously, unsupervised, unattended, or without a person, a human,
+     review, supervision, or oversight, like "Agents must not open PRs
+     without a person". Or autonomous, unsupervised, unattended, or fully
+     automated agents may not open pull requests. Or, in a file for agents,
+     "Do not open pull requests on your own". A word more makes it a ban.
   4. A sentence that starts like "Never open a PR without running the
      tests": do not, don't, or never, then open, submit, create, send, or
      file a pull request, then before, without, or until, then running,
      passing, checking, testing, reading, or the like. The rest of it names
-     no AI and says no to nothing.
-  5. "Don't submit code you don't understand" and the like. It asks for a
-     person in the loop.
-  6. A reminder: don't forget to, don't hesitate to, don't be afraid to,
-     no need to, or no problem.
+     no AI, says no to nothing, and says nothing of who wrote the work, as
+     writing, by hand, or yourself would.
+  5. "Don't submit code you don't understand", "Please don't paste large
+     blocks of code you haven't read", and the like. It asks for a person
+     in the loop.
+  6. A reminder or a request: don't forget to, don't hesitate to, don't be
+     afraid to, no need to, no problem, you don't need to ask, wait, check,
+     tell, mention, or sign, and we only ask that you.
   7. Keeping a template whole: don't delete, remove, edit, change, modify,
      or skip this section, template, line, heading, checklist, or the like.
-  8. A rule to disclose: don't submit, open, send, use, contribute, or post
-     something without disclosing, mentioning, noting, or the like, or
-     undisclosed, then is or are not allowed or the like.
+  8. A rule to disclose, ending the sentence: don't submit, open, send, use,
+     contribute, or post something without disclosing, mentioning, noting,
+     or the like, with at most five words between and none of them with,
+     and, or or, or undisclosed, then up to three words, then is or are not
+     allowed or the like. So "Do not submit AI-generated code, with or
+     without disclosing it" is a ban.
+  9. A whole sentence that is a rule for how to work, with nothing about AI.
+     It keeps secrets, tokens, or keys out of a pull request, keeps pushes
+     off main or a branch, says where a pull request goes, how many to have
+     open, not to take an issue someone else claimed, to leave the files in
+     a folder alone, not to tag maintainers, not to commit build output, or
+     that a pull request that fails its checks isn't merged. An agent, you,
+     we, or they may come first, and up to eight words after it, which
+     name no AI, say no to nothing, and say nothing of who wrote the work.
+     So "Agents should not push to main" is no ban, and "Do not modify any
+     file in this repository" in an AI policy is one.
+  10. A rule to read what AI wrote, ending the sentence: don't use, submit,
+      open, send, post, paste, or commit something without reading,
+      reviewing, checking, testing, or the like, like "Do not use AI to
+      write commit messages without reading them". It asks for a person in
+      the loop.
+  11. A condition that opens the sentence, like "If an agent cannot run
+      the tests,". It is taken out, and the rest is read again.
+  12. A label that scopes where agents work: only on issues labeled
+      `agent ready`, with the label in quotes or backticks.
 
-  Forms 5 to 8 are taken out of the sentence, and what is left is read
-  again, so "Don't forget to never use AI" is a ban. None is taken out when
-  it holds a second word that says no.
+  Forms 5 to 8 and 10 to 12 are taken out of the sentence, and what is
+  left is read again, so "Don't forget to never use AI" is a ban. None is
+  taken out when it holds a second word that says no.
+- **How often the rules are wrong, on made-up docs.** The tests hold every
+  ban wording three reviews found, 66 in all, and the rules read every one
+  as a ban. They also hold 38 made-up welcoming policies, written the way
+  real ones read, with ordinary rules for how to work, and the rules read
+  2 of them as a ban: "Nothing changes about how we review pull requests"
+  and "We will not ask how you wrote it". Each names AI through its
+  paragraph and says no to something else.
 - **A sentence refuses outside pull requests** when it says the project
   doesn't accept, take, merge, review, consider, want, or welcome pull
   requests, PRs, patches, or contributions, isn't accepting, taking, or
@@ -1898,7 +1974,7 @@ would put a repo that said no in front of an admin.
   one, and "We don't take pull requests for this project" is a ban.
 - **A sentence invites agents** when it says agents may, can, or are
   welcome, invited, encouraged, free, or allowed to open, submit, send,
-  make, create, file, contribute, or work, that agent pull requests or
+  make, create, file, contribute, or work, only or not, that agent pull requests or
   contributions, or pull requests from agents, are welcome, that agents
   are welcome, or that the project welcomes pull requests from agents, or
   welcomes agents.
@@ -1906,8 +1982,10 @@ would put a repo that said no in front of an admin.
   use is fine, welcome, allowed, accepted, okay, permitted, or encouraged,
   that AI-assisted or AI-generated work is, that AI is, that using AI is,
   that you may, can, or are welcome to use AI or a tool it names, like
-  Claude Code, Codex, Copilot, ChatGPT, Cursor, or Gemini, or that the
-  project welcomes, accepts, allows, or encourages AI-assisted work.
+  Claude Code, Codex, Copilot, ChatGPT, Cursor, or Gemini, that the project
+  welcomes, accepts, allows, or encourages AI-assisted work, or that it
+  welcomes, accepts, or is happy to take contributions or pull requests
+  made or written with AI or one of those tools.
 - **A person in the loop** is a sentence that says a person, a human, or
   you must, should, need to, or have to review, understand, explain, stand
   behind, or take responsibility, or that says human in the loop, or human
@@ -1917,7 +1995,7 @@ The tiers:
 
 | Tier | When | Reaches the admin queue |
 |---|---|---|
-| Bans or restricts | A sentence anywhere bans AI, or refuses outside pull requests, like "This project does not accept pull requests." Whatever else the docs say | Never |
+| Bans or restricts | A sentence anywhere bans AI, with or without a word that names it, or refuses outside pull requests, like "This project does not accept pull requests." Whatever else the docs say | Never |
 | Invites agents | A sentence invites agents, and nothing keeps agents from working on their own, asks for a person in the loop, or asks for a person-written PR description | Yes |
 | Allows with conditions | A sentence invites agents with one of those conditions, or a sentence allows AI help | Yes |
 | No policy | None of these, whether the docs mention AI or not | Never |
@@ -1966,10 +2044,19 @@ queue with:
   mention, say, write, start, end, begin, use, append, prefix, or sign
   something. No setting comes from it. An admin who wants agents told
   about it writes the note.
+- The sentences that name AI: every sentence in the files it read that
+  names AI, that the rules read as about AI, like every sentence of an AI
+  policy file, or that bans AI with no word that names it, each once, as
+  the file has it, up to 500 characters. It keeps the first 60, in the
+  order the files are read, and how many more there are. The admin reads
+  them before a verdict, under [The admin queue](#the-admin-queue).
 
-`admin_queue` marks each line of a quote and of each source line with
-`> `, as the repo's words for the admin's agent to read as data, and puts
-each label name the repo gave in quotes.
+`admin_queue` marks each line of a quote, a source line, and a sentence
+that names AI with `> `, as the repo's words for the admin's agent to read
+as data, and puts each label name the repo gave in quotes. A line ends at
+any character a reader might break a line at: a line feed, a carriage
+return, a vertical tab, a form feed, a file, group, or record separator,
+a next-line character, or a line or paragraph separator.
 
 **The queue.** The consumer takes up to 5 batches at a time, one run at a
 time, and first asks GitHub what is left of the budget.

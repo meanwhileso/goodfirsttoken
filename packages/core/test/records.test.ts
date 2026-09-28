@@ -193,9 +193,15 @@ describe('crawl candidates', () => {
     ]);
   });
 
-  test('a candidate stored before it had source lines has none, and a source line is at most 500 characters', () => {
+  test('a candidate stored before it had source lines or AI sentences has none, a source line is at most 500 characters, and it keeps at most 60 AI sentences', () => {
     const stored = validate(crawlCandidateSchema, candidate);
     expect(stored.ok && stored.value.sources).toEqual([]);
+    expect(stored.ok && [stored.value.aiSentences, stored.value.moreAiSentences]).toEqual([[], 0]);
+    const sentence = { path: 'AI_POLICY.md', text: 'AI help is fine.' };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: Array<typeof sentence>(60).fill(sentence) }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: Array<typeof sentence>(61).fill(sentence) }))).toEqual([
+      'aiSentences',
+    ]);
     const source = { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' };
     expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [source] }))).toEqual([]);
     expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [{ ...source, line: 'x'.repeat(501) }] }))).toEqual([

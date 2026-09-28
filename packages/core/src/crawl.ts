@@ -52,6 +52,20 @@ export const candidateSourceSchema = z.object({
 });
 export type CandidateSource = z.infer<typeof candidateSourceSchema>;
 
+/**
+ * The most sentences that name AI a crawler find keeps from the repo's docs,
+ * for the admin to read before a verdict.
+ */
+export const MAX_AI_SENTENCES = 60;
+
+/** A sentence in the repo's docs that names AI, as the file has it, cut to MAX_SOURCE_LINE characters. */
+export const aiSentenceSchema = z.object({
+  /** The file's path in the repo. */
+  path: trimmedText(MAX_SOURCE_LINE),
+  text: trimmedText(MAX_SOURCE_LINE),
+});
+export type AiSentence = z.infer<typeof aiSentenceSchema>;
+
 /** A repo whose own docs welcome AI help, waiting for an admin or decided by one. */
 export const crawlCandidateSchema = z
   .object({
@@ -66,6 +80,10 @@ export const crawlCandidateSchema = z
     suggestedTags: z.array(suggestedTagSchema),
     /** The line behind each suggestion the docs gave, and any canary. */
     sources: z.array(candidateSourceSchema).default([]),
+    /** The first MAX_AI_SENTENCES sentences in the docs that name AI, for the admin to read. */
+    aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES).default([]),
+    /** How many more sentences that name AI the docs have. */
+    moreAiSentences: count.default(0),
     status: candidateStatusSchema,
     /** The admin who decided, or null while it waits. */
     decidedBy: githubId.nullable(),

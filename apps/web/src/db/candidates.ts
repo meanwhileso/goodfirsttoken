@@ -4,6 +4,7 @@ import {
   id,
   mustParse,
   repoName,
+  type AiSentence,
   type CandidateSource,
   type CandidateStatus,
   type CrawlCandidate,
@@ -31,6 +32,8 @@ interface CandidateRow {
   settings: string;
   suggested_tags: string;
   sources: string;
+  ai_sentences: string;
+  more_ai_sentences: number;
   status: string;
   decided_by: number | null;
   decided_at: number | null;
@@ -54,6 +57,8 @@ function toCandidate(row: CandidateRow): CrawlCandidate {
       settings: fromJson(row.settings),
       suggestedTags: fromJson(row.suggested_tags),
       sources: fromJson(row.sources),
+      aiSentences: fromJson(row.ai_sentences),
+      moreAiSentences: row.more_ai_sentences,
       status: row.status,
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
@@ -71,6 +76,9 @@ export interface NewCandidate {
   suggestedTags: SuggestedTag[];
   /** The line behind each suggestion the docs gave, and any canary. None when left out. */
   sources?: CandidateSource[];
+  /** The sentences in the docs that name AI, for the admin to read, and how many more there are. None when left out. */
+  aiSentences?: AiSentence[];
+  moreAiSentences?: number;
 }
 
 /**
@@ -101,9 +109,9 @@ export async function addCandidate(
   const result = await db
     .prepare(
       `INSERT INTO crawl_candidates (id, repo, found_at, stars, repo_created_at, repo_pushed_at,
-         owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, sources, status,
-         decided_by, decided_at, reason)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'waiting', NULL, NULL, NULL
+         owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, sources, ai_sentences,
+         more_ai_sentences, status, decided_by, decided_at, reason)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL
        WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?2)
        ON CONFLICT DO NOTHING`,
     )
@@ -121,6 +129,8 @@ export async function addCandidate(
       JSON.stringify(c.settings),
       JSON.stringify(c.suggestedTags),
       JSON.stringify(c.sources),
+      JSON.stringify(c.aiSentences),
+      c.moreAiSentences,
     )
     .run();
   return result.meta.changes === 1 ? c : null;

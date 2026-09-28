@@ -912,7 +912,7 @@ in `people`.
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
-| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, status, and the admin's decision | `id` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
 | `crawl_passes` | Pass of the crawler's search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
 
@@ -967,7 +967,9 @@ that break the rules, so it returns the problems for the caller to show.
   list in `crawl_seeds`, owned by `src/db/seeds.ts`, the passes in
   `crawl_passes`, owned by `src/db/crawls.ts`, the index
   `crawl_candidates_by_repo`, and `crawl_candidates.sources`, JSON text
-  that a find stored before it reads as an empty list. `crawl_passes.open`
+  that a find stored before it reads as an empty list, and
+  `crawl_candidates.ai_sentences` and `more_ai_sentences`, the sentences
+  that name AI, which a find stored before has none of. `crawl_passes.open`
   is 1 or 0. A seed's `handled_at` and `outcome` are null until the cron
   job handles it, and set together. A pass keeps
   where it stands in its own row, and moves on only with a compare-and-set
@@ -983,8 +985,8 @@ live feed. It says crawl results stay in the deployment's database, and only
 listed projects and their policy quotes are public, so `crawl_candidates`,
 `crawl_seeds`, and `crawl_passes` stay private, a rejection's reason
 included. The crawler keeps no verdict on a repo it doesn't propose. Its log
-names the repos it proposed, and a repo it couldn't read whole or GitHub
-failed on, with no verdict on it. The reason an admin gives for
+names the repos it proposed, a repo it couldn't read whole or GitHub failed
+on, with no verdict on it, and a find it couldn't write. The reason an admin gives for
 rejecting a registration reaches the maintainer's agent, and so does the
 reason a removed project is rejected with. The note an admin keeps with a
 do-not-list entry reaches no one else.
@@ -1966,10 +1968,10 @@ admin queue as crawl candidates. The rules are in
   longest, so its consumer leaves the most for the others: it stops while
   less than three fifths of an hourly budget is left, 500 above where a
   maintainer's refresh stops. Its cap of 60 calls covers a run of 5
-  batches, about 2 queries each and 2 calls for each find, with room left.
+  batches, about 3 queries each and 2 calls for each find, with room left.
   The search's cap of 20 calls a run keeps each run under GitHub's 30
   searches a minute, and so sets the pace of the whole crawl: at most 1,900
-  repos an hour, whose reads cost about 380 GraphQL points. Its share of a
+  repos an hour, whose reads cost about 570 GraphQL points. Its share of a
   tenth only keeps it from running the minute's searches to the end, since
   no other job searches.
 - **Bands of stars.** Search serves the first 1,000 results of a query, so
@@ -1987,20 +1989,25 @@ admin queue as crawl candidates. The rules are in
   `.claude/skills/`, and `skills/`, each entry with its `mode` and `size`.
   The listings of `.github/` and the skills folders go one level deeper,
   for the template folders and each skill. Then one query for each 50
-  files, each an `object(expression:)` alias with `<commit>:<path>` as a
+  files and folder checks, about two for a batch of 10, each an
+  `object(expression:)` alias with `<commit>:<path>` as a
   variable, so every file is read at the commit the first query named. It
   asks for each file's `text`, `isBinary`, and `isTruncated`, and for each
   listed folder's `oid` at that commit, to check that the first query
   listed that commit. The folders and names come from
-  `src/projects/docs.ts`, which a proposal uses too. Only a repo in a
+  `src/projects/docs.ts`, which a proposal uses too. Beyond them it reads
+  each text file in the root, `.github/`, and `docs/` with `ai`, `llm`,
+  `llms`, or `genai` among the parts of its name, as an AI policy file,
+  and `config.yml` among the issue templates. Only a repo in a
   listed tier costs more: `GET /repos/{owner}/{repo}`, since GitHub's
   GraphQL doesn't give who can open pull requests, checked with the
   `whyNotEligible` an admin's listing uses, then its labels, 100 to a
   query, each with `issues(states: [OPEN]) { totalCount }`.
 - **No verdict on what it can't read.** `readRepos` and `readFiles` say
   why a repo can't be read whole: a file over the size limit, a symbolic
-  link by its mode, `0o120000`, more templates or skills than it reads, no
-  text or a NUL character, or a folder whose `oid` differs at the commit.
+  link by its mode, `0o120000`, more templates, skills, or files named for
+  AI than it reads, no text or a NUL character, or a folder whose `oid`
+  differs at the commit.
   The consumer counts such a repo as `unreadable_docs`, logs why, and
   gives it no tier. A symbolic link in a folder the crawler doesn't list,
   like a linked `.claude/`, isn't seen, so a skill behind one is not read.
@@ -2032,21 +2039,35 @@ admin queue as crawl candidates. The rules are in
   whatever `GH_WEB_URL` says, since the policy schema takes https links
   only and the GitHub fake serves plain http locally. The branch and each
   part of the path are URL-encoded.
+- **Every sentence that names AI goes to the admin.** Plain rules can miss
+  a ban worded in a way they don't know, so `readPolicy` keeps each
+  sentence that names AI, that the rules read as about AI, or that bans AI
+  with no AI word, as the file has it, cut to 500 characters, the first
+  `MAX_AI_SENTENCES`, 60, and counts the rest. A find stores them in
+  `crawl_candidates.ai_sentences` and `more_ai_sentences`, and
+  `admin_queue`, the admin page, and the admin skill show them before a
+  verdict, marked as the repo's words. The rules' tests hold a corpus of
+  every ban wording three reviews found, 66, all read as bans, and 38
+  made-up welcoming policies, of which the rules read 2 as bans.
 - **The rules' speed.** Every pattern runs on one sentence, with a few
   words of slack at most, and a sentence's end is one mark before a space,
   so no pattern tries a start again after it fails. Each file's lines are
   found once, each heading is read once, and the label names are looked
-  for in the first 2,000 characters of the welcome, so the time a file
-  takes grows with its length alone. A test reads a file at the size limit
+  for in the first 2,000 characters of the welcome. A label kept for
+  people is kept once, whatever the number of sentences that name it. So
+  the time a file takes grows with its length alone. A test reads a file at the size limit
   for each run of space and mark and each phrase a pattern starts with, as
   an AI policy, an `AGENTS.md`, and a PR template, and each takes well
   under a second.
 - **Repo text reaches settings only as a label name, a trailer name, or a
-  CLA link.** The canary and the line behind each suggestion go in
-  `crawl_candidates.sources`, shown to the admin as the repo's words, and
-  no setting holds them. `admin_queue` marks each line of a quote or a
-  source line with `> `, and puts label names in quotes, so no line of a
-  repo's text can pass for a line of the result.
+  CLA link.** The canary, the line behind each suggestion, and the
+  sentences that name AI go in `crawl_candidates.sources` and
+  `ai_sentences`, shown to the admin as the repo's words, and no setting
+  holds them. `admin_queue` marks each line of a quote, a source line, or
+  a sentence that names AI with `> `, and puts label names in quotes, so
+  no line of a repo's text can pass for a line of the result. It breaks a
+  line at a vertical tab, a form feed, and the file, group, and record
+  separators too, as some readers do.
 - **The queue's name.** The Worker tells a crawl batch by its queue's name:
   `crawl`, or one ending `-crawl`, as the deploy's `<WORKER_NAME>-crawl`
   does.
@@ -2075,8 +2096,10 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   - Search: 100 pages of 100 repos, plus a few searches for each band that
     has to be split, and one for each band that tries the rest of the pool
     with no upper end.
-  - GraphQL: 1,000 batches, each one query for its facts and folders and one
-    for its files, neither asking for a connection, so about 2,000 points.
+  - GraphQL: 1,000 batches, each one query for its facts and folders and
+    about two for its files and the checks on its folders, none asking for
+    a connection, so about 3,000 points. A test counts 3 queries for a
+    batch of 10 of the GitHub fake's sample repos, beyond each find's own.
   - Each repo whose docs welcome AI help: one REST call, and a GraphQL query
     for each 100 of its labels, which asks for 100 labels and a count on
     each, about a point.
@@ -2085,9 +2108,9 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
     question included: at most 19 searches, 1,900 repos, and 190 batches an
     hour, and 456 searches and 45,600 repos a day. It stops before a search
     when fewer than 3 of the minute's 30 are left.
-  - The consumer reads a batch soon after it is queued, and spends about 2
-    points for each batch of 10 repos: about 380 points in an hour of
-    searches at most, and about 9,100 in a day, plus 2 calls for each find.
+  - The consumer reads a batch soon after it is queued, and spends about 3
+    points for each batch of 10 repos: about 570 points in an hour of
+    searches at most, and about 13,700 in a day, plus 2 calls for each find.
   - So a pass takes about an hour for each 1,900 repos in the pool, and a
     pool of 10,000 about 6 hourly runs.
 - **How it shares the hour with the other jobs.** Each job stops at its own
@@ -2102,16 +2125,16 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   | The crawler's search | Search | 3 of 30 a minute |
 
   The consumer spends only the top 2,000 of either hourly budget, and about
-  380 GraphQL points an hour at most, since the search queues at most 1,900
+  570 GraphQL points an hour at most, since the search queues at most 1,900
   repos an hour. A maintainer's refresh always has 500 more than the crawl
   leaves. The sync spends mostly REST, on timelines, and the crawl mostly
   GraphQL, so they seldom draw on the same budget.
 - **A monthly crawl.** A pass reads the pool once, and reading it again
   each month is the re-crawl's job (#31). At these rates a pass spends
-  about 2,000 GraphQL points for each 10,000 repos, well under a tenth of a
+  about 3,000 GraphQL points for each 10,000 repos, well under a tenth of a
   percent of the 3.6 million points in a 30-day month, and takes about an
-  hour of runs for each 1,900 repos. The search's cap on calls, not
-  GitHub's budget, sets how long a pass takes.
+  hour of runs for each 1,900 repos. The search's cap on calls sets how
+  long a pass takes, and GitHub's budget has room to spare.
 
 ## Sample data in development
 

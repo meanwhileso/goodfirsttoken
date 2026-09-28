@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { MAX_CRAWL_REASON, candidateSourceSchema, suggestedTagSchema, type CandidateSource } from '../crawl';
+import {
+  MAX_AI_SENTENCES,
+  MAX_CRAWL_REASON,
+  aiSentenceSchema,
+  candidateSourceSchema,
+  suggestedTagSchema,
+  type AiSentence,
+  type CandidateSource,
+} from '../crawl';
 import { MAX_BLOCK_REASON } from '../people';
 import { count, githubLogin, id, isoTime, repoName, trimmedText } from '../primitives';
 import {
@@ -15,7 +23,7 @@ import {
   type ProjectSettingsPatch,
 } from '../projects';
 import { defineTool } from './spec';
-import { indent, lines, numbered, renderSettings, when } from './text';
+import { indent, lines, numbered, plural, renderSettings, when } from './text';
 
 // The admin tools (spec section 4), listed only for admins. So no agent gets
 // not_admin from one: an agent whose person isn't an admin isn't served them.
@@ -64,16 +72,30 @@ const queueItemSchema = z.object({
    * setting, and any canary, as the files have them. Empty for a registration.
    */
   sources: z.array(candidateSourceSchema),
+  /**
+   * For a crawler find, the first sentences in the repo's docs that name AI,
+   * as the files have them, for the admin to read before a verdict, since
+   * the crawler's rules can miss a ban. Empty for a registration.
+   */
+  aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES),
+  /** How many more sentences that name AI the docs have, beyond `aiSentences`. */
+  moreAiSentences: count,
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
+// The file, group, and record separators, which some readers take as line breaks.
+const SEPARATORS = [0x1c, 0x1d, 0x1e].map((code) => String.fromCharCode(code));
+
 /**
  * Text from a repo, each line marked as the repo's words, so no line of it
- * can pass for a line of the result.
+ * can pass for a line of the result. A line ends at any character a reader
+ * might break a line at.
  */
 function repoWords(text: string): string {
-  return text
-    .split(/\r\n|[\n\r\u0085\u2028\u2029]/)
+  let broken = text;
+  for (const separator of SEPARATORS) broken = broken.replaceAll(separator, '\n');
+  return broken
+    .split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/)
     .map((line) => `> ${line}`.trimEnd())
     .join('\n');
 }
@@ -94,6 +116,22 @@ const SOURCE_ABOUT: Record<CandidateSource['about'], string> = {
   prMode: 'PR mode',
   canary: 'A canary. It asks an agent that reads the file to show it did, and no setting comes from it',
 };
+
+/** The sentences that name AI, grouped by file, each line marked as the repo's words. */
+function describeAiSentences(sentences: readonly AiSentence[], more: number): string | false {
+  if (sentences.length === 0 && more === 0) return false;
+  const groups: { path: string; texts: string[] }[] = [];
+  for (const { path, text } of sentences) {
+    const last = groups.at(-1);
+    if (last?.path === path) last.texts.push(text);
+    else groups.push({ path, texts: [text] });
+  }
+  return lines(
+    `every sentence in the repo's docs that names AI, quoted from its files. The crawler's rules can miss a ban worded in a way they don't know, so read these before a verdict. ${AS_DATA}`,
+    ...groups.map((group) => lines(`  from ${JSON.stringify(group.path)}:`, ...group.texts.map((text) => indent(repoWords(text), 4)))),
+    more > 0 && `  ${plural(more, 'more sentence')} in the files ${more === 1 ? 'names' : 'name'} AI. Read them there.`,
+  );
+}
 
 function describeSources(sources: readonly CandidateSource[]): string | false {
   if (sources.length === 0) return false;
@@ -149,6 +187,7 @@ function renderQueueItem(item: QueueItem): string {
           'suggested settings, the rest at their defaults, with label names in quotes:',
           indent(renderSettings(withDefaults(item.settings), [], { quoteLabels: true }), 2),
           describeSources(item.sources),
+          describeAiSentences(item.aiSentences, item.moreAiSentences),
         )
       : indent(renderSettings(withDefaults(item.settings)), 2),
   );

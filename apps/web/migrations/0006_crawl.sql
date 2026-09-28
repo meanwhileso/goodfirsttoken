@@ -1,5 +1,5 @@
 -- The policy crawler (src/crawl/). docs/architecture.md describes both
--- tables, the index, and the new column.
+-- tables, the index, and the new columns.
 
 -- Repos an admin asked the crawler to read, whatever their stars or last
 -- push. handled_at is when the crawler's cron job handled the seed, and
@@ -40,3 +40,9 @@ CREATE INDEX crawl_candidates_by_repo ON crawl_candidates (repo);
 -- The line in the repo's files behind each setting the crawler suggests,
 -- and any canary, as JSON. A find stored before has none.
 ALTER TABLE crawl_candidates ADD COLUMN sources TEXT NOT NULL DEFAULT '[]';
+
+-- The first sentences in the repo's docs that name AI, as JSON, for the
+-- admin to read, and how many more the docs have. A find stored before has
+-- none.
+ALTER TABLE crawl_candidates ADD COLUMN ai_sentences TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE crawl_candidates ADD COLUMN more_ai_sentences INTEGER NOT NULL DEFAULT 0;

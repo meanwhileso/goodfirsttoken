@@ -37,6 +37,18 @@ const SYMLINK = 0o120000;
 const CLAUDE_MD = /^claude\.md$/i;
 const VOUCH_FILE = /^vouched\.td$/i;
 const ISSUE_TEMPLATE = /\.(?:md|markdown|ya?ml)$/i;
+// A text file whose name has an AI word among its parts, split at dots,
+// dashes, and underscores.
+const AI_NAMED = /\.(?:md|markdown|txt|rst|adoc)$/i;
+const AI_NAME_WORDS: ReadonlySet<string> = new Set(['ai', 'llm', 'llms', 'genai']);
+
+function aiWordInName(name: string): boolean {
+  return name
+    .replace(AI_NAMED, '')
+    .toLowerCase()
+    .split(/[-_.\s]+/)
+    .some((part) => AI_NAME_WORDS.has(part));
+}
 const PR_TEMPLATE = /\.(?:md|markdown|txt)$/i;
 const TEMPLATE_FOLDER = /^(?:pull_request_template|issue_template)$/i;
 const PR_TEMPLATE_FOLDER = /^pull_request_template$/i;
@@ -188,9 +200,18 @@ function pathsOf(listed: ListedRepo): Pick<FoundRepo, 'paths' | 'unreadable' | '
   const root = entriesOf('root');
   const dotGithub = entriesOf('dotGithub');
 
-  // Every file with a name a proposal reads, in every folder it is looked for in.
+  // Every file with a name a proposal reads, in every folder it is looked
+  // for in. After the AI policy files, every other text file in those
+  // folders with an AI word in its name, like AI_USAGE.md or LLM_POLICY.md,
+  // read as an AI policy too.
   for (const [doc, kind] of DOC_ORDER) {
     for (const folder of DOC_FILES[doc].folders) for (const entry of files(entriesOf(aliasOf(folder)), DOC_FILES[doc].name)) take(folder, entry, kind);
+    if (doc !== 'aiPolicy') continue;
+    for (const folder of DOC_FILES.aiPolicy.folders) {
+      const named = files(entriesOf(aliasOf(folder)), AI_NAMED).filter((e) => aiWordInName(e.name) && !DOC_FILES.aiPolicy.name.test(e.name));
+      if (named.length > MAX_EXTRA_FILES) problems.push(`${folder || 'the root'} has more than ${String(MAX_EXTRA_FILES)} files with an AI word in their names`);
+      for (const entry of named) take(folder, entry, 'aiPolicy');
+    }
   }
   for (const entry of files(root, CLAUDE_MD)) take('', entry, 'claude');
 
@@ -242,7 +263,8 @@ function pathsOf(listed: ListedRepo): Pick<FoundRepo, 'paths' | 'unreadable' | '
 
   // Issue templates.
   for (const folder of githubFolders.filter((f) => !PR_TEMPLATE_FOLDER.test(f.name))) {
-    const templates = files(folder.object?.entries ?? [], ISSUE_TEMPLATE).filter((e) => !/^config\./i.test(e.name));
+    // config.yml too, since its contact links carry text a repo writes.
+    const templates = files(folder.object?.entries ?? [], ISSUE_TEMPLATE);
     if (templates.length > MAX_EXTRA_FILES) problems.push(`.github/${folder.name} has more than ${String(MAX_EXTRA_FILES)} templates`);
     for (const entry of templates) take(`.github/${folder.name}`, entry, 'issueTemplate');
   }

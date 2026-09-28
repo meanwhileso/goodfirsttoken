@@ -124,6 +124,8 @@ async function registrationItem(token: string | null, project: ProjectRecord, ch
     suggestedTags: [],
     onDoNotList: doNotList !== null,
     sources: [],
+    aiSentences: [],
+    moreAiSentences: 0,
   };
 }
 
@@ -142,6 +144,8 @@ async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
     suggestedTags: candidate.suggestedTags,
     onDoNotList: doNotList !== null,
     sources: candidate.sources,
+    aiSentences: candidate.aiSentences,
+    moreAiSentences: candidate.moreAiSentences,
   };
 }
 
