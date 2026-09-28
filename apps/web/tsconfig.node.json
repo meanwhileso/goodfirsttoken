@@ -5,5 +5,5 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
-  "include": ["*.config.ts", "e2e"]
+  "include": ["*.config.ts", "e2e", "scripts/**/*.ts"]
 }
