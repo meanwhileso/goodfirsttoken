@@ -8,6 +8,8 @@ function nav(page: Page) {
   return page.getByRole('navigation', { name: 'Primary' });
 }
 
+// Signing out ends every session the person has, so this test signs in as
+// @lena, whom no other test signs in as. mcp.spec.ts runs beside it as @priya.
 test('signing in with GitHub through the fake shows your login in the nav, and signing out takes it away', async ({
   page,
   context,
@@ -19,11 +21,11 @@ test('signing in with GitHub through the fake shows your login in the nav, and s
   await page.getByRole('button', { name: 'Sign in with GitHub' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sign in to the GitHub fake');
   await expect(page.getByText('asks for: public_repo.')).toBeVisible();
-  await page.getByRole('button', { name: '@priya' }).click();
+  await page.getByRole('button', { name: '@lena' }).click();
 
   await page.waitForURL((url) => url.pathname === '/me');
-  await expect(nav(page).getByRole('link', { name: '@priya' })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('@priya');
+  await expect(nav(page).getByRole('link', { name: '@lena' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('@lena');
 
   // Every cookie the site set is host-only, named with the __Host- prefix.
   const cookies = await context.cookies(baseURL);
@@ -36,7 +38,7 @@ test('signing in with GitHub through the fake shows your login in the nav, and s
   await page.getByRole('button', { name: 'Sign out' }).click();
   await page.waitForURL((url) => url.pathname === '/');
   await expect(nav(page).getByRole('link', { name: 'Good First Token on GitHub' })).toBeVisible();
-  await expect(nav(page).getByRole('link', { name: '@priya' })).toHaveCount(0);
+  await expect(nav(page).getByRole('link', { name: '@lena' })).toHaveCount(0);
   expect(await context.cookies(baseURL)).toEqual([]);
 });
 
