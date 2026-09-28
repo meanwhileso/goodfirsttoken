@@ -69,9 +69,10 @@ The skills and plugins, install for every harness, and MCP Apps views.
 |---|---|---|---|
 | [#18](https://github.com/meanwhileso/goodfirsttoken/issues/18) | Build every skill from one source, and publish the plugins | #3 | [#42](https://github.com/meanwhileso/goodfirsttoken/pull/42) |
 | [#19](https://github.com/meanwhileso/goodfirsttoken/issues/19) | Write the donor skills: give, work, and review | #18, #17 | |
-| [#20](https://github.com/meanwhileso/goodfirsttoken/issues/20) | Write the maintainer and admin skills | #18, #11 | |
+| [#20](https://github.com/meanwhileso/goodfirsttoken/issues/20) | Write the maintainer and admin skills | #18, #11 | [#68](https://github.com/meanwhileso/goodfirsttoken/pull/68) |
 | [#21](https://github.com/meanwhileso/goodfirsttoken/issues/21) | Serve /start.md, document every harness, and add the token hook | #19 | |
 | [#22](https://github.com/meanwhileso/goodfirsttoken/issues/22) | Add MCP Apps views for issue cards, the live feed, and the review queue | #7, #14, #16 | |
+| [#70](https://github.com/meanwhileso/goodfirsttoken/issues/70) | Let maintainers ask to be removed from their agent | #20 | |
 
 ## M6 Public site
 
@@ -144,6 +145,7 @@ flowchart TD
   n20["#20 Maintainer and admin skills"]:::m5
   n21["#21 start.md and token hook"]:::m5
   n22["#22 MCP Apps views"]:::m5
+  n70["#70 Removal requests"]:::m5
   n23["#23 Homepage"]:::m6
   n24["#24 Project pages"]:::m6
   n25["#25 Issue page"]:::m6
@@ -199,6 +201,7 @@ flowchart TD
   n18 --> n19
   n18 --> n20
   n19 --> n21
+  n20 --> n70
   n21 --> n34
   n23 --> n28
   n23 --> n35
@@ -214,7 +217,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20 done
 ```
 
 ## Maintainer steps

@@ -27,6 +27,7 @@ pnpm check       # lint, typecheck, and a check that the skills match skill-src/
 pnpm test        # unit tests, the Worker's inside the Workers runtime
 pnpm test:e2e    # browser tests against a production build
 pnpm skills:build  # the skills and plugins, from skill-src/
+pnpm skills:run    # the maintain and admin skills' steps, against pnpm dev
 ```
 
 Before the first `pnpm test:e2e`, run `pnpm exec playwright install chromium`.
@@ -74,6 +75,15 @@ connects the plugin to `pnpm dev` with no build. When the agent connects, the
 browser opens on the site's page to approve it, then on the fake GitHub's
 page, where you pick a sample person. Run `pnpm skills:build` without the
 variable before you commit.
+
+To check the maintain and admin skills' steps with no model, and no tokens
+spent, run `pnpm skills:run` while `pnpm dev` runs. It connects a sample
+maintainer's agent and the sample admin's agent with the MCP client SDK,
+registers `sample-owner/sample-parser` with the proposed settings, approves
+it from the admin queue, and prints each call and its answer. The end-to-end
+tests run the same steps. When a skill names another tool or refusal,
+`pnpm test` checks it against the server, and a tool's refusals are listed
+in its spec in `packages/core`.
 
 ## AI help is welcome
 
