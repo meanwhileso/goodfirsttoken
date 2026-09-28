@@ -54,11 +54,23 @@ interface RateLimitStatus {
 }
 
 /** A GraphQL error that says GitHub is limiting the rate, primary or secondary. */
-function limitsRate(error: { type?: string; message: string }): boolean {
+export function limitsRate(error: { type?: string; message: string }): boolean {
   return error.type === 'RATE_LIMITED' || /rate limit/i.test(error.message);
 }
 
-export class ServiceGitHub {
+/**
+ * Reads GitHub with one token. The service token's reader is ServiceGitHub.
+ * The donor's tools read with the donor's own token (src/donor/github.ts),
+ * through the same reads of linked PRs the sync makes.
+ */
+export interface GitHubReader {
+  /** Reads one page of a REST path. */
+  read<T>(path: string): Promise<GitHubPage<T>>;
+  /** Runs a GraphQL query. */
+  query<T>(query: string, variables: Record<string, unknown>): Promise<GraphQLResult<T>>;
+}
+
+export class ServiceGitHub implements GitHubReader {
   /** Calls this run made. */
   calls = 0;
   private readonly budgets = new Map<string, RateLimit>();

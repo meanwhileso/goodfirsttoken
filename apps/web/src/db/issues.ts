@@ -1,6 +1,6 @@
 import { count, mustParse, repoName, taggedIssueSchema, type TaggedIssue } from '@goodfirsttoken/core';
 import { checkTime, fromJson, joinIssue, prColumns, prFromColumns, splitIssue } from './shared';
-import { CARRIES_A_TAG, OPEN_CLAIM_PR, slotsTaken, waiting } from './waiting';
+import { CARRIES_A_TAG, CLOSED_BECAUSE, EXCLUDED_LABEL, OPEN_CLAIM_PR, slotsTaken, takesClaims } from './waiting';
 
 // The tagged_issues table: a cache of each project's open tagged issues, as
 // the last sync read them from GitHub.
@@ -107,6 +107,67 @@ export async function listIssueCopies(db: D1Database, issue: string): Promise<Ta
 }
 
 /**
+ * Why a new agent can't claim a project's copy of an issue, whatever its
+ * slots and open PRs: its project isn't asking for help, or the copy doesn't
+ * carry its tags. Null when it can, as far as those go.
+ */
+export type ClosedBecause = 'project' | 'issue' | null;
+
+function toClosed(value: string | null): ClosedBecause {
+  if (value === null || value === 'project' || value === 'issue') return value;
+  throw new Error(`The database gave ${value} as why a copy takes no claims.`);
+}
+
+/**
+ * The copies of an issue like `owner/name#12` that the projects keeping
+ * their issues in its repo have, oldest project first, each with why a new
+ * agent can't claim it, by the rule in ./waiting.ts. The slots and the open
+ * PRs are left to the caller, which follows them live from the issue's room.
+ */
+export async function listJudgedCopies(
+  db: D1Database,
+  issue: string,
+): Promise<{ copy: TaggedIssue; closed: ClosedBecause }[]> {
+  const { repo, number } = splitIssue(issue);
+  const { results } = await db
+    .prepare(
+      `SELECT t.*, ${CLOSED_BECAUSE} AS closed
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       JOIN tagged_issues t ON t.project = p.repo AND t.issue_repo = ?1 AND t.number = ?2
+       WHERE p.issue_repo = ?1 ORDER BY p.added_at, p.repo`,
+    )
+    .bind(repo, number)
+    .all<IssueRow & { closed: string | null }>();
+  return results.map((row) => ({ copy: toIssue(row), closed: toClosed(row.closed) }));
+}
+
+/**
+ * Whether labels an issue carries on GitHub now carry one of the project's
+ * tags and none of its excluded tags, by the rule in ./waiting.ts, with the
+ * project's current settings. `excluded` is the first of them that is one
+ * of its excluded tags, or null. A project the database doesn't have
+ * carries none.
+ */
+export async function judgeLabels(
+  db: D1Database,
+  project: string,
+  labels: readonly string[],
+): Promise<{ carries: boolean; excluded: string | null }> {
+  const row = await db
+    .prepare(
+      `SELECT ${CARRIES_A_TAG} AS carries, ${EXCLUDED_LABEL} AS excluded
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       CROSS JOIN (SELECT ?2 AS labels) t
+       WHERE p.repo = ?1`,
+    )
+    .bind(mustParse(repoName, project, 'project'), JSON.stringify(labels))
+    .first<{ carries: number; excluded: string | null }>();
+  return { carries: row?.carries === 1, excluded: row?.excluded ?? null };
+}
+
+/**
  * Drops a project's copies of these issues, like `owner/name#12`, all or
  * none. Returns how many it dropped.
  */
@@ -143,8 +204,8 @@ export interface ProjectIssue {
   /** The first open PR a claim on it opened, as the PRs table follows it, or null. */
   claimPr: { repo: string; number: number } | null;
   /**
-   * Whether a new agent could claim it now, as far as the issue goes, by the
-   * rule the homepage counts with. The project has to be approved too.
+   * Whether a new agent could claim it now, by the rule the homepage counts
+   * with: the project asks for help, and the issue waits for an agent.
    */
   waiting: boolean;
 }
@@ -165,7 +226,7 @@ export async function listProjectIssues(
   const { results } = await db
     .prepare(
       `SELECT t.*, COUNT(*) OVER () AS total, ${slotsTaken('?3')} AS taken, ${OPEN_CLAIM_PR} AS claim_pr,
-         ${waiting('?3')} AS waiting
+         ${takesClaims('?3')} AS waiting
        FROM tagged_issues t
        JOIN projects p ON p.repo = t.project
        JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version

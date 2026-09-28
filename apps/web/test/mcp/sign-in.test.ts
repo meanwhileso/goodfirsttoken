@@ -137,8 +137,8 @@ test('an agent registers itself, signs in with PKCE through GitHub, and start_se
   expect(agent.oauth.verifier).not.toBe('');
   expect(agent.oauth.saved?.refresh_token).toEqual(expect.any(String));
   expect(result.isError).toBeFalsy();
-  expect(result.structuredContent).toEqual({ githubId: expect.any(Number) as number, login: 'priya' });
-  expect(result.content).toEqual([{ type: 'text', text: 'Signed in as @priya.' }]);
+  expect(result.structuredContent).toMatchObject({ login: 'priya', sessionId: expect.any(String) as string });
+  expect((result.content as { text: string }[])[0]?.text).toMatch(/^Signed in as @priya\. Session s_[\w-]+\./);
   // start_session read the person from GitHub with the token from the
   // agent's own sign-in.
   expect(github.calls.filter((call) => call.operation === 'GET /user').at(-1)).toMatchObject({
