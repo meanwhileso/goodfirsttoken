@@ -116,37 +116,38 @@ test('a CLA link ending in punctuation loses the punctuation', () => {
 test('four files at the size limit, each one long line with no period, are read in time that grows with their length alone', () => {
   // Every file at the size limit: the phrase over and over, with no words
   // after it, and in the PR template a CLA line whose link ends in a run of
-  // dots and a letter.
+  // dots and a letter. Each read gets files of its own, with the read's
+  // number at the end of every file and at the start of the link's path, so
+  // nothing that remembers a text or a line between reads can make a slow
+  // pattern look fast.
   const phrase = 'PR description ';
-  const full = phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length));
-  const half = phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length / 2));
-  const start = 'https://cla.example.org/';
-  const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nCLA '.length - start.length - 1)}x`;
-  const template = `${half}\nCLA ${link}`;
-  expect([full.length, template.length].every((n) => n > 0.99 * MAX_DOC_BYTES && n <= MAX_DOC_BYTES)).toBe(true);
-  // Each text read ends in a number no other text ends in, so nothing that
-  // remembers a text between reads can make a slow pattern look fast.
-  let made = 0;
-  const own = (text: string) => `${text.slice(0, -2)}${String(made++).padStart(2, '0')}`;
-  const read = () =>
-    proposeSettings(
-      ['help wanted'],
-      docs({ contributing: own(full), aiPolicy: own(full), agents: own(full), prTemplate: `${own(half)}\nCLA ${link}` }),
-    );
+  const filesFor = (read: number) => {
+    const mark = String(read).padStart(2, '0');
+    const full = `${phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length)).slice(0, -2)}${mark}`;
+    const half = `${phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length / 2)).slice(0, -2)}${mark}`;
+    const start = `https://cla.example.org/${mark}`;
+    const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nCLA '.length - start.length - 1)}x`;
+    const template = `${half}\nCLA ${link}`;
+    return { link, docs: docs({ contributing: full, aiPolicy: full, agents: full, prTemplate: template }) };
+  };
+  const reads = [0, 1, 2, 3, 4].map(filesFor);
+  const last = filesFor(5);
+  const sizes = [...reads, last].flatMap((read) => [read.docs.contributing?.text.length ?? 0, read.docs.prTemplate?.text.length ?? 0]);
+  expect(sizes.every((n) => n > 0.99 * MAX_DOC_BYTES && n <= MAX_DOC_BYTES)).toBe(true);
 
   // Read in one pass, all four take a few milliseconds. With a pattern that
-  // tries every start position again, they took a second or more on every
-  // run. The fastest of five runs is timed, so a pause that a busy machine
-  // puts in one run can't fail the test.
+  // tries every start position again, they took about a second or more on
+  // every run. The fastest of five runs is timed, so a pause that a busy
+  // machine puts in one run can't fail the test.
   let fastest = Infinity;
-  for (let run = 0; run < 5; run += 1) {
+  for (const read of reads) {
     const started = performance.now();
-    read();
+    proposeSettings(['help wanted'], read.docs);
     fastest = Math.min(fastest, performance.now() - started);
   }
   expect(fastest).toBeLessThan(50);
 
-  const { settings } = read();
+  const { settings } = proposeSettings(['help wanted'], last.docs);
   expect(settings).not.toHaveProperty('personWrittenDescription');
-  expect(settings.claUrl).toBe(link);
+  expect(settings.claUrl).toBe(last.link);
 });
