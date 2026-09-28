@@ -1,0 +1,23 @@
+/* Layout for the projects list only. Its rows are in project-rows.css, and
+   the components it uses in components.css. */
+
+.projects { padding-top: 56px; }
+.projects-title { font-size: clamp(44px, 7vw, 88px); }
+
+/* The PR mode chips and the search, on one line when they fit. */
+.projects-controls { margin-top: 40px; }
+.projects-controls fieldset {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;
+  min-width: 0; margin: 0; padding: 0; border: 0;
+}
+.projects-search {
+  width: 100%; max-width: 300px; height: 40px; padding: 0 16px; border: 1px solid var(--line); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--ink); font: 15px var(--font-mono);
+}
+.projects-search::placeholder { color: var(--text-faint); }
+.projects-search:focus-visible { outline: none; box-shadow: var(--focus); }
+
+.projects-count { margin-top: 20px; font: 13px var(--font-mono); color: var(--text-faint); }
+.projects-rows { margin-top: 12px; }
+/* Said once, in mono, at the bottom of the section. */
+.projects-note { margin-top: 28px; font: 14px var(--font-mono); color: var(--text-faint); }

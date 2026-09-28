@@ -14,10 +14,12 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DesignRouteImport } from './routes/design'
 import { Route as HealthzRouteImport } from './routes/healthz'
 import { Route as MeRouteImport } from './routes/me'
+import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as DevSeedRouteImport } from './routes/dev.seed'
 import { Route as DevWorkRouteImport } from './routes/dev.work'
 import { Route as OauthAuthorizeRouteImport } from './routes/oauth/authorize'
+import { Route as OwnerRepoIndexRouteImport } from './routes/$owner.$repo.index'
 import { Route as OwnerRepoIssuesNumberRouteImport } from './routes/$owner.$repo.issues.$number'
 
 const IndexRoute = IndexRouteImport.update({
@@ -45,6 +47,11 @@ const MeRoute = MeRouteImport.update({
   path: '/me',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
@@ -65,6 +72,11 @@ const OauthAuthorizeRoute = OauthAuthorizeRouteImport.update({
   path: '/oauth/authorize',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OwnerRepoIndexRoute = OwnerRepoIndexRouteImport.update({
+  id: '/$owner/$repo/',
+  path: '/$owner/$repo/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OwnerRepoIssuesNumberRoute = OwnerRepoIssuesNumberRouteImport.update({
   id: '/$owner/$repo/issues/$number',
   path: '/$owner/$repo/issues/$number',
@@ -77,10 +89,12 @@ export interface FileRoutesByFullPath {
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
   '/me': typeof MeRoute
+  '/projects': typeof ProjectsRoute
   '/sign-in': typeof SignInRoute
   '/dev/seed': typeof DevSeedRoute
   '/dev/work': typeof DevWorkRoute
   '/oauth/authorize': typeof OauthAuthorizeRoute
+  '/$owner/$repo/': typeof OwnerRepoIndexRoute
   '/$owner/$repo/issues/$number': typeof OwnerRepoIssuesNumberRoute
 }
 export interface FileRoutesByTo {
@@ -89,10 +103,12 @@ export interface FileRoutesByTo {
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
   '/me': typeof MeRoute
+  '/projects': typeof ProjectsRoute
   '/sign-in': typeof SignInRoute
   '/dev/seed': typeof DevSeedRoute
   '/dev/work': typeof DevWorkRoute
   '/oauth/authorize': typeof OauthAuthorizeRoute
+  '/$owner/$repo': typeof OwnerRepoIndexRoute
   '/$owner/$repo/issues/$number': typeof OwnerRepoIssuesNumberRoute
 }
 export interface FileRoutesById {
@@ -102,10 +118,12 @@ export interface FileRoutesById {
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
   '/me': typeof MeRoute
+  '/projects': typeof ProjectsRoute
   '/sign-in': typeof SignInRoute
   '/dev/seed': typeof DevSeedRoute
   '/dev/work': typeof DevWorkRoute
   '/oauth/authorize': typeof OauthAuthorizeRoute
+  '/$owner/$repo/': typeof OwnerRepoIndexRoute
   '/$owner/$repo/issues/$number': typeof OwnerRepoIssuesNumberRoute
 }
 export interface FileRouteTypes {
@@ -116,10 +134,12 @@ export interface FileRouteTypes {
     | '/design'
     | '/healthz'
     | '/me'
+    | '/projects'
     | '/sign-in'
     | '/dev/seed'
     | '/dev/work'
     | '/oauth/authorize'
+    | '/$owner/$repo/'
     | '/$owner/$repo/issues/$number'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -128,10 +148,12 @@ export interface FileRouteTypes {
     | '/design'
     | '/healthz'
     | '/me'
+    | '/projects'
     | '/sign-in'
     | '/dev/seed'
     | '/dev/work'
     | '/oauth/authorize'
+    | '/$owner/$repo'
     | '/$owner/$repo/issues/$number'
   id:
     | '__root__'
@@ -140,10 +162,12 @@ export interface FileRouteTypes {
     | '/design'
     | '/healthz'
     | '/me'
+    | '/projects'
     | '/sign-in'
     | '/dev/seed'
     | '/dev/work'
     | '/oauth/authorize'
+    | '/$owner/$repo/'
     | '/$owner/$repo/issues/$number'
   fileRoutesById: FileRoutesById
 }
@@ -153,10 +177,12 @@ export interface RootRouteChildren {
   DesignRoute: typeof DesignRoute
   HealthzRoute: typeof HealthzRoute
   MeRoute: typeof MeRoute
+  ProjectsRoute: typeof ProjectsRoute
   SignInRoute: typeof SignInRoute
   DevSeedRoute: typeof DevSeedRoute
   DevWorkRoute: typeof DevWorkRoute
   OauthAuthorizeRoute: typeof OauthAuthorizeRoute
+  OwnerRepoIndexRoute: typeof OwnerRepoIndexRoute
   OwnerRepoIssuesNumberRoute: typeof OwnerRepoIssuesNumberRoute
 }
 
@@ -197,6 +223,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sign-in': {
       id: '/sign-in'
       path: '/sign-in'
@@ -225,6 +258,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthAuthorizeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$owner/$repo/': {
+      id: '/$owner/$repo/'
+      path: '/$owner/$repo'
+      fullPath: '/$owner/$repo/'
+      preLoaderRoute: typeof OwnerRepoIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/$owner/$repo/issues/$number': {
       id: '/$owner/$repo/issues/$number'
       path: '/$owner/$repo/issues/$number'
@@ -241,10 +281,12 @@ const rootRouteChildren: RootRouteChildren = {
   DesignRoute: DesignRoute,
   HealthzRoute: HealthzRoute,
   MeRoute: MeRoute,
+  ProjectsRoute: ProjectsRoute,
   SignInRoute: SignInRoute,
   DevSeedRoute: DevSeedRoute,
   DevWorkRoute: DevWorkRoute,
   OauthAuthorizeRoute: OauthAuthorizeRoute,
+  OwnerRepoIndexRoute: OwnerRepoIndexRoute,
   OwnerRepoIssuesNumberRoute: OwnerRepoIssuesNumberRoute,
 }
 export const routeTree = rootRouteImport

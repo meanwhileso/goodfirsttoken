@@ -15,8 +15,10 @@ import {
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
 import { applyEvent, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
 import { issueRoom } from '../../src/rooms/issue-room';
-import { LOCAL_FAKE, runAsDevelopment, setEnv } from '../auth/helpers';
+import { syncTaggedIssues } from '../../src/sync/issues';
+import { LOCAL_FAKE, runAsDevelopment, setEnv, startGitHub } from '../auth/helpers';
 import { liveSocket } from '../feed/helpers';
+import { jobDeps } from '../sync/helpers';
 import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
 import { workerFetch } from '../worker';
 
@@ -1022,5 +1024,117 @@ describe('the dev-only route that works an issue as a sample person', () => {
       restore();
     }
     expect(await loadIssue(request, 'sample-owner', 'sample-app', number)).toEqual({ state: 'not_found' });
+  });
+});
+
+describe("the page's breadcrumb", () => {
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
+
+  /** Where the breadcrumb on an issue page's HTML leads, or null when it leads nowhere. */
+  function breadcrumb(html: string): string | null {
+    return /aria-label="Breadcrumb"[^>]*><a href="([^"]+)"/.exec(html)?.[1] ?? null;
+  }
+
+  test("leads to the project's page, when the project keeps its issues in another repo too", async () => {
+    const project = 'sample-owner/sample-elsewhere';
+    const issueRepo = 'sample-owner/sample-issues';
+    await registeredProject({ tags: ['help wanted'], issueRepo }, project);
+    await saveIssues(db, [
+      { issue: `${issueRepo}#${number}`, project, title: 'Keep the cursor in place', labels: ['help wanted'], linkedPr: null, syncedAt: t0 },
+    ]);
+
+    const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-issues', number));
+    const html = await (await page(`/${issueRepo}/issues/${number}`)).text();
+
+    expect(loaded.project).toBe(project);
+    expect(breadcrumb(html)).toBe(`/${project}`);
+    expect((await page(`/${project}`)).status).toBe(200);
+    expect((await page(`/${issueRepo}`)).status).toBe(404);
+  });
+
+  test('leads nowhere when the project has no page', async () => {
+    await tag();
+    await setProjectStatus(
+      db,
+      repo,
+      { status: 'paused', reason: `GitHub shows no public repo named ${repo}. It went private or was deleted.`, changedBy: null },
+      t0,
+    );
+
+    const loaded = ready(await loadIssue(request, 'sample-owner', 'sample-app', number));
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+
+    expect(loaded.project).toBeNull();
+    expect(breadcrumb(html)).toBeNull();
+    expect(html).toContain('aria-label="Breadcrumb"');
+    expect((await page(`/${repo}`)).status).toBe(404);
+  });
+});
+
+describe('an issue of a project with no page', () => {
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
+
+  test("shows nothing cached from the repo once the sync delists the project, and keeps its lanes and timeline", async () => {
+    await tag();
+    const p = await claim(priya);
+    await post(p, 'read AGENTS.md and CONTRIBUTING');
+    // The repo goes private, and the sync, reading it with the service
+    // token, pauses the project on its own.
+    const github = startGitHub();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const fake = github.state.repos[repo];
+      if (!fake) throw new Error(`the fake has no repo ${repo}`);
+      fake.private = true;
+      await syncTaggedIssues(jobDeps(github));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(await getProject(db, repo)).toMatchObject({ status: 'paused', statusChangedBy: null });
+
+    const res = await page(`/${repo}/issues/${number}`);
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect((await page(`/${repo}`)).status).toBe(404);
+    // Not in the page, its title, or its description.
+    expect(html).not.toContain('Handle trailing slashes in rewrites');
+    expect(html).not.toContain('<span class="tag">help wanted</span>');
+    expect(html).toContain(`<title>${repo}#${number} · Good First Token</title>`);
+    // The lanes and the timeline are the room's, and stay.
+    expect(html).toContain('read AGENTS.md and CONTRIBUTING');
+    expect(html).toContain('claimed the issue');
+  });
+
+  test("says the project isn't taking claims when it is on the do-not-list, whatever its cached labels say", async () => {
+    await changeSettings(db, repo, { excludedTags: ['good first issue'] }, maintainer.githubId, t0);
+    await tag({ labels: ['help wanted', 'good first issue'] });
+    await claim(priya);
+    expect((await load()).closedBecause).toBe('issue');
+
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await load()).closedBecause).toBe('project');
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+    expect(html).toContain('The project isn&#x27;t taking claims right now.');
+    expect(html).not.toContain('among the project&#x27;s open tagged issues');
+  });
+
+  test("on the do-not-list shows no cached title, labels, or linked PR, and keeps the room's PRs and slots", async () => {
+    await tag({ labels: ['help wanted', 'bug'], linkedPr: prRef(70) });
+    const p = await claim(priya);
+    await post(p, 'read AGENTS.md and CONTRIBUTING');
+    const k = await claim(kenji, 'codex');
+    await openPr(k, 71);
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    const loaded = await load();
+
+    expect([loaded.title, loaded.labels, loaded.project, loaded.closedBecause]).toEqual([null, [], null, 'project']);
+    expect(loaded.view.openPrs).toEqual([prLink(71)]);
+    // Every event on an issue the do-not-list covers is hidden, so its
+    // claims have no lane, and priya's, which is working, still takes a slot.
+    expect(lanes(loaded.view)).toEqual({});
+    expect(loaded.view.hidden).toEqual({ claims: 2, holding: 1 });
   });
 });

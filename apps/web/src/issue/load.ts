@@ -1,8 +1,9 @@
 import type { ClaimRecord, ProjectRecord, TaggedIssue } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { getDoNotListEntry, getPerson, getProject } from '../db';
+import { getPerson, getProject } from '../db';
 import { siteAddress } from '../home/load';
+import { hasPage } from '../project/shown';
 import { issueRoom } from '../rooms/issue-room';
 import { findIssue } from './find';
 import { issueFromPath } from './path';
@@ -28,6 +29,12 @@ export interface IssuePage {
   issue: string;
   repo: string;
   number: number;
+  /**
+   * The code repo of the project the page follows, when that project has a
+   * page of its own, for the breadcrumb. It differs from `repo` when the
+   * project keeps its issues in another repo.
+   */
+  project: string | null;
   /** The title from the tagged issues cache, or null when the issue isn't in it. */
   title: string | null;
   labels: string[];
@@ -64,23 +71,23 @@ const fold = (label: string) => label.replace(/[A-Z]+/g, (letters) => letters.to
 
 /**
  * Why the issue takes no claims, by the rule the homepage uses for an issue
- * waiting for an agent (src/db/projects.ts), less the open PRs and the free
- * slot, which the page follows live. Null when it takes them.
+ * waiting for an agent (src/db/waiting.ts), less the open PRs and the free
+ * slot, which the page follows live. Null when it takes them. The project
+ * comes first: one that isn't approved, or has no page because the
+ * do-not-list covers it (src/project/shown.ts), takes none, whatever its
+ * cached copy says.
  */
-async function closedBecause(
+function closedBecause(
   project: ProjectRecord | null,
-  tagged: { project: ProjectRecord; copy: TaggedIssue } | undefined,
-  issueRepo: string,
-): Promise<IssuePage['closedBecause']> {
-  if (project?.status !== 'approved') return 'project';
-  if (!tagged) return 'issue';
-  const labels = new Set(tagged.copy.labels.map(fold));
-  const { tags, excludedTags } = tagged.project.settings;
+  withPage: boolean,
+  copy: TaggedIssue | undefined,
+): IssuePage['closedBecause'] {
+  if (project?.status !== 'approved' || !withPage) return 'project';
+  if (!copy) return 'issue';
+  const labels = new Set(copy.labels.map(fold));
+  const { tags, excludedTags } = project.settings;
   if (!tags.some((tag) => labels.has(fold(tag))) || excludedTags.some((tag) => labels.has(fold(tag)))) return 'issue';
-  const listed = await Promise.all(
-    [project.repo, issueRepo].map((repo) => getDoNotListEntry(env.DB, repo)),
-  );
-  return listed.some((entry) => entry !== null) ? 'project' : null;
+  return null;
 }
 
 /** Everything the issue page shows when it loads. */
@@ -114,9 +121,11 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   // the homepage does. The page follows the oldest whose copy waits for an
   // agent, with a free slot under its claims per issue, then the oldest that
   // would but for a PR the sync saw or a full cap, then the oldest.
-  const issueRepo = splitIssue(asked).repo;
   const judged = await Promise.all(
-    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(copy.project, copy, issueRepo) })),
+    copies.map(async (copy) => {
+      const withPage = await hasPage(env.DB, copy.project);
+      return { ...copy, withPage, closed: closedBecause(copy.project, withPage, copy.copy) };
+    }),
   );
   const taken = slotsTaken(view);
   const tagged =
@@ -128,6 +137,12 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     judged[0];
   const latest = glance.claims.at(-1) ?? mirrored.at(-1);
   const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
+  // What the site cached from GitHub, the title, the labels, and the linked
+  // PR, shows only while that project has a page (src/project/shown.ts). So
+  // once the sync delists it, or it goes on the do-not-list, the page shows
+  // the room alone.
+  const withPage = project !== null && (tagged ? tagged.withPage : await hasPage(env.DB, project));
+  const cached = withPage ? tagged?.copy : undefined;
 
   // Each lane, and the timeline, names its claimant by their login now,
   // since a login can change and a freed one can go to someone else. One
@@ -143,7 +158,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
 
   // The open PRs: the room's, and the one the last sync saw linked to the
   // issue, as the homepage counts them. Each by its repo and number only.
-  const linked = tagged?.copy.linkedPr;
+  const linked = cached?.linkedPr;
   const open: PrLink[] = [];
   for (const pr of [...glance.prs, ...(linked ? [linked] : [])]) {
     if (!open.some((known) => samePr(known, pr))) open.push({ repo: pr.repo, number: pr.number });
@@ -157,12 +172,13 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     issue,
     repo,
     number,
-    title: tagged?.copy.title ?? null,
-    labels: tagged?.copy.labels ?? [],
+    project: withPage ? project.repo : null,
+    title: cached?.title ?? null,
+    labels: cached?.labels ?? [],
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
-    closedBecause: tagged ? tagged.closed : await closedBecause(project, undefined, issueRepo),
+    closedBecause: tagged ? tagged.closed : closedBecause(project, withPage, undefined),
     view,
   };
 }

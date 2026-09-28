@@ -1,3 +1,5 @@
+import type { Policy } from '@goodfirsttoken/core';
+
 // Sample projects and work for local development, which `pnpm seed` gives
 // the local site through POST /dev/seed (src/dev/seed.ts). The people and
 // repos are the GitHub fake's sample ones (packages/github-fake), with the
@@ -31,6 +33,12 @@ export interface SampleProject {
   /** Notes every agent reads, word for word. */
   agentNotes?: string;
   addedBy: SamplePerson;
+  /**
+   * For a project an admin listed from its written AI policy, the policy it
+   * was listed from. Left out for a project its maintainer registered. The
+   * quote is from the sample repo's own made-up file.
+   */
+  policy?: Policy;
   /** Its open issues that carry a tag, as the sync would cache them. */
   issues: { number: number; title: string; labels: string[] }[];
 }
@@ -61,7 +69,12 @@ export const SAMPLE_PROJECTS: SampleProject[] = [
     tags: ['contribution welcome'],
     prMode: 'reviewed',
     personWrittenDescription: true,
-    addedBy: SAMPLE_PEOPLE.sampleMaintainer,
+    addedBy: SAMPLE_PEOPLE.sampleAdmin,
+    policy: {
+      quote: 'AI help is fine. Write the PR description yourself.',
+      url: 'https://github.com/sample-owner/sample-bundler/blob/main/CONTRIBUTING.md',
+      tier: 'allows_with_conditions',
+    },
     issues: [{ number: 120, title: 'Warn when two plugins claim the same file type', labels: ['contribution welcome'] }],
   },
   {
