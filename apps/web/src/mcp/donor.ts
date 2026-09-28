@@ -339,18 +339,17 @@ export async function suggestIssues(
   }
   const order = weightedOrder(rankIssues(candidates, donor.interests), random);
 
-  // In that order, each issue's project is read on GitHub with the donor's
-  // token, once, and a project GitHub doesn't show them, whose code repo has
-  // no commits, or whose vouch file keeps them out, is left out whole, as a
-  // claim would be refused. Then each issue is checked on GitHub,
-  // and one that no longer takes claims gives way to the next in the order,
-  // which runs down the whole ranking.
+  // The walk draws each issue as it goes. Each issue's project is read on
+  // GitHub with the donor's token, once, and a project GitHub doesn't show
+  // them, whose code repo has no commits, or whose vouch file keeps them
+  // out, is left out whole, as a claim would be refused. Then each issue is
+  // checked on GitHub, and one that no longer takes claims gives way to the
+  // next draw, which can reach the whole ranking.
   const reader = donorReader(await tokenOf(caller));
   const facts = new Map<string, RepoFacts | null>();
   const picked: { entry: WaitingIssue; issue: GitHubIssue }[] = [];
   let checks = 0;
   for (const { entry } of order) {
-    if (picked.length === SUGGESTIONS || checks === MAX_CHECKS) break;
     const repo = lower(entry.project.repo);
     if (!facts.has(repo)) {
       if (facts.size === MAX_REPOS) continue;
@@ -362,6 +361,8 @@ export async function suggestIssues(
     checks += 1;
     const check = await checkIssueOnGitHub(reader, entry.project, entry.copy.issue, [repoFacts.name]);
     if (check.ok) picked.push({ entry, issue: check.issue });
+    // Stopping here draws no issue the walk won't use.
+    if (picked.length === SUGGESTIONS || checks === MAX_CHECKS) break;
   }
 
   const claims = await listClaimsOn(
@@ -628,10 +629,9 @@ export async function claimIssue(
     // no longer takes the donor's claim is passed over and reported.
     const taken = new Set<string>();
     for (const next of queue) {
-      // A CLA confirmation counts for the first pick reached alone, the one a
-      // refusal asked about. A pick behind it has a project the donor hasn't
-      // been asked about.
-      const attempt = await claimOne({ ...context, claConfirmed: skipped.length === 0 ? context.claConfirmed : undefined }, next);
+      // A CLA confirmation names its link, so it counts for any pick whose
+      // project keeps its CLA there, which is the one the donor signed.
+      const attempt = await claimOne(context, next);
       if (!attempt.ok && SKIPS.has(attempt.refusal.code)) {
         skipped.push({ issue: next, code: attempt.refusal.code, message: attempt.refusal.message });
         taken.add(lower(next));

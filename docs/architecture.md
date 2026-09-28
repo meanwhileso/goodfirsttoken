@@ -447,16 +447,19 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   times. The count comes before the room's claim, and goes back with
   `returnSessionIssue` when no new claim is made. A call that dies in
   between leaves the count one high.
-- **The random order draws every number before it returns,** in
-  `weightedOrder`, with no await between the draws, so calls at the same
-  moment never share one. It orders the whole ranking, each place drawn
-  from the first 12 not placed yet, so `suggestIssues` can walk past any
-  number of issues it passes over. The walk stops at 3 suggestions, 8
+- **The random order is drawn as the walk goes.** `weightedOrder` is a
+  generator. It keeps a window of the first 12 issues not drawn yet, draws
+  one when the walk asks for the next, and lets the next issue down into
+  the window. So a walk that stops after a few issues makes a draw for
+  each of them alone, however many issues wait, and it can still walk past
+  any number of issues it passes over. The walk stops at 3 suggestions, 8
   checks of issues on GitHub, or the end. It reads each project once, up
   to 20, and a project that keeps the donor out takes no checks.
   `suggestIssues` takes the random source as an argument, `Math.random`
   from the server, and the tests stub `Math.random` in the Worker's
-  isolate, which they share.
+  isolate, which they share. Calls at the same moment draw as their walks
+  go, in whatever order their reads finish, so the test of spreading asks
+  one call at a time.
 - **Finding a claim's room.** `post_update` and `release_claim` take a claim
   ID, and the room is named for the issue, so they read the claim from the
   claims table first. The room saves a claim to D1 before its answer to

@@ -718,7 +718,24 @@ describe('the queue', () => {
     expect(confirmed.structuredContent).toMatchObject({ claim: { issue: pick }, queued: [] });
   });
 
-  test('a CLA confirmation counts for the pick it was asked about, and never for a pick behind it', async () => {
+  test('a CLA confirmation counts for a pick behind the one asked about when its project keeps its CLA at the same link', async () => {
+    await project(TOOLS, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/cla', claimsPerIssue: 1 });
+    await project(BUNDLER, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/cla' });
+    const asked = await tagged(TOOLS);
+    const behind = await tagged(BUNDLER);
+    const { agent, sessionId } = await donor('priya');
+
+    await call(agent, 'claim_issue', { sessionId, queue: [asked, behind] });
+    // Before the donor answers, the pick asked about fills up.
+    await claimAs('kenji', asked, TOOLS, 'codex', 1);
+    const confirmed = await call(agent, 'claim_issue', { sessionId, claConfirmed: 'https://sample-owner.test/cla' });
+
+    // The donor signed the CLA at that link, which is the one both projects ask for.
+    expect(confirmed.structuredContent).toMatchObject({ claim: { issue: behind }, skipped: [{ issue: asked, code: 'issue_full' }], queued: [] });
+    expect(await getClaConfirmation(env.DB, people.priya.githubId, BUNDLER)).toMatchObject({ claUrl: 'https://sample-owner.test/cla' });
+  });
+
+  test('a CLA confirmation counts for no pick whose project keeps its CLA at another link', async () => {
     await project(TOOLS, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/cla', claimsPerIssue: 1 });
     await project(BUNDLER, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/bundler-cla' });
     const asked = await tagged(TOOLS);
@@ -761,7 +778,7 @@ describe('the queue, continued', () => {
     expect(await getClaConfirmation(env.DB, people.priya.githubId, DESKTOP)).toBeNull();
   });
 
-  test('two calls at once in one session each take their own pick off the queue, and neither puts back a pick the other took', async () => {
+  test('a walk of the queue and a claim of a named pick at once in one session each take their own pick off, and neither puts back a pick the other took', async () => {
     await project(APP);
     const [first, reached, named] = [await tagged(APP), await tagged(APP), await tagged(APP)];
     const { agent, sessionId } = await donor('priya');
@@ -775,6 +792,25 @@ describe('the queue, continued', () => {
     expect(walked.structuredContent).toMatchObject({ claim: { issue: reached } });
     expect(direct.structuredContent).toMatchObject({ claim: { issue: named } });
     expect((await getSession(env.DB, sessionId))?.queue).toEqual([]);
+  });
+
+  test('two walks of the queue at once reach the same pick: one claims it, the other gets it back resumed, and the pick behind stays next', async () => {
+    await project(APP);
+    const [first, next, behind] = [await tagged(APP), await tagged(APP), await tagged(APP)];
+    const { agent, sessionId } = await donor('priya', { kind: 'issues', count: 5 });
+    await call(agent, 'claim_issue', { sessionId, issue: first, queue: [next, behind] });
+
+    const walks = await Promise.all([call(agent, 'claim_issue', { sessionId }), call(agent, 'claim_issue', { sessionId })]);
+
+    const answers = walks.map((walk) => walk.structuredContent as { claim: { issue: string }; resumed: boolean });
+    expect(answers.map((a) => a.claim.issue)).toEqual([next, next]);
+    expect(answers.map((a) => a.resumed).sort()).toEqual([false, true]);
+    expect((await issueRoom(env.ISSUE_ROOM, next).snapshot()).claims).toHaveLength(1);
+    expect((await issueRoom(env.ISSUE_ROOM, behind).snapshot()).claims).toEqual([]);
+    const session = await getSession(env.DB, sessionId);
+    expect(session?.queue).toEqual([behind]);
+    // The first claim and the pick both walks reached, each counted once.
+    expect(session?.issuesClaimed).toBe(2);
   });
 });
 
@@ -964,24 +1000,86 @@ describe('suggest_issues', () => {
     expect(suggested(result)).not.toContain(plain);
   });
 
+  test('a call draws only the issues its walk takes, however many wait', async () => {
+    await project(APP);
+    for (let i = 0; i < 30; i++) await tagged(APP);
+    const { agent, sessionId } = await donor('priya');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = await call(agent, 'suggest_issues', { sessionId });
+
+    expect(suggested(result)).toHaveLength(3);
+    expect(random).toHaveBeenCalledTimes(3);
+  });
+
+  test('one call checks at most 8 issues on GitHub, so an issue behind 8 that fail waits for the next call', async () => {
+    await project(APP);
+    const failing = [];
+    for (let i = 0; i < 8; i++) failing.push(await tagged(APP));
+    for (const issue of failing) github.closeIssue(APP, numberOf(issue), BY);
+    const open = await tagged(APP);
+    const { agent, sessionId } = await donor('priya');
+    // With every draw at 0, the walk takes the issues in the order they were opened.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const before = github.calls.length;
+
+    const first = await call(agent, 'suggest_issues', { sessionId });
+    const reads = github.calls.slice(before).filter((c) => c.operation === 'GET /repos/{owner}/{repo}/issues/{issue_number}');
+    const next = await call(agent, 'suggest_issues', { sessionId, exclude: failing });
+
+    expect(suggested(first)).toEqual([]);
+    expect(reads).toHaveLength(8);
+    expect(suggested(next)).toEqual([open]);
+  });
+
+  test('one call reads at most 20 projects on GitHub, so issues in a project past them wait for the next call', async () => {
+    // Twenty older projects whose repos GitHub doesn't show the donor.
+    const gone = Array.from({ length: 20 }, (_, i) => `sample-owner/sample-gone-${String(i + 1).padStart(2, '0')}`);
+    for (const repo of gone) {
+      await createProject(
+        env.DB,
+        { repo, status: 'approved', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+        Date.now() - MINUTE,
+      );
+      await saveIssues(env.DB, [{ issue: `${repo}#1`, project: repo, title: 'Fix a sample bug', labels: ['help wanted'], linkedPr: null, syncedAt: Date.now() }]);
+    }
+    await project(APP);
+    const open = await tagged(APP);
+    const { agent, sessionId } = await donor('priya');
+    // With every draw at 0, the walk takes the older projects first.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const before = github.calls.length;
+
+    const first = await call(agent, 'suggest_issues', { sessionId });
+    // Each project is one GraphQL query, and no issue gets as far as a check.
+    const reads = github.calls.slice(before).map((c) => c.url);
+    const next = await call(agent, 'suggest_issues', { sessionId, exclude: gone.map((repo) => `${repo}#1`) });
+
+    expect(suggested(first)).toEqual([]);
+    expect(reads).toEqual(Array.from({ length: 20 }, () => `${github.apiUrl}/graphql`));
+    expect(suggested(next)).toEqual([open]);
+  });
+
   // Four agents sign in, and each sign-in in this file takes longer than
   // the one before, so this test, near the end, gets more time.
-  test('donors asking at the same moment are offered different issues, drawn at random with weight toward the top', { timeout: 60_000 }, async () => {
+  test('donors asking in turn are each offered issues from draws of their own, so they spread out over the issues', { timeout: 60_000 }, async () => {
     await project(APP);
     const issues = [];
     for (let i = 0; i < 10; i++) issues.push(await tagged(APP));
     const donors = [];
     for (const login of ['priya', 'kenji', 'sam', 'ines'] as const) donors.push(await donor(login));
-    // A fixed sequence of draws, so the test gives the same answer every run.
+    // A fixed sequence of draws, so the test gives the same answer every
+    // run. The donors ask one after another. Calls at once would each draw
+    // as their walks go, in whatever order their reads on GitHub finish.
     let state = 7;
     vi.spyOn(Math, 'random').mockImplementation(() => {
       state = (state * 48_271) % 2_147_483_647;
       return state / 2_147_483_647;
     });
 
-    const results = await Promise.all(donors.map(({ agent, sessionId }) => call(agent, 'suggest_issues', { sessionId })));
+    const offered: string[][] = [];
+    for (const { agent, sessionId } of donors) offered.push(suggested(await call(agent, 'suggest_issues', { sessionId })));
 
-    const offered = results.map((result) => suggested(result));
     expect(offered.every((list) => list.length === 3)).toBe(true);
     expect(new Set(offered.map((list) => [...list].sort().join(' '))).size).toBeGreaterThan(1);
     expect(new Set(offered.flat()).size).toBeGreaterThan(3);

@@ -93,10 +93,28 @@ describe('the random order', () => {
   test('an issue below the top 12 is drawn only as the ones above it are placed', () => {
     // A draw at the top of its range places the last of the 12 issues
     // in the draw, and each place lets the next issue down join them.
-    const order = weightedOrder(ranked, () => 0.999_999);
+    const order = [...weightedOrder(ranked, () => 0.999_999)];
 
     expect(order.slice(0, 4)).toEqual(['rank 11', 'rank 12', 'rank 13', 'rank 14']);
-    expect(weightedOrder(ranked, () => 0)).toEqual(ranked);
+    expect([...weightedOrder(ranked, () => 0)]).toEqual(ranked);
+  });
+
+  test('a walk that stops after a few issues makes one draw for each, however many issues wait', () => {
+    const waiting = Array.from({ length: 40_000 }, (_, rank) => `rank ${String(rank)}`);
+    let draws = 0;
+    const random = () => {
+      draws += 1;
+      return 0.5;
+    };
+
+    const taken: string[] = [];
+    for (const issue of weightedOrder(waiting, random)) {
+      taken.push(issue);
+      if (taken.length === 3) break;
+    }
+
+    expect(taken).toHaveLength(3);
+    expect(draws).toBe(3);
   });
 
   test('every issue at the top can lead, and the higher an issue ranks, the more often it leads', () => {
@@ -119,6 +137,8 @@ describe('the random order', () => {
       };
     };
 
-    expect(weightedOrder(ranked, draws(1)).slice(0, 3)).not.toEqual(weightedOrder(ranked, draws(2)).slice(0, 3));
+    const first = (seed: number) => [...weightedOrder(ranked, draws(seed))].slice(0, 3);
+
+    expect(first(1)).not.toEqual(first(2));
   });
 });

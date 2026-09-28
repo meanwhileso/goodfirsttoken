@@ -1263,12 +1263,13 @@ agree.
   `error-handling`.
   All of these compare without case. Higher scores come first, then fewer
   claims holding a slot, then the oldest project, then the lowest issue.
-- It puts the whole ranking in a random order, with weight toward the top.
-  Each place goes to one of the first 12 issues not placed yet, each
-  weighted by how many places are left from it to the bottom of those 12:
-  the first has weight 12 and the twelfth 1. An issue lower down joins the
-  draw as the ones above it are placed. So donors asking at the same moment
-  spread out over the issues, and the best matches come up most often.
+- It walks the ranking in a random order, with weight toward the top,
+  drawing each issue as it goes. Each draw picks one of the first 12 issues
+  not drawn yet, each weighted by how many places are left from it to the
+  bottom of those 12: the first has weight 12 and the twelfth 1. An issue
+  lower down joins the draw as the ones above it are drawn. So donors
+  asking at the same moment spread out over the issues, the best matches
+  come up most often, and a call draws only the issues it walks to.
 - In that order, it reads each issue's project on GitHub once. A project
   whose code repo GitHub doesn't show the donor, whose code repo has no
   commits, or whose vouch file keeps the donor out is left out with all its
@@ -1329,7 +1330,9 @@ and the CLA's link until the donor confirms they signed it. The agent then
 calls `claim_issue` again with `claConfirmed` set to the link the refusal
 gave. A confirmation counts only when its link is the project's link now.
 So a donor who read a link the project has since changed is asked again at
-the new one, and nothing is kept. The confirmation is kept with the link,
+the new one, and nothing is kept. In a walk of the queue, it counts for
+any pick whose project keeps its CLA at that link, since that is the CLA
+the donor signed. The confirmation is kept with the link,
 so the donor is asked once per project, and again only when the project's
 CLA link changes. It is kept once the donor confirms, even when the room
 then refuses the claim.
@@ -1361,8 +1364,11 @@ first, and passes the rest as the claim's `queue`.
   replaces the picks waiting. An issue given to claim leaves the queue.
 - Each change is made to the queue as it is stored at that moment, and
   lands only if no other call changed the queue in between. Otherwise it is
-  made again. So two calls at once in one session each take their own pick
-  off, and neither puts back a pick the other took.
+  made again. So a call never puts back a pick that another call at the
+  same moment took off.
+- Two calls at once that both claim the next pick can reach the same one.
+  One claims it. The other gets that claim back, marked resumed, which
+  takes nothing from the budget, and the pick behind it stays next.
 - A queued pick is claimed only when the agent reaches it, by calling
   `claim_issue` with no issue. The claim's answer tells the agent to do that
   once the claim before it is submitted or released.
@@ -1376,9 +1382,6 @@ first, and passes the rest as the claim's `queue`.
 - A pick whose project asks for a CLA the donor hasn't confirmed stops the
   queue there, and stays next, so the agent can ask the donor. So does a
   spent budget.
-- With no issue given, `claConfirmed` counts for the first pick the call
-  reaches, the one the refusal asked about. When that pick is passed over,
-  it counts for no pick behind it, whose CLA the donor hasn't seen.
 
 **The budget.** The session counts the issues claimed in it, and the time
 since it started.

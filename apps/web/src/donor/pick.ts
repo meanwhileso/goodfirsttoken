@@ -1,9 +1,9 @@
 import type { Interests } from '@goodfirsttoken/core';
 
 // How suggest_issues orders the issues waiting for an agent: ranked against
-// the donor's interests, then put in a random order with weight toward the
-// top, so donors asking at the same moment spread out across issues. The
-// rules are in docs/how-it-works.md, under The donor's tools.
+// the donor's interests, then drawn at random with weight toward the top, so
+// donors asking at the same moment spread out across issues. The rules are
+// in docs/how-it-works.md, under The donor's tools.
 
 /** An issue waiting for an agent, as the ranking sees it. */
 export interface Candidate {
@@ -91,30 +91,34 @@ export function rankIssues<T extends Candidate>(candidates: readonly T[], intere
 }
 
 /**
- * The whole ranking, in a random order with weight toward the top. Each place
- * is drawn from the first POOL issues not placed yet, each weighted by how
- * many places are left from it to the bottom of those: of 12, the first has
- * weight 12 and the twelfth 1. An issue lower down joins the draw as the ones
- * above it are placed, so a caller that passes over an issue comes to the
- * rest of the ranking in turn. `random` gives a number from 0 up to 1, like
- * Math.random. Every draw is made before this returns, so calls at the same
- * moment never share one.
+ * The ranking in a random order with weight toward the top, one issue at a
+ * time. Each issue is drawn when the caller asks for the next one, from the
+ * first POOL issues not placed yet, each weighted by how many places are
+ * left from it to the bottom of those: of 12, the first has weight 12 and
+ * the twelfth 1. An issue lower down joins the draw as the ones above it
+ * are placed, so a caller that passes over an issue comes to the rest of
+ * the ranking in turn. A caller that stops after a few issues makes a draw
+ * for each of them alone. `random` gives a number from 0 up to 1, like
+ * Math.random.
  */
-export function weightedOrder<T>(ranked: readonly T[], random: () => number): T[] {
-  const left = [...ranked];
-  const order: T[] = [];
-  while (left.length > 0) {
-    const pool = Math.min(POOL, left.length);
-    let draw = random() * ((pool * (pool + 1)) / 2);
-    let at = pool - 1;
-    for (let place = 0; place < pool; place++) {
-      draw -= pool - place;
+export function* weightedOrder<T>(ranked: readonly T[], random: () => number): Generator<T, void, undefined> {
+  const pool = ranked.slice(0, POOL);
+  let below = pool.length;
+  while (pool.length > 0) {
+    const size = pool.length;
+    let draw = random() * ((size * (size + 1)) / 2);
+    let at = size - 1;
+    for (let place = 0; place < size; place++) {
+      draw -= size - place;
       if (draw < 0) {
         at = place;
         break;
       }
     }
-    order.push(...left.splice(at, 1));
+    const placed = pool.splice(at, 1);
+    // The next issue down joins the draw.
+    pool.push(...ranked.slice(below, below + 1));
+    below += 1;
+    yield* placed;
   }
-  return order;
 }
