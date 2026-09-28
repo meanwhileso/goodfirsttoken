@@ -548,18 +548,25 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   commit, compared by blob ID, and its bytes read with
   `GET .../git/blobs/{sha}`, so a binary file goes back as it was.
   `submissions.paths` keeps the paths the latest submit sent, for the next.
+- **The branch's head** is read with `GET .../git/ref/heads/{branch}`, and
+  compared with `submissions.commit_sha`, or the start commit before a
+  first submit, or `onto`. A head that differs is read with one GraphQL
+  query for its parents and its author's login, `commitFacts`. Only a
+  commit with one parent, the expected head, and the donor as its author
+  can be a submit that died after its commit.
 - **The commit** is `createCommitOnBranch` with `expectedHeadOid` set to the
   head the change was worked out from, and each file's text in base64.
-  GitHub's `STALE_DATA` means the branch moved, and the change is worked out
+  GitHub's `STALE_DATA` means the branch moved, and the branch is read
   again, up to three tries.
 - **Recording.** The room records the submit after the commit lands. Then
   the lines come from `GET .../compare/{start}...{commit}` in the repo the
   branch is in, which lists up to 300 files, and `saveSubmission` writes
   the row. A PR goes to the room with `openPr`, then to `prs` with
   `addPr`. A call that dies after its commit leaves the commit
-  on the branch unrecorded. The same submit again finds the branch holding
-  the files, and records that commit, since no submit of the claim was
-  recorded. Its PR, likewise, is found by `GET .../pulls?head=`, since
+  on the branch unrecorded. The same submit again finds the donor's own
+  commit on the expected head, holding the files, and records it. When the
+  claim's room has a first submit and `submissions` has no row, the room
+  already recorded it, and it isn't recorded there again. Its PR, likewise, is found by `GET .../pulls?head=`, since
   GitHub answers a PR already open from the branch with a 422 whose message
   names no reason.
 - **What a submit costs.** A first submit to a fork makes about 12 calls to
@@ -1014,7 +1021,8 @@ that break the rules, so it returns the problems for the caller to show.
   outlives a listing.
 - **Migration `0006_submissions.sql`** makes `submissions`, one row per
   claim, which each submit writes over, with a foreign key to the claim.
-  `paths` is a JSON list. The lines added and removed are null when GitHub
+  `base` is the commit the files are read against, the start commit or a
+  head named with `onto`. `paths` is a JSON list. The lines added and removed are null when GitHub
   didn't say. The review reason is null for work whose PR was to open by
   itself. `my_work` reads the rows of a donor's claims awaiting review by
   key.

@@ -29,6 +29,7 @@ function submission(claimId: string, rest: Partial<SubmissionRecord> = {}): Subm
     repo: 'priya/sample-app',
     branch: `goodfirsttoken/issue-12-${claimId}`,
     commit: 'a'.repeat(40),
+    base: sha,
     paths: ['src/rewrite.ts'],
     title: 'Keep the trailing slash in rewrites',
     summary: 'Keeps the slash.',
@@ -53,7 +54,14 @@ beforeEach(async () => {
 describe('submissions', () => {
   test("a claim's latest submit replaces its earlier one, and each claim keeps its own", async () => {
     await saveSubmission(db, submission('c_1'));
-    const later = submission('c_1', { commit: 'b'.repeat(40), paths: ['src/a.ts'], additions: null, deletions: null, reviewReason: null });
+    const later = submission('c_1', {
+      commit: 'b'.repeat(40),
+      base: 'c'.repeat(40),
+      paths: ['src/a.ts'],
+      additions: null,
+      deletions: null,
+      reviewReason: null,
+    });
     await saveSubmission(db, later);
     await saveSubmission(db, submission('c_2'));
 

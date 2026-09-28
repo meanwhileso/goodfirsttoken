@@ -179,16 +179,16 @@ function modeRefusal(path: string, entry: Entry | null, where: string): Refusal 
 /**
  * What the commit changes so the branch holds each file as submitted, and
  * each file an earlier submit sent and this one leaves out as it was at the
- * start commit. A file the branch already holds as submitted, and a
- * deletion of a file the branch doesn't have, change nothing and are left
- * out. `repo` at `rev` is the branch now, and `upstream` at `start` is the
- * start commit. A change to an executable file, a symbolic link, or a
- * submodule is refused, since the commit would make it a plain file.
+ * base. A file the branch already holds as submitted, and a deletion of a
+ * file the branch doesn't have, change nothing and are left out. `at` is
+ * the branch now, and `base` the commit the files are read against. A
+ * change to an executable file, a symbolic link, or a submodule is
+ * refused, since the commit would make it a plain file.
  */
 async function planChange(
   writer: DonorWriter,
   at: { repo: string; rev: string; where: string },
-  start: { repo: string; rev: string },
+  base: { repo: string; rev: string; where: string },
   files: readonly { path: string; content: string | null }[],
   putBack: readonly string[],
 ): Promise<Change | Refusal> {
@@ -210,71 +210,95 @@ async function planChange(
     else change.additions.push({ path: file.path, contents: textBase64(file.content) });
   }
   if (putBack.length > 0) {
-    const atStart = await writer.entries(start.repo, start.rev, putBack);
+    const atBase = await writer.entries(base.repo, base.rev, putBack);
     for (const path of putBack) {
       const now = entries.get(path) ?? null;
-      const was = atStart.get(path) ?? null;
+      const was = atBase.get(path) ?? null;
       if (was?.oid === now?.oid) continue;
-      const kept = modeRefusal(path, now, at.where) ?? modeRefusal(path, was, 'the start commit');
+      const kept = modeRefusal(path, now, at.where) ?? modeRefusal(path, was, base.where);
       if (kept) return kept;
-      if (was?.file === true) change.additions.push({ path, contents: await writer.blob(start.repo, was.oid) });
+      if (was?.file === true) change.additions.push({ path, contents: await writer.blob(base.repo, was.oid) });
       else if (now?.file === true) change.deletions.push(path);
     }
   }
   return change;
 }
 
+function branchMoved(repo: string, branch: string, head: string): Refusal {
+  return refusal(
+    'branch_moved',
+    `${repo}:${branch} is at ${head}, a commit the claim's submits didn't make, so someone pushed to the branch since the last submit. Nothing was committed, so that work stays. Fetch the branch, bring your work onto ${head}, and submit again with onto set to ${head}, sending every file changed from it.`,
+  );
+}
+
 /**
- * Commits the files to the claim's branch, making the branch at the start
- * commit first when it isn't there, and waiting for a new fork. The commit
- * is made again, from the branch as it is then, when the branch moved since
- * it was read.
+ * Whether `head` is a commit the donor made on `expected`, as a submit that
+ * died after its commit leaves one: its one parent is `expected`, and GitHub
+ * names the donor its author.
+ */
+async function ownCommitOn(writer: DonorWriter, repo: string, head: string, expected: string, donor: string): Promise<boolean> {
+  const facts = await writer.commitFacts(repo, head);
+  return (
+    facts !== null &&
+    facts.parents.length === 1 &&
+    facts.parents[0] === expected &&
+    facts.author !== null &&
+    lower(facts.author) === lower(donor)
+  );
+}
+
+/**
+ * Commits the files to the claim's branch, making the branch at the base
+ * first when it isn't there, and waiting for a new fork. A commit the claim's
+ * submits didn't make at the branch's head stops the submit, so no one
+ * else's work is written over. The one exception is a commit of the donor's
+ * own on the expected head that already holds the files, as a submit that
+ * died after its commit leaves: that commit is the submit's, and none is
+ * made. When the branch moves between the read and the commit, the branch
+ * is read again.
  */
 async function commitWork(
   writer: DonorWriter,
   input: {
     target: string;
-    upstream: string;
     branch: string;
-    start: string;
+    /** The commit the files are read against, and where a branch not made yet starts. */
+    base: { repo: string; rev: string; where: string };
+    /** Where the branch should be: the last submit's commit, the head the agent named with onto, or the base. */
+    expected: string;
+    donor: string;
     files: readonly { path: string; content: string | null }[];
     putBack: readonly string[];
     message: { headline: string; body: string };
-    /**
-     * No submit of the claim is recorded yet, so a branch that already holds
-     * the files holds a commit an earlier call made and didn't record, as
-     * when it died after the commit.
-     */
-    unrecorded: boolean;
   },
-): Promise<{ sha: string } | Refusal> {
-  const { target, branch, start } = input;
+): Promise<{ sha: string; recovered: boolean } | Refusal> {
+  const { target, branch, base, expected } = input;
   for (let tries = 0; tries < COMMIT_TRIES; tries++) {
     const head = await whenReady(() => writer.branchHead(target, branch));
     if (head === NOT_READY) return forkNotReady(target);
-    // A branch not made yet starts at the start commit, which the code repo has.
-    const at =
-      head === null
-        ? { repo: input.upstream, rev: start, where: 'the start commit' }
-        : { repo: target, rev: head, where: `${target}:${branch}` };
-    const change = await planChange(writer, at, { repo: input.upstream, rev: start }, input.files, input.putBack);
+    const moved = head !== null && head !== expected;
+    if (moved && !(await ownCommitOn(writer, target, head, expected, input.donor))) return branchMoved(target, branch, head);
+    const at = head === null ? base : { repo: target, rev: head, where: `${target}:${branch}` };
+    const change = await planChange(writer, at, base, input.files, input.putBack);
     if (isRefusal(change)) return change;
     if (change.additions.length + change.deletions.length === 0) {
-      if (input.unrecorded && head !== null && head !== start) return { sha: head };
-      const same = head === null ? 'are as they were at the start commit' : `are as ${target}:${branch} holds them`;
+      if (moved) return { sha: head, recovered: true };
+      const same = head === null ? `are as they were at ${base.where}` : `are as ${target}:${branch} holds them`;
       return refusal(
         'no_changes',
-        `The files ${same}, so nothing was committed. Send every file changed from the start commit, with its full new text.`,
+        `The files ${same}, so nothing was committed. Send every file changed from ${base.where}, with its full new text.`,
       );
     }
+    // The donor's own commit, with other files than these: a push of theirs, which a commit would write over.
+    if (moved) return branchMoved(target, branch, head);
     if (head === null) {
-      const made = await whenReady(() => writer.createBranch(target, branch, start));
+      const made = await whenReady(() => writer.createBranch(target, branch, base.rev));
       if (made === NOT_READY) return forkNotReady(target);
       // Made meanwhile, as by another submit of the claim: read it again.
       if (made === 'exists') continue;
     }
-    const commit = await writer.commit({ repo: target, branch, expectedHead: head ?? start, ...change, ...input.message });
-    if (commit !== 'stale') return commit;
+    const commit = await writer.commit({ repo: target, branch, expectedHead: head ?? base.rev, ...change, ...input.message });
+    if (commit !== 'stale') return { ...commit, recovered: false };
   }
   return refusal('github_refused', `${target}:${branch} kept moving while the commit was made, so nothing was committed. Submit again.`);
 }
@@ -388,8 +412,11 @@ export async function submitWork(
   const model = redacted(input.model, 100);
   // Paths in a repo compare with case, as Git compares them.
   const submitted = new Set(input.files.map((file) => file.path));
+  // The files are read against the start commit, or against the head a
+  // submit built on with onto, after someone else pushed to the branch.
+  const base = input.onto ?? earlier?.base ?? claim.startCommit;
 
-  let committed: { sha: string } | Refusal;
+  let committed: { sha: string; recovered: boolean } | Refusal;
   let target: string;
   try {
     // A claim's branch stays where its first submit put it. Otherwise it goes
@@ -398,13 +425,18 @@ export async function submitWork(
     target = earlier?.repo ?? (facts.writer ? facts.name : await writer.fork(facts.name));
     committed = await commitWork(writer, {
       target,
-      upstream: facts.name,
       branch,
-      start: claim.startCommit,
+      // The code repo has the start commit. A head someone pushed is in the branch's repo.
+      base:
+        base === claim.startCommit
+          ? { repo: facts.name, rev: base, where: 'the start commit' }
+          : { repo: target, rev: base, where: `the commit ${base}` },
+      expected: input.onto ?? earlier?.commit ?? claim.startCommit,
+      donor: donor.login,
       files: input.files,
+      // A file goes back to the base. After onto, that is the head the branch is at.
       putBack: (earlier?.paths ?? []).filter((path) => !submitted.has(path)),
       message: commitMessage({ title, summary, agent: input.agent, model, disclosure: project.settings.disclosure }),
-      unrecorded: earlier === null || claim.submittedAt === null,
     });
   } catch (error) {
     if (!(error instanceof WriteRefused)) throw error;
@@ -416,7 +448,12 @@ export async function submitWork(
   if (isRefusal(committed)) return refuse(committed);
 
   const room = issueRoom(env.ISSUE_ROOM, claim.issue);
-  const recorded = await room.submit({ claimId: claim.id, githubId: donor.githubId, tokenEstimate: input.tokenEstimate ?? null });
+  // A first submit its room recorded and the database didn't, as when a
+  // call died between the two, is recorded once.
+  const inRoom = committed.recovered && earlier === null && claim.submittedAt !== null;
+  const recorded = inRoom
+    ? ({ ok: true, claim } as const)
+    : await room.submit({ claimId: claim.id, githubId: donor.githubId, tokenEstimate: input.tokenEstimate ?? null });
   if (!recorded.ok) {
     return refuse({
       ...recorded.refusal,
@@ -441,6 +478,7 @@ export async function submitWork(
     repo: target,
     branch,
     commit: committed.sha,
+    base,
     paths: input.files.map((file) => file.path),
     title,
     summary,

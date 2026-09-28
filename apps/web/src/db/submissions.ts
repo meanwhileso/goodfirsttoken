@@ -17,6 +17,7 @@ interface SubmissionRow {
   repo: string;
   branch: string;
   commit_sha: string;
+  base: string;
   paths: string;
   title: string;
   summary: string;
@@ -37,6 +38,7 @@ function toSubmission(row: SubmissionRow): SubmissionRecord {
       repo: row.repo,
       branch: row.branch,
       commit: row.commit_sha,
+      base: row.base,
       paths: fromJson(row.paths),
       title: row.title,
       summary: row.summary,
@@ -61,11 +63,11 @@ export async function saveSubmission(db: D1Database, submission: SubmissionRecor
   const row = await db
     .prepare(
       `INSERT INTO submissions (claim_id, repo, branch, commit_sha, paths, title, summary, checks, agent, model,
-         additions, deletions, review_reason, submitted_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         additions, deletions, review_reason, submitted_at, base)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
        ON CONFLICT (claim_id) DO UPDATE SET repo = ?2, branch = ?3, commit_sha = ?4, paths = ?5, title = ?6,
          summary = ?7, checks = ?8, agent = ?9, model = ?10, additions = ?11, deletions = ?12,
-         review_reason = ?13, submitted_at = ?14
+         review_reason = ?13, submitted_at = ?14, base = ?15
        RETURNING *`,
     )
     .bind(
@@ -83,6 +85,7 @@ export async function saveSubmission(db: D1Database, submission: SubmissionRecor
       s.deletions,
       s.reviewReason,
       s.submittedAt,
+      s.base,
     )
     .first<SubmissionRow>();
   if (row === null) throw new Error(`Claim ${s.claimId}'s submission was not saved.`);

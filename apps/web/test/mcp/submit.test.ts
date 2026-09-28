@@ -278,6 +278,24 @@ async function asGitHub(token: string, method: string, path: string, body: unkno
   if (!response.ok) throw new Error(`GitHub answered ${String(response.status)}`);
 }
 
+/** Commits a file to a branch with the donor's own token, as a submit that died after its commit did. */
+async function commitAs(login: string, repo: string, branch: string, files: Record<string, string>): Promise<string> {
+  await asGitHub(agentToken(login), 'POST', '/graphql', {
+    query: 'mutation ($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }',
+    variables: {
+      input: {
+        branch: { repositoryNameWithOwner: repo, branchName: branch },
+        expectedHeadOid: repoState(repo).branches[branch],
+        message: { headline: 'Keep the trailing slash in rewrites' },
+        fileChanges: { additions: Object.entries(files).map(([path, text]) => ({ path, contents: btoa(text) })) },
+      },
+    },
+  });
+  const head = repoState(repo).branches[branch];
+  if (head === undefined) throw new Error(`no branch ${branch}`);
+  return head;
+}
+
 /** An admin removes the project at its maintainers' request, which puts its repo on the do-not-list. */
 async function removeProject(repo: string) {
   await savePerson(env.DB, admin, Date.now());
@@ -792,6 +810,147 @@ describe('what a submit commits', () => {
       expect(text).not.toContain(token);
       expect(text).toContain('[redacted]');
     }
+  });
+});
+
+describe("someone else's push to the claim's branch", () => {
+  const FORK = 'priya/sample-app';
+
+  /** A claim whose PR opened from priya's fork, with a.txt and z.txt as its change. */
+  async function openedClaim() {
+    await project(APP, automatic);
+    repoState(APP).collaborators.kenji = 'write';
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+    await submit(priya, claimId, { 'a.txt': 'one\n', 'z.txt': 'z\n' });
+    const [pull] = pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branch);
+    if (!pull) throw new Error('no PR');
+    return { issue, priya, claimId, branch, number: pull.number };
+  }
+
+  // Each push GitHub lets others make to an open PR's branch, with the file
+  // it leaves there.
+  const pushes: [string, (branch: string, number: number) => string, string][] = [
+    ["a maintainer's commit", (branch) => github.commitFiles(FORK, { 'NOTES.md': 'From the maintainer.\n' }, BY, { branch }), 'NOTES.md'],
+    [
+      "a reviewer's suggestion",
+      (branch) => github.commitFiles(FORK, { 'a.txt': 'one, as the reviewer suggested\n' }, 'kenji', { branch }),
+      'a.txt',
+    ],
+    [
+      'an Update branch merge',
+      (_, number) => {
+        github.commitFiles(APP, { 'CHANGELOG.md': 'From main.\n' }, BY);
+        return github.updatePullRequestBranch(APP, number, BY);
+      },
+      'CHANGELOG.md',
+    ],
+    [
+      "the donor's own Update branch merge",
+      (_, number) => {
+        github.commitFiles(APP, { 'CHANGELOG.md': 'From main.\n' }, BY);
+        return github.updatePullRequestBranch(APP, number, 'priya');
+      },
+      'CHANGELOG.md',
+    ],
+  ];
+
+  test.each(pushes)(
+    '%s stops the next submit with nothing written over, and a submit onto the new head builds on it',
+    async (_, push, theirs) => {
+      const { issue, priya, claimId, branch, number } = await openedClaim();
+      const head = push(branch, number);
+      const theirText = filesAt(FORK, head).get(theirs);
+
+      const same = await submit(priya, claimId, { 'a.txt': 'one\n', 'z.txt': 'z\n' });
+      const sameCalls = lastCalls();
+      const changed = await submit(priya, claimId, { 'a.txt': 'two\n', 'z.txt': 'z\n' });
+      const changedCalls = lastCalls();
+
+      for (const refused of [same, changed]) {
+        expect(refusalOf(refused)).toBe('branch_moved');
+        expect(textOf(refused)).toContain(`${FORK}:${branch} is at ${head}, a commit the claim's submits didn't make`);
+        expect(textOf(refused)).toContain(`submit again with onto set to ${head}`);
+      }
+      expect(writes([...sameCalls, ...changedCalls])).toEqual([]);
+      expect(repoState(FORK).branches[branch]).toBe(head);
+      expect(filesAt(FORK, branch).get(theirs)).toBe(theirText);
+      const submitted = async () => (await issueRoom(env.ISSUE_ROOM, issue).history()).filter((e) => e.kind === 'submitted');
+      expect(await submitted()).toHaveLength(1);
+
+      // The agent fetches the branch, and sends every file changed from its
+      // head, which leaves z.txt out.
+      const onto = await submit(priya, claimId, { 'a.txt': 'two\n' }, { onto: head });
+      const built = repoState(FORK).branches[branch] ?? '';
+      // A later submit leaves a.txt out, so it goes back to what the new head has.
+      const later = await submit(priya, claimId, { 'b.txt': 'b\n' });
+
+      expect(onto.structuredContent).toMatchObject({ state: 'pr_opened', commit: { sha: built } });
+      expect(commitAt(built).parents).toEqual([head]);
+      expect(filesAt(FORK, built).get('a.txt')).toBe('two\n');
+      expect(filesAt(FORK, built).get('z.txt')).toBe('z\n');
+      if (theirs !== 'a.txt') expect(filesAt(FORK, built).get(theirs)).toBe(theirText);
+      expect(later.isError).toBeFalsy();
+      expect(filesAt(FORK, branch).get('a.txt')).toBe(filesAt(FORK, head).get('a.txt'));
+      expect(filesAt(FORK, branch).get('b.txt')).toBe('b\n');
+      expect(await getSubmission(env.DB, claimId)).toMatchObject({ base: head, paths: ['b.txt'] });
+      expect(await submitted()).toHaveLength(3);
+    },
+  );
+
+  test('a submit onto a head the branch has moved past is stopped too, naming the head it is at now', async () => {
+    const { priya, claimId, branch } = await openedClaim();
+    const first = github.commitFiles(FORK, { 'NOTES.md': 'One.\n' }, BY, { branch });
+    const second = github.commitFiles(FORK, { 'NOTES.md': 'Two.\n' }, BY, { branch });
+
+    const refused = await submit(priya, claimId, { 'a.txt': 'two\n' }, { onto: first });
+
+    expect(refusalOf(refused)).toBe('branch_moved');
+    expect(textOf(refused)).toContain(`is at ${second}`);
+    expect(repoState(FORK).branches[branch]).toBe(second);
+  });
+
+  test("the donor's own commit on the last submit's is the submit that made it when it holds the files, and a push when it holds others", async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+    await submit(priya, claimId, { 'a.txt': 'one\n' });
+    // A submit that died after its commit.
+    const died = await commitAs('priya', FORK, branch, { 'a.txt': 'two\n' });
+
+    const again = await submit(priya, claimId, { 'a.txt': 'two\n' });
+    // The donor pushes a change of their own.
+    const pushed = await commitAs('priya', FORK, branch, { 'a.txt': 'three\n' });
+    const next = await submit(priya, claimId, { 'a.txt': 'four\n' });
+
+    expect(again.structuredContent).toMatchObject({ commit: { sha: died } });
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({ commit: died });
+    expect(refusalOf(next)).toBe('branch_moved');
+    expect(repoState(FORK).branches[branch]).toBe(pushed);
+  });
+
+  test("a first submit its room recorded and the database didn't is recorded once, with its token estimate counted once", async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+    // What a call did before it died: the branch, the commit, and the room's record.
+    await asGitHub(agentToken('priya'), 'POST', `/repos/${FORK}/git/refs`, { ref: `refs/heads/${branch}`, sha: start });
+    const died = await commitAs('priya', FORK, branch, { 'a.txt': 'a\n' });
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    await room.submit({ claimId, githubId: people.priya.githubId, tokenEstimate: 2000 });
+
+    const result = await submit(priya, claimId, { 'a.txt': 'a\n' }, { tokenEstimate: 2000 });
+
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_review', commit: { sha: died } });
+    expect((await room.snapshot()).claims[0]).toMatchObject({ tokenEstimate: 2000 });
+    expect((await room.history()).filter((e) => e.kind === 'submitted')).toHaveLength(1);
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({ commit: died, base: start });
   });
 });
 

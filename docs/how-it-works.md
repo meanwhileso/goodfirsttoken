@@ -1688,17 +1688,35 @@ never reaches the tool.
   second, a second, and two seconds. When the fork still isn't ready, the
   submit is refused with `fork_not_ready`, nothing is committed, and the
   agent calls again with the same files. The fork stays.
+- A submit never writes over a commit the claim's submits didn't make.
+  Before it commits, the branch's head must be the commit the claim's
+  last submit made, or the start commit before the first. When someone
+  pushed to the branch since, as a maintainer can to an open PR's branch,
+  a reviewer can by committing a suggestion, and anyone can by clicking
+  Update branch, the submit is refused with `branch_moved`, naming the
+  head, and nothing is committed, so that work stays. The agent fetches
+  the branch, brings its work onto that head, and submits again with
+  `onto` set to it. `onto` must be the branch's head, or the submit is
+  refused with `branch_moved` again.
+- The files are read against the claim's base: its start commit, or the
+  head the latest submit with `onto` named. So after `onto`, every file
+  changed from that head is sent, on that submit and the later ones.
 - After the commit, the branch holds each file as submitted. A file the
   branch already holds with that text, and a deletion of a path where the
   branch has no file, change nothing and are left out. A file an earlier
   submit of the claim sent, and this one leaves out, goes back to how it
-  was at the start commit: deleted when it wasn't there, or its content
-  from then put back, whatever its bytes. When that leaves nothing to
-  change, the submit is refused with `no_changes`. A first submit then
-  makes no branch. One exception: while no submit of the claim is
-  recorded, a branch that already holds the files past the start commit
-  holds a commit an earlier call made and didn't record, as when it died
-  after the commit. The submit records that commit, and makes none.
+  was at the base: deleted when it wasn't there, or its content from then
+  put back, whatever its bytes. When that leaves nothing to change, the
+  submit is refused with `no_changes`. A first submit then makes no
+  branch.
+- One exception to both: a commit at the head whose one parent is where
+  the branch should be, which GitHub names the donor the author of, and
+  which already holds the files, is one an earlier call made and didn't
+  record, as when it died after the commit. The submit records that
+  commit, and makes none. When the room recorded that first submit before
+  the call died, it isn't recorded twice. A later submit that died between
+  the room and the database is recorded twice, with its token estimate
+  added twice, since the room keeps no record of each submit's commit.
 - A submit that would change an executable file, a symbolic link, or a
   submodule is refused with `file_mode`, naming the path, and nothing is
   committed. `createCommitOnBranch` writes every file it adds as a plain
@@ -1715,9 +1733,11 @@ never reaches the tool.
   the issue's title on GitHub. Then comes the summary, then the project's
   disclosure trailer, when it has one, naming the agent and the model, like
   `Assisted-by: claude-code (claude-opus-5-5)`.
-- When the branch moved between the read and the commit, the change is
-  worked out again from the branch as it is then, up to three tries, and
-  then the submit is refused with `github_refused`.
+- When GitHub says the branch moved between the read and the commit, or
+  made the branch meanwhile, the branch is read again, up to three tries,
+  and then the submit is refused with `github_refused`. A push by someone
+  else stops it with `branch_moved`, and a commit another call of the same
+  claim made with these files is taken as above.
 - When GitHub refuses the fork, the branch, or the commit, the submit is
   refused with `github_refused` and GitHub's reason, and the claim stays as
   it was. A change to a file under `.github/workflows/` is one such
@@ -1811,6 +1831,12 @@ GitHub.
   assignee is for claiming, and here the donor may be the assignee, since
   maintainers often assign the person working on an issue. A claim whose
   PR is open skips the check.
+- A submit stops at a push by someone else to the claim's branch, with
+  `branch_moved`, and goes on only with `onto`, the head the agent
+  brought its work onto. The spec says fixes go onto the same branch, and
+  doesn't say what happens to commits maintainers or reviewers add there.
+  A commit through GitHub's API sets the whole file, so without the stop a
+  submit would undo theirs.
 
 ## Crawl candidates
 
@@ -1941,7 +1967,8 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   The MCP server takes a request of at most 4 MiB, and JSON can take twice
   the bytes of the text it carries. A deletion counts nothing.
 - A submit lists 1 to 300 files. `submit_work` takes a title, one line,
-  and `open_pr` a description the donor wrote.
+  and `onto`, a full commit SHA, and `open_pr` a description the donor
+  wrote.
 - The title, at most 256 characters, and the model name, at most 100, fold
   their tabs and line breaks into single spaces. Before that, each is
   refused when it is longer than four times its limit.
@@ -1966,7 +1993,7 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`,
 `not_vouched`, `pr_closed`, `description_required`, `no_changes`,
-`file_mode`, `fork_not_ready`, and `github_refused`.
+`file_mode`, `fork_not_ready`, `branch_moved`, and `github_refused`.
 
 Each maintainer's and admin's tool, and the donor's `submit_work` and
 `open_pr`, lists the refusals an agent can get from it, in its spec in
@@ -1986,7 +2013,7 @@ tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
-| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `fork_not_ready`, `github_refused` |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `fork_not_ready`, `branch_moved`, `github_refused` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
@@ -2024,6 +2051,7 @@ tool say what to do with each one on its list, under
 | `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit |
 | `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, so nothing was committed |
 | `fork_not_ready` | GitHub was still making the donor's fork, so nothing was committed. The same submit works once it is done |
+| `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, so nothing was committed. The refusal names the head to build on |
 | `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
 | `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list |

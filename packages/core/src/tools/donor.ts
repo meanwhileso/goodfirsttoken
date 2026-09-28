@@ -468,7 +468,7 @@ function nextStep(reason: ReviewReason): string {
 export const submitWork = defineTool({
   audience: 'donor',
   description:
-    "Submit the finished work: every file changed from the start commit, each with its full new text or null to delete it, a summary, what you checked, and the agent and model used. Send every changed file each time: a file an earlier submit changed that this one leaves out goes back to the start commit. The server commits it as the donor, on a branch in the repo when the donor can push there, or else in their fork. Then it opens the PR, or puts the work in the donor's review queue. Submitting again adds a commit to the same branch, and to its PR once one is open.",
+    "Submit the finished work: every file changed from the start commit, each with its full new text or null to delete it, a summary, what you checked, and the agent and model used. Send every changed file each time: a file an earlier submit changed that this one leaves out goes back to the start commit. The server commits it as the donor, on a branch in the repo when the donor can push there, or else in their fork. Then it opens the PR, or puts the work in the donor's review queue. Submitting again adds a commit to the same branch, and to its PR once one is open. When someone else pushed to the branch, the submit is refused with branch_moved: fetch the branch, bring your work onto its head, and submit with onto set to that head. From then on, send every file changed from that commit.",
   // not_found, not_claim_owner, and the claim's own refusals come from the
   // claims table, the permission, or the claim's room. A PR that doesn't
   // open by itself sends the work to the review queue, with no refusal.
@@ -484,6 +484,7 @@ export const submitWork = defineTool({
     'no_changes',
     'file_mode',
     'fork_not_ready',
+    'branch_moved',
     'github_refused',
   ],
   input: z.object({
@@ -514,6 +515,11 @@ export const submitWork = defineTool({
       .optional()
       .describe(
         'Tokens spent on this claim since its last submit, or since it was made, when the harness can estimate them. The server adds up the estimates of every submit.',
+      ),
+    onto: commitSha
+      .optional()
+      .describe(
+        "The head of the claim's branch that your files build on, after a branch_moved refusal named it. The files are then every file changed from it, on this submit and the later ones.",
       ),
   }),
   output: z.object({

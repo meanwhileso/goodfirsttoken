@@ -56,7 +56,13 @@ export const submissionRecordSchema = z.object({
   branch: branchName,
   /** The commit the latest submit made. */
   commit: commitSha,
-  /** The paths the latest submit sent, which the branch changes from the claim's start commit. */
+  /**
+   * The commit the submits' files are read against: the claim's start
+   * commit, or the branch's head a submit named with `onto` after someone
+   * else pushed to it.
+   */
+  base: commitSha,
+  /** The paths the latest submit sent, which the branch changes from `base`. */
   paths: z.array(z.string().min(1)).max(300),
   title: prTitle,
   /** The agent's summary, with keys and tokens replaced. */

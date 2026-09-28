@@ -74,6 +74,11 @@ interface FolderAnswer {
   entries?: { name: string; type: string; mode: number; oid: string; size: number }[] | null;
 }
 
+interface CommitFactsAnswer {
+  parents?: { nodes?: ({ oid?: unknown } | null)[] | null } | null;
+  author?: { user?: { login?: unknown } | null } | null;
+}
+
 interface TextAnswer {
   text?: string | null;
   isTruncated?: boolean;
@@ -195,6 +200,22 @@ export class DonorWriter {
       });
     }
     return found;
+  }
+
+  /**
+   * A commit's parents, and the login of the GitHub account its author is,
+   * or null when GitHub shows no such commit in the repo.
+   */
+  async commitFacts(repo: string, sha: string): Promise<{ parents: string[]; author: string | null } | null> {
+    const [answer] = await this.objects<CommitFactsAnswer>(
+      repo,
+      [sha],
+      '... on Commit { parents(first: 2) { nodes { oid } } author { user { login } } }',
+    );
+    if (answer?.parents == null) return null;
+    const parents = (answer.parents.nodes ?? []).flatMap((node) => (typeof node?.oid === 'string' ? [node.oid] : []));
+    const login = answer.author?.user?.login;
+    return { parents, author: typeof login === 'string' ? login : null };
   }
 
   private async objects<T>(repo: string, expressions: readonly string[], fields: string): Promise<(T | null)[]> {
