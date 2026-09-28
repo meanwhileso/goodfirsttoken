@@ -1087,12 +1087,12 @@ removes the repo.
   nothing is saved.
 - A repo GitHub doesn't show the caller, because it went private or is
   gone, and a repo GitHub blocked access to, are refused with
-  `not_maintainer` too, since GitHub gives no role to check. Good First
-  Token pauses such a project on its own, under Delisting in
-  [Tagged issues](#tagged-issues), so it has no page and takes no claims,
-  and only an admin can resume it. Its maintainers can ask once GitHub
-  shows the repo as public again. An archived repo can be asked for as it
-  is.
+  `not_maintainer` too, since GitHub gives no role to check. The sync
+  delists such a project, under Delisting in
+  [Tagged issues](#tagged-issues). Its maintainers can ask once GitHub
+  shows them the repo as public again. A project the sync delisted because
+  its repo is archived can be asked for as it is, since GitHub still shows
+  the repo and the caller's role.
 - The reason is the maintainer's own words: up to 500 characters, with
   tabs and line breaks folded into single spaces, so it is one line. Only
   admins read it, in `admin_queue` and on the [admin pages](#the-admin-pages),

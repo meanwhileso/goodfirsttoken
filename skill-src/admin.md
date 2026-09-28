@@ -228,11 +228,11 @@ The repo goes on the do-not-list, its project is rejected with the reason
 rejected, and the request is closed. Nothing lists it again unless one of
 its maintainers registers it.
 
-When Good First Token paused the project on its own, because its repo went
-private, is gone, or GitHub blocked access to it, its maintainers can't ask,
-since GitHub doesn't show them the repo. The project stays paused, with no
-page, and agents get no claims on it. Leave it paused. An archived repo's
-maintainers can ask.
+When a repo went private, is gone, or GitHub blocked access to it, its
+maintainers can't ask, since GitHub doesn't show them the repo. Good First
+Token's sync delists such a project: it has no page, and agents get no
+claims on it. Leave it as it is. A project the sync delisted because its
+repo is archived can still be asked for.
 
 ## Refusals
 

@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   createProject,
   getDoNotListEntry,
+  getIssueSync,
   getProject,
   getWaitingRemoval,
   listWaitingRemovals,
   savePerson,
+  setDelisted,
   setProjectStatus,
 } from '../../src/db';
 import { startGitHub } from '../auth/helpers';
@@ -89,6 +91,12 @@ async function approvedHarbor(): Promise<ConnectedAgent> {
   await savePerson(env.DB, ADMIN, Date.now());
   await setProjectStatus(env.DB, HARBOR, { status: 'approved', reason: null, changedBy: ADMIN.githubId }, Date.now());
   return maintainer;
+}
+
+/** HARBOR as the sync leaves an approved project whose repo GitHub no longer shows public and open: delisted, and paused by no one. */
+async function delistedBySync(reason: string): Promise<void> {
+  await setDelisted(env.DB, HARBOR, reason, Date.now());
+  await setProjectStatus(env.DB, HARBOR, { status: 'paused', reason, changedBy: null }, Date.now());
 }
 
 /** BUNDLER listed from its AI policy by the admin. */
@@ -196,14 +204,9 @@ describe('request_removal', () => {
     expect(await getWaitingRemoval(env.DB, TOOLS)).toMatchObject({ reason: REASON, requestedBy: 1009 });
   });
 
-  test('a project Good First Token paused on its own, because GitHub shows its repo archived, can ask', async () => {
+  test('a project the sync delisted and paused, because GitHub shows its repo archived, can ask', async () => {
     const maintainer = await approvedHarbor();
-    await setProjectStatus(
-      env.DB,
-      HARBOR,
-      { status: 'paused', reason: `${HARBOR} is archived on GitHub.`, changedBy: null },
-      Date.now(),
-    );
+    await delistedBySync(`${HARBOR} is archived on GitHub.`);
     sampleRepo(HARBOR).archived = true;
     const admin = await connectAgent(github, ADMIN.login);
 
@@ -214,14 +217,9 @@ describe('request_removal', () => {
     expect(item).toMatchObject({ kind: 'removal', removal: { project: { status: 'paused', source: 'registered' } } });
   });
 
-  test("a repo GitHub shows the maintainer no public repo for, like one that went private, is refused, and its project stays paused", async () => {
+  test("a repo GitHub shows the maintainer no public repo for, like one that went private, is refused, and the project the sync delisted stays as it was", async () => {
     const maintainer = await approvedHarbor();
-    await setProjectStatus(
-      env.DB,
-      HARBOR,
-      { status: 'paused', reason: `GitHub shows no public repo named ${HARBOR}.`, changedBy: null },
-      Date.now(),
-    );
+    await delistedBySync(`GitHub shows no public repo named ${HARBOR}. It went private or was deleted.`);
     sampleRepo(HARBOR).private = true;
 
     const asked = await call(maintainer, 'request_removal', { repo: HARBOR, reason: REASON });
@@ -231,6 +229,7 @@ describe('request_removal', () => {
     );
     expect(await storedRequests()).toEqual([]);
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: null });
+    expect(await getIssueSync(env.DB, HARBOR)).toMatchObject({ delisted: expect.stringContaining('went private') as unknown });
   });
 
   test('a repo GitHub blocked access to is refused, since GitHub says nothing of who maintains it', async () => {

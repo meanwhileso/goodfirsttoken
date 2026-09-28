@@ -972,7 +972,7 @@ that break the rules, so it returns the problems for the caller to show.
   sync's delisting and hid the page, so the migration marks each project
   paused that way with its pause's reason. The sync's next read of its
   repos keeps the mark or takes it off.
-- **Migration `0006_removal_requests.sql`** makes `removal_requests`. A
+- **Migration `0007_removal_requests.sql`** makes `removal_requests`. A
   closed request stays, so the table keeps who asked for each removal. A
   request's repo has no foreign key, since a repo that isn't a project can
   be asked for.
