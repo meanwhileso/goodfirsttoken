@@ -1110,9 +1110,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **When the reader goes away.** The runtime is meant to cancel the body,
   which ends the stream. workerd since 1.20260619.1 doesn't, as
   [workerd issue 6832](https://github.com/cloudflare/workerd/issues/6832)
-  reports, and the runtime the unit tests use shows the same. Until that is
-  fixed, the Worker learns a reader left from the minute rule, once a line
-  has waited that long and another comes, or at the hour. The
+  reports, and the runtime the unit tests use shows the same through
+  `exports.default.fetch`. Until that is fixed, the Worker learns a reader
+  left from the minute rule, once a line has waited that long and another
+  comes, or at the hour. The
   `enable_request_signal` compatibility flag would tell it at once. It is
   not on. It applies to every route of the Worker, and workerd calls it
   still experimental with no date to turn it on by default, though
@@ -1776,12 +1777,27 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 
 - **Unit and integration tests** run with Vitest inside `workerd`, through
   `@cloudflare/vitest-pool-workers`, with the bindings from `wrangler.jsonc`.
-  HTTP tests call the whole Worker through `exports.default.fetch` from
-  `cloudflare:workers`, so a test sees the same routing and headers a
-  browser does. Code no route uses yet, like `src/github.ts`, is called
-  directly. They live in `apps/web/test/`. A test that calls GitHub creates
-  the GitHub fake in-process and puts `fake.fetch` in place of the global
-  `fetch`. `vitest.config.ts` points GitHub's URLs at hosts under `.test`.
+  HTTP tests call the whole Worker with `workerFetch` from
+  `apps/web/test/worker.ts`, so a test sees the same routing and headers a
+  browser does. It calls the `fetch` of the Worker's default export in
+  `src/server.ts` itself, with the Worker's bindings and a new execution
+  context, and waits for the work the Worker hands to `waitUntil`. The
+  response comes back as the Worker made it, redirects included. The
+  request's redirect mode is `manual`, as for a request from the internet.
+  Requests through `exports.default.fetch` from `cloudflare:workers` get
+  slower one after another in a test file, in
+  `@cloudflare/vitest-pool-workers` 0.22.0. 300 requests to `/healthz` went
+  from 4 ms to 23 ms each that way, and the MCP tests took four to five
+  times as long as with a direct call. A direct call runs in the test's
+  own I/O context, so the unit tests can't show that the Worker keeps no
+  I/O object from one request for the next. When a test cancels a
+  stream's body, the Worker's stream ends at once. Behind the runtime it
+  doesn't yet, as [The live feeds](#the-live-feeds) says. The end-to-end
+  tests send every request through the runtime. Code no route uses yet,
+  like `src/github.ts`, is called directly. They live in
+  `apps/web/test/`. A test that calls GitHub creates the GitHub fake
+  in-process and puts `fake.fetch` in place of the global `fetch`.
+  `vitest.config.ts` points GitHub's URLs at hosts under `.test`.
 - **Issue room tests** call a room's methods through its stub, in
   `apps/web/test/rooms/`. They set the clock with Vitest's fake `Date`, which
   the room reads too, since it runs in the same isolate. The times are in

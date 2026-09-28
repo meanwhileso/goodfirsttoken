@@ -1,5 +1,5 @@
 import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import type { ClaimRecord, FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, saveIssues, savePerson } from '../../src/db';
@@ -7,6 +7,7 @@ import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
+import { workerFetch } from '../worker';
 import { feedEvent, fields, liveSocket, readStream, storedEvents } from './helpers';
 
 // The live text streams, read through the Worker the way `curl -N` reads
@@ -520,7 +521,7 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
   });
 
   test('opens only on the .ndjson form, with an event ID as since, for a stream that exists', async () => {
-    const answer = (path: string) => exports.default.fetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
+    const answer = (path: string) => workerFetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
 
     expect((await answer('/live.txt')).status).toBe(400);
     expect((await answer('/live.ndjson?since=not%20an%20id')).status).toBe(400);

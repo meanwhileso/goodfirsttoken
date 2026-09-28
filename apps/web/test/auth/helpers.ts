@@ -1,7 +1,8 @@
 import { createGitHubFake, type GitHubFake } from '@goodfirsttoken/github-fake';
 import { symmetricDecrypt } from 'better-auth/crypto';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import { vi } from 'vitest';
+import { workerFetch } from '../worker';
 
 // Shared setup for the sign-in tests. Requests go to the whole Worker, on the
 // primary domain the test config sets, and GitHub is the in-process fake.
@@ -109,11 +110,8 @@ export class Browser {
     if (this.cookies.size > 0) {
       headers.set('cookie', [...this.cookies].map(([name, value]) => `${name}=${value}`).join('; '));
     }
-    // The Worker's fetch would follow a redirect back into the Worker, so
-    // redirects come back as they are, as the tests follow them by hand.
-    const response = await exports.default.fetch(
-      new Request(new URL(path, ORIGIN), { ...init, headers, redirect: 'manual' }),
-    );
+    // Redirects come back as they are, and the tests follow them by hand.
+    const response = await workerFetch(new URL(path, ORIGIN), { ...init, headers });
     for (const header of response.headers.getSetCookie()) {
       const cookie = parseSetCookie(header);
       this.setCookies.push(cookie);
