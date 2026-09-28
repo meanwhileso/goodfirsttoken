@@ -18,11 +18,12 @@ import {
   listProjectsToSync,
   releaseProject,
   saveIssues,
+  setProjectLanguage,
   setProjectStatusFrom,
 } from '../db';
 import { GitHubError } from '../github';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
-import { SyncStopped, type ServiceGitHub, type StopReason } from './github';
+import { SyncStopped, type GitHubReader, type ServiceGitHub, type StopReason } from './github';
 
 // The tagged-issue sync (spec sections 3 and 6). For each approved project
 // it reads, with the read-only service token, the open issues in its issue
@@ -107,6 +108,7 @@ interface RestRepo {
   private?: unknown;
   visibility?: unknown;
   archived?: unknown;
+  language?: unknown;
 }
 
 // https://docs.github.com/en/rest/issues/issues#list-repository-issues
@@ -149,7 +151,8 @@ interface Listed {
   labels: string[];
 }
 
-interface Link {
+/** An open PR linked to an issue, with the ways it was found. */
+export interface Link {
   pr: PrRef;
   foundBy: LinkMethod[];
 }
@@ -187,8 +190,12 @@ function notGitHub(repo: string): SyncStopped {
  * Found, a 451 with its JSON body, or a repo that says it is private or
  * archived. Any other 404 or 451, or a repo in a form GitHub doesn't send,
  * stops the run, so a proxy or a wrong GH_API_URL never pauses a project.
+ * The repo's main language comes back too, or null when GitHub names none.
  */
-async function readRepo(github: ServiceGitHub, repo: string): Promise<{ name: string } | { unlisted: string }> {
+async function readRepo(
+  github: ServiceGitHub,
+  repo: string,
+): Promise<{ name: string; language: string | null } | { unlisted: string }> {
   let found: RestRepo;
   try {
     found = (await github.read<RestRepo>(`/repos/${repo}`)).data;
@@ -207,7 +214,8 @@ async function readRepo(github: ServiceGitHub, repo: string): Promise<{ name: st
     return { unlisted: `${repo} is no longer public on GitHub.` };
   }
   if (found.archived) return { unlisted: `${repo} is archived on GitHub.` };
-  return { name: found.full_name };
+  const language = typeof found.language === 'string' && found.language.length <= 100 ? found.language : null;
+  return { name: found.full_name, language };
 }
 
 /**
@@ -272,8 +280,8 @@ async function listTagged(
  * the issue with a keyword and PRs someone linked by hand. An issue GitHub
  * no longer has, as when it was moved or deleted, is left out.
  */
-async function closingReferences(
-  github: ServiceGitHub,
+export async function closingReferences(
+  github: GitHubReader,
   issueRepo: string,
   numbers: readonly number[],
 ): Promise<Map<number, PrRef[]>> {
@@ -321,7 +329,7 @@ function repoOfSource(source: NonNullable<NonNullable<TimelineEvent['source']>['
  * The open PRs that mention the issue, from its timeline's cross-referenced
  * events, oldest first. Null when GitHub no longer has the issue.
  */
-async function crossReferences(github: ServiceGitHub, issueRepo: string, number: number): Promise<PrRef[] | null> {
+export async function crossReferences(github: GitHubReader, issueRepo: string, number: number): Promise<PrRef[] | null> {
   const found: PrRef[] = [];
   for (let page = 1; ; page++) {
     let events: TimelineEvent[];
@@ -345,7 +353,7 @@ async function crossReferences(github: ServiceGitHub, issueRepo: string, number:
 }
 
 /** Every open PR linked to an issue, each once, with the ways it was found. */
-function linksOf(closing: readonly PrRef[], cross: readonly PrRef[]): Link[] {
+export function linksOf(closing: readonly PrRef[], cross: readonly PrRef[]): Link[] {
   const links = new Map<string, Link>();
   const add = (pr: PrRef, method: LinkMethod) => {
     const link = links.get(prKey(pr)) ?? { pr, foundBy: [] };
@@ -364,7 +372,7 @@ function linksOf(closing: readonly PrRef[], cross: readonly PrRef[]): Link[] {
  * found comes first, then one a closing reference found, then the oldest
  * mention.
  */
-function chooseLink(kept: PrRef | null, links: readonly Link[]): Link | null {
+export function chooseLink(kept: PrRef | null, links: readonly Link[]): Link | null {
   const still = kept === null ? undefined : links.find((link) => samePr(link.pr, kept));
   if (still) return still;
   return (
@@ -447,6 +455,9 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
         return { outcome: 'paused', reason: found.unlisted };
       }
       projectRepos.add(lower(found.name));
+      // The code repo's language ranks the project's issues for donors who
+      // name languages among their interests.
+      if (repo === project.repo) await setProjectLanguage(db, project.repo, found.language);
     }
 
     const passStart = await beginPass(db, project.repo, now());

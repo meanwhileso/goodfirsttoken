@@ -57,7 +57,7 @@ Claims, live updates, feeds, submitting work, and following PRs.
 |---|---|---|---|
 | [#13](https://github.com/meanwhileso/goodfirsttoken/issues/13) | Build the issue room: claims, updates, and live watchers | #5 | [#50](https://github.com/meanwhileso/goodfirsttoken/pull/50) |
 | [#14](https://github.com/meanwhileso/goodfirsttoken/issues/14) | Fan events out to repo, user, and homepage feeds, with text streams | #13 | [#53](https://github.com/meanwhileso/goodfirsttoken/pull/53) |
-| [#15](https://github.com/meanwhileso/goodfirsttoken/issues/15) | Add the donor tools for sessions, suggestions, and claims | #9, #12, #13 | |
+| [#15](https://github.com/meanwhileso/goodfirsttoken/issues/15) | Add the donor tools for sessions, suggestions, and claims | #9, #12, #13 | [#63](https://github.com/meanwhileso/goodfirsttoken/pull/63) |
 | [#16](https://github.com/meanwhileso/goodfirsttoken/issues/16) | Submit work: branch or fork, a signed commit, and the PR | #15 | |
 | [#17](https://github.com/meanwhileso/goodfirsttoken/issues/17) | Follow PRs to the end and bring review comments back | #16 | |
 
@@ -214,7 +214,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n20 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20 done
 ```
 
 ## Maintainer steps

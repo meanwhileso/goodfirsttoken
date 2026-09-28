@@ -1,11 +1,11 @@
-import type { ClaimRecord, ProjectRecord, TaggedIssue } from '@goodfirsttoken/core';
+import type { ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { getPerson, getProject } from '../db';
+import { getPerson, getProject, isAskingForHelp, type ClosedBecause } from '../db';
 import { siteAddress } from '../home/load';
 import { hasPage } from '../project/shown';
 import { issueRoom } from '../rooms/issue-room';
-import { findIssue } from './find';
+import { findIssue, followedCopy } from './find';
 import { issueFromPath } from './path';
 import { foldEvents, samePr, slotsTaken, type IssueView, type PrLink } from './view';
 
@@ -48,7 +48,7 @@ export interface IssuePage {
    * asking for help, or the issue isn't among its open tagged issues. Null
    * when it takes them while a slot is free and no PR is open.
    */
-  closedBecause: 'project' | 'issue' | null;
+  closedBecause: ClosedBecause;
   view: IssueView;
 }
 
@@ -64,31 +64,6 @@ function splitIssue(issue: string): { repo: string; number: number } {
 }
 
 const HOLDS_SLOT = new Set<ClaimRecord['state']>(['active', 'paused', 'awaiting_review']);
-
-// Labels compare without case, folding ASCII letters as the homepage's
-// query does with SQLite's lower().
-const fold = (label: string) => label.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
-
-/**
- * Why the issue takes no claims, by the rule the homepage uses for an issue
- * waiting for an agent (src/db/waiting.ts), less the open PRs and the free
- * slot, which the page follows live. Null when it takes them. The project
- * comes first: one that isn't approved, or has no page because the
- * do-not-list covers it (src/project/shown.ts), takes none, whatever its
- * cached copy says.
- */
-function closedBecause(
-  project: ProjectRecord | null,
-  withPage: boolean,
-  copy: TaggedIssue | undefined,
-): IssuePage['closedBecause'] {
-  if (project?.status !== 'approved' || !withPage) return 'project';
-  if (!copy) return 'issue';
-  const labels = new Set(copy.labels.map(fold));
-  const { tags, excludedTags } = project.settings;
-  if (!tags.some((tag) => labels.has(fold(tag))) || excludedTags.some((tag) => labels.has(fold(tag)))) return 'issue';
-  return null;
-}
 
 /** Everything the issue page shows when it loads. */
 export async function loadIssue(request: Request, owner: string, repo: string, number: string): Promise<IssuePageResult> {
@@ -117,24 +92,16 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   const hidden = glance.claims.filter((claim) => !visible.has(claim.id));
   view.hidden = { claims: hidden.length, holding: hidden.filter((claim) => HOLDS_SLOT.has(claim.state)).length };
 
-  // Each project that keeps its issues in the repo judges its own copy, as
-  // the homepage does. The page follows the oldest whose copy waits for an
-  // agent, with a free slot under its claims per issue, then the oldest that
-  // would but for a PR the sync saw or a full cap, then the oldest.
+  // Each project that keeps its issues in the repo judges its own copy, by
+  // the rule the homepage counts with (src/db/waiting.ts), less the open PRs
+  // and the free slot, which the page follows live. The page follows the
+  // oldest whose copy waits for an agent, with a free slot under its claims
+  // per issue, then the oldest that would but for a PR the sync saw or a
+  // full cap, then the oldest.
   const judged = await Promise.all(
-    copies.map(async (copy) => {
-      const withPage = await hasPage(env.DB, copy.project);
-      return { ...copy, withPage, closed: closedBecause(copy.project, withPage, copy.copy) };
-    }),
+    copies.map(async (copy) => ({ ...copy, withPage: await hasPage(env.DB, copy.project) })),
   );
-  const taken = slotsTaken(view);
-  const tagged =
-    judged.find(
-      (copy) =>
-        copy.closed === null && copy.copy.linkedPr === null && taken < copy.project.settings.claimsPerIssue,
-    ) ??
-    judged.find((copy) => copy.closed === null) ??
-    judged[0];
+  const tagged = followedCopy(judged, slotsTaken(view));
   const latest = glance.claims.at(-1) ?? mirrored.at(-1);
   const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
   // What the site cached from GitHub, the title, the labels, and the linked
@@ -178,7 +145,13 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
-    closedBecause: tagged ? tagged.closed : closedBecause(project, withPage, undefined),
+    // With no copy, the issue isn't among the project's open tagged issues,
+    // unless the project isn't asking for help at all.
+    closedBecause: tagged
+      ? tagged.closed
+      : project !== null && (await isAskingForHelp(env.DB, project.repo))
+        ? 'issue'
+        : 'project',
     view,
   };
 }

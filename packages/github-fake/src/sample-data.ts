@@ -289,8 +289,10 @@ export const repos: SampleRepo[] = [
     ],
   },
   {
-    // A project with its own label for work ready for outside help, and an
-    // agent skill that says how to contribute.
+    // A project with its own label for work ready for outside help, an agent
+    // skill that says how to contribute, and a vouch file in the format of
+    // github.com/mitchellh/vouch: it vouches for kenji and lena, names priya
+    // on another platform only, and denounces arjun.
     owner: 'sample-owner',
     name: 'sample-desktop',
     description: 'A sample desktop setup for tests and local development.',
@@ -305,6 +307,17 @@ export const repos: SampleRepo[] = [
       'README.md': '# sample-desktop\n\nA sample desktop setup for tests and local development.\n',
       'agents/skills/sample-desktop/contributing.md':
         '# Contributing with an agent\n\nOpen the PR for a person to review.\n',
+      '.github/VOUCHED.td': [
+        '# People vouched for, or denounced, in this sample repo.',
+        '#',
+        '# One handle per line, without @, as platform:login or login.',
+        '# A handle that starts with - is denounced. Details follow a space.',
+        '-arjun opened agent PRs nobody had read',
+        'github:kenji',
+        'gitlab:priya',
+        'lena',
+        '',
+      ].join('\n'),
     },
     issues: [
       {
