@@ -200,6 +200,14 @@ describe('what each result says', () => {
     );
   });
 
+  test("a suggestion counts every slot taken, and names only the claimants it lists", () => {
+    const [first] = samples.suggest_issues.output.suggestions;
+    if (!first) throw new Error('missing sample suggestion');
+    // A blocked donor holds the second slot, and isn't named.
+    const text = textOf(toolResult('suggest_issues', { suggestions: [{ ...first, slotsTaken: 2 }] }));
+    expect(text).toContain('2 of 3 slots taken: @kenji (codex)');
+  });
+
   test('an empty suggestion list says so', () => {
     expect(textOf(toolResult('suggest_issues', { suggestions: [] }))).toBe('No eligible issues right now.');
   });
@@ -225,6 +233,14 @@ describe('tool inputs', () => {
       text: 'tests: 3 failing\n\tall in the lock screen\r\n',
     });
     expect(result.ok && result.value.text).toBe('tests: 3 failing all in the lock screen');
+  });
+
+  test('a CLA confirmation names the link the donor confirmed, which must be https', () => {
+    const claim = (claConfirmed: unknown) =>
+      validate(tools.claim_issue.input, { sessionId: 's_1', issue: 'octo/app#1', claConfirmed });
+    expect(claim('https://octo.test/cla').ok).toBe(true);
+    expect(problemFields(claim(true))).toEqual(['claConfirmed']);
+    expect(problemFields(claim('http://octo.test/cla'))).toEqual(['claConfirmed']);
   });
 
   test('an issue in a repo named . or .. is rejected', () => {

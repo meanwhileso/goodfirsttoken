@@ -45,6 +45,17 @@ describe('ranking against interests', () => {
     expect(rankIssues([other, labelled], { projects: [], languages: ['Rust'], kinds: [] })[0]).toBe(labelled);
   });
 
+  test('a kind of work of several words matches those words in a row, in the title or a label', () => {
+    const inTitle = candidate('sample-owner/sample-app#1', { title: 'Better error handling in rewrites' });
+    const inLabel = candidate('sample-owner/sample-app#2', { labels: ['help wanted', 'error-handling'] });
+    const apart = candidate('sample-owner/sample-app#3', { title: 'Log the error when handling a rewrite' });
+    const interests = { projects: [], languages: [], kinds: ['Error Handling'] };
+
+    const ranked = rankIssues([apart, inTitle, inLabel], interests);
+
+    expect(ranked).toEqual([inTitle, inLabel, apart]);
+  });
+
   test('among equal matches, the issue with fewer claims holding a slot comes first, then the order given', () => {
     const busy = candidate('sample-owner/sample-app#1', { holding: 2 });
     const quiet = candidate('sample-owner/sample-app#2');
@@ -73,16 +84,26 @@ describe('the random order', () => {
     return led;
   }
 
-  test('the order draws from the top of the ranking only, and holds each of those issues once', () => {
+  test('the order holds every issue in the ranking once, so a pick that fails gives way to the rest of the ranking', () => {
     const order = weightedOrder(ranked, Math.random);
 
-    expect([...order].sort()).toEqual(ranked.slice(0, POOL).sort());
+    expect([...order].sort()).toEqual([...ranked].sort());
+  });
+
+  test('an issue below the top 12 is drawn only as the ones above it are placed', () => {
+    // A draw at the top of its range places the last of the 12 issues
+    // in the draw, and each place lets the next issue down join them.
+    const order = weightedOrder(ranked, () => 0.999_999);
+
+    expect(order.slice(0, 4)).toEqual(['rank 11', 'rank 12', 'rank 13', 'rank 14']);
+    expect(weightedOrder(ranked, () => 0)).toEqual(ranked);
   });
 
   test('every issue at the top can lead, and the higher an issue ranks, the more often it leads', () => {
     const led = leaders(1000);
     const counts = ranked.slice(0, POOL).map((issue) => led.get(issue) ?? 0);
 
+    expect(ranked.slice(POOL).some((issue) => led.has(issue))).toBe(false);
     expect(counts.every((n) => n > 0)).toBe(true);
     for (let rank = 1; rank < counts.length; rank++) {
       expect(counts[rank], `rank ${String(rank)}`).toBeLessThan(counts[rank - 1] ?? 0);

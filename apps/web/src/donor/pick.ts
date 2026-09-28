@@ -1,10 +1,9 @@
 import type { Interests } from '@goodfirsttoken/core';
 
 // How suggest_issues orders the issues waiting for an agent: ranked against
-// the donor's interests, then the top of the list in a random order with
-// weight toward the top, so donors asking at the same moment spread out
-// across issues. The rules are in docs/how-it-works.md, under The donor's
-// tools.
+// the donor's interests, then put in a random order with weight toward the
+// top, so donors asking at the same moment spread out across issues. The
+// rules are in docs/how-it-works.md, under The donor's tools.
 
 /** An issue waiting for an agent, as the ranking sees it. */
 export interface Candidate {
@@ -20,7 +19,7 @@ export interface Candidate {
   holding: number;
 }
 
-/** How many issues from the top of the ranking the random order draws from. */
+/** How many of the issues not placed yet each place in the random order is drawn from. */
 export const POOL = 12;
 
 const lower = (text: string) => text.toLowerCase();
@@ -50,14 +49,20 @@ function namesLanguage(interest: string, candidate: Candidate): boolean {
 }
 
 /**
- * Whether a word of the issue's title or labels starts with the kind of work
- * named, less a plural s, without case: tests matches test and testing, and
- * docs matches documentation.
+ * Whether the issue's title or one of its labels has the kind of work named,
+ * without case: words in a row, each starting with a word of the kind less a
+ * plural s. So tests matches test and testing, docs matches documentation,
+ * and error handling matches error-handling.
  */
 function namesKind(interest: string, candidate: Candidate): boolean {
-  const stem = lower(interest.trim()).replace(/s$/, '');
-  if (stem === '') return false;
-  return [candidate.title, ...candidate.labels].some((text) => words(text).some((word) => word.startsWith(stem)));
+  const stems = words(interest)
+    .map((word) => word.replace(/s$/, ''))
+    .filter((stem) => stem !== '');
+  if (stems.length === 0) return false;
+  return [candidate.title, ...candidate.labels].some((text) => {
+    const found = words(text);
+    return found.some((_, at) => stems.every((stem, i) => found[at + i]?.startsWith(stem) ?? false));
+  });
 }
 
 /**
@@ -86,23 +91,30 @@ export function rankIssues<T extends Candidate>(candidates: readonly T[], intere
 }
 
 /**
- * The top of the ranking, up to POOL issues, in a random order with weight
- * toward the top. Each place is drawn from the issues not placed yet, each
- * with a weight of how many issues are left from it to the bottom of the
- * pool: of 12, the first has weight 12 and the last 1. `random` gives a
- * number from 0 up to 1, like Math.random. Every draw is made before this
- * returns, so calls at the same moment never share one.
+ * The whole ranking, in a random order with weight toward the top. Each place
+ * is drawn from the first POOL issues not placed yet, each weighted by how
+ * many places are left from it to the bottom of those: of 12, the first has
+ * weight 12 and the twelfth 1. An issue lower down joins the draw as the ones
+ * above it are placed, so a caller that passes over an issue comes to the
+ * rest of the ranking in turn. `random` gives a number from 0 up to 1, like
+ * Math.random. Every draw is made before this returns, so calls at the same
+ * moment never share one.
  */
 export function weightedOrder<T>(ranked: readonly T[], random: () => number): T[] {
-  const left = ranked.slice(0, POOL).map((item, rank, pool) => ({ item, weight: pool.length - rank }));
+  const left = [...ranked];
   const order: T[] = [];
   while (left.length > 0) {
-    const total = left.reduce((sum, entry) => sum + entry.weight, 0);
-    let draw = random() * total;
-    let at = left.findIndex((entry) => (draw -= entry.weight) < 0);
-    if (at < 0) at = left.length - 1;
-    const [taken] = left.splice(at, 1);
-    if (taken) order.push(taken.item);
+    const pool = Math.min(POOL, left.length);
+    let draw = random() * ((pool * (pool + 1)) / 2);
+    let at = pool - 1;
+    for (let place = 0; place < pool; place++) {
+      draw -= pool - place;
+      if (draw < 0) {
+        at = place;
+        break;
+      }
+    }
+    order.push(...left.splice(at, 1));
   }
   return order;
 }

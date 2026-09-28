@@ -122,8 +122,10 @@ const suggestionSchema = z.object({
   prMode: z.enum(prModes),
   /** The project's CLA, which the donor confirms before claiming, or null. */
   claUrl: httpsUrl.nullable(),
-  /** Everyone holding a slot now, with their agents. */
+  /** Everyone holding a slot now, with their agents. A blocked donor holding one isn't named. */
   claimants: z.array(claimantSchema),
+  /** Slots taken now, a blocked donor's included. */
+  slotsTaken: count,
   /** The project's claims per issue. */
   slots: z.int().min(1),
   /** How many times anyone has claimed it. */
@@ -134,12 +136,11 @@ const suggestionSchema = z.object({
 export type Suggestion = z.infer<typeof suggestionSchema>;
 
 function renderSuggestion(s: Suggestion): string {
+  const named = s.claimants.map((c) => `@${c.login} (${c.agent})`).join(', ');
   const who =
-    s.claimants.length === 0
+    s.slotsTaken === 0
       ? 'nobody on it'
-      : `${String(s.claimants.length)} of ${String(s.slots)} slots taken: ${s.claimants
-          .map((c) => `@${c.login} (${c.agent})`)
-          .join(', ')}`;
+      : `${String(s.slotsTaken)} of ${String(s.slots)} slots taken${named === '' ? '' : `: ${named}`}`;
   const issueRepo = s.issue.slice(0, s.issue.indexOf('#'));
   return lines(
     `${s.issue}  ${s.title}`,
@@ -190,7 +191,7 @@ function describeBudgetLeft(budget: { issuesLeft: number | null; endsAt: string 
 export const claimIssue = defineTool({
   audience: 'donor',
   description:
-    "Claim an issue the donor picked, or the next pick waiting in the session's queue. Returns the issue, the project's rules and notes for agents, the repo to clone, and the commit to start from. Pass the donor's other picks as queue: each waits in the session until you call claim_issue with no issue, and a pick that filled up or got a PR meanwhile is skipped and reported. If the project has a CLA, ask the donor to confirm they signed it, then call again with claConfirmed: true. Claiming an issue the donor already holds resumes that claim.",
+    "Claim an issue the donor picked, or the next pick waiting in the session's queue. Returns the issue, the project's rules and notes for agents, the repo to clone, and the commit to start from. Pass the donor's other picks as queue: each waits in the session until you call claim_issue with no issue, and a pick that filled up or got a PR meanwhile is skipped and reported. If the project has a CLA, ask the donor to confirm they signed it, then call again with claConfirmed set to its link. Claiming an issue the donor already holds resumes that claim.",
   input: z.object({
     sessionId: id,
     issue: issueRef
@@ -199,10 +200,9 @@ export const claimIssue = defineTool({
     queue: queueSchema
       .optional()
       .describe("The donor's other picks, in order. They replace the picks waiting in the session."),
-    claConfirmed: z
-      .boolean()
-      .default(false)
-      .describe("The donor confirmed they signed the project's CLA."),
+    claConfirmed: httpsUrl
+      .optional()
+      .describe("The link of the project's CLA, which the donor confirmed they signed, as the refusal gave it."),
   }),
   output: z.object({
     claim: claimSummarySchema,

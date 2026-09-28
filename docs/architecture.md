@@ -398,7 +398,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   the default branch, the donor's `viewerPermission`, and both places the
   vouch file can be, each by an `object(expression:)` alias, in one
   GraphQL query. The head is where the claim's work starts. `ADMIN` or
-  `MAINTAIN` makes it own-project work.
+  `MAINTAIN` makes it own-project work, and `WRITE` or more counts as
+  vouched for, under the vouch file's format below.
 - **An issue on GitHub** is one REST read, `GET /repos/{owner}/{repo}/issues/{n}`,
   which gives its state, labels, assignees, and text, and says whether the
   number is a pull request. Then one GraphQL query for its closing
@@ -411,8 +412,16 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   [`vouch/lib.nu`](https://github.com/mitchellh/vouch/blob/main/vouch/lib.nu),
   read on 2026-09-27, and
   [Ghostty's own file](https://github.com/ghostty-org/ghostty/blob/main/.github/VOUCHED.td),
-  which sets out the same syntax in its header. vouch looks for the file at
-  `VOUCHED.td`, then `.github/VOUCHED.td`, and so do we. It reads a line
+  which sets out the same syntax in its header. vouch's command line looks
+  for the file at `VOUCHED.td`, then `.github/VOUCHED.td`. Its GitHub
+  checks, the ones that gate issues and PRs, read `.github/VOUCHED.td`
+  unless told another path, in
+  [`vouch/github.nu`](https://github.com/mitchellh/vouch/blob/main/vouch/github.nu).
+  We read `.github/VOUCHED.td` first, then the root. Those checks also let
+  a collaborator with admin or write access through before they read the
+  file, and we count GitHub's `WRITE`, `MAINTAIN`, and `ADMIN` as vouched
+  for too. We read the file first all the same, so a line that denounces a
+  collaborator refuses them. vouch reads a line
   trimmed, takes a leading `-` as a denouncement, splits the handle from
   the details at the first space, lowers the handle, and splits a platform
   off at the first `:`. Its check takes the first line that names the
@@ -425,10 +434,13 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   project's settings keep the link, so a changed link no longer matches the
   row, and the donor is asked again.
 - **The queue lives in the session,** as `donor_sessions.queue`, a JSON
-  list. `claim_issue` writes it back after it walks it: the pick it
-  claimed and the ones it passed over are gone, and a pick it stopped at
-  stays first. Two calls in one session at the same moment each write
-  their own view of it, and the last write stays.
+  list. `claim_issue` changes it only through `editSessionQueue`, which
+  reads the list, applies the change, and writes it with an update that
+  lands only on the list it read, trying again up to five times, as the
+  budget does. After a walk, the change takes out the pick claimed and the
+  ones passed over, and a pick it stopped at stays first. So two calls in
+  one session at the same moment each apply their change to the list the
+  other left.
 - **The budget holds under claims at the same moment.** `takeSessionIssue`
   reads the session, checks core's `budgetLeft`, and counts the issue with
   an update that lands only on the count it read, trying again up to five
@@ -437,9 +449,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   between leaves the count one high.
 - **The random order draws every number before it returns,** in
   `weightedOrder`, with no await between the draws, so calls at the same
-  moment never share one. `suggestIssues` takes the random source as an
-  argument, `Math.random` from the server, and the tests stub
-  `Math.random` in the Worker's isolate, which they share.
+  moment never share one. It orders the whole ranking, each place drawn
+  from the first 12 not placed yet, so `suggestIssues` can walk past any
+  number of issues it passes over. The walk stops at 3 suggestions, 8
+  checks of issues on GitHub, or the end. It reads each project once, up
+  to 20, and a project that keeps the donor out takes no checks.
+  `suggestIssues` takes the random source as an argument, `Math.random`
+  from the server, and the tests stub `Math.random` in the Worker's
+  isolate, which they share.
 - **Finding a claim's room.** `post_update` and `release_claim` take a claim
   ID, and the room is named for the issue, so they read the claim from the
   claims table first. The room saves a claim to D1 before its answer to
@@ -451,9 +468,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 - **What a call costs.** `suggest_issues` makes six D1 reads: the
   session, the donor with their interests, their block, their claims,
   their open PRs by project, and one list of every waiting issue. Then one GitHub
-  GraphQL query for each project it checks, and for each issue it checks,
-  one REST read, one GraphQL query, and one timeline page or more, for 3
-  to 8 issues. Then one D1 read for the claims on the issues suggested,
+  GraphQL query for each project it reads, up to 20, and for each issue it
+  checks, one REST read, one GraphQL query, and one timeline page or more,
+  for 0 to 8 issues. Then one D1 read for the claims on the issues suggested,
   one for the blocks among their claimants, and one for each claimant.
   `claim_issue` makes the reads `findIssue` makes, a room `snapshot`, a few
   D1 reads for the session, the donor, the budget, the open PRs, and the

@@ -38,6 +38,7 @@ const DESKTOP = 'sample-owner/sample-desktop';
 const TOOLS = 'sample-owner/sample-tools';
 const BUNDLER = 'sample-owner/sample-bundler';
 const HARBOR = 'sample-owner/sample-harbor';
+const UPSTREAM = 'meanwhileso/goodfirsttoken';
 const BY = 'sample-maintainer';
 const maintainer = { githubId: 1009, login: 'sample-maintainer' };
 const admin = { githubId: 9001, login: 'sample-admin' };
@@ -61,7 +62,7 @@ beforeEach(async () => {
   github = startGitHub();
   // Issue rooms keep their storage across the tests in a file, so each
   // test's issues get numbers no earlier test used.
-  for (const repo of [APP, DESKTOP, TOOLS, BUNDLER, HARBOR]) freshNumbers(github, repo);
+  for (const repo of [APP, DESKTOP, TOOLS, BUNDLER, HARBOR, UPSTREAM]) freshNumbers(github, repo);
   // Every call gets through the limit of 120 a minute, which tools.test.ts tests.
   vi.spyOn(env.MCP_LIMITER, 'limit').mockResolvedValue({ success: true });
   await savePerson(env.DB, maintainer, Date.now());
@@ -71,6 +72,16 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+// Every call the Worker made to GitHub's API in each test ran with a token
+// the site's OAuth app gave an agent when its person signed in. A call with
+// the service token or with no token fails the test. The donor's tools read
+// GitHub as the donor alone.
+afterEach(({ task }) => {
+  const calls = github.calls.filter((c) => c.url.startsWith(github.apiUrl));
+  const notAnAgent = calls.filter((c) => c.token === null || github.state.tokens[c.token]?.clientId !== OAUTH_APP.clientId);
+  expect(notAnAgent.map((c) => `${c.operation} as ${c.login ?? 'no one'}`), task.name).toEqual([]);
 });
 
 interface Result {
@@ -487,17 +498,124 @@ describe('claim_issue', () => {
     const { agent, sessionId } = await donor('priya');
 
     const asked = await call(agent, 'claim_issue', { sessionId, issue: first });
-    const confirmed = await call(agent, 'claim_issue', { sessionId, issue: first, claConfirmed: true });
+    const confirmed = await call(agent, 'claim_issue', { sessionId, issue: first, claConfirmed: 'https://sample-owner.test/cla' });
     const notAskedAgain = await call(agent, 'claim_issue', { sessionId, issue: second });
     await changeSettings(env.DB, TOOLS, { claUrl: 'https://sample-owner.test/cla-v2' }, maintainer.githubId, Date.now());
     const askedAgain = await call(agent, 'claim_issue', { sessionId, issue: third });
 
     expect(refusalOf(asked)).toBe('cla_required');
-    expect(textOf(asked)).toContain('https://sample-owner.test/cla. Ask the donor to confirm they signed it');
+    expect(textOf(asked)).toContain(
+      'https://sample-owner.test/cla. Ask the donor to confirm they signed it, then call claim_issue again with claConfirmed: "https://sample-owner.test/cla".',
+    );
     expect(confirmed.isError).toBeFalsy();
     expect(notAskedAgain.isError).toBeFalsy();
     expect(refusalOf(askedAgain)).toBe('cla_required');
     expect(await getClaConfirmation(env.DB, people.priya.githubId, TOOLS)).toMatchObject({ claUrl: 'https://sample-owner.test/cla' });
+  });
+
+  test('a CLA confirmed at a link the project no longer has is asked again at the new link, and nothing is kept', async () => {
+    await project(TOOLS, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/cla' });
+    const issue = await tagged(TOOLS);
+    const { agent, sessionId } = await donor('priya');
+    await call(agent, 'claim_issue', { sessionId, issue });
+    // The maintainer changes the link while the donor reads the old one.
+    await changeSettings(env.DB, TOOLS, { claUrl: 'https://sample-owner.test/cla-v2' }, maintainer.githubId, Date.now());
+
+    const stale = await call(agent, 'claim_issue', { sessionId, issue, claConfirmed: 'https://sample-owner.test/cla' });
+
+    expect(refusalOf(stale)).toBe('cla_required');
+    expect(textOf(stale)).toContain('https://sample-owner.test/cla-v2');
+    expect(await getClaConfirmation(env.DB, people.priya.githubId, TOOLS)).toBeNull();
+    expect((await issueRoom(env.ISSUE_ROOM, issue).snapshot()).claims).toEqual([]);
+  });
+
+  test("a donor a vouched-only project won't take is refused as not vouched, and never asked for its CLA", async () => {
+    await project(DESKTOP, { tags: ['ready'], whoCanClaim: 'vouched', claUrl: 'https://sample-owner.test/desktop-cla' });
+    const issue = await tagged(DESKTOP, ['ready']);
+    const { agent, sessionId } = await donor('priya');
+
+    const plain = await call(agent, 'claim_issue', { sessionId, issue });
+    const confirming = await call(agent, 'claim_issue', { sessionId, issue, claConfirmed: 'https://sample-owner.test/desktop-cla' });
+
+    expect(refusalOf(plain)).toBe('not_vouched');
+    expect(refusalOf(confirming)).toBe('not_vouched');
+    expect(await getClaConfirmation(env.DB, people.priya.githubId, DESKTOP)).toBeNull();
+  });
+
+  test('a vouched-only project takes its collaborators with write access whether or not its vouch file lists them', async () => {
+    await project(DESKTOP, { tags: ['ready'], whoCanClaim: 'vouched' });
+    const issue = await tagged(DESKTOP, ['ready']);
+    const own = await connectAgent(github, 'sample-maintainer');
+    const sessionId = String((await call(own, 'start_session', { agent: 'codex', budget: { kind: 'until_limit' } })).structuredContent?.sessionId);
+
+    const result = await call(own, 'claim_issue', { sessionId, issue });
+
+    // vouch's own checks of issues and PRs let a collaborator with write access through.
+    expect(refusalOf(result)).toBeNull();
+  });
+
+  test('a vouched-only project with no vouch file takes no one but its collaborators with write access', async () => {
+    await project(UPSTREAM, { tags: ['goodfirsttoken'], whoCanClaim: 'vouched' });
+    const issue = await tagged(UPSTREAM, ['goodfirsttoken']);
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+
+    const refused = await call(priya.agent, 'claim_issue', { sessionId: priya.sessionId, issue });
+    const writer = await call(kenji.agent, 'claim_issue', { sessionId: kenji.sessionId, issue });
+
+    expect(refusalOf(refused)).toBe('not_vouched');
+    expect(textOf(refused)).toContain('and it has no vouch file');
+    // kenji can write to the repo on GitHub, and no vouch file lists him.
+    expect(writer.isError).toBeFalsy();
+  });
+
+  test('a vouch file that denounces a collaborator refuses them too', async () => {
+    await project(DESKTOP, { tags: ['ready'], whoCanClaim: 'anyone' });
+    github.commitFiles(DESKTOP, { '.github/VOUCHED.td': 'kenji\n-sample-maintainer handed the repo on\n' }, BY);
+    const issue = await tagged(DESKTOP, ['ready']);
+    const own = await connectAgent(github, 'sample-maintainer');
+    const sessionId = String((await call(own, 'start_session', { agent: 'codex', budget: { kind: 'until_limit' } })).structuredContent?.sessionId);
+
+    const result = await call(own, 'claim_issue', { sessionId, issue });
+
+    expect(refusalOf(result)).toBe('not_vouched');
+    expect(textOf(result)).toContain('denounces @sample-maintainer');
+  });
+
+  test('the vouch file is read from .github/VOUCHED.td, and from VOUCHED.td at the root only when there is none there', async () => {
+    await project(APP, { tags: ['help wanted'], whoCanClaim: 'vouched' });
+    await project(DESKTOP, { tags: ['ready'], whoCanClaim: 'vouched' });
+    // sample-app has no .github/VOUCHED.td, so the root file counts.
+    github.commitFiles(APP, { 'VOUCHED.td': 'priya\n' }, BY);
+    // sample-desktop has both, and its .github/VOUCHED.td names priya on gitlab only.
+    github.commitFiles(DESKTOP, { 'VOUCHED.td': 'priya\n' }, BY);
+    const atRoot = await tagged(APP);
+    const inDotGithub = await tagged(DESKTOP, ['ready']);
+    const { agent, sessionId } = await donor('priya');
+
+    const rootOnly = await call(agent, 'claim_issue', { sessionId, issue: atRoot });
+    const both = await call(agent, 'claim_issue', { sessionId, issue: inDotGithub });
+
+    expect(rootOnly.isError).toBeFalsy();
+    expect(refusalOf(both)).toBe('not_vouched');
+    expect(textOf(both)).toContain('.github/VOUCHED.td');
+  });
+
+  test('a code repo with no commits on GitHub takes no claims, and its issues are not suggested', async () => {
+    await project(APP);
+    const issue = await tagged(APP);
+    const repo = github.state.repos[APP];
+    if (!repo) throw new Error(`the fake has no repo ${APP}`);
+    // A repo with no commits has no default branch to start from.
+    repo.branches = {};
+    const { agent, sessionId } = await donor('priya');
+
+    const suggestions = await call(agent, 'suggest_issues', { sessionId });
+    const claim = await call(agent, 'claim_issue', { sessionId, issue });
+
+    expect(suggested(suggestions)).toEqual([]);
+    expect(refusalOf(claim)).toBe('project_not_open');
+    expect(textOf(claim)).toContain(`${APP} has no commits on GitHub to start from`);
   });
 
   test("a session is its donor's alone: another donor's session ID finds no session", async () => {
@@ -593,7 +711,7 @@ describe('the queue', () => {
 
     const asked = await call(agent, 'claim_issue', { sessionId, queue: [pick] });
     const kept = await getSession(env.DB, sessionId);
-    const confirmed = await call(agent, 'claim_issue', { sessionId, claConfirmed: true });
+    const confirmed = await call(agent, 'claim_issue', { sessionId, claConfirmed: 'https://sample-owner.test/cla' });
 
     expect(refusalOf(asked)).toBe('cla_required');
     expect(kept?.queue).toEqual([pick]);
@@ -610,13 +728,53 @@ describe('the queue', () => {
     await call(agent, 'claim_issue', { sessionId, queue: [asked, behind] });
     // Before the donor answers, the pick asked about fills up.
     await claimAs('kenji', asked, TOOLS, 'codex', 1);
-    const confirmed = await call(agent, 'claim_issue', { sessionId, claConfirmed: true });
+    const confirmed = await call(agent, 'claim_issue', { sessionId, claConfirmed: 'https://sample-owner.test/cla' });
 
     expect(refusalOf(confirmed)).toBe('cla_required');
     expect(textOf(confirmed)).toContain('https://sample-owner.test/bundler-cla');
     expect(textOf(confirmed)).toContain(`Skipped from the queue first:\n${asked} (issue_full)`);
     expect(await getClaConfirmation(env.DB, people.priya.githubId, BUNDLER)).toBeNull();
     expect((await getSession(env.DB, sessionId))?.queue).toEqual([behind]);
+  });
+});
+
+describe('the queue, continued', () => {
+  test('a queued pick that would be skipped is skipped before its CLA is asked: one a vouched-only project won\'t take, or one closed on GitHub', async () => {
+    await project(DESKTOP, { tags: ['ready'], whoCanClaim: 'vouched', claUrl: 'https://sample-owner.test/desktop-cla' });
+    await project(TOOLS, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/cla' });
+    await project(APP);
+    const unvouched = await tagged(DESKTOP, ['ready']);
+    const closed = await tagged(TOOLS);
+    github.closeIssue(TOOLS, numberOf(closed), BY);
+    const next = await tagged(APP);
+    const { agent, sessionId } = await donor('priya');
+
+    const reached = await call(agent, 'claim_issue', { sessionId, queue: [unvouched, closed, next] });
+
+    expect(reached.structuredContent).toMatchObject({
+      claim: { issue: next },
+      skipped: [
+        { issue: unvouched, code: 'not_vouched' },
+        { issue: closed, code: 'issue_not_eligible' },
+      ],
+    });
+    expect(await getClaConfirmation(env.DB, people.priya.githubId, DESKTOP)).toBeNull();
+  });
+
+  test('two calls at once in one session each take their own pick off the queue, and neither puts back a pick the other took', async () => {
+    await project(APP);
+    const [first, reached, named] = [await tagged(APP), await tagged(APP), await tagged(APP)];
+    const { agent, sessionId } = await donor('priya');
+    await call(agent, 'claim_issue', { sessionId, issue: first, queue: [reached, named] });
+
+    const [walked, direct] = await Promise.all([
+      call(agent, 'claim_issue', { sessionId }),
+      call(agent, 'claim_issue', { sessionId, issue: named }),
+    ]);
+
+    expect(walked.structuredContent).toMatchObject({ claim: { issue: reached } });
+    expect(direct.structuredContent).toMatchObject({ claim: { issue: named } });
+    expect((await getSession(env.DB, sessionId))?.queue).toEqual([]);
   });
 });
 
@@ -647,9 +805,81 @@ describe('post_update and release_claim', () => {
       ['priya', 'released', 'released: Out of time.'],
     ]);
   });
+
+  test("the tools refuse someone else's claim themselves, before they ask its room", async () => {
+    await project(APP);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const claimed = await call(priya.agent, 'claim_issue', { sessionId: priya.sessionId, issue });
+    const claimId = (claimed.structuredContent?.claim as { claimId: string }).claimId;
+    // A room that would take anything from anyone.
+    const room = {
+      postUpdate: vi.fn(() => Promise.resolve({ ok: true, posted: true, waitSeconds: null, claimId, state: 'active', prOnIssue: null })),
+      release: vi.fn(() => Promise.resolve({ ok: true, claim: { state: 'released' } })),
+    };
+    vi.spyOn(env.ISSUE_ROOM, 'getByName').mockReturnValue(room as never);
+
+    const post = await call(kenji.agent, 'post_update', { claimId, text: 'wrote a failing test' });
+    const release = await call(kenji.agent, 'release_claim', { claimId, reason: 'Not mine.' });
+
+    expect(refusalOf(post)).toBe('not_claim_owner');
+    expect(refusalOf(release)).toBe('not_claim_owner');
+    expect(room.postUpdate).not.toHaveBeenCalled();
+    expect(room.release).not.toHaveBeenCalled();
+  });
 });
 
 describe('suggest_issues', () => {
+  test("an older vouched-only project with 12 or more waiting issues hides no other project from a donor it doesn't vouch for", async () => {
+    // sample-desktop is older, takes vouched donors only, and doesn't vouch for priya.
+    await createProject(
+      env.DB,
+      { repo: DESKTOP, status: 'approved', source: 'registered', policy: null, settings: { tags: ['ready'], whoCanClaim: 'vouched' }, addedBy: maintainer.githubId },
+      Date.now() - MINUTE,
+    );
+    await project(APP);
+    for (let i = 0; i < 12; i++) await tagged(DESKTOP, ['ready']);
+    const open = [await tagged(APP), await tagged(APP), await tagged(APP)];
+    const { agent, sessionId } = await donor('priya');
+
+    const result = await call(agent, 'suggest_issues', { sessionId });
+
+    expect([...suggested(result)].sort()).toEqual([...open].sort());
+  });
+
+  test("a donor who names a vouched-only project that doesn't vouch for them is still offered the issues that take their claim", async () => {
+    await project(APP);
+    await project(DESKTOP, { tags: ['ready'], whoCanClaim: 'vouched' });
+    for (let i = 0; i < 12; i++) await tagged(DESKTOP, ['ready']);
+    const open = [await tagged(APP), await tagged(APP), await tagged(APP)];
+    const { agent, sessionId } = await donor('priya');
+    await call(agent, 'set_interests', { projects: ['sample-desktop'], languages: [], kinds: [] });
+
+    const result = await call(agent, 'suggest_issues', { sessionId });
+
+    expect([...suggested(result)].sort()).toEqual([...open].sort());
+  });
+
+  test('a project whose vouch file keeps the donor out is read once, and its issues take none of the checks on GitHub', async () => {
+    await createProject(
+      env.DB,
+      { repo: DESKTOP, status: 'approved', source: 'registered', policy: null, settings: { tags: ['ready'], whoCanClaim: 'vouched' }, addedBy: maintainer.githubId },
+      Date.now() - MINUTE,
+    );
+    await project(APP);
+    for (let i = 0; i < 5; i++) await tagged(DESKTOP, ['ready']);
+    const open = await tagged(APP);
+    const { agent, sessionId } = await donor('priya');
+    const before = github.calls.length;
+
+    const result = await call(agent, 'suggest_issues', { sessionId });
+
+    const ops = github.calls.slice(before).map((c) => c.operation);
+    expect(suggested(result)).toEqual([open]);
+    expect(ops.filter((op) => op === 'GET /repos/{owner}/{repo}/issues/{issue_number}')).toHaveLength(1);
+  });
+
   test("suggestions check each issue on GitHub with the donor's token, and leave out one closed or given a PR since the last sync", async () => {
     await project(APP);
     const closed = await tagged(APP);
@@ -703,14 +933,15 @@ describe('suggest_issues', () => {
       prMode: 'reviewed',
       claUrl: null,
       claimants: [{ login: 'kenji', agent: 'codex', state: 'active' }],
+      slotsTaken: 2,
       slots: 3,
       timesClaimed: 5,
       tough: true,
     });
-    expect(byIssue.get(tried)).toMatchObject({ claimants: [], timesClaimed: 2, tough: false });
+    expect(byIssue.get(tried)).toMatchObject({ claimants: [], slotsTaken: 0, timesClaimed: 2, tough: false });
     expect(textOf(result)).toContain('tough: claimed 5 times without a merged PR');
+    expect(textOf(result)).toContain('2 of 3 slots taken: @kenji (codex)');
     expect(textOf(result)).not.toContain('arjun');
-    expect(textOf(result)).toContain('1 of 3 slots taken: @kenji (codex)');
   });
 
   test("suggestions are ranked against the donor's interests: a project they named, then their language, then a kind of work they like", async () => {
@@ -733,7 +964,9 @@ describe('suggest_issues', () => {
     expect(suggested(result)).not.toContain(plain);
   });
 
-  test('donors asking at the same moment are offered different issues, drawn at random with weight toward the top', async () => {
+  // Four agents sign in, and each sign-in in this file takes longer than
+  // the one before, so this test, near the end, gets more time.
+  test('donors asking at the same moment are offered different issues, drawn at random with weight toward the top', { timeout: 60_000 }, async () => {
     await project(APP);
     const issues = [];
     for (let i = 0; i < 10; i++) issues.push(await tagged(APP));

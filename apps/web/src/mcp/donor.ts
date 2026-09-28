@@ -25,6 +25,7 @@ import {
   blockedAmong,
   countOpenPrsByProject,
   createSession,
+  editSessionQueue,
   getClaim,
   getIssue,
   getPerson,
@@ -36,7 +37,6 @@ import {
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
-  setSessionQueue,
   takeSessionIssue,
   type ClaimWithPr,
   type WaitingIssue,
@@ -268,6 +268,8 @@ function budgetSpent(session: SessionRecord): Refusal {
 const SUGGESTIONS = 3;
 /** How many issues one call checks on GitHub at most, so one call's reads stay few. */
 const MAX_CHECKS = 8;
+/** How many projects' code repos one call reads on GitHub at most. */
+const MAX_REPOS = 20;
 /** How many claims on an issue must end without a merged PR for it to be tough. */
 export const TOUGH_AFTER = 3;
 
@@ -337,9 +339,12 @@ export async function suggestIssues(
   }
   const order = weightedOrder(rankIssues(candidates, donor.interests), random);
 
-  // Each pick is checked on GitHub with the donor's token, and one that no
-  // longer takes claims, or whose project's vouch file keeps the donor out,
-  // gives way to the next.
+  // In that order, each issue's project is read on GitHub with the donor's
+  // token, once, and a project GitHub doesn't show them, whose code repo has
+  // no commits, or whose vouch file keeps them out, is left out whole, as a
+  // claim would be refused. Then each issue is checked on GitHub,
+  // and one that no longer takes claims gives way to the next in the order,
+  // which runs down the whole ranking.
   const reader = donorReader(await tokenOf(caller));
   const facts = new Map<string, RepoFacts | null>();
   const picked: { entry: WaitingIssue; issue: GitHubIssue }[] = [];
@@ -347,9 +352,13 @@ export async function suggestIssues(
   for (const { entry } of order) {
     if (picked.length === SUGGESTIONS || checks === MAX_CHECKS) break;
     const repo = lower(entry.project.repo);
-    if (!facts.has(repo)) facts.set(repo, await readRepoFacts(reader, entry.project.repo));
-    const repoFacts = facts.get(repo) ?? null;
-    if (repoFacts === null || vouchRefusal(entry.project, donor, repoFacts) !== null) continue;
+    if (!facts.has(repo)) {
+      if (facts.size === MAX_REPOS) continue;
+      const read = await readRepoFacts(reader, entry.project.repo);
+      facts.set(repo, read !== null && read.head !== null && vouchRefusal(entry.project, donor, read) === null ? read : null);
+    }
+    const repoFacts = facts.get(repo);
+    if (!repoFacts) continue;
     checks += 1;
     const check = await checkIssueOnGitHub(reader, entry.project, entry.copy.issue, [repoFacts.name]);
     if (check.ok) picked.push({ entry, issue: check.issue });
@@ -387,6 +396,7 @@ export async function suggestIssues(
           agent: claim.agent,
           state: stateAt(claim, now),
         })),
+      slotsTaken: onIssue.filter(({ claim }) => holdsSlot(claim, now)).length,
       slots: entry.project.settings.claimsPerIssue,
       timesClaimed: onIssue.length,
       tough: isTough(onIssue, now),
@@ -444,15 +454,16 @@ interface ClaimContext {
   donor: Donor;
   session: SessionRecord;
   reader: GitHubReader;
-  claConfirmed: boolean;
+  /** The CLA link the donor confirmed they signed, if they did. */
+  claConfirmed: string | undefined;
   now: number;
 }
 
 /**
  * Claims one issue for the donor, or resumes the claim they hold on it. The
  * checks run from the cheapest: the tagged-issue cache, the room's slots and
- * PRs, the donor's open PRs and CLA, then GitHub with the donor's token.
- * The room decides last, as the lock for the cap.
+ * PRs, the donor's open PRs, then GitHub with the donor's token. The CLA
+ * comes after them, and the room decides last, as the lock for the cap.
  */
 async function claimOne(context: ClaimContext, issue: string): Promise<Attempt> {
   const { donor, session, now } = context;
@@ -528,8 +539,6 @@ async function claimNew(
   const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
   const capped = openPrRefusal(project, openPrs);
   if (capped) return { ok: false, refusal: capped };
-  const cla = await claRefusal(env.DB, project, donor, context.claConfirmed, now);
-  if (cla) return { ok: false, refusal: cla };
   const facts = await readRepoFacts(reader, project.repo);
   if (facts === null) {
     return refused('project_not_open', `GitHub shows you no public repo named ${project.repo}, so ${issue} takes no claims.`);
@@ -541,6 +550,11 @@ async function claimNew(
   if (facts.head === null) {
     return refused('project_not_open', `${project.repo} has no commits on GitHub to start from, so ${issue} takes no claims.`);
   }
+  // The CLA comes last, so a donor is asked to confirm one only for an issue
+  // that would take their claim, and a queued pick that would be passed over
+  // is passed over.
+  const cla = await claRefusal(env.DB, project, donor, context.claConfirmed, now);
+  if (cla) return { ok: false, refusal: cla };
 
   const result = await issueRoom(env.ISSUE_ROOM, copy.issue).claim({
     issue: copy.issue,
@@ -598,40 +612,47 @@ export async function claimIssue(
     now,
   };
 
-  let queue = queueOf(input.queue ?? session.queue, input.issue);
+  // Each change to the queue is an edit of the queue as it is stored then,
+  // so a call at the same moment in the session keeps its own change.
+  const edited =
+    input.queue !== undefined || input.issue !== undefined
+      ? await editSessionQueue(env.DB, session.id, (stored) => queueOf(input.queue ?? stored, input.issue))
+      : session;
+  let queue = (edited ?? session).queue;
   const skipped: { issue: string; code: RefusalCode; message: string }[] = [];
-  let result: Attempt;
+  let result: Attempt | undefined;
   if (input.issue !== undefined) {
-    if (input.queue !== undefined || queue.length !== session.queue.length) await setSessionQueue(env.DB, session.id, queue);
     result = await claimOne(context, input.issue);
   } else {
     // The next pick is claimed only now that the agent reached it. One that
     // no longer takes the donor's claim is passed over and reported.
-    for (;;) {
-      const [next, ...rest] = queue;
-      if (next === undefined) {
-        await setSessionQueue(env.DB, session.id, []);
-        return refuse(
-          refusal(
-            'not_found',
-            skipped.length === 0
-              ? `No pick waits in session ${session.id}. Get suggestions with suggest_issues, then claim one.`
-              : `No pick is left in session ${session.id}. Each one no longer takes your claim:\n${skippedText(skipped)}\nGet more with suggest_issues.`,
-          ),
-        );
+    const taken = new Set<string>();
+    for (const next of queue) {
+      // A CLA confirmation counts for the first pick reached alone, the one a
+      // refusal asked about. A pick behind it has a project the donor hasn't
+      // been asked about.
+      const attempt = await claimOne({ ...context, claConfirmed: skipped.length === 0 ? context.claConfirmed : undefined }, next);
+      if (!attempt.ok && SKIPS.has(attempt.refusal.code)) {
+        skipped.push({ issue: next, code: attempt.refusal.code, message: attempt.refusal.message });
+        taken.add(lower(next));
+        continue;
       }
-      // A CLA confirmation counts for the pick at the head of the queue
-      // alone, the one a refusal asked about. A pick behind it has a project
-      // the donor hasn't been asked about.
-      result = await claimOne({ ...context, claConfirmed: context.claConfirmed && skipped.length === 0 }, next);
-      if (result.ok || !SKIPS.has(result.refusal.code)) {
-        if (result.ok) queue = rest;
-        break;
-      }
-      skipped.push({ issue: next, code: result.refusal.code, message: result.refusal.message });
-      queue = rest;
+      if (attempt.ok) taken.add(lower(next));
+      result = attempt;
+      break;
     }
-    await setSessionQueue(env.DB, session.id, queue);
+    const left = await editSessionQueue(env.DB, session.id, (stored) => stored.filter((pick) => !taken.has(lower(pick))));
+    queue = left?.queue ?? [];
+    if (result === undefined) {
+      return refuse(
+        refusal(
+          'not_found',
+          skipped.length === 0
+            ? `No pick waits in session ${session.id}. Get suggestions with suggest_issues, then claim one.`
+            : `No pick is left in session ${session.id}. Each one no longer takes your claim:\n${skippedText(skipped)}\nGet more with suggest_issues.`,
+        ),
+      );
+    }
   }
 
   if (!result.ok) {

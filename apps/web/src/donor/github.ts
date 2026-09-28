@@ -47,6 +47,8 @@ export interface RepoFacts {
   head: string | null;
   /** The donor is an admin or maintainer of the repo, so the work is on their own project. */
   managed: boolean;
+  /** The donor is a collaborator with write access or more: write, maintain, or admin. */
+  writer: boolean;
   /** The vouch file, or null when the repo has none. */
   vouchFile: { path: string; text: string } | null;
 }
@@ -60,26 +62,30 @@ interface RepoAnswer {
     nameWithOwner: string;
     viewerPermission: string | null;
     defaultBranchRef: { target: { oid: string } | null } | null;
-    root: VouchBlob | null;
     dotGithub: VouchBlob | null;
+    root: VouchBlob | null;
   } | null;
 }
 
 /**
- * Where vouch looks for the file, in order: the repo's root, then .github/,
- * which is where Ghostty keeps it.
+ * Where the vouch file is read from, in order: .github/, which vouch's
+ * GitHub checks read and Ghostty keeps it in, then the repo's root, which
+ * vouch's command line also looks in.
  */
-export const VOUCH_PATHS = ['VOUCHED.td', '.github/VOUCHED.td'] as const;
+export const VOUCH_PATHS = ['.github/VOUCHED.td', 'VOUCHED.td'] as const;
 
 const REPO_FACTS = `query ($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner
     viewerPermission
     defaultBranchRef { target { oid } }
-    root: object(expression: "HEAD:${VOUCH_PATHS[0]}") { ... on Blob { text } }
-    dotGithub: object(expression: "HEAD:${VOUCH_PATHS[1]}") { ... on Blob { text } }
+    dotGithub: object(expression: "HEAD:${VOUCH_PATHS[0]}") { ... on Blob { text } }
+    root: object(expression: "HEAD:${VOUCH_PATHS[1]}") { ... on Blob { text } }
   }
 }`;
+
+/** GitHub's names for a permission of write access or more. */
+const WRITE_OR_MORE = new Set(['WRITE', 'MAINTAIN', 'ADMIN']);
 
 /**
  * The facts about a code repo that a claim needs, in one GraphQL query with
@@ -93,14 +99,15 @@ export async function readRepoFacts(reader: GitHubReader, repo: string): Promise
   if (other !== undefined) throw new Error(`GitHub could not read ${repo}: ${other.message}`);
   if (found === null) return null;
   const files = [
-    { path: VOUCH_PATHS[0], text: found.root?.text },
-    { path: VOUCH_PATHS[1], text: found.dotGithub?.text },
+    { path: VOUCH_PATHS[0], text: found.dotGithub?.text },
+    { path: VOUCH_PATHS[1], text: found.root?.text },
   ];
   const file = files.find((f): f is { path: (typeof VOUCH_PATHS)[number]; text: string } => typeof f.text === 'string');
   return {
     name: found.nameWithOwner,
     head: found.defaultBranchRef?.target?.oid ?? null,
     managed: found.viewerPermission === 'ADMIN' || found.viewerPermission === 'MAINTAIN',
+    writer: WRITE_OR_MORE.has(found.viewerPermission ?? ''),
     vouchFile: file ?? null,
   };
 }

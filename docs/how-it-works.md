@@ -1182,8 +1182,8 @@ the first question included.
 A donor's agent spends their tokens through seven tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
 `release_claim`, and `my_work`. Each acts as the caller alone, and reads
-GitHub with the caller's own token, never the service token. `submit_work`
-and `open_pr` come with #16.
+GitHub with the caller's own token. The service token reads nothing for
+them. `submit_work` and `open_pr` come with #16.
 
 **Sessions**
 
@@ -1226,16 +1226,19 @@ when all of these hold, the rules of
   sync takes no claim, though the cache and the room don't know yet.
 - The donor isn't blocked.
 - The donor has fewer open PRs in the project than its open PRs per donor.
-  The PRs counted are the ones opened for the donor's claims in the
-  project that the [PRs](#prs) table shows open.
+  The PRs counted are the ones opened through Good First Token for the
+  donor's claims in the project that the [PRs](#prs) table shows open.
+- GitHub shows the donor the project's code repo, and it has a commit to
+  start from.
 - The project's vouch file doesn't denounce the donor, whoever the project
   lets claim. When the project takes vouched donors only, the file vouches
-  for them. The file is under The vouch file below.
-- When the project has a CLA, the donor confirmed they signed it, under The
-  CLA below.
+  for them, or GitHub says they can write to the code repo. The file is
+  under The vouch file below.
+- When the project has a CLA, the donor confirmed they signed it, at the
+  link the project has now, under The CLA below.
 
 `suggest_issues` checks every rule but the CLA, which the donor confirms
-when they pick, and each suggestion carries the CLA's link. `claim_issue`
+when they claim, and each suggestion carries the CLA's link. `claim_issue`
 checks them all, and the issue's room then checks the slots and the PRs
 again, as the lock for the cap. The homepage's count of issues waiting, the
 issue page's claim pane, and the donor's tools use the one rule, so they
@@ -1254,24 +1257,32 @@ agree.
   donor named its project, by `owner/name`, by the owner or the name alone,
   or by the issue's own repo. It scores 2 when the donor named its
   project's language, or a language that is one of its labels. It scores 1
-  more for each kind of work the donor named that a word of its title or
-  labels starts with, less a plural s, so `docs` matches `documentation`.
+  more for each kind of work the donor named that its title or one of its
+  labels has: words in a row, each starting with a word of the kind less a
+  plural s. So `docs` matches `documentation`, and `error handling` matches
+  `error-handling`.
   All of these compare without case. Higher scores come first, then fewer
   claims holding a slot, then the oldest project, then the lowest issue.
-- From the top 12 it draws an order at random, with weight toward the top.
-  Each place goes to one of the issues not placed yet, each weighted by how
-  many places are left from it to the bottom of the 12: the first has
-  weight 12 and the twelfth 1. So donors asking at the same moment spread
-  out over the issues, and the best matches come up most often.
-- In that order, it checks each issue on GitHub and its project's vouch
-  file, and keeps the first 3 that pass. An issue that fails gives way to
-  the next. It checks at most 8 issues on GitHub in one call.
+- It puts the whole ranking in a random order, with weight toward the top.
+  Each place goes to one of the first 12 issues not placed yet, each
+  weighted by how many places are left from it to the bottom of those 12:
+  the first has weight 12 and the twelfth 1. An issue lower down joins the
+  draw as the ones above it are placed. So donors asking at the same moment
+  spread out over the issues, and the best matches come up most often.
+- In that order, it reads each issue's project on GitHub once. A project
+  whose code repo GitHub doesn't show the donor, whose code repo has no
+  commits, or whose vouch file keeps the donor out is left out with all its
+  issues. Then it checks each issue on GitHub, and keeps the first 3 that
+  pass. An issue that fails gives way to the next, down the whole ranking.
+  One call checks at most 8 issues on GitHub, and reads at most 20
+  projects.
 - Each suggestion carries the issue's link on GitHub and its live page, its
   project, the tag it carries, the PR mode, the CLA's link, the claims
   holding a slot with each claimant's login now, agent, and state, the
-  slots, how many times the issue was claimed, and the tough badge. A
-  blocked donor's claim takes its slot and counts among the times claimed,
-  but isn't among the claimants, as on [the issue page](#the-issue-page).
+  slots taken, the slots, how many times the issue was claimed, and the
+  tough badge. A blocked donor's claim counts among the slots taken and the
+  times claimed, but isn't among the claimants, as on
+  [the issue page](#the-issue-page).
 - An issue is tough once 3 of its claims ended without a merged PR,
   released, expired, or with their PR closed without merging, and no PR of
   its claims merged.
@@ -1291,12 +1302,15 @@ agree.
   `project_not_open` for one that isn't approved, is paused, or is on the
   do-not-list. The cached copy's tags, with `issue_not_eligible`. A PR the
   sync or the room knows of, with `pr_exists`. A full issue, with
-  `issue_full`. The open-PR cap, with `open_pr_cap`. The CLA, with
-  `cla_required`. The code repo on GitHub, with `project_not_open` when
-  GitHub shows the donor no such repo. The vouch file, with `not_vouched`.
-  The issue on GitHub, with `issue_not_eligible` or `pr_exists`. Last, the
-  issue's room makes the claim, and can still refuse with `pr_exists` or
-  `issue_full`.
+  `issue_full`. The open-PR cap, with `open_pr_cap`. The code repo on
+  GitHub, with `project_not_open` when GitHub shows the donor no such repo.
+  The vouch file, with `not_vouched`. The issue on GitHub, with
+  `issue_not_eligible` or `pr_exists`. The code repo's commits, with
+  `project_not_open` when it has none to start from. The CLA, with
+  `cla_required`. Last, the issue's room makes the claim, and can still
+  refuse with `pr_exists` or `issue_full`.
+- So the donor is asked about a CLA only for an issue that would take the
+  claim.
 - When several projects keep their issues in the repo, the claim goes to
   the project the issue page follows, under [The issue page](#the-issue-page).
 - The claim's agent is the session's harness, and its login the donor's
@@ -1311,15 +1325,19 @@ agree.
   still waiting, and what is left of the budget.
 
 **The CLA.** A claim on a project with a CLA is refused with `cla_required`
-and the CLA's link until the donor confirms they signed it, with
-`claConfirmed: true`. The confirmation is kept with the link, so the donor
-is asked once per project, and again only when the project's CLA link
-changes. It is kept once the donor confirms, even when the claim is then
-refused for another reason.
+and the CLA's link until the donor confirms they signed it. The agent then
+calls `claim_issue` again with `claConfirmed` set to the link the refusal
+gave. A confirmation counts only when its link is the project's link now.
+So a donor who read a link the project has since changed is asked again at
+the new one, and nothing is kept. The confirmation is kept with the link,
+so the donor is asked once per project, and again only when the project's
+CLA link changes. It is kept once the donor confirms, even when the room
+then refuses the claim.
 
-**The vouch file.** A project's vouch file is `VOUCHED.td` at the root of
-its code repo's default branch, or else `.github/VOUCHED.td`, where Ghostty
-keeps its own, in the format of [vouch](https://github.com/mitchellh/vouch).
+**The vouch file.** A project's vouch file is `.github/VOUCHED.td` on its
+code repo's default branch, where vouch's own GitHub checks read it and
+Ghostty keeps its own, or else `VOUCHED.td` at the root. It is in the
+format of [vouch](https://github.com/mitchellh/vouch).
 
 - Each line names one person, with a handle, a login or `platform:login`,
   and optional details after a space. Blank lines, and lines that start
@@ -1329,21 +1347,30 @@ keeps its own, in the format of [vouch](https://github.com/mitchellh/vouch).
   handle for another platform, like `gitlab:priya`, names no one here.
   Handles compare without case.
 - A person the file both vouches for and denounces counts as denounced.
-- A project that takes vouched donors only, with no vouch file, takes no
-  one.
+- A donor GitHub says can write to the code repo, with the write,
+  maintain, or admin role, counts as vouched for, as in vouch's own checks.
+  A line that denounces them still refuses them, whoever the project lets
+  claim.
+- A project that takes vouched donors only, with no vouch file, takes only
+  the donors who can write to its code repo.
 
 **The queue.** The donor can pick several suggestions. The agent claims the
 first, and passes the rest as the claim's `queue`.
 
 - The queue lives in the session, up to 20 picks, in order. A `queue` given
   replaces the picks waiting. An issue given to claim leaves the queue.
+- Each change is made to the queue as it is stored at that moment, and
+  lands only if no other call changed the queue in between. Otherwise it is
+  made again. So two calls at once in one session each take their own pick
+  off, and neither puts back a pick the other took.
 - A queued pick is claimed only when the agent reaches it, by calling
   `claim_issue` with no issue. The claim's answer tells the agent to do that
   once the claim before it is submitted or released.
 - A pick that no longer takes the donor's claim is passed over and
   reported: it filled up, got a PR, isn't open and tagged, its project
-  stopped taking claims, or its project's vouch file or open-PR cap keeps
-  the donor out. The answer lists each one passed over with its refusal
+  stopped taking claims or has no commits, or its project's vouch file or
+  open-PR cap keeps the donor out. It is passed over before its CLA is
+  asked about. The answer lists each one passed over with its refusal
   code and message, and claims the next. When none is left, the refusal is
   `not_found`, and names the picks passed over.
 - A pick whose project asks for a CLA the donor hasn't confirmed stops the
@@ -1449,8 +1476,9 @@ under [Registering a project](#registering-a-project) and
 - `suggest_issues` returns at most 3 issues, and takes the ones already shown
   to leave out.
 - `claim_issue` takes an issue, or none to claim the next pick waiting in
-  the session, a `queue` of up to 20 picks, and `claConfirmed`, false
-  unless set.
+  the session, a `queue` of up to 20 picks, and `claConfirmed`, the
+  `https` link of the project's CLA that the donor confirmed they signed,
+  as the refusal gave it.
 - A release needs a public reason.
 - A posted update is one line. Tabs and line breaks fold into single spaces.
   `post_update` takes an optional job, for a line a subagent posts.

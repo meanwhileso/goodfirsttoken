@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import {
-  countSessionIssue,
   createSession,
+  editSessionQueue,
   getSession,
   lastSession,
   returnSessionIssue,
-  setSessionQueue,
   takeSessionIssue,
 } from '../../src/db';
 import { db, emptyDatabase, HOUR, kenji, priya, refusal, signIn, t0 } from './helpers';
@@ -32,19 +31,6 @@ describe('donor sessions', () => {
     });
     expect(await getSession(db, session.id)).toEqual(session);
     expect(await getSession(db, 's_missing')).toBeNull();
-  });
-
-  test('every issue claimed in a session counts against it, even when claims arrive at once', async () => {
-    const session = await createSession(
-      db,
-      { githubId: priya.githubId, agent: 'codex', budget: { kind: 'issues', count: 5 } },
-      t0,
-    );
-
-    await Promise.all([1, 2, 3].map(() => countSessionIssue(db, session.id)));
-
-    expect((await getSession(db, session.id))?.issuesClaimed).toBe(3);
-    expect(await countSessionIssue(db, 's_missing')).toBeNull();
   });
 
   test('claims counted against a budget of issues at the same moment never take more than it has, and a count given back frees one', async () => {
@@ -76,17 +62,30 @@ describe('donor sessions', () => {
     expect(await takeSessionIssue(db, session.id, t0 + 30 * 60_000)).toBeNull();
   });
 
-  test("a session keeps the donor's picks in order, and a new queue replaces them", async () => {
+  test("a session keeps the donor's picks in order, and an edit changes them", async () => {
     const session = await createSession(db, { githubId: priya.githubId, agent: 'codex', budget: { kind: 'until_limit' } }, t0);
 
-    await setSessionQueue(db, session.id, ['sample-owner/sample-app#3', 'sample-owner/sample-app#1']);
+    await editSessionQueue(db, session.id, () => ['sample-owner/sample-app#3', 'sample-owner/sample-app#1']);
     const first = (await getSession(db, session.id))?.queue;
-    await setSessionQueue(db, session.id, ['sample-owner/sample-app#1']);
+    await editSessionQueue(db, session.id, (queue) => queue.slice(1));
 
     expect(session.queue).toEqual([]);
     expect(first).toEqual(['sample-owner/sample-app#3', 'sample-owner/sample-app#1']);
     expect((await getSession(db, session.id))?.queue).toEqual(['sample-owner/sample-app#1']);
-    expect(await setSessionQueue(db, 's_missing', [])).toBeNull();
+    expect(await editSessionQueue(db, 's_missing', () => [])).toBeNull();
+  });
+
+  test('edits to a queue at the same moment each apply to the queue as the other left it, so no pick comes back', async () => {
+    const session = await createSession(db, { githubId: priya.githubId, agent: 'codex', budget: { kind: 'until_limit' } }, t0);
+    const [a, b, c] = ['sample-owner/sample-app#1', 'sample-owner/sample-app#2', 'sample-owner/sample-app#3'];
+    await editSessionQueue(db, session.id, () => [a, b, c]);
+
+    await Promise.all([
+      editSessionQueue(db, session.id, (queue) => queue.filter((pick) => pick !== a)),
+      editSessionQueue(db, session.id, (queue) => queue.filter((pick) => pick !== b)),
+    ]);
+
+    expect((await getSession(db, session.id))?.queue).toEqual([c]);
   });
 
   test("a donor's last session is their most recent one", async () => {

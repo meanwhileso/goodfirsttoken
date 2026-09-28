@@ -37,34 +37,43 @@ export function openPrRefusal(project: ProjectRecord, openPrs: number): Refusal 
 
 /**
  * A refusal when the project has a CLA the donor hasn't confirmed at its
- * current link. When they confirm it now, the confirmation is kept, so they
- * are asked once per project, and again only when its link changes.
+ * current link. `confirmed` is the link the donor confirmed now, if they
+ * did. It counts only when it is the project's link, so a donor who read a
+ * link the project has since changed is asked again. A confirmation is
+ * kept, so the donor is asked once per project, and again only when its
+ * link changes.
  */
 export async function claRefusal(
   db: D1Database,
   project: ProjectRecord,
   donor: Donor,
-  confirmedNow: boolean,
+  confirmed: string | undefined,
   now: number,
 ): Promise<Refusal | null> {
   const url = project.settings.claUrl;
   if (url === null) return null;
   const kept = await getClaConfirmation(db, donor.githubId, project.repo);
   if (kept?.claUrl === url) return null;
-  if (confirmedNow) {
+  if (confirmed === url) {
     await confirmCla(db, { githubId: donor.githubId, project: project.repo, claUrl: url }, now);
     return null;
   }
+  const ask = `Ask the donor to confirm they signed it, then call claim_issue again with claConfirmed: "${url}".`;
   return {
     code: 'cla_required',
-    message: `${project.repo} asks contributors to sign its CLA first: ${url}. Ask the donor to confirm they signed it, then call claim_issue again with claConfirmed: true.`,
+    message:
+      confirmed === undefined
+        ? `${project.repo} asks contributors to sign its CLA first: ${url}. ${ask}`
+        : `${project.repo}'s CLA is at ${url} now, and the donor confirmed ${confirmed}. ${ask}`,
   };
 }
 
 /**
  * A refusal when the project's vouch file keeps the donor out: a line that
  * denounces them, whoever the project lets claim, or, for a project that
- * takes vouched donors only, no line that vouches for them.
+ * takes vouched donors only, no line that vouches for them. A collaborator
+ * with write access to the code repo counts as vouched, as vouch's own
+ * checks of issues and PRs let one through, unless the file denounces them.
  */
 export function vouchRefusal(project: ProjectRecord, donor: Donor, facts: RepoFacts): Refusal | null {
   const file = facts.vouchFile;
@@ -75,7 +84,7 @@ export function vouchRefusal(project: ProjectRecord, donor: Donor, facts: RepoFa
       message: `${project.repo}'s vouch file, ${file?.path ?? ''}, denounces @${donor.login}, so its issues take no claims from them.`,
     };
   }
-  if (project.settings.whoCanClaim !== 'vouched' || status === 'vouched') return null;
+  if (project.settings.whoCanClaim !== 'vouched' || status === 'vouched' || facts.writer) return null;
   return {
     code: 'not_vouched',
     message:
