@@ -1618,6 +1618,12 @@ and its top helpers. What it shows is in
   [Tagged issues](#tagged-issues). Its page would still show what the site
   cached from the repo, like its issues' titles, after the repo went
   private.
+- The sync reads approved projects only. So a project a maintainer or an
+  admin paused keeps its page even when its repo goes private meanwhile,
+  and shows what the site cached until someone resumes it and the next
+  sync delists it.
+  [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) takes
+  that on.
 - The repo in the path is found without case, and the page names it as it
   was saved.
 - A path whose owner or repo GitHub couldn't have, or whose owner's paths
@@ -1744,6 +1750,12 @@ side. What it shows, and in what order, is in
   cache, like one claimed and then untagged or closed, is titled
   `owner/repo#n`. The labels are drawn in the brand purple, since the
   database doesn't keep label colors yet.
+- The cached copy shows only while that project has a page, under Which
+  projects have a page in [the project page](#the-project-page). When it
+  has none, as once the sync delists it or it goes on the do-not-list, the
+  page is titled `owner/repo#n`, in the page and in its `<title>`, and
+  shows no labels and no PR the sync saw linked. The lanes, the timeline,
+  and the PRs the room holds stay.
 
 **The lanes**
 

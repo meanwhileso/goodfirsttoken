@@ -48,6 +48,7 @@ Maintainers register projects, admins approve them, and tagged issues sync from 
 | [#10](https://github.com/meanwhileso/goodfirsttoken/issues/10) | Let maintainers register and manage a project | #9 | [#55](https://github.com/meanwhileso/goodfirsttoken/pull/55) |
 | [#11](https://github.com/meanwhileso/goodfirsttoken/issues/11) | Add the admin queue, pages, and tools | #10 | |
 | [#12](https://github.com/meanwhileso/goodfirsttoken/issues/12) | Sync tagged issues and linked PRs from GitHub | #10 | [#59](https://github.com/meanwhileso/goodfirsttoken/pull/59) |
+| [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) | Delist a paused project whose repo went private | #24 | |
 
 ## M4 Claims and live feeds
 
@@ -133,6 +134,7 @@ flowchart TD
   n10["#10 Maintainer tools"]:::m3
   n11["#11 Admin queue"]:::m3
   n12["#12 Issue and PR sync"]:::m3
+  n65["#65 Delist paused private repos"]:::m3
   n13["#13 Issue room"]:::m4
   n14["#14 Feeds and streams"]:::m4
   n15["#15 Donor tools"]:::m4
@@ -201,6 +203,7 @@ flowchart TD
   n23 --> n28
   n23 --> n35
   n24 --> n28
+  n24 --> n65
   n25 --> n28
   n25 --> n35
   n26 --> n28

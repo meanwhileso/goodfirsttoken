@@ -135,6 +135,12 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     judged[0];
   const latest = glance.claims.at(-1) ?? mirrored.at(-1);
   const project = tagged?.project ?? (latest ? await getProject(env.DB, latest.project) : null);
+  // What the site cached from GitHub, the title, the labels, and the linked
+  // PR, shows only while that project has a page (src/project/shown.ts). So
+  // once the sync delists it, or it goes on the do-not-list, the page shows
+  // the room alone.
+  const withPage = project !== null && (await hasPage(env.DB, project));
+  const cached = withPage ? tagged?.copy : undefined;
 
   // Each lane, and the timeline, names its claimant by their login now,
   // since a login can change and a freed one can go to someone else. One
@@ -150,7 +156,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
 
   // The open PRs: the room's, and the one the last sync saw linked to the
   // issue, as the homepage counts them. Each by its repo and number only.
-  const linked = tagged?.copy.linkedPr;
+  const linked = cached?.linkedPr;
   const open: PrLink[] = [];
   for (const pr of [...glance.prs, ...(linked ? [linked] : [])]) {
     if (!open.some((known) => samePr(known, pr))) open.push({ repo: pr.repo, number: pr.number });
@@ -164,9 +170,9 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     issue,
     repo,
     number,
-    project: project && (await hasPage(env.DB, project)) ? project.repo : null,
-    title: tagged?.copy.title ?? null,
-    labels: tagged?.copy.labels ?? [],
+    project: withPage ? project.repo : null,
+    title: cached?.title ?? null,
+    labels: cached?.labels ?? [],
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
