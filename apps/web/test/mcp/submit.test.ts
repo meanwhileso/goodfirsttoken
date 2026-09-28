@@ -14,6 +14,7 @@ import {
   setPrState,
   setProjectStatus,
 } from '../../src/db';
+import { DonorWriter } from '../../src/donor/writes';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -406,6 +407,29 @@ describe('where the work goes', () => {
     expect(again.structuredContent).toMatchObject({ state: 'awaiting_review', branch: { repo: 'lena/sample-app' } });
   });
 
+  test('a project that keeps its issues in another repo gets the branch in a fork of its code repo, and a PR there that closes the issue by its full name', async () => {
+    await project(APP, { ...automatic, issueRepo: TOOLS });
+    const title = 'Keep the trailing slash in rewrites';
+    const number = github.openIssue(TOOLS, { title, body: 'A rewrite from /docs/ drops the slash.', labels: ['help wanted'], by: BY });
+    const issue = `${TOOLS}#${String(number)}`;
+    await saveIssues(env.DB, [{ issue, project: APP, title, labels: ['help wanted'], linkedPr: null, syncedAt: Date.now() }]);
+    const sam = await donor('sam');
+    const { claimId, start } = await claim(sam, issue);
+
+    const result = await submit(sam, claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
+
+    const branch = branchOf(issue, claimId);
+    expect(repoState('sam/sample-app').forkOf).toBe(APP);
+    expect(github.state.repos['sam/sample-tools']).toBeUndefined();
+    expect(commitAt(repoState('sam/sample-app').branches[branch]).parents).toEqual([start]);
+    const [pull] = pullsBy(APP, 'sam');
+    if (!pull) throw new Error('no PR');
+    expect(pull.pull).toMatchObject({ head: { repo: 'sam/sample-app', ref: branch }, base: { ref: 'main' } });
+    expect(pull.body).toContain(`\n\nCloses ${issue}\n\n`);
+    expect(pullsBy(TOOLS, 'sam')).toEqual([]);
+    expect(result.structuredContent).toMatchObject({ state: 'pr_opened', branch: { repo: 'sam/sample-app' }, pr: prOf(APP, pull.number) });
+  });
+
   test('the branch starts at the start commit, however far the default branch moved since the claim', async () => {
     await project(APP, reviewed);
     const issue = await tagged(APP);
@@ -551,6 +575,95 @@ describe('automatic and reviewed', () => {
     expect(opened.structuredContent).toMatchObject({ state: 'pr_opened' });
     expect(held.structuredContent).toMatchObject({ state: 'awaiting_review', reviewReason: 'open_pr_cap' });
     expect(refusalOf(refused)).toBe('open_pr_cap');
+  });
+});
+
+describe('two calls at once', () => {
+  test('a commit another call of the claim made with the same files, after this one read the branch, is the one recorded', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+    // The other call commits between this one's read of the branch and its commit.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the writer as this
+    const commit = DonorWriter.prototype.commit;
+    const other: { sha?: string } = {};
+    vi.spyOn(DonorWriter.prototype, 'commit').mockImplementation(async function (this: DonorWriter, input) {
+      if (other.sha === undefined) {
+        const made = await commit.call(this, input);
+        if (made !== 'stale') other.sha = made.sha;
+      }
+      return commit.call(this, input);
+    });
+
+    const result = await submit(priya, claimId, { 'a.txt': 'a\n' });
+
+    expect(other.sha).toBeDefined();
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_review', commit: { sha: other.sha } });
+    expect(repoState('priya/sample-app').branches[branch]).toBe(other.sha);
+    expect(commitAt(other.sha).parents).toEqual([start]);
+    expect(lastCalls().filter((c) => c.operation === 'mutation createCommitOnBranch').map((c) => c.status)).toHaveLength(2);
+  });
+
+  test('a PR a call opened without hearing back is found by its branch, and recorded once', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    await submit(priya, claimId, { 'a.txt': 'a\n' });
+    const branch = branchOf(issue, claimId);
+    // What the earlier call did on GitHub before it died.
+    await asGitHub(agentToken('priya'), 'POST', `/repos/${APP}/pulls`, {
+      title: 'Keep the trailing slash in rewrites',
+      body: 'Opened by a call that died.',
+      head: `priya:${branch}`,
+      base: 'main',
+    });
+    const [earlier] = pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branch);
+    if (!earlier) throw new Error('no PR');
+
+    const opened = await call(priya, 'open_pr', { claimId });
+
+    expect(opened.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, earlier.number) });
+    expect(lastCalls().filter((c) => c.operation === 'POST /repos/{owner}/{repo}/pulls').map((c) => c.status)).toEqual([422]);
+    expect(pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branch)).toHaveLength(1);
+    expect(await getPr(env.DB, claimId)).toMatchObject({ pr: prOf(APP, earlier.number), state: 'open' });
+  });
+
+  test('two open_pr calls at once open one PR, and both answer with it', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    await submit(priya, claimId, { 'a.txt': 'a\n' });
+    const branch = branchOf(issue, claimId);
+    // Each call waits, with its PR from GitHub, until the other has one too,
+    // so both reach the claim's room with the same PR.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the writer as this
+    const openPull = DonorWriter.prototype.openPull;
+    let arrived = 0;
+    let release = () => {};
+    const bothHaveIt = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(DonorWriter.prototype, 'openPull').mockImplementation(async function (this: DonorWriter, repo, input) {
+      const pr = await openPull.call(this, repo, input);
+      arrived += 1;
+      if (arrived === 2) release();
+      await bothHaveIt;
+      return pr;
+    });
+
+    const [one, two] = await Promise.all([call(priya, 'open_pr', { claimId }), call(priya, 'open_pr', { claimId })]);
+
+    const pulls = pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branch);
+    expect(pulls).toHaveLength(1);
+    const pr = prOf(APP, pulls[0]?.number ?? 0);
+    expect(one.structuredContent).toMatchObject({ state: 'pr_opened', pr });
+    expect(two.structuredContent).toMatchObject({ state: 'pr_opened', pr });
+    expect((await issueRoom(env.ISSUE_ROOM, issue).history()).filter((e) => e.kind === 'pr_opened')).toHaveLength(1);
+    expect(await getPr(env.DB, claimId)).toMatchObject({ pr, state: 'open' });
   });
 });
 
