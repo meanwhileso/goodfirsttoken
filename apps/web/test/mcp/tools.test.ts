@@ -59,12 +59,15 @@ test("a tools/list answers with start_session and the maintainer's tools, each w
 });
 
 test("each person gets 120 calls a minute to the MCP server, across all their agents, and the next gets a 429 that leaves other people's agents working", async () => {
-  await inOneLimitWindow();
   // People no other test in this file calls as, since the limit counts
   // across the file's tests.
   const laptop = await tokensFor(github, 'arjun');
   const phone = await tokensFor(github, 'arjun');
   const someoneElse = await tokensFor(github, 'ines');
+  // Arjun's 121 calls must fall in one minute of the wall clock. They took
+  // about 2 seconds on an idle machine and up to 6 on a loaded one, so they
+  // start with at least 20 seconds of the minute left.
+  await inOneLimitWindow(20_000);
   const answers: number[] = [];
   for (let i = 0; i < 60; i++) answers.push((await callMcp(laptop.accessToken)).status);
   for (let i = 0; i < 60; i++) answers.push((await callMcp(phone.accessToken)).status);
@@ -76,7 +79,7 @@ test("each person gets 120 calls a minute to the MCP server, across all their ag
   expect(over.status).toBe(429);
   expect(over.headers.get('retry-after')).toBe('60');
   expect(others.status).toBe(200);
-});
+}, 60_000);
 
 test('when GitHub no longer accepts the grant\'s token, start_session disconnects the agent without revoking anything, and its next call gets a 401', async () => {
   const agent = await connectAgent(github, 'lena');
