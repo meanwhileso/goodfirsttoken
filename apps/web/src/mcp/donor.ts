@@ -25,6 +25,7 @@ import {
   blockedAmong,
   countOpenPrsByProject,
   createSession,
+  doNotListedProjects,
   editSessionQueue,
   getClaim,
   getIssue,
@@ -160,13 +161,22 @@ async function unfinishedClaims(person: number, now: number): Promise<ClaimRecor
     .sort((a, b) => Number(b.state === 'paused') - Number(a.state === 'paused'));
 }
 
-/** Summaries of claims, each titled from its project's cached copy of the issue. */
-async function summaries(claims: readonly ClaimRecord[], origin: string): Promise<ClaimSummary[]> {
-  return Promise.all(
-    claims.map(async (claim) => {
-      const copy = await getIssue(env.DB, claim.project, claim.issue);
-      return summaryOf(claim, copy?.title ?? claim.issue, gitHubIssueUrl(claim.issue), origin);
-    }),
+/** A claim's summary, titled from its project's cached copy of the issue. */
+async function summaryFor(claim: ClaimRecord, origin: string): Promise<ClaimSummary> {
+  const copy = await getIssue(env.DB, claim.project, claim.issue);
+  return summaryOf(claim, copy?.title ?? claim.issue, gitHubIssueUrl(claim.issue), origin);
+}
+
+/**
+ * The projects on the do-not-list among the claims', by the rule in
+ * src/db/waiting.ts. Their maintainers asked Good First Token to stop, so no
+ * more work goes into those claims: none is offered to resume, and resuming
+ * one is refused. The donor can still post to one and release it.
+ */
+async function stoppedProjects(claims: readonly ClaimRecord[]): Promise<Set<string>> {
+  return doNotListedProjects(
+    env.DB,
+    claims.map((claim) => claim.project),
   );
 }
 
@@ -189,10 +199,17 @@ export async function startSession(
       interests: person.interests,
       // Maintainers' requests for changes arrive with the PR follow-ups (#17).
       followUps: [],
-      unfinishedClaims: await summaries(await unfinishedClaims(caller.githubId, now), origin),
+      unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
       mergedPrs: [],
     }),
   );
+}
+
+/** The donor's unfinished claims that can go on, for start_session to offer. */
+async function offeredToResume(person: number, origin: string, now: number): Promise<ClaimSummary[]> {
+  const claims = await unfinishedClaims(person, now);
+  const stopped = await stoppedProjects(claims);
+  return Promise.all(claims.filter((claim) => !stopped.has(lower(claim.project))).map((claim) => summaryFor(claim, origin)));
 }
 
 export async function setInterests(caller: Caller, input: ToolInput<'set_interests'>): Promise<Answer> {
@@ -202,12 +219,25 @@ export async function setInterests(caller: Caller, input: ToolInput<'set_interes
 }
 
 export async function myWork(caller: Caller, origin: string, now: number): Promise<Answer> {
+  // Every unfinished claim is the donor's own record, so each is listed, and
+  // one on a project on the do-not-list says to release it.
+  const claims = await unfinishedClaims(caller.githubId, now);
+  const stopped = await stoppedProjects(claims);
+  const working = await Promise.all(
+    claims.map(async (claim) => {
+      const resumable = !stopped.has(lower(claim.project));
+      const reason = resumable
+        ? null
+        : `${claim.project} is on the do-not-list, since its maintainers asked Good First Token to stop. Release the claim with release_claim.`;
+      return { ...(await summaryFor(claim, origin)), resumable, reason };
+    }),
+  );
   return answer(
     toolResult('my_work', {
       // Follow-ups arrive with #17, and work waiting to open as a PR with #16.
       followUps: [],
       readyToOpen: [],
-      working: await summaries(await unfinishedClaims(caller.githubId, now), origin),
+      working,
     }),
   );
 }
@@ -476,6 +506,14 @@ async function claimOne(context: ClaimContext, issue: string): Promise<Attempt> 
   const holders = snapshot.claims.filter((claim) => holdsSlot(claim, now));
   const own = holders.find((claim) => claim.githubId === donor.githubId);
   if (own) {
+    // The refusal a project not asking for help gets, since no more work
+    // goes into a claim on a project on the do-not-list.
+    if ((await stoppedProjects([own])).size > 0) {
+      return refused(
+        'project_not_open',
+        `${own.project} is on the do-not-list, so your claim on ${issue} can't go on. Release it with release_claim.`,
+      );
+    }
     const project = await getProject(env.DB, own.project);
     if (project === null) return refused('not_found', `${own.project} is no longer a project on Good First Token.`);
     return {

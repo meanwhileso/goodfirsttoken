@@ -11,8 +11,11 @@ import { CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS } from '@goodfirsttoken/core';
 // - the copies of one issue that the issue page and claim_issue judge,
 //   listJudgedCopies in ./issues.ts. Those two follow the slots and the open
 //   PRs live, from the issue's room,
-// - and the labels an issue carries on GitHub now, which suggest_issues and
-//   claim_issue check, judgeLabels in ./issues.ts.
+// - the labels an issue carries on GitHub now, which suggest_issues and
+//   claim_issue check, judgeLabels in ./issues.ts,
+// - and the projects on the do-not-list among a donor's claims, which
+//   start_session, my_work, and claim_issue stop work on,
+//   doNotListedProjects in ./projects.ts.
 //
 // Each piece reads the project as `p`, a projects row, its current settings
 // as `s`, a project_settings row, and a project's cached copy of an issue as
@@ -25,14 +28,16 @@ import { CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS } from '@goodfirsttoken/core';
 // submit, whether or not the room's timer has run yet.
 
 /**
- * True when the project asks for help: it is approved, and neither its repo
- * nor the repo where it keeps its issues is on the do-not-list, by their own
- * entries, as hasPage (src/project/shown.ts) reads the list. For an approved
- * project, doNotListedAmong says the same of its issue repo, as hasPage's
- * comment explains.
+ * True when the project's repo or the repo where it keeps its issues is on
+ * the do-not-list, by their own entries, as hasPage (src/project/shown.ts)
+ * reads the list. For an approved project, doNotListedAmong says the same of
+ * its issue repo, as hasPage's comment explains. Its maintainers asked Good
+ * First Token to stop, so no agent does more work there through it.
  */
-export const ASKING_FOR_HELP = `(p.status = 'approved'
-  AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo)))`;
+export const ON_THE_DO_NOT_LIST = `EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))`;
+
+/** True when the project asks for help: it is approved, and not on the do-not-list. */
+export const ASKING_FOR_HELP = `(p.status = 'approved' AND NOT ${ON_THE_DO_NOT_LIST})`;
 
 /** The first of the copy's labels that is one of the project's excluded tags, or NULL. */
 export const EXCLUDED_LABEL = `(SELECT l.value FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x

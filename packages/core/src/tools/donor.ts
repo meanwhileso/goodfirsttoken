@@ -443,6 +443,22 @@ function renderReviewItem(item: ReviewItem): string {
   );
 }
 
+/** A claim in progress, as my_work lists it, with whether the agent can go on with it. */
+export const workingClaimSchema = claimSummarySchema.extend({
+  /** False when no more work may go into it, as when its project's maintainers asked to be removed. */
+  resumable: z.boolean(),
+  /** Why it can't go on, and what to do instead, or null when it can. */
+  reason: z.string().max(500).nullable(),
+});
+export type WorkingClaim = z.infer<typeof workingClaimSchema>;
+
+function renderWorkingClaim(claim: WorkingClaim): string {
+  return lines(
+    renderClaimSummary(claim),
+    !claim.resumable && `Can't go on: ${claim.reason ?? 'Release it with release_claim.'}`,
+  );
+}
+
 export const myWork = defineTool({
   audience: 'donor',
   description:
@@ -452,7 +468,7 @@ export const myWork = defineTool({
     followUps: z.array(followUpSchema),
     readyToOpen: z.array(reviewItemSchema),
     /** Active and paused claims. */
-    working: z.array(claimSummarySchema),
+    working: z.array(workingClaimSchema),
   }),
   text: (out) =>
     out.followUps.length + out.readyToOpen.length + out.working.length === 0
@@ -463,7 +479,7 @@ export const myWork = defineTool({
           out.readyToOpen.length > 0 &&
             `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
           out.working.length > 0 &&
-            `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderClaimSummary), 2)}`,
+            `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
         ),
 });
 

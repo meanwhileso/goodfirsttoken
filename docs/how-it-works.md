@@ -1379,13 +1379,19 @@ them. `submit_work` and `open_pr` come with #16.
   claims table lists them, and each claim's room gives its state now. The
   agent offers them before new issues, and resumes one by claiming its
   issue again.
+- A claim whose project is on the [do-not-list](#crawl-candidates), working
+  or paused, isn't among them, since no more work goes there.
 - The answer's follow-ups, a maintainer asking for changes on one of the
   donor's PRs, come first when there are any. The list is empty until #17
   fills it. So is the list of PRs merged since the last session.
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions.
-- `my_work` lists the same claims in progress. Its follow-ups, and its work
-  waiting to open as a PR, are empty lists until #17 and #16 fill them.
+- `my_work` lists the same claims in progress, and those on a project on
+  the do-not-list too, since they are the donor's own record. Each is
+  marked `resumable`. One on the do-not-list isn't, and its `reason` says
+  so and tells the agent to release it with `release_claim`. Its
+  follow-ups, and its work waiting to open as a PR, are empty lists until
+  #17 and #16 fill them.
 - A session belongs to the donor who started it. Another donor who names it
   finds no session, and is refused with `not_found`.
 
@@ -1480,6 +1486,10 @@ the donor's tools use the one rule, so they agree.
 - Claiming an issue the donor holds a slot on gives back that claim, marked
   resumed, with the commit it started from. It takes no second slot, and
   nothing from the budget.
+- Resuming a claim whose project is on the do-not-list is refused with
+  `project_not_open`, the refusal a project not asking for help gets, and
+  the answer says to release the claim. A queued pick like that is passed
+  over and reported.
 - Otherwise the checks run in this order, and the first to fail refuses the
   claim: the budget, with `budget_spent`. The project, with
   `project_not_open` for one that isn't approved, is paused, or is on the
@@ -1586,6 +1596,8 @@ since it started.
 - Only the donor who made the claim can post to it or release it. Anyone
   else is refused with `not_claim_owner`, by the `work_claim` permission,
   and the room checks again. A claim the table doesn't have is `not_found`.
+- Both work on a claim whose project is on the do-not-list, so the donor can
+  say they are stopping and let it go.
 
 ## Crawl candidates
 
@@ -1621,6 +1633,13 @@ approving a maintainer's registration of it takes it off, under
   shown.
 - The homepage's lists, the live feeds, and the issue pages leave out what
   it covers.
+- Its maintainers asked Good First Token to stop, so no agent does more
+  work there through it. A project is on the list, for the donor's tools,
+  when its repo or its issue repo has an entry of its own, as for the
+  homepage. None of its issues is suggested or takes a new claim, and a
+  claim on it isn't offered to resume and can't be resumed. The donor can
+  still post to that claim and release it, and `my_work` lists it with a
+  note to release it, under [The donor's tools](#the-donors-tools).
 
 ## MCP tools
 

@@ -19,6 +19,7 @@ import {
   setProjectLanguage,
   setProjectStatus,
 } from '../../src/db';
+import { adminRemoveProject } from '../../src/admin/actions';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -264,6 +265,85 @@ describe('start_session and set_interests', () => {
   });
 });
 
+describe("claims on a repo whose maintainers asked to be removed", () => {
+  /** An admin removes the project at its maintainers' request, which puts its repo on the do-not-list. */
+  async function remove(repo: string) {
+    await savePerson(env.DB, admin, Date.now());
+    const configured = env.ADMIN_GITHUB_IDS;
+    env.ADMIN_GITHUB_IDS = String(admin.githubId);
+    try {
+      const removed = await adminRemoveProject({ ...admin, gitHubToken: () => Promise.resolve(null) }, { repo }, Date.now());
+      if (!removed.ok) throw new Error(removed.refusal.message);
+    } finally {
+      env.ADMIN_GITHUB_IDS = configured;
+    }
+  }
+
+  test('start_session offers none of them to resume, working or paused, and my_work marks each as one to release', async () => {
+    await project(APP);
+    await project(TOOLS);
+    const [working, stale] = [await tagged(APP), await tagged(APP)];
+    const elsewhere = await tagged(TOOLS);
+    // A claim made 31 minutes ago, with no update since, is paused.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() - 31 * MINUTE);
+    const pausedClaim = await claimAs('priya', stale, APP, 'claude-code');
+    vi.useRealTimers();
+    const workingClaim = await claimAs('priya', working, APP, 'claude-code');
+    const otherClaim = await claimAs('priya', elsewhere, TOOLS, 'claude-code');
+    await remove(APP);
+
+    const { agent, started } = await donor('priya');
+    const work = await call(agent, 'my_work');
+
+    const offered = started.structuredContent?.unfinishedClaims as { claimId: string }[];
+    expect(offered.map((c) => c.claimId)).toEqual([otherClaim.id]);
+    const listed = work.structuredContent?.working as { claimId: string; resumable: boolean; reason: string | null }[];
+    expect(new Map(listed.map((c) => [c.claimId, [c.resumable, c.reason === null]]))).toEqual(
+      new Map([
+        [pausedClaim.id, [false, false]],
+        [workingClaim.id, [false, false]],
+        [otherClaim.id, [true, true]],
+      ]),
+    );
+    expect(textOf(work)).toContain(
+      `Can't go on: ${APP} is on the do-not-list, since its maintainers asked Good First Token to stop. Release the claim with release_claim.`,
+    );
+  });
+
+  test('resuming one is refused as for a project not asking for help, whether named or reached in the queue', async () => {
+    await project(APP);
+    await project(TOOLS);
+    const [working, stale] = [await tagged(APP), await tagged(APP)];
+    const next = await tagged(TOOLS);
+    await claimAs('priya', working, APP, 'claude-code');
+    await claimAs('priya', stale, APP, 'claude-code');
+    await remove(APP);
+    const { agent, sessionId } = await donor('priya');
+
+    const named = await call(agent, 'claim_issue', { sessionId, issue: working });
+    const walked = await call(agent, 'claim_issue', { sessionId, queue: [stale, next] });
+
+    expect(refusalOf(named)).toBe('project_not_open');
+    expect(textOf(named)).toContain(`${APP} is on the do-not-list, so your claim on ${working} can't go on. Release it with release_claim.`);
+    expect(walked.structuredContent).toMatchObject({ claim: { issue: next }, skipped: [{ issue: stale, code: 'project_not_open' }] });
+  });
+
+  test('the donor can still post to one and release it', async () => {
+    await project(APP);
+    const issue = await tagged(APP);
+    const claim = await claimAs('priya', issue, APP, 'claude-code');
+    await remove(APP);
+    const { agent } = await donor('priya');
+
+    const posted = await call(agent, 'post_update', { claimId: claim.id, text: 'Stopping here: the project asked to be removed.' });
+    const released = await call(agent, 'release_claim', { claimId: claim.id, reason: 'The project asked to be removed.' });
+
+    expect(posted.isError).toBeFalsy();
+    expect(released.structuredContent).toMatchObject({ claimId: claim.id, state: 'released' });
+  });
+});
+
 describe('claim_issue', () => {
   test("it checks GitHub with the donor's own token, and returns the issue, the project's settings and notes, the repo, and the commit to start from", async () => {
     await project(APP, { tags: ['help wanted'], agentNotes: 'Run the sample tests before you submit.' });
@@ -348,13 +428,18 @@ describe('claim_issue', () => {
     const paused = await tagged(TOOLS);
     const pending = await tagged(BUNDLER);
     const listed = await tagged(HARBOR);
+    // The project comes first: on the do-not-list, its untagged copy is refused for the project.
+    const listedUntagged = await tagged(HARBOR, ['bug']);
     const nowhere = `${DESKTOP}#${String(github.openIssue(DESKTOP, { title: 'Not a project', labels: ['ready'], by: BY }))}`;
     const good = await tagged(APP);
     const { agent, sessionId } = await donor('priya');
 
     const refusals = [];
-    for (const issue of [untagged, excluded, linked, withClaimPr, full, paused, pending, listed, nowhere]) {
-      refusals.push([issue, refusalOf(await call(agent, 'claim_issue', { sessionId, issue }))]);
+    let listedUntaggedText = '';
+    for (const issue of [untagged, excluded, linked, withClaimPr, full, paused, pending, listed, listedUntagged, nowhere]) {
+      const result = await call(agent, 'claim_issue', { sessionId, issue });
+      if (issue === listedUntagged) listedUntaggedText = textOf(result);
+      refusals.push([issue, refusalOf(result)]);
     }
     const suggestions = await call(agent, 'suggest_issues', { sessionId });
 
@@ -367,8 +452,10 @@ describe('claim_issue', () => {
       [paused, 'project_not_open'],
       [pending, 'project_not_open'],
       [listed, 'project_not_open'],
+      [listedUntagged, 'project_not_open'],
       [nowhere, 'not_found'],
     ]);
+    expect(listedUntaggedText).toContain(`${HARBOR} is on the do-not-list, so ${listedUntagged} takes no claims. Pick another issue.`);
     // suggest_issues offers the one issue that takes claims, the one the homepage counts.
     expect(suggested(suggestions)).toEqual([good]);
     expect(await waitingOnHomepage()).toBe(1);

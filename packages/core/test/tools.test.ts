@@ -201,6 +201,16 @@ describe('what each result says', () => {
     );
   });
 
+  test("a claim in progress that can't go on says why and what to do, and one that can says nothing more", () => {
+    const [claim] = samples.my_work.output.working;
+    if (!claim) throw new Error('missing sample claim');
+    const reason = 'sample-owner/sample-app is on the do-not-list. Release the claim with release_claim.';
+    const work = (working: (typeof claim)[]) => textOf(toolResult('my_work', { ...samples.my_work.output, working }));
+
+    expect(work([{ ...claim, resumable: false, reason }])).toContain(`Can't go on: ${reason}`);
+    expect(work([claim])).not.toContain("Can't go on");
+  });
+
   test("a suggestion counts every slot taken, and names only the claimants it lists", () => {
     const [first] = samples.suggest_issues.output.suggestions;
     if (!first) throw new Error('missing sample suggestion');

@@ -28,7 +28,7 @@ import {
 } from '@goodfirsttoken/core';
 import { getDoNotListEntry } from './do-not-list';
 import { checkTime, fromJson, joinIssue } from './shared';
-import { ASKING_FOR_HELP, slotsTaken, takesClaims, waiting } from './waiting';
+import { ASKING_FOR_HELP, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
 
 // The projects, project_settings, and project_status_changes tables. A
 // project's row holds its current status and points at its current
@@ -339,6 +339,21 @@ export async function isAskingForHelp(db: D1Database, repo: string): Promise<boo
     .bind(mustParse(repoName, repo, 'repo'))
     .first<{ yes: number }>();
   return row !== null;
+}
+
+/**
+ * Which of these projects are on the do-not-list, by the rule in
+ * ./waiting.ts, each in lower case. The repos go in as one JSON array, so any
+ * number of them takes one query.
+ */
+export async function doNotListedProjects(db: D1Database, repos: Iterable<string>): Promise<Set<string>> {
+  const names = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
+  if (names.length === 0) return new Set();
+  const { results } = await db
+    .prepare(`SELECT p.repo FROM projects p WHERE p.repo IN (SELECT value FROM json_each(?1)) AND ${ON_THE_DO_NOT_LIST}`)
+    .bind(JSON.stringify(names))
+    .all<{ repo: string }>();
+  return new Set(results.map((row) => row.repo.toLowerCase()));
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */

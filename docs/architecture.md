@@ -1555,6 +1555,10 @@ under The projects list and The project page.
   - `listJudgedCopies` in `src/db/issues.ts` judges the copies of one issue,
     for its page and `claim_issue`, and `judgeLabels` there the labels an
     issue carries on GitHub now, for `suggest_issues` and `claim_issue`.
+  - `doNotListedProjects` in `src/db/projects.ts` says which of a donor's
+    claims are on a project on the do-not-list, with `ON_THE_DO_NOT_LIST`,
+    the part of `ASKING_FOR_HELP` that reads the list, for `start_session`,
+    `my_work`, and resuming with `claim_issue`.
 
   A test checks that the page's issues that take claims are the ones the
   homepage counts waiting and the ones `suggest_issues` starts from.

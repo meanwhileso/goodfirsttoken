@@ -187,7 +187,7 @@ export const samples: Samples = {
           personWrittenDescription: true,
         },
       ],
-      working: [claim],
+      working: [{ ...claim, resumable: true, reason: null }],
     },
     mentions: [
       'asked for changes',
