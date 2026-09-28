@@ -431,6 +431,21 @@ export const submitWork = defineTool({
   audience: 'donor',
   description:
     "Submit the finished work: every file changed from the start commit, each with its full new text or null to delete it, a summary, what you checked, and the agent and model used. Send every changed file each time: a file an earlier submit changed that this one leaves out goes back to the start commit. The server commits it as the donor, on a branch in the repo when the donor can push there, or else in their fork. Then it opens the PR, or puts the work in the donor's review queue. Submitting again adds a commit to the same branch, and to its PR once one is open.",
+  // not_found, not_claim_owner, and the claim's own refusals come from the
+  // claims table, the permission, or the claim's room. A PR that doesn't
+  // open by itself sends the work to the review queue, with no refusal.
+  refusals: [
+    'not_found',
+    'not_claim_owner',
+    'donor_blocked',
+    'project_not_open',
+    'claim_released',
+    'claim_expired',
+    'pr_closed',
+    'no_changes',
+    'fork_not_ready',
+    'github_refused',
+  ],
   input: z.object({
     claimId: id,
     files: z
@@ -593,6 +608,21 @@ export const openPr = defineTool({
   audience: 'donor',
   description:
     "Open the PR for work in the donor's review queue, once the donor has read the diff. When the project asks for a person-written description, ask the donor to write it and pass it word for word. Don't draft it.",
+  // A claim with a PR is refused with pr_already_opened before its PR's
+  // state is read, so open_pr never gives pr_closed.
+  refusals: [
+    'not_found',
+    'not_claim_owner',
+    'donor_blocked',
+    'project_not_open',
+    'claim_released',
+    'claim_expired',
+    'not_submitted',
+    'pr_already_opened',
+    'description_required',
+    'open_pr_cap',
+    'github_refused',
+  ],
   input: z.object({
     claimId: id,
     description: trimmedText(MAX_PR_DESCRIPTION)

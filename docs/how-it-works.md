@@ -1914,9 +1914,10 @@ tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `not_vouched`, `pr_closed`, `description_required`, `no_changes`,
 `fork_not_ready`, and `github_refused`.
 
-Each maintainer's and admin's tool lists the refusals an agent can get from
-it, in its spec in `packages/core`, and answers an agent with no other. The
-skills that use a tool say what to do with each one on its list, under
+Each maintainer's and admin's tool, and the donor's `submit_work` and
+`open_pr`, lists the refusals an agent can get from it, in its spec in
+`packages/core`, and answers an agent with no other. The skills that use a
+tool say what to do with each one on its list, under
 [Skills and plugins](#skills-and-plugins).
 
 | Tool | An agent can be refused with |
@@ -1931,12 +1932,18 @@ skills that use a tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `no_changes`, `fork_not_ready`, `github_refused` |
+| `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
   so any other agent's call gets the MCP SDK's error
   `Tool <name> not found`. The admins' actions still check the permission
   themselves, and the admin pages get `not_admin` from them.
+- No agent gets `pr_closed` from `open_pr`. A claim with a PR is refused
+  with `pr_already_opened` before its PR's state is read. A PR that
+  `submit_work` was to open by itself, and GitHub didn't, sends the work to
+  the review queue with no refusal.
 - No agent gets `invalid_input` from `admin_decide`. Its input schema
   refuses a rejection with no reason first, with an error that starts
   `Input validation error` and names `reason`. The admin pages check the
