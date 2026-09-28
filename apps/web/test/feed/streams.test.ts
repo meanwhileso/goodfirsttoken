@@ -264,8 +264,10 @@ describe('a text stream', () => {
 
   test('closes when its lifetime ends on a quiet feed', async () => {
     // A quiet stream's hour is counted by a timer in the Worker's request.
-    // This one is given a second. A fake timer would fire in the test's
-    // request, where the stream can't be closed.
+    // This one is given a second on the real clock, which ends the stream in
+    // whichever I/O context the request runs. A fake timer fires in the
+    // test's own context, and could close the stream only while the Worker
+    // runs there too, as it does through workerFetch.
     const reader = { githubId: 3301, login: 'sample-reader' };
     await signIn(reader);
     const feed = personFeed(env.FEED, reader.githubId);
