@@ -52,24 +52,3 @@
   display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: var(--r-xl); background: var(--surface);
   box-shadow: var(--shadow-window);
 }
-
-/* The projects asking for help, as rows grouped by hairlines. */
-.home-rows > li { padding: 16px 0; border-top: 1px solid var(--line-soft); }
-.home-rows > li:last-child { border-bottom: 1px solid var(--line-soft); }
-.home-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; color: inherit;
-}
-.home-row:hover { text-decoration: none; }
-.home-row:hover .home-row__title { color: var(--label-ink); }
-.home-row__title { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); overflow-wrap: anywhere; }
-.home-row__meta {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; grid-column: 1; min-width: 0; font-size: 14px;
-  color: var(--text-muted);
-}
-/* A label can be long. It wraps, so the page never scrolls sideways. */
-.home-row__meta .tag { height: auto; min-height: 24px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-.home-row__side { display: flex; align-items: center; gap: 12px; grid-row: 1 / span 2; grid-column: 2; }
-@container page (max-width: 720px) {
-  .home-row { grid-template-columns: minmax(0, 1fr); }
-  .home-row__side { grid-row: auto; grid-column: 1; }
-}

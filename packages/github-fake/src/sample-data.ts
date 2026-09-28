@@ -115,7 +115,8 @@ export const people: SampleAccount[] = [
   // Maintainers: they register projects and tag issues.
   { login: 'octo-maintainer', id: 1008, name: 'Octo Maintainer', created: '10y' },
   { login: 'sample-maintainer', id: 1009, name: 'Sample Maintainer', created: '9y' },
-  // An admin of the site itself. Local development makes this account an
+  // An admin of the site itself, who listed a project from its written AI
+  // policy in the sample work. Local development makes this account an
   // admin (apps/web/src/auth/settings.ts), so the admin pages can be tried.
   { login: 'sample-admin', id: 1010, name: 'Sample Admin', created: '8y' },
 ];
