@@ -124,11 +124,18 @@ test('four files at the size limit, each one long line with no period, are read 
   const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nCLA '.length - start.length - 1)}x`;
   const template = `${half}\nCLA ${link}`;
   expect([full.length, template.length].every((n) => n > 0.99 * MAX_DOC_BYTES && n <= MAX_DOC_BYTES)).toBe(true);
+  // Each text read ends in a number no other text ends in, so nothing that
+  // remembers a text between reads can make a slow pattern look fast.
+  let made = 0;
+  const own = (text: string) => `${text.slice(0, -2)}${String(made++).padStart(2, '0')}`;
   const read = () =>
-    proposeSettings(['help wanted'], docs({ contributing: full, aiPolicy: full, agents: full, prTemplate: template }));
+    proposeSettings(
+      ['help wanted'],
+      docs({ contributing: own(full), aiPolicy: own(full), agents: own(full), prTemplate: `${own(half)}\nCLA ${link}` }),
+    );
 
-  // Read in one pass, all four take about a millisecond. A pattern that tries
-  // every start position again took most of a second for each file, on every
+  // Read in one pass, all four take a few milliseconds. With a pattern that
+  // tries every start position again, they took a second or more on every
   // run. The fastest of five runs is timed, so a pause that a busy machine
   // puts in one run can't fail the test.
   let fastest = Infinity;
