@@ -26,6 +26,7 @@ import {
   setProjectStatus,
 } from '../../src/db';
 import { SAMPLE_PROJECTS } from '../../src/dev/sample-work';
+import { loadIssue } from '../../src/issue/load';
 import { filterProjects } from '../../src/project/list';
 import { loadProject, loadProjectsList, type ProjectPage, type ProjectPageResult } from '../../src/project/load';
 import { issueRoom } from '../../src/rooms/issue-room';
@@ -310,6 +311,44 @@ describe('which projects have a page', () => {
 
     expect((await load()).state).toBe('ready');
     expect(await load('sample-owner/sample-removed')).toEqual({ state: 'not_found' });
+  });
+
+  test("a project on the do-not-list that kept its issues in another project's code repo takes nothing from that project, on the list, its page, or its issues' pages", async () => {
+    const issues = 'sample-owner/sample-app-issues';
+    const removed = 'sample-owner/sample-removed';
+    await registeredProject({ tags: ['help wanted'], issueRepo: issues });
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, removed);
+    await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, t0);
+    await tag(repo, `${issues}#5`);
+    const claimed = await issueRoom(env.ISSUE_ROOM, `${issues}#5`).claim({
+      issue: `${issues}#5`,
+      project: repo,
+      githubId: priya.githubId,
+      login: priya.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!claimed.ok) throw new Error(claimed.refusal.message);
+
+    expect((await load()).state).toBe('ready');
+    expect(await load(removed)).toEqual({ state: 'not_found' });
+    // Its row on the list leads to its page.
+    const list = await (await exports.default.fetch('http://localhost/projects')).text();
+    expect(list).toContain(`href="/${repo}"`);
+    const res = await exports.default.fetch(`http://localhost/${repo}`);
+    await res.body?.cancel();
+    expect(res.status).toBe(200);
+    // Its issue's page shows the cached copy, leads back to the project, and takes claims.
+    const issue = await loadIssue(request, 'sample-owner', 'sample-app-issues', '5');
+    if (issue.state !== 'ready') throw new Error(`The issue page is ${issue.state}.`);
+    expect([issue.title, issue.project, issue.closedBecause, issue.view.lanes.length]).toEqual([
+      `Issue ${issues}#5`,
+      repo,
+      null,
+      1,
+    ]);
   });
 
   test('finds the project whatever the case of its repo in the path, and names it as it was saved', async () => {

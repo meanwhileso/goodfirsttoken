@@ -1367,16 +1367,16 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
-  timeline names every claimant, and one for the do-not-list for each
-  project with a cached copy that is approved or paused by a person, or for
-  the project of the latest claim when none has a copy, as `hasPage` asks
-  `doNotListedAmong`. That one answer decides the breadcrumb, the cached
-  copy, and whether the project takes claims. Then the room's glance, which
-  reads its whole history and asks D1 which donors are blocked and whether
-  the do-not-list covers the issue's repo, two queries at once, and a
-  socket on the room for as long as the page is open. Each lane keeps its
-  newest 20 lines, so the page carries at most that many per claim. Nothing
-  caches any of it yet.
+  timeline names every claimant, and one or two for the do-not-list for
+  each project with a cached copy that is approved or paused by a person,
+  or for the project of the latest claim when none has a copy, as
+  `hasPage` looks up its repo and its issue repo. That one answer decides
+  the breadcrumb, the cached copy, and whether the project takes claims.
+  Then the room's glance, which reads its whole history and asks D1 which
+  donors are blocked and whether the do-not-list covers the issue's repo,
+  two queries at once, and a socket on the room for as long as the page is
+  open. Each lane keeps its newest 20 lines, so the page carries at most
+  that many per claim. Nothing caches any of it yet.
 
 ## The project pages
 
@@ -1391,7 +1391,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
-| `src/project/shown.ts` | `hasPage`, which projects have a page, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
+| `src/project/shown.ts` | `hasPage`, which projects have a page by their status and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
@@ -1414,10 +1414,16 @@ under The projects list and The project page.
   are as many as the homepage counts waiting.
 - **What the page reads.** `loadProject` reads the project, then asks
   `hasPage` in `src/project/shown.ts` whether it has a page, by its status,
-  who set that status, and whether `doNotListedAmong` covers its repo or
-  its issue repo, the rule the rooms and feeds hide events by. A
-  pause with no person in `status_changed_by` is Good First Token's own,
-  as the maintainer's `pause_project` reads it too. Then, at the same time, its
+  who set that status, and whether its repo or its issue repo has an entry
+  of its own on the do-not-list, as the homepage's query checks. For a
+  project that could have a page, that agrees with `doNotListedAmong`, the
+  rule the rooms and feeds hide events by, on its issue repo, since the
+  project keeps its issues there and is off the list. `doNotListedAmong`
+  reads every repo as an issue repo, so `hasPage` doesn't ask it about the
+  code repo, where a project on the list that kept its issues there would
+  take the page away. A pause with no person in `status_changed_by` is
+  Good First Token's own, as the maintainer's `pause_project` reads it
+  too. Then, at the same time, its
   tagged issues with `listProjectIssues`, the claims working now with
   `countWorkingClaims`, the merged PRs with `listMergedPrs`, the top
   helpers with `topHelpers`, the save of its current settings with
@@ -1451,10 +1457,11 @@ under The projects list and The project page.
   [Registering a project](how-it-works.md#registering-a-project).
 - **What a view costs.** The list is one D1 query, the homepage's, which
   counts the waiting issues of every approved project. A project's page
-  reads the project, and the do-not-list once. Then it makes six
-  reads at once. Its tagged issues are one query, through the table's key,
-  with each issue's claims through `claims_by_issue`. The claims working
-  now, the merged PRs, and the top helpers are one query each, through
+  reads the project, and the do-not-list once or twice, by key. Then it
+  makes six reads at once. Its tagged issues are one query, through the
+  table's key, with each issue's claims through `claims_by_issue`. The
+  claims working now, the merged PRs, and the top helpers are one query
+  each, through
   `claims_by_project`, with each PR, person, block, and do-not-list entry
   by key. The save of its settings is one read by key. The `glance` at the
   project's feed asks D1 which of the donors in the events it reads are

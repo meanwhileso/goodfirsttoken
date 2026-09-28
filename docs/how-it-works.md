@@ -1833,6 +1833,9 @@ and its top helpers. What it shows is in
   admin paused. A pending or rejected project, a repo that isn't a
   project, and a project whose repo or issue repo is on the do-not-list are
   `404`, and the page says the repo isn't listed.
+- Only those two repos' own entries count. A project on the do-not-list
+  takes no page from another project, even when it kept its issues in that
+  project's repo or in the same issue repo.
 - So is a project Good First Token paused on its own, with no person. The
   sync does that when GitHub shows its repo or issue repo private,
   archived, blocked, or gone, under Delisting in
