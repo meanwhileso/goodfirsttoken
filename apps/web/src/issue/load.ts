@@ -1,7 +1,7 @@
 import type { ClaimRecord, ProjectRecord, TaggedIssue } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { getDoNotListEntry, getPerson, getProject } from '../db';
+import { getPerson, getProject } from '../db';
 import { siteAddress } from '../home/load';
 import { hasPage } from '../project/shown';
 import { issueRoom } from '../rooms/issue-room';
@@ -72,22 +72,22 @@ const fold = (label: string) => label.replace(/[A-Z]+/g, (letters) => letters.to
 /**
  * Why the issue takes no claims, by the rule the homepage uses for an issue
  * waiting for an agent (src/db/waiting.ts), less the open PRs and the free
- * slot, which the page follows live. Null when it takes them.
+ * slot, which the page follows live. Null when it takes them. The project
+ * comes first: one that isn't approved, or has no page because the
+ * do-not-list covers it (src/project/shown.ts), takes none, whatever its
+ * cached copy says.
  */
-async function closedBecause(
+function closedBecause(
   project: ProjectRecord | null,
-  tagged: { project: ProjectRecord; copy: TaggedIssue } | undefined,
-  issueRepo: string,
-): Promise<IssuePage['closedBecause']> {
-  if (project?.status !== 'approved') return 'project';
-  if (!tagged) return 'issue';
-  const labels = new Set(tagged.copy.labels.map(fold));
-  const { tags, excludedTags } = tagged.project.settings;
+  withPage: boolean,
+  copy: TaggedIssue | undefined,
+): IssuePage['closedBecause'] {
+  if (project?.status !== 'approved' || !withPage) return 'project';
+  if (!copy) return 'issue';
+  const labels = new Set(copy.labels.map(fold));
+  const { tags, excludedTags } = project.settings;
   if (!tags.some((tag) => labels.has(fold(tag))) || excludedTags.some((tag) => labels.has(fold(tag)))) return 'issue';
-  const listed = await Promise.all(
-    [project.repo, issueRepo].map((repo) => getDoNotListEntry(env.DB, repo)),
-  );
-  return listed.some((entry) => entry !== null) ? 'project' : null;
+  return null;
 }
 
 /** Everything the issue page shows when it loads. */
@@ -121,9 +121,11 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   // the homepage does. The page follows the oldest whose copy waits for an
   // agent, with a free slot under its claims per issue, then the oldest that
   // would but for a PR the sync saw or a full cap, then the oldest.
-  const issueRepo = splitIssue(asked).repo;
   const judged = await Promise.all(
-    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(copy.project, copy, issueRepo) })),
+    copies.map(async (copy) => {
+      const withPage = await hasPage(env.DB, copy.project);
+      return { ...copy, withPage, closed: closedBecause(copy.project, withPage, copy.copy) };
+    }),
   );
   const taken = slotsTaken(view);
   const tagged =
@@ -139,7 +141,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
   // PR, shows only while that project has a page (src/project/shown.ts). So
   // once the sync delists it, or it goes on the do-not-list, the page shows
   // the room alone.
-  const withPage = project !== null && (await hasPage(env.DB, project));
+  const withPage = project !== null && (tagged ? tagged.withPage : await hasPage(env.DB, project));
   const cached = withPage ? tagged?.copy : undefined;
 
   // Each lane, and the timeline, names its claimant by their login now,
@@ -176,7 +178,7 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
     site: siteAddress(request),
     origin: siteOrigin(request),
     slots: project?.settings.claimsPerIssue ?? null,
-    closedBecause: tagged ? tagged.closed : await closedBecause(project, undefined, issueRepo),
+    closedBecause: tagged ? tagged.closed : closedBecause(project, withPage, undefined),
     view,
   };
 }

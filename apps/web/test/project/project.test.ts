@@ -302,6 +302,16 @@ describe('which projects have a page', () => {
     expect(await load('sample-owner/sample-other')).toEqual({ state: 'not_found' });
   });
 
+  test("a project on the do-not-list that keeps its issues in another project's issue repo takes no page away from that project", async () => {
+    const issues = 'sample-owner/sample-issues';
+    await registeredProject({ tags: ['help wanted'], issueRepo: issues });
+    await registeredProject({ tags: ['help wanted'], issueRepo: issues }, 'sample-owner/sample-removed');
+    await addToDoNotList(db, { repo: 'sample-owner/sample-removed', reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await load()).state).toBe('ready');
+    expect(await load('sample-owner/sample-removed')).toEqual({ state: 'not_found' });
+  });
+
   test('finds the project whatever the case of its repo in the path, and names it as it was saved', async () => {
     await registeredProject();
 

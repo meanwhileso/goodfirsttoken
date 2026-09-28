@@ -1289,9 +1289,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   waiting for an agent, which `listProjectsAskingForHelp` applies with the
   SQL in `src/db/waiting.ts`. `closedBecause` in
   `src/issue/load.ts` judges each copy with its own project, less the open
-  PRs and the free slot, which the page follows live: an approved project,
-  not on the do-not-list, and a cached copy with one of its tags and none of
-  its excluded ones, folding ASCII letters as SQLite's `lower()` does. `read`
+  PRs and the free slot, which the page follows live: an approved project
+  with a page, so off the do-not-list by `hasPage`, and then a cached copy
+  with one of its tags and none of its excluded ones, folding ASCII letters
+  as SQLite's `lower()` does. The project comes first, so the page says the
+  project isn't taking claims whatever the copy's labels are. `read`
   then picks the copy the page follows, as how-it-works says, checking the
   slots taken against each copy's own claims per issue. That copy's linked
   PR joins the room's open PRs.
@@ -1365,12 +1367,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
-  timeline names every claimant, and two for the do-not-list when the issue
-  could take claims, and one or two more for the breadcrumb, when the
-  project the page follows is approved or a person paused it, since
-  `hasPage` checks the do-not-list again. Then the room's glance, which
-  reads its whole history and D1 once for its block check, and a socket on
-  the room for as long as the page is open. Each lane keeps its
+  timeline names every claimant, and one for the do-not-list for each
+  project with a cached copy that is approved or paused by a person, or for
+  the project of the latest claim when none has a copy, as `hasPage` asks
+  `doNotListedAmong`. That one answer decides the breadcrumb, the cached
+  copy, and whether the project takes claims. Then the room's glance, which
+  reads its whole history and asks D1 which donors are blocked and whether
+  the do-not-list covers the issue's repo, two queries at once, and a
+  socket on the room for as long as the page is open. Each lane keeps its
   newest 20 lines, so the page carries at most that many per claim. Nothing
   caches any of it yet.
 
@@ -1387,7 +1391,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
-| `src/project/shown.ts` | `hasPage`, which projects have a page, for a project's page and the breadcrumb on its issues' pages |
+| `src/project/shown.ts` | `hasPage`, which projects have a page, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
@@ -1410,7 +1414,8 @@ under The projects list and The project page.
   are as many as the homepage counts waiting.
 - **What the page reads.** `loadProject` reads the project, then asks
   `hasPage` in `src/project/shown.ts` whether it has a page, by its status,
-  who set that status, and the do-not-list for its repo and issue repo. A
+  who set that status, and whether `doNotListedAmong` covers its repo or
+  its issue repo, the rule the rooms and feeds hide events by. A
   pause with no person in `status_changed_by` is Good First Token's own,
   as the maintainer's `pause_project` reads it too. Then, at the same time, its
   tagged issues with `listProjectIssues`, the claims working now with
@@ -1446,18 +1451,19 @@ under The projects list and The project page.
   [Registering a project](how-it-works.md#registering-a-project).
 - **What a view costs.** The list is one D1 query, the homepage's, which
   counts the waiting issues of every approved project. A project's page
-  reads the project, and the do-not-list once or twice. Then it makes six
+  reads the project, and the do-not-list once. Then it makes six
   reads at once. Its tagged issues are one query, through the table's key,
   with each issue's claims through `claims_by_issue`. The claims working
   now, the merged PRs, and the top helpers are one query each, through
   `claims_by_project`, with each PR, person, block, and do-not-list entry
   by key. The save of its settings is one read by key. The `glance` at the
   project's feed asks D1 which of the donors in the events it reads are
-  blocked, and reads again for as long as a round names donors it hasn't
-  asked about, so once when none is blocked, and never when the feed has
-  no events. Then it reads `people` once or twice. So a view costs about
-  ten D1 queries, one call to a feed, and a socket on the feed for as long
-  as the page is open.
+  blocked and which of their repos the do-not-list covers, two queries at
+  once, and reads again for as long as a round names donors or repos it
+  hasn't asked about, so once when nothing is hidden, and never when the
+  feed has no events. Then it reads `people` once or twice. So a view
+  costs about eleven D1 queries, one call to a feed, and a socket on the
+  feed for as long as the page is open.
   The three queries through `claims_by_project` read every claim the
   project ever had, since the index keys claims by project and claim time,
   and none of them is limited in time. The working claims are filtered by

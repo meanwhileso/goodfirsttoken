@@ -2029,8 +2029,9 @@ each a ring, filled while a claim takes it.
   the cache, so the page shows those when it loads.
 - Otherwise the rings turn gray too, and the pane says why: the project
   isn't taking claims, or the issue isn't among the project's open tagged
-  issues. The cache can't tell an issue closed on GitHub from one
-  untagged, so both show that way.
+  issues. The project comes first: when it isn't taking claims, the pane
+  says so whatever the issue's labels are. The cache can't tell an issue
+  closed on GitHub from one untagged, so both show that way.
 - A PR links to GitHub by its repo and number, whatever link was stored
   with it.
 - The page also says how many times the issue was claimed.

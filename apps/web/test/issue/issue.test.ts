@@ -1105,6 +1105,20 @@ describe('an issue of a project with no page', () => {
     expect(html).toContain('claimed the issue');
   });
 
+  test("says the project isn't taking claims when it is on the do-not-list, whatever its cached labels say", async () => {
+    await changeSettings(db, repo, { excludedTags: ['good first issue'] }, maintainer.githubId, t0);
+    await tag({ labels: ['help wanted', 'good first issue'] });
+    await claim(priya);
+    expect((await load()).closedBecause).toBe('issue');
+
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0);
+
+    expect((await load()).closedBecause).toBe('project');
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+    expect(html).toContain('The project isn&#x27;t taking claims right now.');
+    expect(html).not.toContain('among the project&#x27;s open tagged issues');
+  });
+
   test("on the do-not-list shows no cached title, labels, or linked PR, and keeps the room's PRs and slots", async () => {
     await tag({ labels: ['help wanted', 'bug'], linkedPr: prRef(70) });
     const p = await claim(priya);
