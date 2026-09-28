@@ -1728,7 +1728,9 @@ the next crawl. It reads:
   takes the first it finds, and the crawler reads them all,
 - `CLAUDE.md` in the root, found without case,
 - the pull request templates in a `PULL_REQUEST_TEMPLATE` folder in the
-  root, `docs/`, or `.github/`, ending `.md`, `.markdown`, or `.txt`,
+  root, `docs/`, or `.github/`, ending `.md`, `.markdown`, or `.txt`. In
+  `.github/` it reads each such folder, and each issue template folder,
+  whatever the case of its name,
 - each agent skill, a `SKILL.md` in a folder under `.claude/skills/` or
   `skills/`,
 - the issue templates in `.github/ISSUE_TEMPLATE/` ending `.md`,

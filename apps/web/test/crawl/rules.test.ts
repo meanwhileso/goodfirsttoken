@@ -170,6 +170,9 @@ describe('a statement that pull requests are not taken refuses outside pull requ
     'This project is closed to outside contributions.',
     'We accept issues. We no longer accept pull requests.',
     "Don't open pull requests without tests, and don't open pull requests at all.",
+    'This project does <strong>not</strong> accept pull requests.',
+    'This project does **not** accept pull requests.',
+    'We do _not_ take pull requests.',
   ])('%j', (text) => {
     expect(readPolicy([invites, file('contributing', text)]).tier).toBe('bans_or_restricts');
   });
@@ -227,6 +230,7 @@ describe('the forms known to say no to something else, each one tested both ways
     for (const sentence of [
       'Autonomous agents and AI-generated PRs are not accepted.',
       'Agents may not work on their own, and their pull requests are rejected.',
+      'Autonomous agents may not open pull requests, and Copilot may not be used at all.',
     ]) {
       expect(readPolicy([contributing(`Agent pull requests are welcome. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
     }
@@ -272,6 +276,9 @@ describe('the forms known to say no to something else, each one tested both ways
     }
     const more = "Don't submit AI-assisted code without disclosing it, and don't submit large AI-generated changes at all.";
     expect(readPolicy([contributing(`AI help is fine. ${more}`)]).tier).toBe('bans_or_restricts');
+    // The second "never" is inside the words the form spans.
+    const inside = 'Never use AI, and never submit anything without disclosing it.';
+    expect(readPolicy([contributing(`AI help is fine. ${inside}`)]).tier).toBe('bans_or_restricts');
   });
 });
 
@@ -397,6 +404,7 @@ describe('welcomes', () => {
     'You may use AI to help with your change.',
     'We welcome AI-assisted pull requests.',
     'Feel free to use Claude Code, Codex, or Copilot.',
+    'Feel free to use Gemini.',
   ])('%j allows AI help with conditions', (sentence) => {
     const reading = readPolicy([contributing(sentence)]);
 

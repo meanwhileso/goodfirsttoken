@@ -211,15 +211,16 @@ function pathsOf(listed: ListedRepo): Pick<FoundRepo, 'paths' | 'unreadable' | '
     }
     templateFolders.push({ folder: inFolder(folder, 'PULL_REQUEST_TEMPLATE'), entries: entriesOf(alias) });
   }
-  // In .github/, the template folders by any case, from its nested listing.
-  const githubFolders = new Map<string, Entry>();
+  // In .github/, every template folder whatever the case of its name, from its nested listing.
+  const githubFolders: Entry[] = [];
   for (const entry of dotGithub) {
     if (!TEMPLATE_FOLDER.test(entry.name) || (entry.type === 'blob' && entry.mode !== SYMLINK)) continue;
     if (entry.type !== 'tree') problems.push(`.github/${entry.name} is a symbolic link`);
-    else githubFolders.set(entry.name.toLowerCase(), entry);
+    else githubFolders.push(entry);
   }
-  const prFolder = githubFolders.get('pull_request_template');
-  if (prFolder) templateFolders.push({ folder: `.github/${prFolder.name}`, entries: prFolder.object?.entries ?? [] });
+  for (const folder of githubFolders.filter((f) => PR_TEMPLATE_FOLDER.test(f.name))) {
+    templateFolders.push({ folder: `.github/${folder.name}`, entries: folder.object?.entries ?? [] });
+  }
   for (const { folder, entries } of templateFolders) {
     const templates = files(entries, PR_TEMPLATE);
     if (templates.length > MAX_EXTRA_FILES) problems.push(`${folder} has more than ${String(MAX_EXTRA_FILES)} templates`);
@@ -240,10 +241,11 @@ function pathsOf(listed: ListedRepo): Pick<FoundRepo, 'paths' | 'unreadable' | '
   }
 
   // Issue templates.
-  const issueFolder = githubFolders.get('issue_template');
-  const templates = files(issueFolder?.object?.entries ?? [], ISSUE_TEMPLATE).filter((e) => !/^config\./i.test(e.name));
-  if (templates.length > MAX_EXTRA_FILES) problems.push(`.github/${issueFolder?.name ?? ''} has more than ${String(MAX_EXTRA_FILES)} templates`);
-  for (const entry of templates) take(`.github/${issueFolder?.name ?? ''}`, entry, 'issueTemplate');
+  for (const folder of githubFolders.filter((f) => !PR_TEMPLATE_FOLDER.test(f.name))) {
+    const templates = files(folder.object?.entries ?? [], ISSUE_TEMPLATE).filter((e) => !/^config\./i.test(e.name));
+    if (templates.length > MAX_EXTRA_FILES) problems.push(`.github/${folder.name} has more than ${String(MAX_EXTRA_FILES)} templates`);
+    for (const entry of templates) take(`.github/${folder.name}`, entry, 'issueTemplate');
+  }
 
   const vouchIn = (folder: string, entries: readonly Entry[]) => {
     const found = entries.find((e) => e.type === 'blob' && VOUCH_FILE.test(e.name));

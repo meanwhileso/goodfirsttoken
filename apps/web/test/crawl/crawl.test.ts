@@ -685,6 +685,23 @@ describe('what the crawler reads, and when it gives no verdict', () => {
     expect(logged).toContain(`The crawler gave ${CONDITIONS} no verdict: .github/ISSUE_TEMPLATE has more than 10 templates.`);
   });
 
+  test('every pull request template folder in .github/ is read, whatever the case of its name', async () => {
+    github.commitFiles(
+      SILENT,
+      {
+        'CONTRIBUTING.md': '# Contributing\n\nAgent pull requests are welcome.\n',
+        '.github/PULL_REQUEST_TEMPLATE/feature.md': '- [ ] I understand AI-generated code will be closed.\n',
+        '.github/pull_request_template/fix.md': 'Say what you fixed.\n',
+      },
+      'sample-maintainer',
+    );
+
+    const { run } = await consume([{ repos: [SILENT] }]);
+
+    expect(await waitingTiers()).toEqual({});
+    expect(run?.tiers).toEqual({ bans_or_restricts: 1 });
+  });
+
   test.each([
     ['a second CONTRIBUTING.md, in docs/', 'docs/CONTRIBUTING.md', 'We do not accept AI-generated pull requests.'],
     ['a pull request template in .github/PULL_REQUEST_TEMPLATE/', '.github/PULL_REQUEST_TEMPLATE/feature.md', '- [ ] I understand AI-generated code will be closed.'],
@@ -772,10 +789,14 @@ describe('what the crawler reads, and when it gives no verdict', () => {
 
 describe('when GitHub fails on a repo', () => {
   test('one repo GitHub answers with a lasting error goes back alone, and the rest of its batch is read', async () => {
+    // GitHub answers the listing of sample-policies/silent with an error
+    // every time, whatever its place in the query.
     changeGraphQL((sent, answer) => {
       if (!listing(sent) || !answer.data) return;
-      answer.data.r1 = null;
-      answer.errors = [{ type: 'FORBIDDEN', path: ['r1'], message: 'Repository access blocked' }];
+      const n = Object.entries(sent.variables).find(([key, value]) => key.startsWith('n') && value === 'silent')?.[0].slice(1);
+      if (n === undefined) return;
+      answer.data[`r${n}`] = null;
+      answer.errors = [{ type: 'FORBIDDEN', path: [`r${n}`], message: 'Repository access blocked' }];
     });
 
     const first = await consume([{ repos: [INVITES, SILENT] }]);

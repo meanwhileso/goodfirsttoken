@@ -239,7 +239,7 @@ const ABOUT_CONTRIBUTING =
 // ---------------------------------------------------------------------------
 // Welcomes.
 
-const WELCOMES_ANY = /\b(?:AI|LLMs?|agents?|agent|ai)\b|\b(?:Claude|Codex|Copilot|ChatGPT|Cursor)\b/i;
+const WELCOMES_ANY = /\b(?:AI|LLMs?|agents?|agent|ai)\b|\b(?:Claude|Codex|Copilot|ChatGPT|Cursor|Gemini)\b/i;
 const INVITES = [
   /\b(?:(?:AI|coding|autonomous|LLM)[- ])?agents\s+(?:may|can|are (?:welcome|invited|encouraged|free|allowed) to)\s+(?:open|submit|send|make|create|file|contribute|work)\b/i,
   /\ban? (?:(?:AI|coding|autonomous)[- ])?agent\s+(?:may|can|is (?:welcome|invited|encouraged|free|allowed) to)\s+(?:open|submit|send|make|create|file|contribute|work)\b/i,
