@@ -84,7 +84,7 @@ function refreshText(outcome: RefreshOutcome): string {
 export const registerProject = defineTool({
   audience: 'maintainer',
   description:
-    "Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it. Registering a repo listed from its AI policy replaces the listing's settings with yours, and keeps its status, except that a rejected listing waits for an admin again. Set issueRepo only to a repo you also maintain. Pick the goodfirsttoken tag and the label is created in the issue repo with your GitHub account.",
+    "Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it. A rejected registration can be registered again, with new settings, and waits for an admin again. Registering a repo listed from its AI policy replaces the listing's settings with yours, and keeps its status, except that a rejected listing waits for an admin again. Set issueRepo only to a repo you also maintain. Pick the goodfirsttoken tag and the label is created in the issue repo with your GitHub account.",
   input: z.object({
     repo: repoName,
     settings: projectSettingsSchema
@@ -96,9 +96,9 @@ export const registerProject = defineTool({
     /** False for a proposal. Nothing is saved until the settings come back. */
     saved: z.boolean(),
     /**
-     * The status once saved: `pending` for a new registration, or the status a
-     * listing made from a policy keeps when its maintainer takes it over. Null
-     * for a proposal.
+     * The status once saved: `pending` for a new registration or one
+     * registered again, or the status a listing made from a policy keeps when
+     * its maintainer takes it over. Null for a proposal.
      */
     status: projectStatusSchema.nullable(),
     settings: projectSettingsSchema,

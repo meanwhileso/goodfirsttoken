@@ -42,20 +42,23 @@ export function repoFacts(found: ManagedRepo): RepoFacts {
  * repo GitHub says nothing about on either is refused. A repo is never let in
  * on a guess.
  */
-export function whyNotEligible(facts: RepoFacts): string | null {
+export function whyNotEligible(facts: RepoFacts, action: 'register' | 'list' = 'register'): string | null {
   const name = facts.fullName;
-  const fromAnyone = 'Only a repo that takes pull requests from anyone can be registered.';
+  const done = action === 'register' ? 'registered' : 'listed';
+  const fromAnyone = `Only a repo that takes pull requests from anyone can be ${done}.`;
   if (facts.private || (facts.visibility !== null && facts.visibility !== 'public')) {
-    return `${name} is not public. Only public repos can be registered.`;
+    return `${name} is not public. Only public repos can be ${done}.`;
   }
-  if (facts.archived) return `${name} is archived on GitHub. Only a repo that takes changes can be registered.`;
+  if (facts.archived) return `${name} is archived on GitHub. Only a repo that takes changes can be ${done}.`;
   if (facts.hasPullRequests === null) return `GitHub didn't say whether ${name} takes pull requests. ${fromAnyone}`;
-  if (!facts.hasPullRequests) return `${name} has pull requests turned off on GitHub. Turn them on to register it.`;
+  // A maintainer can change the repo's settings on GitHub. An admin can't.
+  const fix = (what: string) => (action === 'register' ? `${what} on GitHub to register it.` : fromAnyone);
+  if (!facts.hasPullRequests) return `${name} has pull requests turned off on GitHub. ${fix('Turn them on')}`;
   if (facts.pullRequestCreationPolicy === null) {
     return `GitHub didn't say who can open pull requests on ${name}. ${fromAnyone}`;
   }
   if (facts.pullRequestCreationPolicy !== 'all') {
-    return `${name} lets only collaborators open pull requests. Let anyone open them on GitHub to register it.`;
+    return `${name} lets only collaborators open pull requests. ${fix('Let anyone open them')}`;
   }
   return null;
 }
@@ -74,6 +77,59 @@ export function whyNotIssueRepo(facts: RepoFacts): string | null {
     return `The issue repo ${name} is archived on GitHub. Keep this project's issues in a repo that takes changes.`;
   }
   return null;
+}
+
+/** A repo as GitHub describes it, with what an admin weighs. */
+// https://docs.github.com/en/rest/repos/repos#get-a-repository
+export interface ListedRepo extends ManagedRepo {
+  stargazers_count: number;
+  created_at: string;
+  /** GitHub's docs allow null. */
+  pushed_at: string | null;
+  owner: { login: string };
+}
+
+/** What GitHub says about a repo, for an admin to weigh, with times in milliseconds. */
+export interface Standing {
+  stars: number;
+  createdAt: number;
+  pushedAt: number;
+  ownerCreatedAt: number;
+}
+
+/**
+ * Reads a public repo with the token given, or null when GitHub shows none
+ * by that name, as it answers for a private repo to a token with only
+ * `public_repo`. Other refusals go on up.
+ */
+export async function readRepo(token: string, repo: string): Promise<ListedRepo | null> {
+  try {
+    return await gitHubRest<ListedRepo>(token, 'GET', `/repos/${repo}`);
+  } catch (error) {
+    if (error instanceof GitHubError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * The repo's stars, when it was made, its last push, and when its owner's
+ * account was made, from two reads with the token given: the repo, and its
+ * owner. Null when GitHub shows no public repo by that name. Every other
+ * failure goes on up, even a 404 for the owner the repo named, so a read
+ * that failed never passes for a repo that isn't public.
+ */
+// https://docs.github.com/en/rest/users/users#get-a-user
+export async function readStanding(token: string, repo: string): Promise<{ repo: ListedRepo; standing: Standing } | null> {
+  const found = await readRepo(token, repo);
+  if (found === null) return null;
+  const owner = await gitHubRest<{ created_at: string }>(token, 'GET', `/users/${encodeURIComponent(found.owner.login)}`);
+  const createdAt = Date.parse(found.created_at);
+  const pushedAt = found.pushed_at === null ? createdAt : Date.parse(found.pushed_at);
+  const standing = { stars: found.stargazers_count, createdAt, pushedAt, ownerCreatedAt: Date.parse(owner.created_at) };
+  if (!Object.values(standing).every(Number.isFinite)) {
+    throw new Error(`GitHub described ${found.full_name} in a shape it doesn't document.`);
+  }
+  return { repo: found, standing };
 }
 
 const LABEL_PAGE = 100;

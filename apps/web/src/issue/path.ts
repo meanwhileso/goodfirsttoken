@@ -3,10 +3,11 @@ import { issueRef, validate } from '@goodfirsttoken/core';
 // Which issue a page's path names, for the server and the page alike.
 
 /**
- * Owners whose paths belong to the site: sign-in and the MCP server. The
- * Worker answers them before any page, and the page answers 404 for them too.
+ * Owners whose paths belong to the site: sign-in, the MCP server, and the
+ * admin pages. The Worker answers the first three before any page, and the
+ * page answers 404 for all of them.
  */
-const RESERVED_OWNERS = new Set(['auth', 'mcp', 'oauth']);
+const RESERVED_OWNERS = new Set(['admin', 'auth', 'mcp', 'oauth']);
 
 /**
  * The issue a page's path names, like `owner/name#12`, or null when it names

@@ -15,7 +15,6 @@ import {
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller, type ManagedRepo } from '../auth/permissions';
-import { adminGithubIds } from '../auth/settings';
 import {
   changeSettings,
   countProjectPrs,
@@ -24,6 +23,7 @@ import {
   getIssueSync,
   getProject,
   listIssues,
+  reopenRegistration,
   setProjectStatusFrom,
   statusHistory,
   takeOverListing,
@@ -39,6 +39,7 @@ import {
   whyNotEligible,
   whyNotIssueRepo,
 } from '../projects/repo';
+import { resumableBy, statusBeforePause } from '../projects/status';
 import { refreshIssues } from '../sync/scheduled';
 
 // The maintainer's tools: register_project, update_project, project_status,
@@ -132,6 +133,14 @@ function registered(project: ProjectRecord, createdLabels: string[]): Answer {
   );
 }
 
+/**
+ * Whether the repo is registered already: waiting for an admin, approved, or
+ * paused. A rejected registration can be registered again.
+ */
+function registeredAlready(project: ProjectRecord): boolean {
+  return project.source === 'registered' && project.status !== 'rejected';
+}
+
 function alreadyRegistered(project: ProjectRecord): Answer {
   return refuse(
     'already_registered',
@@ -154,7 +163,7 @@ export async function registerProject(
   const repo = facts.fullName;
 
   const existing = await getProject(env.DB, repo);
-  if (existing?.source === 'registered') return alreadyRegistered(existing);
+  if (existing !== null && registeredAlready(existing)) return alreadyRegistered(existing);
 
   if (input.settings === undefined) {
     const [labels, docs] = await Promise.all([readLabels(token, repo), readDocs(token, repo)]);
@@ -172,13 +181,16 @@ export async function registerProject(
 
   for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
     const current = attempt === 0 ? existing : await getProject(env.DB, repo);
-    if (current?.source === 'registered') return alreadyRegistered(current);
+    if (current !== null && registeredAlready(current)) return alreadyRegistered(current);
     if (current === null) {
       const project = await createProject(
         env.DB,
         { repo, status: 'pending', source: 'registered', policy: null, settings, addedBy: caller.githubId },
         now,
       );
+      if (project !== null) return registered(project, created);
+    } else if (current.source === 'registered') {
+      const project = await reopenRegistration(env.DB, current.repo, settings, caller.githubId, now);
       if (project !== null) return registered(project, created);
     } else {
       const takeover = await takeOverListing(env.DB, current.repo, settings, caller.githubId, now);
@@ -277,13 +289,6 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
   );
 }
 
-/** Who can lift the project's pause, or null when it isn't paused. */
-function resumableBy(project: ProjectRecord): 'maintainers' | 'admins' | null {
-  if (project.status !== 'paused') return null;
-  const by = project.statusChangedBy;
-  return by === null || adminGithubIds().has(by) ? 'admins' : 'maintainers';
-}
-
 function pauseAnswer(project: ProjectRecord, changed: boolean): Answer {
   return answer(
     toolResult('pause_project', { repo: project.repo, status: project.status, changed, resumableBy: resumableBy(project) }),
@@ -335,9 +340,7 @@ export async function pauseProject(caller: Caller, input: ToolInput<'pause_proje
       // that repo too. A pause only stops work, so it needs the code repo alone.
       const place = await checkIssueRepo(caller, project.repo, project.settings.issueRepo);
       if (!place.ok) return place.answer;
-      // The status before this pause, from the history, newest first.
-      const before = (await statusHistory(env.DB, project.repo)).find((c) => c.status !== 'paused');
-      change = { status: before?.status ?? 'pending', reason: before?.reason ?? null };
+      change = statusBeforePause(await statusHistory(env.DB, project.repo));
     }
     const updated = await setProjectStatusFrom(env.DB, project, { ...change, changedBy: caller.githubId }, now);
     if (updated !== null) return pauseAnswer(updated, true);

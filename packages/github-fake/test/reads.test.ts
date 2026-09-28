@@ -36,6 +36,29 @@ test('lists come in pages with a Link header, as on GitHub', async () => {
   expect(numbers(second.body)).toEqual([949, 925, 921]);
 });
 
+// The admin queue reads these: a repo's stars, when it was made and last
+// pushed, and when its owner's account was made, an organization's included.
+test("a repo gives its stars and its times, and its owner, a person or an organization, gives when the account was made", async () => {
+  const token = fake.tokenFor('priya');
+  const repo = await rest<{ stargazers_count: number; created_at: string; pushed_at: string; owner: { login: string } }>(
+    fake,
+    'GET',
+    '/repos/sample-owner/sample-harbor',
+    { token },
+  );
+  const org = await rest<{ type: string; created_at: string }>(fake, 'GET', `/users/${repo.body.owner.login}`, { token });
+  const person = await rest<{ type: string; created_at: string }>(fake, 'GET', '/users/octo-maintainer', { token });
+  const year = 365 * 86_400_000;
+
+  expect(repo.body.stargazers_count).toBe(4200);
+  expect(Date.now() - Date.parse(repo.body.created_at)).toBeGreaterThan(4 * year);
+  expect(Date.parse(repo.body.pushed_at)).toBeGreaterThan(Date.parse(repo.body.created_at));
+  expect(org.body.type).toBe('Organization');
+  expect(Date.now() - Date.parse(org.body.created_at)).toBeGreaterThan(8 * year);
+  expect(person.body.type).toBe('User');
+  expect(Date.parse(person.body.created_at)).toBeLessThan(Date.now());
+});
+
 test('a label list has the fields GitHub sends for each label', async () => {
   const { body } = await rest<Record<string, unknown>[]>(fake, 'GET', `${UPSTREAM}/labels`);
   const label = body.find((l) => l.name === 'goodfirsttoken');
@@ -84,8 +107,9 @@ test('search finds open tagged issues across repos with no PR linked to them', a
   expect(body.items.map((i) => i.html_url).sort()).toEqual([
     `${fake.webUrl}/sample-owner/sample-app/issues/311`,
     `${fake.webUrl}/sample-owner/sample-harbor/issues/88`,
+    `${fake.webUrl}/sample-owner/sample-notes/issues/42`,
   ]);
-  expect(body.total_count).toBe(2);
+  expect(body.total_count).toBe(3);
   // https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests lists it as required.
   expect(body.search_type).toBe('lexical');
 });
@@ -116,6 +140,7 @@ test('repository search filters by stars and push date, and leaves forks out', a
   const all = await rest<{ items: { fork: boolean }[] }>(fake, 'GET', `/search/repositories?q=${encodeURIComponent('stars:>=0')}`);
 
   expect(body.items.map((r) => r.full_name)).toEqual([
+    'sample-owner/sample-cli',
     'sample-owner/sample-bundler',
     'sample-owner/sample-desktop',
     'sample-owner/sample-app',

@@ -1,9 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { addPr, createProject, listIssueClaims, saveIssues, savePerson, setPrState } from '../db';
+import { addCandidate, addPr, createProject, listIssueClaims, saveIssues, savePerson, setPrState } from '../db';
 import { issueRoom } from '../rooms/issue-room';
 import { devOnlyRequest } from './gate';
-import { SAMPLE_CLAIMS, SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleClaim } from './sample-work';
+import { SAMPLE_CANDIDATES, SAMPLE_CLAIMS, SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleClaim } from './sample-work';
 
 // POST /dev/seed, in local development only: gives the local site the sample
 // projects and work in ./sample-work.ts, so `pnpm dev` shows a homepage with
@@ -19,6 +19,9 @@ import { SAMPLE_CLAIMS, SAMPLE_PEOPLE, SAMPLE_PROJECTS, type SampleClaim } from 
 
 // A sample commit to start the work from.
 const START_COMMIT = '5a3e'.repeat(10);
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 function text(status: number, body: string): Response {
   return new Response(`${body}\n`, {
@@ -41,8 +44,14 @@ export async function handleDevSeed(request: Request): Promise<Response> {
   return Response.json(await seedSampleWork(), { headers: { 'cache-control': 'no-store' } });
 }
 
-/** Adds the sample people, projects, issues, and work. Returns what it made. */
-export async function seedSampleWork(): Promise<{ projects: number; claims: number; lines: number; merged: number }> {
+/** Adds the sample people, projects, issues, crawler finds, and work. Returns what it made. */
+export async function seedSampleWork(): Promise<{
+  projects: number;
+  candidates: number;
+  claims: number;
+  lines: number;
+  merged: number;
+}> {
   const now = Date.now();
   for (const person of Object.values(SAMPLE_PEOPLE)) await savePerson(env.DB, person, now);
 
@@ -59,6 +68,7 @@ export async function seedSampleWork(): Promise<{ projects: number; claims: numb
           tags: project.tags,
           prMode: project.prMode,
           personWrittenDescription: project.personWrittenDescription ?? false,
+          agentNotes: project.agentNotes ?? '',
         },
         addedBy: project.addedBy.githubId,
       },
@@ -78,6 +88,32 @@ export async function seedSampleWork(): Promise<{ projects: number; claims: numb
     );
   }
 
+  let candidates = 0;
+  for (const candidate of SAMPLE_CANDIDATES) {
+    const year = 365 * DAY_MS;
+    const found = await addCandidate(
+      env.DB,
+      {
+        repo: candidate.repo,
+        facts: {
+          stars: candidate.stars,
+          createdAt: now - candidate.createdYearsAgo * year,
+          pushedAt: now - candidate.pushedHoursAgo * HOUR_MS,
+          ownerCreatedAt: now - candidate.ownerYearsAgo * year,
+        },
+        policy: {
+          quote: candidate.policy.quote,
+          url: `https://github.com/${candidate.repo}/blob/main/${candidate.policy.path}`,
+          tier: candidate.policy.tier,
+        },
+        settings: candidate.settings,
+        suggestedTags: candidate.suggestedTags,
+      },
+      now,
+    );
+    if (found) candidates += 1;
+  }
+
   const made = { claims: 0, lines: 0, merged: 0 };
   for (const sample of SAMPLE_CLAIMS) {
     const result = await work(sample);
@@ -85,7 +121,7 @@ export async function seedSampleWork(): Promise<{ projects: number; claims: numb
     made.lines += result.posted ? 1 : 0;
     made.merged += result.merged ? 1 : 0;
   }
-  return { projects, ...made };
+  return { projects, candidates, ...made };
 }
 
 // Claims the issue, posts the line, and for done work, submits it, opens
