@@ -13,9 +13,9 @@ import { CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS } from '@goodfirsttoken/core';
 //   PRs live, from the issue's room,
 // - the labels an issue carries on GitHub now, which suggest_issues and
 //   claim_issue check, judgeLabels in ./issues.ts,
-// - and the projects on the do-not-list among a donor's claims, which
-//   start_session, my_work, and claim_issue stop work on,
-//   doNotListedProjects in ./projects.ts.
+// - and the projects on the do-not-list, or delisted by the sync, among a
+//   donor's claims, which start_session, my_work, and claim_issue stop work
+//   on, doNotListedProjects and delistedProjects in ./projects.ts.
 //
 // Each piece reads the project as `p`, a projects row, its current settings
 // as `s`, a project_settings row, and a project's cached copy of an issue as
@@ -40,7 +40,8 @@ export const ON_THE_DO_NOT_LIST = `EXISTS (SELECT 1 FROM do_not_list d WHERE d.r
  * True when the sync last found the project's repo or issue repo private,
  * archived, blocked, or gone on GitHub, as hasPage reads the mark too. What
  * the site cached from them stays hidden until the sync sees them public
- * and open again, so a project resumed meanwhile asks no one for help.
+ * and open again, so a project resumed meanwhile asks no one for help, and
+ * the claims on it can't go on.
  */
 export const DELISTED = `EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = p.repo AND u.delisted IS NOT NULL)`;
 

@@ -2,6 +2,7 @@ import {
   changedSettings,
   count,
   githubId,
+  issueSyncSchema,
   mustParse,
   policySchema,
   projectRecordSchema,
@@ -28,7 +29,7 @@ import {
 } from '@goodfirsttoken/core';
 import { getDoNotListEntry } from './do-not-list';
 import { checkTime, fromJson, joinIssue } from './shared';
-import { ASKING_FOR_HELP, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
+import { ASKING_FOR_HELP, DELISTED, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
 
 // The projects, project_settings, and project_status_changes tables. A
 // project's row holds its current status and points at its current
@@ -69,6 +70,8 @@ interface SettingsRow {
   changed_by: number;
   changed_at: number;
 }
+
+const delistedReason = issueSyncSchema.shape.delisted.unwrap();
 
 const SELECT_PROJECT = `
   SELECT p.*, s.settings FROM projects p
@@ -354,6 +357,25 @@ export async function doNotListedProjects(db: D1Database, repos: Iterable<string
     .bind(JSON.stringify(names))
     .all<{ repo: string }>();
   return new Set(results.map((row) => row.repo.toLowerCase()));
+}
+
+/**
+ * Which of these projects the sync delisted, by the rule in ./waiting.ts,
+ * each in lower case, with the reason GitHub gave, like
+ * `sample-owner/app is archived on GitHub.` The repos go in as one JSON
+ * array, so any number of them takes one query.
+ */
+export async function delistedProjects(db: D1Database, repos: Iterable<string>): Promise<Map<string, string>> {
+  const names = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
+  if (names.length === 0) return new Map();
+  const { results } = await db
+    .prepare(
+      `SELECT p.repo, (SELECT y.delisted FROM issue_syncs y WHERE y.project = p.repo) AS delisted
+       FROM projects p WHERE p.repo IN (SELECT value FROM json_each(?1)) AND ${DELISTED}`,
+    )
+    .bind(JSON.stringify(names))
+    .all<{ repo: string; delisted: string }>();
+  return new Map(results.map((row) => [row.repo.toLowerCase(), mustParse(delistedReason, row.delisted, 'delisted')]));
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */

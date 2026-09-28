@@ -1118,6 +1118,26 @@ describe('an issue of a project with no page', () => {
     expect(html).not.toContain('among the project&#x27;s open tagged issues');
   });
 
+  test("the sync delisted shows no PR the sync saw linked, though it told the room, and keeps the PRs claims opened", async () => {
+    await tag({ linkedPr: prRef(70) });
+    const k = await claim(kenji, 'codex');
+    await openPr(k, 71);
+    // The sync tells the issue's room of the PR it keeps for the issue.
+    const told = await room().prOpened(prRef(70));
+    const shown = await load();
+    await setDelisted(db, repo, `GitHub shows no public repo named ${repo}. It went private or was deleted.`, t0);
+
+    const loaded = await load();
+    const html = await (await page(`/${repo}/issues/${number}`)).text();
+
+    expect(told.ok).toBe(true);
+    expect(shown.view.openPrs).toEqual([prLink(71), prLink(70)]);
+    expect([loaded.title, loaded.labels, loaded.project, loaded.closedBecause]).toEqual([null, [], null, 'project']);
+    expect(loaded.view.openPrs).toEqual([prLink(71)]);
+    expect(html).not.toContain(`${repo}/pull/70`);
+    expect(html).toContain(`${repo}/pull/71`);
+  });
+
   test("on the do-not-list shows no cached title, labels, or linked PR, and keeps the room's PRs and slots", async () => {
     await tag({ labels: ['help wanted', 'bug'], linkedPr: prRef(70) });
     const p = await claim(priya);

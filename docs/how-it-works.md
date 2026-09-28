@@ -1310,9 +1310,11 @@ too, with the same reason.
 
 - A delisted project has no page, and what the site cached from its repos,
   like its issues' titles and labels, shows nowhere, under Which projects
-  have a page in [the project page](#the-project-page) and under
-  [the issue page](#the-issue-page). It asks no one for help, so the lists
-  leave it out, and its issues take no claims, whatever its status.
+  have a page in [the project page](#the-project-page), under
+  [the issue page](#the-issue-page), and in the
+  [donor's tools](#the-donors-tools). It asks no one for help, so the lists
+  leave it out, its issues take no claims, and the claims on them can't go
+  on, whatever its status.
 - The sync reads no issues of a paused project, so each run first reads the
   repos alone of every paused project, whoever paused it, and of every
   approved project it delisted, as after a resume. The one whose repos were
@@ -1416,17 +1418,21 @@ them. `submit_work` and `open_pr` come with #16.
   claims table lists them, and each claim's room gives its state now. The
   agent offers them before new issues, and resumes one by claiming its
   issue again.
-- A claim whose project is on the [do-not-list](#crawl-candidates), working
-  or paused, isn't among them, since no more work goes there.
+- A claim whose project is on the [do-not-list](#crawl-candidates), or one
+  the sync delisted, under Delisting in [Tagged issues](#tagged-issues),
+  working or paused, isn't among them, since no more work goes there.
 - The answer's follow-ups, a maintainer asking for changes on one of the
   donor's PRs, come first when there are any. The list is empty until #17
   fills it. So is the list of PRs merged since the last session.
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions.
 - `my_work` lists the same claims in progress, and those on a project on
-  the do-not-list too, since they are the donor's own record. Each is
-  marked `resumable`. One on the do-not-list isn't, and its `reason` says
-  so and tells the agent to release it with `release_claim`. Its
+  the do-not-list or one the sync delisted too, since they are the donor's
+  own record. Each is marked `resumable`. One of those isn't, and its
+  `reason` says why, with the reason GitHub gave for a delisted project,
+  and tells the agent to release it with `release_claim`. A claim on a
+  delisted project is titled by its issue alone, like `owner/repo#n`,
+  since nothing cached from the repo shows. Its
   follow-ups, and its work waiting to open as a PR, are empty lists until
   #17 and #16 fill them.
 - A session belongs to the donor who started it. Another donor who names it
@@ -1524,14 +1530,16 @@ the donor's tools use the one rule, so they agree.
 - Claiming an issue the donor holds a slot on gives back that claim, marked
   resumed, with the commit it started from. It takes no second slot, and
   nothing from the budget.
-- Resuming a claim whose project is on the do-not-list is refused with
-  `project_not_open`, the refusal a project not asking for help gets, and
-  the answer says to release the claim. A queued pick like that is passed
+- Resuming a claim whose project is on the do-not-list, or one the sync
+  delisted, is refused with `project_not_open`, the refusal a project not
+  asking for help gets. The answer says why, with the reason GitHub gave
+  for a delisted project, and says to release the claim. A queued pick like that is passed
   over and reported.
 - Otherwise the checks run in this order, and the first to fail refuses the
   claim: the budget, with `budget_spent`. The project, with
   `project_not_open` for one that isn't approved, is paused, is on the
-  do-not-list, or is delisted. The cached copy's tags, with
+  do-not-list, or is delisted, which gives the reason GitHub gave. The
+  cached copy's tags, with
   `issue_not_eligible`. A PR the sync or the room knows of, with
   `pr_exists`. A full issue, with
   `issue_full`. The open-PR cap, with `open_pr_cap`. The code repo on
@@ -1635,8 +1643,8 @@ since it started.
 - Only the donor who made the claim can post to it or release it. Anyone
   else is refused with `not_claim_owner`, by the `work_claim` permission,
   and the room checks again. A claim the table doesn't have is `not_found`.
-- Both work on a claim whose project is on the do-not-list, so the donor can
-  say they are stopping and let it go.
+- Both work on a claim whose project is on the do-not-list, or one the
+  sync delisted, so the donor can say they are stopping and let it go.
 
 ## Crawl candidates
 
@@ -2283,9 +2291,9 @@ side. What it shows, and in what order, is in
   projects have a page in [the project page](#the-project-page). When it
   has none, as once the sync delists it or it goes on the do-not-list, the
   page is titled `owner/repo#n`, in the page and in its `<title>`, and
-  shows no labels and no PR the sync saw linked. The PRs the room holds
-  stay, and so do the lanes and the timeline, except on an issue the
-  do-not-list covers, below.
+  shows no labels and no PR the sync saw linked, though the sync told the
+  issue's room of it. The PRs claims opened stay, and so do the lanes and
+  the timeline, except on an issue the do-not-list covers, below.
 
 **The lanes**
 

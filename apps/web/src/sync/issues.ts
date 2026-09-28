@@ -48,13 +48,6 @@ import { SyncStopped, type GitHubReader, type ServiceGitHub, type StopReason } f
 /** How long a run holds a project: the most a scheduled run lasts. */
 export const HOLD_MS = 15 * 60_000;
 
-/**
- * The calls a run's checks of projects it reads no issues for make, at
- * most, of the run's own cap, so the passes always get the rest. A check
- * starts only below it, so one that reads two repos can pass it by one.
- */
-const CHECK_CALLS = 100;
-
 export interface SyncDeps {
   db: D1Database;
   rooms: DurableObjectNamespace<IssueRoom>;
@@ -583,13 +576,16 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
 /**
  * Reads the repos alone of each project the run reads no issues for, in the
  * order listProjectsToCheck gives, and keeps what GitHub shows, until they
- * are done or the checks have made CHECK_CALLS calls. The next run starts
- * with the ones this one left. Throws SyncStopped when the run has to stop.
+ * are done or the checks have made the calls the job's allowance gives them,
+ * `checkCalls`. A check starts only below that, so one that reads two repos
+ * can pass it by one. The next run starts with the projects this one left.
+ * Throws SyncStopped when the run has to stop.
  */
 async function checkProjects(deps: SyncDeps, repos: readonly string[], run: SyncRun): Promise<void> {
   const before = deps.github.calls;
+  const cap = deps.github.allowance.checkCalls ?? deps.github.allowance.maxCalls;
   for (const repo of repos) {
-    if (deps.github.calls - before >= CHECK_CALLS) return;
+    if (deps.github.calls - before >= cap) return;
     const project = await getProject(deps.db, repo);
     if (project?.status !== 'paused' && project?.status !== 'approved') continue;
     try {

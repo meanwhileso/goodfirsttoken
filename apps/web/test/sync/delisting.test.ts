@@ -3,11 +3,12 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getIssueSync, getProject, listIssues, listWaitingIssues, savePerson, setProjectStatus, statusHistory } from '../../src/db';
 import { syncTaggedIssues } from '../../src/sync/issues';
+import { ALLOWANCES } from '../../src/sync/scheduled';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, maintainer, registeredProject, signIn, t0 } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';
 import { workerFetch } from '../worker';
-import { callsTo, jobDeps, SERVICE_LOGIN } from './helpers';
+import { callsTo, freshNumbers, jobDeps, SERVICE_LOGIN } from './helpers';
 
 // Delisting a project the sync reads no issues for: a paused one, whoever
 // paused it, and an approved one resumed while the sync had it delisted.
@@ -56,7 +57,7 @@ interface Result {
   structuredContent?: Record<string, unknown>;
 }
 
-async function call(agent: ConnectedAgent, name: string, args: Record<string, unknown>): Promise<Result> {
+async function call(agent: ConnectedAgent, name: string, args: Record<string, unknown> = {}): Promise<Result> {
   return (await agent.client.callTool({ name, arguments: args })) as Result;
 }
 
@@ -106,6 +107,16 @@ async function shown(project = APP, issue = ISSUE, title = TITLE, label = 'help 
     closed: html.includes('The project isn&#x27;t taking claims right now.'),
     listed: lists.some((list) => list.includes(`href="/${project}"`)),
   };
+}
+
+/** The reason the sync gives when GitHub shows no public sample-app. */
+const GONE = `GitHub shows no public repo named ${APP}. It went private or was deleted.`;
+
+/** A donor's agent for `login`, with a session started. */
+async function donor(login: string): Promise<{ agent: ConnectedAgent; sessionId: string }> {
+  const agent = await connectAgent(github, login);
+  const started = await call(agent, 'start_session', { agent: 'claude-code', budget: { kind: 'until_limit' } });
+  return { agent, sessionId: String(started.structuredContent?.sessionId) };
 }
 
 /** The GitHub token the fake gave `login`'s agent when it signed in. */
@@ -163,14 +174,17 @@ describe('a project its maintainer paused', () => {
     const byAdmin = await call(admin, 'admin_pause_project', { repo: APP, paused: false });
     const resumed = await shown();
     const suggestions = await listWaitingIssues(env.DB, Date.now());
+    const { agent: priya, sessionId } = await donor('priya');
+    const claimed = await call(priya, 'claim_issue', { sessionId, issue: ISSUE });
     const run = await sync();
 
     expect(textOf(byMaintainer)).toMatch(/^Refused \(not_maintainer\): GitHub shows you no public repo named/);
     expect(byAdmin.structuredContent).toMatchObject({ repo: APP, status: 'approved', changed: true });
     // Between the resume and the next sync, nothing cached shows, and no
-    // one is sent to its issues.
+    // one is sent to its issues. A claim is refused with the real reason.
     expect(resumed).toEqual({ projectPage: 404, issuePage: 200, title: false, labels: false, closed: true, listed: false });
     expect(suggestions).toEqual([]);
+    expect(textOf(claimed)).toBe(`Refused (project_not_open): ${GONE} So ${ISSUE} takes no claims. Pick another issue.`);
     // The next run finds the repo still private and pauses the approved project.
     expect(run.delisted).toEqual([APP]);
     expect(await getProject(env.DB, APP)).toMatchObject({ status: 'paused', statusChangedBy: null });
@@ -242,6 +256,74 @@ describe('a project its maintainer paused', () => {
       `/repos/${APP}`,
       `/repos/${DESKTOP}`,
     ]);
+  });
+});
+
+describe("a donor's claim on a project the sync delisted", () => {
+  interface Working {
+    issue: string;
+    title: string;
+    resumable: boolean;
+    reason: string | null;
+  }
+
+  const title = 'Keep the query string in rewrites';
+
+  /**
+   * sample-app listed with a new tagged issue, read by the sync, and priya's
+   * claim on it. Issue rooms keep their storage across the tests in a file,
+   * so each test claims an issue of its own.
+   */
+  async function claimedByPriya() {
+    freshNumbers(github, APP);
+    const issue = `${APP}#${String(github.openIssue(APP, { title, labels: ['help wanted'], by: 'sample-maintainer' }))}`;
+    await listed(await connectAgent(github, 'sample-maintainer'));
+    await sync();
+    const { agent, sessionId } = await donor('priya');
+    const claimed = await call(agent, 'claim_issue', { sessionId, issue });
+    expect(claimed.structuredContent).toMatchObject({ resumed: false, claim: { issue } });
+    const claimId = (claimed.structuredContent?.claim as { claimId: string }).claimId;
+    return { agent, sessionId, issue, claimId };
+  }
+
+  test("isn't offered to resume, my_work shows it with no cached title as one to release, and resuming it is refused", async () => {
+    const { agent, sessionId, issue } = await claimedByPriya();
+    const before = (await call(agent, 'my_work')).structuredContent?.working as Working[];
+    sampleRepo(APP).private = true;
+    await sync();
+
+    const work = await call(agent, 'my_work');
+    const again = await call(agent, 'start_session', { agent: 'claude-code', budget: { kind: 'until_limit' } });
+    const resumed = await call(agent, 'claim_issue', { sessionId, issue });
+
+    expect(before).toMatchObject([{ issue, title, resumable: true, reason: null }]);
+    expect(work.structuredContent?.working).toEqual([
+      expect.objectContaining({
+        issue,
+        title: issue,
+        resumable: false,
+        reason: `${GONE} So the claim can't go on. Release it with release_claim.`,
+      }),
+    ]);
+    expect(JSON.stringify(work.structuredContent)).not.toContain(title);
+    expect(textOf(work)).not.toContain(title);
+    expect(again.structuredContent?.unfinishedClaims).toEqual([]);
+    expect(textOf(resumed)).toBe(
+      `Refused (project_not_open): ${GONE} So your claim on ${issue} can't go on. Release it with release_claim.`,
+    );
+  });
+
+  test('can still be posted to and released', async () => {
+    const { agent, claimId } = await claimedByPriya();
+    sampleRepo(APP).private = true;
+    await sync();
+
+    const posted = await call(agent, 'post_update', { claimId, text: 'stopping: the repo went private' });
+    const released = await call(agent, 'release_claim', { claimId, reason: 'The repo went private.' });
+
+    expect(textOf(posted)).toBe(`Posted to claim ${claimId}.`);
+    expect(released.structuredContent).toMatchObject({ claimId, state: 'released' });
+    expect((await call(agent, 'my_work')).structuredContent?.working).toEqual([]);
   });
 });
 
@@ -339,12 +421,50 @@ describe('the checks and the budget', () => {
     expect((await page(`/${APP}`)).status).toBe(200);
   });
 
+  test('one run checks 100 projects whose checks read one repo each, and starts no more', async () => {
+    // GitHub shows none of these repos, so a check reads one each.
+    const gone = Array.from({ length: 102 }, (_, i) => `sample-owner/sample-gone-${String(i).padStart(3, '0')}`);
+    await pausedProjects(gone);
+
+    const run = await sync();
+
+    expect(run).toMatchObject({ stopped: null, checked: 100 });
+    expect(reposRead()).toEqual(gone.slice(0, 100));
+    const last = gone[99] ?? '';
+    expect((await getIssueSync(db, last))?.delisted).toBe(`GitHub shows no public repo named ${last}. It went private or was deleted.`);
+    expect(await getIssueSync(db, gone[100] ?? '')).toBeNull();
+  });
+
+  test('a check that reads two repos can take the checks one call past 100, and then none starts', async () => {
+    // The first project's repo is gone, so its check reads one repo. Each
+    // of the others has a public code repo, and an issue repo GitHub doesn't
+    // show, so its check reads two.
+    const single = 'sample-owner/sample-a-gone';
+    const pairs = Array.from({ length: 53 }, (_, i) => `sample-owner/sample-b-${String(i).padStart(3, '0')}`);
+    await pausedProjects([single]);
+    for (const [i, name] of pairs.entries()) {
+      github.state.repos[name] = { ...sampleRepo(TOOLS), id: 900_000 + i, name: name.split('/')[1] ?? '', issues: {} };
+      await registeredProject({ tags: ['help wanted'], issueRepo: `${name}-issues` }, name);
+      await setProjectStatus(db, name, { status: 'paused', reason: null, changedBy: maintainer.githubId }, t0);
+    }
+
+    const run = await sync();
+    const read = reposRead();
+
+    // 1 + 2 * 49 = 99 calls, below 100, so one more check starts: 51 checks, 101 calls.
+    expect(run).toMatchObject({ stopped: null, checked: 51 });
+    expect(read).toHaveLength(101);
+    expect(read.slice(0, 3)).toEqual([single, pairs[0], `${pairs[0] ?? ''}-issues`]);
+    expect(read.slice(-2)).toEqual([pairs[49], `${pairs[49] ?? ''}-issues`]);
+    expect(await getIssueSync(db, pairs[50] ?? '')).toBeNull();
+  });
+
   test("the checks leave the rest of a run's calls to the passes, and the next run checks first the projects they left", async () => {
     await registeredProject();
     // GitHub shows none of these repos, so a check reads one each.
     const gone = Array.from({ length: 250 }, (_, i) => `sample-owner/sample-gone-${String(i).padStart(3, '0')}`);
     await pausedProjects(gone);
-    const allowance = { leave: 0.2, maxCalls: 200 };
+    const allowance = { ...ALLOWANCES.sync, maxCalls: 200 };
 
     const first = await syncTaggedIssues(jobDeps(github, allowance));
     const readFirst = reposRead();

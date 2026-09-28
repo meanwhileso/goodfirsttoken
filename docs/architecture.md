@@ -405,8 +405,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   picks the one the issue page follows with `followedCopy`, so a claim goes
   to the project the page follows. `checkIssueOnGitHub` judges the labels
   an issue carries on GitHub now with `judgeLabels` in `src/db/issues.ts`,
-  which runs `CARRIES_A_TAG` over them in D1. The do-not-list comes into it
-  only through `ASKING_FOR_HELP`, the homepage's check.
+  which runs `CARRIES_A_TAG` over them in D1. The do-not-list and the
+  sync's mark come into it only through `ASKING_FOR_HELP`, the homepage's
+  check.
 - **One place for the donor's rules.** `src/donor/rules.ts` checks the
   rules spec section 6 sets for the donor. `suggest_issues` and
   `claim_issue` both call it, and each returns a refusal or nothing.
@@ -1493,7 +1494,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `prUrl` in `src/issue/view.ts` builds its link to GitHub, whether it came
   from the room, the cache's linked PR, or a `pr_opened` event, whose text
   carries only `opened PR owner/name#57`. The link stored with a PR can be
-  on any host, so it never reaches the page.
+  on any host, so it never reaches the page. The sync tells the room of the
+  PR it saw linked, so while the project the page follows has no page, the
+  room's PRs the page shows are its claims' own, by the PR each claim
+  holds.
 - **The status.** The loader throws TanStack Router's `notFound()` for an
   issue with no page, which renders the route's not-found component with
   `404`. When D1 or the room throws, the server function names `503` in
@@ -1568,7 +1572,10 @@ under The projects list and The project page.
   - `doNotListedProjects` in `src/db/projects.ts` says which of a donor's
     claims are on a project on the do-not-list, with `ON_THE_DO_NOT_LIST`,
     the part of `ASKING_FOR_HELP` that reads the list, for `start_session`,
-    `my_work`, and resuming with `claim_issue`.
+    `my_work`, and resuming with `claim_issue`. `delistedProjects` beside
+    it says which the sync delisted, with the reason, through `DELISTED`,
+    the part that reads the mark, for the same tools and for the refusal
+    of a new claim.
 
   A test checks that the page's issues that take claims are the ones the
   homepage counts waiting and the ones `suggest_issues` starts from.
@@ -1715,9 +1722,11 @@ read-only service token. The rules are in
   to four fifths of the budget, all it spends before it stops. The checks
   come out of the sync's own cap, so a run still costs at most 1,000 calls:
   the `/rate_limit` read, then one or two for each project it checks, then
-  its passes. `CHECK_CALLS` in `src/sync/issues.ts` starts no new check once
-  the checks have made 100 calls, a tenth of the run, so the passes always
-  get about nine tenths, and checks spend about 400 calls an hour at most.
+  its passes. `checkCalls` in the sync's `ALLOWANCES`, in
+  `src/sync/scheduled.ts` with the other budget figures, starts no new
+  check once the checks have made 100 calls, a tenth of the run, so the
+  passes always get about nine tenths, and checks spend about 400 calls an
+  hour at most.
   Each project is checked every run while they fit in 100 calls: 50 that
   keep their issues in a repo apart, or 100 that don't. Past that, each is
   checked every few runs, the one read longest ago first. The caps keep a
@@ -1784,7 +1793,7 @@ read-only service token. The rules are in
 - **Resuming** leaves the mark, so the gap between a resume and the next
   run shows nothing cached. Two paths resume a project, the maintainer's
   `pause_project` and the admin's `admin_pause_project`, and no site form
-  changes a status. Neither reads the repo for the mark: the maintainer's
+  pauses or resumes a project. Neither reads the repo for the mark: the maintainer's
   asks GitHub only for their role, with their own token, and the admin's
   asks nothing. The first check after a resume pauses the project again
   when the repo is still gone, or takes the mark off when it isn't. Only
