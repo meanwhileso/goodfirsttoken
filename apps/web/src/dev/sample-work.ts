@@ -30,6 +30,8 @@ export interface SampleProject {
   tags: string[];
   prMode: 'automatic' | 'reviewed';
   personWrittenDescription?: boolean;
+  /** Notes every agent reads, word for word. */
+  agentNotes?: string;
   addedBy: SamplePerson;
   /**
    * For a project an admin listed from its written AI policy, the policy it
@@ -88,8 +90,49 @@ export const SAMPLE_PROJECTS: SampleProject[] = [
     status: 'pending',
     tags: ['help wanted'],
     prMode: 'reviewed',
+    personWrittenDescription: true,
+    agentNotes: 'Run just test before submitting. Leave the vendored code under third_party/ alone.',
     addedBy: SAMPLE_PEOPLE.octoMaintainer,
     issues: [{ number: 88, title: 'Retry uploads after a 503', labels: ['help wanted'] }],
+  },
+  {
+    repo: 'sample-owner/sample-notes',
+    status: 'pending',
+    tags: ['help wanted'],
+    prMode: 'reviewed',
+    agentNotes: 'Skip the tests, they are slow.',
+    addedBy: SAMPLE_PEOPLE.sampleMaintainer,
+    issues: [{ number: 42, title: 'Keep the cursor in place after a sync', labels: ['help wanted'] }],
+  },
+];
+
+export interface SampleCandidate {
+  repo: string;
+  /** As the crawler read them: the stars, and how long ago the repo, its last push, and its owner's account. */
+  stars: number;
+  createdYearsAgo: number;
+  pushedHoursAgo: number;
+  ownerYearsAgo: number;
+  policy: { quote: string; path: string; tier: 'invites_agents' | 'allows_with_conditions' };
+  settings: { prMode: 'automatic' | 'reviewed' };
+  suggestedTags: { name: string; openIssues: number }[];
+}
+
+/** Crawler finds waiting in the admin queue. The quotes are the sample repos' own made-up files. */
+export const SAMPLE_CANDIDATES: SampleCandidate[] = [
+  {
+    repo: 'sample-owner/sample-cli',
+    stars: 21000,
+    createdYearsAgo: 7,
+    pushedHoursAgo: 2,
+    ownerYearsAgo: 9,
+    policy: {
+      quote: 'Agents may open pull requests on issues labeled agents welcome.',
+      path: 'AGENTS.md',
+      tier: 'invites_agents',
+    },
+    settings: { prMode: 'automatic' },
+    suggestedTags: [{ name: 'agents welcome', openIssues: 0 }],
   },
 ];
 

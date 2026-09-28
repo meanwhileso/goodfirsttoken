@@ -67,7 +67,7 @@ export function describeDisclosure(settings: ProjectSettings): string {
 function settingValue(settings: ProjectSettings, key: SettingKey): string {
   switch (key) {
     case 'tags':
-      return settings.tags.join(', ');
+      return listOrNone(settings.tags);
     case 'excludedTags':
       return listOrNone(settings.excludedTags);
     case 'issueRepo':

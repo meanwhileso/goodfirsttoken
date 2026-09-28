@@ -4,6 +4,7 @@ import {
   addToDoNotList,
   decideCandidate,
   getCandidate,
+  getWaitingCandidate,
   listCandidates,
   type NewCandidate,
 } from '../../src/db';
@@ -105,5 +106,13 @@ describe('crawl candidates', () => {
 
     expect(again).toMatchObject({ repo, status: 'waiting', foundAt: t0 + 30 * DAY });
     expect(again?.id).not.toBe(first?.id);
+  });
+
+  test("a repo's waiting find is found whatever the case of its name, and a decided one isn't", async () => {
+    const waiting = await addCandidate(db, found, t0);
+
+    expect(await getWaitingCandidate(db, 'SAMPLE-OWNER/sample-app')).toEqual(waiting);
+    await decideCandidate(db, waiting?.id ?? '', { status: 'approved', decidedBy: admin.githubId, reason: null }, t0 + DAY);
+    expect(await getWaitingCandidate(db, repo)).toBeNull();
   });
 });

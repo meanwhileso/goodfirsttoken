@@ -23,7 +23,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(issue|projects)\.spec\.ts$/ },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(issue|projects|admin)\.spec\.ts$/ },
     // The issue page's tests work real issue rooms, and every event they
     // make reaches the homepage's feed. The projects' tests do too, and seed
     // the sample projects, which the homepage lists. So they run once the
@@ -34,6 +34,9 @@ export default defineConfig({
       testMatch: /(issue|projects)\.spec\.ts$/,
       dependencies: ['chromium'],
     },
+    // The admin pages' tests list projects, which the homepage shows, so
+    // they run last, on their own.
+    { name: 'admin', use: { ...devices['Desktop Chrome'] }, testMatch: /admin\.spec\.ts$/, dependencies: ['rooms'] },
   ],
   webServer: [
     {

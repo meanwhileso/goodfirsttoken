@@ -53,6 +53,7 @@ describe('the tool list', () => {
         'admin_add_project',
         'admin_block_donor',
         'admin_pause_project',
+        'admin_remove_project',
       ].sort(),
     );
   });
@@ -200,6 +201,54 @@ describe('what each result says', () => {
     );
   });
 
+  test('a crawler find in the queue shows its suggested settings with the rest at their defaults, and says when no tags were suggested', () => {
+    const [candidate] = samples.admin_queue.output.items;
+    if (candidate === undefined) throw new Error('missing sample');
+    const text = textOf(toolResult('admin_queue', { items: [{ ...candidate, settings: { prMode: 'automatic' } }] }));
+    expect(text).toContain('suggested settings, the rest at their defaults:');
+    expect(text).toMatch(/Tags +none/);
+    expect(text).toMatch(/PR mode +automatic/);
+    expect(text).toMatch(/Claims per issue +3/);
+  });
+
+  test("a registration with no facts says whether GitHub showed no public repo or didn't answer", () => {
+    const registration = samples.admin_queue.output.items[1];
+    if (registration === undefined) throw new Error('missing sample');
+    const queue = (factsMissing: 'not_public' | 'no_answer') =>
+      textOf(toolResult('admin_queue', { items: [{ ...registration, factsMissing }] }));
+    const { repo } = registration;
+    expect(queue('not_public')).toContain(`GitHub showed no public repo named ${repo} when asked.`);
+    expect(queue('no_answer')).toContain(`GitHub didn't answer when asked about ${repo}. Read the queue again for its facts.`);
+    expect(queue('no_answer')).not.toContain('no public repo');
+  });
+
+  test('an item on the do-not-list says so: approving a registration takes it off, and only its maintainers can list a crawler find', () => {
+    const [candidate, registration] = samples.admin_queue.output.items;
+    if (candidate === undefined || registration === undefined) throw new Error('missing sample');
+    const queue = (item: typeof candidate) => textOf(toolResult('admin_queue', { items: [{ ...item, onDoNotList: true }] }));
+    expect(queue(registration)).toContain(
+      'Its maintainers asked to be removed, so it is on the do-not-list. Approving this registration takes it off.',
+    );
+    expect(queue(candidate)).toContain(
+      'Its maintainers asked to be removed, so it is on the do-not-list. Only they can list it again, by registering it.',
+    );
+  });
+
+  test("a rejection says who sees its reason: a registration's maintainers, and no one for a crawler find", () => {
+    const decide = (kind: 'registration' | 'candidate') =>
+      textOf(toolResult('admin_decide', { repo: repoName, kind, status: 'rejected' }));
+    expect(decide('registration')).toBe(`Rejected ${repoName}. Its maintainers see the reason with project_status.`);
+    expect(decide('candidate')).toBe(`Rejected the crawler find ${repoName}. It leaves the queue.`);
+  });
+
+  test('an admin pause that changed nothing says so', () => {
+    const pause = (output: Partial<ToolOutput<'admin_pause_project'>>) =>
+      textOf(toolResult('admin_pause_project', { ...samples.admin_pause_project.output, ...output }));
+    expect(pause({ changed: false })).toBe(`${repoName} was already paused by an admin, with that reason. Nothing changed.`);
+    expect(pause({ status: 'approved', changed: true })).toBe(`Resumed ${repoName}. Status: approved.`);
+    expect(pause({ status: 'approved', changed: false })).toBe(`${repoName} isn't paused, so nothing changed. Status: approved.`);
+  });
+
   test('an empty suggestion list says so', () => {
     expect(textOf(toolResult('suggest_issues', { suggestions: [] }))).toBe('No eligible issues right now.');
   });
@@ -275,6 +324,22 @@ describe('tool inputs', () => {
     const decide = (tier: string) => validate(tools.admin_decide.input, { id: 'q_1', decision: 'approve', tier });
     expect(decide('invites_agents').ok).toBe(true);
     expect(problemFields(decide('bans_agents'))).toEqual(['tier']);
+  });
+
+  test('a crawler find can be approved with only the settings the admin changed', () => {
+    const decide = (settings: unknown) =>
+      validate(tools.admin_decide.input, { id: 'cand_1', decision: 'approve', settings });
+    expect(decide({ tags: ['ready for help'] }).ok).toBe(true);
+    expect(decide({}).ok).toBe(true);
+    expect(problemFields(decide({ claimsPerIssue: 0 }))).toEqual(['settings.claimsPerIssue']);
+  });
+
+  test('a listing from a policy can send only the settings that change', () => {
+    const policy = samples.admin_queue.output.items[0]?.policy;
+    const add = (settings: unknown) => validate(tools.admin_add_project.input, { repo: repoName, policy, settings });
+    expect(add({ prMode: 'automatic' }).ok).toBe(true);
+    expect(add({ tags: ['ready for help'] }).ok).toBe(true);
+    expect(problemFields(add({ claimsPerIssue: 0 }))).toEqual(['settings.claimsPerIssue']);
   });
 
   test('an admin pause needs a reason', () => {

@@ -1,4 +1,4 @@
-import { donorBlockSchema, githubId, mustParse, type DonorBlock } from '@goodfirsttoken/core';
+import { donorBlockSchema, githubId, githubLogin, mustParse, type DonorBlock } from '@goodfirsttoken/core';
 import { checkTime } from './shared';
 
 // The donor_blocks table: donors an admin blocked.
@@ -80,10 +80,16 @@ export async function blockedAmong(db: D1Database, ids: Iterable<number>): Promi
   return new Set(results.map((row) => row.github_id));
 }
 
-/** Every blocked donor, most recently blocked first. */
-export async function listBlocks(db: D1Database): Promise<DonorBlock[]> {
+/** A block, with the login its donor was last seen with. */
+export type ListedBlock = DonorBlock & { login: string };
+
+/** Every blocked donor with their login, most recently blocked first, in one query. */
+export async function listBlocks(db: D1Database): Promise<ListedBlock[]> {
   const { results } = await db
-    .prepare('SELECT * FROM donor_blocks ORDER BY blocked_at DESC, github_id')
-    .all<BlockRow>();
-  return results.map(toBlock);
+    .prepare(
+      `SELECT b.*, p.login FROM donor_blocks b JOIN people p ON p.github_id = b.github_id
+       ORDER BY b.blocked_at DESC, b.github_id`,
+    )
+    .all<BlockRow & { login: string }>();
+  return results.map((row) => ({ ...toBlock(row), login: mustParse(githubLogin, row.login, 'login') }));
 }

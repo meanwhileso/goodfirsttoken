@@ -1,8 +1,8 @@
 // The sample people and repos, in one place. Tests, the local GitHub fake,
 // and `pnpm seed` all start from this. They take the shapes of the
 // prototype's sample data in prototype/: a project with tagged issues, one
-// with nothing tagged yet, a popular repo that invites contributions, and a
-// registration waiting for an admin.
+// with nothing tagged yet, a popular repo that invites contributions,
+// registrations waiting for an admin, and a repo the crawler finds.
 //
 // Every account and repo here is made up, except this project's own repo,
 // meanwhileso/goodfirsttoken, and its owner. Its sample issues and PRs are
@@ -114,7 +114,8 @@ export const people: SampleAccount[] = [
   { login: 'octo-maintainer', id: 1008, name: 'Octo Maintainer', created: '10y' },
   { login: 'sample-maintainer', id: 1009, name: 'Sample Maintainer', created: '9y' },
   // An admin of the site itself, who listed a project from its written AI
-  // policy in the sample work.
+  // policy in the sample work. Local development makes this account an
+  // admin (apps/web/src/auth/settings.ts), so the admin pages can be tried.
   { login: 'sample-admin', id: 1010, name: 'Sample Admin', created: '8y' },
 ];
 
@@ -398,6 +399,50 @@ export const repos: SampleRepo[] = [
         created: '8d',
       },
     ],
+  },
+  {
+    // A second registration waiting for an admin.
+    owner: 'sample-owner',
+    name: 'sample-notes',
+    description: 'A sample notes app for tests and local development.',
+    language: 'TypeScript',
+    license: 'MIT',
+    stars: 900,
+    created: '3y',
+    pushed: '1d',
+    collaborators: { 'sample-maintainer': 'admin' },
+    labels: defaultLabels,
+    files: {
+      'README.md': '# sample-notes\n\nA sample notes app for tests and local development.\n',
+    },
+    issues: [
+      {
+        number: 42,
+        title: 'Keep the cursor in place after a sync',
+        body: 'A sync moves the cursor to the end of the note.',
+        author: 'sample-maintainer',
+        labels: ['help wanted'],
+        created: '6d',
+      },
+    ],
+  },
+  {
+    // A popular repo whose AGENTS.md invites agent pull requests, which the
+    // crawler finds and an admin reviews.
+    owner: 'sample-owner',
+    name: 'sample-cli',
+    description: 'A sample command line tool for tests and local development.',
+    language: 'Rust',
+    license: 'MIT',
+    stars: 21000,
+    created: '7y',
+    pushed: '2h',
+    collaborators: { 'sample-maintainer': 'admin' },
+    labels: [...defaultLabels, { name: 'agents welcome', color: '0e8a16', description: null }],
+    files: {
+      'README.md': '# sample-cli\n\nA sample command line tool for tests and local development.\n',
+      'AGENTS.md': '# AGENTS.md\n\nAgents may open pull requests on issues labeled agents welcome.\n',
+    },
   },
 ];
 

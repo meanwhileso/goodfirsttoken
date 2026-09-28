@@ -63,14 +63,13 @@
   function renderNav(slot) {
     const current = slot.dataset.current || '';
     const signedIn = slot.dataset.signedIn === 'true';
-    const admin = slot.dataset.admin === 'true';
     const cur = (id) => (id === current ? 'page' : null);
 
+    // The admin pages are the site's /admin route now, described in docs/how-it-works.md.
     const items = NAV_LINKS.map((l) => h('li', null,
       h('a', { href: l.href, 'aria-current': cur(l.id) },
         l.dot ? h('span', { class: 'dot dot--pulse', 'aria-hidden': 'true' }) : null,
         l.label)));
-    if (admin) items.push(h('li', null, h('a', { href: 'admin.html', 'aria-current': cur('admin') }, 'admin')));
     items.push(signedIn
       ? h('li', null, h('a', { class: 'site-nav__me', href: 'me.html', 'aria-current': cur('me') },
         h('span', { class: 'avatar', style: 'width:28px;height:28px;font-size:12px' }, 'P'), '@priya'))

@@ -6,6 +6,7 @@ import {
   adminDecide,
   adminPauseProject,
   adminQueue,
+  adminRemoveProject,
 } from './admin';
 import {
   claimIssue,
@@ -41,6 +42,7 @@ export const tools = {
   admin_add_project: adminAddProject,
   admin_block_donor: adminBlockDonor,
   admin_pause_project: adminPauseProject,
+  admin_remove_project: adminRemoveProject,
 } as const;
 
 export type Tools = typeof tools;
@@ -49,6 +51,8 @@ export type ToolName = keyof Tools;
 export type ToolInput<N extends ToolName> = z.output<Tools[N]['input']>;
 /** A tool's structured result. */
 export type ToolOutput<N extends ToolName> = z.output<Tools[N]['output']>;
+/** A tool's structured result as a tool builds it, before its schema fills in defaults. */
+export type ToolOutputInput<N extends ToolName> = z.input<Tools[N]['output']>;
 
 export interface TextContent {
   type: 'text';
@@ -74,7 +78,7 @@ export interface ToolRefusal {
  */
 export function toolResult<N extends ToolName>(
   name: N,
-  output: z.input<Tools[N]['output']>,
+  output: ToolOutputInput<N>,
 ): ToolResult<ToolOutput<N>> {
   const spec: ToolSpec = tools[name];
   const data = spec.output.parse(output) as ToolOutput<N>;
@@ -93,6 +97,7 @@ export function toolRefusal(refusal: Refusal): ToolRefusal {
 
 export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
+export { doNotListNote } from './admin';
 export { reviewReasons } from './donor';
 export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';

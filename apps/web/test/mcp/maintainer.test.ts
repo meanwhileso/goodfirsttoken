@@ -454,6 +454,33 @@ describe('register_project', () => {
     expect(hasLabel(HARBOR, 'goodfirsttoken')).toBe(false);
   });
 
+  test("a rejected registration registered again goes back to pending with the new settings, so an admin reviews it again", async () => {
+    const agent = await connectAgent(github, 'octo-maintainer');
+    await call(agent, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'], agentNotes: 'Skip the tests.' } });
+    await savePerson(env.DB, admin, Date.now());
+    await setProjectStatus(env.DB, HARBOR, { status: 'rejected', reason: 'The notes ask agents to skip the tests.', changedBy: admin.githubId }, Date.now());
+
+    const proposal = await call(agent, 'register_project', { repo: HARBOR });
+    const again = await call(agent, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'], claimsPerIssue: 2 } });
+
+    expect(proposal.structuredContent).toMatchObject({ saved: false });
+    expect(again.structuredContent).toMatchObject({ saved: true, status: 'pending' });
+    expect(textOf(again)).toContain('A Good First Token admin reviews it before agents can claim its issues.');
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({
+      status: 'pending',
+      statusReason: null,
+      statusChangedBy: 1008,
+      source: 'registered',
+      settings: { tags: ['help wanted'], claimsPerIssue: 2, agentNotes: '' },
+    });
+    expect(await statusHistory(env.DB, HARBOR)).toMatchObject([
+      { status: 'pending', reason: null, changedBy: 1008 },
+      { status: 'rejected', changedBy: admin.githubId },
+      { status: 'pending', changedBy: 1008 },
+    ]);
+    expect((await settingsHistory(env.DB, HARBOR)).map((v) => v.changedBy)).toEqual([1008, 1008]);
+  });
+
   test("registering a repo listed from its AI policy replaces the listing's settings, makes it registered, and keeps its status", async () => {
     await policyListing(APP_REPO);
     const agent = await connectAgent(github, 'sample-maintainer');

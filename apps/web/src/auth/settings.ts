@@ -87,17 +87,27 @@ export function siteOrigin(request: Request): string {
 }
 
 /**
+ * The GitHub fake's sample admin, @sample-admin
+ * (packages/github-fake/src/sample-data.ts). Only in development, where
+ * GitHub is the fake on this machine, is it an admin, so the admin pages can
+ * be tried locally and the browser tests can sign in as an admin.
+ */
+export const DEV_SAMPLE_ADMIN = 1010;
+
+/**
  * The numeric GitHub IDs of Good First Token's admins, from ADMIN_GITHUB_IDS,
  * separated by commas or spaces. An entry that isn't a whole number names no
- * one.
+ * one. In development the fake's sample admin is one too.
  */
 export function adminGithubIds(): ReadonlySet<number> {
   const ids = (env.ADMIN_GITHUB_IDS as string | undefined) ?? '';
-  return new Set(
+  const admins = new Set(
     ids
       .split(/[\s,]+/)
       .filter((id) => /^[1-9][0-9]{0,15}$/.test(id))
       .map(Number)
       .filter(Number.isSafeInteger),
   );
+  if (isDevelopment()) admins.add(DEV_SAMPLE_ADMIN);
+  return admins;
 }

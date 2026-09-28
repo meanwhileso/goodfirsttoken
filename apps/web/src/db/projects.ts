@@ -24,6 +24,7 @@ import {
   type SettingKey,
   type SettingsVersion,
 } from '@goodfirsttoken/core';
+import { getDoNotListEntry } from './do-not-list';
 import { checkTime, fromJson } from './shared';
 import { waiting } from './waiting';
 
@@ -115,9 +116,12 @@ export interface NewProject {
 
 /**
  * Saves a new project, the first version of its settings, and its first
- * status, all made by `addedBy` at `now`. Null when the
- * repo is already a project, in any case, since GitHub ignores case in repo
- * names.
+ * status, all made by `addedBy` at `now`. Null when the repo is already a
+ * project, in any case, since GitHub ignores case in repo names, and when a
+ * project listed from its policy would be for a repo on the do-not-list,
+ * checked in the same statement as the insert. A maintainer's registration
+ * of a repo on the list is saved, and the repo stays on it until an admin
+ * approves the registration.
  */
 export async function createProject(
   db: D1Database,
@@ -146,7 +150,8 @@ export async function createProject(
       .prepare(
         `INSERT INTO projects (repo, issue_repo, status, status_reason, status_changed_by, status_changed_at,
            source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version)
-         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+         SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1
+         WHERE ?6 = 'registered' OR NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)
          ON CONFLICT DO NOTHING`,
       )
       .bind(
@@ -162,10 +167,12 @@ export async function createProject(
         record.addedBy,
         record.addedAt,
       ),
+    // A project that already existed has its first settings. A listing the
+    // do-not-list kept out has no row, so these add nothing for it.
     db
       .prepare(
         `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
-         VALUES (?, 1, ?, ?, ?)
+         SELECT ?1, 1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM projects WHERE repo = ?1)
          ON CONFLICT DO NOTHING`,
       )
       .bind(record.repo, JSON.stringify(record.settings), record.addedBy, record.addedAt),
@@ -174,7 +181,8 @@ export async function createProject(
       .prepare(
         `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
          SELECT ?1, ?2, NULL, ?3, ?4
-         WHERE NOT EXISTS (SELECT 1 FROM project_status_changes WHERE repo = ?1)`,
+         WHERE NOT EXISTS (SELECT 1 FROM project_status_changes WHERE repo = ?1)
+           AND EXISTS (SELECT 1 FROM projects WHERE repo = ?1)`,
       )
       .bind(record.repo, record.status, record.addedBy, record.addedAt),
   ]);
@@ -319,13 +327,19 @@ export async function setProjectStatus(
  * when. So a change decided on what was read never lands over a change
  * someone made since. The project after the change, or null when its status
  * changed since the read or the project is gone. A change to the status and
- * reason it already has writes nothing and returns `read`.
+ * reason it already has, by the person who set them, writes nothing and
+ * returns `read`. The same status and reason from someone else is a change of
+ * its own, so an admin's pause over a maintainer's names the admin.
+ * `alongside` runs in the same transaction, after the change, for a write
+ * that has to land with it, and checks for itself that the change landed. A
+ * change that writes nothing, as above, runs nothing, `alongside` included.
  */
 export async function setProjectStatusFrom(
   db: D1Database,
   read: ProjectRecord,
   change: { status: ProjectStatus; reason: string | null; changedBy: number | null },
   now: number,
+  alongside: D1PreparedStatement[] = [],
 ): Promise<ProjectRecord | null> {
   const was = mustParse(projectRecordSchema, read, 'read');
   const next = mustParse(
@@ -333,7 +347,9 @@ export async function setProjectStatusFrom(
     { repo: was.repo, status: change.status, reason: change.reason, changedBy: change.changedBy, changedAt: now },
     'status change',
   );
-  if (next.status === was.status && next.reason === was.statusReason) return was;
+  if (next.status === was.status && next.reason === was.statusReason && next.changedBy === was.statusChangedBy) {
+    return was;
+  }
   const unchanged = `repo = ?1 AND status = ?6 AND status_reason IS ?7 AND status_changed_by IS ?8
     AND status_changed_at = ?9`;
   const values = [
@@ -349,7 +365,7 @@ export async function setProjectStatusFrom(
   ];
   // One transaction. The history row and the update each apply only while
   // the status is the one read.
-  const [, updated, stored] = await db.batch<ProjectRow>([
+  const results = await db.batch<ProjectRow>([
     db
       .prepare(
         `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
@@ -362,9 +378,11 @@ export async function setProjectStatusFrom(
          WHERE ${unchanged}`,
       )
       .bind(...values),
+    ...alongside,
     db.prepare(`${SELECT_PROJECT} WHERE p.repo = ?`).bind(next.repo),
   ]);
-  const row = stored?.results[0];
+  const updated = results[1];
+  const row = results.at(-1)?.results[0];
   return updated?.meta.changes === 1 && row !== undefined ? toProject(row) : null;
 }
 
@@ -563,4 +581,204 @@ export async function settingsHistory(db: D1Database, repo: string): Promise<Set
     before = settings;
   }
   return history.reverse();
+}
+
+/** A project waiting for an admin, with the ID of the status change that put it in the queue. */
+export interface PendingProject {
+  project: ProjectRecord;
+  /** The project's latest status change, which made it pending. */
+  changeId: number;
+}
+
+/**
+ * Every pending project, the one that has waited longest first, each with
+ * the ID of the status change that made it pending. A new status change
+ * gives it a new ID, so an ID names one wait in the queue.
+ */
+export async function listPendingProjects(db: D1Database): Promise<PendingProject[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.*, s.settings,
+         (SELECT MAX(c.id) FROM project_status_changes c WHERE c.repo = p.repo) AS change_id
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       WHERE p.status = 'pending'
+       ORDER BY p.status_changed_at, p.repo`,
+    )
+    .all<ProjectRow & { change_id: number }>();
+  return results.map((row) => ({ project: toProject(row), changeId: mustParse(count, row.change_id, 'changeId') }));
+}
+
+/**
+ * The pending project whose latest status change is `changeId`, or null when
+ * there is none: no such change, a project that isn't pending, or one whose
+ * status changed since.
+ */
+export async function getPendingProject(db: D1Database, changeId: number): Promise<PendingProject | null> {
+  const change = mustParse(count, changeId, 'changeId');
+  const row = await db
+    .prepare(
+      `${SELECT_PROJECT}
+       WHERE p.status = 'pending'
+         AND p.repo = (SELECT repo FROM project_status_changes WHERE id = ?1)
+         AND ?1 = (SELECT MAX(c.id) FROM project_status_changes c WHERE c.repo = p.repo)`,
+    )
+    .bind(change)
+    .first<ProjectRow>();
+  return row === null ? null : { project: toProject(row), changeId: change };
+}
+
+/** Every project listed from its written AI policy, whatever its status, the oldest listing first. */
+export async function listPolicyListings(db: D1Database): Promise<ProjectRecord[]> {
+  const { results } = await db
+    .prepare(`${SELECT_PROJECT} WHERE p.source = 'policy' ORDER BY p.added_at, p.repo`)
+    .all<ProjectRow>();
+  return results.map(toProject);
+}
+
+/** A do-not-list entry for the repo keeps it out of a listing, checked in the same statement as a write. */
+const NOT_ON_DO_NOT_LIST = 'NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)';
+
+export type Relisting = { ok: true; project: ProjectRecord; changed: SettingKey[] } | { ok: false; problems: FieldProblem[] };
+
+/**
+ * An admin lists a repo from its policy again, when it is already listed
+ * that way: the new policy replaces the old, and the settings sent replace
+ * the listing's, saved as a new version by `by` at `now`. Settings left out
+ * keep their value. Its status, who added it, and when stay. A change that
+ * changes no setting saves no new version. Null when the repo isn't a
+ * project listed from its policy when it saves, or is on the do-not-list,
+ * checked in the same statements as the writes.
+ */
+export async function relistFromPolicy(
+  db: D1Database,
+  repo: string,
+  listing: { policy: Policy; settings: ProjectSettingsPatch },
+  by: number,
+  now: number,
+): Promise<Relisting | null> {
+  const policy = mustParse(policySchema, listing.policy, 'policy');
+  const changedBy = mustParse(githubId, by, 'by');
+  const at = checkTime(now);
+  for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
+    const current = await getProject(db, repo);
+    if (current?.source !== 'policy' || (await getDoNotListEntry(db, current.repo)) !== null) return null;
+    const result = updateProjectSettings(current.settings, listing.settings);
+    if (!result.ok) return result;
+    const next = result.value;
+    const changed = changedSettings(current.settings, next);
+    const version = changed.length > 0 ? current.settingsVersion + 1 : current.settingsVersion;
+    const project = mustParse(
+      projectRecordSchema,
+      { ...current, policy, settings: next, settingsVersion: version },
+      'project',
+    );
+    // Both statements check that the project is still the listing read,
+    // with no other save since, and that the repo isn't on the do-not-list,
+    // and the batch runs as one transaction. The update runs last, since it
+    // changes what they check.
+    const still = `repo = ?1 AND source = 'policy' AND settings_version = ?2 AND ${NOT_ON_DO_NOT_LIST}`;
+    const read = [current.repo, current.settingsVersion];
+    const statements: D1PreparedStatement[] = [];
+    if (changed.length > 0) {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
+             SELECT ?1, ?3, ?4, ?5, ?6 WHERE EXISTS (SELECT 1 FROM projects WHERE ${still})`,
+          )
+          .bind(...read, version, JSON.stringify(next), changedBy, at),
+      );
+    }
+    statements.push(
+      db
+        .prepare(
+          `UPDATE projects SET policy_quote = ?3, policy_url = ?4, policy_tier = ?5, settings_version = ?6,
+             issue_repo = ?7
+           WHERE ${still}`,
+        )
+        .bind(...read, policy.quote, policy.url, policy.tier, version, issueRepoOf(current.repo, next)),
+    );
+    const results = await db.batch(statements);
+    if (results.at(-1)?.meta.changes === 1) return { ok: true, project, changed };
+  }
+  throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
+}
+
+/**
+ * A maintainer registers again a repo whose registration was rejected, or
+ * that was removed at its maintainers' request. Their settings replace the
+ * project's, whole, as a new save made by `by` at `now`, with settings they
+ * left out at their defaults, and it goes back to `pending`, changed by them,
+ * so an admin reviews it again. It names them as who added it, and keeps the
+ * time it was first added. A repo on the do-not-list stays on it until an
+ * admin approves the registration. Null when the repo isn't a rejected
+ * registration when it saves.
+ */
+export async function reopenRegistration(
+  db: D1Database,
+  repo: string,
+  settings: ProjectSettingsInput,
+  by: number,
+  now: number,
+): Promise<ProjectRecord | null> {
+  const next = mustParse(projectSettingsSchema, settings, 'settings');
+  const addedBy = mustParse(githubId, by, 'by');
+  const at = checkTime(now);
+  for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
+    const current = await getProject(db, repo);
+    if (current?.source !== 'registered' || current.status !== 'rejected') return null;
+    const changed = changedSettings(current.settings, next);
+    const version = changed.length > 0 ? current.settingsVersion + 1 : current.settingsVersion;
+    const project = mustParse(
+      projectRecordSchema,
+      {
+        ...current,
+        status: 'pending',
+        statusReason: null,
+        statusChangedBy: addedBy,
+        statusChangedAt: at,
+        addedBy,
+        settings: next,
+        settingsVersion: version,
+      },
+      'project',
+    );
+    // Every statement checks that the project is still the rejection that
+    // was read, with no other save or status change since, and the batch
+    // runs as one transaction. The update runs after them, since it changes
+    // what they check.
+    const rejected = `repo = ?1 AND source = 'registered' AND status = 'rejected' AND settings_version = ?2
+      AND status_changed_at = ?3`;
+    const read = [current.repo, current.settingsVersion, current.statusChangedAt];
+    const statements: D1PreparedStatement[] = [];
+    if (changed.length > 0) {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
+             SELECT ?1, ?4, ?5, ?6, ?7 WHERE EXISTS (SELECT 1 FROM projects WHERE ${rejected})`,
+          )
+          .bind(...read, version, JSON.stringify(next), addedBy, at),
+      );
+    }
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO project_status_changes (repo, status, reason, changed_by, changed_at)
+           SELECT ?1, 'pending', NULL, ?4, ?5 WHERE EXISTS (SELECT 1 FROM projects WHERE ${rejected})`,
+        )
+        .bind(...read, addedBy, at),
+      db
+        .prepare(
+          `UPDATE projects SET status = 'pending', status_reason = NULL, status_changed_by = ?4,
+             status_changed_at = ?5, added_by = ?4, settings_version = ?6, issue_repo = ?7
+           WHERE ${rejected}`,
+        )
+        .bind(...read, addedBy, at, version, issueRepoOf(current.repo, next)),
+    );
+    const results = await db.batch(statements);
+    if (results.at(-1)?.meta.changes === 1) return project;
+  }
+  throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }

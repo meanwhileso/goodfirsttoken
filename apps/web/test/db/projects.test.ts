@@ -1,11 +1,17 @@
 import { settingKeys } from '@goodfirsttoken/core';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
+  addToDoNotList,
   changeSettings,
   createProject,
+  getPendingProject,
   getProject,
+  listPendingProjects,
+  listPolicyListings,
   listProjects,
   listProjectsByIssueRepo,
+  relistFromPolicy,
+  reopenRegistration,
   setProjectStatus,
   settingsHistory,
   statusHistory,
@@ -36,6 +42,10 @@ const policy = {
 beforeEach(async () => {
   await emptyDatabase();
   await signIn(maintainer, coMaintainer, admin);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('projects', () => {
@@ -504,10 +514,166 @@ describe('a status change decided on what was read', () => {
     expect(await statusHistory(db, repo)).toHaveLength(2);
   });
 
-  test('a change to the status and reason it already has writes nothing', async () => {
+  test('a change to the status and reason it already has, by the person who set them, writes nothing', async () => {
     const project = await registeredProject({ tags: ['help wanted'] });
 
-    expect(await setProjectStatusFrom(db, project, { status: 'approved', reason: null, changedBy: coMaintainer.githubId }, t0 + HOUR)).toEqual(project);
+    expect(await setProjectStatusFrom(db, project, { status: 'approved', reason: null, changedBy: maintainer.githubId }, t0 + HOUR)).toEqual(project);
     expect(await statusHistory(db, repo)).toHaveLength(1);
+  });
+
+  test("the same status and reason from someone else is a change of its own, so an admin's pause over a maintainer's names the admin", async () => {
+    await registeredProject({ tags: ['help wanted'] });
+    const read = await setProjectStatus(db, repo, { status: 'paused', reason: null, changedBy: maintainer.githubId }, t0 + HOUR);
+    if (read === null) throw new Error('no project');
+
+    const paused = await setProjectStatusFrom(db, read, { status: 'paused', reason: null, changedBy: admin.githubId }, t0 + 2 * HOUR);
+
+    expect(paused).toMatchObject({ status: 'paused', statusReason: null, statusChangedBy: admin.githubId, statusChangedAt: t0 + 2 * HOUR });
+    expect(await getProject(db, repo)).toEqual(paused);
+    expect(await statusHistory(db, repo)).toMatchObject([
+      { status: 'paused', changedBy: admin.githubId },
+      { status: 'paused', changedBy: maintainer.githubId },
+      { status: 'approved' },
+    ]);
+  });
+});
+
+describe('the admin queue and the listings', () => {
+  test('pending projects wait oldest first, each named by the status change that put it in the queue', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+    const other = 'sample-owner/sample-tools';
+    await createProject(
+      db,
+      { repo: other, status: 'pending', source: 'registered', policy: null, settings: { tags: ['bug'] }, addedBy: maintainer.githubId },
+      t0 + HOUR,
+    );
+    await setProjectStatus(db, repo, { status: 'pending', reason: null, changedBy: admin.githubId }, t0 + 2 * HOUR);
+
+    const pending = await listPendingProjects(db);
+
+    expect(pending.map((p) => p.project.repo)).toEqual([other, repo]);
+    const [first, second] = pending;
+    expect(await getPendingProject(db, first?.changeId ?? 0)).toEqual(first);
+    expect(await getPendingProject(db, second?.changeId ?? 0)).toEqual(second);
+  });
+
+  test("a status change gives a pending project's wait a new ID, so an older ID names nothing", async () => {
+    await createProject(
+      db,
+      { repo, status: 'pending', source: 'registered', policy: null, settings: { tags: ['bug'] }, addedBy: maintainer.githubId },
+      t0,
+    );
+    const [waiting] = await listPendingProjects(db);
+    if (waiting === undefined) throw new Error('nothing pending');
+
+    await setProjectStatus(db, repo, { status: 'rejected', reason: 'Spam.', changedBy: admin.githubId }, t0 + HOUR);
+    const rejectedStill = await getPendingProject(db, waiting.changeId);
+    await setProjectStatus(db, repo, { status: 'pending', reason: null, changedBy: maintainer.githubId }, t0 + 2 * HOUR);
+
+    expect(rejectedStill).toBeNull();
+    expect(await getPendingProject(db, waiting.changeId)).toBeNull();
+    expect(await listPendingProjects(db)).toHaveLength(1);
+  });
+
+  test('listing a repo again from its policy replaces the policy, changes only the settings sent, keeps its status, and records who changed the settings', async () => {
+    await createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'], agentNotes: 'Run make test.' }, addedBy: admin.githubId },
+      t0,
+    );
+    await setProjectStatus(db, repo, { status: 'paused', reason: 'Checking.', changedBy: admin.githubId }, t0 + HOUR);
+    const next = { ...policy, quote: 'Agents are welcome.', tier: 'invites_agents' as const };
+
+    const relisted = await relistFromPolicy(db, repo, { policy: next, settings: { prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+
+    if (!relisted?.ok) throw new Error('not listed again');
+    expect(relisted).toMatchObject({ changed: ['prMode'], project: { status: 'paused', policy: next } });
+    expect(relisted.project.settings).toMatchObject({ tags: ['ready'], agentNotes: 'Run make test.', prMode: 'automatic' });
+    expect(await getProject(db, repo)).toEqual(relisted.project);
+    expect(await listPolicyListings(db)).toEqual([relisted.project]);
+    expect(await settingsHistory(db, repo)).toMatchObject([{ version: 2, changedBy: admin.githubId }, { version: 1 }]);
+  });
+
+  test('a repo on the do-not-list is never listed from its policy, new or again', async () => {
+    const other = 'sample-owner/sample-harbor';
+    await createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0,
+    );
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0 + HOUR);
+    await addToDoNotList(db, { repo: other, reason: null, addedBy: admin.githubId }, t0 + HOUR);
+
+    const relisted = await relistFromPolicy(db, repo, { policy, settings: { prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+    const created = await createProject(
+      db,
+      { repo: other, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0 + 2 * HOUR,
+    );
+
+    expect(relisted).toBeNull();
+    expect((await getProject(db, repo))?.settings.prMode).toBe('reviewed');
+    expect(created).toBeNull();
+    expect(await getProject(db, other)).toBeNull();
+    expect(await statusHistory(db, other)).toEqual([]);
+    expect(await settingsHistory(db, other)).toEqual([]);
+  });
+
+  test('a removal that lands between the read and the write of a listing again leaves the listing as it was', async () => {
+    await createProject(
+      db,
+      { repo, status: 'approved', source: 'policy', policy, settings: { tags: ['ready'] }, addedBy: admin.githubId },
+      t0,
+    );
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0 + HOUR);
+      return batch(statements);
+    });
+
+    const relisted = await relistFromPolicy(db, repo, { policy, settings: { prMode: 'automatic' } }, admin.githubId, t0 + 2 * HOUR);
+
+    expect(relisted).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ settingsVersion: 1, settings: { prMode: 'reviewed' } });
+    expect(await settingsHistory(db, repo)).toHaveLength(1);
+  });
+
+  test('a rejected registration registered again lands only on the rejection it read, so one that landed first wins', async () => {
+    await createProject(
+      db,
+      { repo, status: 'pending', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+      t0,
+    );
+    await setProjectStatus(db, repo, { status: 'rejected', reason: 'Not yet.', changedBy: admin.githubId }, t0 + HOUR);
+    const batch = db.batch.bind(db);
+    let first: unknown;
+    vi.spyOn(db, 'batch').mockImplementationOnce(async (statements) => {
+      // Another maintainer registers it again between this one's read and write.
+      first = await reopenRegistration(db, repo, { tags: ['help wanted'] }, coMaintainer.githubId, t0 + 2 * HOUR);
+      return batch(statements);
+    });
+
+    const second = await reopenRegistration(db, repo, { tags: ['help wanted'] }, maintainer.githubId, t0 + 3 * HOUR);
+
+    expect(first).toMatchObject({ status: 'pending', statusChangedBy: coMaintainer.githubId });
+    expect(second).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({
+      status: 'pending',
+      statusChangedBy: coMaintainer.githubId,
+      addedBy: coMaintainer.githubId,
+    });
+    expect((await statusHistory(db, repo)).map((change) => [change.status, change.changedBy])).toEqual([
+      ['pending', coMaintainer.githubId],
+      ['rejected', admin.githubId],
+      ['pending', maintainer.githubId],
+    ]);
+  });
+
+  test('a registered project is never listed again from a policy', async () => {
+    await registeredProject({ tags: ['help wanted'] });
+
+    expect(await relistFromPolicy(db, repo, { policy, settings: { tags: ['ready'] } }, admin.githubId, t0 + HOUR)).toBeNull();
+    expect(await getProject(db, repo)).toMatchObject({ source: 'registered', policy: null, settings: { tags: ['help wanted'] } });
+    expect(await listPolicyListings(db)).toEqual([]);
   });
 });

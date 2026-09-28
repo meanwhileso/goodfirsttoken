@@ -3,23 +3,17 @@ import { issueRef, repoName, validate } from '@goodfirsttoken/core';
 // Which issue or project a page's path names, for the server and the page alike.
 
 /**
- * Owners whose paths belong to the site: sign-in and the MCP server. The
- * Worker answers them before any page, and the page answers 404 for them too.
+ * Owners whose paths belong to the site: sign-in, the MCP server and its
+ * OAuth routes, the admin pages, and the dev routes. No project and no issue
+ * has a page under them, and both pages answer 404 for them.
+ * docs/architecture.md, under The site's own paths, says why each one is
+ * here.
  */
-const RESERVED_OWNERS = new Set(['auth', 'mcp', 'oauth']);
-
-/**
- * Owners with pages of the site's own under them, like /dev/seed, which
- * TanStack Router matches ahead of a project's page. They belong to the site
- * the same way. docs/architecture.md, under The site's own paths, says why
- * each one is here.
- */
-const SITE_PAGE_OWNERS = new Set(['dev']);
+const RESERVED_OWNERS = new Set(['admin', 'auth', 'dev', 'mcp', 'oauth']);
 
 /** Whether an owner's paths belong to the site, so no project or issue has a page under it. */
 function ownedBySite(owner: string): boolean {
-  const name = owner.toLowerCase();
-  return RESERVED_OWNERS.has(name) || SITE_PAGE_OWNERS.has(name);
+  return RESERVED_OWNERS.has(owner.toLowerCase());
 }
 
 /**
