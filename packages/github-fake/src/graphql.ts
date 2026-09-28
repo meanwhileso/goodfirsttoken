@@ -1,5 +1,6 @@
 // A slice of GitHub's GraphQL API: reading files from many repos in one
-// query, issues with the open PRs that close them, pull requests, and
+// query, a repo's labels with the open issues that carry each, issues with
+// the open PRs that close them, pull requests, and
 // createCommitOnBranch. The schema below copies the names and
 // types of GitHub's own, so a query that works here works on GitHub. Queries
 // run through graphql-js, so aliases, fragments, variables, and validation
@@ -14,6 +15,7 @@
 // https://docs.github.com/en/graphql/reference/commits#object-commit
 // https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch
 // https://docs.github.com/en/graphql/reference/issues#object-issue
+// https://docs.github.com/en/graphql/reference/labels#object-label
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
@@ -31,8 +33,10 @@ import {
   findRepo,
   findRepoByFullName,
   fullName,
+  key,
   roleOf,
   type IssueRecord,
+  type LabelRecord,
   type PullData,
   type RepoRecord,
 } from './state.ts';
@@ -127,6 +131,30 @@ const schema = buildSchema(/* GraphQL */ `
     object(expression: String, oid: GitObjectID): GitObject
     issue(number: Int!): Issue
     pullRequest(number: Int!): PullRequest
+    labels(after: String, before: String, first: Int, last: Int, query: String): LabelConnection
+  }
+
+  type Label implements Node {
+    id: ID!
+    name: String!
+    color: String!
+    description: String
+    isDefault: Boolean!
+    url: URI!
+    repository: Repository!
+    issues(after: String, before: String, first: Int, last: Int, states: [IssueState!]): IssueConnection!
+  }
+
+  type LabelConnection {
+    totalCount: Int!
+    nodes: [Label]
+    pageInfo: PageInfo!
+  }
+
+  type IssueConnection {
+    totalCount: Int!
+    nodes: [Issue]
+    pageInfo: PageInfo!
   }
 
   type Issue implements Node {
@@ -380,6 +408,49 @@ function repositoryNode(ctx: Ctx, repo: RepoRecord) {
       const issue = findIssue(repo, number);
       if (!issue?.pull) throw fail('NOT_FOUND', `Could not resolve to a PullRequest with the number of ${String(number)}.`);
       return pullRequestNode(ctx, repo, issue as IssueRecord & { pull: PullData });
+    },
+    // In the order they were made. `query` finds labels by name or
+    // description, without case.
+    labels: (args: PageArgs & { query?: string | null }) => {
+      const query = args.query?.toLowerCase() ?? null;
+      const found = repo.labels.filter(
+        (label) =>
+          query === null ||
+          label.name.toLowerCase().includes(query) ||
+          (label.description ?? '').toLowerCase().includes(query),
+      );
+      return pageOf(
+        found.map((label) => labelNode(ctx, repo, label)),
+        args,
+        'labels',
+      );
+    },
+  };
+}
+
+type PageArgs = { first?: number | null; last?: number | null; after?: string | null; before?: string | null };
+
+// A label, with the issues that carry it. An issue connection asked for its
+// totalCount alone needs no first or last, as on GitHub. Pull requests
+// aren't issues here, as on GitHub, where a label's pull requests are a
+// connection of their own.
+function labelNode(ctx: Ctx, repo: RepoRecord, label: LabelRecord) {
+  return {
+    __typename: 'Label',
+    id: nodeId('LA', label.id),
+    name: label.name,
+    color: label.color,
+    description: label.description,
+    isDefault: label.default,
+    url: `${ctx.webUrl}/${fullName(repo)}/labels/${encodeURIComponent(label.name)}`,
+    repository: () => repositoryNode(ctx, repo),
+    issues: (args: PageArgs & { states?: string[] | null }) => {
+      const issues = Object.values(repo.issues)
+        .filter((issue) => issue.pull === null && issue.labels.some((name) => key(name) === key(label.name)))
+        .filter((issue) => !args.states || args.states.includes(issue.state === 'open' ? 'OPEN' : 'CLOSED'))
+        .sort((a, b) => a.number - b.number);
+      const page = () => pageOf(issues.map((issue) => issueNode(ctx, repo, issue)), args, 'issues');
+      return { totalCount: issues.length, nodes: () => page().nodes, pageInfo: () => page().pageInfo };
     },
   };
 }
