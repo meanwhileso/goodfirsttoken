@@ -405,8 +405,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   picks the one the issue page follows with `followedCopy`, so a claim goes
   to the project the page follows. `checkIssueOnGitHub` judges the labels
   an issue carries on GitHub now with `judgeLabels` in `src/db/issues.ts`,
-  which runs `CARRIES_A_TAG` over them in D1. The do-not-list comes into it
-  only through `ASKING_FOR_HELP`, the homepage's check.
+  which runs `CARRIES_A_TAG` over them in D1. The do-not-list and the
+  sync's mark come into it only through `ASKING_FOR_HELP`, the homepage's
+  check.
 - **One place for the donor's rules.** `src/donor/rules.ts` checks the
   rules spec section 6 sets for the donor. `suggest_issues` and
   `claim_issue` both call it, and each returns a refusal or nothing.
@@ -895,7 +896,7 @@ in `people`.
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
 | `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
-| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, and its code repo's main language | `project` |
+| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
@@ -951,6 +952,12 @@ that break the rules, so it returns the problems for the caller to show.
   list that starts empty, `issue_syncs.language`, and `cla_confirmations`.
   A confirmation's project has no foreign key, like a claim's, so it
   outlives a listing.
+- **Migration `0006_delisting.sql`** adds `issue_syncs.delisted`, the
+  reason GitHub delists the project or null, and
+  `issue_syncs.repos_read_at`. Before it, a pause that named no one was the
+  sync's delisting and hid the page, so the migration marks each project
+  paused that way with its pause's reason. The sync's next read of its
+  repos keeps the mark or takes it off.
 
 ### Who sees what
 
@@ -1050,7 +1057,7 @@ pruning after a sync, with no index of its own.
 | Index | Serves |
 |---|---|
 | `people_by_login` | A person by login, for `/@<login>` pages and admin blocks |
-| `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first |
+| `projects_by_status` | The list of approved projects and the admin queue of pending ones, oldest first, and the paused and approved projects the sync checks |
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync, and the copies of an issue the sync checks before a room forgets its PR |
 | `project_status_changes_by_repo` | A project's status changes, newest first, and its latest, which names a registration in the admin queue |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
@@ -1078,7 +1085,8 @@ Merge rate reads the same index.
 Some views have no index of their own. Issues worked per person this week
 scans every claim. The all-time views scan `claims` or `prs` and look up the
 other by key, and hiding blocked donors looks up `donor_blocks` by key.
-Hiding what the do-not-list covers looks up `do_not_list` by key, and the
+Hiding what the sync delisted looks up `issue_syncs` by key. Hiding what
+the do-not-list covers looks up `do_not_list` by key, and the
 projects whose issues live in each repo through `projects_by_issue_repo`.
 
 ### Migrations
@@ -1579,7 +1587,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `prUrl` in `src/issue/view.ts` builds its link to GitHub, whether it came
   from the room, the cache's linked PR, or a `pr_opened` event, whose text
   carries only `opened PR owner/name#57`. The link stored with a PR can be
-  on any host, so it never reaches the page.
+  on any host, so it never reaches the page. The sync tells the room of the
+  PR it saw linked, so while the project the page follows has no page, the
+  room's PRs the page shows are its claims' own, by the PR each claim
+  holds.
 - **The status.** The loader throws TanStack Router's `notFound()` for an
   issue with no page, which renders the route's not-found component with
   `404`. When D1 or the room throws, the server function names `503` in
@@ -1597,11 +1608,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   show it.
 - **What a view costs.** The reads `findIssue` makes. One for the project
   when the issue isn't cached, one for each person who claimed it, since the
-  timeline names every claimant, and one or two for the do-not-list for
-  each project with a cached copy that is approved or paused by a person,
-  or for the project of the latest claim when none has a copy, as
-  `hasPage` looks up its repo and its issue repo. That one answer decides
-  the breadcrumb, the cached copy, and whether the project takes claims.
+  timeline names every claimant, and two or three for each project with a
+  cached copy that is approved or paused, or for the project of the latest
+  claim when none has a copy, as `hasPage` looks up the sync's mark in
+  `issue_syncs` and the do-not-list for its repo and its issue repo, all at
+  once. That one answer decides the breadcrumb, the cached copy, and
+  whether the project takes claims.
   Then the room's glance, which reads its whole history and asks D1 which
   donors are blocked and whether the do-not-list covers the issue's repo,
   two queries at once, and a socket on the room for as long as the page is
@@ -1621,7 +1633,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
-| `src/project/shown.ts` | `hasPage`, which projects have a page by their status and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
+| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
@@ -1635,10 +1647,11 @@ under The projects list and The project page.
   render and enabled from the page's first render after hydration, so
   they look off until they work, and a test can wait for them.
 - **One waiting rule.** `src/db/waiting.ts` holds the SQL for a project
-  asking for help, `ASKING_FOR_HELP`, a cached copy that carries a tag,
-  the slots its claims hold at a time, a claim's PR that is still open,
-  the whole rule for an issue waiting for an agent, and why a copy takes
-  no claims whatever its slots and PRs. Every query that asks uses it:
+  asking for help, `ASKING_FOR_HELP`, which reads the sync's mark with
+  `DELISTED`, a cached copy that carries a tag, the slots its claims hold
+  at a time, a claim's PR that is still open, the whole rule for an issue
+  waiting for an agent, and why a copy takes no claims whatever its slots
+  and PRs. Every query that asks uses it:
   - `listProjectsAskingForHelp` counts each project's copies that wait, for
     the homepage and the projects list.
   - `listProjectIssues` in `src/db/issues.ts` says for each copy of one
@@ -1652,22 +1665,28 @@ under The projects list and The project page.
   - `doNotListedProjects` in `src/db/projects.ts` says which of a donor's
     claims are on a project on the do-not-list, with `ON_THE_DO_NOT_LIST`,
     the part of `ASKING_FOR_HELP` that reads the list, for `start_session`,
-    `my_work`, and resuming with `claim_issue`.
+    `my_work`, and resuming with `claim_issue`. `delistedProjects` beside
+    it says which the sync delisted, with the reason, through `DELISTED`,
+    the part that reads the mark, for the same tools and for the refusal
+    of a new claim.
 
   A test checks that the page's issues that take claims are the ones the
   homepage counts waiting and the ones `suggest_issues` starts from.
 - **What the page reads.** `loadProject` reads the project, then asks
   `hasPage` in `src/project/shown.ts` whether it has a page, by its status,
-  who set that status, and whether its repo or its issue repo has an entry
-  of its own on the do-not-list, as the homepage's query checks. For a
-  project that could have a page, that agrees with `doNotListedAmong`, the
-  rule the rooms and feeds hide events by, on its issue repo, since the
-  project keeps its issues there and is off the list. `doNotListedAmong`
-  reads every repo as an issue repo, so `hasPage` doesn't ask it about the
-  code repo, where a project on the list that kept its issues there would
-  take the page away. A pause with no person in `status_changed_by` is
-  Good First Token's own, as the maintainer's `pause_project` reads it
-  too. Then, at the same time, its
+  whether the sync delisted it, and whether its repo or its issue repo has
+  an entry of its own on the do-not-list, as the homepage's query checks.
+  For a project that could have a page, that agrees with
+  `doNotListedAmong`, the rule the rooms and feeds hide events by, on its
+  issue repo, since the project keeps its issues there and is off the
+  list. `doNotListedAmong` reads every repo as an issue repo, so `hasPage`
+  doesn't ask it about the code repo, where a project on the list that
+  kept its issues there would take the page away. Who paused it doesn't
+  count. The mark in
+  `issue_syncs.delisted` hides what the site cached from the repos,
+  whatever the status, and `DELISTED` in `src/db/waiting.ts` reads the same
+  column for the lists and the claims, so the rule lives in that column
+  alone. Then, at the same time, its
   tagged issues with `listProjectIssues`, the claims working now with
   `countWorkingClaims`, the merged PRs with `listMergedPrs`, the top
   helpers with `topHelpers`, the save of its current settings with
@@ -1701,8 +1720,9 @@ under The projects list and The project page.
   [Registering a project](how-it-works.md#registering-a-project).
 - **What a view costs.** The list is one D1 query, the homepage's, which
   counts the waiting issues of every approved project. A project's page
-  reads the project, and the do-not-list once or twice, by key. Then it
-  makes six reads at once. Its tagged issues are one query, through the
+  reads the project, then its row in `issue_syncs` and the do-not-list once
+  or twice, by key, all at once. Then it makes six reads at once. Its
+  tagged issues are one query, through the
   table's key, with each issue's claims through `claims_by_issue`. The
   claims working now, the merged PRs, and the top helpers are one query
   each, through
@@ -1713,7 +1733,7 @@ under The projects list and The project page.
   once, and reads again for as long as a round names donors or repos it
   hasn't asked about, so once when nothing is hidden, and never when the
   feed has no events. Then it reads `people` once or twice. So a view
-  costs about eleven D1 queries, one call to a feed, and a socket on the
+  costs about twelve D1 queries, one call to a feed, and a socket on the
   feed for as long as the page is open.
   The three queries through `claims_by_project` read every claim the
   project ever had, since the index keys claims by project and claim time,
@@ -1732,10 +1752,10 @@ read-only service token. The rules are in
 | File | What it does |
 |---|---|
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run |
-| `src/sync/issues.ts` | The tagged-issue sync: one project's pass, and the scheduled run over every approved project |
+| `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
 | `src/sync/prs.ts` | The PR job |
 | `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
-| `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, and which run holds it |
+| `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, which run holds it, and whether the sync delisted it, with the projects a run checks |
 
 - **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync and
   `7,37 * * * *` for the PR job, so the two never start in the same
@@ -1753,6 +1773,10 @@ read-only service token. The rules are in
   GraphQL query for each 25 issues, and one REST call for each 100 events on
   each issue's timeline. The timelines are most of it: about one call for
   each tagged issue.
+- **What a check costs.** A check of a project the sync reads no issues
+  for, a paused one or an approved one it delisted, costs one REST call for
+  its code repo, and one more for an issue repo apart from it. The first
+  repo GitHub doesn't show ends the check, so a gone code repo costs one.
 - **One list for each tag.** GitHub's issue list filter takes labels as a
   list separated by commas, and an issue has to carry every one. So each tag
   is a list of its own, with `assignee=none`, and the lists meet in code,
@@ -1777,19 +1801,29 @@ read-only service token. The rules are in
   that isn't JSON. Any other refusal goes back to the code that made the
   call, which knows what a `404` means there. The PR job stops on any
   refusal of its query, and ends without an error.
-- **Only GitHub's answers pause a project.** `GitHubError` keeps the
+- **Only GitHub's answers delist a project.** `GitHubError` keeps the
   `message` of GitHub's JSON error body apart, as `bodyMessage`, which is
-  null when the body was anything else. A repo read pauses a project only on
+  null when the body was anything else. A repo read delists a project only on
   a `404` whose body says `Not Found`, a `451` with a JSON body, or a repo
   with the fields GitHub sends that says it is private or archived. A
   `/rate_limit` answer without GitHub's budgets, or any other `404` or
   `451`, stops the run. So a proxy, or a `GH_API_URL` that isn't GitHub's
-  API, never pauses a project.
+  API, never delists or pauses a project.
 - **Calls in one run.** The caps in
   [how-it-works.md](how-it-works.md#tagged-issues), under The budget, count
   the `/rate_limit` read too. Four sync runs an hour at the sync's cap come
-  to four fifths of the budget, all it spends before it stops. The caps keep
-  a run inside Cloudflare's limits, which
+  to four fifths of the budget, all it spends before it stops. The checks
+  come out of the sync's own cap, so a run still costs at most 1,000 calls:
+  the `/rate_limit` read, then one or two for each project it checks, then
+  its passes. `checkCalls` in the sync's `ALLOWANCES`, in
+  `src/sync/scheduled.ts` with the other budget figures, starts no new
+  check once the checks have made 100 calls, a tenth of the run, so the
+  passes always get about nine tenths, and checks spend about 400 calls an
+  hour at most.
+  Each project is checked every run while they fit in 100 calls: 50 that
+  keep their issues in a repo apart, or 100 that don't. Past that, each is
+  checked every few runs, the one read longest ago first. The caps keep a
+  run inside Cloudflare's limits, which
   [developers.cloudflare.com/workers/platform/limits](https://developers.cloudflare.com/workers/platform/limits/)
   gave on 2026-09-27: 10,000 subrequests for one invocation on the Workers
   Paid plan, calls to D1, KV, and R2 included, and 30 seconds of CPU for a
@@ -1829,11 +1863,43 @@ read-only service token. The rules are in
   gives its `language`, which `setProjectLanguage` keeps in
   `issue_syncs.language` for ranking suggestions. It costs no call of its
   own.
-- **Delisting** uses `setProjectStatusFrom`, the compare-and-set #55 added,
-  with `changed_by` null, which the maintainer's `pause_project` reads as a
-  pause only an admin can lift. It tries three times, and stops as soon as
-  the project isn't approved. GitHub answers a REST call to a renamed or
-  moved repo's old name with a redirect, which `fetch` follows.
+- **Delisting** writes the mark first, `issue_syncs.delisted` with the
+  reason, through `setDelisted` in `src/db/syncs.ts`, so the page is hidden
+  even when the pause doesn't land. Then it pauses an approved project with
+  `setProjectStatusFrom`, the compare-and-set #55 added, with `changed_by`
+  null, which the maintainer's `pause_project` reads as a pause only an
+  admin can lift. It tries three times, and stops as soon as the project
+  isn't approved. A read that finds both repos public and open clears the
+  mark, in the same statement that keeps `repos_read_at`. GitHub answers a
+  REST call to a renamed or moved repo's old name with a redirect, which
+  `fetch` follows.
+- **The mark sits beside the status** of a paused project. Taking over a
+  maintainer's pause would make it the admins' to lift, by `resumableBy`,
+  add a status change the maintainer didn't make, and need an admin to
+  bring the page back once the repo is public again. The mark changes
+  nothing a person set, adds nothing to the status history, and comes off
+  by itself. The approved case moved onto it too: `hasPage` no longer reads
+  a pause with no person as hidden, so one column says whether what was
+  cached shows. The pause of an approved project stays, since it keeps the
+  status history and the admin's say over the claims. Neither writes a feed
+  event, since only issue rooms make those.
+- **Resuming** leaves the mark, so the gap between a resume and the next
+  run shows nothing cached. Two paths resume a project, the maintainer's
+  `pause_project` and the admin's `admin_pause_project`, and no site form
+  pauses or resumes a project. Neither reads the repo for the mark: the maintainer's
+  asks GitHub only for their role, with their own token, and the admin's
+  asks nothing. The first check after a resume pauses the project again
+  when the repo is still gone, or takes the mark off when it isn't. Only
+  the service token sets or clears the mark, so no person's token is
+  used on anyone else's behalf.
+- **The checks** come first in a run, before the passes, from
+  `listProjectsToCheck` in `src/db/syncs.ts`: every paused project and every
+  approved one delisted, off the do-not-list, ordered by `repos_read_at`,
+  never read first. A pass reads the repos of an approved project anyway,
+  so an approved project that isn't delisted isn't checked. A refusal about
+  one project skips its check, and the next run tries it again. A check
+  holds no project, since it only reads the repos, sets the mark, and
+  pauses through the compare-and-set.
 - **The PR job** reads 50 PRs in one GraphQL query, each by its repo and
   number, so one point covers them.
 - **A maintainer's refresh** is `project_status` with `refresh`. It runs
@@ -1844,9 +1910,10 @@ read-only service token. The rules are in
   refreshes at once make one read. `issue_syncs.refreshed_at` counts only
   refreshes, so a scheduled run never makes a refresh wait.
 - **The log.** Each run logs one line, with what it read, what is left of
-  the budget, the projects another run held, and every open PR it found
-  linked to the issues it read, each counted once for each issue, by the
-  ways it was found. It counts the PRs in other repos apart.
+  the budget, the projects another run held, how many projects it checked
+  and which of them it delisted, and every open PR it found linked to the
+  issues it read, each counted once for each issue, by the ways it was
+  found. It counts the PRs in other repos apart.
 
 ### Open question 7: finding linked PRs
 
@@ -2314,7 +2381,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   rooms keep their storage across a file. The scheduled tests run each cron
   in `wrangler.jsonc`, which `vitest.config.ts` reads and passes in as
   `TEST_CRONS`. A maintainer's refresh is tested through the MCP client SDK
-  with the MCP tests.
+  with the MCP tests. `delisting.test.ts` pauses and resumes projects the
+  same way, as their maintainer and as an admin, on the real clock, which
+  signing in an agent needs, and reads what the pages show through the
+  Worker. The test of what migration `0006_delisting.sql` marks runs the
+  migration's own `INSERT` again, from `TEST_MIGRATIONS`, on rows made
+  before it.
 - **Issue page tests** load the page's data from real rooms, fetch the page
   through the Worker, and read an issue's live socket with the page's own
   fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake

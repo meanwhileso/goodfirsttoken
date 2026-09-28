@@ -1053,6 +1053,9 @@ a project is `not_found`.
   a project that isn't paused changes nothing. Resuming a project whose
   issues live in another repo needs that repo too, under the issue repo in
   [Registering a project](#registering-a-project).
+- A resume leaves a project the sync delisted as it is: no page, nothing
+  cached shown, and no claims, until the sync sees its repos public and
+  open again, under Delisting in [Tagged issues](#tagged-issues).
 - A pause Good First Token made, or one made by someone who is one of its
   admins, stays until an admin lifts it with `admin_pause_project`, under
   [Permissions](#permissions). A maintainer who isn't an admin and tries is
@@ -1162,6 +1165,8 @@ project with `paused: false`.
   changes nothing.
 - Resuming puts back the status the project had before the pause, as a
   maintainer's resume does, whoever paused it, Good First Token included.
+  A project the sync delisted stays delisted, as a maintainer's resume
+  leaves it.
 - The answer says whether the call changed anything.
 
 **Blocking.** `admin_block_donor` blocks a donor, or lifts a block with
@@ -1212,14 +1217,14 @@ Until it replaces this, the skills check a request in the repo itself.
   policy, a crawler find, a rejected project, and a repo whose pull
   requests are now limited to collaborators, which can't be registered or
   taken over.
-- It doesn't work for a project Good First Token paused on its own, under
-  Delisting in [Tagged issues](#tagged-issues): its repo went private, is
-  gone, GitHub blocked access to it, or it's archived. The admin can't read
-  the file of a repo that isn't public, and an archived repo takes no new
-  commit. So the check waits until the repo is public and not archived
-  again, unless the line was on the default branch before the repo was
-  archived. Until then the project stays paused, with no page, and only an
-  admin can resume it.
+- It doesn't work for a project the sync delisted, under Delisting in
+  [Tagged issues](#tagged-issues): its repo went private, is gone, GitHub
+  blocked access to it, or it's archived. The admin can't read the file of
+  a repo that isn't public, and an archived repo takes no new commit. So
+  the check waits until the repo is public and not archived again, unless
+  the line was on the default branch before the repo was archived. Until
+  then the project has no page, and when Good First Token paused it, it
+  stays paused, and only an admin can resume it.
 - A listing's notes for agents prove nothing, since admins save them, with
   `admin_add_project`, or with `admin_decide` when they approve a crawler
   find. A registration's notes come from an admin or maintainer of the repo,
@@ -1285,9 +1290,10 @@ sync reads from GitHub.
 
 **The sync.** Every 15 minutes, a scheduled run reads the tagged issues of
 the approved projects from GitHub, with the service token under
-[Calls to GitHub](#calls-to-github). A pending, rejected, or paused project
-isn't read, and neither is one whose repo or issue repo is on the
-do-not-list.
+[Calls to GitHub](#calls-to-github). It reads no issues of a pending,
+rejected, or paused project, and nothing of a project whose repo or issue
+repo is on the do-not-list. It reads a paused project's repos alone, under
+Delisting below.
 
 - It reads the open issues in the project's issue repo that carry one of its
   tags, and leaves out pull requests, issues with an assignee, and issues
@@ -1342,21 +1348,50 @@ a renamed or moved repo still counts, under Delisting below.
 
 **Delisting.** Before it reads a project's issues, the sync reads its repo,
 and its issue repo when that is another one. When GitHub shows either as
-private, archived, or blocked, or doesn't show it, the sync pauses the
-project, with the reason, like `sample-owner/app is archived on GitHub.`
+private, archived, or blocked, or doesn't show it, the sync delists the
+project: it marks it with the reason, like
+`sample-owner/app is archived on GitHub.` It pauses an approved project
+too, with the same reason.
 
-- Only an answer in GitHub's own form pauses a project: its `404` with a
+- A delisted project has no page, and what the site cached from its repos,
+  like its issues' titles and labels, shows nowhere, under Which projects
+  have a page in [the project page](#the-project-page), under
+  [the issue page](#the-issue-page), and in the
+  [donor's tools](#the-donors-tools). It asks no one for help, so the lists
+  leave it out, its issues take no claims, and the claims on them can't go
+  on, whatever its status.
+- The sync reads no issues of a paused project, so each run first reads the
+  repos alone of every paused project, whoever paused it, and of every
+  approved project it delisted, as after a resume. The one whose repos were
+  read longest ago goes first, never read first.
+- The mark sits beside the project's status. A pause its maintainer or an
+  admin made stays theirs, with their reason, and nothing is added to the
+  status history. So its maintainers can still lift their own pause, and
+  the page comes back by itself once GitHub shows the repos again. Taking
+  the pause over for Good First Token would make it the admins' to lift,
+  and the page would come back only when one did.
+- When the sync reads both repos public and open again, it takes the mark
+  off, and the page comes back with no one acting. A pause Good First Token
+  made stays until an admin lifts it, and its page shows it paused.
+- A resume leaves the mark, from the maintainer's `pause_project` or the
+  admin's `admin_pause_project`. So a project resumed while its repo is
+  still private shows nothing cached, and the next run pauses it again,
+  for Good First Token, as it does any approved project.
+- Only reads with the service token set the mark or take it off: the
+  sync's, and a maintainer's refresh, which reads the same way. No
+  person's token does.
+- Only an answer in GitHub's own form delists a project: its `404` with a
   JSON body that says `Not Found`, a `451` with a JSON body, or the repo,
   with the fields GitHub gives, saying it is private or archived. Any other
-  answer stops the run and pauses nothing, so a proxy, or an API that isn't
-  GitHub's, can't pause a project.
+  answer stops the run and delists nothing, so a proxy, or an API that
+  isn't GitHub's, can't delist a project.
 
 - The service token reads public repos only, so for a repo that went
   private and for one that was deleted, the reason is the same:
   `GitHub shows no public repo named sample-owner/app. It went private or
   was deleted.`
-- The pause names no person, so only an admin can resume it, as
-  [Managing a project](#managing-a-project) says.
+- The pause of an approved project names no person, so only an admin can
+  resume it, as [Managing a project](#managing-a-project) says.
 - It lands only on the approved status the sync read, so a change someone
   made at the same moment stays.
 - GitHub answers a renamed or moved repo from its new name, so the sync
@@ -1380,16 +1415,20 @@ the first question included.
 | The PR job | A tenth | 100 |
 | A maintainer's refresh | Half | 60 |
 
+- The sync's reads of repos alone, before its passes, start no new project
+  once they have made 100 of its calls in a run, so the passes always get
+  the rest. The next run starts with the projects they left.
 - A run also stops when GitHub refuses a call for the rate limit, primary
   or secondary, refuses the token, can't be reached, answers with an error
   of its own, or answers what GitHub doesn't send, as when it doesn't answer
-  the first question as GitHub does. It pauses nothing then.
+  the first question as GitHub does. It pauses and delists nothing then.
 - A run that stops saves what it read first, and the next picks up there.
 - When GitHub refuses a read about one project alone, like a label it can't
   list issues by, the run skips that project and goes on.
 - Each run of the sync logs one line: what it read, what is left of the
   budget, why it stopped, the projects it left because another run held
-  them, and every open PR it found linked to the issues it read, each
+  them, how many projects it read the repos alone of and which of those it
+  delisted, and every open PR it found linked to the issues it read, each
   counted once for each issue, by a closing reference only, a
   cross-reference only, or both ways, with the PRs in other repos counted
   apart.
@@ -1424,17 +1463,21 @@ them. `submit_work` and `open_pr` come with #16.
   claims table lists them, and each claim's room gives its state now. The
   agent offers them before new issues, and resumes one by claiming its
   issue again.
-- A claim whose project is on the [do-not-list](#crawl-candidates), working
-  or paused, isn't among them, since no more work goes there.
+- A claim whose project is on the [do-not-list](#crawl-candidates), or one
+  the sync delisted, under Delisting in [Tagged issues](#tagged-issues),
+  working or paused, isn't among them, since no more work goes there.
 - The answer's follow-ups, a maintainer asking for changes on one of the
   donor's PRs, come first when there are any. The list is empty until #17
   fills it. So is the list of PRs merged since the last session.
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions.
 - `my_work` lists the same claims in progress, and those on a project on
-  the do-not-list too, since they are the donor's own record. Each is
-  marked `resumable`. One on the do-not-list isn't, and its `reason` says
-  so and tells the agent to release it with `release_claim`. Its
+  the do-not-list or one the sync delisted too, since they are the donor's
+  own record. Each is marked `resumable`. One of those isn't, and its
+  `reason` says why, with the reason GitHub gave for a delisted project,
+  and tells the agent to release it with `release_claim`. A claim on a
+  delisted project is titled by its issue alone, like `owner/repo#n`,
+  since nothing cached from the repo shows. Its
   follow-ups, and its work waiting to open as a PR, are empty lists until
   #17 and #16 fill them.
 - A session belongs to the donor who started it. Another donor who names it
@@ -1446,7 +1489,8 @@ when all of these hold, the rules of
 
 - It waits for an agent, by the homepage's rule under
   [The homepage](#the-homepage): its project is approved and not paused,
-  neither the project's repo nor the issue's repo is on the do-not-list, its
+  neither the project's repo nor the issue's repo is on the do-not-list,
+  the sync hasn't delisted the project, its
   cached copy carries one of the project's tags and none of its excluded
   tags, no open PR the sync or a claim knows of is linked to it, and fewer
   of its claims hold a slot than the project's claims per issue.
@@ -1531,15 +1575,18 @@ the donor's tools use the one rule, so they agree.
 - Claiming an issue the donor holds a slot on gives back that claim, marked
   resumed, with the commit it started from. It takes no second slot, and
   nothing from the budget.
-- Resuming a claim whose project is on the do-not-list is refused with
-  `project_not_open`, the refusal a project not asking for help gets, and
-  the answer says to release the claim. A queued pick like that is passed
+- Resuming a claim whose project is on the do-not-list, or one the sync
+  delisted, is refused with `project_not_open`, the refusal a project not
+  asking for help gets. The answer says why, with the reason GitHub gave
+  for a delisted project, and says to release the claim. A queued pick like that is passed
   over and reported.
 - Otherwise the checks run in this order, and the first to fail refuses the
   claim: the budget, with `budget_spent`. The project, with
-  `project_not_open` for one that isn't approved, is paused, or is on the
-  do-not-list. The cached copy's tags, with `issue_not_eligible`. A PR the
-  sync or the room knows of, with `pr_exists`. A full issue, with
+  `project_not_open` for one that isn't approved, is paused, is on the
+  do-not-list, or is delisted, which gives the reason GitHub gave. The
+  cached copy's tags, with
+  `issue_not_eligible`. A PR the sync or the room knows of, with
+  `pr_exists`. A full issue, with
   `issue_full`. The open-PR cap, with `open_pr_cap`. The code repo on
   GitHub, with `project_not_open` when GitHub shows the donor no such repo.
   The vouch file, with `not_vouched`. The issue on GitHub, with
@@ -1641,8 +1688,8 @@ since it started.
 - Only the donor who made the claim can post to it or release it. Anyone
   else is refused with `not_claim_owner`, by the `work_claim` permission,
   and the room checks again. A claim the table doesn't have is `not_found`.
-- Both work on a claim whose project is on the do-not-list, so the donor can
-  say they are stopping and let it go.
+- Both work on a claim whose project is on the do-not-list, or one the
+  sync delisted, so the donor can say they are stopping and let it go.
 
 ## Crawl candidates
 
@@ -2118,7 +2165,8 @@ the video before the visitor plays it.
 **Asking for help** lists the projects asking for help.
 
 - Every approved project. Pending, rejected, and paused ones are left out,
-  and so is a project whose repo or issue repo is on the do-not-list.
+  and so is a project whose repo or issue repo is on the do-not-list, or
+  one the sync delisted, under Delisting in [Tagged issues](#tagged-issues).
 - An issue is waiting for an agent when a new agent could claim it now: the
   project's cached copy of it carries one of the project's tags and none of
   its excluded tags, compared without case, it has no open PR, and fewer of
@@ -2146,8 +2194,9 @@ it shows is in [brand/brief-website.md](../brand/brief-website.md).
 
 - It lists the projects [asking for help](#the-homepage) by the homepage's
   rule, all of them up to 1,000, in the homepage's order: approved, not
-  paused, and off the do-not-list, the ones with the most issues waiting
-  for an agent first. Pending, rejected, and paused projects aren't on it.
+  paused, off the do-not-list, and not delisted, the ones with the most
+  issues waiting for an agent first. Pending, rejected, and paused projects
+  aren't on it.
 - Each row is the homepage's row, with how the project got in:
   `registered by its maintainers`, or `listed from its AI policy`.
 - The chips filter by PR mode: `all`, `automatic PRs`, or `reviewed PRs`.
@@ -2170,25 +2219,19 @@ and its top helpers. What it shows is in
 
 **Which projects have a page**
 
-- An approved project has one, and so does one that a maintainer or an
-  admin paused. A pending or rejected project, a repo that isn't a
-  project, and a project whose repo or issue repo is on the do-not-list are
-  `404`, and the page says the repo isn't listed.
-- So is a project Good First Token paused on its own, with no person. The
-  sync does that when GitHub shows its repo or issue repo private,
-  archived, blocked, or gone, under Delisting in
-  [Tagged issues](#tagged-issues). Its page would still show what the site
-  cached from the repo, like its issues' titles, after the repo went
-  private.
-- Only those two repos' own entries count. A project on the do-not-list
-  takes no page from another project, even when it kept its issues in that
-  project's repo or in the same issue repo.
-- The sync reads approved projects only. So a project a maintainer or an
-  admin paused keeps its page even when its repo goes private meanwhile,
-  and shows what the site cached until someone resumes it and the next
-  sync delists it.
-  [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) takes
-  that on.
+- An approved or a paused project has one, whoever paused it. A pending or
+  rejected project, a repo that isn't a project, and a project whose repo
+  or issue repo is on the do-not-list are `404`, and the page says the repo
+  isn't listed.
+- So is a project the sync delisted, approved or paused. The sync does that
+  when GitHub shows its repo or issue repo private, archived, blocked, or
+  gone, under Delisting in [Tagged issues](#tagged-issues). Its page would
+  still show what the site cached from the repo, like its issues' titles,
+  after the repo went private. A resume doesn't bring the page back. The
+  sync does, once it sees both repos public and open again.
+- Only those two repos' own do-not-list entries count. A project on the
+  do-not-list takes no page from another project, even when it kept its
+  issues in that project's repo or in the same issue repo.
 - The repo in the path is found without case, and the page names it as it
   was saved.
 - A path whose owner or repo GitHub couldn't have, or whose owner's paths
@@ -2219,9 +2262,9 @@ below.
   holds one now, as the homepage counts them. It links to its issue page,
   in the repo where the project keeps its issues.
 - An issue takes claims when the homepage counts it
-  [waiting for an agent](#the-homepage), which needs the project approved
-  and off the do-not-list too. The homepage, the project pages, the issue
-  pages, and `suggest_issues` use one rule.
+  [waiting for an agent](#the-homepage), which needs the project approved,
+  off the do-not-list, and not delisted too. The homepage, the project
+  pages, the issue pages, and `suggest_issues` use one rule.
 - An open PR on the issue, the one the last sync saw linked or else a
   claim's, is named on the row, and turns its rings gray. A paused
   project's rings are gray too. A full issue's rings are all filled.
@@ -2321,9 +2364,9 @@ side. What it shows, and in what order, is in
   projects have a page in [the project page](#the-project-page). When it
   has none, as once the sync delists it or it goes on the do-not-list, the
   page is titled `owner/repo#n`, in the page and in its `<title>`, and
-  shows no labels and no PR the sync saw linked. The PRs the room holds
-  stay, and so do the lanes and the timeline, except on an issue the
-  do-not-list covers, below.
+  shows no labels and no PR the sync saw linked, though the sync told the
+  issue's room of it. The PRs claims opened stay, and so do the lanes and
+  the timeline, except on an issue the do-not-list covers, below.
 
 **The lanes**
 

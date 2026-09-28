@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { epochMs, issueRef, labelName, prRefSchema, repoName } from './primitives';
+import { epochMs, issueRef, labelName, prRefSchema, repoName, trimmedText } from './primitives';
+import { MAX_STATUS_REASON } from './projects';
 
 // The cache of each project's tagged issues (spec section 6). GitHub is the
 // source of truth, and the server checks it again before suggesting,
@@ -64,5 +65,15 @@ export const issueSyncSchema = z.object({
    * the sync read it.
    */
   language: z.string().max(100).nullable(),
+  /**
+   * Why GitHub showed the project's code repo or issue repo private,
+   * archived, blocked, or gone when the sync last read them, like
+   * `sample-owner/app is archived on GitHub.`, or null when it showed both
+   * public and open, or before the sync read them. While it is set, what the
+   * site cached from the repos stays hidden, whatever the project's status.
+   */
+  delisted: trimmedText(MAX_STATUS_REASON).nullable(),
+  /** When the sync last read the project's code repo and issue repo, or null before it did. */
+  reposReadAt: epochMs.nullable(),
 });
 export type IssueSync = z.infer<typeof issueSyncSchema>;
