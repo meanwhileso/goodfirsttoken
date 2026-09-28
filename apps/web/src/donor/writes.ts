@@ -25,13 +25,21 @@ export class WriteRefused extends Error {
  */
 export const NOT_READY = Symbol('not ready');
 
-/** A path's entry in a commit's tree: a file, or something else, like a folder. */
+/** A path's entry in a commit's tree. */
 export interface Entry {
   oid: string;
-  /** A file, as opposed to a folder or a submodule. */
+  /** Anything but a folder: a file, a symbolic link, or a submodule. */
   file: boolean;
+  /** The size in bytes of a file or a symbolic link, as GitHub gives it. */
   byteSize: number | null;
-  binary: boolean;
+  /** The mode Git keeps it with, like 0o100644 for a file, 0o100755 for an executable one, or 0o40000 for a folder. */
+  mode: number;
+}
+
+/** The folder a path is in, as an expression's path: empty for the root. */
+function folderOf(path: string): string {
+  const slash = path.lastIndexOf('/');
+  return slash === -1 ? '' : path.slice(0, slash);
 }
 
 /** An addition for createCommitOnBranch: a path and its content in base64. */
@@ -62,11 +70,8 @@ function refusedBy(error: unknown, what: string): unknown {
 
 const ENTRY_CHUNK = 100;
 
-interface EntryAnswer {
-  __typename: string;
-  oid: string;
-  byteSize?: number;
-  isBinary?: boolean | null;
+interface FolderAnswer {
+  entries?: { name: string; type: string; mode: number; oid: string; size: number }[] | null;
 }
 
 interface TextAnswer {
@@ -144,35 +149,34 @@ export class DonorWriter {
   }
 
   /**
-   * What each path is at a commit: a file with its size, something else, or
-   * null for nothing. The paths go in as GraphQL variables, so a path never
-   * becomes part of the query.
+   * What each path is at a commit, with its mode, or null for nothing. Each
+   * is read from its folder's entries, which carry the modes. The paths go
+   * in as GraphQL variables, so a path never becomes part of the query.
    */
   async entries(repo: string, rev: string, paths: readonly string[]): Promise<Map<string, Entry | null>> {
-    const found = new Map<string, Entry | null>();
-    for (let start = 0; start < paths.length; start += ENTRY_CHUNK) {
-      const chunk = paths.slice(start, start + ENTRY_CHUNK);
-      const answers = await this.objects<EntryAnswer>(
+    const folders = [...new Set(paths.map(folderOf))];
+    const listed = new Map<string, Map<string, Entry>>();
+    for (let start = 0; start < folders.length; start += ENTRY_CHUNK) {
+      const chunk = folders.slice(start, start + ENTRY_CHUNK);
+      const answers = await this.objects<FolderAnswer>(
         repo,
-        chunk.map((path) => `${rev}:${path}`),
-        '__typename oid ... on Blob { byteSize isBinary }',
+        chunk.map((folder) => `${rev}:${folder}`),
+        '... on Tree { entries { name type mode oid size } }',
       );
-      chunk.forEach((path, i) => {
-        const answer = answers[i] ?? null;
-        found.set(
-          path,
-          answer === null
-            ? null
-            : {
-                oid: answer.oid,
-                file: answer.__typename === 'Blob',
-                byteSize: answer.byteSize ?? null,
-                binary: answer.isBinary !== false,
-              },
+      chunk.forEach((folder, i) => {
+        const entries = answers[i]?.entries ?? [];
+        listed.set(
+          folder,
+          new Map(
+            entries.map((entry) => [
+              entry.name,
+              { oid: entry.oid, file: entry.type !== 'tree', byteSize: entry.type === 'blob' ? entry.size : null, mode: entry.mode },
+            ]),
+          ),
         );
       });
     }
-    return found;
+    return new Map(paths.map((path) => [path, listed.get(folderOf(path))?.get(path.slice(path.lastIndexOf('/') + 1)) ?? null]));
   }
 
   /** The text of each file at a commit, or null for one GitHub gave no whole text for. */

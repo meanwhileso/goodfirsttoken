@@ -17,7 +17,7 @@
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
-import { base64ToBytes, blobText, bytesToBase64, lookupPath, type GitPerson, type Oid } from './git.ts';
+import { base64ToBytes, blobText, bytesToBase64, entryMode, lookupPath, type GitPerson, type Oid } from './git.ts';
 import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
 import { own } from './own.ts';
 import {
@@ -552,7 +552,7 @@ function objectNode(ctx: Ctx, repo: RepoRecord, oid: Oid | null, path: string): 
             name: entry.name,
             path: entryPath,
             type: entry.type,
-            mode: entry.type === 'blob' ? 0o100644 : 0o40000,
+            mode: parseInt(entryMode(entry), 8),
             oid: entry.oid,
             size: target?.type === 'blob' ? target.size : 0,
             object: () => objectNode(ctx, repo, entry.oid, entryPath),

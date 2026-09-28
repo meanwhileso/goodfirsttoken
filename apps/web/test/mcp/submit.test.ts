@@ -714,6 +714,66 @@ describe('what a submit commits', () => {
     expect(refusalOf(again)).toBe('no_changes');
   });
 
+  test('an executable file, a symbolic link, and a submodule take no change and no deletion, and keep their modes', async () => {
+    await project(APP, reviewed);
+    github.commitFiles(
+      APP,
+      { 'bin/run.sh': 'echo run\n', 'bin/latest': 'run.sh', 'vendor/lib': 'c'.repeat(40) },
+      BY,
+      { modes: { 'bin/run.sh': '100755', 'bin/latest': '120000', 'vendor/lib': '160000' } },
+    );
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+
+    const tries: [Record<string, string | null>, string][] = [
+      [{ 'bin/run.sh': 'echo walk\n' }, 'bin/run.sh is an executable file'],
+      [{ 'bin/run.sh': null }, 'bin/run.sh is an executable file'],
+      [{ 'bin/latest': 'walk.sh' }, 'bin/latest is a symbolic link'],
+      [{ 'vendor/lib': 'd'.repeat(40) }, 'vendor/lib is a submodule'],
+      [{ 'vendor/lib': null }, 'vendor/lib is a submodule'],
+    ];
+    for (const [files, says] of tries) {
+      const refused = await submit(priya, claimId, { 'src/ok.ts': 'export {};\n', ...files });
+      expect(refusalOf(refused), says).toBe('file_mode');
+      expect(textOf(refused)).toContain(`${says} in the start commit, and submit_work changes only plain files, so nothing was committed.`);
+      expect(writes(lastCalls()).filter((w) => !w.endsWith('/forks'))).toEqual([]);
+    }
+    // The same text as the file has changes nothing, so it goes through.
+    const same = await submit(priya, claimId, { 'src/ok.ts': 'export {};\n', 'bin/run.sh': 'echo run\n' });
+
+    expect(same.isError).toBeFalsy();
+    const modes = (dir: string) => {
+      const tree = github.state.objects[commitAt(repoState('priya/sample-app').branches[branch]).tree];
+      const folder = tree?.type === 'tree' ? tree.entries.find((e) => e.name === dir) : undefined;
+      const entries = folder === undefined ? undefined : github.state.objects[folder.oid];
+      return entries?.type === 'tree' ? Object.fromEntries(entries.entries.map((e) => [e.name, e.mode ?? '100644'])) : {};
+    };
+    expect(modes('bin')).toEqual({ 'run.sh': '100755', latest: '120000' });
+    expect(modes('vendor')).toEqual({ lib: '160000' });
+  });
+
+  test('putting back a file whose mode a commit would lose is refused', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+    await submit(priya, claimId, { 'tool.sh': 'echo one\n', 'a.txt': 'a\n' });
+    // No submit gets a mode onto the branch, and a push to it stops the
+    // next submit, so the test sets one in the fake's tree itself.
+    const tree = github.state.objects[commitAt(repoState('priya/sample-app').branches[branch]).tree];
+    const entry = tree?.type === 'tree' ? tree.entries.find((e) => e.name === 'tool.sh') : undefined;
+    if (!entry) throw new Error('no tool.sh');
+    entry.mode = '100755';
+
+    const refused = await submit(priya, claimId, { 'a.txt': 'b\n' });
+
+    expect(refusalOf(refused)).toBe('file_mode');
+    expect(textOf(refused)).toContain(`tool.sh is an executable file in priya/sample-app:${branch}`);
+  });
+
   test("keys and tokens in the agent's notes are replaced in the commit, the PR, and the review queue", async () => {
     await project(APP, reviewed);
     const issue = await tagged(APP);

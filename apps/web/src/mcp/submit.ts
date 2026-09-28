@@ -40,6 +40,7 @@ import {
   commitUrl,
   textBase64,
   type Addition,
+  type Entry,
 } from '../donor/writes';
 import { issueRoom } from '../rooms/issue-room';
 import {
@@ -155,35 +156,58 @@ interface Change {
 }
 
 /**
+ * What a mode other than a plain file's makes a path. createCommitOnBranch
+ * writes every file as a plain file, 100644, so a change to one of these
+ * would lose what it is.
+ */
+const KEPT_MODES = new Map<number, string>([
+  [0o100755, 'an executable file'],
+  [0o120000, 'a symbolic link'],
+  [0o160000, 'a submodule'],
+]);
+
+/** The refusal for a change to a path whose mode a commit would lose, or null. `where` is where the entry is. */
+function modeRefusal(path: string, entry: Entry | null, where: string): Refusal | null {
+  const kind = entry === null ? undefined : KEPT_MODES.get(entry.mode);
+  if (kind === undefined) return null;
+  return refusal(
+    'file_mode',
+    `${path} is ${kind} in ${where}, and submit_work changes only plain files, so nothing was committed. Tell the donor, who can change it with Git themselves, and submit the rest without it.`,
+  );
+}
+
+/**
  * What the commit changes so the branch holds each file as submitted, and
  * each file an earlier submit sent and this one leaves out as it was at the
  * start commit. A file the branch already holds as submitted, and a
  * deletion of a file the branch doesn't have, change nothing and are left
  * out. `repo` at `rev` is the branch now, and `upstream` at `start` is the
- * start commit.
+ * start commit. A change to an executable file, a symbolic link, or a
+ * submodule is refused, since the commit would make it a plain file.
  */
 async function planChange(
   writer: DonorWriter,
-  at: { repo: string; rev: string },
+  at: { repo: string; rev: string; where: string },
   start: { repo: string; rev: string },
   files: readonly { path: string; content: string | null }[],
   putBack: readonly string[],
-): Promise<Change> {
+): Promise<Change | Refusal> {
   const entries = await writer.entries(at.repo, at.rev, [...files.map((file) => file.path), ...putBack]);
   // A file whose text may be the one submitted: one of the same size.
   const sameSize = files.filter((file) => {
     const entry = entries.get(file.path);
-    return file.content !== null && entry?.file === true && !entry.binary && entry.byteSize === utf8Length(file.content);
+    return file.content !== null && entry?.file === true && entry.byteSize === utf8Length(file.content);
   });
   const texts = sameSize.length === 0 ? new Map<string, string | null>() : await writer.texts(at.repo, at.rev, sameSize.map((file) => file.path));
   const change: Change = { additions: [], deletions: [] };
   for (const file of files) {
     const entry = entries.get(file.path) ?? null;
-    if (file.content === null) {
-      if (entry?.file === true) change.deletions.push(file.path);
-    } else if (texts.get(file.path) !== file.content) {
-      change.additions.push({ path: file.path, contents: textBase64(file.content) });
-    }
+    const changes = file.content === null ? entry?.file === true : texts.get(file.path) !== file.content;
+    if (!changes) continue;
+    const kept = modeRefusal(file.path, entry, at.where);
+    if (kept) return kept;
+    if (file.content === null) change.deletions.push(file.path);
+    else change.additions.push({ path: file.path, contents: textBase64(file.content) });
   }
   if (putBack.length > 0) {
     const atStart = await writer.entries(start.repo, start.rev, putBack);
@@ -191,6 +215,8 @@ async function planChange(
       const now = entries.get(path) ?? null;
       const was = atStart.get(path) ?? null;
       if (was?.oid === now?.oid) continue;
+      const kept = modeRefusal(path, now, at.where) ?? modeRefusal(path, was, 'the start commit');
+      if (kept) return kept;
       if (was?.file === true) change.additions.push({ path, contents: await writer.blob(start.repo, was.oid) });
       else if (now?.file === true) change.deletions.push(path);
     }
@@ -227,8 +253,12 @@ async function commitWork(
     const head = await whenReady(() => writer.branchHead(target, branch));
     if (head === NOT_READY) return forkNotReady(target);
     // A branch not made yet starts at the start commit, which the code repo has.
-    const at = head === null ? { repo: input.upstream, rev: start } : { repo: target, rev: head };
+    const at =
+      head === null
+        ? { repo: input.upstream, rev: start, where: 'the start commit' }
+        : { repo: target, rev: head, where: `${target}:${branch}` };
     const change = await planChange(writer, at, { repo: input.upstream, rev: start }, input.files, input.putBack);
+    if (isRefusal(change)) return change;
     if (change.additions.length + change.deletions.length === 0) {
       if (input.unrecorded && head !== null && head !== start) return { sha: head };
       const same = head === null ? 'are as they were at the start commit' : `are as ${target}:${branch} holds them`;

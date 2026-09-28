@@ -482,6 +482,7 @@ export const submitWork = defineTool({
     'pr_closed',
     'issue_not_eligible',
     'no_changes',
+    'file_mode',
     'fork_not_ready',
     'github_refused',
   ],

@@ -518,10 +518,12 @@ function contents(req: RestRequest, params: Params): Response {
   const found = lookupPath(store, readObject(store, sha, 'commit').tree, path);
   if (!found) throw new FakeError('not_found', 'Not Found');
   if (found.object.type === 'blob') return json(contentShape(req.ctx, repo, refName, path, found.oid, found.object, true));
+  // A submodule, which GitHub lists with the type submodule, is left out.
   return json(
-    found.object.entries.map((entry) => {
+    found.object.entries.flatMap((entry) => {
+      if (entry.type === 'commit') return [];
       const entryPath = path ? `${path}/${entry.name}` : entry.name;
-      return contentShape(req.ctx, repo, refName, entryPath, entry.oid, readObject(store, entry.oid, entry.type), false);
+      return [contentShape(req.ctx, repo, refName, entryPath, entry.oid, readObject(store, entry.oid, entry.type), false)];
     }),
   );
 }

@@ -452,3 +452,88 @@ test("a blob's content comes back in base64", async () => {
   expect(read.body.size).toBe(Buffer.byteLength(text));
   expect(missing.status).toBe(404);
 });
+
+const ENTRIES = `query ($owner: String!, $name: String!, $dir: String!, $sub: String!) {
+  repository(owner: $owner, name: $name) {
+    dir: object(expression: $dir) { ... on Tree { entries { name type mode oid size } } }
+    sub: object(expression: $sub) { __typename }
+  }
+}`;
+
+interface EntriesReply {
+  repository: {
+    dir: { entries: { name: string; type: string; mode: number; oid: string; size: number }[] } | null;
+    sub: { __typename: string } | null;
+  };
+}
+
+test("a tree gives each entry's mode, and createCommitOnBranch writes an addition as a plain file, whatever it was", async () => {
+  const submodule = 'a'.repeat(40);
+  fake.commitFiles(
+    'meanwhileso/goodfirsttoken',
+    { 'tools/run.sh': 'echo run\n', 'tools/latest': 'run.sh', 'tools/vendor': submodule, 'tools/notes.md': 'Notes.\n' },
+    'octo-maintainer',
+    { modes: { 'tools/run.sh': '100755', 'tools/latest': '120000', 'tools/vendor': '160000' } },
+  );
+  const { token } = await forkWithBranch('sam', 'modes');
+  const read = async (ref: string) => {
+    const reply = await graphql<EntriesReply>(fake, token, ENTRIES, {
+      owner: 'sam',
+      name: 'goodfirsttoken',
+      dir: `${ref}:tools`,
+      sub: `${ref}:tools/vendor`,
+    });
+    return reply.body.data?.repository;
+  };
+  const before = await read('modes');
+
+  await graphql(fake, token, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'sam/goodfirsttoken', branchName: 'modes' },
+      expectedHeadOid: await head('sam/goodfirsttoken', 'modes'),
+      message: { headline: 'Write over the executable' },
+      fileChanges: { additions: [{ path: 'tools/run.sh', contents: toBase64('echo walk\n') }], deletions: [{ path: 'tools/vendor' }] },
+    },
+  });
+  const after = await read('modes');
+
+  expect(before?.dir?.entries.map(({ name, type, mode }) => [name, type, mode])).toEqual([
+    ['latest', 'blob', 0o120000],
+    ['notes.md', 'blob', 0o100644],
+    ['run.sh', 'blob', 0o100755],
+    ['vendor', 'commit', 0o160000],
+  ]);
+  expect(before?.dir?.entries.find((entry) => entry.name === 'vendor')?.oid).toBe(submodule);
+  // A submodule's commit is in another repo.
+  expect(before?.sub).toBeNull();
+  expect(after?.dir?.entries.map(({ name, mode }) => [name, mode])).toEqual([
+    ['latest', 0o120000],
+    ['notes.md', 0o100644],
+    ['run.sh', 0o100644],
+  ]);
+});
+
+test("Update branch merges the base branch into a PR's branch, in a merge commit by the person who clicked it", async () => {
+  const { token } = await forkWithBranch('sam', 'behind');
+  await commitFile(token, 'sam/goodfirsttoken', 'behind', 'mine.txt');
+  const pr = await rest<{ number: number }>(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token,
+    body: { title: 'Behind', head: 'sam:behind', base: 'main' },
+  });
+  const was = await head('sam/goodfirsttoken', 'behind');
+  const main = fake.commitFiles('meanwhileso/goodfirsttoken', { 'theirs.txt': 'From main.\n' }, 'octo-maintainer');
+
+  const merged = fake.updatePullRequestBranch('meanwhileso/goodfirsttoken', pr.body.number, 'octo-maintainer');
+  // A maintainer commits a reviewer's suggestion to the PR's branch in the fork.
+  const suggested = fake.commitFiles('sam/goodfirsttoken', { 'mine.txt': 'Suggested.\n' }, 'octo-maintainer', { branch: 'behind' });
+
+  const commit = fake.state.objects[merged];
+  expect(commit?.type === 'commit' && [commit.parents, commit.author.login]).toEqual([[was, main], 'octo-maintainer']);
+  const read = await rest<{ head: { sha: string } }>(fake, 'GET', `${UPSTREAM}/pulls/${String(pr.body.number)}`);
+  expect(read.body.head.sha).toBe(suggested);
+  expect(await head('sam/goodfirsttoken', 'behind')).toBe(suggested);
+  const file = async (path: string) =>
+    (await rest<{ content: string }>(fake, 'GET', `/repos/sam/goodfirsttoken/contents/${path}?ref=behind`)).body.content;
+  expect(fromBase64(await file('theirs.txt'))).toBe('From main.\n');
+  expect(fromBase64(await file('mine.txt'))).toBe('Suggested.\n');
+});

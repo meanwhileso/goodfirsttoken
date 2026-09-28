@@ -34,14 +34,17 @@ import {
   openIssue,
   openPull,
   roleOf,
+  updatePullBranch,
   type FakeState,
   type IssueRecord,
   type RepoRecord,
   type ReviewInput,
 } from './state.ts';
 import { handleWeb, revokeOverTheCap } from './web.ts';
+import type { FileMode } from './git.ts';
 
 export type { FakeState, ReviewInput } from './state.ts';
+export type { FileMode } from './git.ts';
 export type { RateResource } from './rate-limit.ts';
 export type { SampleData } from './sample-data.ts';
 
@@ -99,8 +102,19 @@ export interface GitHubFake {
   mergePullRequest: (repo: string, number: number, by: string) => void;
   closePullRequest: (repo: string, number: number, by: string) => void;
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
-  // Commits these files, path to text, to the repo's default branch as `by`.
-  commitFiles: (repo: string, files: Record<string, string>, by: string) => void;
+  // Commits these files, path to text, to the repo's default branch as
+  // `by`, or to `branch`, and returns the commit's ID. A file is 100644
+  // unless `modes` gives it another mode. For a submodule, 160000, its
+  // text is the ID of the commit it names.
+  commitFiles: (
+    repo: string,
+    files: Record<string, string>,
+    by: string,
+    options?: { branch?: string; modes?: Record<string, FileMode> },
+  ) => string;
+  // Clicks Update branch on a PR as `by`: the base branch merges into the
+  // PR's branch. Returns the merge commit's ID.
+  updatePullRequestBranch: (repo: string, number: number, by: string) => string;
   // Opens an issue as `by`, with the labels given, and returns its number.
   openIssue: (repo: string, issue: { title: string; body?: string; labels?: string[]; by: string }) => number;
   labelIssue: (repo: string, number: number, label: string, by: string) => void;
@@ -335,17 +349,18 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     reviewPullRequest: (repo, number, review) => {
       addReview(state, repoNamed(repo), number, review, now().toISOString());
     },
-    commitFiles: (repo, files, by) => {
+    commitFiles: (repo, files, by, options = {}) => {
       const record = repoNamed(repo);
-      const additions = Object.entries(files).map(([path, contents]) => ({ path, contents }));
-      commitOnBranch(
+      const additions = Object.entries(files).map(([path, contents]) => ({ path, contents, mode: own(options.modes ?? {}, path) }));
+      return commitOnBranch(
         state,
         record,
-        record.defaultBranch,
+        options.branch ?? record.defaultBranch,
         { additions, deletions: [], headline: 'Update files', login: by },
         now().toISOString(),
       );
     },
+    updatePullRequestBranch: (repo, number, by) => updatePullBranch(state, repoNamed(repo), number, by, now().toISOString()),
     openIssue: (repo, issue) =>
       openIssue(
         state,

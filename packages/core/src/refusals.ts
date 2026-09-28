@@ -33,6 +33,9 @@ export const refusalCodes = [
   'no_changes',
   // GitHub makes a new fork in the background, and hadn't finished it.
   'fork_not_ready',
+  // The submit changes an executable file, a symbolic link, or a submodule,
+  // which a commit through GitHub's API would make a plain file.
+  'file_mode',
   // GitHub refused a write the server made with the donor's token: the fork,
   // the branch, the commit, or the PR.
   'github_refused',

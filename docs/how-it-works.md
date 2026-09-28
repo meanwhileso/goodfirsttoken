@@ -1699,6 +1699,16 @@ never reaches the tool.
   recorded, a branch that already holds the files past the start commit
   holds a commit an earlier call made and didn't record, as when it died
   after the commit. The submit records that commit, and makes none.
+- A submit that would change an executable file, a symbolic link, or a
+  submodule is refused with `file_mode`, naming the path, and nothing is
+  committed. `createCommitOnBranch` writes every file it adds as a plain
+  file, mode 100644, so an executable would lose its mode, and a link or a
+  submodule would become a plain file. Each path's mode is read from its
+  folder in the branch's tree, or in the start commit while there is no
+  branch: 100755, 120000, and 160000 are refused. Deleting one is refused
+  too, and so is putting one back. A file sent with the text it has
+  changes nothing, so it goes through. The donor changes such a file with
+  Git themselves.
 - The commit is one call to GitHub's GraphQL `createCommitOnBranch` with
   the donor's token. GitHub makes the donor its author, commits it as
   GitHub, and signs it. Its first line is the title the agent gave, or else
@@ -1956,7 +1966,7 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`,
 `not_vouched`, `pr_closed`, `description_required`, `no_changes`,
-`fork_not_ready`, and `github_refused`.
+`file_mode`, `fork_not_ready`, and `github_refused`.
 
 Each maintainer's and admin's tool, and the donor's `submit_work` and
 `open_pr`, lists the refusals an agent can get from it, in its spec in
@@ -1976,7 +1986,7 @@ tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
-| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `fork_not_ready`, `github_refused` |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `fork_not_ready`, `github_refused` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
@@ -2012,6 +2022,7 @@ tool say what to do with each one on its list, under
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit |
+| `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, so nothing was committed |
 | `fork_not_ready` | GitHub was still making the donor's fork, so nothing was committed. The same submit works once it is done |
 | `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |

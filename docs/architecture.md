@@ -534,12 +534,17 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   the server waits 0.5, 1, and 2 seconds between reads with `setTimeout`,
   so a submit to a new fork can take about 4 seconds more. A Worker's wait
   uses no CPU time.
-- **Working out the change.** One GraphQL query for each 100 paths reads
-  each path's object at the branch head, or at the start commit in the code
-  repo while there is no branch, with `object(expression:)` and the paths as
-  variables: its type, size, and whether it is binary. A file whose new
+- **Working out the change.** One GraphQL query for each 100 folders
+  reads the entries of each folder a path is in, at the branch head, or at
+  the start commit in the code repo while there is no branch, with
+  `object(expression:)` and the folders as variables: each entry's name,
+  type, mode, blob ID, and size. Tree entries are the one place GitHub
+  gives a file's mode. A folder's entries come back whole, so a path in a
+  folder of thousands of files reads all their names. A file whose new
   text has the same size in UTF-8 as the one there is read in full in a
-  second query and compared. A path to put back is read at the start
+  second query and compared. A change to an entry whose mode is 100755,
+  120000, or 160000 is refused with `file_mode` before anything is
+  written. A path to put back is read at the start
   commit, compared by blob ID, and its bytes read with
   `GET .../git/blobs/{sha}`, so a binary file goes back as it was.
   `submissions.paths` keeps the paths the latest submit sent, for the next.
@@ -2149,9 +2154,10 @@ and Playwright run it as a local HTTP server.
   with its endpoint, the token it carried, the login that token belongs to,
   and the status. The local server lists them at `/_fake/calls`.
 - **Tests change it the way people change GitHub.** Besides merging,
-  closing, and reviewing PRs and committing files, a test can open, label,
-  assign, and close issues, open a PR from a branch or a fork, and spend
-  part of a person's rate limit, as their other clients would.
+  closing, and reviewing PRs and committing files, to any branch and with
+  any mode, a test can open, label, assign, and close issues, open a PR
+  from a branch or a fork, click Update branch on a PR, and spend part of
+  a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
   access. A fork belongs to whoever's token made it, and forking again
   returns the same fork. GitHub makes a new fork in the background, so for
@@ -2162,8 +2168,14 @@ and Playwright run it as a local HTTP server.
   expected head, makes the caller the author, and GitHub signs the commit.
   It refuses a change to a file under `.github/workflows/` from a token
   without the `workflow` scope, unless another branch of the repo has the
-  same file, with the same path and content. A commit to an open PR's
-  branch moves the PR's head, as a push does. A PR that
+  same file, with the same path and content. It writes every file it adds
+  as mode 100644, whatever the file was. A tree keeps each file's mode:
+  100644, 100755 for an executable file, 120000 for a symbolic link, and
+  160000 for a submodule, whose commit is in another repo, so
+  `object(expression:)` finds nothing at its path. A commit to an open PR's
+  branch moves the PR's head, as a push does. Update branch merges the
+  base branch into the PR's branch, in a merge commit by whoever clicked
+  it. A PR that
   mentions an issue adds a `cross-referenced` event to that issue's
   timeline, and merging it closes the issues it says it closes. A PR's head
   must be the base repo or a fork of it. Search serves the first 1,000
@@ -2186,6 +2198,10 @@ and Playwright run it as a local HTTP server.
     removed when the new text lacks it, which is close to what GitHub
     counts for small changes.
   - An archived repo accepts writes.
+  - A folder's contents over REST, and a comparison, leave a submodule
+    out. GitHub lists one in a folder with the type `submodule`.
+  - Update branch merges with no check for conflicts, and has no REST
+    route.
   - `maintainer_can_modify` is kept and sent back, and the base repo's
     maintainers still can't push to the PR's branch.
   - Issue search refuses a query that names neither `is:issue` nor

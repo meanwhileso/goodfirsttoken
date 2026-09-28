@@ -8,11 +8,14 @@
 import {
   blobOid,
   isAncestor,
+  listEntries,
   listFiles,
   readObject,
   writeBlob,
   writeCommit,
   writeTree,
+  type FileEntry,
+  type FileMode,
   type GitPerson,
   type ObjectStore,
   type Oid,
@@ -359,7 +362,10 @@ export function forkRepo(
 }
 
 export interface FileChanges {
-  additions: { path: string; contents: string | Uint8Array }[];
+  // createCommitOnBranch writes every addition as a 100644 file. Only the
+  // fake's own helpers give a mode, and for a submodule, its commit's ID
+  // as the contents.
+  additions: { path: string; contents: string | Uint8Array; mode?: FileMode }[];
   deletions: string[];
 }
 
@@ -413,7 +419,7 @@ export function commitOnBranch(
       `Expected branch to point to "${change.expectedHeadOid}" but it did not. Pull and try again.`,
     );
   }
-  const files = listFiles(state.objects, readObject(state.objects, head, 'commit').tree);
+  const files = listEntries(state.objects, readObject(state.objects, head, 'commit').tree);
   for (const path of change.deletions) {
     if (!files.delete(path)) {
       throw new FakeError(
@@ -422,7 +428,10 @@ export function commitOnBranch(
       );
     }
   }
-  for (const { path, contents } of change.additions) files.set(path, writeBlob(state.objects, contents));
+  for (const { path, contents, mode = '100644' } of change.additions) {
+    const oid = mode === '160000' ? String(contents) : writeBlob(state.objects, contents);
+    files.set(path, { oid, mode });
+  }
   const message = change.body ? `${change.headline}\n\n${change.body}` : change.headline;
   const oid = writeCommit(state.objects, {
     tree: writeTree(state.objects, files),
@@ -432,10 +441,16 @@ export function commitOnBranch(
     committer: webFlow(now),
     signedByGitHub: true,
   });
+  moveBranch(state, repo, branch, oid, now);
+  return oid;
+}
+
+// Points a branch at a new commit, as a push does. An open PR from the
+// branch takes the commit.
+function moveBranch(state: FakeState, repo: RepoRecord, branch: string, oid: Oid, now: string): void {
   repo.branches[branch] = oid;
   repo.pushedAt = now;
   repo.updatedAt = now;
-  // An open PR from the branch takes the new commit, as it does on a push.
   for (const base of Object.values(state.repos)) {
     for (const issue of Object.values(base.issues)) {
       const pull = issue.pull;
@@ -443,6 +458,41 @@ export function commitOnBranch(
       if (pull.head.repo !== null && key(pull.head.repo) === key(fullName(repo))) pull.head.sha = oid;
     }
   }
+}
+
+// The files of `into` with the changes `from` made since the two parted.
+function mergedFiles(store: ObjectStore, into: Oid, from: Oid): Map<string, FileEntry> {
+  const files = listEntries(store, readObject(store, into, 'commit').tree);
+  const since = mergeBase(store, into, from);
+  const before = since ? listEntries(store, readObject(store, since, 'commit').tree) : new Map<string, FileEntry>();
+  const after = listEntries(store, readObject(store, from, 'commit').tree);
+  for (const path of before.keys()) if (!after.has(path)) files.delete(path);
+  for (const [path, file] of after) {
+    const was = before.get(path);
+    if (was?.oid !== file.oid || was.mode !== file.mode) files.set(path, file);
+  }
+  return files;
+}
+
+// GitHub's Update branch on a PR: the base branch merges into the PR's
+// branch in a merge commit that the person makes and GitHub signs.
+// https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch
+export function updatePullBranch(state: FakeState, repo: RepoRecord, number: number, login: string, now: string): Oid {
+  const issue = getPull(repo, number);
+  const { pull } = issue;
+  const baseHead = own(repo.branches, pull.base.ref);
+  const head = pull.head.repo === null ? null : findRepoByFullName(state, pull.head.repo);
+  if (baseHead === undefined || head === null) throw new FakeError('invalid', 'The branch could not be updated');
+  const store = state.objects;
+  const oid = writeCommit(store, {
+    tree: writeTree(store, mergedFiles(store, pull.head.sha, baseHead)),
+    parents: [pull.head.sha, baseHead],
+    message: `Merge branch '${pull.base.ref}' into ${pull.head.ref}`,
+    author: gitPerson(state, login, now),
+    committer: webFlow(now),
+    signedByGitHub: true,
+  });
+  moveBranch(state, head, pull.head.ref, oid, now);
   return oid;
 }
 
@@ -708,14 +758,8 @@ export function mergePull(state: FakeState, repo: RepoRecord, number: number, lo
   const baseHead = repo.branches[pull.base.ref];
   if (baseHead === undefined) throw new FakeError('invalid', 'Base branch was deleted');
   const store = state.objects;
-  const files = listFiles(store, readObject(store, baseHead, 'commit').tree);
-  const since = mergeBase(store, baseHead, pull.head.sha);
-  const before = since ? listFiles(store, readObject(store, since, 'commit').tree) : new Map<string, Oid>();
-  const after = listFiles(store, readObject(store, pull.head.sha, 'commit').tree);
-  for (const path of before.keys()) if (!after.has(path)) files.delete(path);
-  for (const [path, oid] of after) if (before.get(path) !== oid) files.set(path, oid);
   const oid = writeCommit(store, {
-    tree: writeTree(store, files),
+    tree: writeTree(store, mergedFiles(store, baseHead, pull.head.sha)),
     parents: [baseHead, pull.head.sha],
     message: `Merge pull request #${String(number)} from ${pull.head.owner}/${pull.head.ref}\n\n${issue.title}`,
     author: gitPerson(state, login, now),
