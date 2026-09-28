@@ -753,8 +753,12 @@ together.
     `src/auth/permissions.ts`, `src/mcp/server.ts`, `maintainer.ts`,
     `admin.ts`, and `donor.ts`, and `src/admin/actions.ts`, and passes them
     in as `TEST_ANSWER_TEXT`. Comments and the admin pages' text aren't
-    read. Server text built from parts at run time, like
-    `Tool admin_queue not found`, isn't checked. At least one sentence
+    read. Those files also hold strings no answer shows, like internal
+    errors and logs, so a quote of one of them passes too. Answer text
+    from other files isn't read, like the sync's pause reasons that
+    `project_status` repeats, so a skill can't quote it yet. Server text
+    built from parts at run time, like `Tool admin_queue not found`, isn't
+    checked. At least one sentence
     across the skills has to be checked, so the test can't pass on none.
   - The skill calls every tool of its audience, and each tool it calls has
     a `refusals` list.

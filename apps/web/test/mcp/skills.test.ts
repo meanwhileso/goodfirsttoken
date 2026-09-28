@@ -32,8 +32,8 @@ import { connectAgent, emptyKv } from './helpers';
 // - Each sentence it quotes from the server in backticks, one that starts
 //   with a capital and ends with a full stop, is among the strings of the
 //   code that writes the MCP tools' answers. The Vitest config reads the
-//   strings of those files, and no comments or other pages. Across the
-//   skills, at least one such sentence is checked.
+//   strings of those files, errors and logs included, and no comments or
+//   other pages. Across the skills, at least one such sentence is checked.
 // - It names every tool of its audience.
 //
 // Its `## Connect` section tells an agent how to add the server in its own
