@@ -82,12 +82,13 @@ export function leaveDoNotListWhenApproved(db: D1Database, repo: string, by: num
 
 /**
  * Which of these repos the do-not-list covers, as the repos where issues
- * live. A repo on the list is covered, and so is every project's issue there,
- * whether or not that project is on the list. An issue repo is covered when
- * a project on the list keeps its issues there, and no approved or paused
- * project off the list does. Only those have claims, so removing one project
- * never hides the events of a listed project that shares its issue repo.
- * Each comes back in lower case. The repos go in as one JSON array, so any
+ * live. A repo on the list is always covered, and so are the issues any
+ * project keeps there, whether or not that project is on the list. An issue
+ * repo is covered when a project on the list keeps its issues there, and no
+ * approved or paused project off the list does. Only those have claims, so
+ * removing one project leaves shown the events of an approved or paused
+ * project on an issue repo they share, unless that repo is the removed
+ * project's own code repo. Each comes back in lower case. The repos go in as one JSON array, so any
  * number of them takes one query, under D1's limit on bound values.
  */
 export async function doNotListedAmong(db: D1Database, repos: Iterable<string>): Promise<Set<string>> {

@@ -1374,8 +1374,9 @@ approving a maintainer's registration of it takes it off, under
   list.
 - It covers the issue repo of a project on the list, unless an approved or
   paused project off the list keeps its issues there too. Only those have
-  claims, so removing one project leaves the issues of a listed project
-  that shares its issue repo, and the events on them, shown.
+  claims, so removing one project leaves the issues of an approved or
+  paused project that shares its issue repo, and the events on them,
+  shown.
 - The homepage's lists, the live feeds, and the issue pages leave out what
   it covers.
 

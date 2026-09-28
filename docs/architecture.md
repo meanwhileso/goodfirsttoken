@@ -1082,11 +1082,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   and the issue page leave those projects out. The do-not-list names code
   repos, so the query also covers the issue repo of a project on the list,
   unless an approved or paused project off the list keeps its issues there
-  too, since only those have claims. That keeps a listed project's events
-  on a shared issue repo shown. Judging each event by its claim's project
-  would also hide a removed project's own events there, but would change
-  how every feed and room reads its history, since they skip hidden repos
-  in SQL. The `history()` RPC
+  too, since only those have claims. That keeps an approved or paused
+  project's events on a shared issue repo shown. Judging each event by its
+  claim's project would also hide a removed project's own events there, but
+  would change how every feed and room reads its history, since they skip
+  hidden repos in SQL. The `history()` RPC
   of a room and of a feed leaves blocked donors out too, and throws when D1
   can't say who they are.
   Tests read what is stored straight from the object's SQLite.
