@@ -1,3 +1,5 @@
+import type { D1Migration } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, test } from 'vitest';
 import {
   addToDoNotList,
@@ -6,12 +8,14 @@ import {
   finishPass,
   getIssueSync,
   holdProject,
+  listProjectsToCheck,
   listProjectsToSync,
   releaseProject,
+  setDelisted,
   setProjectStatus,
   takeRefresh,
 } from '../../src/db';
-import { db, emptyDatabase, HOUR, maintainer, MINUTE, registeredProject, repo, signIn, t0 } from './helpers';
+import { admin, db, emptyDatabase, HOUR, maintainer, MINUTE, registeredProject, repo, signIn, t0 } from './helpers';
 
 // Where the tagged-issue sync stands for each project. Every repo here is
 // made up.
@@ -74,6 +78,70 @@ describe('issue syncs', () => {
 
     expect(before).toEqual([repo]);
     expect(await listProjectsToSync(db)).toEqual([]);
+  });
+});
+
+describe('delisting', () => {
+  const fourth = 'sample-owner/fourth-app';
+  const pause = (name: string, changedBy: number | null = maintainer.githubId) =>
+    setProjectStatus(db, name, { status: 'paused', reason: changedBy === null ? `${name} is archived on GitHub.` : null, changedBy }, t0);
+
+  test('a run checks every paused project and every approved one delisted, the one read longest ago first, never read first', async () => {
+    for (const name of [repo, second, third, fourth]) await registeredProject({ tags: ['help wanted'] }, name);
+    await pause(repo);
+    await pause(second, null);
+    await setDelisted(db, second, `${second} is archived on GitHub.`, t0 + MINUTE);
+    await setDelisted(db, third, `${third} is archived on GitHub.`, t0);
+    await setDelisted(db, fourth, null, t0);
+
+    // The fourth is approved and shown, so its pass reads its repos.
+    expect(await listProjectsToCheck(db)).toEqual([repo, third, second]);
+  });
+
+  test('no pending, rejected, or do-not-listed project is checked, delisted or not', async () => {
+    await signIn(admin);
+    for (const name of [repo, second, third]) await registeredProject({ tags: ['help wanted'], issueRepo: 'sample-owner/listed-issues' }, name);
+    await setProjectStatus(db, repo, { status: 'pending', reason: null, changedBy: maintainer.githubId }, t0);
+    await setProjectStatus(db, second, { status: 'rejected', reason: 'No tests to run.', changedBy: admin.githubId }, t0);
+    await pause(third);
+    for (const name of [repo, second]) await setDelisted(db, name, `${name} is archived on GitHub.`, t0);
+    const before = await listProjectsToCheck(db);
+
+    await addToDoNotList(db, { repo: 'Sample-Owner/Listed-Issues', reason: null, addedBy: admin.githubId }, t0);
+
+    expect(before).toEqual([third]);
+    expect(await listProjectsToCheck(db)).toEqual([]);
+  });
+
+  test("a read that shows the repos public and open takes the mark off, and keeps the pass where it stands", async () => {
+    await registeredProject();
+    const started = await beginPass(db, repo, t0);
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0 + MINUTE);
+    const marked = await getIssueSync(db, repo);
+
+    await setDelisted(db, repo, null, t0 + HOUR);
+
+    expect(marked).toMatchObject({ delisted: `${repo} is archived on GitHub.`, reposReadAt: t0 + MINUTE });
+    expect(await getIssueSync(db, repo)).toMatchObject({ delisted: null, reposReadAt: t0 + HOUR, passStartedAt: started });
+  });
+
+  test("the migration that brought the mark marks each project Good First Token paused before it, with its pause's reason", async () => {
+    for (const name of [repo, second, third]) await registeredProject({ tags: ['help wanted'] }, name);
+    await pause(repo);
+    await pause(second, null);
+    await beginPass(db, second, t0);
+    await pause(third, null);
+    const { TEST_MIGRATIONS } = env as Env & { TEST_MIGRATIONS: D1Migration[] };
+    const migration = TEST_MIGRATIONS.find((m) => m.name === '0006_delisting.sql');
+    // The columns are there already, so only the rows it writes run again.
+    const writes = migration?.queries.filter((query) => /^\s*INSERT\b/i.test(query)) ?? [];
+
+    for (const query of writes) await db.prepare(query).run();
+
+    expect(writes).toHaveLength(1);
+    expect(await getIssueSync(db, repo)).toBeNull();
+    expect(await getIssueSync(db, second)).toMatchObject({ delisted: `${second} is archived on GitHub.`, passStartedAt: t0 });
+    expect(await getIssueSync(db, third)).toMatchObject({ delisted: `${third} is archived on GitHub.` });
   });
 });
 

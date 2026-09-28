@@ -23,6 +23,7 @@ import {
   listWaitingIssues,
   saveClaim,
   saveIssues,
+  setDelisted,
   setPrState,
   setProjectStatus,
 } from '../../src/db';
@@ -274,7 +275,7 @@ describe('which projects have a page', () => {
     expect(await load('sample-owner/sample-nothing')).toEqual({ state: 'not_found' });
   });
 
-  test("a pause Good First Token made on its own, with no person, leaves no page, while a maintainer's or an admin's pause keeps it", async () => {
+  test("a project the sync delisted has none, paused or resumed, while a maintainer's or an admin's pause alone keeps it", async () => {
     await registeredProject();
     await tag(repo, `${repo}#1`);
     await setProjectStatus(db, repo, { status: 'paused', reason: 'Back after the release.', changedBy: maintainer.githubId }, t0);
@@ -282,15 +283,18 @@ describe('which projects have a page', () => {
     await setProjectStatus(db, repo, { status: 'paused', reason: 'Too many PRs at once.', changedBy: admin.githubId }, t0 + 1);
     expect(ready(await load()).status).toBe('paused');
 
-    // The sync pauses a project whose repo went private, was archived, or is gone.
-    const delisted = `GitHub shows no public repo named ${repo}. It went private or was deleted.`;
-    await setProjectStatus(db, repo, { status: 'paused', reason: delisted, changedBy: null }, t0 + 2);
+    // The sync delists a project whose repo went private, was archived, or
+    // is gone, whoever paused it.
+    await setDelisted(db, repo, `GitHub shows no public repo named ${repo}. It went private or was deleted.`, t0 + 2);
 
     expect(await load()).toEqual({ state: 'not_found' });
     const res = await workerFetch(`http://localhost/${repo}`);
     expect(res.status).toBe(404);
     // Nothing cached from the repo shows.
     expect(await res.text()).not.toContain(`Issue ${repo}#1`);
+    // A resume leaves the mark, so the page stays away.
+    await setProjectStatus(db, repo, { status: 'approved', reason: null, changedBy: admin.githubId }, t0 + 3);
+    expect(await load()).toEqual({ state: 'not_found' });
   });
 
   test('a project whose repo, or the repo its issues live in, is on the do-not-list has none', async () => {
