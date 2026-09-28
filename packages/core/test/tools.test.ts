@@ -54,6 +54,7 @@ describe('the tool list', () => {
         'admin_block_donor',
         'admin_pause_project',
         'admin_remove_project',
+        'admin_seed_repo',
       ].sort(),
     );
   });

@@ -1,6 +1,7 @@
 import handler from '@tanstack/react-start/server-entry';
 import { handleAuthRequest, isAuthPath } from './auth/routes';
 import { siteOrigin } from './auth/settings';
+import { isCrawlQueue, readCrawlBatch } from './crawl/queue';
 import { deliverFeedBatch } from './feed/queue';
 import { handleStream, isStreamPath } from './feed/streams';
 import { answerConsent, limitAgentSignIn } from './mcp/authorize';
@@ -16,9 +17,10 @@ import { runScheduled } from './sync/scheduled';
 // the MCP server's OAuth provider (src/mcp/provider.ts), which answers /mcp
 // and the OAuth routes, and hands the rest to the site below. When an agent
 // revokes its grant at the token endpoint, its connection ends here too. The
-// feed queue's consumer is src/feed/queue.ts, and the cron triggers' jobs,
-// which read GitHub with the service token, are in src/sync/. The Durable
-// Objects are exported from here.
+// feed queue's consumer is src/feed/queue.ts, and the crawl queue's is
+// src/crawl/queue.ts. The cron triggers' jobs, which read GitHub with the
+// service token, are in src/sync/ and src/crawl/. The Durable Objects are
+// exported from here.
 
 // The site: sign-in under /auth (src/auth/routes.ts), the live text streams,
 // like /live.txt (src/feed/streams.ts), the form on the page where a person
@@ -46,6 +48,9 @@ export default {
     if (revoking !== null && response.ok) await endRevokedConnection(origin, revoking);
     return response;
   },
-  queue: (batch, env) => deliverFeedBatch(batch, env),
+  queue: async (batch, env) => {
+    if (isCrawlQueue(batch.queue)) await readCrawlBatch(batch, env);
+    else await deliverFeedBatch(batch, env);
+  },
   scheduled: (controller, env) => runScheduled(controller.cron, env),
 } satisfies ExportedHandler<Env>;

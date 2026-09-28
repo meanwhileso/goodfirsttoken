@@ -16,6 +16,7 @@ import {
 import { env } from 'cloudflare:workers';
 import { requirePermission, type Caller } from '../auth/permissions';
 import {
+  addSeed,
   addToDoNotList,
   blockDonor,
   createProject,
@@ -410,6 +411,28 @@ export async function adminPauseProject(
     if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true } };
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
+}
+
+/**
+ * Adds a repo to the crawler's seed list, for the crawler to read whatever
+ * its stars or last push. A repo on the do-not-list is refused, since the
+ * crawler never reads one. Nothing is read from GitHub: the crawler reads
+ * the repo when it queues it.
+ */
+export async function adminSeedRepo(
+  caller: Caller,
+  input: ToolInput<'admin_seed_repo'>,
+  now: number,
+): Promise<Outcome<'admin_seed_repo'>> {
+  await requirePermission(caller, 'review_projects');
+  if ((await getDoNotListEntry(env.DB, input.repo)) !== null) {
+    return refuse(
+      'repo_not_eligible',
+      `${input.repo} is on the do-not-list, because its maintainers asked to be removed, so the crawler never reads it.`,
+    );
+  }
+  const { seed, added } = await addSeed(env.DB, { repo: input.repo, addedBy: caller.githubId }, now);
+  return { ok: true, value: { repo: seed.repo, added } };
 }
 
 /**

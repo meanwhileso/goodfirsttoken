@@ -8,6 +8,7 @@ import {
   adminPauseProject,
   adminQueue,
   adminRemoveProject,
+  adminSeedRepo,
 } from '../../src/admin/actions';
 import { PermissionRefused, type Caller } from '../../src/auth/permissions';
 import {
@@ -16,6 +17,8 @@ import {
   getCandidate,
   getDoNotListEntry,
   getProject,
+  getSeed,
+  listSeedsToQueue,
   savePerson,
   setProjectStatus,
   settingsHistory,
@@ -45,6 +48,7 @@ const ADMIN_TOOLS = [
   'admin_pause_project',
   'admin_queue',
   'admin_remove_project',
+  'admin_seed_repo',
 ];
 const POLICY = {
   quote: 'AI help is fine. Write the PR description yourself.',
@@ -130,7 +134,7 @@ async function crawlerFind(settings: Record<string, unknown> = { personWrittenDe
 }
 
 describe('who sees the admin tools', () => {
-  test("a donor's agent lists no admin tool, and an admin's lists all six", async () => {
+  test("a donor's agent lists no admin tool, and an admin's lists all seven", async () => {
     const donor = await connectAgent(github, 'priya');
     const admin = await connectAgent(github, ADMIN.login);
 
@@ -177,6 +181,7 @@ describe('who sees the admin tools', () => {
       admin_block_donor: { login: 'octo-maintainer' },
       admin_pause_project: { repo: HARBOR, reason: 'Spam reports.' },
       admin_remove_project: { repo: HARBOR },
+      admin_seed_repo: { repo: HARBOR },
     };
 
     let refused: boolean;
@@ -191,6 +196,7 @@ describe('who sees the admin tools', () => {
     expect(await getProject(env.DB, HARBOR)).toEqual(before);
     expect(await getProject(env.DB, BUNDLER)).toBeNull();
     expect(await getDoNotListEntry(env.DB, HARBOR)).toBeNull();
+    expect(await getSeed(env.DB, HARBOR)).toBeNull();
   });
 
   test.each([
@@ -204,6 +210,7 @@ describe('who sees the admin tools', () => {
     ['admin_block_donor', (caller: Caller) => adminBlockDonor(caller, { login: 'priya', blocked: true }, Date.now())],
     ['admin_pause_project', (caller: Caller) => adminPauseProject(caller, { repo: HARBOR, paused: true, reason: 'x' }, Date.now())],
     ['admin_remove_project', (caller: Caller) => adminRemoveProject(caller, { repo: HARBOR }, Date.now())],
+    ['admin_seed_repo', (caller: Caller) => adminSeedRepo(caller, { repo: HARBOR }, Date.now())],
   ] as const)('%s checks the permission before it reads or writes anything', async (_name, run) => {
     const token = vi.fn(() => Promise.resolve('gho_not-read'));
     const prepare = vi.spyOn(env.DB, 'prepare');
@@ -703,6 +710,34 @@ describe('admin_pause_project', () => {
     expect(textOf(pending)).toMatch(/^Refused \(project_not_open\)/);
     expect(noReason.isError).toBe(true);
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'pending' });
+  });
+});
+
+describe('admin_seed_repo', () => {
+  test("an admin adds a repo to the crawler's seed list once, whatever the case of its name, without asking GitHub", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const reads = github.calls.length;
+
+    const added = await call(admin, 'admin_seed_repo', { repo: 'sample-policies/small-seed' });
+    const again = await call(admin, 'admin_seed_repo', { repo: 'Sample-Policies/Small-Seed' });
+
+    expect(added.structuredContent).toEqual({ repo: 'sample-policies/small-seed', added: true });
+    expect(textOf(added)).toContain("Added sample-policies/small-seed to the crawler's seed list.");
+    expect(again.structuredContent).toEqual({ repo: 'sample-policies/small-seed', added: false });
+    expect(await listSeedsToQueue(env.DB, 10)).toEqual([
+      { repo: 'sample-policies/small-seed', addedBy: ADMIN.githubId, addedAt: expect.any(Number) as unknown, queuedAt: null },
+    ]);
+    expect(github.calls.slice(reads)).toEqual([]);
+  });
+
+  test('a repo on the do-not-list is refused, since the crawler never reads one', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_remove_project', { repo: BUNDLER });
+
+    const seeded = await call(admin, 'admin_seed_repo', { repo: BUNDLER });
+
+    expect(textOf(seeded)).toMatch(/^Refused \(repo_not_eligible\)/);
+    expect(await getSeed(env.DB, BUNDLER)).toBeNull();
   });
 });
 

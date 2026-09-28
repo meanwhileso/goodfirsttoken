@@ -8,8 +8,9 @@ Nothing is live yet. The site serves the homepage, each issue's page,
 sign-in with GitHub, the MCP server's sign-in for agents with
 `start_session`, the maintainer's tools, and the admins' tools, the admin
 pages, the design system at `/design`, and the live feeds as text streams
-and sockets, and reads tagged issues and PRs from GitHub on a schedule,
-while the build goes on in the open.
+and sockets. It reads tagged issues and PRs from GitHub on a schedule, and
+looks for projects whose docs welcome AI help, while the build goes on in
+the open.
 
 ## Health check
 
@@ -356,7 +357,7 @@ tools and pages that need it arrive with the issues that build them.
 
 | Permission | Allows | Who holds it | Refusal |
 |---|---|---|---|
-| `review_projects` | Seeing the admin queue, approving or rejecting what waits in it, and removing a project at its maintainers' request | Admins | `not_admin` |
+| `review_projects` | Seeing the admin queue, approving or rejecting what waits in it, removing a project at its maintainers' request, and adding a repo to the crawler's seed list | Admins | `not_admin` |
 | `list_from_policy` | Listing a project from its written policy, or editing any such listing | Admins | `not_admin` |
 | `block_donors` | Blocking a donor, or lifting a block | Admins | `not_admin` |
 | `pause_any_project` | Pausing any project, or resuming one that an admin or Good First Token paused | Admins | `not_admin` |
@@ -896,8 +897,8 @@ table, and each takes its value from the first file that gives one:
 - **Tags** are the repo's labels that mean ready for outside help, compared
   without case: `help wanted`, `contributor friendly`,
   `contribution welcome`, `goodfirsttoken`, and any label starting with
-  `.contrib/`, up to 20, the most a project can have. The plan's crawler
-  also counts `good first issue`, but the plan names it as a label projects
+  `.contrib/`, up to 20, the most a project can have. The crawler also
+  shows admins `good first issue`, but the plan names it as a label projects
   keep for people, so the proposal leaves it out. With none of them, the
   tag is `goodfirsttoken`, which is created if the maintainer keeps it.
 - **Disclosure** uses the trailer a file names for AI help, `Assisted-by` or
@@ -912,6 +913,10 @@ table, and each takes its value from the first file that gives one:
   sentence around it.
 - Every other setting keeps its default. So the proposal's PR mode is always
   `reviewed`, and the maintainer chooses `automatic` if they want it.
+
+The [policy crawler](#the-policy-crawler) finds these four files the same
+way, and suggests tags, disclosure, the person-written PR description, and
+the CLA by the same rules.
 
 **Saving.** With settings, it checks them as a whole, and saves the project
 as `pending`, registered by the caller at that time. The settings they left
@@ -1061,10 +1066,12 @@ a project is `not_found`.
 ## The admin queue
 
 Good First Token's admins approve and reject what waits for them, list
-projects from their written AI policies, pause projects, block donors, and
-remove projects at their maintainers' request, from their agent with six
-tools listed only for admins, or from the [admin pages](#the-admin-pages).
-Both go through the same actions, so the rules below hold for both.
+projects from their written AI policies, pause projects, block donors,
+remove projects at their maintainers' request, and add repos to the
+crawler's seed list, from their agent with seven tools listed only for
+admins, or from the [admin pages](#the-admin-pages). Both go through the
+same actions, so the rules below hold for both. The pages have no form for
+pausing, removing, or the seed list yet.
 
 - Every action first checks the caller's admin permission, under
   [Permissions](#permissions), before it reads or writes anything. Anyone
@@ -1086,8 +1093,9 @@ waited longest first, each with an ID that `admin_decide` takes.
   status changes, the ID names nothing, and a decision on it is `not_found`.
 - A **crawler find** is a waiting [candidate](#crawl-candidates), with its
   policy quote, link, and tier, the settings the crawler suggests, and the
-  labels that could mean ready for help. Nothing makes one yet but the
-  sample data. The crawler (#30) will.
+  labels that could mean ready for help. The
+  [policy crawler](#the-policy-crawler) makes them, and so does the sample
+  data.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration they are
   read from GitHub when the queue is read, with the admin's own token: the
@@ -1179,6 +1187,18 @@ how they asked, and only admins see it.
   the repo off the list, and rejecting it leaves it on.
 - The events on its issues leave the live feeds, as
   [Live feeds](#live-feeds) says.
+
+**The seed list.** `admin_seed_repo` adds a repo to the crawler's seed
+list, for the [policy crawler](#the-policy-crawler) to read whatever its
+stars or last push.
+
+- A repo is on the list once, whatever the case of its name, and keeps the
+  admin who added it and when. Adding it again changes nothing, and the
+  answer says so.
+- A repo on the do-not-list is refused with `repo_not_eligible`.
+- It asks GitHub nothing. The crawler reads the repo when it queues it, and
+  leaves it alone there when it is a project already, or was proposed
+  before.
 
 ## The admin pages
 
@@ -1312,17 +1332,21 @@ project, with the reason, like `sample-owner/app is archived on GitHub.`
 
 **The budget.** GitHub gives the service token's account 5,000 REST calls
 and 5,000 GraphQL points an hour, whichever of its tokens makes them, and the
-scheduled jobs and a maintainer's refresh share them. A run first asks
+scheduled jobs, a maintainer's refresh, and the
+[policy crawler](#the-policy-crawler) share them. It also gives 30 searches
+a minute, which only the crawler makes. A run first asks
 GitHub what is left, which costs nothing, then reads what GitHub says is
 left after every call, and before each call it stops when less is left than
 its job leaves for the others. Each job also caps the calls one run makes,
 the first question included.
 
-| Job | Stops while less than this share of the hour's limit is left | Most calls in one run |
+| Job | Stops while less than this share of the limit is left | Most calls in one run |
 |---|---|---|
-| The sync | A fifth | 1,000 |
-| The PR job | A tenth | 100 |
-| A maintainer's refresh | Half | 60 |
+| The sync | A fifth of the hour's | 1,000 |
+| The PR job | A tenth of the hour's | 100 |
+| A maintainer's refresh | Half of the hour's | 60 |
+| The crawler's search | A tenth of the minute's searches | 20 |
+| The crawler's queue, each batch it reads | Three fifths of the hour's | 60 |
 
 - A run also stops when GitHub refuses a call for the rate limit, primary
   or secondary, refuses the token, can't be reached, answers with an error
@@ -1347,8 +1371,8 @@ the first question included.
 
 ## Crawl candidates
 
-A candidate is a repo the crawler found whose own docs welcome AI help. Nothing
-crawls yet.
+A candidate is a repo the crawler found whose own docs welcome AI help. The
+[policy crawler](#the-policy-crawler) makes them.
 
 - A candidate has the repo's stars, when it was made, its last push, and
   when its owner's account was made. It has the policy quote, link, and tier,
@@ -1380,15 +1404,214 @@ approving a maintainer's registration of it takes it off, under
 - The homepage's lists, the live feeds, and the issue pages leave out what
   it covers.
 
+## The policy crawler
+
+The crawler looks for popular projects whose own docs welcome AI help, and
+puts each one in the admin queue as a [candidate](#crawl-candidates). It
+never lists a project. An admin does, under
+[The admin queue](#the-admin-queue). It reads public data only, with the
+service token, under [Calls to GitHub](#calls-to-github). With no service
+token it reads nothing, and the log names the secret.
+
+**Which repos it reads.** Once an hour, at 52 minutes past, a scheduled run
+puts repos in the crawl queue, 10 to a batch.
+
+- First the seeds admins added that it hasn't queued yet, under The seed
+  list in [The admin queue](#the-admin-queue), whatever their stars or last
+  push. It queues each seed once.
+- Then the public repos GitHub's search finds with at least 1,000 stars and
+  a push in the 30 days before the pass started, and not archived. Search
+  leaves out forks, as it does by default.
+- It leaves out a repo on the do-not-list, a repo that is a project
+  already, whatever its status, and a repo it put in the admin queue
+  before, whatever the admin decided. Names compare without case.
+- Search serves at most 1,000 repos for one query, so a pass reads the pool
+  in bands of star counts, fewest stars first. The first band is every repo
+  with 1,000 stars or more, which counts the whole pool.
+- When search counts more than 1,000 repos in a band, the band is split
+  before anything in it is queued. A band with no upper end gets one, at
+  the width the pass is using, which starts at 10 star counts. A band with
+  an upper end becomes half as wide, down to one star count, which gives
+  the first 1,000.
+- Each band starts where the one before it ended, just as wide. After a
+  band with fewer than 250 repos in it, the next is twice as wide, and
+  first tries the rest of the pool with no upper end. The pass is done when
+  a band with no upper end is read whole.
+- A run stops before a search when less than a tenth of the minute's
+  searches is left, or after 20 calls, the first question to GitHub
+  included. The next run picks up where it stopped.
+- A pass that is done stays done, so nothing reads the pool a second time
+  yet, and a seed added later is still read.
+- A repo whose stars change while a pass reads the pool can land in two
+  bands, or in none. A repo read twice is put in the admin queue once.
+
+**What it reads in each repo.** The crawl queue's consumer reads each batch
+from the repo's default branch:
+
+- the four files a proposal reads, found the same way, under
+  [Registering a project](#registering-a-project),
+- `CLAUDE.md` in the root, found without case,
+- up to 3 agent skills, each a `SKILL.md` in a folder under
+  `.claude/skills/` or `skills/`,
+- up to 3 issue templates in `.github/ISSUE_TEMPLATE/` ending `.md`,
+  `.markdown`, `.yml`, or `.yaml`, leaving out `config`, and
+- whether it has a vouch file, `VOUCHED.td` in the root or `.github/`,
+  without reading it.
+
+A file over 100 KB is left unread. A repo GitHub shows archived, or doesn't
+show at all, is read no further. The consumer checks the do-not-list, the
+projects, and the crawler's earlier finds again before it reads a batch,
+and a repo on any of them is read no further. It checks once more before it
+puts a repo in the admin queue, under the name GitHub gives the repo now,
+since a repo can be renamed.
+
+**How it sorts them.** Plain rules over the text, with no model, in the
+order the files are read: the AI policy file, CONTRIBUTING, `AGENTS.md`,
+`CLAUDE.md`, the PR template, the skills, then the issue templates.
+
+- A sentence ends at a period, question mark, or exclamation mark followed
+  by a space, at a blank line, or where a list item, a heading, a quote, or
+  a table row starts. It runs on over a line that is only wrapped. A clause
+  ends at a semicolon, or at one of these words: but, however, unless,
+  except, although, though, as long as, so long as, provided.
+- A clause names AI when it has `AI` in capitals, `LLM`,
+  `large language model`, `artificial intelligence`, `generative`,
+  `machine-generated`, `ChatGPT`, or `Copilot`. Outside `AGENTS.md`,
+  `CLAUDE.md`, and the skills, `agent`, `Claude`, `Codex`, and `Gemini`
+  name AI too. Those files talk to agents, so a rule there for how an agent
+  works, like "Claude should not use emojis", names no AI. A bot names no
+  AI anywhere, so "stale PRs are closed by a bot" is no ban.
+- **A clause says no to AI** when it names AI and has one of these:
+  - not, n't, never, or no longer before a form of accept, allow, permit,
+    welcome, tolerate, merge, review, consider, or want, with at most one
+    word between,
+  - use, submit, send, open, file, contribute, contain, include, or
+    involve after one of those negatives, with at most one word between,
+    or avoid or refrain from, when AI is named in the words after it,
+  - not before generated, written, produced, created, made, or used, as in
+    "must not be AI-generated",
+  - prohibited, forbidden, banned, ban, disallowed, unwelcome,
+    unacceptable, zero tolerance, no-AI, or AI-free,
+  - closed, rejected, removed, deleted, locked, banned, blocked, declined,
+    or ignored after is, are, will be, or get, or close, reject, delete,
+    lock, ban, block, decline, or ignore after we, or after the right to,
+  - or no right before an AI name, as in "No AI-generated code."
+- These say no to something else, and are no ban:
+  - A checkbox a contributor ticks, a Markdown task list item or an issue
+    form's option, like "I did not use AI". It is their choice, unless it
+    confirms, certifies, agrees, attests, declares, promises, or affirms
+    something. Anywhere else, a sentence in the first person counts like
+    any other.
+  - A clause with a negative that keeps AI off issues with a label it
+    names in quotes or backticks, after "on issues labeled" or the like, or
+    as in "on `good first issue` issues". So "Don't use AI on issues
+    labeled `good first issue`" is no ban, and the label becomes an
+    excluded tag.
+  - A clause that keeps agents from working on their own, and names no AI
+    but agents. That is one with a negative and autonomous,
+    unsupervised, unattended, fully automated, on its own, on their own, or
+    without a person, a human, review, supervision, or oversight. It is
+    also one that says agents or bots may not open, submit, create, send,
+    or file pull requests, and, in `AGENTS.md`, `CLAUDE.md`, or a skill,
+    one that starts "Do not open pull requests" or the like.
+- **A sentence invites agents** when it says agents may, can, or are
+  welcome, invited, encouraged, free, or allowed to open, submit, send,
+  make, create, file, contribute, or work, that agent pull requests or
+  contributions are welcome, or that the project welcomes pull requests
+  from agents, or welcomes agents.
+- **A sentence allows AI help** when it says AI help, assistance, tools, or
+  use is fine, welcome, allowed, accepted, okay, permitted, or encouraged,
+  that AI-assisted or AI-generated work is, that AI is, that using AI is,
+  that you may, can, or are welcome to use AI, or that the project
+  welcomes, accepts, allows, or encourages AI-assisted work.
+- **A person in the loop** is a sentence that says a person, a human, or
+  you must, should, need to, or have to review, understand, explain, stand
+  behind, or take responsibility, or that says human in the loop, or human
+  review is required.
+
+The tiers:
+
+| Tier | When | Reaches the admin queue |
+|---|---|---|
+| Bans or restricts | A clause anywhere says no to AI, or a sentence says the project doesn't accept pull requests or contributions and ends there, like "This project does not accept pull requests." Whatever else the docs say | Never |
+| Invites agents | A sentence invites agents, and nothing keeps agents from working on their own, asks for a person in the loop, or asks for a person-written PR description | Yes |
+| Allows with conditions | A sentence invites agents with one of those conditions, or a sentence allows AI help | Yes |
+| No policy | None of these, whether the docs mention AI or not | Never |
+
+**What it suggests.** A repo in either of the two listed tiers is checked
+the way an admin's listing checks it, over REST: it has to be public, not
+archived, and take pull requests from anyone. One that has pull requests
+turned off, lets only collaborators open them, or that GitHub says nothing
+about on either, is left out. The crawler then reads its labels, the first
+1,000, each with how many open issues carry it, and puts it in the admin
+queue with:
+
+- The quote: the paragraph with the first sentence that invites agents, or
+  else the first that allows AI help, as the file has it. A paragraph that
+  is a Markdown heading alone brings the paragraph after it. When the quote
+  would run over 2,000 characters, it is the sentence alone, cut there.
+- The link: the file on github.com, on the repo's default branch.
+- The facts: its stars, when it was made, its last push, and when its
+  owner's account was made, as GitHub gave them to the crawler.
+- The suggested settings:
+  - PR mode `automatic` for invites agents, and `reviewed` otherwise.
+  - The disclosure trailer, the person-written PR description, and the
+    CLA, by the rules a proposal uses.
+  - Who can claim `vouched` when it has a vouch file.
+  - Excluded tags: the repo's labels the docs keep AI off, or name in
+    quotes or backticks in a sentence that keeps them for people, as in
+    "reserved for people new to the project".
+  - Tags: the repo's labels the inviting or allowing sentence names after
+    labeled, label, or tagged, or in quotes or backticks, then the labels a
+    proposal takes as ready for outside help, up to 20, none of them
+    excluded. With none, it suggests no tags, and the admin picks them.
+  - Notes for agents, when `AGENTS.md` or `CLAUDE.md` has a canary: a
+    sentence that says if or when you are an AI, an LLM, a language model,
+    an agent, an assistant, or a bot, then asks it to include, add, put,
+    mention, say, write, start, end, begin, use, append, prefix, or sign
+    something. The note is in our words, and names the file, as in "Read
+    AGENTS.md before you start, and follow what it tells agents to do." It
+    never copies the file's words.
+- The suggested tags: the labels the sentence names, and the labels that
+  mean ready for outside help, `good first issue` included, each with its
+  open issue count, up to 20, none of them excluded.
+
+**The queue.** The consumer takes up to 5 batches at a time, one run at a
+time, and first asks GitHub what is left of the budget.
+
+- It stops before a call when less than three fifths of the hour's limit is
+  left, or after 60 calls. The batch it was on, and each one after it, go
+  back to the queue, to be read again:
+  - when the budget starts over, if the budget stopped it, at least a
+    minute and at most an hour later, or 15 minutes later when GitHub
+    didn't say when,
+  - at once, after 60 calls,
+  - after 30 seconds, and twice as long on each later try up to an hour,
+    when GitHub failed or refused the token.
+- The finds a batch made before it stopped stay in the admin queue, and
+  when the batch comes back, those repos are read no further.
+- A batch GitHub read with any error but a repo it doesn't show goes back
+  too, since the file GitHub missed could be the one that bans AI.
+- A malformed batch goes back at once. A batch goes to the dead-letter
+  queue after 90 retries.
+- With no service token, it reads nothing, and asks for each batch again in
+  an hour.
+- Each run logs one line: the batches it read, the repos, what it left out
+  and why, how many repos fell in each tier, the repos it put in the admin
+  queue, its calls, what is left of the budget, and why it stopped. It names
+  no repo it didn't put in the admin queue. The search's run logs one line
+  too: the seeds and repos it queued, its searches, where the pass stands,
+  how many repos the pool has, and why it stopped.
+
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves eleven of them so far:
+a description for agents. The MCP server serves twelve of them so far:
 `start_session`, which takes the input defined here and answers with who is
 signed in, under [Connecting an agent](#connecting-an-agent), the
 maintainer's four tools, under
 [Registering a project](#registering-a-project) and
-[Managing a project](#managing-a-project), and the admins' six, under
+[Managing a project](#managing-a-project), and the admins' seven, under
 [The admin queue](#the-admin-queue), with the inputs, outputs, and
 descriptions defined here.
 
@@ -1396,7 +1619,7 @@ descriptions defined here.
 |---|---|
 | Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `set_interests` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project` |
-| Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project` |
+| Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project`, `admin_seed_repo` |
 
 **Results**
 
@@ -1479,7 +1702,7 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
-| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list |
+| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy or the crawler's seed list, is on the do-not-list |
 | `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |
 | `listed_from_policy` | Changing the settings of a listing made from a policy with `update_project`, which takes `register_project` first |
 | `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
@@ -2095,8 +2318,9 @@ A deployment can serve them from a static host, on a hostname of its own.
   These use the admin's own token: their agent's, or on the admin pages,
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the
-  `GH_SERVICE_TOKEN` secret: the sync, the PR job, and a maintainer's
-  refresh. They read public data only, and never with a person's token. With
+  `GH_SERVICE_TOKEN` secret: the sync, the PR job, a maintainer's refresh,
+  and the policy crawler. They read public data only, and never with a
+  person's token. With
   no service token, they read nothing, and the log names the secret.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
   names the one token to revoke. Signing out, Disconnect, and an agent's

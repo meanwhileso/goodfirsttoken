@@ -290,4 +290,8 @@ export const samples: Samples = {
     output: { repo, status: 'rejected' },
     mentions: ['Removed', repo, 'do-not-list'],
   },
+  admin_seed_repo: {
+    output: { repo, added: true },
+    mentions: ['Added', repo, 'seed list'],
+  },
 };

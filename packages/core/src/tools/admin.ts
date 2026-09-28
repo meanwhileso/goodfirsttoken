@@ -255,3 +255,19 @@ export const adminRemoveProject = defineTool({
       out.status === null && `${out.repo} wasn't a project, so the do-not-list is all that changed.`,
     ),
 });
+
+export const adminSeedRepo = defineTool({
+  audience: 'admin',
+  description:
+    "Add a repo to the policy crawler's seed list. The crawler reads a seed's docs whatever its stars or last push, and puts it in the admin queue when they welcome AI help. It reads a repo that is a project already, or one it put in the queue before, no further. A repo on the do-not-list is refused.",
+  input: z.object({ repo: repoName }),
+  output: z.object({
+    repo: repoName,
+    /** False when the repo was on the seed list already, and nothing changed. */
+    added: z.boolean(),
+  }),
+  text: (out) =>
+    out.added
+      ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`
+      : `${out.repo} is on the crawler's seed list already. Nothing changed.`,
+});

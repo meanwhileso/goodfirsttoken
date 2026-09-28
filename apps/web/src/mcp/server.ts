@@ -133,6 +133,9 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
     server.registerTool('admin_remove_project', specOf(tools.admin_remove_project), (input) =>
       run(() => adminTools.admin_remove_project(caller, input, Date.now())),
     );
+    server.registerTool('admin_seed_repo', specOf(tools.admin_seed_repo), (input) =>
+      run(() => adminTools.admin_seed_repo(caller, input, Date.now())),
+    );
   }
   return server;
 }

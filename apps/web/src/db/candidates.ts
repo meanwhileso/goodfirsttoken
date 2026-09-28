@@ -120,6 +120,40 @@ export async function addCandidate(
   return result.meta.changes === 1 ? c : null;
 }
 
+/** Why the crawler leaves a repo alone. */
+export type CrawlerSkip =
+  /** Its maintainers asked to be removed. */
+  | 'do_not_list'
+  /** It is a project already, whatever its status. */
+  | 'project'
+  /** The crawler put it in the admin queue before, whatever the admin decided. */
+  | 'proposed';
+
+/**
+ * Which of these repos the crawler leaves alone, and why, by the repo's name
+ * in lower case. The do-not-list comes first, then projects, then earlier
+ * finds. Names compare without case. The repos go in as one JSON array, so
+ * any number of them takes one query.
+ */
+export async function crawlerSkips(db: D1Database, repos: Iterable<string>): Promise<Map<string, CrawlerSkip>> {
+  const checked = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
+  if (checked.length === 0) return new Map();
+  const { results } = await db
+    .prepare(
+      `SELECT repo, why FROM (
+         SELECT j.value AS repo,
+           CASE WHEN EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = j.value) THEN 'do_not_list'
+                WHEN EXISTS (SELECT 1 FROM projects p WHERE p.repo = j.value) THEN 'project'
+                WHEN EXISTS (SELECT 1 FROM crawl_candidates c WHERE c.repo = j.value) THEN 'proposed'
+           END AS why
+         FROM json_each(?) j)
+       WHERE why IS NOT NULL`,
+    )
+    .bind(JSON.stringify(checked))
+    .all<{ repo: string; why: CrawlerSkip }>();
+  return new Map(results.map((row) => [row.repo.toLowerCase(), row.why]));
+}
+
 export async function getCandidate(db: D1Database, candidateId: string): Promise<CrawlCandidate | null> {
   const row = await db
     .prepare('SELECT * FROM crawl_candidates WHERE id = ?')
