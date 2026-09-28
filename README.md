@@ -23,7 +23,8 @@ goodfirsttoken.org yet. Here is what's in the repo today:
   It is nearly empty so far.
 - [`skill-src/`](skill-src/): the agent skills, built into
   [`skills/`](skills/) for `npx skills add` and into the Claude Code plugins
-  in [`plugins/`](plugins/). Their bodies are placeholders so far.
+  in [`plugins/`](plugins/). The maintain and admin skills are written. The
+  donor's skills are placeholders so far.
 - [`brand/`](brand/): who it's for, how it looks and sounds, and the pages
   the site needs.
 - [`prototype/`](prototype/): every page as clickable static HTML with

@@ -510,7 +510,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `validation.ts` the check that names the field in every problem.
 - **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
   maintainers, and admins: who sees it, a description for agents, input and
-  output schemas, and a function that renders the output as text.
+  output schemas, and a function that renders the output as text. A
+  maintainer's or admin's tool also lists, in `refusals`, every refusal code
+  it can answer with. The skills are checked against those lists, under
+  [Skills and plugins](#skills-and-plugins). The donor's tools can add
+  theirs when their skills name them.
   `src/tools/index.ts` lists them all, and its `toolResult` and
   `toolRefusal` build MCP results without depending on the MCP SDK.
 - **The claim state machine never reads the clock.** Its caller passes the
@@ -570,6 +574,56 @@ its version did not go up.
 - **The admin plugin** lists `goodfirsttoken` as a dependency and has no MCP
   server of its own. Installing it installs the donor plugin too, so an admin
   connects to the server once.
+
+### What the skills name
+
+A skill tells an agent which tools to call and what to do with each
+refusal, so a skill and the server can drift apart. Two checks hold them
+together.
+
+- **`apps/web/test/mcp/skills.test.ts`** reads each skill's source, which
+  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`. It
+  connects the agent of the person the skill is for, a maintainer with no
+  admin role for maintain and the sample admin for admin, and lists that
+  agent's tools from the server with their schemas. Every snake_case name
+  in the skill, and every word it puts in backticks on its own, has to be
+  one of those tools, a refusal code, or a field or value in the tools'
+  schemas, like `prMode` or `too_soon`. JSON's literals and
+  `goodfirsttoken`, our label and plugin, are the only other words allowed.
+  The skill has to name every tool of its audience, and every refusal on
+  the `refusals` list of each tool it names. So a skill that names a tool
+  its reader isn't served, or a field no tool has, or leaves out a refusal
+  its tools can give, fails.
+- **Every tool call in the MCP tests** goes through `mcpClient` in
+  `test/mcp/helpers.ts`, which fails the test when a tool refuses with a
+  code its `refusals` list leaves out. So a list can't fall behind the
+  server while the tests exercise the refusal.
+
+### Following the skills' steps
+
+`pnpm skills:run` runs `apps/web/scripts/skill-run.ts` against a site in
+development, `pnpm dev` unless `--site` names another. It follows the steps
+of the maintain and admin skills with the MCP client SDK as each person's
+agent. No model runs, so it spends no tokens.
+
+- The GitHub fake's `sample-maintainer` registers
+  `sample-owner/sample-parser`, a sample repo no sample work touches, and
+  confirms the proposed settings as they are. `sample-admin` finds the registration with `admin_queue`,
+  checks it carries those settings, and approves it with `admin_decide`.
+  Then `project_status` has to say it is approved.
+- Each person approves their agent over plain HTTP, the way a browser would:
+  the site's page to approve the agent, then the GitHub fake's sign-in page.
+  The run's requests carry a `cf-connecting-ip` of its own, so its sign-ins
+  don't count toward anyone else's limit.
+- A repo can be registered once. When an earlier run on the same database
+  left the project, the admin's agent first removes it with
+  `admin_remove_project`, and the run registers it again, as a rejected
+  registration.
+- `e2e/skills.spec.ts` runs the same steps against the end-to-end tests'
+  preview, the Worker and the GitHub fake as servers of their own, as in
+  `pnpm dev`. So CI runs them on every pull request, and a person can run
+  them against `pnpm dev` and read each call and its answer. Runs of real
+  harnesses stay by hand, since they spend real tokens.
 
 ### What the installers read
 
@@ -1732,11 +1786,12 @@ and Playwright run it as a local HTTP server.
 - **The sample data** in `src/sample-data.ts` takes the shapes of the
   prototype's: donors, maintainers, and an admin, a project with tagged
   issues, one with nothing tagged, a popular repo that invites
-  contributions, two registrations waiting for an admin, and a repo whose
-  AGENTS.md invites agents, for a crawler find. It is the one place later issues add
-  to. Every account and repo in it is made up, under `sample-owner`, except
-  this project's own repo. That repo's sample issues and PRs are numbered
-  from 900 up, clear of its real ones.
+  contributions, two registrations waiting for an admin, a repo whose
+  AGENTS.md invites agents, for a crawler find, and a repo no sample work
+  touches, which `pnpm skills:run` registers. It is the one place later
+  issues add to. Every account and repo in it is made up, under
+  `sample-owner`, except this project's own repo. That repo's sample issues
+  and PRs are numbered from 900 up, clear of its real ones.
 - **Local sign-in.** The fake's authorize page lists the sample people. Pick
   one, and the app gets that person's token through the same OAuth flow it
   uses with GitHub. The app's dev sign-in posts the same form for you, with
@@ -1824,7 +1879,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   check what it holds. They live in `apps/web/test/mcp/`. The admin's tools
   are tested there too, and their actions are also called directly, with a
   spy on D1 and `fetch`, to show each checks the permission before it reads
-  anything.
+  anything. A tool that refuses with a code its spec doesn't list fails the
+  test that called it, and `skills.test.ts` checks the skills against the
+  tools, as under [What the skills name](#what-the-skills-name).
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
@@ -1848,10 +1905,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   homepage's tests see only what they expect. `admin.spec.ts` signs in as
   the fake's sample admin, approves and rejects the seeded registrations,
   and replays the admin page's server function call as a donor. Approving
-  lists a project on the homepage, so it runs last, in the `admin` project,
+  lists a project on the homepage, so it runs in the `admin` project,
   which depends on `rooms`. It signs in three times, since every dev
   sign-in counts toward the sign-in limit of 20 a minute from one
-  address.
+  address. `skills.spec.ts` follows the maintain and admin skills' steps,
+  under [Following the skills' steps](#following-the-skills-steps). It
+  registers a project and approves it from the admin queue, where
+  `admin.spec.ts` expects only what it seeded, so it runs last, in the
+  `skills` project, which depends on `admin`.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is

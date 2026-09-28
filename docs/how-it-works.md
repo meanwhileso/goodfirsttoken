@@ -1461,6 +1461,24 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 `not_admin`, `not_found`, `repo_not_eligible`, `already_registered`,
 `invalid_settings`, `project_not_open`, and `invalid_input`.
 
+Each maintainer's and admin's tool lists the refusals it can answer with, in
+its spec in `packages/core`, and answers with no other. The skills that use
+a tool say what to do with each one on its list, under
+[Skills and plugins](#skills-and-plugins).
+
+| Tool | Can refuse with |
+|---|---|
+| `register_project` | `not_maintainer`, `repo_not_eligible`, `already_registered`, `label_not_created` |
+| `update_project` | `not_maintainer`, `not_found`, `listed_from_policy`, `invalid_settings`, `repo_not_eligible`, `label_not_created` |
+| `project_status` | `not_maintainer`, `not_found` |
+| `pause_project` | `not_maintainer`, `not_found`, `project_not_open`, `not_admin`, `repo_not_eligible` |
+| `admin_queue` | `not_admin` |
+| `admin_decide` | `not_admin`, `invalid_input`, `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered` |
+| `admin_add_project` | `not_admin`, `repo_not_eligible`, `already_registered`, `invalid_settings` |
+| `admin_block_donor` | `not_admin`, `not_found` |
+| `admin_pause_project` | `not_admin`, `not_found`, `project_not_open` |
+| `admin_remove_project` | `not_admin` |
+
 | Code | When |
 |---|---|
 | `claim_expired` | The claim passed its 24 hours, or its 7 days awaiting review |
@@ -1967,8 +1985,9 @@ The limits we set are our choice, so any of them can change.
 
 ## Skills and plugins
 
-The skills tell an agent how to use Good First Token. Their bodies are
-placeholders until #19 and #20 write them.
+The skills tell an agent how to use Good First Token. The give, work, and
+review skills are placeholders until #19 writes them. The maintain and admin
+skills are written.
 
 | Skill | In the Claude Code plugin | Standalone skill |
 |---|---|---|
@@ -1991,6 +2010,49 @@ placeholders until #19 and #20 write them.
   down. Claude Code users get a change the next time they update the plugin
   or the marketplace, or automatically if they turned on auto-update for it.
   The higher version is what lets an update find the change.
+
+**What the maintain and admin skills both do.**
+
+- Each gives plain steps that work in each harness the plan names: Claude
+  Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
+  tools aren't there, it says how to add the MCP server in each of them.
+- Each names only the tools the server serves the person it is for, and the
+  fields and values those tools take or return. It names every refusal each
+  of those tools can answer with, under [Refusals](#refusals), with what to
+  do about it.
+- Their examples use made-up repos, so neither states a verdict or a
+  setting for a real project.
+
+**maintain** acts for an admin or maintainer of a repo on GitHub.
+
+- It starts with `project_status` on the repo, which says whether it is a
+  project, its status, and an admin's reason for a rejection or a pause.
+- To register, it asks `register_project` for a proposal, shows the
+  maintainer every proposed setting with the server's reason for it, and
+  asks them to confirm or change each one. It then registers with the whole
+  settings object as they confirmed it. It never makes up a setting, and
+  saves nothing the maintainer didn't confirm.
+- It takes over a listing made from a policy by registering the repo, and
+  changes settings with `update_project`, sending only the ones that change.
+  It pauses and resumes with `pause_project`, and asks `project_status` to
+  read the tagged issues again after the maintainer tags some.
+- No tool removes a project for its maintainers. To have one removed for
+  good, the skill tells the maintainer to ask Good First Token's admins in
+  an issue on `meanwhileso/goodfirsttoken`. An admin then removes it, under
+  [The admin queue](#the-admin-queue).
+
+**admin** works with one of Good First Token's admins, and only an admin's
+agent is served its tools.
+
+- It works the admin queue one item at a time, in the queue's order. For
+  each item, the admin's own agent reads the policy quote, the repo's facts,
+  the settings, and the notes for agents, and proposes a verdict with its
+  reasons. For a crawler find, it checks the quote at its link when it can
+  read the web, and proposes the tier, the settings the quote asks for, and
+  the project's own tags.
+- It calls `admin_decide` only with what the admin decided. A rejection
+  carries a reason the admin confirmed. It lists, pauses, blocks, and
+  removes only on the admin's word, too.
 
 ## The design system
 

@@ -2,7 +2,8 @@
 // and `pnpm seed` all start from this. They take the shapes of the
 // prototype's sample data in prototype/: a project with tagged issues, one
 // with nothing tagged yet, a popular repo that invites contributions,
-// registrations waiting for an admin, and a repo the crawler finds.
+// registrations waiting for an admin, a repo the crawler finds, and a repo
+// for `pnpm skills:run` to register.
 //
 // Every account and repo here is made up, except this project's own repo,
 // meanwhileso/goodfirsttoken, and its owner. Its sample issues and PRs are
@@ -441,6 +442,27 @@ export const repos: SampleRepo[] = [
     files: {
       'README.md': '# sample-cli\n\nA sample command line tool for tests and local development.\n',
       'AGENTS.md': '# AGENTS.md\n\nAgents may open pull requests on issues labeled agents welcome.\n',
+    },
+  },
+  {
+    // A repo no sample work touches. `pnpm skills:run` registers it as its
+    // maintainer and approves it as the sample admin, following the maintain
+    // and admin skills. Its CONTRIBUTING gives the proposal reasons to show.
+    // It has no issues, so a search over the sample issues finds none here.
+    owner: 'sample-owner',
+    name: 'sample-parser',
+    description: 'A sample parser for tests and local development.',
+    language: 'TypeScript',
+    license: 'MIT',
+    stars: 1500,
+    created: '4y',
+    pushed: '6h',
+    collaborators: { 'sample-maintainer': 'admin' },
+    labels: defaultLabels,
+    files: {
+      'README.md': '# sample-parser\n\nA sample parser for tests and local development.\n',
+      'CONTRIBUTING.md':
+        '# Contributing\n\n## AI help\n\nAI help is welcome. Disclose it with an Assisted-by: trailer, and write the PR description yourself.\n',
     },
   },
 ];

@@ -1,8 +1,10 @@
+import { tools, type ToolName } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import {
   Client,
   StreamableHTTPClientTransport,
   UnauthorizedError,
+  type CallToolResult,
   type OAuthClientInformationMixed,
   type OAuthClientMetadata,
   type OAuthClientProvider,
@@ -89,10 +91,32 @@ export function agentFetch(address = randomAddress()) {
   };
 }
 
+/**
+ * Throws when a tool answered with a refusal its spec in packages/core
+ * doesn't list. The skills say what to do with each refusal their tools
+ * list, so a refusal left off the list is one no skill handles. Every tool
+ * call in the MCP tests goes through this check.
+ */
+function checkRefusalListed(tool: string, result: CallToolResult): void {
+  const text = result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
+  const code = /^Refused \(([a-z_]+)\)/.exec(text)?.[1];
+  if (code === undefined || !Object.hasOwn(tools, tool)) return;
+  const listed = tools[tool as ToolName].refusals;
+  if (listed !== undefined && !listed.some((known) => known === code)) {
+    throw new Error(`${tool} refused with ${code}, which its spec in packages/core doesn't list in refusals.`);
+  }
+}
+
 /** An MCP client for `oauth`, ready to connect. */
 export function mcpClient(oauth: MemoryOAuthClient, fetch = agentFetch()) {
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider: oauth, fetch });
   const client = new Client({ name: 'goodfirsttoken-tests', version: '0.0.0' });
+  const callTool = client.callTool.bind(client);
+  client.callTool = async (params, options) => {
+    const result = await callTool(params, options);
+    checkRefusalListed(params.name, result);
+    return result;
+  };
   return { client, transport };
 }
 

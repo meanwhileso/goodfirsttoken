@@ -113,6 +113,7 @@ export const adminQueue = defineTool({
   audience: 'admin',
   description:
     "List maintainers' registrations and crawler finds waiting for an admin, with each repo's facts from GitHub.",
+  refusals: ['not_admin'],
   input: z.object({
     kind: z.enum(['all', ...queueItemKinds]).default('all'),
   }),
@@ -131,6 +132,9 @@ export const adminDecide = defineTool({
   audience: 'admin',
   description:
     "Approve or reject a queue item by its id. A rejection needs a reason, which the maintainer sees with project_status. A registration keeps the settings its maintainer chose. For a crawler find, pass the policy tier and the settings you confirmed: settings left out take the crawler's suggestion, then their default, and the tags are required.",
+  // A crawler find is approved by listing it from its policy, so it can be
+  // refused the way admin_add_project is.
+  refusals: ['not_admin', 'invalid_input', 'not_found', 'invalid_settings', 'repo_not_eligible', 'already_registered'],
   input: z
     .object({
       id,
@@ -165,6 +169,7 @@ export const adminAddProject = defineTool({
   audience: 'admin',
   description:
     "List a public repo from its written AI policy, with the quote, its link, the tier, the settings, and the project's own tags. It is listed at once, with the settings sent and the rest at their defaults, and it needs its tags. Listing a repo already listed from its policy replaces that listing's policy, changes only the settings sent, and keeps its status. A repo its maintainers registered, or one on the do-not-list, is refused.",
+  refusals: ['not_admin', 'repo_not_eligible', 'already_registered', 'invalid_settings'],
   input: z.object({
     repo: repoName,
     policy: policySchema,
@@ -189,6 +194,7 @@ export const adminBlockDonor = defineTool({
   audience: 'admin',
   description:
     'Block a donor, or unblock one with blocked: false. A blocked donor gets no new claims, and their live posts are hidden.',
+  refusals: ['not_admin', 'not_found'],
   input: z.object({
     login: githubLogin,
     blocked: z.boolean().default(true),
@@ -205,6 +211,7 @@ export const adminPauseProject = defineTool({
   audience: 'admin',
   description:
     'Pause an approved project, with a reason its maintainers see, or resume any paused project with paused: false. A pause by an admin stays until an admin lifts it, and pausing a project its maintainers paused makes it yours.',
+  refusals: ['not_admin', 'not_found', 'project_not_open'],
   input: z
     .object({
       repo: repoName,
@@ -238,6 +245,7 @@ export const adminRemoveProject = defineTool({
   audience: 'admin',
   description:
     "Remove a repo at its maintainers' request. It goes on the do-not-list, its project is rejected with a reason its maintainers see, and a crawler find for it waiting in the queue is rejected. Nothing lists it again unless a maintainer registers it.",
+  refusals: ['not_admin'],
   input: z.object({
     repo: repoName,
     note: trimmedText(MAX_CRAWL_REASON)

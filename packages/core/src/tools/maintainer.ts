@@ -85,6 +85,9 @@ export const registerProject = defineTool({
   audience: 'maintainer',
   description:
     "Register a public repo you maintain. Call it with the repo alone to get proposed settings, confirm or change them with the maintainer, then call it again with the settings. A registered project waits for a Good First Token admin to approve it. A rejected registration can be registered again, with new settings, and waits for an admin again. Registering a repo listed from its AI policy replaces the listing's settings with yours, and keeps its status, except that a rejected listing waits for an admin again. Set issueRepo only to a repo you also maintain. Pick the goodfirsttoken tag and the label is created in the issue repo with your GitHub account.",
+  // not_maintainer and repo_not_eligible come from the code repo or the
+  // issue repo, and label_not_created from the label.
+  refusals: ['not_maintainer', 'repo_not_eligible', 'already_registered', 'label_not_created'],
   input: z.object({
     repo: repoName,
     settings: projectSettingsSchema
@@ -125,6 +128,14 @@ export const updateProject = defineTool({
   audience: 'maintainer',
   description:
     "Change some of a registered project's settings. Settings left out keep their value. Changes apply at once and show on the project page with who made them. Set issueRepo only to a repo you also maintain. Pick the goodfirsttoken tag and the label is created in the issue repo with your GitHub account. A project listed from its AI policy is refused: take it over with register_project first.",
+  refusals: [
+    'not_maintainer',
+    'not_found',
+    'listed_from_policy',
+    'invalid_settings',
+    'repo_not_eligible',
+    'label_not_created',
+  ],
   input: z.object({ repo: repoName, settings: projectSettingsPatchSchema }),
   output: z.object({
     repo: repoName,
@@ -148,6 +159,7 @@ export const updateProject = defineTool({
 export const projectStatus = defineTool({
   audience: 'maintainer',
   description: `Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused. The tagged issues are counted as the last sync read them from GitHub. Set refresh to read an approved project's tagged issues from GitHub first, at most once every ${String(ISSUE_REFRESH_INTERVAL_MS / 60_000)} minutes, and not while a scheduled sync is reading them.`,
+  refusals: ['not_maintainer', 'not_found'],
   input: z.object({
     repo: repoName,
     refresh: z
@@ -197,6 +209,8 @@ export const pauseProject = defineTool({
   audience: 'maintainer',
   description:
     'Pause a project so agents get no new claims on it, or resume it with paused: false.',
+  // A resume needs the issue repo too, so it can be refused for it.
+  refusals: ['not_maintainer', 'not_found', 'project_not_open', 'not_admin', 'repo_not_eligible'],
   input: z.object({
     repo: repoName,
     paused: z.boolean().default(true),
