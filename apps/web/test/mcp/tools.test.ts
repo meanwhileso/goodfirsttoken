@@ -64,9 +64,9 @@ test("each person gets 120 calls a minute to the MCP server, across all their ag
   const laptop = await tokensFor(github, 'arjun');
   const phone = await tokensFor(github, 'arjun');
   const someoneElse = await tokensFor(github, 'ines');
-  // The 122 calls must fall in one minute of the wall clock. The whole test
-  // takes about 2 seconds on an idle machine and has taken nearly 9 on a
-  // busy one, so the calls start with at least 20 seconds of the minute left.
+  // Arjun's 121 calls must fall in one minute of the wall clock. They took
+  // about 2 seconds on an idle machine and up to 6 on a loaded one, so they
+  // start with at least 20 seconds of the minute left.
   await inOneLimitWindow(20_000);
   const answers: number[] = [];
   for (let i = 0; i < 60; i++) answers.push((await callMcp(laptop.accessToken)).status);

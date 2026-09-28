@@ -140,10 +140,12 @@ export class Browser {
 }
 
 /**
- * Waits, when needed, until the next `needed` milliseconds, 8 seconds unless
- * a test asks for more, fall in one rate-limit window. The runtime counts
- * each minute of the wall clock apart, so a test that sends 21 requests
- * across the turn of a minute would see its count start over.
+ * Waits for the next minute when less than `needed` milliseconds of this one
+ * are left, 8 seconds by default, so that much of a test falls in one
+ * rate-limit window. The runtime counts each minute of the wall clock apart,
+ * so a test that sends 21 requests across the turn of a minute would see its
+ * count start over. Called from a hook, keep `needed` under the hook's
+ * 10-second timeout.
  */
 export async function inOneLimitWindow(needed = 8_000): Promise<void> {
   const left = 60_000 - (Date.now() % 60_000);
