@@ -390,20 +390,23 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | File | What it does |
 |---|---|
 | `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
-| `src/issue/waiting.ts` | Whether an issue takes claims, and which project's copy a claim goes to, for the issue page and `claim_issue` |
+| `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
 | `src/donor/vouch.ts` | The vouch file's format |
 | `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
 
-- **One rule for which issues take claims.** The homepage counts waiting
-  issues in SQL, in `listProjectsAskingForHelp` in `src/db/projects.ts`.
-  Its rule is three SQL fragments there, `ASKING_FOR_HELP`, `HOLDING`, and
-  `WAITS`, which `listWaitingIssues` shares to list the issues
-  `suggest_issues` starts from. The issue page judges one copy with the
-  same rule in TypeScript, `closedBecause` in `src/issue/waiting.ts`, and
-  picks the project it follows with `followedCopy` there. `claim_issue`
-  calls both, so a claim goes to the project the page follows.
+- **One rule for which issues take claims,** the SQL in
+  `src/db/waiting.ts`, under The projects list and the project pages.
+  `listWaitingIssues` in `src/db/projects.ts` lists the issues
+  `suggest_issues` starts from with its `takesClaims`, and
+  `slotsTaken` gives their slots taken. `claim_issue` gets each project's
+  copy of an issue from `findIssue`, judged by `CLOSED_BECAUSE` there, and
+  picks the one the issue page follows with `followedCopy`, so a claim goes
+  to the project the page follows. `checkIssueOnGitHub` judges the labels
+  an issue carries on GitHub now with `judgeLabels` in `src/db/issues.ts`,
+  which runs `CARRIES_A_TAG` over them in D1. The do-not-list comes into it
+  only through `ASKING_FOR_HELP`, the homepage's check.
 - **One place for the donor's rules.** `src/donor/rules.ts` checks the
   rules spec section 6 sets for the donor. `suggest_issues` and
   `claim_issue` both call it, and each returns a refusal or nothing.
@@ -494,13 +497,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   session, the donor with their interests, their block, their claims,
   their open PRs by project, and one list of every waiting issue. Then one GitHub
   GraphQL query for each project it reads, up to 20, and for each issue it
-  checks, one REST read, one GraphQL query, and one timeline page or more,
-  for 0 to 8 issues. Then one D1 read for the claims on the issues suggested,
-  one for the blocks among their claimants, and one for each claimant.
-  `claim_issue` makes the reads `findIssue` makes, a room `snapshot`, a few
-  D1 reads for the session, the donor, the budget, the open PRs, and the
-  CLA, one GraphQL query for the repo, the issue's three or more GitHub
-  reads, and the room's `claim`. The list of waiting issues reads every
+  checks, one REST read, one D1 read for its labels, one GraphQL query, and
+  one timeline page or more, for 0 to 8 issues. Then one D1 read for the
+  claims on the issues suggested, one for the blocks among their claimants,
+  and one for each claimant. `claim_issue` makes the reads `findIssue`
+  makes, a room `snapshot`, a few D1 reads for the session, the donor, the
+  budget, the open PRs, the issue's labels, and the CLA, one GraphQL query
+  for the repo, the issue's three or more GitHub reads, and the room's
+  `claim`. The list of waiting issues reads every
   approved project's cached issues, through `projects_by_status` and the
   key of `tagged_issues`. Nothing caches any of it yet.
 
@@ -1339,7 +1343,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
 - **Asking for help** counts each approved project's waiting issues in the
   same query, with `json_each` over the issue's labels and the project's
   current settings. The rule for an issue waiting is SQL in
-  `src/db/waiting.ts`, which a project page's tagged issues use too.
+  `src/db/waiting.ts`, which every part of the site that asks follows.
   SQLite's `lower()` folds only ASCII letters, so two labels that differ in
   the case of other letters don't match there. The
   claims that hold a slot come from the claims mirror, through
@@ -1375,8 +1379,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
 | `src/routes/$owner.$repo.issues.$number.tsx` | The page, built from the components in `src/components/`, with its lanes, slot panes, and timeline |
 | `src/issue/data.ts` | `getIssuePage`, the server function the route's loader calls |
 | `src/issue/load.ts` | `loadIssue`, which reads what the page shows, on the server only |
-| `src/issue/find.ts` | `findIssue`, which says whether an issue is on the site, for the page and the issue's stream |
-| `src/issue/waiting.ts` | Whether a project's copy of the issue takes claims, and the copy the page follows, for the page and `claim_issue` |
+| `src/issue/find.ts` | `findIssue`, which says whether an issue is on the site, for the page and the issue's stream, with each project's copy judged, and `followedCopy`, the copy the page follows, for the page and `claim_issue` |
 | `src/issue/path.ts` | `issueFromPath`, the issue a page's path names, for the server and the 404 page |
 | `src/issue/view.ts` | The lanes, slots, timeline, and open PRs, folded from the room's events, for the server and the page alike |
 | `src/styles/issue-page.css` | The page's layout |
@@ -1417,19 +1420,19 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   neither gets a `404` from the page and from the stream, and that no room
   is made. The one difference is the path, under The site's own paths.
 - **Whether it takes claims** follows the homepage's rule for an issue
-  waiting for an agent, which `listProjectsAskingForHelp` applies with the
-  SQL in `src/db/waiting.ts`. `closedBecause` in
-  `src/issue/load.ts` judges each copy with its own project, less the open
-  PRs and the free slot, which the page follows live: an approved project
-  with a page, so off the do-not-list by `hasPage`, and then a cached copy
-  with one of its tags and none of its excluded ones, folding ASCII letters
-  as SQLite's `lower()` does. The project comes first, so the page says the
-  project isn't taking claims whatever the copy's labels are.
-  `followedCopy` in `src/issue/waiting.ts` then picks the copy the page
-  follows, as how-it-works says, checking the slots taken against each
-  copy's own claims per issue. That copy's linked PR joins the room's open
-  PRs. `claim_issue` picks its copy with `followedCopy` too, and judges
-  each with `closedBecause` in `src/issue/waiting.ts`.
+  waiting for an agent, the SQL in `src/db/waiting.ts`. `findIssue` reads
+  each project's copy with `listJudgedCopies` in `src/db/issues.ts`, which
+  judges it with `CLOSED_BECAUSE` there, less the open PRs and the free
+  slot, which the page follows live: a project asking for help, so
+  approved and off the do-not-list, and then a cached copy with one of its
+  tags and none of its excluded ones. The project comes first, so the page
+  says the project isn't taking claims whatever the copy's labels are.
+  With no copy, `isAskingForHelp` in `src/db/projects.ts` says the same of
+  the project the latest claim went to. `followedCopy` in
+  `src/issue/find.ts` then picks the copy the page follows, as how-it-works
+  says, checking the slots taken against each copy's own claims per issue.
+  That copy's linked PR joins the room's open PRs. `claim_issue` makes the
+  same pick.
 - **The site's own paths.** A project's page is at `/<owner>/<repo>`, with
   its issues' pages and its streams under it, so a path the site keeps for
   itself could name a repo. `src/issue/path.ts` holds one rule for the
@@ -1537,14 +1540,24 @@ under The projects list and The project page.
   Their controls sit in a `fieldset` that is disabled in the server's
   render and enabled from the page's first render after hydration, so
   they look off until they work, and a test can wait for them.
-- **One waiting rule.** `src/db/waiting.ts` holds the SQL for a cached copy
-  that carries a tag, the slots its claims hold at a time, a claim's PR
-  that is still open, and the whole rule for an issue waiting for an
-  agent. `listProjectsAskingForHelp` counts each project's copies that
-  wait, and `listProjectIssues` in `src/db/issues.ts` says for each copy
-  of one project how many slots are taken, which claim's PR is open, and
-  whether it waits. A test checks that the page's issues that take claims
-  are as many as the homepage counts waiting.
+- **One waiting rule.** `src/db/waiting.ts` holds the SQL for a project
+  asking for help, `ASKING_FOR_HELP`, a cached copy that carries a tag,
+  the slots its claims hold at a time, a claim's PR that is still open,
+  the whole rule for an issue waiting for an agent, and why a copy takes
+  no claims whatever its slots and PRs. Every query that asks uses it:
+  - `listProjectsAskingForHelp` counts each project's copies that wait, for
+    the homepage and the projects list.
+  - `listProjectIssues` in `src/db/issues.ts` says for each copy of one
+    project how many slots are taken, which claim's PR is open, and
+    whether it takes claims, for its page.
+  - `listWaitingIssues` in `src/db/projects.ts` lists the copies that take
+    claims, for `suggest_issues`.
+  - `listJudgedCopies` in `src/db/issues.ts` judges the copies of one issue,
+    for its page and `claim_issue`, and `judgeLabels` there the labels an
+    issue carries on GitHub now, for `suggest_issues` and `claim_issue`.
+
+  A test checks that the page's issues that take claims are the ones the
+  homepage counts waiting and the ones `suggest_issues` starts from.
 - **What the page reads.** `loadProject` reads the project, then asks
   `hasPage` in `src/project/shown.ts` whether it has a page, by its status,
   who set that status, and whether its repo or its issue repo has an entry

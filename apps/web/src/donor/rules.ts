@@ -64,7 +64,7 @@ export async function claRefusal(
     message:
       confirmed === undefined
         ? `${project.repo} asks contributors to sign its CLA first: ${url}. ${ask}`
-        : `${project.repo}'s CLA is at ${url} now, and the donor confirmed ${confirmed}. ${ask}`,
+        : `${project.repo}'s CLA is at ${url}, and the donor confirmed ${confirmed}. ${ask}`,
   };
 }
 

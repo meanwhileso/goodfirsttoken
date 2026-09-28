@@ -1,6 +1,6 @@
 import { labelName, type ProjectRecord, type Refusal } from '@goodfirsttoken/core';
+import { judgeLabels } from '../db';
 import { GitHubError, gitHubQuery, gitHubRead, type GitHubPage, type GraphQLResult } from '../github';
-import { carriesTags, foldLabel } from '../issue/waiting';
 import { limitsRate, type GitHubReader } from '../sync/github';
 import { chooseLink, closingReferences, crossReferences, linksOf } from '../sync/issues';
 
@@ -181,12 +181,14 @@ function notEligible(message: string): IssueCheck {
 /**
  * Checks the issue on GitHub with the donor's token, as spec section 6
  * asks before suggesting and before claiming: it is still open, carries one
- * of the project's tags and none of its excluded tags, has no assignee, and
- * has no open PR linked to it in the project's code repo or issue repo, by
- * the sync's rule. `names` are other names GitHub gives the project's repos
- * now, as after a rename.
+ * of the project's tags and none of its excluded tags, by the rule the
+ * homepage counts with (src/db/waiting.ts), has no assignee, and has no open
+ * PR linked to it in the project's code repo or issue repo, by the sync's
+ * rule. `names` are other names GitHub gives the project's repos now, as
+ * after a rename.
  */
 export async function checkIssueOnGitHub(
+  db: D1Database,
   reader: GitHubReader,
   project: ProjectRecord,
   issue: string,
@@ -197,12 +199,10 @@ export async function checkIssueOnGitHub(
   if (found.isPullRequest) return notEligible(`${issue} is a pull request on GitHub. Pick an issue.`);
   if (!found.open) return notEligible(`${issue} is closed on GitHub. Pick another issue.`);
   if (found.assigned) return notEligible(`${issue} has an assignee on GitHub, so someone is on it. Pick another issue.`);
-  if (!carriesTags(found.labels, project.settings)) {
-    const excluded = found.labels.find((label) =>
-      project.settings.excludedTags.some((tag) => foldLabel(tag) === foldLabel(label)),
-    );
+  const { carries, excluded } = await judgeLabels(db, project.repo, found.labels);
+  if (!carries) {
     return notEligible(
-      excluded === undefined
+      excluded === null
         ? `${issue} no longer carries a tag ${project.repo} marks work for outside help with. Pick another issue.`
         : `${issue} carries ${excluded}, a label ${project.repo} keeps for people. Pick another issue.`,
     );

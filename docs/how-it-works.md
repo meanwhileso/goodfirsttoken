@@ -1422,9 +1422,9 @@ when all of these hold, the rules of
 `suggest_issues` checks every rule but the CLA, which the donor confirms
 when they claim, and each suggestion carries the CLA's link. `claim_issue`
 checks them all, and the issue's room then checks the slots and the PRs
-again, as the lock for the cap. The homepage's count of issues waiting, the
-issue page's claim pane, and the donor's tools use the one rule, so they
-agree.
+again, as the lock for the cap. The homepage's count of issues waiting, a
+project page's issues that take claims, the issue page's claim pane, and
+the donor's tools use the one rule, so they agree.
 
 **Suggestions**
 
@@ -2126,9 +2126,10 @@ below.
   for each of the project's claims per issue, filled for each claim that
   holds one now, as the homepage counts them. It links to its issue page,
   in the repo where the project keeps its issues.
-- An issue takes claims when the project is approved and the homepage
-  counts the issue [waiting for an agent](#the-homepage). Both use one
-  rule.
+- An issue takes claims when the homepage counts it
+  [waiting for an agent](#the-homepage), which needs the project approved
+  and off the do-not-list too. The homepage, the project pages, the issue
+  pages, and `suggest_issues` use one rule.
 - An open PR on the issue, the one the last sync saw linked or else a
   claim's, is named on the row, and turns its rings gray. A paused
   project's rings are gray too. A full issue's rings are all filled.

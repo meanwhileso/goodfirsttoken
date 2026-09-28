@@ -395,12 +395,13 @@ describe('claim_issue', () => {
     github.openPullRequest(TOOLS, { title: 'Downstream fix', body: `Fixes ${elsewhere}`, by: 'kenji' });
     const { agent, sessionId } = await donor('priya');
 
-    const refusals = [];
+    const results = new Map<string, Result>();
     for (const issue of [closed, assigned, untagged, excluded, closing, mentioned, elsewhere]) {
-      refusals.push([issue, refusalOf(await call(agent, 'claim_issue', { sessionId, issue }))]);
+      results.set(issue, await call(agent, 'claim_issue', { sessionId, issue }));
     }
+    const said = (issue: string) => textOf(results.get(issue) ?? { content: [] });
 
-    expect(refusals).toEqual([
+    expect([...results].map(([issue, result]) => [issue, refusalOf(result)])).toEqual([
       [closed, 'issue_not_eligible'],
       [assigned, 'issue_not_eligible'],
       [untagged, 'issue_not_eligible'],
@@ -409,6 +410,9 @@ describe('claim_issue', () => {
       [mentioned, 'pr_exists'],
       [elsewhere, null],
     ]);
+    // Its labels on GitHub are judged by the rule the homepage counts with.
+    expect(said(untagged)).toContain(`${untagged} no longer carries a tag ${APP} marks work for outside help with.`);
+    expect(said(excluded)).toContain(`${excluded} carries good first issue, a label ${APP} keeps for people.`);
   });
 
   test('an issue whose PR merged is refused, though the cache still lists it and its room holds no PR until the next sync', async () => {
@@ -748,7 +752,10 @@ describe('the queue', () => {
     const confirmed = await call(agent, 'claim_issue', { sessionId, claConfirmed: 'https://sample-owner.test/cla' });
 
     expect(refusalOf(confirmed)).toBe('cla_required');
-    expect(textOf(confirmed)).toContain('https://sample-owner.test/bundler-cla');
+    // The CLA asked about is the pick's own, and the link confirmed was another project's.
+    expect(textOf(confirmed)).toContain(
+      `${BUNDLER}'s CLA is at https://sample-owner.test/bundler-cla, and the donor confirmed https://sample-owner.test/cla.`,
+    );
     expect(textOf(confirmed)).toContain(`Skipped from the queue first:\n${asked} (issue_full)`);
     expect(await getClaConfirmation(env.DB, people.priya.githubId, BUNDLER)).toBeNull();
     expect((await getSession(env.DB, sessionId))?.queue).toEqual([behind]);

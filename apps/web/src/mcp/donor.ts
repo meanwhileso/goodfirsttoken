@@ -52,8 +52,7 @@ import {
 import { rankIssues, weightedOrder, type Candidate } from '../donor/pick';
 import { blockedRefusal, claRefusal, openPrRefusal, vouchRefusal, type Donor } from '../donor/rules';
 import { gitHubRest, gitHubUrls } from '../github';
-import { findIssue } from '../issue/find';
-import { closedBecause, followedCopy } from '../issue/waiting';
+import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
 import type { GitHubReader } from '../sync/github';
 
@@ -359,7 +358,7 @@ export async function suggestIssues(
     const repoFacts = facts.get(repo);
     if (!repoFacts) continue;
     checks += 1;
-    const check = await checkIssueOnGitHub(reader, entry.project, entry.copy.issue, [repoFacts.name]);
+    const check = await checkIssueOnGitHub(env.DB, reader, entry.project, entry.copy.issue, [repoFacts.name]);
     if (check.ok) picked.push({ entry, issue: check.issue });
     // Stopping here draws no issue the walk won't use.
     if (picked.length === SUGGESTIONS || checks === MAX_CHECKS) break;
@@ -506,16 +505,14 @@ async function claimOne(context: ClaimContext, issue: string): Promise<Attempt> 
 async function claimNew(
   context: ClaimContext,
   issue: string,
-  copies: NonNullable<Awaited<ReturnType<typeof findIssue>>>['copies'],
+  copies: readonly JudgedCopy[],
   taken: number,
   roomPr: string | null,
 ): Promise<Attempt> {
   const { donor, now, reader } = context;
-  const issueRepo = splitIssue(issue).repo;
-  const judged = await Promise.all(
-    copies.map(async (copy) => ({ ...copy, closed: await closedBecause(env.DB, copy.project, copy, issueRepo) })),
-  );
-  const chosen = followedCopy(judged, taken);
+  // Each copy comes judged by the rule the homepage counts with, less the
+  // slots and PRs, which the room holds.
+  const chosen = followedCopy(copies, taken);
   if (chosen === undefined) {
     return refused('issue_not_eligible', `${issue} isn't among a project's open tagged issues. Pick another issue.`);
   }
@@ -546,7 +543,7 @@ async function claimNew(
   }
   const vouch = vouchRefusal(project, donor, facts);
   if (vouch) return { ok: false, refusal: vouch };
-  const check = await checkIssueOnGitHub(reader, project, copy.issue, [facts.name]);
+  const check = await checkIssueOnGitHub(env.DB, reader, project, copy.issue, [facts.name]);
   if (!check.ok) return check;
   if (facts.head === null) {
     return refused('project_not_open', `${project.repo} has no commits on GitHub to start from, so ${issue} takes no claims.`);

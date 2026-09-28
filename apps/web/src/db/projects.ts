@@ -1,6 +1,5 @@
 import {
   changedSettings,
-  CLAIM_LIFETIME_MS,
   count,
   githubId,
   mustParse,
@@ -11,7 +10,6 @@ import {
   projectStatusChangeSchema,
   projectStatusSchema,
   repoName,
-  REVIEW_WINDOW_MS,
   settingsVersionSchema,
   taggedIssueSchema,
   updateProjectSettings,
@@ -30,7 +28,7 @@ import {
 } from '@goodfirsttoken/core';
 import { getDoNotListEntry } from './do-not-list';
 import { checkTime, fromJson, joinIssue } from './shared';
-import { waiting } from './waiting';
+import { ASKING_FOR_HELP, slotsTaken, takesClaims, waiting } from './waiting';
 
 // The projects, project_settings, and project_status_changes tables. A
 // project's row holds its current status and points at its current
@@ -222,37 +220,6 @@ export interface ProjectAskingForHelp {
   waiting: number;
 }
 
-// The homepage's rule for an issue waiting for an agent, in SQL, shared by
-// listProjectsAskingForHelp and listWaitingIssues. src/issue/waiting.ts has
-// the same rule for one issue, for the issue page and claim_issue.
-//
-// ASKING_FOR_HELP holds for a project p that is approved, with neither its
-// repo nor its issue repo on the do-not-list. HOLDING counts the claims on
-// the cached issue t that hold a slot at ?4: working or paused until 24
-// hours (?2) after the claim was made, and awaiting review until 7 days
-// (?3) after its first submit, as core's holdsSlot says, whether or not the
-// room's timer has run yet. WAITS holds for t, of the project whose current
-// settings are s, when a new agent could claim it at ?4. Labels compare
-// without case: SQLite's lower() folds ASCII letters. An issue has an open
-// PR when the sync saw one linked to it, or when a claim on it opened one
-// that the PRs table doesn't show merged or closed, as the issue's room
-// counts it.
-const ASKING_FOR_HELP = `p.status = 'approved'
-  AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))`;
-const HOLDING = `(SELECT COUNT(*) FROM claims c
-  WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
-    AND ((c.state IN ('active', 'paused') AND c.claimed_at + ?2 > ?4)
-      OR (c.state = 'awaiting_review' AND c.submitted_at + ?3 > ?4)))`;
-const WAITS = `t.linked_pr_number IS NULL
-  AND EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.tags') g
-              WHERE lower(l.value) = lower(g.value))
-  AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) l, json_each(s.settings, '$.excludedTags') x
-                  WHERE lower(l.value) = lower(x.value))
-  AND NOT EXISTS (SELECT 1 FROM claims c LEFT JOIN prs pr ON pr.claim_id = c.id
-                  WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
-                    AND c.pr_number IS NOT NULL AND (pr.state IS NULL OR pr.state = 'open'))
-  AND ${HOLDING} < json_extract(s.settings, '$.claimsPerIssue')`;
-
 /**
  * The projects asking for help at `now`: every approved project, paused
  * ones left out, and any whose repo or issue repo is on the do-not-list.
@@ -265,8 +232,8 @@ export async function listProjectsAskingForHelp(
   limit: number,
   now: number,
 ): Promise<{ total: number; projects: ProjectAskingForHelp[] }> {
-  // Which issues wait for an agent is one rule in ./waiting.ts, which a
-  // project page's tagged issues follow too.
+  // Which projects ask for help, and which of their issues wait for an
+  // agent, is one rule in ./waiting.ts, which every list of them follows.
   const { results } = await db
     .prepare(
       `SELECT p.*, s.settings, COUNT(*) OVER () AS total,
@@ -297,25 +264,24 @@ export interface WaitingIssue {
 }
 
 /**
- * Every cached issue waiting for an agent at `now`, by the homepage's rule,
- * in every project asking for help: the oldest project first, then by issue.
- * Two projects that keep issues in one repo each list their own copy.
+ * Every cached issue waiting for an agent at `now`, in every project asking
+ * for help, by the rule in ./waiting.ts that the homepage counts with: the
+ * oldest project first, then by issue. Two projects that keep issues in one
+ * repo each list their own copy.
  */
 export async function listWaitingIssues(db: D1Database, now: number): Promise<WaitingIssue[]> {
   const { results } = await db
     .prepare(
       `SELECT p.*, s.settings, t.issue_repo AS copy_repo, t.number AS copy_number, t.title AS copy_title,
-         t.labels AS copy_labels, t.synced_at AS copy_synced_at, ${HOLDING} AS holding, y.language AS language
+         t.labels AS copy_labels, t.synced_at AS copy_synced_at, ${slotsTaken('?1')} AS holding, y.language AS language
        FROM projects p
        JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
        JOIN tagged_issues t ON t.project = p.repo
        LEFT JOIN issue_syncs y ON y.project = p.repo
-       WHERE ${ASKING_FOR_HELP} AND ${WAITS}
+       WHERE ${takesClaims('?1')}
        ORDER BY p.added_at, p.repo, t.issue_repo, t.number`,
     )
-    // The rule takes ?2 to ?4. listProjectsAskingForHelp's ?1 is its limit,
-    // and this query has none.
-    .bind(null, CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS, checkTime(now))
+    .bind(checkTime(now))
     .all<
       ProjectRow & {
         copy_repo: string;
@@ -364,6 +330,15 @@ export async function getSettingsSave(
     .first<{ changed_by: number; changed_at: number }>();
   if (row === null) return null;
   return { changedBy: mustParse(githubId, row.changed_by, 'changedBy'), changedAt: checkTime(row.changed_at, 'changedAt') };
+}
+
+/** Whether the project asks for help now, by the rule in ./waiting.ts: approved, and off the do-not-list. */
+export async function isAskingForHelp(db: D1Database, repo: string): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT 1 AS yes FROM projects p WHERE p.repo = ? AND ${ASKING_FOR_HELP}`)
+    .bind(mustParse(repoName, repo, 'repo'))
+    .first<{ yes: number }>();
+  return row !== null;
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */
