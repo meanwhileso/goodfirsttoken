@@ -155,6 +155,16 @@ describe('who sees the admin tools', () => {
     expect(names.filter((name) => name.startsWith('admin_'))).toEqual([]);
   });
 
+  test("an admin's agent that lost the role is told the tool isn't found, and gets no refusal", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    env.ADMIN_GITHUB_IDS = '';
+
+    const said = await call(admin, 'admin_queue', {}).then(textOf, (error: unknown) => String(error));
+
+    expect(said).toContain('Tool admin_queue not found');
+    expect(said).not.toContain('Refused');
+  });
+
   test("the GitHub fake's sample admin is no admin outside development", async () => {
     // The tests run the Worker as staging, with GitHub on https hosts.
     env.ADMIN_GITHUB_IDS = '';
@@ -391,7 +401,8 @@ describe('admin_decide on a registration', () => {
     const status = await call(maintainer, 'project_status', { repo: HARBOR });
 
     expect(noReason.isError).toBe(true);
-    expect(textOf(noReason)).toContain('reason');
+    expect(textOf(noReason)).toContain('reason: is required to reject');
+    expect(textOf(noReason)).not.toContain('Refused');
     expect(rejected.structuredContent).toEqual({ repo: HARBOR, kind: 'registration', status: 'rejected' });
     expect(status.structuredContent).toMatchObject({ status: 'rejected', statusReason: 'The notes ask agents to skip the tests.' });
     expect(textOf(status)).toContain('Reason: The notes ask agents to skip the tests.');
@@ -736,6 +747,17 @@ describe('admin_pause_project', () => {
 
     expect(textOf(byMaintainer)).toMatch(/^Refused \(not_admin\): Good First Token paused/);
     expect(byAdmin.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true });
+  });
+
+  test("pausing or resuming a repo that isn't a project is not found, and nothing is made", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const pause = await call(admin, 'admin_pause_project', { repo: TOOLS, reason: 'Spam reports.' });
+    const resume = await call(admin, 'admin_pause_project', { repo: TOOLS, paused: false });
+
+    const notFound = `Refused (not_found): ${TOOLS} is not a project on Good First Token.`;
+    expect([textOf(pause), textOf(resume)]).toEqual([notFound, notFound]);
+    expect(await getProject(env.DB, TOOLS)).toBeNull();
   });
 
   test('only an approved project can be paused, and pausing needs a reason', async () => {

@@ -1,17 +1,20 @@
+import { tools, type ToolName } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import {
   Client,
   StreamableHTTPClientTransport,
   UnauthorizedError,
+  type CallToolResult,
   type OAuthClientInformationMixed,
   type OAuthClientMetadata,
   type OAuthClientProvider,
   type OAuthTokens,
 } from '@modelcontextprotocol/client';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import { expect } from 'vitest';
 import { limiterKey } from '../../src/auth/rate-limit';
 import { APP, Browser, ORIGIN, location, pickOnGitHub, randomAddress } from '../auth/helpers';
+import { workerFetch } from '../worker';
 
 // An agent that connects to the MCP server with the official MCP client SDK:
 // it finds the server's OAuth metadata, registers itself, and signs in with
@@ -85,14 +88,36 @@ export function agentFetch(address = randomAddress()) {
   return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init);
     request.headers.set('cf-connecting-ip', address);
-    return exports.default.fetch(request);
+    return workerFetch(request);
   };
+}
+
+/**
+ * Throws when a tool answered with a refusal its spec in packages/core
+ * doesn't list. The skills say what to do with each refusal their tools
+ * list, so a refusal left off the list is one no skill handles. Every tool
+ * call in the MCP tests goes through this check.
+ */
+function checkRefusalListed(tool: string, result: CallToolResult): void {
+  const text = result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
+  const code = /^Refused \(([a-z_]+)\)/.exec(text)?.[1];
+  if (code === undefined || !Object.hasOwn(tools, tool)) return;
+  const listed = tools[tool as ToolName].refusals;
+  if (listed !== undefined && !listed.some((known) => known === code)) {
+    throw new Error(`${tool} refused with ${code}, which its spec in packages/core doesn't list in refusals.`);
+  }
 }
 
 /** An MCP client for `oauth`, ready to connect. */
 export function mcpClient(oauth: MemoryOAuthClient, fetch = agentFetch()) {
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider: oauth, fetch });
   const client = new Client({ name: 'goodfirsttoken-tests', version: '0.0.0' });
+  const callTool = client.callTool.bind(client);
+  client.callTool = async (params, options) => {
+    const result = await callTool(params, options);
+    checkRefusalListed(params.name, result);
+    return result;
+  };
   return { client, transport };
 }
 
@@ -248,8 +273,8 @@ export function refreshNothing(fetch = agentFetch()): Promise<Response> {
 
 /**
  * Counts `count` requests to /oauth/token from `address` against its limit,
- * straight on TOKEN_LIMITER, as if the address had sent them. Hundreds of
- * requests through the Worker would slow every later test in the file.
+ * straight on TOKEN_LIMITER, as if the address had sent them. That is
+ * quicker than sending hundreds of requests through the Worker.
  */
 export async function useUpTokenRequests(address: string, count = TOKEN_LIMIT): Promise<void> {
   const key = limiterKey(address);

@@ -1,6 +1,6 @@
 import type { ClaimRecord, PrRef } from '@goodfirsttoken/core';
 import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
-import { env, exports } from 'cloudflare:workers';
+import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   addToDoNotList,
@@ -20,6 +20,7 @@ import { LOCAL_FAKE, runAsDevelopment, setEnv, startGitHub } from '../auth/helpe
 import { liveSocket } from '../feed/helpers';
 import { jobDeps } from '../sync/helpers';
 import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
+import { workerFetch } from '../worker';
 
 // The issue page: what it loads from the issue's room and the database, the
 // page itself through the Worker, and the room's live socket the page
@@ -396,7 +397,7 @@ describe('the slots', () => {
     const page = await load();
     expect(page).toMatchObject({ closedBecause: null, slots: 3, title: 'As sample-web cached it' });
     expect(slotsTaken(page.view)).toBe(1);
-    expect(await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text()).toContain(claimCommand());
+    expect(await (await workerFetch(`http://localhost/${repo}/issues/${number}`)).text()).toContain(claimCommand());
   });
 
   test("with two projects keeping issues in one repo, a blocked donor's claim counts against each project's cap", async () => {
@@ -415,7 +416,7 @@ describe('the slots', () => {
     const page = await load();
     expect(page).toMatchObject({ closedBecause: null, slots: 3, title: 'As sample-web cached it' });
     expect([lanesInPlay(page.view), slotsTaken(page.view)]).toEqual([[], 1]);
-    const html = await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text();
+    const html = await (await workerFetch(`http://localhost/${repo}/issues/${number}`)).text();
     expect(html).toContain('1 of 3 slots taken');
     expect(html).toContain(claimCommand());
   });
@@ -548,7 +549,7 @@ describe('the slots', () => {
 
     const loaded = await load();
     expect(JSON.stringify(loaded)).not.toContain('elsewhere.example');
-    const html = await (await exports.default.fetch(`http://localhost/${repo}/issues/${number}`)).text();
+    const html = await (await workerFetch(`http://localhost/${repo}/issues/${number}`)).text();
 
     expect(html).not.toContain('elsewhere.example');
     for (const n of [80, 81, 82]) expect(html).toContain(`href="https://github.com/${repo}/pull/${String(n)}"`);
@@ -635,7 +636,7 @@ describe('which issues have a page', () => {
 });
 
 describe('the page, through the Worker', () => {
-  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
 
   test('shows the lanes, the slots, and the timeline, and sets no cookie for a visitor', async () => {
     await tag();
@@ -775,7 +776,7 @@ describe("the room's glance, which the page loads with", () => {
     try {
       expect(await room().glance()).toBeNull();
       expect(await loadIssue(request, 'sample-owner', 'sample-app', number)).toEqual({ state: 'unavailable', issue });
-      const res = await exports.default.fetch(`http://localhost/${repo}/issues/${number}`);
+      const res = await workerFetch(`http://localhost/${repo}/issues/${number}`);
       expect(res.status).toBe(503);
       expect(await res.text()).not.toContain('nobody should see');
     } finally {
@@ -911,7 +912,7 @@ describe("the room's live socket, as the page follows it", () => {
 
 describe('the dev-only route that works an issue as a sample person', () => {
   const work = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
-    exports.default.fetch('http://localhost:5173/dev/work', {
+    workerFetch('http://localhost:5173/dev/work', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify({ issue, ...body }),
@@ -934,7 +935,7 @@ describe('the dev-only route that works an issue as a sample person', () => {
     const restore = runAsDevelopment();
     try {
       for (const host of ['gft.example', 'gft.workers.test', '192.0.2.10:5173']) {
-        const res = await exports.default.fetch(`http://${host}/dev/work`, {
+        const res = await workerFetch(`http://${host}/dev/work`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ issue: theirs, login: 'priya', action: 'claim' }),
@@ -1027,7 +1028,7 @@ describe('the dev-only route that works an issue as a sample person', () => {
 });
 
 describe("the page's breadcrumb", () => {
-  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
 
   /** Where the breadcrumb on an issue page's HTML leads, or null when it leads nowhere. */
   function breadcrumb(html: string): string | null {
@@ -1071,7 +1072,7 @@ describe("the page's breadcrumb", () => {
 });
 
 describe('an issue of a project with no page', () => {
-  const page = (path: string) => exports.default.fetch(`http://localhost${path}`);
+  const page = (path: string) => workerFetch(`http://localhost${path}`);
 
   test("shows nothing cached from the repo once the sync delists the project, and keeps its lanes and timeline", async () => {
     await tag();

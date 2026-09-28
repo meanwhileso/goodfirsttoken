@@ -650,7 +650,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `validation.ts` the check that names the field in every problem.
 - **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
   maintainers, and admins: who sees it, a description for agents, input and
-  output schemas, and a function that renders the output as text.
+  output schemas, and a function that renders the output as text. A
+  maintainer's or admin's tool also lists, in `refusals`, every refusal code
+  an agent can get from it. The skills are checked against those lists, under
+  [Skills and plugins](#skills-and-plugins). The donor's tools can add
+  theirs when their skills name them.
   `src/tools/index.ts` lists them all, and its `toolResult` and
   `toolRefusal` build MCP results without depending on the MCP SDK.
 - **The claim state machine never reads the clock.** Its caller passes the
@@ -710,6 +714,95 @@ its version did not go up.
 - **The admin plugin** lists `goodfirsttoken` as a dependency and has no MCP
   server of its own. Installing it installs the donor plugin too, so an admin
   connects to the server once.
+
+### What the skills name
+
+A skill tells an agent which tools to call and what to do with each
+refusal, so a skill and the server can drift apart. Two checks hold them
+together.
+
+- **`apps/web/test/mcp/skills.test.ts`** reads each skill's source, which
+  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`. It
+  connects the agent of the person the skill is for, a maintainer with no
+  admin role for maintain and the sample admin for admin, and lists that
+  agent's tools from the server with their schemas. The tools a skill calls
+  are the ones of its own audience, from their specs in `packages/core`.
+  - The skill's `## Connect` section tells an agent how to add the server in
+    its own harness, in that harness's words. There only a snake_case name
+    alone in backticks is checked, and it has to be a tool the reader is
+    served.
+  - In the rest, sentence by sentence, every snake_case name has to be a
+    tool the reader is served, a value in the schemas of the tools the
+    skill names, like `too_soon`, or a refusal on the `refusals` list of a
+    tool the skill calls, or of a tool named in the same sentence, as when
+    the admin skill says what a maintainer gets.
+  - Every word in backticks on its own, and every key in a JSON object in
+    backticks, has to be a field or value in those schemas, like `prMode`.
+    JSON's literals and `goodfirsttoken`, our label and plugin, are the
+    only other words allowed. In a sentence that names tools, as in
+    "`admin_block_donor` with `login`", each has to be a field, value, or
+    refusal of one of those tools. A value after a field, as in
+    "`prMode` `reviewed`", has to be one that field takes, when the field
+    takes a fixed set: an enum, or true or false. A value after a free
+    field, like `id`, isn't checked.
+  - The `## Refusals` section has one entry, a list item that starts with
+    the code in backticks and a colon, for each refusal on the lists of the
+    tools the skill calls, and no other.
+  - Each line of a code block is a call, `tool {json}`, to a tool the skill
+    calls, whose input schema from `packages/core` takes the JSON. The
+    Refusals entries and the code blocks are the only places the audience
+    limits what a skill calls. Prose that tells an agent to call another
+    tool its reader is served, like `start_session`, passes.
+  - Each sentence the skill quotes in backticks, one that starts with a
+    capital and ends with a full stop, like `Listed from its AI policy.`,
+    has to be one of the strings in the code that writes the MCP tools'
+    answers, or part of one. `vitest.config.ts` reads every string, and
+    each fixed part of every template, in `packages/core/src/tools/`,
+    `packages/core/src/projects.ts`, `src/projects/`,
+    `src/auth/permissions.ts`, `src/mcp/server.ts`, `maintainer.ts`,
+    `admin.ts`, and `donor.ts`, and `src/admin/actions.ts`, and passes them
+    in as `TEST_ANSWER_TEXT`. Comments and the admin pages' text aren't
+    read. Those files also hold strings no answer shows, like internal
+    errors and logs, so a quote of one of them passes too. Answer text
+    from other files isn't read, like the sync's pause reasons that
+    `project_status` repeats, so a skill can't quote it yet. Server text
+    built from parts at run time, like `Tool admin_queue not found`, isn't
+    checked. At least one sentence
+    across the skills has to be checked, so the test can't pass on none.
+  - The skill calls every tool of its audience, and each tool it calls has
+    a `refusals` list.
+- **Every tool call in the MCP tests** goes through `mcpClient` in
+  `test/mcp/helpers.ts`, which fails the test when a tool refuses with a
+  code its `refusals` list leaves out. Every code on the lists has a test
+  that gets it through `mcpClient`, so a list can't fall behind the server.
+  A refusal no agent can get, like `not_admin` from an admin's tool, stays
+  off the lists.
+
+### Following the skills' steps
+
+`pnpm skills:run` runs `apps/web/scripts/skill-run.ts` against a site in
+development, `pnpm dev` unless `--site` names another. It follows the steps
+of the maintain and admin skills with the MCP client SDK as each person's
+agent. No model runs, so it spends no tokens.
+
+- The GitHub fake's `sample-maintainer` registers
+  `sample-owner/sample-parser`, a sample repo no sample work touches, and
+  confirms the proposed settings as they are. `sample-admin` finds the registration with `admin_queue`,
+  checks it carries those settings, and approves it with `admin_decide`.
+  Then `project_status` has to say it is approved.
+- Each person approves their agent over plain HTTP, the way a browser would:
+  the site's page to approve the agent, then the GitHub fake's sign-in page.
+  The run's requests carry a `cf-connecting-ip` of its own, so its sign-ins
+  don't count toward anyone else's limit.
+- A repo can be registered once. When an earlier run on the same database
+  left the project, the admin's agent first removes it with
+  `admin_remove_project`, and the run registers it again, as a rejected
+  registration.
+- `e2e/skills.spec.ts` runs the same steps against the end-to-end tests'
+  preview, the Worker and the GitHub fake as servers of their own, as in
+  `pnpm dev`. So CI runs them on every pull request, and a person can run
+  them against `pnpm dev` and read each call and its answer. Runs of real
+  harnesses stay by hand, since they spend real tokens.
 
 ### What the installers read
 
@@ -1275,9 +1368,10 @@ streams' in [Text streams](how-it-works.md#text-streams).
 - **When the reader goes away.** The runtime is meant to cancel the body,
   which ends the stream. workerd since 1.20260619.1 doesn't, as
   [workerd issue 6832](https://github.com/cloudflare/workerd/issues/6832)
-  reports, and the runtime the unit tests use shows the same. Until that is
-  fixed, the Worker learns a reader left from the minute rule, once a line
-  has waited that long and another comes, or at the hour. The
+  reports, and the runtime the unit tests use shows the same through
+  `exports.default.fetch`. Until that is fixed, the Worker learns a reader
+  left from the minute rule, once a line has waited that long and another
+  comes, or at the hour. The
   `enable_request_signal` compatibility flag would tell it at once. It is
   not on. It applies to every route of the Worker, and workerd calls it
   still experimental with no date to turn it on by default, though
@@ -2244,8 +2338,9 @@ and Playwright run it as a local HTTP server.
 - **The sample data** in `src/sample-data.ts` takes the shapes of the
   prototype's: donors, maintainers, and an admin, a project with tagged
   issues, one with nothing tagged, a popular repo that invites
-  contributions, two registrations waiting for an admin, and a repo whose
-  AGENTS.md invites agents, for a crawler find. `sample-owner/sample-desktop`
+  contributions, two registrations waiting for an admin, a repo whose
+  AGENTS.md invites agents, for a crawler find, and a repo no sample work
+  touches, which `pnpm skills:run` registers. `sample-owner/sample-desktop`
   keeps a vouch file at `.github/VOUCHED.td`, in the format Ghostty uses,
   which the fake serves like any file. It is the one place later issues add
   to. Every account and repo in it is made up, under `sample-owner`, except
@@ -2293,11 +2388,34 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 
 - **Unit and integration tests** run with Vitest inside `workerd`, through
   `@cloudflare/vitest-pool-workers`, with the bindings from `wrangler.jsonc`.
-  HTTP tests call the whole Worker through `exports.default.fetch` from
-  `cloudflare:workers`, so a test sees the same routing and headers a
-  browser does. Code no route uses yet, like `src/github.ts`, is called
-  directly. They live in `apps/web/test/`. A test that calls GitHub creates
-  the GitHub fake in-process and puts `fake.fetch` in place of the global
+  They live in `apps/web/test/`. HTTP tests call the whole Worker with
+  `workerFetch` from `apps/web/test/worker.ts`, so a test sees the same
+  routing and headers a browser does. It calls the `fetch` of the Worker's
+  default export in `src/server.ts` itself, with the Worker's bindings and a
+  new execution context, and waits for the work the Worker hands to
+  `waitUntil`. The response comes back as the Worker made it, redirects
+  included. The request comes in as the runtime hands one over: its
+  redirect mode is `manual`, its headers and its clones' headers refuse
+  changes, and the caller's `AbortSignal` doesn't reach it. Requests
+  through `exports.default.fetch` from `cloudflare:workers` get slower one
+  after another in a test file, in `@cloudflare/vitest-pool-workers`
+  0.22.0, even for a Worker with none of this code, as
+  [workers-sdk issue 15446](https://github.com/cloudflare/workers-sdk/issues/15446)
+  reports. A direct call runs in the test's own I/O context, so these
+  tests can't show that the Worker keeps no stream, body, or socket from one
+  request for the next, which the runtime refuses.
+  `apps/web/test/runtime.test.ts` sends a few requests through
+  `exports.default.fetch` on purpose, early in its file while they are
+  still quick: two calls to `/mcp` from a connected agent, and a text
+  stream's body, read by two readers. It also checks that `workerFetch`
+  hands the Worker a request like the runtime's. The end-to-end tests reach
+  pages, sign-in, the OAuth routes, disconnecting an agent, the admin
+  forms, and the issue page's socket through the runtime. When a test
+  cancels a stream's body through `workerFetch`, the Worker's stream ends at
+  once. Behind the runtime it doesn't yet, as
+  [The live feeds](#the-live-feeds) says. Code no route uses yet, like
+  `src/github.ts`, is called directly. A test that calls GitHub creates the
+  GitHub fake in-process and puts `fake.fetch` in place of the global
   `fetch`. `vitest.config.ts` points GitHub's URLs at hosts under `.test`.
 - **Issue room tests** call a room's methods through its stub, in
   `apps/web/test/rooms/`. They set the clock with Vitest's fake `Date`, which
@@ -2315,12 +2433,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   streams through the Worker while the room, the queue, and the feeds run as
   they do deployed. The local
   queue waits a second for a batch, as a deployed one does. The hour's close
-  is tested with a fake `Date`, which the Worker's request reads too. A fake
-  timer can't stand in for the hour: it would fire in the test's I/O
-  context, where the Worker's stream can't be closed. So the timer that
-  ends a quiet stream is tested by calling `handleStream` with a lifetime of
-  a second. The consumer's tests hand it batches of their own, which record
-  each `retry` and its wait. `createMessageBatch` drops the wait.
+  is tested with a fake `Date`, which the Worker's request reads too. The
+  timer that ends a quiet stream is tested by calling `handleStream` with a
+  lifetime of a second on the real clock, which ends the stream in whichever
+  I/O context the request runs. A fake timer fires in the test's own
+  context, and could close the stream only while the Worker runs there too,
+  as it does through `workerFetch`. The consumer's tests hand it batches of
+  their own, which record each `retry` and its wait. `createMessageBatch`
+  drops the wait.
 - **Project tests** call the proposal's rules directly, and read files and
   labels from the GitHub fake with the functions in `src/projects/`. They
   live in `apps/web/test/projects/`. The maintainer's tools are tested
@@ -2345,7 +2465,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   also tested alone, in `apps/web/test/donor/`. The admin's tools are
   tested there too, and their actions are also called directly, with a spy
   on D1 and `fetch`, to show each checks the permission before it reads
-  anything.
+  anything. A tool that refuses with a code its spec doesn't list fails the
+  test that called it, and `skills.test.ts` checks the skills against the
+  tools, as under [What the skills name](#what-the-skills-name).
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
@@ -2372,9 +2494,14 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   only what they expect. `admin.spec.ts` signs in as the fake's sample
   admin, approves and rejects the seeded registrations, and replays the
   admin page's server function call as a donor. Approving lists a project
-  on the homepage, so it runs last, in the `admin` project, which depends
-  on `rooms`. It signs in three times, since every dev sign-in counts
-  toward the sign-in limit of 20 a minute from one address.
+  on the homepage, so it runs in the `admin` project, which depends on
+  `rooms`. It signs in three times, since every dev sign-in counts toward
+  the sign-in limit of 20 a minute from one address. `skills.spec.ts`
+  follows the maintain and admin skills' steps, under
+  [Following the skills' steps](#following-the-skills-steps). It registers
+  a project and approves it from the admin queue, where `admin.spec.ts`
+  expects only what it seeded, so it runs last, in the `skills` project,
+  which depends on `admin`.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
