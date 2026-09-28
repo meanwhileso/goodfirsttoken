@@ -442,6 +442,7 @@ export const submitWork = defineTool({
     'claim_released',
     'claim_expired',
     'pr_closed',
+    'issue_not_eligible',
     'no_changes',
     'fork_not_ready',
     'github_refused',
@@ -621,6 +622,7 @@ export const openPr = defineTool({
     'pr_already_opened',
     'description_required',
     'open_pr_cap',
+    'issue_not_eligible',
     'github_refused',
   ],
   input: z.object({

@@ -28,7 +28,7 @@ import {
   saveSubmission,
   setReviewReason,
 } from '../db';
-import { linkedPrs, readIssue, readRepoFacts, type RepoFacts } from '../donor/github';
+import { checkIssueFacts, linkedPrs, readIssue, readRepoFacts, type GitHubIssue, type IssueRules, type RepoFacts } from '../donor/github';
 import { GitHubError } from '../github';
 import { blockedRefusal, openPrRefusal, projectClosedRefusal, type Donor } from '../donor/rules';
 import { branchFor, commitMessage, isWorkflowPath, prBody, redacted, reviewReason } from '../donor/work';
@@ -305,6 +305,18 @@ async function openFor(
   return { ...opened.refusal, message: `${opened.refusal.message} GitHub opened ${pr.url} all the same.` };
 }
 
+/**
+ * What checkIssueFacts lets through for a donor's own work: the issue may be
+ * assigned to them, as a maintainer does for someone on it, and to no one
+ * else. `next` says what the agent does when the issue fails.
+ */
+function ownIssue(donor: Donor, next: string): IssueRules {
+  return { assignee: donor.login, next };
+}
+
+const NOT_COMMITTED = 'Nothing was committed. Stop with release_claim and a reason.';
+const NOT_OPENED = 'The work stays on its branch, and no PR opened. Stop with release_claim and a reason.';
+
 /** The code repo on GitHub as the donor sees it, or the refusal when it has no default branch to aim a PR at. */
 async function codeRepo(writer: DonorWriter, project: ProjectRecord): Promise<(RepoFacts & { defaultBranch: string }) | Refusal> {
   const facts = await readRepoFacts(writer.reader, project.repo);
@@ -325,9 +337,21 @@ export async function submitWork(
   const writer = new DonorWriter(await tokenOf(caller));
   const facts = await codeRepo(writer, project);
   if (isRefusal(facts)) return refuse(facts);
+  // Before anything is written, the issue is checked on GitHub as a claim
+  // checks it: GitHub shows it, it is open, it carries a tag and no
+  // excluded tag, and no one else is assigned. A claim whose PR is open is
+  // past that: the PR is the maintainers' to take or close, and they often
+  // relabel or assign an issue once a PR is on it.
+  let issue: GitHubIssue | null;
+  if (claim.pr === null) {
+    const checked = await checkIssueFacts(env.DB, writer.reader, project, claim.issue, ownIssue(donor, NOT_COMMITTED));
+    if (!checked.ok) return refuse(checked.refusal);
+    issue = checked.issue;
+  } else {
+    issue = await readIssue(writer.reader, claim.issue);
+  }
   const earlier = await getSubmission(env.DB, claim.id);
   const branch = earlier?.branch ?? branchFor(claim);
-  const issue = await readIssue(writer.reader, claim.issue);
   const title = redacted(input.title ?? issue?.title ?? (await getIssue(env.DB, project.repo, claim.issue))?.title ?? claim.issue, 256);
   const summary = redacted(input.summary);
   const checks = redacted(input.checks);
@@ -448,9 +472,13 @@ export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: n
   const writer = new DonorWriter(await tokenOf(caller));
   const facts = await codeRepo(writer, project);
   if (isRefusal(facts)) return refuse(facts);
-  // GitHub is checked for a PR on the issue before this one opens. The
-  // donor decides whether a second one helps, so it doesn't stop them.
-  const [prOnIssue = null] = await otherPrs(writer, work, [facts.name]);
+  // The issue is checked on GitHub as submit_work checks it, and a failing
+  // one opens no PR. GitHub is checked for a PR on the issue too, but the
+  // donor decides whether a second one helps, so that doesn't stop them.
+  const checked = await checkIssueFacts(env.DB, writer.reader, project, claim.issue, ownIssue(donor, NOT_OPENED));
+  if (!checked.ok) return refuse(checked.refusal);
+  const names = checked.issue.repo === null ? [facts.name] : [facts.name, checked.issue.repo];
+  const [prOnIssue = null] = await otherPrs(writer, work, names);
   const opened = await openFor(writer, work, facts, submission, input.description);
   if (isRefusal(opened)) return refuse(opened);
   return answer(
@@ -490,17 +518,25 @@ export async function readyToOpen(caller: Caller, origin: string, now: number): 
     const submission = submissions.get(claim.id);
     if (submission === undefined) continue;
     const project = await getProject(env.DB, claim.project);
-    const closed = blocked ?? (await projectClosedRefusal(env.DB, project, claim.project));
-    // A read GitHub refuses leaves the item with the PRs its room knows of.
-    // A refused token still ends the connection.
-    const prs =
-      closed === null && project !== null
-        ? await otherPrs(writer, { claim, project, donor, roomPrs }, []).catch((error: unknown) => {
-            if (error instanceof GitHubError && error.status === 401) throw error;
-            console.warn(`my_work could not read the PRs on ${claim.issue} from GitHub.`, error);
-            return roomPrs;
-          })
-        : roomPrs;
+    let closed = blocked ?? (await projectClosedRefusal(env.DB, project, claim.project));
+    let prs = roomPrs;
+    // The issue is checked on GitHub as open_pr checks it, so a failing one
+    // says why it can't open. A read GitHub refuses leaves the item openable,
+    // with the PRs its room knows of. A refused token still ends the
+    // connection.
+    if (closed === null && project !== null) {
+      try {
+        const checked = await checkIssueFacts(env.DB, writer.reader, project, claim.issue, ownIssue(donor, NOT_OPENED));
+        if (checked.ok) {
+          prs = await otherPrs(writer, { claim, project, donor, roomPrs }, checked.issue.repo === null ? [] : [checked.issue.repo]);
+        } else {
+          closed = checked.refusal;
+        }
+      } catch (error) {
+        if (error instanceof GitHubError && error.status === 401) throw error;
+        console.warn(`my_work could not read ${claim.issue} from GitHub.`, error);
+      }
+    }
     const copy = await getIssue(env.DB, claim.project, claim.issue);
     const expiresAt = claimDeadlines(claim).expiresAt;
     items.push({

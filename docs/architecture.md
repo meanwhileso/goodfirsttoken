@@ -410,7 +410,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   to the project the page follows. `checkIssueOnGitHub` judges the labels
   an issue carries on GitHub now with `judgeLabels` in `src/db/issues.ts`,
   which runs `CARRIES_A_TAG` over them in D1. The do-not-list comes into it
-  only through `ASKING_FOR_HELP`, the homepage's check.
+  only through `ASKING_FOR_HELP`, the homepage's check. Its first half,
+  `checkIssueFacts`, reads the issue's own facts, and `submit_work`,
+  `open_pr`, and the review queue in `my_work` run it again, with the
+  donor let through as the issue's assignee.
 - **One place for the donor's rules.** `src/donor/rules.ts` checks the
   rules spec section 6 sets for the donor. `suggest_issues` and
   `claim_issue` both call it, and each returns a refusal or nothing.

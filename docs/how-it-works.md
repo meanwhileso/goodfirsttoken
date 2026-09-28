@@ -1662,6 +1662,14 @@ never reaches the tool.
   `claim_released` or `claim_expired`, and a claim whose PR the PRs table
   shows merged or closed with `pr_closed`. None of these makes a call to
   GitHub.
+- Then, before anything is written, it reads the issue on GitHub with the
+  donor's token and checks it as claiming does: GitHub shows it, it is an
+  open issue, it carries one of the project's tags and none of its excluded
+  tags, and it has no assignee other than the donor. An issue that fails is
+  refused with `issue_not_eligible`, nothing is written, and the claim stays
+  as it was, for the donor to release. A claim whose PR is open skips this
+  check. Its PR is the maintainers' to take or close, and they often
+  relabel an issue, or assign it, once a PR is on it.
 - A claim has one branch, `goodfirsttoken/issue-<number>-<claim ID>`. It
   holds the claim's ID, so no other claim's branch has its name, and every
   submit of the claim uses it.
@@ -1743,6 +1751,9 @@ queue.
   open-PR cap with `open_pr_cap`, and, for a project that wants a
   person-written description, a call with none with
   `description_required`.
+- Before it opens, it checks the issue on GitHub as `submit_work` does, and
+  refuses one that fails with `issue_not_eligible`. The work stays on its
+  branch.
 - It checks GitHub for another PR on the issue first, and names one in its
   answer. The donor decided a second PR helps, so it opens all the same.
 - The PR opens with the donor's token, from the claim's branch, in the code
@@ -1768,9 +1779,28 @@ the summary and what was checked, why it waits, when it expires, whether
 the project wants a person-written description, and an open PR on the issue
 from anyone, from the room or, read with the donor's token, from GitHub.
 When GitHub refuses that read, the room's PRs are the ones named.
-One whose PR can't open now, because the donor is blocked or the project
-isn't open, is marked `openable: false` with the reason, and nothing about
-it is read from GitHub.
+One whose PR can't open now is marked `openable: false` with the reason:
+the donor is blocked or the project isn't open, and then nothing about it
+is read from GitHub, or the issue fails the check `open_pr` makes on
+GitHub.
+
+**Where the spec needs to change.** These choices differ from spec section
+7, or go past it, and the spec needs a change to match them.
+
+- A change to a workflow file almost never lands. The spec sends work that
+  touches CI workflow files to the review queue. GitHub takes such a change
+  only from a token with the `workflow` scope, which Good First Token
+  doesn't ask for, unless the same file is on another branch of the repo.
+  So nearly every such submit is refused with `github_refused`, and the
+  donor makes the change on GitHub themselves.
+- `submit_work` and `open_pr` check the issue on GitHub again, and refuse
+  one that fails with `issue_not_eligible`. The spec asks for the check
+  before a PR opens, and doesn't say what happens when it fails. The review
+  queue would only hold work that `open_pr` then refuses, so the submit is
+  refused, and the donor releases the claim. The spec's rule of no
+  assignee is for claiming, and here the donor may be the assignee, since
+  maintainers often assign the person working on an issue. A claim whose
+  PR is open skips the check.
 
 ## Crawl candidates
 
@@ -1932,8 +1962,8 @@ tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
-| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `no_changes`, `fork_not_ready`, `github_refused` |
-| `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `github_refused` |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `fork_not_ready`, `github_refused` |
+| `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
@@ -1957,7 +1987,7 @@ tool say what to do with each one on its list, under
 | `not_submitted` | Opening a PR before the work was submitted |
 | `pr_closed` | The claim's PR merged or closed, so the claim takes no more updates or fixes |
 | `project_not_open` | The project isn't approved, or is paused, or, for the donor's tools, is on the do-not-list or has no public repo GitHub shows them. Pausing a project that isn't approved gets it too |
-| `issue_not_eligible` | The issue is closed, has no project tag, has an excluded tag, has an assignee, or is a pull request |
+| `issue_not_eligible` | GitHub shows no such issue, or it is closed, has no project tag, has an excluded tag, has an assignee, or is a pull request. For submitting and opening a PR, the donor may be its assignee |
 | `pr_exists` | A PR is open on the issue, so it takes no new claims |
 | `issue_full` | Every slot on the issue is taken |
 | `donor_blocked` | An admin blocked the donor |

@@ -238,6 +238,18 @@ function filesAt(repo: string, ref: string): Map<string, string> {
   return files;
 }
 
+/** The issue as the fake holds it. */
+function issueState(issue: string) {
+  const found = repoState(issue.slice(0, issue.indexOf('#'))).issues[String(numberOf(issue))];
+  if (!found) throw new Error(`the fake has no issue ${issue}`);
+  return found;
+}
+
+/** The calls that wrote to GitHub: every call but a REST read and a GraphQL query. */
+function writes(calls: RecordedCall[]): string[] {
+  return calls.filter((c) => c.method !== 'GET' && !c.operation.startsWith('query')).map((c) => c.operation);
+}
+
 /** The PRs someone opened in a repo. */
 function pullsBy(repo: string, login: string) {
   return Object.values(repoState(repo).issues).filter((issue) => issue.pull !== null && issue.user === login);
@@ -720,6 +732,109 @@ describe('what a submit commits', () => {
       expect(text).not.toContain(token);
       expect(text).toContain('[redacted]');
     }
+  });
+});
+
+describe('the issue on GitHub', () => {
+  // Each way an issue stops taking outside work after a claim, done on
+  // GitHub by a maintainer, which neither the cache nor the room hears of.
+  const failing: [string, (issue: string) => void, string][] = [
+    [
+      'closed',
+      (issue) => {
+        github.closeIssue(APP, numberOf(issue), BY);
+      },
+      'is closed on GitHub',
+    ],
+    [
+      'deleted',
+      (issue) => {
+        // The fake's record of the issue goes, as a deleted issue goes from GitHub.
+        Reflect.deleteProperty(repoState(APP).issues, String(numberOf(issue)));
+      },
+      'GitHub shows you no issue',
+    ],
+    [
+      'untagged',
+      (issue) => {
+        issueState(issue).labels = [];
+      },
+      'no longer carries a tag',
+    ],
+    [
+      'given an excluded tag',
+      (issue) => {
+        github.labelIssue(APP, numberOf(issue), 'needs design', BY);
+      },
+      'a label sample-owner/sample-app keeps for people',
+    ],
+    [
+      'assigned to someone else',
+      (issue) => {
+        github.assignIssue(APP, numberOf(issue), 'lena', BY);
+      },
+      'has an assignee on GitHub',
+    ],
+  ];
+
+  test.each(failing)(
+    'an issue %s after the claim takes no submit and no PR, and nothing is written to GitHub',
+    async (_, change, says) => {
+      await project(APP, { ...automatic, prMode: 'reviewed', excludedTags: ['needs design'] });
+      const [working, waiting] = [await tagged(APP), await tagged(APP)];
+      const priya = await donor('priya');
+      const one = await claim(priya, working);
+      const two = await claim(priya, waiting);
+      await submit(priya, two.claimId, { 'b.txt': 'b\n' });
+      const branches = { ...repoState('priya/sample-app').branches };
+      change(working);
+      change(waiting);
+
+      const submitted = await submit(priya, one.claimId, { 'a.txt': 'a\n' });
+      const submitCalls = lastCalls();
+      const queued = await call(priya, 'my_work');
+      const opened = await call(priya, 'open_pr', { claimId: two.claimId });
+      const openCalls = lastCalls();
+
+      expect(refusalOf(submitted)).toBe('issue_not_eligible');
+      expect(textOf(submitted)).toContain(says);
+      expect(textOf(submitted)).toContain('Nothing was committed. Stop with release_claim and a reason.');
+      expect(submitCalls.length).toBeGreaterThan(0);
+      expect(writes(submitCalls)).toEqual([]);
+      expect(refusalOf(opened)).toBe('issue_not_eligible');
+      expect(textOf(opened)).toContain(says);
+      expect(textOf(opened)).toContain('The work stays on its branch, and no PR opened.');
+      expect(writes(openCalls)).toEqual([]);
+      expect(repoState('priya/sample-app').branches).toEqual(branches);
+      expect(pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref.startsWith('goodfirsttoken/'))).toEqual([]);
+      expect(await getSubmission(env.DB, one.claimId)).toBeNull();
+      expect((await issueRoom(env.ISSUE_ROOM, working).snapshot()).claims[0]?.state).toBe('active');
+      expect((await issueRoom(env.ISSUE_ROOM, waiting).snapshot()).claims[0]?.state).toBe('awaiting_review');
+      expect(queued.structuredContent?.readyToOpen).toEqual([
+        expect.objectContaining({ claimId: two.claimId, openable: false, reason: expect.stringContaining(says) as string }),
+      ]);
+    },
+  );
+
+  test('an issue assigned to the donor takes their work, and a claim whose PR is open takes fixes whatever the issue says', async () => {
+    await project(APP, automatic);
+    const [assigned, relabelled] = [await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    const one = await claim(priya, assigned);
+    const two = await claim(priya, relabelled);
+    github.assignIssue(APP, numberOf(assigned), 'priya', BY);
+
+    const mine = await submit(priya, one.claimId, { 'a.txt': 'a\n' });
+    const opened = await submit(priya, two.claimId, { 'b.txt': 'b\n' });
+    // With the PR open, a maintainer relabels the issue and assigns a reviewer.
+    issueState(relabelled).labels = ['in review'];
+    github.assignIssue(APP, numberOf(relabelled), 'lena', BY);
+    const fixed = await submit(priya, two.claimId, { 'b.txt': 'b, fixed\n' });
+
+    expect(mine.structuredContent).toMatchObject({ state: 'pr_opened' });
+    expect(opened.structuredContent).toMatchObject({ state: 'pr_opened' });
+    expect(fixed.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
+    expect(filesAt('priya/sample-app', branchOf(relabelled, two.claimId)).get('b.txt')).toBe('b, fixed\n');
   });
 });
 
