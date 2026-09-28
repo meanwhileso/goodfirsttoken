@@ -2,7 +2,7 @@ import { labelName, type ProjectRecord, type Refusal } from '@goodfirsttoken/cor
 import { judgeLabels } from '../db';
 import { GitHubError, gitHubQuery, gitHubRead, type GitHubPage, type GraphQLResult } from '../github';
 import { limitsRate, type GitHubReader } from '../sync/github';
-import { chooseLink, closingReferences, crossReferences, linksOf } from '../sync/issues';
+import { chooseLink, closingReferences, crossReferences, linksOf, type Link } from '../sync/issues';
 
 // What the donor's tools read from GitHub, all with the donor's own token:
 // the facts about a project's repo a claim needs, and each issue as it is
@@ -43,6 +43,8 @@ class DonorGitHub implements GitHubReader {
 export interface RepoFacts {
   /** The repo as GitHub names it now. */
   name: string;
+  /** The default branch, which a PR goes into, or null for an empty repo. */
+  defaultBranch: string | null;
   /** The head commit of the default branch, where a claim's work starts, or null for an empty repo. */
   head: string | null;
   /** The donor is an admin or maintainer of the repo, so the work is on their own project. */
@@ -61,7 +63,7 @@ interface RepoAnswer {
   repository: {
     nameWithOwner: string;
     viewerPermission: string | null;
-    defaultBranchRef: { target: { oid: string } | null } | null;
+    defaultBranchRef: { name: string; target: { oid: string } | null } | null;
     dotGithub: VouchBlob | null;
     root: VouchBlob | null;
   } | null;
@@ -78,7 +80,7 @@ const REPO_FACTS = `query ($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner
     viewerPermission
-    defaultBranchRef { target { oid } }
+    defaultBranchRef { name target { oid } }
     dotGithub: object(expression: "HEAD:${VOUCH_PATHS[0]}") { ... on Blob { text } }
     root: object(expression: "HEAD:${VOUCH_PATHS[1]}") { ... on Blob { text } }
   }
@@ -105,6 +107,7 @@ export async function readRepoFacts(reader: GitHubReader, repo: string): Promise
   const file = files.find((f): f is { path: (typeof VOUCH_PATHS)[number]; text: string } => typeof f.text === 'string');
   return {
     name: found.nameWithOwner,
+    defaultBranch: found.defaultBranchRef?.name ?? null,
     head: found.defaultBranchRef?.target?.oid ?? null,
     managed: found.viewerPermission === 'ADMIN' || found.viewerPermission === 'MAINTAIN',
     writer: WRITE_OR_MORE.has(found.viewerPermission ?? ''),
@@ -172,6 +175,31 @@ export async function readIssue(reader: GitHubReader, issue: string): Promise<Gi
   };
 }
 
+/**
+ * The open PRs GitHub links to the issue now, read with the donor's token,
+ * by the sync's rule under Linked PRs: a closing reference or a mention, from
+ * a PR open in the project's code repo or issue repo. `names` are other names
+ * GitHub gives the project's repos now, as after a rename. Null when GitHub
+ * shows the donor no such issue.
+ */
+export async function linkedPrs(
+  reader: GitHubReader,
+  project: ProjectRecord,
+  issue: string,
+  names: readonly string[] = [],
+): Promise<Link[] | null> {
+  const { repo: issueRepo, number } = splitIssue(issue);
+  const closes = (await closingReferences(reader, issueRepo, [number])).get(number);
+  const mentions = await crossReferences(reader, issueRepo, number);
+  if (closes === undefined || mentions === null) return null;
+  // A PR counts only in the project's code repo or issue repo, as the sync
+  // counts it, by the names the project keeps and the names GitHub gives.
+  const ours = new Set(
+    [project.repo, project.settings.issueRepo ?? project.repo, issueRepo, ...names].map((name) => name.toLowerCase()),
+  );
+  return linksOf(closes, mentions).filter((link) => ours.has(link.pr.repo.toLowerCase()));
+}
+
 export type IssueCheck = { ok: true; issue: GitHubIssue } | { ok: false; refusal: Refusal };
 
 function notEligible(message: string): IssueCheck {
@@ -208,21 +236,9 @@ export async function checkIssueOnGitHub(
     );
   }
 
-  const { repo: issueRepo, number } = splitIssue(issue);
-  const closes = (await closingReferences(reader, issueRepo, [number])).get(number);
-  const mentions = await crossReferences(reader, issueRepo, number);
-  if (closes === undefined || mentions === null) return notEligible(`GitHub shows you no issue ${issue}. Pick another issue.`);
-  // A PR counts only in the project's code repo or issue repo, as the sync
-  // counts it, by the names the project keeps and the names GitHub gives.
-  const ours = new Set(
-    [project.repo, project.settings.issueRepo ?? project.repo, found.repo ?? issueRepo, ...names].map((name) =>
-      name.toLowerCase(),
-    ),
-  );
-  const linked = chooseLink(
-    null,
-    linksOf(closes, mentions).filter((link) => ours.has(link.pr.repo.toLowerCase())),
-  );
+  const links = await linkedPrs(reader, project, issue, found.repo === null ? names : [...names, found.repo]);
+  if (links === null) return notEligible(`GitHub shows you no issue ${issue}. Pick another issue.`);
+  const linked = chooseLink(null, links);
   if (linked !== null) {
     return {
       ok: false,

@@ -4,10 +4,18 @@ import { findRepo } from '../src/state.ts';
 import { fromBase64, graphql, rest, toBase64 } from './call.ts';
 
 let fake: GitHubFake;
+// The fake's clock, which the tests move.
+let clock: number;
 
 beforeEach(() => {
-  fake = createGitHubFake();
+  clock = Date.now();
+  fake = createGitHubFake({ now: () => new Date(clock) });
 });
+
+/** Time passes, and GitHub finishes making the forks it started. */
+function forksFinish(): void {
+  clock += fake.forkDelayMs;
+}
 
 const UPSTREAM = '/repos/meanwhileso/goodfirsttoken';
 
@@ -19,6 +27,7 @@ async function head(repo: string, branch: string): Promise<string> {
 async function forkWithBranch(login: string, branch: string) {
   const token = fake.tokenFor(login);
   await rest(fake, 'POST', `${UPSTREAM}/forks`, { token, body: {} });
+  forksFinish();
   const sha = await head('meanwhileso/goodfirsttoken', 'main');
   await rest(fake, 'POST', `/repos/${login}/goodfirsttoken/git/refs`, {
     token,
@@ -201,6 +210,7 @@ test("a collaborator working on a branch in the repo is the commit's author and 
 test("a PR's head must come from the base repo or a fork of it", async () => {
   const sam = fake.tokenFor('sam');
   await rest(fake, 'POST', '/repos/sample-owner/sample-app/forks', { token: sam, body: {} });
+  forksFinish();
   await rest(fake, 'POST', '/repos/sam/sample-app/git/refs', {
     token: sam,
     body: { ref: 'refs/heads/elsewhere', sha: await head('sam/sample-app', 'main') },
@@ -216,6 +226,25 @@ test("a PR's head must come from the base repo or a fork of it", async () => {
   expect(reply.status).toBe(422);
   expect(reply.body.errors).toMatchObject([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
   expect(open.body).toEqual([]);
+});
+
+test("a commit to an open PR's branch moves the PR's head, as a push does", async () => {
+  const { token } = await forkWithBranch('sam', 'moving');
+  await commitFile(token, 'sam/goodfirsttoken', 'moving', 'first.txt');
+  const pr = await rest<{ number: number }>(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token,
+    body: { title: 'Moving', head: 'sam:moving', base: 'main' },
+  });
+
+  await commitFile(token, 'sam/goodfirsttoken', 'moving', 'second.txt');
+  const read = await rest<{ head: { sha: string }; commits: number; changed_files: number }>(
+    fake,
+    'GET',
+    `${UPSTREAM}/pulls/${String(pr.body.number)}`,
+  );
+
+  expect(read.body.head.sha).toBe(await head('sam/goodfirsttoken', 'moving'));
+  expect(read.body).toMatchObject({ commits: 2, changed_files: 2 });
 });
 
 test('GitHub refuses a second open PR from the same branch, and a PR with no new commits', async () => {
@@ -269,4 +298,157 @@ test('merging a PR lands its changes and closes the issue it says it closes', as
   });
   expect(issue.body).toMatchObject({ state: 'closed', state_reason: 'completed', closed_by: { login: 'octo-maintainer' } });
   expect(file.status).toBe(200);
+});
+
+const REF = `query ($owner: String!, $name: String!, $ref: String!) {
+  repository(owner: $owner, name: $name) { ref(qualifiedName: $ref) { target { oid } } }
+}`;
+
+test("a new fork's git data answers 409 until GitHub finishes making it, and forking again meanwhile gives the same fork", async () => {
+  const sam = fake.tokenFor('sam');
+  const upstreamHead = await head('meanwhileso/goodfirsttoken', 'main');
+
+  const forked = await rest<{ full_name: string }>(fake, 'POST', `${UPSTREAM}/forks`, { token: sam, body: {} });
+  const again = await rest<{ full_name: string }>(fake, 'POST', `${UPSTREAM}/forks`, { token: sam, body: {} });
+  const read = await rest<{ message: string }>(fake, 'GET', '/repos/sam/goodfirsttoken/git/ref/heads/main', { token: sam });
+  const branch = await rest<{ message: string }>(fake, 'POST', '/repos/sam/goodfirsttoken/git/refs', {
+    token: sam,
+    body: { ref: 'refs/heads/early', sha: upstreamHead },
+  });
+  const ref = await graphql<{ repository: { ref: unknown } }>(fake, sam, REF, {
+    owner: 'sam',
+    name: 'goodfirsttoken',
+    ref: 'refs/heads/main',
+  });
+  const commit = await graphql<CommitReply>(fake, sam, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'sam/goodfirsttoken', branchName: 'main' },
+      expectedHeadOid: upstreamHead,
+      message: { headline: 'Too early' },
+      fileChanges: { additions: [{ path: 'early.txt', contents: toBase64('early') }] },
+    },
+  });
+  const pull = await rest<{ errors: { field?: string }[] }>(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: sam,
+    body: { title: 'Too early', head: 'sam:main', base: 'main' },
+  });
+
+  expect([forked.status, again.status]).toEqual([202, 202]);
+  expect(again.body.full_name).toBe(forked.body.full_name);
+  expect([read.status, read.body.message]).toEqual([409, 'Git Repository is empty.']);
+  expect([branch.status, branch.body.message]).toEqual([409, 'Git Repository is empty.']);
+  expect(ref.body.data?.repository.ref).toBeNull();
+  expect(commit.body.data?.createCommitOnBranch).toBeNull();
+  expect(commit.body.errors?.[0]?.message).toBe('Git Repository is empty.');
+  expect(pull.status).toBe(422);
+  expect(pull.body.errors).toMatchObject([{ field: 'head' }]);
+
+  forksFinish();
+  const ready = await rest(fake, 'POST', '/repos/sam/goodfirsttoken/git/refs', {
+    token: sam,
+    body: { ref: 'refs/heads/later', sha: upstreamHead },
+  });
+  expect(ready.status).toBe(201);
+  expect(await head('sam/goodfirsttoken', 'later')).toBe(upstreamHead);
+});
+
+test('someone without push access can make no branch in the repo, and commit nothing to it', async () => {
+  const priya = fake.tokenFor('priya');
+  const sha = await head('meanwhileso/goodfirsttoken', 'main');
+
+  const branch = await rest(fake, 'POST', `${UPSTREAM}/git/refs`, { token: priya, body: { ref: 'refs/heads/priya-1', sha } });
+  const commit = await graphql<CommitReply>(fake, priya, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'meanwhileso/goodfirsttoken', branchName: 'main' },
+      expectedHeadOid: sha,
+      message: { headline: 'Not mine to push' },
+      fileChanges: { additions: [{ path: 'nope.txt', contents: toBase64('nope') }] },
+    },
+  });
+
+  expect(branch.status).toBe(404);
+  expect(commit.body.data?.createCommitOnBranch).toBeNull();
+  expect(commit.body.errors).toEqual([expect.objectContaining({ type: 'FORBIDDEN' })]);
+  expect(await head('meanwhileso/goodfirsttoken', 'main')).toBe(sha);
+});
+
+test('a change under .github/workflows/ needs the workflow scope, unless another branch has the same file', async () => {
+  const { token } = await forkWithBranch('sam', 'ci');
+  const scoped = fake.tokenFor('sam', ['public_repo', 'workflow']);
+  const commitWorkflow = async (as: string, change: { contents: string } | { deleted: true }) =>
+    graphql<CommitReply>(fake, as, COMMIT, {
+      input: {
+        branch: { repositoryNameWithOwner: 'sam/goodfirsttoken', branchName: 'ci' },
+        expectedHeadOid: await head('sam/goodfirsttoken', 'ci'),
+        message: { headline: 'Change CI' },
+        fileChanges:
+          'deleted' in change
+            ? { deletions: [{ path: '.github/workflows/ci.yml' }] }
+            : { additions: [{ path: '.github/workflows/ci.yml', contents: toBase64(change.contents) }] },
+      },
+    });
+
+  const changed = await commitWorkflow(token, { contents: 'name: CI\non: [push]\n' });
+  const deleted = await commitWorkflow(token, { deleted: true });
+  // main has the file as it is, so it may go on another branch.
+  const same = await commitWorkflow(token, { contents: 'name: CI\non: [pull_request]\n' });
+  const withScope = await commitWorkflow(scoped, { contents: 'name: CI\non: [push]\n' });
+
+  expect(changed.body.errors).toEqual([
+    expect.objectContaining({
+      type: 'FORBIDDEN',
+      message: 'refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope',
+    }),
+  ]);
+  expect(deleted.body.errors).toEqual([expect.objectContaining({ type: 'FORBIDDEN' })]);
+  expect(same.body.errors).toBeUndefined();
+  expect(withScope.body.errors).toBeUndefined();
+});
+
+test('a comparison lists the files a branch changed since a commit, with lines added and removed, and finds a fork branch by its owner', async () => {
+  const { token, sha } = await forkWithBranch('sam', 'compare-me');
+  await graphql(fake, token, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'sam/goodfirsttoken', branchName: 'compare-me' },
+      expectedHeadOid: sha,
+      message: { headline: 'Three changes' },
+      fileChanges: {
+        additions: [
+          { path: 'README.md', contents: toBase64('# Good First Token\n\nSpend your spare tokens.\nOn open source.\n') },
+          { path: 'NEW.md', contents: toBase64('one\ntwo\n') },
+        ],
+        deletions: [{ path: 'package.json' }],
+      },
+    },
+  });
+
+  const inFork = await rest<{ files: unknown[] }>(fake, 'GET', `/repos/sam/goodfirsttoken/compare/${sha}...compare-me`);
+  const acrossForks = await rest<{ ahead_by: number }>(fake, 'GET', `${UPSTREAM}/compare/main...sam:compare-me`);
+  const unknown = await rest(fake, 'GET', `/repos/sam/goodfirsttoken/compare/${sha}...no-such-branch`);
+
+  expect(inFork.body).toMatchObject({ status: 'ahead', ahead_by: 1, behind_by: 0, total_commits: 1 });
+  expect(inFork.body.files).toMatchObject([
+    { filename: 'NEW.md', status: 'added', additions: 2, deletions: 0 },
+    { filename: 'README.md', status: 'modified', additions: 2, deletions: 1 },
+    { filename: 'package.json', status: 'removed', additions: 0, deletions: 1 },
+  ]);
+  expect(acrossForks.body.ahead_by).toBe(1);
+  expect(unknown.status).toBe(404);
+});
+
+test("a blob's content comes back in base64", async () => {
+  const text = '# Good First Token\n\nSpend your spare tokens on open source.\n';
+  const readme = await rest<{ sha: string }>(fake, 'GET', `${UPSTREAM}/contents/README.md`);
+
+  const read = await rest<{ content: string; encoding: string; size: number }>(
+    fake,
+    'GET',
+    `${UPSTREAM}/git/blobs/${readme.body.sha}`,
+  );
+  const missing = await rest(fake, 'GET', `${UPSTREAM}/git/blobs/${'0'.repeat(40)}`);
+
+  expect(read.body.encoding).toBe('base64');
+  expect(fromBase64(read.body.content)).toBe(text);
+  expect(read.body.size).toBe(Buffer.byteLength(text));
+  expect(missing.status).toBe(404);
 });

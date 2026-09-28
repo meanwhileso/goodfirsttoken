@@ -6,6 +6,7 @@
 // test can read or change any part of it.
 
 import {
+  blobOid,
   isAncestor,
   listFiles,
   readObject,
@@ -125,6 +126,10 @@ export interface RepoRecord {
   hasPullRequests: boolean;
   pullRequestCreationPolicy: 'all' | 'collaborators_only';
   forkOf: string | null;
+  // GitHub makes a fork in the background. Until this time, the fork's git
+  // data isn't there yet. State saved before the fake kept it has none, and
+  // a repo with none is ready.
+  gitReadyAt?: string | null;
   collaborators: Record<string, Role>;
   branches: Record<string, Oid>;
   labels: LabelRecord[];
@@ -180,9 +185,11 @@ export interface ValidationError {
   message?: string;
 }
 
-// A refusal, in terms both the REST and GraphQL layers can report.
+// A refusal, in terms both the REST and GraphQL layers can report. `empty`
+// is a repo whose git data isn't there yet, like a fork GitHub is still
+// making.
 export class FakeError extends Error {
-  kind: 'not_found' | 'forbidden' | 'invalid' | 'stale';
+  kind: 'not_found' | 'forbidden' | 'invalid' | 'stale' | 'empty';
   errors: ValidationError[];
 
   constructor(kind: FakeError['kind'], message: string, errors: ValidationError[] = []) {
@@ -262,6 +269,18 @@ export function requirePush(repo: RepoRecord, login: string | null): void {
   if (!canPush(roleOf(repo, login))) throw new FakeError('not_found', 'Not Found');
 }
 
+// Whether the repo's git data is there at `now`. A fork isn't at first.
+// https://docs.github.com/en/rest/repos/forks#create-a-fork
+export function gitReady(repo: RepoRecord, now: string): boolean {
+  return repo.gitReadyAt == null || Date.parse(repo.gitReadyAt) <= Date.parse(now);
+}
+
+// GitHub answers 409 to the git data of a repo it is still making.
+// https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database
+export function requireGit(repo: RepoRecord, now: string): void {
+  if (!gitReady(repo, now)) throw new FakeError('empty', 'Git Repository is empty.');
+}
+
 // GitHub keeps a person's email private behind a noreply address.
 export function gitPerson(state: FakeState, login: string, date: string): GitPerson {
   const account = getAccount(state, login);
@@ -298,12 +317,13 @@ export function forkOf(state: FakeState, repo: RepoRecord, login: string): RepoR
 }
 
 // Forks a repo into the person's account. A person who already has a fork
-// of the repo gets that fork back, as on GitHub.
+// of the repo gets that fork back, as on GitHub. A new fork's git data is
+// ready at `readyAt`, and at once without it.
 export function forkRepo(
   state: FakeState,
   parent: RepoRecord,
   login: string,
-  options: { name?: string; defaultBranchOnly?: boolean },
+  options: { name?: string; defaultBranchOnly?: boolean; readyAt?: string },
   now: string,
 ): RepoRecord {
   const existing = forkOf(state, parent, login);
@@ -327,6 +347,7 @@ export function forkRepo(
     hasPullRequests: true,
     pullRequestCreationPolicy: 'all',
     forkOf: fullName(parent),
+    gitReadyAt: options.readyAt ?? null,
     collaborators: {},
     branches,
     labels: [],
@@ -340,6 +361,37 @@ export function forkRepo(
 export interface FileChanges {
   additions: { path: string; contents: string | Uint8Array }[];
   deletions: string[];
+}
+
+// Where GitHub Actions reads workflow files.
+const WORKFLOWS = '.github/workflows/';
+
+// GitHub lets a token without the workflow scope add or change a file under
+// .github/workflows/ only when another branch of the repo has the same file,
+// with the same path and content. The fake also refuses a deletion there
+// without the scope, which GitHub's docs don't say either way. Returns
+// GitHub's refusal for the first path it refuses, or null.
+// https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps#available-scopes
+export function workflowRefusal(
+  state: FakeState,
+  repo: RepoRecord,
+  branch: string,
+  change: FileChanges,
+  scopes: readonly string[],
+): string | null {
+  if (scopes.includes('workflow')) return null;
+  const onOtherBranches = Object.entries(repo.branches)
+    .filter(([name]) => name !== branch)
+    .map(([, oid]) => listFiles(state.objects, readObject(state.objects, oid, 'commit').tree));
+  const refused = (path: string) =>
+    `refusing to allow an OAuth App to create or update workflow \`${path}\` without \`workflow\` scope`;
+  for (const { path, contents } of change.additions) {
+    if (!path.startsWith(WORKFLOWS)) continue;
+    const oid = blobOid(contents);
+    if (!onOtherBranches.some((files) => files.get(path) === oid)) return refused(path);
+  }
+  const deleted = change.deletions.find((path) => path.startsWith(WORKFLOWS));
+  return deleted === undefined ? null : refused(deleted);
 }
 
 // Adds a commit to a branch as the person, the way createCommitOnBranch
@@ -383,6 +435,14 @@ export function commitOnBranch(
   repo.branches[branch] = oid;
   repo.pushedAt = now;
   repo.updatedAt = now;
+  // An open PR from the branch takes the new commit, as it does on a push.
+  for (const base of Object.values(state.repos)) {
+    for (const issue of Object.values(base.issues)) {
+      const pull = issue.pull;
+      if (issue.state !== 'open' || pull === null || pull.head.ref !== branch) continue;
+      if (pull.head.repo !== null && key(pull.head.repo) === key(fullName(repo))) pull.head.sha = oid;
+    }
+  }
   return oid;
 }
 
@@ -528,7 +588,8 @@ export function openPull(state: FakeState, base: RepoRecord, input: OpenPullInpu
   if (input.headRepo && (!headRepo || networkRoot(state, headRepo) !== networkRoot(state, base))) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
   }
-  const headSha = headRepo ? own(headRepo.branches, branch) : undefined;
+  // A fork GitHub is still making has no branches to open a PR from yet.
+  const headSha = headRepo && gitReady(headRepo, now) ? own(headRepo.branches, branch) : undefined;
   if (!headRepo || headSha === undefined) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head' }]);
   }

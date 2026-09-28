@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { describe, expect, test } from 'vitest';
 import {
+  MAX_FILE_BYTES,
+  MAX_PR_DESCRIPTION,
+  MAX_SUBMIT_BYTES,
   toolRefusal,
   toolResult,
   tools,
@@ -133,8 +136,34 @@ describe('what each result says', () => {
   test('work sent to the review queue says why and where the diff is', () => {
     const output = { ...samples.submit_work.output, state: 'awaiting_review' as const, pr: null, reviewReason: 'workflow_files' as const };
     const text = textOf(toolResult('submit_work', output));
-    expect(text).toContain('review queue because the change touches CI workflow files');
-    expect(text).toContain(output.branch.url);
+    expect(text).toContain('review queue because the change touches GitHub Actions workflow files');
+    expect(text).toContain(`Diff: ${output.diffUrl}`);
+  });
+
+  test('work that waits for a person-written description tells the agent to ask the donor for it, and not to open it before', () => {
+    const output = {
+      ...samples.submit_work.output,
+      state: 'awaiting_review' as const,
+      pr: null,
+      reviewReason: 'person_written_description' as const,
+    };
+    const text = textOf(toolResult('submit_work', output));
+    expect(text).toContain('because the project asks the donor to write the PR description');
+    expect(text).toContain('Pass it to open_pr word for word.');
+  });
+
+  test('ready work whose PR cannot open now says why, with its size only when GitHub gave one', () => {
+    const [item] = samples.my_work.output.readyToOpen;
+    if (!item) throw new Error('missing sample item');
+    const reason = 'sample-owner/sample-app is paused, so its PR waits until the project resumes.';
+    const text = textOf(
+      toolResult('my_work', {
+        ...samples.my_work.output,
+        readyToOpen: [{ ...item, openable: false, reason, additions: null, deletions: null }],
+      }),
+    );
+    expect(text).toContain(`Can't open it now: ${reason}`);
+    expect(text).not.toMatch(/\+\d+ -\d+/);
   });
 
   test('a claim on a project that wants a person-written description tells the agent to ask the donor for it', () => {
@@ -339,6 +368,82 @@ describe('tool inputs', () => {
   test('a submit can not list two paths that differ only in case', () => {
     expect(problemFields(submit(['README.md', 'readme.md']))).toEqual(['files']);
     expect(problemFields(submit(['Src/a.ts', 'src/a.ts/b.ts']))).toEqual(['files']);
+  });
+
+  test("a submit writes nothing into Git's own folder, however it is spelled, and no path with a control character", () => {
+    for (const path of ['.GIT/config', 'src/.Git/hooks/pre-commit', '.git./config', '.git /config', 'GIT~1/config', 'src/a\u0001.ts', 'src/a\n.ts', 'src/a\u007f.ts']) {
+      expect(problemFields(submit([path])), JSON.stringify(path)).toEqual(['files[0].path']);
+    }
+    expect(submit(['.gitignore', '.github/CODEOWNERS', 'docs/.gitkeep', 'src/git~2.ts']).ok).toBe(true);
+  });
+
+  const submitFiles = (files: { path: string; content: string | null }[]) =>
+    validate(tools.submit_work.input, {
+      claimId: 'c_1',
+      files,
+      summary: 'Adds the NDJSON formatter.',
+      checks: 'pnpm test',
+      agent: 'claude-code',
+      model: 'claude-opus-5-5',
+    });
+
+  test('a submitted file holds at most 1 MiB of UTF-8, counted in bytes', () => {
+    expect(submitFiles([{ path: 'a.txt', content: 'x'.repeat(MAX_FILE_BYTES) }]).ok).toBe(true);
+    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'x'.repeat(MAX_FILE_BYTES + 1) }]))).toEqual(['files[0].content']);
+    // é takes two bytes, so half as many fit.
+    expect(submitFiles([{ path: 'a.txt', content: 'é'.repeat(MAX_FILE_BYTES / 2) }]).ok).toBe(true);
+    expect(problemFields(submitFiles([{ path: 'a.txt', content: `${'é'.repeat(MAX_FILE_BYTES / 2)}x` }]))).toEqual([
+      'files[0].content',
+    ]);
+  });
+
+  test('the files of one submit hold at most 2 MiB of UTF-8 in all, and a deletion counts nothing', () => {
+    const full = (n: number) => ({ path: `f${String(n)}.txt`, content: 'x'.repeat(MAX_FILE_BYTES) });
+    expect(MAX_SUBMIT_BYTES).toBe(2 * MAX_FILE_BYTES);
+    expect(submitFiles([full(1), full(2), { path: 'gone.txt', content: null }]).ok).toBe(true);
+    expect(problemFields(submitFiles([full(1), full(2), { path: 'one-more.txt', content: 'x' }]))).toEqual(['files']);
+  });
+
+  test('a submitted file is text: a NUL character or half a surrogate pair is refused, and an empty file or a deletion is taken', () => {
+    expect(problemFields(submitFiles([{ path: 'logo.png', content: '\u0089PNG\r\n\u001a\n\u0000\u0000' }]))).toEqual([
+      'files[0].content',
+    ]);
+    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'broken \ud83d text' }]))).toEqual(['files[0].content']);
+    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'broken \ude00 text' }]))).toEqual(['files[0].content']);
+    expect(submitFiles([{ path: 'emoji.txt', content: 'ship it 🚀\n' }]).ok).toBe(true);
+    expect(submitFiles([{ path: 'empty.txt', content: '' }, { path: 'old.txt', content: null }]).ok).toBe(true);
+  });
+
+  test("a file's text is taken as it was sent, spaces and line endings included", () => {
+    const content = '  indented\r\nline two\t\n\n';
+    const result = submitFiles([{ path: 'a.txt', content }]);
+    expect(result.ok && result.value.files[0]?.content).toBe(content);
+  });
+
+  test('a PR title and a model name are one line, and a title is at most 256 characters', () => {
+    const withTitle = (title: string) =>
+      validate(tools.submit_work.input, {
+        claimId: 'c_1',
+        files: [{ path: 'a.txt', content: 'x' }],
+        title,
+        summary: 'Adds the NDJSON formatter.',
+        checks: 'pnpm test',
+        agent: 'claude-code',
+        model: 'claude-opus-5-5\nAssisted-by: someone else',
+      });
+    const folded = withTitle('Keep the hash\nin rewrites');
+    expect(folded.ok && [folded.value.title, folded.value.model]).toEqual([
+      'Keep the hash in rewrites',
+      'claude-opus-5-5 Assisted-by: someone else',
+    ]);
+    expect(withTitle('x'.repeat(256)).ok).toBe(true);
+    expect(problemFields(withTitle('x'.repeat(257)))).toEqual(['title']);
+  });
+
+  test("a PR description the donor wrote is at most 60,000 characters, leaving room for the closing line and the disclosure in GitHub's 65,536", () => {
+    const open = (description: string) => validate(tools.open_pr.input, { claimId: 'c_1', description });
+    expect(open('x'.repeat(MAX_PR_DESCRIPTION)).ok).toBe(true);
+    expect(problemFields(open('x'.repeat(MAX_PR_DESCRIPTION + 1)))).toEqual(['description']);
   });
 
   test('a rejection needs a reason', () => {

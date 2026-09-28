@@ -60,8 +60,16 @@ export function trimmedText(max: number) {
     .max(max, `must be at most ${max.toLocaleString('en-US')} characters`);
 }
 
-/** The model an agent used, like `claude-opus-5-5`. */
-export const modelName = trimmedText(100);
+/**
+ * The model an agent used, like `claude-opus-5-5`. It goes into a commit
+ * trailer, so tabs and line breaks fold into single spaces.
+ */
+export const modelName = z
+  .string({ error: 'must be text' })
+  .overwrite((text) => text.replace(/\s*[\t\r\n]+\s*/g, ' '))
+  .trim()
+  .min(1, 'must not be empty')
+  .max(100, 'must be at most 100 characters');
 
 /** A time in UTC, as ISO 8601, like `2026-09-26T13:02:00.000Z`. */
 export const isoTime = z.iso.datetime({ error: 'must be an ISO 8601 time in UTC' });

@@ -98,7 +98,7 @@ export function toolRefusal(refusal: Refusal): ToolRefusal {
 export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
 export { doNotListNote } from './admin';
-export { reviewReasons } from './donor';
+export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
 export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';
 export type { ClaimSummary, FollowUp } from './shared';

@@ -56,34 +56,36 @@ import { gitHubRest, gitHubUrls } from '../github';
 import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
 import type { GitHubReader } from '../sync/github';
+import { readyToOpen } from './submit';
 
 // The donor's tools: start_session, set_interests, suggest_issues,
-// claim_issue, post_update, release_claim, and my_work. Each acts only as
-// the caller, and reads GitHub only with the caller's own token. Claims go
-// through the issue's room, which holds them and is the lock for the cap.
-// The rules are in docs/how-it-works.md, under The donor's tools.
+// claim_issue, post_update, release_claim, and my_work. submit_work and
+// open_pr are in ./submit.ts. Each acts only as the caller, and reads GitHub
+// only with the caller's own token. Claims go through the issue's room,
+// which holds them and is the lock for the cap. The rules are in
+// docs/how-it-works.md, under The donor's tools.
 
 /** A tool's answer, as the MCP SDK takes it. */
 export type Answer = CallToolResult;
 
-function answer(result: ToolResult<unknown> | ToolRefusal): Answer {
+export function answer(result: ToolResult<unknown> | ToolRefusal): Answer {
   return { ...result };
 }
 
-function refuse(refusal: Refusal): Answer {
+export function refuse(refusal: Refusal): Answer {
   return answer(toolRefusal(refusal));
 }
 
-function refusal(code: RefusalCode, message: string): Refusal {
+export function refusal(code: RefusalCode, message: string): Refusal {
   return { code, message };
 }
 
 /** The caller's GitHub token, from their agent's grant. */
-async function tokenOf(caller: Caller): Promise<string> {
+export async function tokenOf(caller: Caller): Promise<string> {
   return (await caller.gitHubToken()) ?? '';
 }
 
-const lower = (text: string) => text.toLowerCase();
+export const lower = (text: string) => text.toLowerCase();
 
 function splitIssue(issue: string): { repo: string; number: number } {
   const hash = issue.lastIndexOf('#');
@@ -91,23 +93,23 @@ function splitIssue(issue: string): { repo: string; number: number } {
 }
 
 /** The issue on GitHub, where the GitHub the Worker calls serves pages. */
-function gitHubIssueUrl(issue: string): string {
+export function gitHubIssueUrl(issue: string): string {
   const { repo, number } = splitIssue(issue);
   return `${gitHubUrls().web}/${repo}/issues/${String(number)}`;
 }
 
 /** The issue's live page on the site. */
-function liveUrl(origin: string, issue: string): string {
+export function liveUrl(origin: string, issue: string): string {
   const { repo, number } = splitIssue(issue);
   return `${origin}/${repo}/issues/${String(number)}`;
 }
 
-function iso(time: number | null): string | null {
+export function iso(time: number | null): string | null {
   return time === null ? null : new Date(time).toISOString();
 }
 
 /** The claim's state at `now`, with its timers applied, as its room would give it. */
-function stateAt(claim: ClaimRecord, now: number): ClaimState {
+export function stateAt(claim: ClaimRecord, now: number): ClaimState {
   return nextClaimState(claim, { kind: 'tick' }, now).claim.state;
 }
 
@@ -126,7 +128,7 @@ function summaryOf(claim: ClaimRecord, title: string, url: string, origin: strin
 }
 
 /** The donor as the rules name them, their GitHub ID and their login now, and their saved interests. */
-async function donorOf(caller: Caller): Promise<Donor & { interests: Interests | null }> {
+export async function donorOf(caller: Caller): Promise<Donor & { interests: Interests | null }> {
   const person = await getPerson(env.DB, caller.githubId);
   return { githubId: caller.githubId, login: person?.login ?? caller.login, interests: person?.interests ?? null };
 }
@@ -138,7 +140,7 @@ async function ownSession(caller: Caller, sessionId: string): Promise<SessionRec
   return refusal('not_found', `There is no session ${sessionId} for you. Start one with start_session.`);
 }
 
-function isRefusal(value: object): value is Refusal {
+export function isRefusal(value: object): value is Refusal {
   return 'code' in value && 'message' in value;
 }
 
@@ -234,16 +236,16 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
   );
   return answer(
     toolResult('my_work', {
-      // Follow-ups arrive with #17, and work waiting to open as a PR with #16.
+      // Follow-ups arrive with #17.
       followUps: [],
-      readyToOpen: [],
+      readyToOpen: await readyToOpen(caller, origin, now),
       working,
     }),
   );
 }
 
 /** The claim, found by its ID in the claims table, once the caller is the one who made it. */
-async function ownClaim(caller: Caller, claimId: string): Promise<ClaimRecord | Refusal> {
+export async function ownClaim(caller: Caller, claimId: string): Promise<ClaimRecord | Refusal> {
   const claim = await getClaim(env.DB, claimId);
   if (claim === null) return refusal('not_found', `There is no claim ${claimId}.`);
   await requirePermission(caller, 'work_claim', { claimantGithubId: claim.githubId });

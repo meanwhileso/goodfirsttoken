@@ -12,4 +12,5 @@ export * from './people';
 export * from './projects';
 export * from './prs';
 export * from './sessions';
+export * from './submissions';
 export * from './syncs';

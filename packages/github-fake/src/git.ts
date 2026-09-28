@@ -85,6 +85,12 @@ export function blobText(blob: Blob): string | null {
   }
 }
 
+// The ID a blob with this content has, whether or not it is stored.
+export function blobOid(content: string | Uint8Array): Oid {
+  const bytes = typeof content === 'string' ? encoder.encode(content) : content;
+  return hashOid(`blob\0${bytesToBase64(bytes)}`);
+}
+
 export function writeBlob(store: ObjectStore, content: string | Uint8Array): Oid {
   const bytes = typeof content === 'string' ? encoder.encode(content) : content;
   const base64 = bytesToBase64(bytes);

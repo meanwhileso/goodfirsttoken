@@ -28,6 +28,14 @@ export const refusalCodes = [
   // Posting, submitting, and opening a PR (spec sections 7 and 8).
   'not_claim_owner',
   'description_required',
+  // The submitted files leave the branch as it is, so there is nothing to
+  // commit.
+  'no_changes',
+  // GitHub makes a new fork in the background, and hadn't finished it.
+  'fork_not_ready',
+  // GitHub refused a write the server made with the donor's token: the fork,
+  // the branch, the commit, or the PR.
+  'github_refused',
   // Maintainers and admins (spec sections 3 and 4).
   'not_maintainer',
   'repo_not_eligible',

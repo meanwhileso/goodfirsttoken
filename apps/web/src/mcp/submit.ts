@@ -1,0 +1,528 @@
+import {
+  claimDeadlines,
+  holdsSlot,
+  nextClaimState,
+  toolResult,
+  utf8Length,
+  type ClaimEvent,
+  type ClaimRecord,
+  type PrRef,
+  type ProjectRecord,
+  type Refusal,
+  type ReviewReason,
+  type SubmissionRecord,
+  type ToolInput,
+  type ToolOutput,
+} from '@goodfirsttoken/core';
+import { env } from 'cloudflare:workers';
+import type { Caller } from '../auth/permissions';
+import {
+  addPr,
+  countOpenPrsByProject,
+  getIssue,
+  getPr,
+  getProject,
+  getSubmission,
+  getSubmissions,
+  listPersonClaims,
+  saveSubmission,
+  setReviewReason,
+} from '../db';
+import { linkedPrs, readIssue, readRepoFacts, type RepoFacts } from '../donor/github';
+import { GitHubError } from '../github';
+import { blockedRefusal, openPrRefusal, projectClosedRefusal, type Donor } from '../donor/rules';
+import { branchFor, commitMessage, isWorkflowPath, prBody, redacted, reviewReason } from '../donor/work';
+import {
+  DonorWriter,
+  NOT_READY,
+  WriteRefused,
+  branchUrls,
+  commitUrl,
+  textBase64,
+  type Addition,
+} from '../donor/writes';
+import { issueRoom } from '../rooms/issue-room';
+import {
+  answer,
+  donorOf,
+  gitHubIssueUrl,
+  isRefusal,
+  liveUrl,
+  lower,
+  ownClaim,
+  refusal,
+  refuse,
+  stateAt,
+  tokenOf,
+  type Answer,
+} from './donor';
+
+// submit_work and open_pr: finished work becomes a signed commit on the
+// claim's branch, and then a PR, or waits in the donor's review queue for
+// open_pr. Every GitHub call runs with the donor's own token, for their own
+// claim. The claim changes only in its issue's room, so the live feeds and
+// the issue page see each submit and each PR. The rules are in
+// docs/how-it-works.md, under The donor's tools.
+
+/**
+ * How long to wait between reads of a new fork, which GitHub makes in the
+ * background. After the last wait, a fork still not ready refuses the
+ * submit with fork_not_ready, and the agent calls again.
+ */
+export const FORK_WAITS_MS = [500, 1000, 2000] as const;
+
+/** How many times a commit is tried when the branch moved since it was read. */
+const COMMIT_TRIES = 3;
+
+function samePr(a: PrRef, b: PrRef): boolean {
+  return lower(a.repo) === lower(b.repo) && a.number === b.number;
+}
+
+/** Reads again after each wait while GitHub is still making the repo. */
+async function whenReady<T>(read: () => Promise<T | typeof NOT_READY>): Promise<T | typeof NOT_READY> {
+  let got = await read();
+  for (const wait of FORK_WAITS_MS) {
+    if (got !== NOT_READY) return got;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    got = await read();
+  }
+  return got;
+}
+
+function forkNotReady(repo: string): Refusal {
+  return refusal(
+    'fork_not_ready',
+    `GitHub is still making ${repo}, the donor's fork, so nothing was committed. Call submit_work again in a minute, with the same files.`,
+  );
+}
+
+/** A claim the caller may submit to or open a PR for, with what the answer needs. */
+interface Work {
+  /** The claim as its room holds it now. */
+  claim: ClaimRecord;
+  project: ProjectRecord;
+  donor: Donor;
+  /** Open PRs on the issue that the room knows of, other than the claim's own. */
+  roomPrs: PrRef[];
+}
+
+/**
+ * The caller's claim, checked before anything goes to GitHub: it is theirs,
+ * they aren't blocked, its project still takes work, and the claim can take
+ * `event` now. A claim whose PR merged or closed takes no more work.
+ */
+async function workOn(caller: Caller, claimId: string, event: ClaimEvent, now: number): Promise<Work | Refusal> {
+  const found = await ownClaim(caller, claimId);
+  if (isRefusal(found)) return found;
+  const donor = await donorOf(caller);
+  const blocked = await blockedRefusal(env.DB, donor);
+  if (blocked) return blocked;
+  const project = await getProject(env.DB, found.project);
+  const closed = await projectClosedRefusal(env.DB, project, found.project);
+  if (closed || project === null) return closed ?? refusal('project_not_open', `${found.project} is no longer a project.`);
+  const snapshot = await issueRoom(env.ISSUE_ROOM, found.issue).snapshot();
+  const claim = snapshot.claims.find((held) => held.id === found.id) ?? found;
+  const checked = nextClaimState(claim, event, Math.max(now, claim.claimedAt));
+  if (!checked.ok) return checked.refusal;
+  if (claim.pr !== null) {
+    const pr = await getPr(env.DB, claim.id);
+    if (pr !== null && pr.state !== 'open') {
+      return refusal(
+        'pr_closed',
+        `Claim ${claim.id}'s PR, ${claim.pr.url}, is ${pr.state}, so the claim takes no more work. Pick another issue.`,
+      );
+    }
+  }
+  const roomPrs = snapshot.prs.filter((pr) => claim.pr === null || !samePr(pr, claim.pr));
+  return { claim, project, donor, roomPrs };
+}
+
+/** The open PRs on the issue now, on GitHub and in its room, other than the claim's own. */
+async function otherPrs(writer: DonorWriter, work: Work, names: readonly string[]): Promise<PrRef[]> {
+  const links = (await linkedPrs(writer.reader, work.project, work.claim.issue, names)) ?? [];
+  const own = work.claim.pr;
+  const found: PrRef[] = [];
+  for (const pr of [...links.map((link) => link.pr), ...work.roomPrs]) {
+    if (own !== null && samePr(pr, own)) continue;
+    if (!found.some((known) => samePr(known, pr))) found.push(pr);
+  }
+  return found;
+}
+
+interface Change {
+  additions: Addition[];
+  deletions: string[];
+}
+
+/**
+ * What the commit changes so the branch holds each file as submitted, and
+ * each file an earlier submit sent and this one leaves out as it was at the
+ * start commit. A file the branch already holds as submitted, and a
+ * deletion of a file the branch doesn't have, change nothing and are left
+ * out. `repo` at `rev` is the branch now, and `upstream` at `start` is the
+ * start commit.
+ */
+async function planChange(
+  writer: DonorWriter,
+  at: { repo: string; rev: string },
+  start: { repo: string; rev: string },
+  files: readonly { path: string; content: string | null }[],
+  putBack: readonly string[],
+): Promise<Change> {
+  const entries = await writer.entries(at.repo, at.rev, [...files.map((file) => file.path), ...putBack]);
+  // A file whose text may be the one submitted: one of the same size.
+  const sameSize = files.filter((file) => {
+    const entry = entries.get(file.path);
+    return file.content !== null && entry?.file === true && !entry.binary && entry.byteSize === utf8Length(file.content);
+  });
+  const texts = sameSize.length === 0 ? new Map<string, string | null>() : await writer.texts(at.repo, at.rev, sameSize.map((file) => file.path));
+  const change: Change = { additions: [], deletions: [] };
+  for (const file of files) {
+    const entry = entries.get(file.path) ?? null;
+    if (file.content === null) {
+      if (entry?.file === true) change.deletions.push(file.path);
+    } else if (texts.get(file.path) !== file.content) {
+      change.additions.push({ path: file.path, contents: textBase64(file.content) });
+    }
+  }
+  if (putBack.length > 0) {
+    const atStart = await writer.entries(start.repo, start.rev, putBack);
+    for (const path of putBack) {
+      const now = entries.get(path) ?? null;
+      const was = atStart.get(path) ?? null;
+      if (was?.oid === now?.oid) continue;
+      if (was?.file === true) change.additions.push({ path, contents: await writer.blob(start.repo, was.oid) });
+      else if (now?.file === true) change.deletions.push(path);
+    }
+  }
+  return change;
+}
+
+/**
+ * Commits the files to the claim's branch, making the branch at the start
+ * commit first when it isn't there, and waiting for a new fork. The commit
+ * is made again, from the branch as it is then, when the branch moved since
+ * it was read.
+ */
+async function commitWork(
+  writer: DonorWriter,
+  input: {
+    target: string;
+    upstream: string;
+    branch: string;
+    start: string;
+    files: readonly { path: string; content: string | null }[];
+    putBack: readonly string[];
+    message: { headline: string; body: string };
+    /**
+     * No submit of the claim is recorded yet, so a branch that already holds
+     * the files holds a commit an earlier call made and didn't record, as
+     * when it died after the commit.
+     */
+    unrecorded: boolean;
+  },
+): Promise<{ sha: string } | Refusal> {
+  const { target, branch, start } = input;
+  for (let tries = 0; tries < COMMIT_TRIES; tries++) {
+    const head = await whenReady(() => writer.branchHead(target, branch));
+    if (head === NOT_READY) return forkNotReady(target);
+    // A branch not made yet starts at the start commit, which the code repo has.
+    const at = head === null ? { repo: input.upstream, rev: start } : { repo: target, rev: head };
+    const change = await planChange(writer, at, { repo: input.upstream, rev: start }, input.files, input.putBack);
+    if (change.additions.length + change.deletions.length === 0) {
+      if (input.unrecorded && head !== null && head !== start) return { sha: head };
+      const same = head === null ? 'are as they were at the start commit' : `are as ${target}:${branch} holds them`;
+      return refusal(
+        'no_changes',
+        `The files ${same}, so nothing was committed. Send every file changed from the start commit, with its full new text.`,
+      );
+    }
+    if (head === null) {
+      const made = await whenReady(() => writer.createBranch(target, branch, start));
+      if (made === NOT_READY) return forkNotReady(target);
+      // Made meanwhile, as by another submit of the claim: read it again.
+      if (made === 'exists') continue;
+    }
+    const commit = await writer.commit({ repo: target, branch, expectedHead: head ?? start, ...change, ...input.message });
+    if (commit !== 'stale') return commit;
+  }
+  return refusal('github_refused', `${target}:${branch} kept moving while the commit was made, so nothing was committed. Submit again.`);
+}
+
+/** Where a PR comes from: the branch in the repo, or `owner:branch` in the donor's fork. */
+function pullHead(submission: SubmissionRecord, upstream: string): string {
+  if (lower(submission.repo) === lower(upstream)) return submission.branch;
+  return `${submission.repo.slice(0, submission.repo.indexOf('/'))}:${submission.branch}`;
+}
+
+/**
+ * Opens the claim's PR as the donor, and records it: the claim's room first,
+ * so the issue takes no new claims, then the PRs table, whose job follows it
+ * until it merges or closes.
+ */
+async function openFor(
+  writer: DonorWriter,
+  work: Work,
+  facts: RepoFacts & { defaultBranch: string },
+  submission: SubmissionRecord,
+  description: string | undefined,
+): Promise<{ claim: ClaimRecord; pr: PrRef } | Refusal> {
+  const { claim, project } = work;
+  let pr: PrRef;
+  try {
+    pr = await writer.openPull(facts.name, {
+      title: submission.title,
+      body: prBody({
+        description,
+        summary: submission.summary,
+        checks: submission.checks,
+        agent: submission.agent,
+        model: submission.model,
+        issue: claim.issue,
+        codeRepo: facts.name,
+        disclosure: project.settings.disclosure,
+      }),
+      head: pullHead(submission, facts.name),
+      base: facts.defaultBranch,
+    });
+  } catch (error) {
+    if (error instanceof WriteRefused) return refusal('github_refused', `${error.message} The work stays on its branch.`);
+    throw error;
+  }
+  const room = issueRoom(env.ISSUE_ROOM, claim.issue);
+  const opened = await room.openPr({ claimId: claim.id, githubId: claim.githubId, pr });
+  if (opened.ok) {
+    await addPr(env.DB, { claimId: claim.id, pr, openedAt: Date.now() });
+    return { claim: opened.claim, pr };
+  }
+  // A call at the same moment opened the same PR from the same branch, and
+  // GitHub gave it to both.
+  const held = (await room.snapshot()).claims.find((c) => c.id === claim.id);
+  if (opened.refusal.code === 'pr_already_opened' && held?.pr != null && samePr(held.pr, pr)) {
+    await addPr(env.DB, { claimId: claim.id, pr, openedAt: Date.now() });
+    return { claim: held, pr };
+  }
+  return { ...opened.refusal, message: `${opened.refusal.message} GitHub opened ${pr.url} all the same.` };
+}
+
+/** The code repo on GitHub as the donor sees it, or the refusal when it has no default branch to aim a PR at. */
+async function codeRepo(writer: DonorWriter, project: ProjectRecord): Promise<(RepoFacts & { defaultBranch: string }) | Refusal> {
+  const facts = await readRepoFacts(writer.reader, project.repo);
+  if (facts === null || facts.defaultBranch === null) {
+    return refusal('project_not_open', `GitHub shows you no public repo named ${project.repo} with a branch to aim a PR at, so nothing was sent.`);
+  }
+  return { ...facts, defaultBranch: facts.defaultBranch };
+}
+
+export async function submitWork(
+  caller: Caller,
+  input: ToolInput<'submit_work'>,
+  now: number,
+): Promise<Answer> {
+  const work = await workOn(caller, input.claimId, { kind: 'submit' }, now);
+  if (isRefusal(work)) return refuse(work);
+  const { claim, project, donor } = work;
+  const writer = new DonorWriter(await tokenOf(caller));
+  const facts = await codeRepo(writer, project);
+  if (isRefusal(facts)) return refuse(facts);
+  const earlier = await getSubmission(env.DB, claim.id);
+  const branch = earlier?.branch ?? branchFor(claim);
+  const issue = await readIssue(writer.reader, claim.issue);
+  const title = redacted(input.title ?? issue?.title ?? (await getIssue(env.DB, project.repo, claim.issue))?.title ?? claim.issue, 256);
+  const summary = redacted(input.summary);
+  const checks = redacted(input.checks);
+  const model = redacted(input.model, 100);
+  // Paths in a repo compare with case, as Git compares them.
+  const submitted = new Set(input.files.map((file) => file.path));
+
+  let committed: { sha: string } | Refusal;
+  let target: string;
+  try {
+    // A claim's branch stays where its first submit put it. Otherwise it goes
+    // in the code repo when the donor can push there, and in their fork when
+    // they can't, each by their own permission.
+    target = earlier?.repo ?? (facts.writer ? facts.name : await writer.fork(facts.name));
+    committed = await commitWork(writer, {
+      target,
+      upstream: facts.name,
+      branch,
+      start: claim.startCommit,
+      files: input.files,
+      putBack: (earlier?.paths ?? []).filter((path) => !submitted.has(path)),
+      message: commitMessage({ title, summary, agent: input.agent, model, disclosure: project.settings.disclosure }),
+      unrecorded: earlier === null || claim.submittedAt === null,
+    });
+  } catch (error) {
+    if (!(error instanceof WriteRefused)) throw error;
+    const workflows = input.files.some((file) => isWorkflowPath(file.path))
+      ? " GitHub takes a change to a file under .github/workflows/ only from a token with the workflow scope, which Good First Token doesn't ask for. Leave that change out, and tell the donor to make it on GitHub themselves."
+      : '';
+    return refuse(refusal('github_refused', `${error.message} Nothing was committed.${workflows}`));
+  }
+  if (isRefusal(committed)) return refuse(committed);
+
+  const room = issueRoom(env.ISSUE_ROOM, claim.issue);
+  const recorded = await room.submit({ claimId: claim.id, githubId: donor.githubId, tokenEstimate: input.tokenEstimate ?? null });
+  if (!recorded.ok) {
+    return refuse({
+      ...recorded.refusal,
+      message: `${recorded.refusal.message} The commit ${committed.sha.slice(0, 7)} is on ${target}:${branch} all the same.`,
+    });
+  }
+  const lines = await writer.lineCounts(target, claim.startCommit, committed.sha);
+  const prs = await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name]);
+  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  const reason =
+    recorded.claim.state === 'pr_opened'
+      ? null
+      : reviewReason({
+          prOnIssue: prs.length > 0,
+          workflowFiles: input.files.some((file) => isWorkflowPath(file.path)),
+          prMode: project.settings.prMode,
+          personWrittenDescription: project.settings.personWrittenDescription,
+          atOpenPrCap: openPrRefusal(project, openPrs) !== null,
+        });
+  const submission = await saveSubmission(env.DB, {
+    claimId: claim.id,
+    repo: target,
+    branch,
+    commit: committed.sha,
+    paths: input.files.map((file) => file.path),
+    title,
+    summary,
+    checks,
+    agent: input.agent,
+    model,
+    additions: lines?.additions ?? null,
+    deletions: lines?.deletions ?? null,
+    reviewReason: reason,
+    submittedAt: now,
+  });
+
+  const urls = branchUrls(target, branch, claim.startCommit);
+  const result = (state: ClaimRecord['state'], pr: PrRef | null, why: ReviewReason | null) =>
+    answer(
+      toolResult('submit_work', {
+        claimId: claim.id,
+        issue: claim.issue,
+        state,
+        commit: { sha: committed.sha, url: commitUrl(target, committed.sha) },
+        branch: { repo: target, name: branch, url: urls.branch },
+        diffUrl: urls.diff,
+        pr,
+        reviewReason: why,
+      }),
+    );
+  // A claim whose PR is open takes the commit on that PR's branch.
+  if (recorded.claim.state === 'pr_opened') return result('pr_opened', recorded.claim.pr, null);
+  if (reason !== null) return result(recorded.claim.state, null, reason);
+  const opened = await openFor(writer, { ...work, claim: recorded.claim }, facts, submission, undefined);
+  if (!isRefusal(opened)) return result(opened.claim.state, opened.pr, null);
+  console.warn(`Claim ${claim.id}'s PR didn't open by itself.`, opened.message);
+  await setReviewReason(env.DB, claim.id, 'pr_refused');
+  return result(recorded.claim.state, null, 'pr_refused');
+}
+
+export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: number): Promise<Answer> {
+  // Any PR will do to ask the claim whether it can take one now.
+  const probe = { repo: 'goodfirsttoken/goodfirsttoken', number: 1, url: 'https://github.com/' };
+  const work = await workOn(caller, input.claimId, { kind: 'open_pr', pr: probe }, now);
+  if (isRefusal(work)) return refuse(work);
+  const { claim, project, donor } = work;
+  const submission = await getSubmission(env.DB, claim.id);
+  if (submission === null) {
+    return refuse(refusal('not_submitted', `Claim ${claim.id} has no submitted work to open a PR for. Submit it with submit_work.`));
+  }
+  if (project.settings.personWrittenDescription && input.description === undefined) {
+    return refuse(
+      refusal(
+        'description_required',
+        `${project.repo} asks the donor to write the PR description. Ask them to write it, and pass it as description, word for word. Don't draft it.`,
+      ),
+    );
+  }
+  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  const capped = openPrRefusal(project, openPrs);
+  if (capped) return refuse(capped);
+
+  const writer = new DonorWriter(await tokenOf(caller));
+  const facts = await codeRepo(writer, project);
+  if (isRefusal(facts)) return refuse(facts);
+  // GitHub is checked for a PR on the issue before this one opens. The
+  // donor decides whether a second one helps, so it doesn't stop them.
+  const [prOnIssue = null] = await otherPrs(writer, work, [facts.name]);
+  const opened = await openFor(writer, work, facts, submission, input.description);
+  if (isRefusal(opened)) return refuse(opened);
+  return answer(
+    toolResult('open_pr', { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue }),
+  );
+}
+
+type ReviewItem = ToolOutput<'my_work'>['readyToOpen'][number];
+
+/**
+ * The donor's submitted work waiting for them to open its PR: their claims
+ * awaiting review, as each one's room holds it now, with their latest
+ * submits. Each names a PR open on the issue, from its room or, read with
+ * the donor's token, from GitHub. One whose PR can't be opened now says why,
+ * and nothing about it is read from GitHub.
+ */
+export async function readyToOpen(caller: Caller, origin: string, now: number): Promise<ReviewItem[]> {
+  const listed = (await listPersonClaims(env.DB, caller.githubId)).filter((claim) => holdsSlot(claim, now));
+  const held = await Promise.all(
+    listed.map(async (listedClaim) => {
+      const snapshot = await issueRoom(env.ISSUE_ROOM, listedClaim.issue).snapshot();
+      const claim = snapshot.claims.find((c) => c.id === listedClaim.id) ?? listedClaim;
+      return { claim, roomPrs: snapshot.prs.filter((pr) => claim.pr === null || !samePr(pr, claim.pr)) };
+    }),
+  );
+  const waiting = held.filter(({ claim }) => stateAt(claim, now) === 'awaiting_review');
+  if (waiting.length === 0) return [];
+  const submissions = await getSubmissions(
+    env.DB,
+    waiting.map(({ claim }) => claim.id),
+  );
+  const donor = await donorOf(caller);
+  const blocked = await blockedRefusal(env.DB, donor);
+  const writer = new DonorWriter(await tokenOf(caller));
+  const items: ReviewItem[] = [];
+  for (const { claim, roomPrs } of waiting) {
+    const submission = submissions.get(claim.id);
+    if (submission === undefined) continue;
+    const project = await getProject(env.DB, claim.project);
+    const closed = blocked ?? (await projectClosedRefusal(env.DB, project, claim.project));
+    // A read GitHub refuses leaves the item with the PRs its room knows of.
+    // A refused token still ends the connection.
+    const prs =
+      closed === null && project !== null
+        ? await otherPrs(writer, { claim, project, donor, roomPrs }, []).catch((error: unknown) => {
+            if (error instanceof GitHubError && error.status === 401) throw error;
+            console.warn(`my_work could not read the PRs on ${claim.issue} from GitHub.`, error);
+            return roomPrs;
+          })
+        : roomPrs;
+    const copy = await getIssue(env.DB, claim.project, claim.issue);
+    const expiresAt = claimDeadlines(claim).expiresAt;
+    items.push({
+      claimId: claim.id,
+      issue: claim.issue,
+      title: copy?.title ?? submission.title,
+      url: gitHubIssueUrl(claim.issue),
+      liveUrl: liveUrl(origin, claim.issue),
+      diffUrl: branchUrls(submission.repo, submission.branch, claim.startCommit).diff,
+      additions: submission.additions,
+      deletions: submission.deletions,
+      agent: submission.agent,
+      model: submission.model,
+      summary: submission.summary,
+      checks: submission.checks,
+      reviewReason: submission.reviewReason ?? 'pr_refused',
+      prOnIssue: prs[0] ?? null,
+      expiresAt: new Date(expiresAt ?? now).toISOString(),
+      personWrittenDescription: project?.settings.personWrittenDescription ?? false,
+      openable: closed === null,
+      reason: closed === null ? null : closed.message.slice(0, 500),
+    });
+  }
+  return items;
+}

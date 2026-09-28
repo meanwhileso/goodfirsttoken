@@ -6,7 +6,9 @@ import { REST_DOCS, errorResponse, json, paginate } from './http.ts';
 import { own, setOwn } from './own.ts';
 import { searchIssues, searchRepos } from './search.ts';
 import {
+  blobShape,
   branchShape,
+  compareShape,
   contentShape,
   fullUserShape,
   issueShape,
@@ -24,11 +26,13 @@ import {
   canSee,
   findIssue,
   findRepo,
+  forkOf,
   forkRepo,
   getPull,
   key,
   newId,
   openPull,
+  requireGit,
   requirePush,
   type IssueRecord,
   type PullData,
@@ -44,6 +48,9 @@ export interface RestRequest {
   // authentication.
   app?: { clientId: string; clientSecret: string } | null;
   now: string;
+  // When a fork made by this call has its git data, since GitHub makes it
+  // in the background. `now` makes it ready at once.
+  forkReadyAt?: string;
 }
 
 type Params = Record<string, string>;
@@ -106,6 +113,18 @@ function searchPage<T>(
     200,
     page.headers,
   );
+}
+
+// One side of a comparison: a branch or a commit in the repo, or
+// USERNAME:BRANCH in that person's fork of it.
+function resolveSide(req: RestRequest, repo: RepoRecord, side: string): Oid {
+  const colon = side.indexOf(':');
+  if (colon === -1) return resolveRef(repo, side, req);
+  const owner = side.slice(0, colon);
+  const where = key(owner) === key(repo.owner) ? repo : forkOf(req.ctx.state, repo, owner);
+  if (!where || !canSee(where, req.ctx.viewer, req.ctx.scopes)) throw new FakeError('not_found', 'Not Found');
+  requireGit(where, req.now);
+  return resolveRef(where, side.slice(colon + 1), req);
 }
 
 function resolveRef(repo: RepoRecord, ref: string | null, req: RestRequest): Oid {
@@ -299,7 +318,8 @@ const routes: Route[] = [
     handle: (req, params) => contents(req, params),
   },
   {
-    // A person who already has a fork gets it back. Forking is instant here.
+    // A person who already has a fork gets it back. GitHub makes a new fork
+    // in the background, and its git data answers 409 until it's ready.
     method: 'POST',
     path: '/repos/{owner}/{repo}/forks',
     docs: `${DOCS}/repos/forks#create-a-fork`,
@@ -317,7 +337,11 @@ const routes: Route[] = [
         req.ctx.state,
         repo,
         login,
-        { name: str(req.body.name), defaultBranchOnly: req.body.default_branch_only === true },
+        {
+          name: str(req.body.name),
+          defaultBranchOnly: req.body.default_branch_only === true,
+          readyAt: req.forkReadyAt ?? req.now,
+        },
         req.now,
       );
       return json(repoShape(req.ctx, fork, true), 202);
@@ -329,6 +353,7 @@ const routes: Route[] = [
     docs: `${DOCS}/branches/branches#get-a-branch`,
     handle: (req, params) => {
       const repo = repoOf(req, params);
+      requireGit(repo, req.now);
       const branch = params.branch ?? '';
       const sha = own(repo.branches, branch);
       if (sha === undefined) throw new FakeError('not_found', 'Branch not found');
@@ -341,10 +366,42 @@ const routes: Route[] = [
     docs: `${DOCS}/git/refs#get-a-reference`,
     handle: (req, params) => {
       const repo = repoOf(req, params);
+      requireGit(repo, req.now);
       const branch = /^heads\/(.+)$/.exec(params.ref ?? '')?.[1];
       const sha = branch === undefined ? undefined : own(repo.branches, branch);
       if (branch === undefined || sha === undefined) throw new FakeError('not_found', 'Not Found');
       return json(refShape(req.ctx, repo, branch, sha));
+    },
+  },
+  {
+    // The blob's content, in base64, however large, up to GitHub's 100 MB.
+    method: 'GET',
+    path: '/repos/{owner}/{repo}/git/blobs/{file_sha}',
+    docs: `${DOCS}/git/blobs#get-a-blob`,
+    handle: (req, params) => {
+      const repo = repoOf(req, params);
+      requireGit(repo, req.now);
+      const sha = params.file_sha ?? '';
+      const blob = own(req.ctx.state.objects, sha);
+      if (blob?.type !== 'blob') throw new FakeError('not_found', 'Not Found');
+      return json(blobShape(req.ctx, repo, sha, blob));
+    },
+  },
+  {
+    // BASE...HEAD, each a branch or a commit, and USERNAME:BRANCH for a
+    // branch in someone's fork in the same network. The files are the
+    // change from the merge base to HEAD.
+    method: 'GET',
+    path: '/repos/{owner}/{repo}/compare/{basehead+}',
+    docs: `${DOCS}/commits/commits#compare-two-commits`,
+    handle: (req, params) => {
+      const repo = repoOf(req, params);
+      requireGit(repo, req.now);
+      const [base, head, extra] = (params.basehead ?? '').split('...');
+      if (base === undefined || head === undefined || extra !== undefined || !base || !head) {
+        throw new FakeError('not_found', 'Not Found');
+      }
+      return json(compareShape(req.ctx, repo, resolveSide(req, repo, base), resolveSide(req, repo, head)));
     },
   },
   {
@@ -356,6 +413,7 @@ const routes: Route[] = [
     handle: (req, params) => {
       const repo = repoOf(req, params);
       requirePush(repo, viewer(req));
+      requireGit(repo, req.now);
       const ref = str(req.body.ref) ?? '';
       const sha = str(req.body.sha) ?? '';
       const branch = /^refs\/heads\/(.+)$/.exec(ref)?.[1];
@@ -451,6 +509,7 @@ const routes: Route[] = [
 // its entries.
 function contents(req: RestRequest, params: Params): Response {
   const repo = repoOf(req, params);
+  requireGit(repo, req.now);
   const ref = req.url.searchParams.get('ref');
   const sha = resolveRef(repo, ref, req);
   const refName = ref ?? repo.defaultBranch;
@@ -489,7 +548,7 @@ function match(route: Route, method: string, path: string): Params | null {
   return want.length === have.length ? params : null;
 }
 
-const STATUS = { not_found: 404, forbidden: 403, invalid: 422, stale: 409 };
+const STATUS = { not_found: 404, forbidden: 403, invalid: 422, stale: 409, empty: 409 };
 
 // Returns the response and the operation name for the call log, like
 // "GET /repos/{owner}/{repo}".

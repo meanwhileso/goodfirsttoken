@@ -82,8 +82,8 @@ The repo is a pnpm workspace.
   live in `src/projects/`,** described under
   [The maintainer's tools](#the-maintainers-tools), with the rules for who
   may change a project's status.
-- **What the donor's tools check and read, and how they order
-  suggestions, live in `src/donor/`,** described under
+- **What the donor's tools check, read, and write on GitHub, and how they
+  order suggestions, live in `src/donor/`,** described under
   [The donor's tools](#the-donors-tools).
 - **The admin's actions and the admin pages live in `src/admin/`,**
   described under [The admin's tools and pages](#the-admins-tools-and-pages).
@@ -173,6 +173,7 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
 | `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and the tools it serves, each run as the caller, the admin's to admins only |
 | `src/mcp/donor.ts` | The donor's tools, under [The donor's tools](#the-donors-tools) |
+| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and the review queue `my_work` lists, under [The donor's tools](#the-donors-tools) |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
 | `src/mcp/admin.ts` | The admin's tools, under [The admin's tools and pages](#the-admins-tools-and-pages) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
@@ -390,9 +391,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | File | What it does |
 |---|---|
 | `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
+| `src/mcp/submit.ts` | `submit_work` and `open_pr`, and the review queue that `my_work` lists |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
-| `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike |
+| `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
+| `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR |
+| `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, and the words of the commit and the PR |
 | `src/donor/vouch.ts` | The vouch file's format |
 | `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
 
@@ -507,6 +511,54 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `claim`. The list of waiting issues reads every
   approved project's cached issues, through `projects_by_status` and the
   key of `tagged_issues`. Nothing caches any of it yet.
+- **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
+  reads the claim from the claims table, checks `work_claim`, the block,
+  and the project with `projectClosedRefusal`, whose do-not-list check is
+  `doNotListedProjects`, the one `claim_issue` uses, and asks the claim's
+  room whether the claim can take the event now. Only then is a
+  `DonorWriter` made with the donor's token, so a refusal makes no call to
+  GitHub.
+- **Push access** is the repo's `viewerPermission` from `readRepoFacts`,
+  the query a claim makes, which also gives the default branch's name for
+  the PR. A linked PR is read with `linkedPrs` in `src/donor/github.ts`,
+  which `checkIssueOnGitHub` uses too: the sync's `closingReferences` and
+  `crossReferences`, with the donor's token.
+- **The fork** is `POST /repos/{owner}/{repo}/forks` with
+  `default_branch_only`, which GitHub answers with the fork the donor has,
+  whatever its name, or a new one. The branch is `POST .../git/refs` at the
+  start commit. A fork can point at it, since a fork network shares its
+  objects on GitHub. GitHub answers 409 for a repo it is still making, and
+  the server waits 0.5, 1, and 2 seconds between reads with `setTimeout`,
+  so a submit to a new fork can take about 4 seconds more. A Worker's wait
+  uses no CPU time.
+- **Working out the change.** One GraphQL query for each 100 paths reads
+  each path's object at the branch head, or at the start commit in the code
+  repo while there is no branch, with `object(expression:)` and the paths as
+  variables: its type, size, and whether it is binary. A file whose new
+  text has the same size in UTF-8 as the one there is read in full in a
+  second query and compared. A path to put back is read at the start
+  commit, compared by blob ID, and its bytes read with
+  `GET .../git/blobs/{sha}`, so a binary file goes back as it was.
+  `submissions.paths` keeps the paths the latest submit sent, for the next.
+- **The commit** is `createCommitOnBranch` with `expectedHeadOid` set to the
+  head the change was worked out from, and each file's text in base64.
+  GitHub's `STALE_DATA` means the branch moved, and the change is worked out
+  again, up to three tries.
+- **Recording.** The room records the submit after the commit lands. Then
+  the lines come from `GET .../compare/{start}...{commit}` in the repo the
+  branch is in, which lists up to 300 files, and `saveSubmission` writes
+  the row. A PR goes to the room with `openPr`, then to `prs` with
+  `addPr`. A call that dies after its commit leaves the commit
+  on the branch unrecorded. The same submit again finds the branch holding
+  the files, and records that commit, since no submit of the claim was
+  recorded. Its PR, likewise, is found by `GET .../pulls?head=`, since
+  GitHub answers a PR already open from the branch with a 422 whose message
+  names no reason.
+- **What a submit costs.** A first submit to a fork makes about 12 calls to
+  GitHub: the repo, the issue, the fork, the branch, one or two GraphQL
+  reads of the files, the new branch, the commit, the comparison, the
+  issue's closing references and timeline, and the PR. Each path put back
+  adds a blob read.
 
 ### The admin's tools and pages
 
@@ -772,8 +824,8 @@ Worker's name, so no setting names them.
 
 D1, bound as `DB`, holds the structured records that search and the
 leaderboard read: people, projects with their settings and status changes,
-the tagged-issue cache, claims, PRs, donor sessions, blocks, the
-do-not-list, and crawl candidates. GitHub is the source of truth for issues
+the tagged-issue cache, claims, their submitted work, PRs, donor sessions,
+blocks, the do-not-list, and crawl candidates. GitHub is the source of truth for issues
 and PRs, and the issue room is for claims, so those tables are caches and
 mirrors. None of these tables holds a GitHub token. The rules these records
 follow are in [how-it-works.md](how-it-works.md#people), under
@@ -805,6 +857,7 @@ in `people`.
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, and its code repo's main language | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
+| `submissions` | Claim's submitted work: the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
@@ -858,6 +911,12 @@ that break the rules, so it returns the problems for the caller to show.
   list that starts empty, `issue_syncs.language`, and `cla_confirmations`.
   A confirmation's project has no foreign key, like a claim's, so it
   outlives a listing.
+- **Migration `0006_submissions.sql`** makes `submissions`, one row per
+  claim, which each submit writes over, with a foreign key to the claim.
+  `paths` is a JSON list. The lines added and removed are null when GitHub
+  didn't say. The review reason is null for work whose PR was to open by
+  itself. `my_work` reads the rows of a donor's claims awaiting review by
+  key.
 
 ### Who sees what
 
@@ -873,6 +932,11 @@ These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
 `donor_sessions.queue`, `cla_confirmations`, `donor_blocks.reason`, and
 `do_not_list.reason`.
+
+A submission's branch and commit are public on GitHub once they land. Its
+title, summary, and notes on what was checked go into the PR when it opens,
+with keys and tokens replaced before they are stored. Until then only the
+donor's `my_work` shows them.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -1971,7 +2035,8 @@ and Playwright run it as a local HTTP server.
 - **What it covers.** REST: the authenticated user and users, repos with the
   caller's `permissions`, labels listed or one by name, issues and their
   timelines, issue and repo search, file contents, forks, branches and refs,
-  pull requests, reviews, and review comments. GraphQL: `repository`, `viewer`, file reads with
+  git blobs, comparisons of two commits, pull requests, reviews, and review
+  comments. GraphQL: `repository`, `viewer`, file reads with
   `object(expression:)` across many repos in one query, an issue with the
   open PRs that close it, through `closedByPullRequestsReferences`, a pull
   request's state, and `createCommitOnBranch`. GitHub's primary rate limits:
@@ -1993,8 +2058,16 @@ and Playwright run it as a local HTTP server.
   part of a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
   access. A fork belongs to whoever's token made it, and forking again
-  returns the same fork. `createCommitOnBranch` refuses a stale expected
-  head, makes the caller the author, and GitHub signs the commit. A PR that
+  returns the same fork. GitHub makes a new fork in the background, so for
+  `forkDelayMs` after it is made, a second unless the fake was made with
+  another or a test sets it, its git data answers 409
+  `Git Repository is empty.`, GraphQL reads its refs and objects as null,
+  and no PR can come from it. `createCommitOnBranch` refuses a stale
+  expected head, makes the caller the author, and GitHub signs the commit.
+  It refuses a change to a file under `.github/workflows/` from a token
+  without the `workflow` scope, unless another branch of the repo has the
+  same file, with the same path and content. A commit to an open PR's
+  branch moves the PR's head, as a push does. A PR that
   mentions an issue adds a `cross-referenced` event to that issue's
   timeline, and merging it closes the issues it says it closes. A PR's head
   must be the base repo or a fork of it. Search serves the first 1,000
@@ -2005,10 +2078,17 @@ and Playwright run it as a local HTTP server.
   `public_repo`.
 - **Where it differs.** Tests that depend on any of these need the fake
   changed first.
-  - Forks are ready at once. GitHub makes them in the background.
-  - OAuth scopes are recorded and sent back in `x-oauth-scopes`. Only a
-    private repo checks them, for `repo`. A token with no scopes can fork
-    and commit to a public one.
+  - A new fork is ready after `forkDelayMs`. GitHub takes as long as its
+    background job does. What GitHub's GraphQL answers for a fork not ready
+    yet isn't checked on GitHub.
+  - OAuth scopes are recorded and sent back in `x-oauth-scopes`. A private
+    repo checks them, for `repo`, and a workflow file, for `workflow`. A
+    token with no scopes can fork and commit to a public one. GitHub's docs
+    say the `workflow` scope is needed to add or change a workflow file.
+    The fake asks for it to delete one too, which the docs don't say.
+  - A comparison counts a line as added when the old text lacks it, and as
+    removed when the new text lacks it, which is close to what GitHub
+    counts for small changes.
   - An archived repo accepts writes.
   - `maintainer_can_modify` is kept and sent back, and the base repo's
     maintainers still can't push to the PR's branch.
@@ -2160,11 +2240,17 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   check what it holds. They live in `apps/web/test/mcp/`. The donor's tools'
   tests give each test's issues numbers of their own, as the sync tests do,
   since rooms keep their storage across a file, and stub `Math.random` to
-  fix the random order. The vouch file's format and the random order are
-  also tested alone, in `apps/web/test/donor/`. The admin's tools are
-  tested there too, and their actions are also called directly, with a spy
-  on D1 and `fetch`, to show each checks the permission before it reads
-  anything.
+  fix the random order. The vouch file's format, the random order, and the
+  rules of submitted work are also tested alone, in `apps/web/test/donor/`.
+  The admin's tools are tested in `apps/web/test/mcp/` too, and their
+  actions are also called directly, with a spy on D1 and `fetch`, to show
+  each checks the permission before it reads anything. `submit.test.ts`
+  holds the permission-isolation suite for `submit_work`, `open_pr`, and
+  `my_work`: after each test, it checks that every GitHub call each of
+  those tool calls made ran with the token of the donor whose claim it
+  was, who also made the call. The fake's state shows where each branch,
+  commit, and PR went, and who authored it. Its forks are ready at once,
+  except in the test of a fork GitHub is still making.
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
