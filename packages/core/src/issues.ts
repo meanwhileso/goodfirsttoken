@@ -58,5 +58,11 @@ export const issueSyncSchema = z.object({
   refreshedAt: epochMs.nullable(),
   /** While a run reads the project, when its hold on it runs out. Null when none holds it. */
   readingUntil: epochMs.nullable(),
+  /**
+   * The code repo's main language, as GitHub named it when the sync last read
+   * the repo, for ranking suggestions. Null when GitHub names none, or before
+   * the sync read it.
+   */
+  language: z.string().max(100).nullable(),
 });
 export type IssueSync = z.infer<typeof issueSyncSchema>;

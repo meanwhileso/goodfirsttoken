@@ -198,7 +198,7 @@ async function read(request: Request, asked: string, now: number): Promise<Proje
           labels: copy.labels,
           taken,
           openPr: linked ?? claimPr,
-          takesClaims: status === 'approved' && waiting,
+          takesClaims: waiting,
         };
       }),
     },

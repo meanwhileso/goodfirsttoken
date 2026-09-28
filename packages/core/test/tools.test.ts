@@ -202,6 +202,24 @@ describe('what each result says', () => {
     );
   });
 
+  test("a claim in progress that can't go on says why and what to do, and one that can says nothing more", () => {
+    const [claim] = samples.my_work.output.working;
+    if (!claim) throw new Error('missing sample claim');
+    const reason = 'sample-owner/sample-app is on the do-not-list. Release the claim with release_claim.';
+    const work = (working: (typeof claim)[]) => textOf(toolResult('my_work', { ...samples.my_work.output, working }));
+
+    expect(work([{ ...claim, resumable: false, reason }])).toContain(`Can't go on: ${reason}`);
+    expect(work([claim])).not.toContain("Can't go on");
+  });
+
+  test("a suggestion counts every slot taken, and names only the claimants it lists", () => {
+    const [first] = samples.suggest_issues.output.suggestions;
+    if (!first) throw new Error('missing sample suggestion');
+    // A blocked donor holds the second slot, and isn't named.
+    const text = textOf(toolResult('suggest_issues', { suggestions: [{ ...first, slotsTaken: 2 }] }));
+    expect(text).toContain('2 of 3 slots taken: @kenji (codex)');
+  });
+
   test('a crawler find in the queue shows its suggested settings with the rest at their defaults, and says when no tags were suggested', () => {
     const [candidate] = samples.admin_queue.output.items;
     if (candidate === undefined) throw new Error('missing sample');
@@ -331,6 +349,14 @@ describe('tool inputs', () => {
       text: 'tests: 3 failing\n\tall in the lock screen\r\n',
     });
     expect(result.ok && result.value.text).toBe('tests: 3 failing all in the lock screen');
+  });
+
+  test('a CLA confirmation names the link the donor confirmed, which must be https', () => {
+    const claim = (claConfirmed: unknown) =>
+      validate(tools.claim_issue.input, { sessionId: 's_1', issue: 'octo/app#1', claConfirmed });
+    expect(claim('https://octo.test/cla').ok).toBe(true);
+    expect(problemFields(claim(true))).toEqual(['claConfirmed']);
+    expect(problemFields(claim('http://octo.test/cla'))).toEqual(['claConfirmed']);
   });
 
   test('an issue in a repo named . or .. is rejected', () => {

@@ -5,8 +5,10 @@ import {
   holdsSlot,
   id,
   mustParse,
+  prStateSchema,
   repoName,
   type ClaimRecord,
+  type PrState,
 } from '@goodfirsttoken/core';
 import { checkTime, joinIssue, prColumns, prFromColumns, splitIssue } from './shared';
 
@@ -175,6 +177,38 @@ export async function listIssueClaims(db: D1Database, issue: string): Promise<Cl
     .bind(repo, number)
     .all<ClaimRow>();
   return results.map(toClaim);
+}
+
+/** A claim, with the state the PRs table records for its PR, or null when it has none there. */
+export interface ClaimWithPr {
+  claim: ClaimRecord;
+  prState: PrState | null;
+}
+
+/**
+ * Every claim on these issues, like `owner/name#12`, in the order they were
+ * made, each with its PR's state. The issues go in as one JSON array, so any
+ * number of them takes one query.
+ */
+export async function listClaimsOn(db: D1Database, issues: readonly string[]): Promise<ClaimWithPr[]> {
+  const keys = issues.map((issue) => {
+    const { repo, number } = splitIssue(issue);
+    return [repo, number];
+  });
+  if (keys.length === 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT c.*, pr.state AS pr_state FROM json_each(?) j
+       JOIN claims c ON c.issue_repo = json_extract(j.value, '$[0]') AND c.issue_number = json_extract(j.value, '$[1]')
+       LEFT JOIN prs pr ON pr.claim_id = c.id
+       ORDER BY c.claimed_at, c.id`,
+    )
+    .bind(JSON.stringify(keys))
+    .all<ClaimRow & { pr_state: string | null }>();
+  return results.map((row) => ({
+    claim: toClaim(row),
+    prState: row.pr_state === null ? null : mustParse(prStateSchema, row.pr_state, 'prState'),
+  }));
 }
 
 /** Every claim a person made, newest first. */

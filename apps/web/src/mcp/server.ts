@@ -1,12 +1,12 @@
-import { githubId, productName, toolRefusal, tools, type ToolSpec } from '@goodfirsttoken/core';
+import { productName, toolRefusal, tools, type ToolSpec } from '@goodfirsttoken/core';
 import { createMcpHandler, McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller } from '../auth/permissions';
 import { siteOrigin } from '../auth/settings';
-import { savePerson } from '../db';
-import { GitHubError, gitHubRest } from '../github';
+import { GitHubError } from '../github';
 import { adminTools } from './admin';
 import { disconnect, markConnectionUsed } from './connections';
+import * as donor from './donor';
 import { pauseProject, projectStatus, registerProject, updateProject } from './maintainer';
 import { MCP_PATH } from './paths';
 import type { AgentProps } from './provider';
@@ -21,11 +21,6 @@ import type { AgentProps } from './provider';
 export function callerOf(props: AgentProps): Caller {
   return { githubId: props.githubId, login: props.login, gitHubToken: () => Promise.resolve(props.gitHubToken) };
 }
-
-// start_session proves the whole path: the caller and their token come from
-// the grant, and GitHub says who the token belongs to. #15 gives it the rest
-// of its result, from packages/core.
-const startSessionOutput = tools.start_session.output.pick({ login: true }).extend({ githubId });
 
 type Answer = CallToolResult;
 
@@ -56,15 +51,6 @@ async function asCaller(props: AgentProps, origin: string, tool: () => Promise<A
   }
 }
 
-async function startSession(caller: Caller): Promise<Answer> {
-  const token = (await caller.gitHubToken()) ?? '';
-  const profile = await gitHubRest<{ id: number; login: string }>(token, 'GET', '/user');
-  if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
-  await savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, Date.now());
-  const output = startSessionOutput.parse({ githubId: caller.githubId, login: profile.login });
-  return { ...answer(`Signed in as @${output.login}.`), structuredContent: output };
-}
-
 /** A tool's description and schemas, as packages/core defines them. */
 function specOf<I extends ToolSpec['input'], O extends ToolSpec['output']>(spec: ToolSpec<I, O>) {
   return { description: spec.description, inputSchema: spec.input, outputSchema: spec.output };
@@ -88,16 +74,27 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
   const server = new McpServer({ name: productName, version: '0.1.0' });
   const caller = callerOf(props);
   const run = (tool: () => Promise<Answer>) => asCaller(props, origin, tool);
-  server.registerTool(
-    'start_session',
-    {
-      description:
-        "Call this first, with the harness name and the budget the donor chose. Returns the signed-in donor's GitHub login and numeric ID.",
-      inputSchema: tools.start_session.input,
-      outputSchema: startSessionOutput,
-    },
-    () => run(() => startSession(caller)),
+  // The donor's tools. Each acts as the caller alone, and reads GitHub with
+  // their own token.
+  server.registerTool('start_session', specOf(tools.start_session), (input) =>
+    run(() => donor.startSession(caller, input, origin, Date.now())),
   );
+  server.registerTool('set_interests', specOf(tools.set_interests), (input) =>
+    run(() => donor.setInterests(caller, input)),
+  );
+  server.registerTool('suggest_issues', specOf(tools.suggest_issues), (input) =>
+    run(() => donor.suggestIssues(caller, input, origin, Date.now())),
+  );
+  server.registerTool('claim_issue', specOf(tools.claim_issue), (input) =>
+    run(() => donor.claimIssue(caller, input, origin, Date.now())),
+  );
+  server.registerTool('post_update', specOf(tools.post_update), (input) =>
+    run(() => donor.postUpdate(caller, input)),
+  );
+  server.registerTool('release_claim', specOf(tools.release_claim), (input) =>
+    run(() => donor.releaseClaim(caller, input)),
+  );
+  server.registerTool('my_work', specOf(tools.my_work), () => run(() => donor.myWork(caller, origin, Date.now())));
   // The maintainer's tools. Each asks GitHub for the caller's permission on
   // the repo, with their own token, on every call.
   server.registerTool('register_project', specOf(tools.register_project), (input) =>

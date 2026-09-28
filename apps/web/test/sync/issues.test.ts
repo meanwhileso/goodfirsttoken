@@ -171,6 +171,21 @@ describe('reading tagged issues', () => {
     expect(github.calls.filter((call) => call.login !== SERVICE_LOGIN)).toEqual([]);
   });
 
+  test("the sync keeps the code repo's main language as GitHub names it, which suggestions rank by", async () => {
+    await registeredProject();
+    await sync();
+    const before = (await getIssueSync(db, APP))?.language;
+    const repo = github.state.repos[APP];
+    if (!repo) throw new Error('missing sample repo');
+    repo.language = null;
+
+    later();
+    await sync();
+
+    expect(before).toBe('TypeScript');
+    expect((await getIssueSync(db, APP))?.language).toBeNull();
+  });
+
   test('an issue with an excluded tag is left out, and leaves the cache once it gets one', async () => {
     await registeredProject({ tags: ['help wanted'], excludedTags: ['good first issue'] });
     const kept = tagged('Log the rewrite rules');

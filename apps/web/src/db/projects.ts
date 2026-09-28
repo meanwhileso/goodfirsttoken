@@ -11,6 +11,7 @@ import {
   projectStatusSchema,
   repoName,
   settingsVersionSchema,
+  taggedIssueSchema,
   updateProjectSettings,
   type FieldProblem,
   type Policy,
@@ -23,10 +24,11 @@ import {
   type ProjectStatusChange,
   type SettingKey,
   type SettingsVersion,
+  type TaggedIssue,
 } from '@goodfirsttoken/core';
 import { getDoNotListEntry } from './do-not-list';
-import { checkTime, fromJson } from './shared';
-import { waiting } from './waiting';
+import { checkTime, fromJson, joinIssue } from './shared';
+import { ASKING_FOR_HELP, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
 
 // The projects, project_settings, and project_status_changes tables. A
 // project's row holds its current status and points at its current
@@ -230,16 +232,15 @@ export async function listProjectsAskingForHelp(
   limit: number,
   now: number,
 ): Promise<{ total: number; projects: ProjectAskingForHelp[] }> {
-  // Which issues wait for an agent is one rule in ./waiting.ts, which a
-  // project page's tagged issues follow too.
+  // Which projects ask for help, and which of their issues wait for an
+  // agent, is one rule in ./waiting.ts, which every list of them follows.
   const { results } = await db
     .prepare(
       `SELECT p.*, s.settings, COUNT(*) OVER () AS total,
          (SELECT COUNT(*) FROM tagged_issues t WHERE t.project = p.repo AND ${waiting('?2')}) AS waiting
        FROM projects p
        JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
-       WHERE p.status = 'approved'
-         AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))
+       WHERE ${ASKING_FOR_HELP}
        ORDER BY waiting DESC, p.added_at DESC, p.repo
        LIMIT ?1`,
     )
@@ -249,6 +250,69 @@ export async function listProjectsAskingForHelp(
     total: mustParse(count, results[0]?.total ?? 0, 'total'),
     projects: results.map((row) => ({ project: toProject(row), waiting: mustParse(count, row.waiting, 'waiting') })),
   };
+}
+
+/** An issue waiting for an agent, with its project, for suggestions. */
+export interface WaitingIssue {
+  project: ProjectRecord;
+  /** The project's cached copy of the issue. */
+  copy: TaggedIssue;
+  /** Claims on the issue holding a slot now. */
+  holding: number;
+  /** The main language of the project's code repo as the sync last read it, or null. */
+  language: string | null;
+}
+
+/**
+ * Every cached issue waiting for an agent at `now`, in every project asking
+ * for help, by the rule in ./waiting.ts that the homepage counts with: the
+ * oldest project first, then by issue. Two projects that keep issues in one
+ * repo each list their own copy.
+ */
+export async function listWaitingIssues(db: D1Database, now: number): Promise<WaitingIssue[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.*, s.settings, t.issue_repo AS copy_repo, t.number AS copy_number, t.title AS copy_title,
+         t.labels AS copy_labels, t.synced_at AS copy_synced_at, ${slotsTaken('?1')} AS holding, y.language AS language
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       JOIN tagged_issues t ON t.project = p.repo
+       LEFT JOIN issue_syncs y ON y.project = p.repo
+       WHERE ${takesClaims('?1')}
+       ORDER BY p.added_at, p.repo, t.issue_repo, t.number`,
+    )
+    .bind(checkTime(now))
+    .all<
+      ProjectRow & {
+        copy_repo: string;
+        copy_number: number;
+        copy_title: string;
+        copy_labels: string;
+        copy_synced_at: number;
+        holding: number;
+        language: string | null;
+      }
+    >();
+  return results.map((row) => {
+    const project = toProject(row);
+    return {
+      project,
+      copy: mustParse(
+        taggedIssueSchema,
+        {
+          issue: joinIssue(row.copy_repo, row.copy_number),
+          project: project.repo,
+          title: row.copy_title,
+          labels: fromJson(row.copy_labels),
+          linkedPr: null,
+          syncedAt: row.copy_synced_at,
+        },
+        'issue',
+      ),
+      holding: mustParse(count, row.holding, 'holding'),
+      language: row.language,
+    };
+  });
 }
 
 /**
@@ -266,6 +330,30 @@ export async function getSettingsSave(
     .first<{ changed_by: number; changed_at: number }>();
   if (row === null) return null;
   return { changedBy: mustParse(githubId, row.changed_by, 'changedBy'), changedAt: checkTime(row.changed_at, 'changedAt') };
+}
+
+/** Whether the project asks for help now, by the rule in ./waiting.ts: approved, and off the do-not-list. */
+export async function isAskingForHelp(db: D1Database, repo: string): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT 1 AS yes FROM projects p WHERE p.repo = ? AND ${ASKING_FOR_HELP}`)
+    .bind(mustParse(repoName, repo, 'repo'))
+    .first<{ yes: number }>();
+  return row !== null;
+}
+
+/**
+ * Which of these projects are on the do-not-list, by the rule in
+ * ./waiting.ts, each in lower case. The repos go in as one JSON array, so any
+ * number of them takes one query.
+ */
+export async function doNotListedProjects(db: D1Database, repos: Iterable<string>): Promise<Set<string>> {
+  const names = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
+  if (names.length === 0) return new Set();
+  const { results } = await db
+    .prepare(`SELECT p.repo FROM projects p WHERE p.repo IN (SELECT value FROM json_each(?1)) AND ${ON_THE_DO_NOT_LIST}`)
+    .bind(JSON.stringify(names))
+    .all<{ repo: string }>();
+  return new Set(results.map((row) => row.repo.toLowerCase()));
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */

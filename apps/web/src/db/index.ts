@@ -4,6 +4,7 @@
 
 export * from './blocks';
 export * from './candidates';
+export * from './cla';
 export * from './claims';
 export * from './crawls';
 export * from './do-not-list';

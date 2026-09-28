@@ -19,7 +19,8 @@ import {
 } from '../primitives';
 import { interestsSchema, type Interests } from '../people';
 import { prModes, projectSettingsSchema } from '../projects';
-import { budgetSchema, type Budget } from '../sessions';
+import { refusalCodeSchema } from '../refusals';
+import { budgetSchema, queueSchema, type Budget } from '../sessions';
 import { defineTool } from './spec';
 import {
   claimantSchema,
@@ -98,7 +99,8 @@ export const startSession = defineTool({
           2,
         )}`,
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
-        'Offer the follow-ups and unfinished claims before new issues.',
+        'Offer the follow-ups and paused claims first, then the other unfinished claims, before new issues.',
+      out.unfinishedClaims.length > 0 && 'Resume a claim with claim_issue and its issue.',
     ),
 });
 
@@ -120,8 +122,10 @@ const suggestionSchema = z.object({
   prMode: z.enum(prModes),
   /** The project's CLA, which the donor confirms before claiming, or null. */
   claUrl: httpsUrl.nullable(),
-  /** Everyone holding a slot now, with their agents. */
+  /** Everyone holding a slot now, with their agents. A blocked donor holding one isn't named. */
   claimants: z.array(claimantSchema),
+  /** Slots taken now, a blocked donor's included. */
+  slotsTaken: count,
   /** The project's claims per issue. */
   slots: z.int().min(1),
   /** How many times anyone has claimed it. */
@@ -132,12 +136,11 @@ const suggestionSchema = z.object({
 export type Suggestion = z.infer<typeof suggestionSchema>;
 
 function renderSuggestion(s: Suggestion): string {
+  const named = s.claimants.map((c) => `@${c.login} (${c.agent})`).join(', ');
   const who =
-    s.claimants.length === 0
+    s.slotsTaken === 0
       ? 'nobody on it'
-      : `${String(s.claimants.length)} of ${String(s.slots)} slots taken: ${s.claimants
-          .map((c) => `@${c.login} (${c.agent})`)
-          .join(', ')}`;
+      : `${String(s.slotsTaken)} of ${String(s.slots)} slots taken${named === '' ? '' : `: ${named}`}`;
   const issueRepo = s.issue.slice(0, s.issue.indexOf('#'));
   return lines(
     `${s.issue}  ${s.title}`,
@@ -152,7 +155,7 @@ function renderSuggestion(s: Suggestion): string {
 export const suggestIssues = defineTool({
   audience: 'donor',
   description:
-    "Suggest up to three issues that maintainers tagged for outside help, ranked against the donor's interests. Show the donor each issue's link and let them pick one or more. For more, call it again with the issues already shown in exclude.",
+    "Suggest up to three issues that maintainers tagged for outside help, ranked against the donor's interests. Show the donor each issue's link and let them pick one or more. Claim the first pick with claim_issue, and pass the rest as its queue. For more, call it again with the issues already shown in exclude.",
   input: z.object({
     sessionId: id,
     exclude: z
@@ -172,20 +175,39 @@ export const suggestIssues = defineTool({
         ),
 });
 
+/** A queued pick claim_issue passed over, and why. */
+const skippedPickSchema = z.object({
+  issue: issueRef,
+  code: refusalCodeSchema,
+  message: z.string(),
+});
+
+function describeBudgetLeft(budget: { issuesLeft: number | null; endsAt: string | null }): string {
+  if (budget.issuesLeft !== null) return `Budget left: ${plural(budget.issuesLeft, 'issue')}.`;
+  if (budget.endsAt !== null) return `Budget: new claims until ${when(budget.endsAt)}.`;
+  return 'Budget: until the harness stops.';
+}
+
 export const claimIssue = defineTool({
   audience: 'donor',
   description:
-    "Claim an issue the donor picked. Returns the issue, the project's rules and notes for agents, the repo to clone, and the commit to start from. If the project has a CLA, ask the donor to confirm they signed it, then call again with claConfirmed: true.",
+    "Claim an issue the donor picked, or the next pick waiting in the session's queue. Returns the issue, the project's rules and notes for agents, the repo to clone, and the commit to start from. Pass the donor's other picks as queue: each waits in the session until you call claim_issue with no issue, and a pick that filled up or got a PR meanwhile is skipped and reported. If the project has a CLA, ask the donor to confirm they signed it, then call again with claConfirmed set to its link. Claiming an issue the donor already holds resumes that claim.",
   input: z.object({
     sessionId: id,
-    issue: issueRef,
-    claConfirmed: z
-      .boolean()
-      .default(false)
-      .describe("The donor confirmed they signed the project's CLA."),
+    issue: issueRef
+      .optional()
+      .describe("The issue to claim now. Leave it out to claim the next pick waiting in the session's queue."),
+    queue: queueSchema
+      .optional()
+      .describe("The donor's other picks, in order. They replace the picks waiting in the session."),
+    claConfirmed: httpsUrl
+      .optional()
+      .describe("The link of the project's CLA, which the donor confirmed they signed, as the refusal gave it."),
   }),
   output: z.object({
     claim: claimSummarySchema,
+    /** The donor already held the issue, and this is that claim. */
+    resumed: z.boolean(),
     /** Slots taken on the issue, this claim's included. */
     slotsTaken: z.int().min(1),
     slots: z.int().min(1),
@@ -193,11 +215,24 @@ export const claimIssue = defineTool({
     body: z.string(),
     project: z.object({ repo: repoName, settings: projectSettingsSchema }),
     clone: z.object({ url: webUrl, commit: commitSha }),
+    /** Queued picks passed over on the way to this one: they filled up, got a PR, or no longer take claims. */
+    skipped: z.array(skippedPickSchema),
+    /** The picks still waiting in the session, in order. */
+    queued: queueSchema,
+    /** What is left of the session's budget after this claim. */
+    budget: z.object({ issuesLeft: count.nullable(), endsAt: isoTime.nullable() }),
   }),
   text: (out) => {
     const { settings } = out.project;
     return lines(
-      `Claimed ${out.claim.issue} as claim ${out.claim.claimId} · ${String(out.slotsTaken)} of ${String(out.slots)} slots taken`,
+      out.skipped.length > 0 &&
+        `Skipped from the queue (${String(out.skipped.length)}):\n${indent(
+          numbered(out.skipped, (s) => `${s.issue} (${s.code}): ${s.message}`),
+          2,
+        )}`,
+      out.resumed
+        ? `Resumed claim ${out.claim.claimId} on ${out.claim.issue} · ${String(out.slotsTaken)} of ${String(out.slots)} slots taken`
+        : `Claimed ${out.claim.issue} as claim ${out.claim.claimId} · ${String(out.slotsTaken)} of ${String(out.slots)} slots taken`,
       out.claim.title,
       `Issue: ${out.claim.url}`,
       `Live: ${out.claim.liveUrl}`,
@@ -216,6 +251,9 @@ export const claimIssue = defineTool({
       'Post an update with post_update after each code change, test run, or decision: at least every 10 minutes, at most every 10 seconds. Never post local paths, environment contents, tokens, or secrets.',
       out.claim.expiresAt &&
         `Submit with submit_work before ${when(out.claim.expiresAt)}, or stop with release_claim and a reason.`,
+      out.queued.length > 0 &&
+        `Queued next (${String(out.queued.length)}): ${out.queued.join(', ')}. Once this claim is submitted or released, claim the next with claim_issue and no issue.`,
+      describeBudgetLeft(out.budget),
       '',
       'Issue text:',
       indent(out.body || '(empty)', 2),
@@ -405,6 +443,22 @@ function renderReviewItem(item: ReviewItem): string {
   );
 }
 
+/** A claim in progress, as my_work lists it, with whether the agent can go on with it. */
+export const workingClaimSchema = claimSummarySchema.extend({
+  /** False when no more work may go into it, as when its project's maintainers asked to be removed. */
+  resumable: z.boolean(),
+  /** Why it can't go on, and what to do instead, or null when it can. */
+  reason: z.string().max(500).nullable(),
+});
+export type WorkingClaim = z.infer<typeof workingClaimSchema>;
+
+function renderWorkingClaim(claim: WorkingClaim): string {
+  return lines(
+    renderClaimSummary(claim),
+    !claim.resumable && `Can't go on: ${claim.reason ?? 'Release it with release_claim.'}`,
+  );
+}
+
 export const myWork = defineTool({
   audience: 'donor',
   description:
@@ -414,7 +468,7 @@ export const myWork = defineTool({
     followUps: z.array(followUpSchema),
     readyToOpen: z.array(reviewItemSchema),
     /** Active and paused claims. */
-    working: z.array(claimSummarySchema),
+    working: z.array(workingClaimSchema),
   }),
   text: (out) =>
     out.followUps.length + out.readyToOpen.length + out.working.length === 0
@@ -425,7 +479,7 @@ export const myWork = defineTool({
           out.readyToOpen.length > 0 &&
             `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
           out.working.length > 0 &&
-            `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderClaimSummary), 2)}`,
+            `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
         ),
 });
 
