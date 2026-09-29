@@ -8,6 +8,7 @@ export * from './cla';
 export * from './claims';
 export * from './crawls';
 export * from './do-not-list';
+export * from './follow-ups';
 export * from './issues';
 export * from './people';
 export * from './projects';

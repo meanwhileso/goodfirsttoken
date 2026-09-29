@@ -110,4 +110,4 @@ export {
 export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
 export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';
-export type { ClaimSummary, Delisting, FollowUp } from './shared';
+export type { ClaimSummary, Delisting, FollowUp, ReadInPart } from './shared';

@@ -25,8 +25,10 @@ import { describeProblems, validate, type FieldProblem } from './validation';
 // the issue room that holds every claim on the issue.
 //
 // The machine has no fact about whether a claim's PR is still open. It lets
-// a `pr_opened` claim take updates and review fixes. The caller that tracks
-// PRs refuses those with `pr_closed` once the PR has merged or closed.
+// a `pr_opened` claim take updates and review fixes, and `pr_opened` stays
+// the claim's state once its PR merges or closes, since that is a fact about
+// the PR. The issue room, which the PR job tells, refuses those with
+// `pr_closed` from then on.
 
 export const claimStates = [
   'active',

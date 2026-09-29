@@ -59,7 +59,9 @@ Claims, live updates, feeds, submitting work, and following PRs.
 | [#14](https://github.com/meanwhileso/goodfirsttoken/issues/14) | Fan events out to repo, user, and homepage feeds, with text streams | #13 | [#53](https://github.com/meanwhileso/goodfirsttoken/pull/53) |
 | [#15](https://github.com/meanwhileso/goodfirsttoken/issues/15) | Add the donor tools for sessions, suggestions, and claims | #9, #12, #13 | [#63](https://github.com/meanwhileso/goodfirsttoken/pull/63) |
 | [#16](https://github.com/meanwhileso/goodfirsttoken/issues/16) | Submit work: branch or fork, a signed commit, and the PR | #15 | [#74](https://github.com/meanwhileso/goodfirsttoken/pull/74) |
-| [#17](https://github.com/meanwhileso/goodfirsttoken/issues/17) | Follow PRs to the end and bring review comments back | #16 | |
+| [#17](https://github.com/meanwhileso/goodfirsttoken/issues/17) | Follow PRs to the end and bring review comments back | #16 | [#78](https://github.com/meanwhileso/goodfirsttoken/pull/78) |
+| [#87](https://github.com/meanwhileso/goodfirsttoken/issues/87) | Bring back a maintainer's comments in a PR's conversation as follow-ups | #17 | |
+| [#88](https://github.com/meanwhileso/goodfirsttoken/issues/88) | Let a donor settle a follow-up without a fix | #17 | |
 
 ## M5 Skills and harnesses
 
@@ -74,6 +76,7 @@ The skills and plugins, install for every harness, and MCP Apps views.
 | [#22](https://github.com/meanwhileso/goodfirsttoken/issues/22) | Add MCP Apps views for issue cards, the live feed, and the review queue | #7, #14, #16 | [#79](https://github.com/meanwhileso/goodfirsttoken/pull/79) |
 | [#70](https://github.com/meanwhileso/goodfirsttoken/issues/70) | Let maintainers ask to be removed from their agent | #20 | [#75](https://github.com/meanwhileso/goodfirsttoken/pull/75) |
 | [#80](https://github.com/meanwhileso/goodfirsttoken/issues/80) | Tell a maintainer when the sync delisted their project | #70 | [#82](https://github.com/meanwhileso/goodfirsttoken/pull/82) |
+| [#86](https://github.com/meanwhileso/goodfirsttoken/issues/86) | Show the whole follow-up in the review queue view | #17 | |
 
 ## M6 Public site
 
@@ -111,6 +114,7 @@ Deploys, the static host, a security review, and the launch video.
 | [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | [#49](https://github.com/meanwhileso/goodfirsttoken/pull/49) |
 | [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
 | [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | [#57](https://github.com/meanwhileso/goodfirsttoken/pull/57) |
+| [#89](https://github.com/meanwhileso/goodfirsttoken/issues/89) | Check on GitHub that a private organization member's review counts | #17 | |
 
 ## Dependency graph
 
@@ -143,6 +147,8 @@ flowchart TD
   n15["#15 Donor tools"]:::m4
   n16["#16 Submit work"]:::m4
   n17["#17 Follow PRs"]:::m4
+  n87["#87 Conversation follow-ups"]:::m4
+  n88["#88 Settle a follow-up"]:::m4
   n18["#18 Skill build"]:::m5
   n19["#19 Donor skills"]:::m5
   n20["#20 Maintainer and admin skills"]:::m5
@@ -150,6 +156,7 @@ flowchart TD
   n22["#22 MCP Apps views"]:::m5
   n70["#70 Removal requests"]:::m5
   n80["#80 Delisted in project_status"]:::m5
+  n86["#86 Follow-ups in the view"]:::m5
   n23["#23 Homepage"]:::m6
   n24["#24 Project pages"]:::m6
   n25["#25 Issue page"]:::m6
@@ -166,6 +173,7 @@ flowchart TD
   n33["#33 Static host"]:::m8
   n34["#34 Security review"]:::m8
   n35["#35 Launch video"]:::m8
+  n89["#89 Push access on GitHub"]:::m8
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -204,6 +212,10 @@ flowchart TD
   n16 --> n27
   n17 --> n19
   n17 --> n26
+  n17 --> n86
+  n17 --> n87
+  n17 --> n88
+  n17 --> n89
   n18 --> n19
   n18 --> n20
   n19 --> n21
@@ -226,7 +238,7 @@ flowchart TD
   n76 --> n77
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n80,n22 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n17,n80,n22 done
 ```
 
 ## Maintainer steps

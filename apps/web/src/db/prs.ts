@@ -7,6 +7,7 @@ import {
   issueRef,
   mustParse,
   prRecordSchema,
+  prRefSchema,
   prStateSchema,
   repoName,
   type PrRecord,
@@ -122,9 +123,11 @@ export async function getPr(db: D1Database, claimId: string): Promise<PrRecord |
 /**
  * Records the state GitHub shows for a claim's PR at `at`. Its times change
  * only when its state does, and a merged PR stays merged. Reopening a closed
- * PR clears its close time. GitHub's clock and ours can differ, so a time
- * before the PR opened counts as the time it opened. Null when the claim has
- * no PR.
+ * PR clears its close time, and its offer, so a session offers how it ends
+ * next. GitHub's clock and ours can differ, so a time before the PR opened
+ * counts as the time it opened. A PR recorded closed without merging has
+ * its issue due to be read again, until rereadDone says it was. Null when
+ * the claim has no PR.
  */
 export async function setPrState(
   db: D1Database,
@@ -149,7 +152,11 @@ export async function setPrState(
   );
   // Only from the state just read, so a change that landed since then wins.
   const row = await db
-    .prepare('UPDATE prs SET state = ?, merged_at = ?, closed_at = ? WHERE claim_id = ? AND state = ? RETURNING *')
+    .prepare(
+      `UPDATE prs SET state = ?1, merged_at = ?2, closed_at = ?3, reread_due = CASE WHEN ?1 = 'closed' THEN 1 ELSE 0 END,
+         reread_failed_at = NULL, offered_at = CASE WHEN ?1 = 'open' THEN NULL ELSE offered_at END
+       WHERE claim_id = ?4 AND state = ?5 RETURNING *`,
+    )
     .bind(updated.state, updated.mergedAt, updated.closedAt, current.claimId, current.state)
     .first<PrRow>();
   return row === null ? getPr(db, current.claimId) : toPr(row);
@@ -170,6 +177,130 @@ export async function isOpenClaimPr(db: D1Database, pr: PrRef, issue: string): P
     .bind(mustParse(repoName, pr.repo, 'pr.repo'), pr.number, repo, number)
     .first<{ found: number }>();
   return row !== null;
+}
+
+/**
+ * The claims on `issue`, like `owner/name#12`, whose own PR is among `prs`
+ * and recorded closed without merging, each with its PR, for a read that
+ * found those PRs open on GitHub.
+ */
+export async function listReopenedClaimPrs(
+  db: D1Database,
+  prs: readonly PrRef[],
+  issue: string,
+): Promise<{ claimId: string; pr: PrRef }[]> {
+  if (prs.length === 0) return [];
+  const { repo, number } = splitIssue(issue);
+  const found = prs.map((pr) => ({ repo: mustParse(repoName, pr.repo, 'pr.repo'), number: pr.number }));
+  const { results } = await db
+    .prepare(
+      `SELECT p.claim_id, p.repo, p.number, p.url FROM json_each(?1) j
+       JOIN prs p ON p.repo = json_extract(j.value, '$.repo') AND p.number = json_extract(j.value, '$.number')
+       JOIN claims c ON c.id = p.claim_id
+       WHERE p.state = 'closed' AND c.issue_repo = ?2 AND c.issue_number = ?3
+       ORDER BY p.claim_id`,
+    )
+    .bind(JSON.stringify(found), repo, number)
+    .all<{ claim_id: string; repo: string; number: number; url: string }>();
+  return results.map((row) => ({
+    claimId: mustParse(id, row.claim_id, 'claimId'),
+    pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
+  }));
+}
+
+/** What one read of a claim's open PR's reviews covered. */
+export interface ReviewsRead {
+  claimId: string;
+  /** Every review GitHub counts on the PR now, pending and dismissed ones left out. */
+  reviews: number;
+  /**
+   * For each review the read took, newest first, how many comments on its
+   * lines the read left out: 0 for a review that isn't a maintainer's.
+   */
+  leftOut: number[];
+}
+
+/**
+ * Adds what the PR job's read of each PR covered to what earlier reads
+ * covered, in one statement. The reviews GitHub counts beyond the count the
+ * last read kept are new, and are the newest. The new ones the read took
+ * count as read, and the comments on lines it left out of those count as
+ * left out. A new review the read didn't take is never read, since each
+ * read takes the newest reviews. So `reviews_read` is how many of the PR's
+ * reviews some read took, and `comments_left_out` how many comments on
+ * lines of those no read took.
+ */
+export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[]): Promise<void> {
+  if (read.length === 0) return;
+  const rows = read.map((row) => ({
+    claimId: mustParse(id, row.claimId, 'claimId'),
+    reviews: mustParse(count, row.reviews, 'reviews'),
+    leftOut: row.leftOut.map((n) => mustParse(count, n, 'leftOut')),
+  }));
+  // SET reads the row as it was, so prs.reviews is the last read's count.
+  await db
+    .prepare(
+      `UPDATE prs SET
+         reviews = r.reviews,
+         reviews_read = MIN(r.reviews, prs.reviews_read + MIN(r.took, MAX(0, r.reviews - prs.reviews))),
+         comments_left_out = prs.comments_left_out
+           + COALESCE((SELECT SUM(e.value) FROM json_each(r.left_out) e WHERE e.key < MAX(0, r.reviews - prs.reviews)), 0)
+       FROM (SELECT json_extract(j.value, '$.claimId') AS claim_id, json_extract(j.value, '$.reviews') AS reviews,
+               json_array_length(j.value, '$.leftOut') AS took, json_extract(j.value, '$.leftOut') AS left_out
+             FROM json_each(?) j) r
+       WHERE prs.claim_id = r.claim_id`,
+    )
+    .bind(JSON.stringify(rows))
+    .run();
+}
+
+/**
+ * The claims whose PR closed without merging, and whose issue waits to be
+ * read again, with the issue: those whose read never failed, oldest close
+ * first, then the rest, oldest failure first. So a read that fails each
+ * time goes behind the others.
+ */
+export async function listRereadsDue(db: D1Database): Promise<{ claimId: string; issue: string }[]> {
+  // prs_reread_due gives this order, since SQLite puts nulls first.
+  const { results } = await db
+    .prepare(
+      `SELECT p.claim_id, c.issue_repo, c.issue_number FROM prs p JOIN claims c ON c.id = p.claim_id
+       WHERE p.reread_due = 1 ORDER BY p.reread_failed_at, p.closed_at, p.claim_id`,
+    )
+    .all<{ claim_id: string; issue_repo: string; issue_number: number }>();
+  return results.map((row) => ({
+    claimId: mustParse(id, row.claim_id, 'claimId'),
+    issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+  }));
+}
+
+/**
+ * Records that a run's read of the issue of the claim's closed PR didn't
+ * land at `now`, so the read waits behind the others.
+ */
+export async function rereadFailed(db: D1Database, claimId: string, now: number): Promise<void> {
+  await db
+    .prepare('UPDATE prs SET reread_failed_at = ? WHERE claim_id = ?')
+    .bind(checkTime(now), mustParse(id, claimId, 'claimId'))
+    .run();
+}
+
+/** Records that the issue of the claim's closed PR was read again. */
+export async function rereadDone(db: D1Database, claimId: string): Promise<void> {
+  await db.prepare('UPDATE prs SET reread_due = 0 WHERE claim_id = ?').bind(mustParse(id, claimId, 'claimId')).run();
+}
+
+/**
+ * Every PR recorded closed without merging at `since` or later, oldest
+ * close first, for the job that reads whether one opened again, or merged.
+ */
+export async function listClosedPrsSince(db: D1Database, since: number): Promise<PrRecord[]> {
+  // prs_by_closed gives the range and the order.
+  const { results } = await db
+    .prepare("SELECT * FROM prs WHERE closed_at >= ? AND state = 'closed' ORDER BY closed_at, claim_id")
+    .bind(checkTime(Math.max(0, since), 'since'))
+    .all<PrRow>();
+  return results.map(toPr);
 }
 
 /** Every PR still open, oldest first, for the job that follows them. */
@@ -372,4 +503,80 @@ export async function listMergedPrs(
       mergedAt: checkTime(row.merged_at, 'mergedAt'),
     })),
   };
+}
+
+/** A donor's PR that merged or closed without merging, offered once. */
+export interface EndedToOffer {
+  claimId: string;
+  issue: string;
+  pr: PrRef;
+  outcome: 'merged' | 'closed';
+  /** The agent the claim's latest submit named, or the claim's when it has none. */
+  agent: string;
+  /** The title of the claim's latest submit, which its PR opened with, or null when it has none. */
+  title: string | null;
+  closedAt: number;
+}
+
+/**
+ * The donor's PRs that merged or closed without merging and that no
+ * session offered yet, oldest end first. Left out, and left unoffered, as
+ * for listMergedPrs: a blocked donor's, and one the do-not-list names. So
+ * is one on a project the sync delisted, since nothing cached from its
+ * repos goes out. markEndedOffered marks the ones a session offers.
+ */
+export async function listEndedToOffer(db: D1Database, person: number): Promise<EndedToOffer[]> {
+  // The donor's claims through claims_by_person, and each one's PR by key.
+  const { results } = await db
+    .prepare(
+      `SELECT p.claim_id, p.repo, p.number, p.url, p.state, p.closed_at, c.issue_repo, c.issue_number,
+         COALESCE(sub.agent, c.agent) AS agent, sub.title
+       FROM claims c
+       JOIN prs p ON p.claim_id = c.id
+       LEFT JOIN submissions sub ON sub.claim_id = p.claim_id
+       WHERE c.github_id = ? AND p.state IN ('merged', 'closed') AND p.offered_at IS NULL AND ${SHOWN}
+         AND NOT EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = c.project AND u.delisted IS NOT NULL)
+       ORDER BY p.closed_at, p.claim_id`,
+    )
+    .bind(mustParse(githubId, person, 'githubId'))
+    .all<{
+      claim_id: string;
+      repo: string;
+      number: number;
+      url: string;
+      state: string;
+      closed_at: number;
+      issue_repo: string;
+      issue_number: number;
+      agent: string;
+      title: string | null;
+    }>();
+  return results.map((row) => ({
+    claimId: mustParse(id, row.claim_id, 'claimId'),
+    issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+    pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
+    outcome: row.state === 'merged' ? 'merged' : 'closed',
+    agent: mustParse(agentName, row.agent, 'agent'),
+    title: row.title,
+    closedAt: checkTime(row.closed_at, 'closedAt'),
+  }));
+}
+
+/**
+ * Marks offered at `now` each of these claims' PRs that merged or closed
+ * and that no session offered yet, in one statement, and gives the claims
+ * it marked. So when two sessions list the same PR at once, only the one
+ * that marks it first offers it.
+ */
+export async function markEndedOffered(db: D1Database, claimIds: readonly string[], now: number): Promise<Set<string>> {
+  if (claimIds.length === 0) return new Set();
+  const { results } = await db
+    .prepare(
+      `UPDATE prs SET offered_at = ?2
+       WHERE claim_id IN (SELECT value FROM json_each(?1)) AND state IN ('merged', 'closed') AND offered_at IS NULL
+       RETURNING claim_id`,
+    )
+    .bind(JSON.stringify(claimIds.map((claimId) => mustParse(id, claimId, 'claimId'))), checkTime(now))
+    .all<{ claim_id: string }>();
+  return new Set(results.map((row) => row.claim_id));
 }

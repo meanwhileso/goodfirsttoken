@@ -29,13 +29,16 @@ import {
   type ReviewReason,
 } from '../submissions';
 import { defineTool } from './spec';
+import { MAX_FOLLOW_UPS } from '../follow-ups';
 import {
   claimantSchema,
   claimSummarySchema,
   followUpSchema,
   issueLinks,
+  readInPartSchema,
   renderClaimSummary,
-  renderFollowUp,
+  renderFollowUps,
+  renderReadInPart,
 } from './shared';
 import { indent, lines, numbered, plural, when } from './text';
 
@@ -61,18 +64,31 @@ function describeInterests(interests: Interests): string {
   return parts.length > 0 ? parts.join(' · ') : 'none';
 }
 
-const mergedPrSchema = z.object({
+/** A claim's PR that merged, or closed without merging, since a session last offered it, offered once. */
+const endedPrSchema = z.object({
   issue: issueRef,
   title: z.string(),
   pr: prRefSchema,
-  /** A pre-filled X post link. Nothing is ever posted for the donor. */
-  shareUrl: webUrl,
+  outcome: z.enum(['merged', 'closed']),
+  /** For a merged PR, a pre-filled X post link, or null. Nothing is ever posted for the donor. */
+  shareUrl: webUrl.nullable(),
 });
+type EndedPr = z.infer<typeof endedPrSchema>;
+
+function renderEndedPr(ended: EndedPr): string {
+  return ended.outcome === 'merged'
+    ? lines(`${ended.issue}  ${ended.title}`, `PR #${String(ended.pr.number)} merged: ${ended.pr.url}`, ended.shareUrl && `Share it: ${ended.shareUrl}`)
+    : lines(
+        `${ended.issue}  ${ended.title}`,
+        `PR #${String(ended.pr.number)} closed without merging: ${ended.pr.url}`,
+        `While ${ended.issue} is open and tagged, it takes claims again, so the donor can try again with claim_issue.`,
+      );
+}
 
 export const startSession = defineTool({
   audience: 'donor',
   description:
-    'Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers, unfinished claims, and PRs merged since the last session. Offer follow-ups and unfinished claims before new issues.',
+    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers on the donor's open PRs, unfinished claims, and PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
   input: z.object({
     agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
     budget: budgetSchema,
@@ -83,10 +99,16 @@ export const startSession = defineTool({
     budget: budgetSchema,
     /** Null until the donor saves interests with set_interests. */
     interests: interestsSchema.nullable(),
-    followUps: z.array(followUpSchema),
+    /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */
+    followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
+    /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
+    moreFollowUps: count,
+    /** The donor's open PRs whose reviews were read in part, with their links to read the rest. */
+    readInPart: z.array(readInPartSchema),
     /** Active and paused claims from earlier sessions. */
     unfinishedClaims: z.array(claimSummarySchema),
-    mergedPrs: z.array(mergedPrSchema),
+    /** The donor's PRs that merged, or closed without merging, since a session last offered them, each offered once. */
+    endedPrs: z.array(endedPrSchema),
   }),
   text: (out) =>
     lines(
@@ -94,17 +116,14 @@ export const startSession = defineTool({
       out.interests
         ? `Interests: ${describeInterests(out.interests)}.`
         : 'No saved interests. Ask the donor which languages, projects, and kinds of work they like, then call set_interests.',
-      out.followUps.length > 0 &&
-        `Maintainers asked for changes (${String(out.followUps.length)}):\n${indent(numbered(out.followUps, renderFollowUp), 2)}`,
+      out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
+      out.readInPart.length > 0 && renderReadInPart(out.readInPart),
       out.unfinishedClaims.length > 0 &&
         `Unfinished claims (${String(out.unfinishedClaims.length)}):\n${indent(numbered(out.unfinishedClaims, renderClaimSummary), 2)}`,
-      out.mergedPrs.length > 0 &&
-        `Merged since the last session (${String(out.mergedPrs.length)}):\n${indent(
-          numbered(out.mergedPrs, (m) =>
-            lines(`${m.issue}  ${m.title}`, `PR #${String(m.pr.number)} merged. Share it: ${m.shareUrl}`),
-          ),
-          2,
-        )}`,
+      out.endedPrs.length > 0 &&
+        `Merged or closed since the last session (${String(out.endedPrs.length)}):\n${indent(numbered(out.endedPrs, renderEndedPr), 2)}`,
+      out.endedPrs.some((ended) => ended.shareUrl !== null) &&
+        'Tell the donor, and give them each link to post on X if they want to. Post nothing for them.',
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
         'Offer the follow-ups and paused claims first, then the other unfinished claims, before new issues.',
       out.unfinishedClaims.length > 0 && 'Resume a claim with claim_issue and its issue.',
@@ -640,20 +659,25 @@ function renderWorkingClaim(claim: WorkingClaim): string {
 export const myWork = defineTool({
   audience: 'donor',
   description:
-    "List the donor's follow-ups from maintainers, submitted work ready to open as a PR, and claims in progress.",
+    "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, and claims in progress. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
   input: z.object({}),
   output: z.object({
-    followUps: z.array(followUpSchema),
+    /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */
+    followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
+    /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
+    moreFollowUps: count,
+    /** The donor's open PRs whose reviews were read in part, with their links to read the rest. */
+    readInPart: z.array(readInPartSchema),
     readyToOpen: z.array(reviewItemSchema),
     /** Active and paused claims. */
     working: z.array(workingClaimSchema),
   }),
   text: (out) =>
-    out.followUps.length + out.readyToOpen.length + out.working.length === 0
+    out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length === 0
       ? 'Nothing waiting: no follow-ups, no work to open, and no claims in progress.'
       : lines(
-          out.followUps.length > 0 &&
-            `Maintainers asked for changes (${String(out.followUps.length)}):\n${indent(numbered(out.followUps, renderFollowUp), 2)}`,
+          out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
+          out.readInPart.length > 0 && renderReadInPart(out.readInPart),
           out.readyToOpen.length > 0 &&
             `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
           out.working.length > 0 &&

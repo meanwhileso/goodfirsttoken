@@ -9,6 +9,8 @@ import {
 } from '@goodfirsttoken/core';
 import {
   beginPass,
+  delistedProjects,
+  doNotListedProjects,
   dropIssues,
   finishPass,
   getProject,
@@ -18,6 +20,7 @@ import {
   listIssues,
   listProjectsToCheck,
   listProjectsToSync,
+  listReopenedClaimPrs,
   releaseProject,
   saveIssues,
   setDelisted,
@@ -27,6 +30,7 @@ import {
 import { GitHubError } from '../github';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
 import { SyncStopped, type GitHubReader, type ServiceGitHub, type StopReason } from './github';
+import { reopenClaimPr } from './reopen';
 
 // The tagged-issue sync (spec sections 3 and 6). For each approved project
 // it reads, with the read-only service token, the open issues in its issue
@@ -124,9 +128,11 @@ interface RestRepo {
 }
 
 // https://docs.github.com/en/rest/issues/issues#list-repository-issues
+// https://docs.github.com/en/rest/issues/issues#get-an-issue
 interface RestIssue {
   number: number;
   title: string;
+  state?: string;
   labels: (string | { name?: string })[];
   assignees?: unknown[] | null;
   assignee?: unknown;
@@ -291,6 +297,23 @@ function labelsOf(issue: RestIssue): string[] {
 }
 
 /**
+ * The issue as a pass keeps it, or null when the pass leaves it out: it is
+ * a pull request, which GitHub lists with issues, has an assignee, carries
+ * none of the tags, or carries an excluded one. Labels compare without
+ * case. Whether it is open is the caller's to check.
+ */
+function keptIssue(issue: RestIssue, tags: readonly string[], excluded: readonly string[]): Listed | null {
+  if (issue.pull_request !== undefined) return null;
+  if ((issue.assignees?.length ?? 0) > 0 || (issue.assignee ?? null) !== null) return null;
+  const labels = labelsOf(issue);
+  const carried = new Set(labels.map(lower));
+  if (!tags.some((tag) => carried.has(lower(tag)))) return null;
+  const skip = new Set(excluded.map(lower));
+  if (labels.some((label) => skip.has(lower(label)))) return null;
+  return { number: issue.number, title: issue.title, labels };
+}
+
+/**
  * The open issues in the repo that carry one of the tags and none of the
  * excluded tags, and have no assignee, by number. GitHub lists issues with
  * every label given, so each tag is its own list, and the lists meet here.
@@ -301,19 +324,14 @@ async function listTagged(
   tags: readonly string[],
   excluded: readonly string[],
 ): Promise<Map<number, Listed>> {
-  const skip = new Set(excluded.map(lower));
   const found = new Map<number, Listed>();
   for (const tag of tags) {
     for (let page = 1; ; page++) {
       const query = `state=open&labels=${encodeURIComponent(tag)}&assignee=none&per_page=${String(PER_PAGE)}&page=${String(page)}`;
       const { data, hasNext } = await github.read<RestIssue[]>(`/repos/${issueRepo}/issues?${query}`);
       for (const issue of data) {
-        // The list holds pull requests too.
-        if (issue.pull_request !== undefined) continue;
-        if ((issue.assignees?.length ?? 0) > 0 || (issue.assignee ?? null) !== null) continue;
-        const labels = labelsOf(issue);
-        if (labels.some((label) => skip.has(lower(label)))) continue;
-        found.set(issue.number, { number: issue.number, title: issue.title, labels });
+        const kept = keptIssue(issue, tags, excluded);
+        if (kept !== null) found.set(issue.number, kept);
       }
       if (!hasNext || data.length === 0) break;
     }
@@ -461,6 +479,18 @@ async function tellRoom(deps: SyncDeps, issue: string, before: PrRef | null, aft
 }
 
 /**
+ * Records open again each claim's own PR on the issue, among the PRs
+ * GitHub shows linked to it and open, that the PR job recorded closed
+ * without merging, as when a stale bot's close was undone, by
+ * reopenClaimPr.
+ */
+async function reopenClaimPrs(deps: SyncDeps, issue: string, open: readonly PrRef[]): Promise<void> {
+  for (const { claimId, pr } of await listReopenedClaimPrs(deps.db, open, issue)) {
+    await reopenClaimPr(deps, { claimId, issue, pr });
+  }
+}
+
+/**
  * Drops the project's copies of issues the pass no longer found. A copy
  * with a linked PR tells the issue's room the PR is gone from the sync,
  * unless another project's copy keeps the same PR. A copy whose room didn't
@@ -478,6 +508,52 @@ async function dropMissing(deps: SyncDeps, project: string, missing: readonly Ta
     if (pr === null || keptElsewhere || (await tellRoom(deps, copy.issue, pr, null))) drop.push(copy.issue);
   }
   return dropIssues(deps.db, project, drop);
+}
+
+/**
+ * The project's copy of a tagged issue the pass read, with the open PRs
+ * `closes` names and its timeline's mentions, of those aimed at the
+ * project, as `ours` says. The linked PR the copy kept stays while it is
+ * still open and linked, and the room hears of a change first. Null when
+ * GitHub no longer has the issue.
+ */
+async function readCopy(
+  deps: SyncDeps,
+  project: ProjectRecord,
+  issue: Listed,
+  closes: readonly PrRef[],
+  before: TaggedIssue | undefined,
+  ours: (pr: PrRef) => boolean,
+  run?: SyncRun,
+): Promise<TaggedIssue | null> {
+  const issueRepo = project.settings.issueRepo ?? project.repo;
+  const mentions = await crossReferences(deps.github, issueRepo, issue.number);
+  if (mentions === null) return null;
+  const ref = `${issueRepo}#${String(issue.number)}`;
+  const kept = before?.linkedPr ?? null;
+  const all = linksOf(closes, mentions);
+  const links = all.filter((link) => ours(link.pr));
+  countLinks(run, links, all.length - links.length);
+  const found = chooseLink(kept, links);
+  await reopenClaimPrs(
+    deps,
+    ref,
+    links.map((link) => link.pr),
+  );
+  // When the room didn't take the change, the copy keeps what the room
+  // holds, and the next pass tries again.
+  const told = await tellRoom(deps, ref, kept, found?.pr ?? null);
+  const linkedPr = told ? (found?.pr ?? null) : kept;
+  const foundBy = told ? found?.foundBy : before?.linkedPrFoundBy;
+  return {
+    issue: ref,
+    project: project.repo,
+    title: issue.title,
+    labels: issue.labels,
+    linkedPr,
+    ...(linkedPr === null || foundBy === undefined ? {} : { linkedPrFoundBy: foundBy }),
+    syncedAt: deps.now(),
+  };
 }
 
 /**
@@ -522,29 +598,8 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
         for (const issue of batch) {
           const closes = closing.get(issue.number);
           if (closes === undefined) continue;
-          const mentions = await crossReferences(github, issueRepo, issue.number);
-          if (mentions === null) continue;
-          const ref = `${issueRepo}#${String(issue.number)}`;
-          const before = cached.get(keyOf(issue.number));
-          const kept = before?.linkedPr ?? null;
-          const all = linksOf(closes, mentions);
-          const links = all.filter((link) => ours(link.pr));
-          countLinks(run, links, all.length - links.length);
-          const found = chooseLink(kept, links);
-          // When the room didn't take the change, the copy keeps what the
-          // room holds, and the next pass tries again.
-          const told = await tellRoom(deps, ref, kept, found?.pr ?? null);
-          const linkedPr = told ? (found?.pr ?? null) : kept;
-          const foundBy = told ? found?.foundBy : before?.linkedPrFoundBy;
-          saves.push({
-            issue: ref,
-            project: project.repo,
-            title: issue.title,
-            labels: issue.labels,
-            linkedPr,
-            ...(linkedPr === null || foundBy === undefined ? {} : { linkedPrFoundBy: foundBy }),
-            syncedAt: now(),
-          });
+          const copy = await readCopy(deps, project, issue, closes, cached.get(keyOf(issue.number)), ours, run);
+          if (copy !== null) saves.push(copy);
         }
       } finally {
         await saveIssues(db, saves);
@@ -570,6 +625,73 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
     if (error instanceof ProjectProblem) return { outcome: 'skipped', problem: error.message };
     throw error;
   }
+}
+
+/**
+ * Reads one issue again, by a pass's rules, for each project that keeps a
+ * copy of it and asks for help: approved, and neither on the do-not-list
+ * nor delisted. The copy stays, with its linked PR read again, while GitHub
+ * shows the issue open, tagged, with no excluded tag and no assignee. Any
+ * other answer about the issue drops the copy, as the pass's end would. The
+ * PR job calls it when a claim's PR on the issue closed without merging,
+ * so an issue still open and tagged takes claims again at once.
+ *
+ * True once every copy that asks for help was read again, or GitHub said
+ * the issue is gone, which leaves the copy to the next pass. False when
+ * one waits: another run holds its project, or GitHub refused the read. The
+ * PR job then tries again on its next run. Throws SyncStopped when the run
+ * has to stop, as when it made all its calls or the budget ran out.
+ */
+export async function rereadIssue(deps: SyncDeps, issue: string): Promise<boolean> {
+  const copies = await listIssueCopies(deps.db, issue);
+  if (copies.length === 0) return true;
+  const repos = copies.map((copy) => copy.project);
+  const [stopped, delisted] = await Promise.all([doNotListedProjects(deps.db, repos), delistedProjects(deps.db, repos)]);
+  let landed = true;
+  for (const copy of copies) {
+    const project = await getProject(deps.db, copy.project);
+    if (project?.status !== 'approved') continue;
+    if (stopped.has(lower(project.repo)) || delisted.has(lower(project.repo))) continue;
+    const until = deps.now() + HOLD_MS;
+    if (!(await holdProject(deps.db, project.repo, deps.now(), until))) {
+      landed = false;
+      continue;
+    }
+    try {
+      await rereadCopy(deps, project, copy);
+    } catch (error) {
+      if (error instanceof GitHubError && (error.status === 404 || error.status === 410)) continue;
+      if (!(error instanceof GitHubError) && !(error instanceof ProjectProblem)) throw error;
+      console.warn(`${copy.issue} was not read again for ${project.repo}. The PR job's next run tries again. ${error.message}`);
+      landed = false;
+    } finally {
+      await releaseProject(deps.db, project.repo, until);
+    }
+  }
+  return landed;
+}
+
+async function rereadCopy(deps: SyncDeps, project: ProjectRecord, copy: TaggedIssue): Promise<void> {
+  const issueRepo = project.settings.issueRepo ?? project.repo;
+  const hash = copy.issue.lastIndexOf('#');
+  const number = Number(copy.issue.slice(hash + 1));
+  // A copy in a repo the project no longer keeps its issues in is the pass's to drop.
+  if (lower(copy.issue.slice(0, hash)) !== lower(issueRepo)) return;
+  const { data } = await deps.github.read<RestIssue>(`/repos/${issueRepo}/issues/${String(number)}`);
+  if (typeof data.state !== 'string') throw notGitHub(issueRepo);
+  // An issue moved to another repo answers from there, and is the pass's to drop.
+  if (data.number !== number) return;
+  const listed = data.state === 'open' ? keptIssue(data, project.settings.tags, project.settings.excludedTags) : null;
+  if (listed === null) {
+    await dropMissing(deps, project.repo, [copy]);
+    return;
+  }
+  // An issue GitHub no longer has is missing from its closing references.
+  const closes = (await closingReferences(deps.github, issueRepo, [number])).get(number);
+  if (closes === undefined) return;
+  const projectRepos = new Set([lower(project.repo), lower(issueRepo)]);
+  const read = await readCopy(deps, project, listed, closes, copy, (pr) => projectRepos.has(lower(pr.repo)));
+  if (read !== null) await saveIssues(deps.db, [read]);
 }
 
 /**

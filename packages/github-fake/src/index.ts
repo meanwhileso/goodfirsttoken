@@ -22,6 +22,7 @@ import {
   canPush,
   closeIssue,
   commitOnBranch,
+  dismissReview,
   findAccount,
   findIssue,
   findRepoByFullName,
@@ -33,7 +34,9 @@ import {
   newId,
   openIssue,
   openPull,
+  reopenIssue,
   roleOf,
+  unlabelIssue,
   updatePullBranch,
   type FakeState,
   type IssueRecord,
@@ -101,7 +104,14 @@ export interface GitHubFake {
   // Things maintainers do on GitHub, for tests to set up what the app sees.
   mergePullRequest: (repo: string, number: number, by: string) => void;
   closePullRequest: (repo: string, number: number, by: string) => void;
-  reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
+  // Opens a PR closed without merging again, as a stale bot's close is
+  // undone. A merged PR can't open again.
+  reopenPullRequest: (repo: string, number: number, by: string) => void;
+  // Reviews a PR, and returns the review's ID. A PENDING review is one its
+  // author hasn't submitted, which only they see.
+  reviewPullRequest: (repo: string, number: number, review: ReviewInput) => number;
+  // A maintainer dismisses a submitted review.
+  dismissReview: (repo: string, number: number, reviewId: number) => void;
   // Commits these files, path to text, to the repo's default branch as
   // `by`, or to `branch`, and returns the commit's ID. A file given null is
   // deleted. A file is 100644 unless `modes` gives it another mode. For a
@@ -118,6 +128,7 @@ export interface GitHubFake {
   // Opens an issue as `by`, with the labels given, and returns its number.
   openIssue: (repo: string, issue: { title: string; body?: string; labels?: string[]; by: string }) => number;
   labelIssue: (repo: string, number: number, label: string, by: string) => void;
+  unlabelIssue: (repo: string, number: number, label: string, by: string) => void;
   assignIssue: (repo: string, number: number, assignee: string, by: string) => void;
   closeIssue: (repo: string, number: number, by: string) => void;
   // Opens a PR as `by`, from a branch in the repo when they can push there
@@ -333,7 +344,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     },
     fetch,
     tokenFor: (login, scopes = ['public_repo']) => {
-      if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization. Tokens belong to people.`);
+      if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization or a bot. Tokens belong to people.`);
       return mintToken(login, scopes, null);
     },
     reset: () => {
@@ -346,8 +357,12 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     closePullRequest: (repo, number, by) => {
       closeIssue(state, getPull(repoNamed(repo), number), by, null, now().toISOString());
     },
-    reviewPullRequest: (repo, number, review) => {
-      addReview(state, repoNamed(repo), number, review, now().toISOString());
+    reopenPullRequest: (repo, number, by) => {
+      reopenIssue(state, getPull(repoNamed(repo), number), by, now().toISOString());
+    },
+    reviewPullRequest: (repo, number, review) => addReview(state, repoNamed(repo), number, review, now().toISOString()).id,
+    dismissReview: (repo, number, reviewId) => {
+      dismissReview(repoNamed(repo), number, reviewId);
     },
     commitFiles: (repo, files, by, options = {}) => {
       const record = repoNamed(repo);
@@ -373,6 +388,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       ).number,
     labelIssue: (repo, number, label, by) => {
       labelIssue(state, repoNamed(repo), issueNamed(repo, number), label, by, now().toISOString());
+    },
+    unlabelIssue: (repo, number, label, by) => {
+      unlabelIssue(state, repoNamed(repo), issueNamed(repo, number), label, by, now().toISOString());
     },
     assignIssue: (repo, number, assignee, by) => {
       assignIssue(state, issueNamed(repo, number), assignee, by, now().toISOString());
