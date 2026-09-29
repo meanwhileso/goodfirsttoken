@@ -45,6 +45,8 @@ const BATCH = 50;
 export const REVIEWS_READ = 10;
 /** The comments read on each of those reviews. */
 export const COMMENTS_READ = 10;
+/** The longest file path a follow-up keeps. */
+const MAX_PATH = 4096;
 
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreview
@@ -140,17 +142,18 @@ function reviewerOf(author: Actor | null | undefined, prAuthor: string): string 
  * What reviewers wrote on an open PR, as follow-ups: the text of each
  * review that comments or asks for changes, and each comment on a line, in
  * any review but a dismissed one. An approval's own text asks for nothing.
- * Each text is folded to one line and cut. Empty text, and anything GitHub
- * gives in another form, is left out.
+ * Each text, and each file's path, is folded to one line and cut. Empty
+ * text, and anything GitHub gives in another form, is left out.
  */
 function followUpsOf(pull: PullState): NewFollowUp[] {
   const prAuthor = pull.author?.login;
   if (typeof prAuthor !== 'string') return [];
   const found: NewFollowUp[] = [];
-  const add = (followUp: Omit<NewFollowUp, 'body'> & { body: string }) => {
+  const add = (followUp: NewFollowUp) => {
     const checked = followUpRecordSchema.omit({ claimId: true, readAt: true, shownAt: true, answeredAt: true }).safeParse({
       ...followUp,
       body: foldUntrusted(followUp.body, MAX_FOLLOW_UP_TEXT),
+      path: followUp.path === null ? null : foldUntrusted(followUp.path, MAX_PATH),
     });
     if (checked.success) found.push(checked.data);
   };

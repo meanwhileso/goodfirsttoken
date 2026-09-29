@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { adminRemoveProject } from '../../src/admin/actions';
 import { createProject, getIssue, getPr, listClaimFollowUps, saveIssues, savePerson, setDelisted } from '../../src/db';
 import { issueRoom } from '../../src/rooms/issue-room';
+import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
 import { ALLOWANCES } from '../../src/sync/scheduled';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
@@ -110,13 +111,16 @@ async function donor(login: string): Promise<Donor> {
   return d;
 }
 
-/** The PR job's run, with its calls marked as the job's. */
-async function runPrJob() {
+/** A scheduled job's run, with its calls marked as the job's. */
+async function asJob<T>(run: () => Promise<T>): Promise<T> {
   const before = github.calls.length;
-  const run = await followPrs(jobDeps(github, ALLOWANCES.prs));
+  const result = await run();
   for (let i = before; i < github.calls.length; i++) jobCalls.add(i);
-  return run;
+  return result;
 }
+
+const runPrJob = () => asJob(() => followPrs(jobDeps(github, ALLOWANCES.prs)));
+const runSync = () => asJob(() => syncTaggedIssues(jobDeps(github)));
 
 async function tagged(): Promise<string> {
   const title = 'Keep the trailing slash in rewrites';
@@ -277,6 +281,9 @@ describe('follow-ups', () => {
     const { issue, claimId, pr } = await openedPr(priya);
     github.reviewPullRequest(APP, pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'Please add a test.' });
     await runPrJob();
+    // The sync sees the PR linked to the issue, as it would on its cron.
+    await runSync();
+    const linked = (await getIssue(env.DB, APP, issue))?.linkedPr;
     const refusedFirst = await call(kenji, 'claim_issue', { sessionId: kenji.sessionId, issue });
     github.closePullRequest(APP, pr.number, BY);
 
@@ -285,6 +292,7 @@ describe('follow-ups', () => {
     const fix = await submit(priya, claimId, { 'src/rewrite.test.ts': 'test("slash", () => {});\n' });
     const claimed = await call(kenji, 'claim_issue', { sessionId: kenji.sessionId, issue });
 
+    expect(linked).toEqual(pr);
     expect(refusalOf(refusedFirst)).toBe('pr_exists');
     expect(run).toMatchObject({ closed: 1, stopped: null });
     expect(next.structuredContent).toMatchObject({ followUps: [], mergedPrs: [] });

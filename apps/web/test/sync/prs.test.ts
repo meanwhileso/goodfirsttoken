@@ -2,7 +2,7 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import type { ClaimRecord, PrRef } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { addPr, getIssue, getPr, listClaimFollowUps } from '../../src/db';
+import { addPr, getIssue, getPr, listClaimFollowUps, listWaitingIssues } from '../../src/db';
 import { issueRoom, type IssueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
@@ -181,7 +181,7 @@ describe('the PR job', () => {
   });
 
   test('a spent GraphQL budget stops the job before it reads, and changes nothing', async () => {
-    const { claim, pr } = await claimWithPr();
+    const { issue, claim, pr } = await claimWithPr();
     const other = await claimWithPr();
     github.closePullRequest(APP, pr.number, BY);
     github.reviewPullRequest(APP, other.pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'Add a test.' });
@@ -193,7 +193,8 @@ describe('the PR job', () => {
     expect(github.calls.map((call) => call.operation)).toEqual(['GET /rate_limit']);
     expect(await getPr(db, claim.id)).toMatchObject({ state: 'open' });
     expect(await listClaimFollowUps(db, other.claim.id)).toEqual([]);
-    expect((await room(other.issue).history()).map((e) => e.kind)).not.toContain('pr_closed');
+    expect((await room(issue).history()).map((e) => e.kind)).not.toContain('pr_closed');
+    expect((await room(issue).snapshot()).prs).toEqual([pr]);
   });
 });
 
@@ -223,6 +224,7 @@ describe('a PR closed without merging', () => {
       kind: 'pr_closed',
       text: `PR ${APP}#${String(pr.number)} closed without merging`,
     });
+    expect((await listWaitingIssues(db, Date.now())).map((entry) => entry.copy.issue)).toContain(ref(issue));
     expect(await claimAs(kenji, issue)).toMatchObject({ ok: true, created: true });
     // The issue is read again with the service token, inside the job's own run.
     expect(callsTo(github, 'GET /repos/{owner}/{repo}/issues/{issue_number}')).toHaveLength(1);

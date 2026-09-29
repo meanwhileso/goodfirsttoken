@@ -56,8 +56,13 @@ export const followUpRecordSchema = z.object({
   commentId: z.string().min(1).max(100),
   reviewer: githubLogin,
   body: followUpText,
-  /** The file an inline comment is on, or null for a review's own text. */
-  path: z.string().min(1).max(4096).nullable(),
+  /** The file an inline comment is on, folded to one line too, or null for a review's own text. */
+  path: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((path) => foldUntrusted(path, 4096) === path, 'must be one folded line')
+    .nullable(),
   /** The review or comment on GitHub. */
   url: webUrl,
   /** When the reviewer wrote it, as GitHub gives it. */

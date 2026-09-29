@@ -54,10 +54,10 @@ function toFollowUp(row: FollowUpRow): FollowUpRecord {
 export type NewFollowUp = Omit<FollowUpRecord, 'claimId' | 'readAt' | 'shownAt' | 'answeredAt'>;
 
 /**
- * Stores what the PR job read on a claim's PR at `readAt`. A review or
- * comment read before, by its comment ID, stays as it was first read, shown
- * or answered. The claim must be in the claims table. Returns how many are
- * new.
+ * Stores what the PR job read on a claim's PR at `readAt`, in one
+ * statement, in the order given. A review or comment read before, by its
+ * comment ID, stays as it was first read, shown or answered. The claim must
+ * be in the claims table. Returns how many are new.
  */
 export async function saveFollowUps(
   db: D1Database,
@@ -69,18 +69,19 @@ export async function saveFollowUps(
     mustParse(followUpRecordSchema, { ...followUp, claimId, readAt, shownAt: null, answeredAt: null }, 'follow-up'),
   );
   if (rows.length === 0) return 0;
-  const results = await db.batch(
-    rows.map((row) =>
-      db
-        .prepare(
-          `INSERT INTO follow_ups (claim_id, comment_id, reviewer, body, path, url, written_at, read_at, shown_at, answered_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-           ON CONFLICT (claim_id, comment_id) DO NOTHING`,
-        )
-        .bind(row.claimId, row.commentId, row.reviewer, row.body, row.path, row.url, row.writtenAt, row.readAt),
-    ),
-  );
-  return results.reduce((sum, result) => sum + result.meta.changes, 0);
+  // The rows go in as one JSON array, so any number of them takes one
+  // query. `WHERE true` lets SQLite read ON CONFLICT after a SELECT.
+  const result = await db
+    .prepare(
+      `INSERT INTO follow_ups (claim_id, comment_id, reviewer, body, path, url, written_at, read_at, shown_at, answered_at)
+       SELECT ?1, json_extract(j.value, '$.commentId'), json_extract(j.value, '$.reviewer'), json_extract(j.value, '$.body'),
+         json_extract(j.value, '$.path'), json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'), ?2, NULL, NULL
+       FROM json_each(?3) j WHERE true ORDER BY j.key
+       ON CONFLICT (claim_id, comment_id) DO NOTHING`,
+    )
+    .bind(mustParse(id, claimId, 'claimId'), checkTime(readAt, 'readAt'), JSON.stringify(rows))
+    .run();
+  return result.meta.changes;
 }
 
 /** A follow-up waiting for the donor, with what the tools show of its claim. */

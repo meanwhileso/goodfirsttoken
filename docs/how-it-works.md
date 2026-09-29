@@ -463,8 +463,10 @@ same answer. Each issue's room holds its claims and runs their timers, as
   holds no slot. To withdraw that work, close the PR on GitHub.
 - A `released` or `expired` claim refuses every event. `pr_opened` is final.
 - The state machine has no fact about whether the claim's PR is still open.
-  Refusing updates and fixes once the PR merged or closed, with `pr_closed`,
-  is left to the code that tracks PRs.
+  A claim stays `pr_opened` once its PR merges or closes, since that is a
+  fact about the PR, which [PRs](#prs) records. The issue room refuses the
+  claim's updates and fixes from then on, with `pr_closed`, under
+  [The issue room](#the-issue-room).
 - A refusal carries the claim as of `now`, which is the one to store. A late
   update is refused and leaves the claim `expired`.
 - A malformed claim, event, or time is refused as `invalid_input`, with the
@@ -560,7 +562,8 @@ their work, open their PRs, and release them through it.
   10 minutes, and the room pauses a claim only after 30 minutes with no post,
   so a claim whose agent keeps to the 10 minutes never pauses.
 - A post to an expired or released claim is refused, as under
-  [Claims](#claims).
+  [Claims](#claims). So is a post to a claim whose PR merged or closed, with
+  `pr_closed`, under When a claim's PR ends below.
 - While an open PR is linked to the issue, the answer to each claimant's
   post carries its link, unless the PR is the claimant's own.
 - A subagent's post carries its job, under the same claim.
@@ -683,6 +686,21 @@ PR it keeps for the issue, and when that one goes, under
 merges or closes, under [PRs](#prs). The room keeps each PR once, however
 many ways it hears of it. Once none is open, the issue takes claims again.
 
+**When a claim's PR ends.** The PR job tells the room when a claim's own PR
+merged, or closed without merging, as GitHub shows it.
+
+- The room forgets the PR, so the issue takes claims again once no other PR
+  is open on it. The claim held no slot since its PR opened, so none frees.
+- It announces the outcome once, with a `pr_merged` or `pr_closed` event,
+  timed when the room heard. Hearing it again adds nothing.
+- The claim stays `pr_opened`. It takes no more posts or submits: each is
+  refused with `pr_closed`, saying whether the PR merged or closed. For a
+  PR closed without merging, the refusal says the issue takes claims again
+  while it is open and tagged, and the claimant can claim it again, as
+  anyone can.
+- A PR the room holds for no claim of its own, or for another claim, is
+  forgotten, and announces nothing.
+
 **Events.** Each post and each change of a claim's state is a
 [feed event](#feed-events), stored in the room, sent to its watchers, and
 sent to the feed queue, as [Live feeds](#live-feeds) says. The history
@@ -695,6 +713,8 @@ survives a restart.
 | `paused` | `paused: no update for 30 minutes` |
 | `submitted` | `submitted the work`, then `submitted more work` for each submit after the first |
 | `pr_opened` | `opened PR owner/name#57` |
+| `pr_merged` | `PR owner/name#57 merged` |
+| `pr_closed` | `PR owner/name#57 closed without merging` |
 | `released` | `released: ` and the reason |
 | `expired` | `expired: no submit within 24 hours`, or `expired: no PR within 7 days of the submit` |
 
@@ -775,20 +795,66 @@ service token under [Calls to GitHub](#calls-to-github).
 
 - A PR that merged is recorded merged, and one closed without merging is
   recorded closed, each at the time GitHub gives. The claim's issue room is
-  told first, and forgets the PR, so the issue takes claims again once no PR
-  is open on it.
+  told first, and announces it, as under When a claim's PR ends in
+  [the issue room](#the-issue-room).
+- A PR closed without merging then has its issue read again, at once, by
+  the sync's rules under [Tagged issues](#tagged-issues), for each project
+  that keeps a copy of it and asks for help: approved, and neither on the
+  do-not-list nor delisted. While GitHub shows the issue open, carrying one
+  of the project's tags and none of its excluded tags, with no assignee,
+  the copy stays, and its linked PR is read again, so the issue takes
+  claims at once when no other PR is open on it. Closed, untagged, given an
+  excluded tag, or assigned, the copy is dropped, as the pass's end would
+  drop it, and the issue takes no claims. A project another run holds is
+  left to that run, and GitHub refusing the read leaves the copy to the
+  next pass.
+- A PR that merged leaves its issue to the next sync, which drops it once
+  the merge closed it.
 - When the room doesn't take it, the PR stays open in the table, and the
   next run tries again.
 - A PR GitHub no longer shows, as when its repo went private, stays open, and
   the next run reads it again.
 - The job reads open PRs only, so a PR recorded closed that reopens on GitHub
   stays closed here.
-- It makes no `pr_merged` or `pr_closed` feed event yet.
 - It stops early the way the sync does, under The budget in
   [Tagged issues](#tagged-issues), and saves what it read first. With no
   open PR, it asks GitHub nothing.
 - When GitHub refuses its query, the job stops, and the next run reads the
   PRs again.
+
+**Follow-ups.** The same query reads, for each PR still open, its 10 newest
+reviews, leaving out a pending or dismissed one, and the first 10 comments
+on lines in each. What a reviewer wrote there is kept as a follow-up for the
+claim's donor, once.
+
+- A reviewer is anyone but the PR's author, who is the donor. Good First
+  Token posts on GitHub only as the donor, with the donor's own token, so
+  its posts are left out too. A GitHub App's bot is no reviewer, known by
+  GitHub's `Bot` type or a login that ends in `[bot]`. An account GitHub no
+  longer has is left out.
+- Each review that comments or asks for changes is a follow-up, with its
+  text. An approval's own text asks for nothing, and isn't one. Each
+  comment on a line is a follow-up, with its file, in any review but a
+  dismissed one, an approval included.
+- The text is untrusted repo text. Before it is kept, each run of line
+  breaks, tabs, control characters, Unicode line and paragraph separators,
+  marks that reorder text, and other white space becomes one space, and
+  the ends are trimmed, so it is one line. Text longer than 1,000
+  characters is cut to fit, whole characters only, and ends in `...`.
+  Empty text is no follow-up. A comment's file path is folded the same way.
+- A follow-up is known by GitHub's ID for the review or comment. Reading it
+  again changes nothing, so an edit on GitHub after the first read isn't
+  read again.
+- A review or comment beyond the 10 newest reviews, or the first 10
+  comments of one, isn't read. A PR that gets more than 10 reviews between
+  two runs loses the oldest of them.
+- A PR that merged or closed has its reviews left unread.
+- Follow-ups are kept for every open PR, and shown to the donor only as
+  under [The donor's tools](#the-donors-tools).
+
+**Shared once.** Each merged PR records when a session first offered its
+donor a link to share it, under [The donor's tools](#the-donors-tools), so
+no later session offers it again.
 
 ## Projects
 
@@ -1365,8 +1431,10 @@ a renamed or moved repo still counts, under Delisting below.
   tells the issue's room, which refuses a claim with `pr_exists`. Once the
   PR merges, closes, or stops being linked, the next read clears it, tells
   the room, and the issue takes claims again if it is still open and tagged.
-  When the kept PR goes and another is linked, the room hears of the new
-  one first, so it always has one while any is open.
+  When a claim's own PR closes without merging, the PR job makes that read
+  at once, under [PRs](#prs). When the kept PR goes and another is linked,
+  the room hears of the new one first, so it always has one while any is
+  open.
 - A claim's own PR that is still open in the [PRs](#prs) table is the PR
   job's to close in the claim's own issue's room, so the sync leaves that to
   it there. In the room of any other issue the PR mentions, the sync closes
@@ -1501,9 +1569,12 @@ maintainer's token or other donor's ever does their work.
 - A claim whose project is on the [do-not-list](#crawl-candidates), or one
   the sync delisted, under Delisting in [Tagged issues](#tagged-issues),
   working or paused, isn't among them, since no more work goes there.
-- The answer's follow-ups, a maintainer asking for changes on one of the
-  donor's PRs, come first when there are any. The list is empty until #17
-  fills it. So is the list of PRs merged since the last session.
+- The answer's follow-ups, what reviewers wrote on the donor's open PRs,
+  come first when there are any, under Follow-ups below. The agent offers
+  them before anything new.
+- The answer also lists the donor's PRs that merged since a session last
+  offered them, each with a link to post it on X, under Sharing a merged PR
+  below.
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions.
 - `my_work` lists the same claims in progress, and those on a project on
@@ -1513,10 +1584,56 @@ maintainer's token or other donor's ever does their work.
   and tells the agent to release it with `release_claim`. A claim on a
   delisted project is titled by its issue alone, like `owner/repo#n`,
   since nothing cached from the repo shows. It also lists the donor's work
-  waiting to open as a PR, under The review queue below. Its follow-ups are
-  an empty list until #17 fills it.
+  waiting to open as a PR, under The review queue below, and the same
+  follow-ups `start_session` gives.
 - A session belongs to the donor who started it. Another donor who names it
   finds no session, and is refused with `not_found`.
+
+**Follow-ups.** A follow-up is a review or a comment on a line that a
+reviewer wrote on one of the donor's open PRs, as the PR job read it, under
+Follow-ups in [PRs](#prs).
+
+- `start_session` and `my_work` list the follow-ups that wait, oldest
+  first, at most 20. A follow-up waits until a submit to its claim answers
+  it. It shows only while `submit_work` could take a fix for it: its PR is
+  open in the PRs table, its project is approved and neither on the
+  do-not-list nor delisted, and the donor isn't blocked. The others stay
+  stored, and show again once that holds, as when a paused project
+  resumes.
+- Each names the claim, the issue and its title, the PR, the reviewer, the
+  file a comment on a line is on, the link to it on GitHub, when it was
+  written, the claim's branch, and the commit to send every changed file
+  from: the start commit, or the head a submit last named with `onto`.
+- The reviewer's text is quoted as their own words, one line after `>`,
+  under a note that says it is a reviewer's request from GitHub to weigh
+  with the donor and the repo's own rules, and holds no instructions for
+  the agent. A text that isn't one folded line is never sent.
+- Listing a follow-up marks it shown. A submit to the claim that lands
+  answers every follow-up on it shown before the submit. One the PR job
+  read since, which no tool has shown, still waits, so a donor always sees
+  a review before a submit answers it.
+- A fix goes onto the claim's branch, and so onto its PR, through
+  `submit_work`, under Submitting below. When someone pushed to the branch,
+  the submit is refused with `branch_moved` and goes on with `onto`.
+- Once the PR merges or closes, its follow-ups show no more.
+
+**Sharing a merged PR.** Once the PR job records a claim's PR merged, the
+donor's next `start_session` lists it, once, with a link to post it on X.
+
+- The link is X's post form, `https://x.com/intent/tweet`, filled with
+  `My PR to owner/repo merged. claude-code wrote it with my spare tokens,
+  through Good First Token.`, with the claim's agent, and the PR's link on
+  GitHub. It names only what GitHub and the live feeds show anyone. The
+  PR's title stays out, since a repo's text could mention someone on X.
+- The agent gives the donor the link. Nothing is ever posted for anyone.
+- A PR is offered once: the session that lists it marks it offered, in the
+  same statement, so two sessions at once never both list it.
+- A PR a blocked donor's claim opened, one the do-not-list names, as for
+  the merged PRs a project page lists, and one on a project the sync
+  delisted, isn't offered while that holds, and waits.
+- PRs that merged before the change that brought the link, and before
+  their donor's latest session, count as offered, since that session was
+  the next one after the merge.
 
 **Which issues take the donor's claim.** An issue takes a donor's new claim
 when all of these hold, the rules of
@@ -1742,8 +1859,12 @@ never reaches the tool.
   sync gave, as `my_work` gives it. It refuses a claim its room holds as
   released or expired with
   `claim_released` or `claim_expired`, and a claim whose PR the PRs table
-  shows merged or closed with `pr_closed`. None of these makes a call to
-  GitHub.
+  shows merged or closed with `pr_closed`, which says which, and for a PR
+  closed without merging, that the issue takes claims again while it is
+  open and tagged. None of these makes a call to GitHub. A claim whose PR
+  the room heard of ending first, before the table records it, is refused
+  by the room with `pr_closed` once the commit lands, and the commit stays
+  on the branch.
 - Then, before anything is written, it reads the issue on GitHub with the
   donor's token and checks it as claiming does: GitHub shows it, it is an
   open issue, it carries one of the project's tags and none of its excluded
@@ -1869,7 +1990,8 @@ never reaches the tool.
   rule under [Tagged issues](#tagged-issues). The PRs the room knows of
   count too, and the claim's own PR doesn't.
 - A claim whose PR is open takes the commit onto that PR's branch, and no
-  second PR opens.
+  second PR opens. The submit answers the claim's follow-ups a tool showed
+  before it, under Follow-ups above.
 - Otherwise the PR opens by itself when the project's PR mode is
   `automatic`, no other PR is open on the issue, no path the branch
   changes is under `.github/workflows/`, compared without case, and every
@@ -2549,8 +2671,9 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
 
 The codes are defined in `packages/core`. `nextClaimState` returns the first
 four and `invalid_input`. The issue room returns those, and `pr_exists`,
-`issue_full`, `not_claim_owner`, and `not_found`. `requirePermission` returns
-`not_claim_owner`, `not_maintainer`, and `not_admin`. The maintainer's tools
+`issue_full`, `pr_closed`, `not_claim_owner`, and `not_found`.
+`requirePermission` returns `not_claim_owner`, `not_maintainer`, and
+`not_admin`. The maintainer's tools
 return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 `listed_from_policy`, `label_not_created`, `invalid_settings`,
 `project_not_open`, `not_admin`, and `not_found`. The admins' tools return
@@ -2641,8 +2764,9 @@ claim ID, a kind, the text, and for a subagent's line, its job.
   mark a claim's state changes.
 - `pr_merged` and `pr_closed` are the outcome of the claim's PR. They are PR
   facts, and the claim stays `pr_opened`.
-- The issue room makes every kind but `pr_merged` and `pr_closed`, with the
-  texts [the issue room](#the-issue-room) lists. Nothing makes those two yet.
+- The issue room makes every kind, with the texts
+  [the issue room](#the-issue-room) lists. It makes `pr_merged` and
+  `pr_closed` when the PR job tells it, under When a claim's PR ends there.
 - On the feed queue, an event travels with the claimant's GitHub ID and the
   project's code repo, which pick its feeds. The event itself carries
   neither.
@@ -3139,8 +3263,10 @@ side. What it shows, and in what order, is in
   `working` again.
 - A released or expired claim leaves the lanes, live too, and frees its
   slot. The timeline keeps its release and reason, or its expiry.
-- Once the claim's PR merges or closes, its lane says so. Nothing sends
-  those events yet, as under [Feed events](#feed-events).
+- Once the claim's PR merges or closes, its lane says so, live, from the
+  room's `pr_merged` or `pr_closed` event: `merged`, or `PR closed`, linked
+  to the PR. The lane stays, since the claim stays `pr_opened`, and the
+  timeline shows the event.
 
 **The slots** are the claims per issue of the project the page follows,
 each a ring, filled while a claim takes it.
@@ -3167,9 +3293,11 @@ each a ring, filled while a claim takes it.
   what a screen reader reads, or to what a person selects and copies.
 - While a PR is open on the issue, claims are closed. The rings turn gray,
   the pane says claims are closed with the PR's link, and every lane says
-  the PR is open, with its link. A claim's PR closes them live. The room
-  makes no event for a PR from anyone else, and the sync's linked PR is in
-  the cache, so the page shows those when it loads.
+  the PR is open, with its link. A claim's PR closes them live, and its
+  merge or close opens them again live, when no other PR is open and the
+  issue still takes claims. The room makes no event for a PR from anyone
+  else, and the sync's linked PR is in the cache, so the page shows those
+  when it loads.
 - Otherwise the rings turn gray too, and the pane says why: the project
   isn't taking claims, or the issue isn't among the project's open tagged
   issues. The project comes first: when it isn't taking claims, the pane
@@ -3266,6 +3394,9 @@ Each limit the schemas enforce, other than those under project settings:
 | Policy quote | 2,000 characters | Us |
 | Pause, reject, block, and do-not-list reasons | 500 characters | Us |
 | Interests | 20 per list, 50 characters each | Us |
+| A reviewer's text in a follow-up | 1,000 characters, folded to one line | Us |
+| Follow-ups `start_session` and `my_work` list at once | 20 | Us |
+| Reviews the PR job reads on an open PR each run | The newest 10, with the first 10 comments on lines of each | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
 | Suggestions left out with `exclude` | 100 | Us |
 | Picks waiting in a session's queue | 20 | Us |
@@ -3474,7 +3605,9 @@ A deployment can serve them from a static host, on a hostname of its own.
 - Reads that act for no one run with the read-only service token, the
   `GH_SERVICE_TOKEN` secret: the sync, the PR job, a maintainer's refresh,
   and the policy crawler. They read public data only, and never with a
-  person's token. With
+  person's token. The PR job reads each open PR's state, author, reviews,
+  and comments on lines in one query, and reads an issue again, as the sync
+  does, when a claim's PR on it closed without merging. With
   no service token, they read nothing, and the log names the secret.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
   names the one token to revoke. Signing out, Disconnect, and an agent's
