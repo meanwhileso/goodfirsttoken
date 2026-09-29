@@ -110,6 +110,14 @@ interface WaitingRow extends FollowUpRow {
 }
 
 /**
+ * When a follow-up on a claim `c` shows, over its PR `pr` and its project
+ * `p`: the PR is open in the PRs table, the project asks for help, and the
+ * claimant isn't blocked. Exactly then submit_work would take a fix.
+ */
+const SHOWS = `pr.state = 'open' AND ${ASKING_FOR_HELP}
+  AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)`;
+
+/**
  * The donor's follow-ups no submit answered yet, oldest first, at most
  * `limit` of them. Each is on one of their claims whose PR the PRs table
  * shows open, with its submitted work, while its project asks for help
@@ -127,9 +135,7 @@ export async function listWaitingFollowUps(db: D1Database, person: number, limit
        JOIN prs pr ON pr.claim_id = c.id
        JOIN submissions sub ON sub.claim_id = c.id
        JOIN projects p ON p.repo = c.project
-       WHERE c.github_id = ?1 AND f.answered_at IS NULL AND pr.state = 'open'
-         AND ${ASKING_FOR_HELP}
-         AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)
+       WHERE c.github_id = ?1 AND f.answered_at IS NULL AND ${SHOWS}
        ORDER BY f.written_at, f.rowid
        LIMIT ?2`,
     )
@@ -142,6 +148,55 @@ export async function listWaitingFollowUps(db: D1Database, person: number, limit
     pr: mustParse(prRefSchema, prFromColumns(row.pr_repo, row.pr_number, row.pr_url), 'pr'),
     branch: { repo: mustParse(repoName, row.branch_repo, 'branch.repo'), name: row.branch },
     base: mustParse(commitSha, row.base, 'base'),
+  }));
+}
+
+/** One of the donor's open PRs whose reviews the PR job read in part. */
+export interface ReadInPartPr {
+  claimId: string;
+  issue: string;
+  pr: PrRef;
+  reviews: number;
+  reviewsRead: number;
+  commentsLeftOut: number;
+}
+
+/**
+ * The donor's open PRs whose reviews the PR job's latest read took in
+ * part, in the order they opened, when their follow-ups would show: more
+ * reviews than the read took, or comments on lines of a maintainer's
+ * review it left out.
+ */
+export async function listReadInPart(db: D1Database, person: number): Promise<ReadInPartPr[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.id AS claim_id, c.issue_repo, c.issue_number, pr.repo AS pr_repo, pr.number AS pr_number,
+         pr.url AS pr_url, pr.reviews, pr.reviews_read, pr.comments_left_out
+       FROM claims c
+       JOIN prs pr ON pr.claim_id = c.id
+       JOIN projects p ON p.repo = c.project
+       WHERE c.github_id = ?1 AND (pr.reviews > pr.reviews_read OR pr.comments_left_out > 0) AND ${SHOWS}
+       ORDER BY pr.opened_at, c.id`,
+    )
+    .bind(mustParse(githubId, person, 'githubId'))
+    .all<{
+      claim_id: string;
+      issue_repo: string;
+      issue_number: number;
+      pr_repo: string;
+      pr_number: number;
+      pr_url: string;
+      reviews: number;
+      reviews_read: number;
+      comments_left_out: number;
+    }>();
+  return results.map((row) => ({
+    claimId: mustParse(id, row.claim_id, 'claimId'),
+    issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+    pr: mustParse(prRefSchema, prFromColumns(row.pr_repo, row.pr_number, row.pr_url), 'pr'),
+    reviews: mustParse(count, row.reviews, 'reviews'),
+    reviewsRead: mustParse(count, row.reviews_read, 'reviewsRead'),
+    commentsLeftOut: mustParse(count, row.comments_left_out, 'commentsLeftOut'),
   }));
 }
 

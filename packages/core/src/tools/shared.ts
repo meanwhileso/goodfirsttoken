@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { claimStateSchema, type ClaimState } from '../claims';
 import { followUpText } from '../follow-ups';
-import { agentName, commitSha, githubLogin, id, isoTime, issueRef, prRefSchema, repoName, webUrl } from '../primitives';
+import { agentName, commitSha, count, githubLogin, id, isoTime, issueRef, prRefSchema, repoName, webUrl } from '../primitives';
 import { branchName } from '../submissions';
-import { indent, lines, numbered, when } from './text';
+import { indent, lines, numbered, plural, when } from './text';
 
 // Pieces that more than one tool returns.
 
@@ -93,6 +93,41 @@ export function renderFollowUp(followUp: FollowUp): string {
     `> ${followUp.comment}`,
     followUp.commentUrl,
     `Fixes go on ${followUp.branch.repo}:${followUp.branch.name}, sending every file changed from ${followUp.base}.`,
+  );
+}
+
+/**
+ * One of the donor's open PRs whose reviews the PR job read in part: it
+ * has more reviews than a read takes, or a maintainer's review with more
+ * comments on lines.
+ */
+export const readInPartSchema = z.object({
+  claimId: id,
+  issue: issueRef,
+  pr: prRefSchema,
+  /** Every review GitHub counts on the PR, pending and dismissed ones left out. */
+  reviews: count,
+  /** How many of the newest the PR job read. */
+  reviewsRead: count,
+  /** Comments on lines of a maintainer's review it read that it left out. */
+  commentsLeftOut: count,
+});
+export type ReadInPart = z.infer<typeof readInPartSchema>;
+
+export function renderReadInPart(items: readonly ReadInPart[]): string {
+  return lines(
+    `PRs whose reviews Good First Token read in part (${String(items.length)}). Read the rest on GitHub before you answer them:`,
+    indent(
+      numbered(items, (item) =>
+        lines(
+          `${item.issue}  claim ${item.claimId}`,
+          `Good First Token read ${String(item.reviewsRead)} of the PR's ${plural(item.reviews, 'review')}${
+            item.commentsLeftOut > 0 ? ` and left out ${plural(item.commentsLeftOut, 'comment')} on lines` : ''
+          }. Read the rest on GitHub: ${item.pr.url}`,
+        ),
+      ),
+      2,
+    ),
   );
 }
 

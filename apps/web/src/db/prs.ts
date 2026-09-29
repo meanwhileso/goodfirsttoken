@@ -177,6 +177,36 @@ export async function isOpenClaimPr(db: D1Database, pr: PrRef, issue: string): P
   return row !== null;
 }
 
+/** How much of a claim's open PR's reviews the PR job's latest read covered. */
+export interface ReviewsRead {
+  claimId: string;
+  /** Every review GitHub counts on the PR, pending and dismissed ones left out. */
+  reviews: number;
+  /** How many of the newest the read took. */
+  reviewsRead: number;
+  /** Comments on lines of a maintainer's review the read took that it left out. */
+  commentsLeftOut: number;
+}
+
+/** Records what the PR job's latest read covered of each PR, in one statement. */
+export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[]): Promise<void> {
+  if (read.length === 0) return;
+  const rows = read.map((row) => ({
+    claimId: mustParse(id, row.claimId, 'claimId'),
+    reviews: mustParse(count, row.reviews, 'reviews'),
+    reviewsRead: mustParse(count, row.reviewsRead, 'reviewsRead'),
+    commentsLeftOut: mustParse(count, row.commentsLeftOut, 'commentsLeftOut'),
+  }));
+  await db
+    .prepare(
+      `UPDATE prs SET reviews = json_extract(j.value, '$.reviews'), reviews_read = json_extract(j.value, '$.reviewsRead'),
+         comments_left_out = json_extract(j.value, '$.commentsLeftOut')
+       FROM json_each(?) j WHERE prs.claim_id = json_extract(j.value, '$.claimId')`,
+    )
+    .bind(JSON.stringify(rows))
+    .run();
+}
+
 /**
  * The claims whose PR closed without merging, and whose issue waits to be
  * read again, oldest close first, with the issue.

@@ -47,6 +47,8 @@ const followUp = {
   base: sha,
 };
 
+const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3 };
+
 const counts = { taggedIssues: 3, working: 2, openPrs: 1, merged: 14 };
 
 export const samples: Samples = {
@@ -57,6 +59,7 @@ export const samples: Samples = {
       budget: { kind: 'issues', count: 3 },
       interests: { languages: ['typescript'], kinds: ['tests'] },
       followUps: [followUp],
+      readInPart: [readInPart],
       unfinishedClaims: [{ ...claim, state: 'paused' }],
       mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/tweet?text=merged' }],
     },
@@ -69,6 +72,7 @@ export const samples: Samples = {
       'paused',
       'Share it',
       'Offer the follow-ups and paused claims first',
+      "Good First Token read 10 of the PR's 12 reviews and left out 3 comments on lines. Read the rest on GitHub",
       'Resume a claim with claim_issue and its issue.',
     ],
   },
@@ -173,6 +177,7 @@ export const samples: Samples = {
   my_work: {
     output: {
       followUps: [followUp],
+      readInPart: [readInPart],
       readyToOpen: [
         {
           claimId: 'c_2',
@@ -200,6 +205,7 @@ export const samples: Samples = {
     mentions: [
       '> Can the formatter skip events with an empty text field?',
       'Fixes go on priya/goodfirsttoken:goodfirsttoken/issue-912-c_0',
+      `Read the rest on GitHub: ${pr.url}`,
       '+23 -4',
       'codex (gpt-5.5-codex)',
       'waiting because a PR is already open on the issue',

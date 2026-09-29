@@ -5,7 +5,17 @@ import {
   type PrRecord,
   type PrState,
 } from '@goodfirsttoken/core';
-import { getClaim, listOpenPrs, listRereadsDue, rereadDone, saveFollowUps, setPrState, type NewFollowUp } from '../db';
+import {
+  getClaim,
+  listOpenPrs,
+  listRereadsDue,
+  rereadDone,
+  saveFollowUps,
+  setPrState,
+  setReviewsRead,
+  type NewFollowUp,
+  type ReviewsRead,
+} from '../db';
 import { GitHubError } from '../github';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
 import { SyncStopped, type ServiceGitHub, type StopReason } from './github';
@@ -76,7 +86,7 @@ interface Review {
   url: string;
   submittedAt: string | null;
   author: Actor | null;
-  comments: { nodes: (ReviewComment | null)[] | null } | null;
+  comments: { totalCount?: number; nodes: (ReviewComment | null)[] | null } | null;
 }
 
 interface PullState {
@@ -84,7 +94,7 @@ interface PullState {
   mergedAt: string | null;
   closedAt: string | null;
   author?: Actor | null;
-  reviews?: { nodes: (Review | null)[] | null } | null;
+  reviews?: { totalCount?: number; nodes: (Review | null)[] | null } | null;
 }
 
 type Pulls = Record<string, { pullRequest: PullState | null } | null>;
@@ -95,10 +105,11 @@ const PULL = `fragment Pull on PullRequest {
   state mergedAt closedAt
   author { __typename login }
   reviews(last: ${String(REVIEWS_READ)}, states: [COMMENTED, CHANGES_REQUESTED, APPROVED]) {
+    totalCount
     nodes {
       id state body url submittedAt authorAssociation
       author { __typename login }
-      comments(first: ${String(COMMENTS_READ)}) { nodes { id body path url createdAt authorAssociation author { __typename login } } }
+      comments(first: ${String(COMMENTS_READ)}) { totalCount nodes { id body path url createdAt authorAssociation author { __typename login } } }
     }
   }
 }`;
@@ -201,6 +212,20 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
 }
 
 /**
+ * How much of an open PR's reviews the read covered: every review GitHub
+ * counts, pending and dismissed ones left out, the newest it read, and the
+ * comments on lines of a maintainer's review it read that it left out.
+ */
+function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId'> {
+  const read = (pull.reviews?.nodes ?? []).filter((review) => review !== null);
+  const prAuthor = pull.author?.login ?? '';
+  const commentsLeftOut = read
+    .filter((review) => reviewerOf(review.author, review.authorAssociation, prAuthor) !== null)
+    .reduce((sum, review) => sum + Math.max(0, (review.comments?.totalCount ?? 0) - (review.comments?.nodes?.length ?? 0)), 0);
+  return { reviews: Math.max(pull.reviews?.totalCount ?? 0, read.length), reviewsRead: read.length, commentsLeftOut };
+}
+
+/**
  * Reads every open PR in the prs table, oldest first, until they are done
  * or the run has to stop. It first asks GitHub what is left of the budget.
  * An open PR's new reviews and review comments are kept as follow-ups. A
@@ -218,6 +243,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
     for (let start = 0; start < open.length; start += BATCH) {
       const batch = open.slice(start, start + BATCH);
       const pulls = await readStates(deps.github, batch);
+      const covered: ReviewsRead[] = [];
       for (const [i, record] of batch.entries()) {
         const pull = pulls[`p${String(i)}`]?.pullRequest;
         if (pull == null) continue;
@@ -225,6 +251,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
         const outcome = outcomeOf(pull, deps.now());
         if (outcome === null) {
           run.followUps += await saveFollowUps(deps.db, record.claimId, followUpsOf(pull), deps.now());
+          covered.push({ claimId: record.claimId, ...reviewsReadOf(pull) });
           continue;
         }
         const claim = await getClaim(deps.db, record.claimId);
@@ -245,6 +272,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
         if (outcome.state === 'merged') run.merged += 1;
         else run.closed += 1;
       }
+      await setReviewsRead(deps.db, covered);
     }
     // A read that can't run now, as when another run holds the project,
     // stays due for the next run.

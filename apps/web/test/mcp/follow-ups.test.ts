@@ -307,6 +307,40 @@ describe('follow-ups', () => {
     expect(await getIssue(env.DB, APP, issue)).toMatchObject({ linkedPr: null });
     expect((await issueRoom(env.ISSUE_ROOM, issue).history()).map((e) => e.kind)).toContain('pr_closed');
   });
+
+  test("a PR with more reviews or comments than a read covers is named, with how many, and the PR's link to read the rest", async () => {
+    await project();
+    const priya = await donor('priya');
+    const longReview = await openedPr(priya);
+    const botFlood = await openedPr(priya);
+    github.reviewPullRequest(APP, longReview.pr.number, {
+      login: BY,
+      state: 'CHANGES_REQUESTED',
+      body: 'A few things.',
+      comments: Array.from({ length: 12 }, (_, i) => ({ path: 'src/rewrite.ts', line: 1, body: `Thing ${String(i + 1)}.` })),
+    });
+    github.reviewPullRequest(APP, botFlood.pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'Please add a test.' });
+    for (let i = 0; i < 10; i++) {
+      github.reviewPullRequest(APP, botFlood.pr.number, { login: 'sample-ci[bot]', state: 'COMMENTED', body: `Check ${String(i + 1)} passed.` });
+    }
+
+    await runPrJob();
+    const next = await startSession(priya);
+
+    const comments = (next.structuredContent?.followUps as { claimId: string; comment: string }[]).map((f) => [f.claimId, f.comment]);
+    expect(comments).toEqual([
+      [longReview.claimId, 'A few things.'],
+      ...Array.from({ length: 10 }, (_, i) => [longReview.claimId, `Thing ${String(i + 1)}.`]),
+    ]);
+    expect(next.structuredContent?.readInPart).toEqual([
+      { claimId: longReview.claimId, issue: longReview.issue, pr: longReview.pr, reviews: 1, reviewsRead: 1, commentsLeftOut: 2 },
+      { claimId: botFlood.claimId, issue: botFlood.issue, pr: botFlood.pr, reviews: 11, reviewsRead: 10, commentsLeftOut: 0 },
+    ]);
+    const text = textOf(next);
+    expect(text).toContain(`Read the rest on GitHub: ${longReview.pr.url}`);
+    expect(text).toContain(`Read the rest on GitHub: ${botFlood.pr.url}`);
+    expect((await call(priya, 'my_work')).structuredContent?.readInPart).toEqual(next.structuredContent?.readInPart);
+  });
 });
 
 describe('a merged PR', () => {

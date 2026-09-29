@@ -103,4 +103,4 @@ export { doNotListNote } from './admin';
 export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
 export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';
-export type { ClaimSummary, FollowUp } from './shared';
+export type { ClaimSummary, FollowUp, ReadInPart } from './shared';

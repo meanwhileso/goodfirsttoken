@@ -38,6 +38,7 @@ import {
   getSession,
   listClaimsOn,
   listPersonClaims,
+  listReadInPart,
   listWaitingFollowUps,
   listWaitingIssues,
   markFollowUpsShown,
@@ -220,6 +221,7 @@ export async function startSession(
       budget: session.budget,
       interests: person.interests,
       followUps: await followUpsFor(caller.githubId, now),
+      readInPart: await listReadInPart(env.DB, caller.githubId),
       unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
       mergedPrs: await mergedToShare(caller.githubId, now),
     }),
@@ -305,6 +307,7 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
   return answer(
     toolResult('my_work', {
       followUps: await followUpsFor(caller.githubId, now),
+      readInPart: await listReadInPart(env.DB, caller.githubId),
       readyToOpen: await readyToOpen(caller, origin, now),
       working,
     }),

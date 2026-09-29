@@ -27,6 +27,14 @@ CREATE TABLE follow_ups (
 -- or null before that. A PR is offered once.
 ALTER TABLE prs ADD COLUMN offered_at INTEGER;
 
+-- What the PR job's latest read of an open PR covered: how many reviews
+-- GitHub counts on it, pending and dismissed ones left out, how many of the
+-- newest it read, and how many comments on lines of a maintainer's review
+-- it read left out. The donor's tools name a PR read in part.
+ALTER TABLE prs ADD COLUMN reviews INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE prs ADD COLUMN reviews_read INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE prs ADD COLUMN comments_left_out INTEGER NOT NULL DEFAULT 0;
+
 -- 1 while the issue of a PR that closed without merging waits for the PR
 -- job to read it again, and 0 otherwise. A read that can't run now waits
 -- for the job's next run.
