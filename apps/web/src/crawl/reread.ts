@@ -158,15 +158,18 @@ async function pauseForCrawler(
  * What the rules read now, against the last whole read: whether it changed,
  * and whether it moved into the ban tier.
  *
- * - With a last read of this version, it changed when the hashes differ, and
- *   moved into a ban when it reads a ban now and didn't then.
+ * - It moved into a ban when it reads a ban now and the last read, of any
+ *   version, didn't. When no read kept whether it was a ban, as before the
+ *   first, a listing made from a policy compares with the tier it was
+ *   listed at, which is never a ban, and a registered project doesn't move,
+ *   since its maintainers registered it with its docs as they were.
+ * - With a last read of this version, it changed when the hashes differ.
  * - With a last read of another version, as after a change to the rules, it
- *   takes the new one and reads as neither, so a change to the rules sends
- *   nothing back to the queue and pauses nothing.
+ *   takes the new one and reads as no change, so a change to the rules sends
+ *   nothing back to the queue. A move into a ban still pauses, and an admin
+ *   reviews it.
  * - With no last read, a listing made from a policy compares with the policy
- *   it was listed from, whose tier is never a ban, and a registered project
- *   reads as neither, since its maintainers registered it with its docs as
- *   they were.
+ *   it was listed from, and a registered project reads as no change.
  */
 function compare(
   project: ProjectRecord,
@@ -175,11 +178,10 @@ function compare(
   fingerprint: string,
 ): { changed: boolean; intoBan: boolean } {
   const banned = reading.tier === 'bans_or_restricts';
-  if (last?.fingerprint == null) {
-    return { changed: readsOtherwise(project.policy, reading), intoBan: project.policy !== null && banned };
-  }
-  if (!comparable(last.fingerprint)) return { changed: false, intoBan: false };
-  return { changed: last.fingerprint !== fingerprint, intoBan: banned && last.banned !== true };
+  const intoBan = banned && (last?.banned == null ? project.policy !== null : !last.banned);
+  if (last?.fingerprint == null) return { changed: readsOtherwise(project.policy, reading), intoBan };
+  if (!comparable(last.fingerprint)) return { changed: false, intoBan };
+  return { changed: last.fingerprint !== fingerprint, intoBan };
 }
 
 /**

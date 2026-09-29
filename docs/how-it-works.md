@@ -2672,11 +2672,12 @@ none of the repo's text, and whether they read a ban:
 - When what the hash covers changes, as when the rules change what they
   read in most repos, its version goes up. A hash of another version
   compares with nothing: the read takes the new hash, and sends nothing to
-  the queue and pauses nothing for what it read. So a change to the rules
-  sends no listing back. A ban that lands in the week of such a change is
-  taken as the docs are, like a registered project's at its first read.
-  The pull request settings are checked as on every read, since no change
-  to the rules touches them.
+  the queue for what it read. So a change to the rules sends no listing
+  back. Whether the last read was a ban is kept apart from the hash, so a
+  move into a ban still pauses the project. A change to the rules can then
+  pause a listing that the new rules read as a ban, and an admin reviews
+  the pause. The pull request settings are checked as on every read, since
+  no change to the rules touches them.
 
 **What it does.**
 

@@ -21,8 +21,9 @@ import { suggestSettings, type PolicyFile, type PolicyReading } from './rules';
 /**
  * Raised when what the fingerprint covers changes, like a change to the
  * rules that changes what they read in most repos. A fingerprint of another
- * version compares with nothing, so the next read takes a new one, and acts
- * on nothing else, so no listed project reads as changed for it.
+ * version compares with nothing, so the next read takes a new one, and no
+ * listed project reads as changed for it. Whether the last read was a ban
+ * is kept apart from the hash, so a move into a ban still pauses.
  */
 export const FINGERPRINT_VERSION = 1;
 

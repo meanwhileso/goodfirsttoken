@@ -61,6 +61,8 @@ const NO_AUTONOMY = 'sample-policies/no-autonomous-agents';
 const CHANGED = 'Agents may open pull requests on their own, on issues labeled `agent ready` or `help wanted`.';
 /** A fingerprint of the version the crawler makes now. */
 const THIS_VERSION = new RegExp(`^v${String(FINGERPRINT_VERSION)}:[0-9a-f]{64}$`);
+/** A fingerprint of another version, as a read kept before a change to the rules. */
+const OTHER_VERSION = `v${String(FINGERPRINT_VERSION + 1)}:${'0'.repeat(64)}`;
 
 let github: GitHubFake;
 let clock: number;
@@ -397,8 +399,7 @@ describe('a listing whose policy changes', () => {
     const admin = await connectAgent(github, ADMIN.login);
     const { item } = await onlyItem(admin, 'policy_change', INVITES);
     await call(admin, 'admin_decide', { id: item.id, decision: 'reject', reason: 'The listing quotes it well enough.' });
-    const other = `v${String(FINGERPRINT_VERSION + 1)}:${'0'.repeat(64)}`;
-    await db.prepare('UPDATE policy_reads SET fingerprint = ? WHERE project = ?').bind(other, INVITES).run();
+    await db.prepare('UPDATE policy_reads SET fingerprint = ? WHERE project = ?').bind(OTHER_VERSION, INVITES).run();
 
     const bumped = await week();
     const after = await week();
@@ -407,6 +408,58 @@ describe('a listing whose policy changes', () => {
     expect(after.run?.reread).toMatchObject({ read: 1, changed: [], paused: [] });
     expect((await getPolicyRead(db, INVITES))?.fingerprint).toMatch(THIS_VERSION);
     expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
+  });
+
+  test('a hash of another version still pauses a listing whose docs read a ban now and not at the last read, and sends no policy change', async () => {
+    await listing();
+    await week();
+    await db.prepare('UPDATE policy_reads SET fingerprint = ?, banned = 0 WHERE project = ?').bind(OTHER_VERSION, INVITES).run();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+
+    const { run } = await week();
+
+    expect(run?.reread).toMatchObject({ read: 1, paused: [INVITES], changed: [] });
+    expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: BAN_REASON });
+    const read = await getPolicyRead(db, INVITES);
+    expect(read?.fingerprint).toMatch(THIS_VERSION);
+    expect(read?.banned).toBe(true);
+    expect(await rows('policy_changes')).toBe(0);
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'pause', INVITES);
+    expect(item.pause).toMatchObject({ reason: BAN_REASON, ban: { path: 'AI_POLICY.md', line: BAN } });
+  });
+
+  test('a hash of another version pauses nothing when the last read was a ban too, as after an admin resumed the listing', async () => {
+    await listing();
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+    await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'pause', INVITES);
+    await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
+    await db.prepare('UPDATE policy_reads SET fingerprint = ? WHERE project = ?').bind(OTHER_VERSION, INVITES).run();
+    expect((await getPolicyRead(db, INVITES))?.banned).toBe(true);
+
+    const { run } = await week();
+
+    expect(run?.reread).toMatchObject({ read: 1, paused: [], changed: [] });
+    expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', statusChangedBy: ADMIN.githubId });
+    expect((await getPolicyRead(db, INVITES))?.fingerprint).toMatch(THIS_VERSION);
+    expect(await rows('policy_changes')).toBe(0);
+  });
+
+  test('a hash of another version with no ban kept beside it follows the first read: a listing whose docs ban pauses, a registered project stays', async () => {
+    await listing();
+    await registered(BANS_AI);
+    await week();
+    await db.prepare('UPDATE policy_reads SET fingerprint = ?, banned = NULL').bind(OTHER_VERSION).run();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+
+    const { run } = await week();
+
+    expect(run?.reread).toMatchObject({ read: 2, paused: [INVITES], changed: [] });
+    expect(await getProject(db, BANS_AI)).toMatchObject({ status: 'approved' });
+    expect(await rows('policy_changes')).toBe(0);
   });
 
   test('a quote that moves to another file goes back to the queue, since the listing links to the file', async () => {

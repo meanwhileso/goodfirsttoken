@@ -2310,13 +2310,16 @@ admin queue as crawl candidates. The rules are in
   digits, and none of the text. `FINGERPRINT_VERSION` goes up when what it
   covers changes, like a change to the rules that reads most repos
   differently. `compare` in `src/crawl/reread.ts` reads a hash of another
-  version, by `comparable`, as a new baseline: it keeps the new hash and
-  acts on nothing it read, so a change like that sends no listing back to
-  the queue and pauses nothing. Hashing the files whole would send a listing
-  back for every build step added to its CONTRIBUTING. Hashing the quote
-  and tier alone would miss a new condition, like a CLA, and a new
-  sentence that names AI, which the rules can misread, and which an admin
-  reads when a change comes back.
+  version, by `comparable`, as a new baseline: it keeps the new hash, so a
+  change like that sends no listing back to the queue. It still pauses on a
+  move into a ban, read from `policy_reads.banned`, which no version
+  touches. So a change to the rules can pause a listing that the new rules
+  read as a ban, and an admin reviews the pause, since a missed ban is the
+  worse error. Hashing the files whole would send a listing back for every
+  build step added to its CONTRIBUTING. Hashing the quote and tier alone
+  would miss a new condition, like a CLA, and a new sentence that names AI,
+  which the rules can misread, and which an admin reads when a change comes
+  back.
 - **Who can open pull requests is read each week,** in one REST call,
   since GitHub's GraphQL doesn't give it. The sync reads the same REST
   answer for each approved project every 15 minutes, and doesn't look at
@@ -2328,9 +2331,10 @@ admin queue as crawl candidates. The rules are in
   come from one place.
 - **A pause on a move into a ban.** `policy_reads.banned` keeps whether
   the last whole read was a ban, beside its hash, and `compare` pauses only
-  when this read is a ban and that one wasn't. A hash that changed while
-  the docs stay a ban pauses nothing, so an admin's resume and a
-  registered project's ban at its first read stay as they are.
+  when this read is a ban and that one wasn't, whatever the hash's
+  version. A hash that changed while the docs stay a ban pauses nothing, so
+  an admin's resume and a registered project's ban at its first read stay
+  as they are. With no read kept, `compare` follows the first read's rules.
 - **A ban's pause takes over any pause.** `pauseForCrawler` with
   `anyPause` lands on an approved or a paused project, whoever paused it,
   through the compare-and-set, since the move into a ban is found only
