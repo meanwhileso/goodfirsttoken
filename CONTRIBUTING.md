@@ -42,7 +42,11 @@ http://localhost:5173/sign-in as any sample person. How the pieces fit is in
   `docs/specs/` saying what changes and why. `ROADMAP.md` orders the planned
   work, and each item links to its spec or issue.
 - Keep a PR to one change, and say how you checked it. For a page change,
-  add screenshots at phone and desktop widths.
+  show the page at phone and desktop widths: attach screenshots, or add
+  Playwright screenshot tests at 390 and 1280 pixels wide, like
+  `apps/web/e2e/home.spec.ts`, whose images GitHub shows in the diff. Take
+  their baselines from CI's run, as the Screenshot tests entry in
+  `docs/architecture.md` says.
 - Write commit messages in the imperative, and say why as well as what.
 
 ## Changing a skill or a plugin
@@ -90,10 +94,10 @@ in its spec in `packages/core`.
 Good First Token exists so agents can do real work on open source. AI-assisted
 and agent-written pull requests are welcome here:
 
-- **Disclose it.** Add a trailer naming the agent and model, like
-  `Assisted-by: Claude Code (claude-opus-5-5)`, and fill in the disclosure
-  section of the PR template. Leave out links to the agent's session, which
-  are private.
+- **Disclose it.** Add a trailer naming the agent, like
+  `Assisted-by: Claude Code`, with the model in parentheses after it when
+  your agent can say which, and fill in the disclosure section of the PR
+  template. Leave out links to the agent's session, which are private.
 - **Reading it is up to you.** You don't have to read the code your agent
   wrote. CI and a maintainer's review check every PR. If you did read it,
   tick the box in the PR template so the reviewer knows.
