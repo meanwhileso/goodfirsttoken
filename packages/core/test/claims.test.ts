@@ -315,6 +315,13 @@ describe('stored claims', () => {
     expect(result.ok ? [] : result.problems.map((p) => p.field)).toEqual([field]);
   });
 
+  test('a claim released before reasons were folded still reads, whatever its reason holds', () => {
+    // A release folds its reason now, so none of these is stored again.
+    for (const releaseReason of ['​', `gave up\n\u{E0041}`]) {
+      expect(validate(claimRecordSchema, { ...record, state: 'released', releaseReason }).ok).toBe(true);
+    }
+  });
+
   // Every claim reachable from a new one, by each event in turn.
   const reachable: ClaimTimeline[] = [
     newClaim(claimedAt),

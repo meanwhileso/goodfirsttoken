@@ -77,6 +77,9 @@ const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
  * code points, or a letter and its accent.
  */
 export function cutGraphemes(text: string, max: number): string {
+  // A text has at least as many UTF-16 units as graphemes, so one no longer
+  // than `max` units fits without counting them.
+  if (text.length <= max) return text;
   const parts = Array.from(graphemes.segment(text), ({ segment }) => segment);
   return parts.length > max ? `${parts.slice(0, max - 3).join('')}...` : text;
 }

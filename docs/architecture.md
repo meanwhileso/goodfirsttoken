@@ -14,7 +14,7 @@ The repo is a pnpm workspace.
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
-| `skill-src/` | The one source file per skill, and each plugin's version and description. Nothing installs from here. |
+| `skill-src/` | The one source file per skill, the parts several skills share in `skill-src/shared/`, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
 | `plugins/` | The Claude Code plugins, `goodfirsttoken` and `goodfirsttoken-admin`. Each plugin's `skills/` and `.claude-plugin/` folders are built from `skill-src/`. Anything else in a plugin folder is written by hand. The version rule covers the whole folder. |
 | `.claude-plugin/marketplace.json` | Makes the repo a Claude Code plugin marketplace that lists both plugins. Built from `skill-src/`. |
@@ -444,11 +444,10 @@ The rules are under [Repo IDs](how-it-works.md#repo-ids) in how-it-works.md.
   the queue, a repo's requests withdrawn by someone other than their asker
   since the latest one an admin closed as `removed`, in one query: the
   first five withdrawn, with both logins joined from `people`, and a count
-  of the rest from `COUNT(*) OVER ()`. `removalReason` in core drops the
-  characters a person can't see, on top of folding the ones that could
-  break a line. A `451` from GitHub is a `PermissionRefused` in
-  `requirePermission`, as a `404` is, so every maintainer's tool refuses a
-  repo GitHub blocked with `not_maintainer`.
+  of the rest from `COUNT(*) OVER ()`. `removalReason` in core folds the
+  reason, under One fold for untrusted text. A `451` from GitHub is a
+  `PermissionRefused` in `requirePermission`, as a `404` is, so every
+  maintainer's tool refuses a repo GitHub blocked with `not_maintainer`.
 - **Resuming reads the status history,** newest first, for the change
   before the pause. The project's row holds only its current status. A
   status change keeps who made it and no role, so whether a pause was an
@@ -644,10 +643,50 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   yet. A PR another session marked between the two is left out of the
   answer, which is made again without it. `shareOnXUrl` in `packages/core`
   builds the link for a merged one, with the submission's agent.
-  `foldUntrusted` there folds a reviewer's text by `UNSAFE_CHARACTER` and
-  `HIDDEN_CHARACTER` in `characters.ts`, the sets `removalReason` folds
-  by, and `cutGraphemes` cuts it after, the rule the name an agent's
-  client gives itself is cut by too.
+  `foldUntrusted`, below, folds a reviewer's text, and `cutGraphemes`
+  cuts it after, the rule the name an agent's client gives itself is cut
+  by too.
+- **One fold for untrusted text.** `foldLine` in `packages/core/src/characters.ts`
+  is the fold, by `UNSAFE_CHARACTER` and `HIDDEN_CHARACTER` there. It is
+  one pattern whose choices are each one character, so it takes time in
+  proportion to the text's length. A run of millions of hidden characters
+  can still overflow the pattern engine's stack, so every caller caps the
+  text first. `foldUntrusted` is the fold with a cut, for text GitHub
+  gives, whose own limits cap it: a reviewer's text and an issue's title.
+  `untrustedLine` is the fold as a schema, for text a tool is given: an
+  `abort` check refuses text longer than four times the limit before the
+  fold runs, and the limit counts what the fold leaves. A posted update,
+  a job name, a release reason, and a removal's reason use it. A removal's
+  reason used to keep a run of plain spaces and other widths of space as
+  they were. It folds them to one space now, like every other text.
+  `feedEventSchema` and the claim's `releaseReason` check a stored job
+  and reason the way they were checked before the fold, so an event or a
+  claim stored earlier still reads. `keptRemovalReason` folds a stored
+  request's reason each time it is read, for the queue, and doesn't
+  refuse one that folds to nothing, like a reason of only ideographic
+  spaces the fold before kept. `askRemoval` checks a new reason with
+  `removalReason` before it saves one. `foldIssueTitle` in `issues.ts` folds
+  a title to its limit. `taggedIssueSchema` runs it
+  with `overwrite`, so `saveIssues` stores a folded title and every read
+  through the schema, `toIssue` and `listWaitingIssues`, folds a title
+  stored before. No migration clears old titles: SQL can't run the fold,
+  and a cleared title would show nothing until a pass read the issue
+  again, which can take several runs. `readIssue` in
+  `src/donor/github.ts` folds the title GitHub gives the donor's token.
+  The donor tools' answers take a title only through `issueTitle`, which
+  refuses one that isn't folded, the way `followUpText` does.
+  `cutGraphemes` gives back text no longer than its cap in UTF-16 units
+  without counting graphemes, since a text has at least as many units as
+  graphemes, so cutting a title that fits costs next to nothing.
+  Three other folds stay, for text that isn't untrusted words shown to
+  an agent. `foldLines` in `primitives.ts`, behind `oneLine`, folds only
+  tabs and line breaks in a submit's title and a model name, the donor's
+  own text, which goes to GitHub as they wrote it. The stream formatter
+  in `src/feed/format.ts` folds the characters that could break a line in
+  every event it writes, events stored before the fold among them, so
+  each is one line whatever it holds. `clientNameOf` in
+  `src/mcp/connections.ts` folds the name an agent's client gives itself,
+  which only people read, on the consent page and on `/me`.
 - **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
   reads the claim from the claims table, checks `work_claim`, the block,
   and the project with `projectClosedRefusal`, whose do-not-list check is
@@ -1150,12 +1189,23 @@ its version did not go up.
 |---|---|
 | `skill-src/<name>.md` with `plugin: goodfirsttoken` | `skills/goodfirsttoken-<name>/SKILL.md`, and `plugins/goodfirsttoken/skills/<name>/SKILL.md` |
 | `skill-src/<name>.md` with `plugin: goodfirsttoken-admin` | `plugins/goodfirsttoken-admin/skills/<name>/SKILL.md` only |
+| `skill-src/shared/<part>.md` | Nothing of its own. Its text goes into each skill that includes it |
 | `skill-src/plugins.json` | Each plugin's `.claude-plugin/plugin.json`, and `.claude-plugin/marketplace.json` |
 
 - **A source file** starts with frontmatter that sets `description` and
   `plugin`, one top-level key per line. Other keys, like `argument-hint`,
   are copied into both copies as written. The build sets `name`, and
   `{{MCP_URL}}` in the body becomes the MCP server's URL.
+- **A shared part** in `skill-src/shared/` holds text several skills
+  carry, so it has one source: the steps to add the MCP server in Codex,
+  OpenCode, Cursor, Grok Bot, and any other harness, which every skill
+  shows, and the donor's rules, steps, and refusals, which give, work, and
+  review share. A line of its own, `{{include <part>}}`, in a skill's body
+  becomes the part's text, before `{{MCP_URL}}` is filled in. A part can't
+  include another. A missing part, a name that isn't a part's, or an
+  include inside other text fails the build, and the error says which. Each copy holds the whole text, so an agent reads one file, and a
+  change to a part changes every plugin that carries it, which the version
+  rule then covers.
 - **The copies are committed,** because installers read them straight from
   GitHub. `skills/`, `.claude-plugin/`, and each plugin's `skills/` and
   `.claude-plugin/` folders hold only what the build writes, and the build
@@ -1196,10 +1246,13 @@ A skill tells an agent which tools to call and what to do with each
 refusal, so a skill and the server can drift apart. Two checks hold them
 together.
 
-- **`apps/web/test/mcp/skills.test.ts`** reads each skill's source, which
-  `vitest.config.ts` reads in Node and passes in as `TEST_SKILLS`. It
-  connects the agent of the person the skill is for, a maintainer with no
-  admin role for maintain and the sample admin for admin, and lists that
+- **`apps/web/test/mcp/skills.test.ts`** reads each skill as the plugins
+  carry it, built with its shared parts in place, which `vitest.config.ts`
+  reads in Node from `plugins/*/skills/` and passes in as `TEST_SKILLS`.
+  `pnpm skills:check` fails when those differ from what `skill-src/`
+  builds. It connects the agent of the person the skill is for, a sample
+  donor for give, work, and review, a maintainer with no admin role for
+  maintain, and the sample admin for admin, and lists that
   agent's tools from the server with their schemas. The tools a skill calls
   are the ones of its own audience, from their specs in `packages/core`.
   - The skill's `## Connect` section tells an agent how to add the server in
@@ -1246,19 +1299,25 @@ together.
     across the skills has to be checked, so the test can't pass on none.
   - The skill calls every tool of its audience, and each tool it calls has
     a `refusals` list.
+  - give, work, and review each carry the donor's contract in their
+    `## Rules` section, each rule in its own words, so a skill that drops
+    the shared rules, or a rule dropped from them, fails.
 - **Every tool call in the MCP tests** goes through `mcpClient` in
   `test/mcp/helpers.ts`, which fails the test when a tool refuses with a
   code its `refusals` list leaves out. Every code on the lists has a test
-  that gets it through `mcpClient`, so a list can't fall behind the server.
-  A refusal no agent can get, like `not_admin` from an admin's tool, stays
-  off the lists.
+  that gets it through `mcpClient`, so a list can't fall behind the server,
+  but one. `not_found` from `set_interests` needs a caller with no record,
+  and a signed-in agent always has one, so its test calls the tool's
+  handler and checks the list. A refusal the server never gives an agent,
+  like `not_admin` from an admin's tool, which it serves only to admins,
+  stays off the lists.
 
 ### Following the skills' steps
 
 `pnpm skills:run` runs `apps/web/scripts/skill-run.ts` against a site in
 development, `pnpm dev` unless `--site` names another. It follows the steps
-of the maintain and admin skills with the MCP client SDK as each person's
-agent. No model runs, so it spends no tokens.
+of the maintain, admin, and give skills with the MCP client SDK as each
+person's agent. No model runs, so it spends no tokens.
 
 - The GitHub fake's `sample-maintainer` registers
   `sample-owner/sample-parser`, a sample repo no sample work touches, and
@@ -1273,11 +1332,56 @@ agent. No model runs, so it spends no tokens.
   left the project, the admin's agent first removes it with
   `admin_remove_project`, and the run registers it again, as a rejected
   registration.
-- `e2e/skills.spec.ts` runs the same steps against the end-to-end tests'
-  preview, the Worker and the GitHub fake as servers of their own, as in
+- Then `runDonorSkills` follows the give skill as the sample donor `ines`,
+  on `sample-owner/sample-app#311`, the one sample issue no other
+  end-to-end test claims. The sample work leaves one of its three slots
+  open, and its project opens agent PRs by itself. The donor's agent starts
+  a session with a budget of one issue, saves interests on the first run,
+  asks `suggest_issues` until the issue comes up, with the ones shown in
+  `exclude`, and claims it. It posts three lines: the second comes a moment
+  after the first, so the server asks it to wait, and it waits the seconds
+  the answer gives and folds that line into the third. It submits two
+  files, and the PR opens on the GitHub fake. Then `my_work` has to list no
+  work waiting for that claim. Work that waited in the review queue would
+  be opened with `open_pr`. An unfinished claim on the issue from a run
+  that stopped early is taken up again.
+- The issue takes that claim until a PR opens on it, and only the PR job,
+  which runs on a schedule, would hear of a PR closed on the fake. So the
+  donor's steps run once on one local database, after `pnpm seed`. To run
+  them again, stop `pnpm dev`, empty its local data with
+  `pnpm --filter @goodfirsttoken/web exec node scripts/migrate-local.mjs --fresh`,
+  start `pnpm dev`, and run `pnpm seed`. A run that finds the issue taken
+  stops with these steps.
+- `e2e/skills.spec.ts` runs the same steps, the donor's in a test of its
+  own, against the end-to-end tests' preview, the Worker and the GitHub fake as servers of their own, as in
   `pnpm dev`. So CI runs them on every pull request, and a person can run
-  them against `pnpm dev` and read each call and its answer. Runs of real
-  harnesses stay by hand, since they spend real tokens.
+  them against `pnpm dev` and read each call and its answer. Outside CI,
+  Playwright reuses a GitHub fake that is already running. When that fake
+  still holds the PR an earlier run opened on the issue, the donor's test
+  resets it to the sample data first. It resets it only then, since a
+  reset also drops what tests running beside it made there.
+- Runs of real harnesses stay by hand, since they spend real tokens. To
+  run the give skill in Claude Code against `pnpm dev`, on fresh local
+  data as above:
+  1. Get an access token for the sample donor `ines` with `agentToken`
+     from `skill-run.ts`, which signs an agent in the way the run does:
+     `node --input-type=module -e "import { agentToken, runAddress } from './apps/web/scripts/skill-run.ts'; console.log(await agentToken('http://localhost:5173', runAddress(), 'ines', 'Claude Code'))"`.
+  2. Write an MCP config outside the repo, with one server,
+     `goodfirsttoken`, of `type` `http`, at `http://localhost:5173/mcp`,
+     with the header `Authorization: Bearer <token>`.
+  3. From an empty folder outside the repo, run `claude -p` with the
+     prompt, `--plugin-dir plugins/goodfirsttoken` from the repo,
+     `--mcp-config` and `--strict-mcp-config` with that file, `--tools`
+     `Skill,Read,Write,Edit,Glob,Grep,Bash`, `--allowedTools` for the
+     server's tools, those tools, and `git clone`, `--max-turns 40`, and
+     `--output-format stream-json --verbose` to keep the transcript.
+  4. The prompt gives the donor's answers up front, since a headless run
+     can't ask: the budget, their interests, the pick,
+     `sample-owner/sample-app#311`, yes to any CLA, and no special
+     instructions. Then it says to follow `/goodfirsttoken:give` for one
+     issue, through the claim, the updates, the submit, and the review
+     queue. The GitHub fake serves no Git, so the clone fails, and the
+     prompt says to write the change from the issue's text then.
 
 ### What the installers read
 
@@ -3480,11 +3584,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   on the homepage, so it runs in the `admin` project, which depends on
   `rooms`. It signs in three times, since every dev sign-in counts toward
   the sign-in limit of 20 a minute from one address. `skills.spec.ts`
-  follows the maintain and admin skills' steps, under
+  follows the maintain, admin, and give skills' steps, under
   [Following the skills' steps](#following-the-skills-steps). It registers
   a project and approves it from the admin queue, where `admin.spec.ts`
   expects only what it seeded, so it runs in the `skills` project, which
-  depends on `admin`.
+  depends on `admin`. Its donor claims and opens a PR on
+  `sample-owner/sample-app#311`, which no other test claims.
+  `mcp-apps-flow.spec.ts` works a `sample-owner/sample-desktop` issue.
   `mcp-apps.spec.ts` opens each view MCP Apps hosts show, read from the MCP
   server, in `apps-host.ts`, a stand-in for a host: a page that frames the
   view in a sandbox under the policy the spec builds from the view's

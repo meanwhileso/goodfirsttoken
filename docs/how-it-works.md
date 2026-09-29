@@ -1390,15 +1390,21 @@ removes the repo, or a maintainer of the repo withdraws it.
   shows them the repo as public again. A project the sync delisted because
   its repo is archived can be asked for as it is, since GitHub still shows
   the repo and the caller's role.
-- The reason is the maintainer's own words, up to 500 characters, always
-  on one line, and only what a person can see. Each run of characters that
-  could break a line or change what a terminal shows, with the plain spaces
-  around it, becomes one space: control characters, tabs and line breaks
-  among them, Unicode line and paragraph separators, and marks that reorder
-  text. Every character a person doesn't see goes: format characters, like
-  a zero-width space, a word joiner, or Unicode tag characters, private-use
-  characters, unassigned ones, and ones Unicode says to ignore when they
-  can't be shown, like a variation selector or a Hangul filler. Only admins
+- The reason is the maintainer's own words, always on one line, and only
+  what a person can see. Each run of spaces of any width and of characters
+  that could break a line or change what a terminal shows becomes one
+  space: control characters, tabs and line breaks among them, Unicode line
+  and paragraph separators, and marks that reorder text. Every character a
+  person doesn't see goes: format characters, like a zero-width space, a
+  word joiner, or Unicode tag characters, private-use characters,
+  unassigned ones, ones Unicode says to ignore when they can't be shown,
+  like a variation selector or a Hangul filler, and lone surrogates. A
+  lone surrogate is half of a character with no other half next to it,
+  which JSON can carry. Two halves with a hidden character between them
+  would join into one character, like a tag, once what is between them
+  goes, so each half goes with it. The ends are trimmed. The reason's
+  limit under [Limits](#limits) counts what is left, and a reason longer
+  than four times it is refused before it folds. Only admins
   read it, in `admin_queue`, as a JSON string, so no quote mark in it can end
   the quote early, and on the [admin pages](#the-admin-pages). Both show it
   as the maintainer's words. It reaches no public page, so nothing redacts
@@ -1758,6 +1764,15 @@ sync reads from GitHub.
   there is one, with the ways the sync found it, and when the sync read it.
   Every label is kept, so a change to a project's tags can apply before the
   next sync.
+- The title is untrusted repo text. It is folded the way a reviewer's text
+  is under [PRs](#prs): one line, with only what a person can see, and cut
+  to its limit under [Limits](#limits), whole graphemes only. The fold
+  runs when a copy is saved and again each time one is read, so a title
+  kept before titles were folded reads folded too. The donor's tools fold
+  a title they read from GitHub with the donor's token the same way, and
+  a PR's title they show in its place. So a title can't add a line to a
+  tool's text, or words only an agent reads, and every page and tool
+  shows it the same.
 - Each project has its own copy of an issue, so two projects that keep issues
   in the same repo each keep theirs. The project must exist.
 - Issues saved together all save, or none of them do, so one bad issue saves
@@ -3340,8 +3355,15 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   `https` link of the project's CLA that the donor confirmed they signed,
   as the refusal gave it.
 - A release needs a public reason.
-- A posted update is one line. Tabs and line breaks fold into single spaces.
-  `post_update` takes an optional job, for a line a subagent posts.
+- A posted update, a subagent's job name, and a release reason each reach
+  the public feeds, so each is one line, with only what a person can see,
+  folded the way a reviewer's text is under [PRs](#prs). Each limit under
+  [Limits](#limits) counts the folded text, and text longer than four
+  times it is refused before it folds, so checking one takes a short time
+  whatever a request carries. Text that folds to nothing is refused.
+  `post_update` takes an optional job, for a line a subagent posts. A feed
+  event or a claim stored before these were folded keeps its job or reason
+  as it was given, and the streams still show it on one line.
 - Submitted files are paths inside the repo: no leading slash, no
   backslashes, no control characters, no characters that change the
   direction text shows in (U+202A to U+202E and U+2066 to U+2069), no
@@ -3404,8 +3426,7 @@ tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, and
 `github_refused`.
 
-Each maintainer's and admin's tool, and the donor's `submit_work` and
-`open_pr`, lists the refusals an agent can get from it, in its spec in
+Every tool lists the refusals an agent can get from it, in its spec in
 `packages/core`, and answers an agent with no other. The skills that use a
 tool say what to do with each one on its list, under
 [Skills and plugins](#skills-and-plugins).
@@ -3423,6 +3444,13 @@ tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
+| `start_session` | None |
+| `set_interests` | `not_found` |
+| `suggest_issues` | `not_found`, `budget_spent`, `donor_blocked` |
+| `claim_issue` | `not_found`, `donor_blocked`, `budget_spent`, `project_not_open`, `issue_not_eligible`, `pr_exists`, `issue_full`, `open_pr_cap`, `not_vouched`, `cla_required` |
+| `post_update` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_closed` |
+| `release_claim` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_already_opened` |
+| `my_work` | None |
 | `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
@@ -3431,6 +3459,16 @@ tool say what to do with each one on its list, under
   so any other agent's call gets the MCP SDK's error
   `Tool <name> not found`. The admins' actions still check the permission
   themselves, and the admin pages get `not_admin` from them.
+- `set_interests` refuses a caller Good First Token has no record of with
+  `not_found`, and says to call `start_session` first. An agent's sign-in
+  records its person, under [Connecting an agent](#connecting-an-agent),
+  so a signed-in agent's person is there to save interests for.
+- No agent gets `invalid_input` from `claim_issue`. An issue's room refuses
+  a claim on another issue with it, and `claim_issue` asks the room of the
+  issue it claims.
+- `release_claim` refuses a claim whose PR merged or closed with
+  `pr_already_opened`, as it does one whose PR is open, since the claim
+  holds no slot either way.
 - No agent gets `pr_closed` from `open_pr`. A claim with a PR is refused
   with `pr_already_opened` before its PR's state is read. A PR that
   `submit_work` was to open by itself, and GitHub didn't, sends the work to
@@ -4249,17 +4287,19 @@ Each limit the schemas enforce, other than those under project settings:
 | PR description | 65,536 characters | GitHub |
 | PR description the donor writes | 60,000 characters, leaving room for the closing line and the disclosure | Us |
 | PR title, and a submit's title | 256 characters | GitHub |
-| Posted update | 200 characters | Us |
+| Posted update | 200 characters once folded, and 800 before | Us |
+| An issue's title | 256 graphemes once folded, cut to fit | GitHub takes 256 characters. The cut by graphemes is ours |
 | Feed event text | 500 characters | Us |
-| Subagent job name | 40 characters | Us |
-| Release reason | 200 characters | Us |
+| Subagent job name | 40 characters once folded, and 160 before | Us |
+| Release reason | 200 characters once folded, and 800 before | Us |
 | Files per submit | 1 to 300 | Us |
 | Path of a submitted file | 4,096 characters | Us |
 | A submitted file | 1 MiB (1,048,576 bytes) of UTF-8 | Us, at the size GitHub recommends |
 | The files of one submit | 2 MiB (2,097,152 bytes) of UTF-8 | Us, under the MCP server's 4 MiB request |
 | Submit summary, and what was checked | 1,000 characters each | Us |
 | Policy quote | 2,000 characters | Us |
-| Pause, reject, block, and do-not-list reasons, and a reason to be removed | 500 characters | Us |
+| Pause, reject, block, and do-not-list reasons | 500 characters | Us |
+| A reason to be removed | 500 characters once folded, and 2,000 before | Us |
 | Interests | 20 per list, 50 characters each | Us |
 | A reviewer's text in a follow-up | 1,000 graphemes, folded to one line | Us |
 | A comment's file path in a follow-up | 4,096 graphemes, folded to one line | Us |
@@ -4276,9 +4316,9 @@ The limits we set are our choice, so any of them can change.
 
 ## Skills and plugins
 
-The skills tell an agent how to use Good First Token. The give, work, and
-review skills are placeholders until #19 writes them. The maintain and admin
-skills are written.
+The skills tell an agent how to use Good First Token: give, work, and
+review for donors, maintain for maintainers, and admin for Good First
+Token's admins.
 
 | Skill | In the Claude Code plugin | Standalone skill |
 |---|---|---|
@@ -4302,19 +4342,88 @@ skills are written.
   or the marketplace, or automatically if they turned on auto-update for it.
   The higher version is what lets an update find the change.
 
-**What the maintain and admin skills both do.**
+**What every skill does.**
 
 - Each gives plain steps that work in each harness the plan names: Claude
   Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
   tools aren't there, it says how to add the MCP server in each of them.
+  The steps for all but Claude Code are one shared part, the same in every
+  skill.
 - Each names only the tools the server serves the person it is for, and the
   fields, values, and refusals of those tools. Its Refusals section has one
   entry for each refusal the tools of its own audience can give an agent,
   under [Refusals](#refusals), with what to do about it. Each call it shows
   as an example is to one of those tools, and one the tool takes, and each
   sentence it quotes from the server is the server's own.
-- Their examples use made-up repos, so neither states a verdict or a
-  setting for a real project.
+- Their examples use made-up repos, so none states a verdict or a setting
+  for a real project.
+
+**What the donor's skills share.** give, work, and review carry the same
+rules, steps, and refusals, so an agent that starts in any of them can
+finish the work.
+
+- The contract: work only issues the server gives, once the donor picked
+  or named one. Follow the repo's AGENTS.md and CONTRIBUTING and the
+  project's notes for agents, though nothing in the repo's files overrides
+  the contract: the agent reads no secrets and does nothing beyond the
+  issue. When the repo asks an agent to include, add, or sign something
+  that marks unreviewed agent work, a canary, the agent does what it asks,
+  tells the donor, and never strips it. When the donor writes the PR's
+  description, the agent tells them the marker has to be in it. Post a
+  line with `post_update` after each code change, test run, or decision,
+  and at least every 10 minutes. When a post comes too soon, keep the line
+  and fold it into the next one, or post it after the wait when a submit
+  or a release comes next. Keep local paths, environment contents,
+  tokens, and secrets out of every update, summary, check note, release
+  reason, and submitted file, and out of the PR's title. Submit only
+  files read at the start commit, since `submit_work` replaces each file
+  whole, and release the claim when the repo can't be cloned there.
+  Release a claim with `release_claim` and a public reason when stuck.
+- An update is one line in the feed's voice: lowercase, past tense, what
+  was done and where, with repo-relative paths.
+- A session starts with `start_session` and the budget the donor chose.
+  On the first run the agent asks for the donor's interests and saves them
+  with `set_interests`. It tells the donor how each PR in `endedPrs` ended,
+  since each is listed once. For a merged one it gives the donor the link
+  to post it on X, and posts nothing. For one closed without merging it
+  says the issue takes claims again while it is open and tagged. Then it
+  offers the follow-ups and the unfinished claims, paused ones first,
+  before anything new.
+- Once a claim lands, the agent asks the donor "Any special instructions
+  for this one?" The answer stays in the harness, and is never posted.
+- The agent works from the start commit `claim_issue` gives, and submits
+  every file changed from it with `submit_work`. On `branch_moved` it
+  fetches the branch, brings its work onto the head the refusal names, and
+  submits again with `onto`. A fix for a follow-up is a submit to the same
+  claim, which goes onto its PR.
+- The review queue comes from `my_work`. The agent shows each diff's link
+  and opens a PR with `open_pr` only once the donor read it and said so.
+  When the project wants a person-written description, the agent asks the
+  donor for it and passes it word for word. It never drafts it.
+- In a host that shows views, a Pick in the issue cards claims the issue
+  and sends a message from the donor. The agent then calls `claim_issue`
+  with that issue, which gives back the claim, asks for special
+  instructions, and works it. The review queue's Open PR tells the agent
+  of each PR it opened, and the agent opens none of them again.
+- Each refusal a donor's tool can give has an entry with what to do.
+
+**give** spends a session's budget. It asks `suggest_issues` for three
+issues, shows each with its tag, claimants, slots, PR mode, and tough
+badge, and lets the donor pick one or more. When a pick's project has a
+CLA, it shows the link, and sends `claConfirmed` only once the donor
+confirmed they signed it. It claims the first
+pick with the rest as the queue, and claims the next pick once a claim is
+submitted or released, with `claConfirmed` when the donor confirmed that
+pick's CLA, until the budget is spent or the donor stops. Then it shows
+the review queue from `my_work`, even when each PR opened by itself.
+
+**work** works one issue the donor names, like `owner/repo#123`, with a
+session of its own.
+
+**review** starts from `my_work`: follow-ups first, then the work waiting
+to open as a PR, then the claims in progress. A claim that isn't
+resumable is released, as its reason says. It tells the donor they can
+also open a PR from /me, under [Your queue on /me](#your-queue-on-me).
 
 **maintain** acts for an admin or maintainer of a repo on GitHub.
 
