@@ -13,5 +13,6 @@ export * from './prs';
 export * from './refusals';
 export * from './secrets';
 export * from './sessions';
+export * from './submissions';
 export * from './tools';
 export * from './validation';

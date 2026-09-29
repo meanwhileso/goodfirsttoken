@@ -2,7 +2,7 @@ import { labelName, type ProjectRecord, type Refusal } from '@goodfirsttoken/cor
 import { judgeLabels } from '../db';
 import { GitHubError, gitHubQuery, gitHubRead, type GitHubPage, type GraphQLResult } from '../github';
 import { limitsRate, type GitHubReader } from '../sync/github';
-import { chooseLink, closingReferences, crossReferences, linksOf } from '../sync/issues';
+import { chooseLink, closingReferences, crossReferences, linksOf, type Link } from '../sync/issues';
 
 // What the donor's tools read from GitHub, all with the donor's own token:
 // the facts about a project's repo a claim needs, and each issue as it is
@@ -43,6 +43,8 @@ class DonorGitHub implements GitHubReader {
 export interface RepoFacts {
   /** The repo as GitHub names it now. */
   name: string;
+  /** The default branch, which a PR goes into, or null for an empty repo. */
+  defaultBranch: string | null;
   /** The head commit of the default branch, where a claim's work starts, or null for an empty repo. */
   head: string | null;
   /** The donor is an admin or maintainer of the repo, so the work is on their own project. */
@@ -61,7 +63,7 @@ interface RepoAnswer {
   repository: {
     nameWithOwner: string;
     viewerPermission: string | null;
-    defaultBranchRef: { target: { oid: string } | null } | null;
+    defaultBranchRef: { name: string; target: { oid: string } | null } | null;
     dotGithub: VouchBlob | null;
     root: VouchBlob | null;
   } | null;
@@ -78,7 +80,7 @@ const REPO_FACTS = `query ($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner
     viewerPermission
-    defaultBranchRef { target { oid } }
+    defaultBranchRef { name target { oid } }
     dotGithub: object(expression: "HEAD:${VOUCH_PATHS[0]}") { ... on Blob { text } }
     root: object(expression: "HEAD:${VOUCH_PATHS[1]}") { ... on Blob { text } }
   }
@@ -105,6 +107,7 @@ export async function readRepoFacts(reader: GitHubReader, repo: string): Promise
   const file = files.find((f): f is { path: (typeof VOUCH_PATHS)[number]; text: string } => typeof f.text === 'string');
   return {
     name: found.nameWithOwner,
+    defaultBranch: found.defaultBranchRef?.name ?? null,
     head: found.defaultBranchRef?.target?.oid ?? null,
     managed: found.viewerPermission === 'ADMIN' || found.viewerPermission === 'MAINTAIN',
     writer: WRITE_OR_MORE.has(found.viewerPermission ?? ''),
@@ -120,8 +123,8 @@ interface RestIssue {
   html_url?: unknown;
   repository_url?: unknown;
   labels?: (string | { name?: unknown })[];
-  assignees?: unknown[] | null;
-  assignee?: unknown;
+  assignees?: ({ login?: unknown } | null)[] | null;
+  assignee?: { login?: unknown } | null;
   pull_request?: unknown;
 }
 
@@ -134,6 +137,8 @@ export interface GitHubIssue {
   open: boolean;
   labels: string[];
   assigned: boolean;
+  /** The logins of the people assigned, as far as GitHub names them. */
+  assignees: string[];
   /** GitHub keeps pull requests and issues under the same numbers. */
   isPullRequest: boolean;
   /** The repo GitHub names the issue's repo now, or null when it doesn't say. */
@@ -160,6 +165,9 @@ export async function readIssue(reader: GitHubReader, issue: string): Promise<Gi
     return checked.success ? [checked.data] : [];
   });
   const repoMatch = /\/repos\/([^/]+\/[^/]+)$/.exec(typeof found.repository_url === 'string' ? found.repository_url : '');
+  const assignees = [...(found.assignees ?? []), found.assignee ?? null].flatMap((person) =>
+    typeof person?.login === 'string' ? [person.login] : [],
+  );
   return {
     title: typeof found.title === 'string' ? found.title : issue,
     body: typeof found.body === 'string' ? found.body : '',
@@ -167,9 +175,35 @@ export async function readIssue(reader: GitHubReader, issue: string): Promise<Gi
     open: found.state === 'open',
     labels,
     assigned: (found.assignees?.length ?? 0) > 0 || (found.assignee ?? null) !== null,
+    assignees: [...new Set(assignees)],
     isPullRequest: found.pull_request !== undefined && found.pull_request !== null,
     repo: repoMatch?.[1] ?? null,
   };
+}
+
+/**
+ * The open PRs GitHub links to the issue now, read with the donor's token,
+ * by the sync's rule under Linked PRs: a closing reference or a mention, from
+ * a PR open in the project's code repo or issue repo. `names` are other names
+ * GitHub gives the project's repos now, as after a rename. Null when GitHub
+ * shows the donor no such issue.
+ */
+export async function linkedPrs(
+  reader: GitHubReader,
+  project: ProjectRecord,
+  issue: string,
+  names: readonly string[] = [],
+): Promise<Link[] | null> {
+  const { repo: issueRepo, number } = splitIssue(issue);
+  const closes = (await closingReferences(reader, issueRepo, [number])).get(number);
+  const mentions = await crossReferences(reader, issueRepo, number);
+  if (closes === undefined || mentions === null) return null;
+  // A PR counts only in the project's code repo or issue repo, as the sync
+  // counts it, by the names the project keeps and the names GitHub gives.
+  const ours = new Set(
+    [project.repo, project.settings.issueRepo ?? project.repo, issueRepo, ...names].map((name) => name.toLowerCase()),
+  );
+  return linksOf(closes, mentions).filter((link) => ours.has(link.pr.repo.toLowerCase()));
 }
 
 export type IssueCheck = { ok: true; issue: GitHubIssue } | { ok: false; refusal: Refusal };
@@ -178,14 +212,56 @@ function notEligible(message: string): IssueCheck {
   return { ok: false, refusal: { code: 'issue_not_eligible', message } };
 }
 
+/** What a check of the issue's own facts lets through, and tells the agent on a refusal. */
+export interface IssueRules {
+  /** A login the issue may be assigned to, like the donor's own for their work, or null for none. */
+  assignee: string | null;
+  /** What the agent does after a refusal. */
+  next: string;
+}
+
+const TO_CLAIM: IssueRules = { assignee: null, next: 'Pick another issue.' };
+
+/**
+ * Checks the issue's own facts on GitHub with the donor's token, as spec
+ * section 6 asks before suggesting, claiming, and opening a PR: GitHub shows
+ * it, it is an issue, it is open, it has no assignee but the one `rules`
+ * lets through, and it carries one of the project's tags and none of its
+ * excluded tags, by the rule the homepage counts with (src/db/waiting.ts).
+ */
+export async function checkIssueFacts(
+  db: D1Database,
+  reader: GitHubReader,
+  project: ProjectRecord,
+  issue: string,
+  rules: IssueRules = TO_CLAIM,
+): Promise<IssueCheck> {
+  const { next } = rules;
+  const found = await readIssue(reader, issue);
+  if (found === null) return notEligible(`GitHub shows you no issue ${issue}. ${next}`);
+  if (found.isPullRequest) return notEligible(`${issue} is a pull request on GitHub. ${next}`);
+  if (!found.open) return notEligible(`${issue} is closed on GitHub. ${next}`);
+  const others = found.assignees.filter((login) => login.toLowerCase() !== rules.assignee?.toLowerCase());
+  if (others.length > 0 || (found.assigned && found.assignees.length === 0)) {
+    return notEligible(`${issue} has an assignee on GitHub, so someone is on it. ${next}`);
+  }
+  const { carries, excluded } = await judgeLabels(db, project.repo, found.labels);
+  if (!carries) {
+    return notEligible(
+      excluded === null
+        ? `${issue} no longer carries a tag ${project.repo} marks work for outside help with. ${next}`
+        : `${issue} carries ${excluded}, a label ${project.repo} keeps for people. ${next}`,
+    );
+  }
+  return { ok: true, issue: found };
+}
+
 /**
  * Checks the issue on GitHub with the donor's token, as spec section 6
- * asks before suggesting and before claiming: it is still open, carries one
- * of the project's tags and none of its excluded tags, by the rule the
- * homepage counts with (src/db/waiting.ts), has no assignee, and has no open
- * PR linked to it in the project's code repo or issue repo, by the sync's
- * rule. `names` are other names GitHub gives the project's repos now, as
- * after a rename.
+ * asks before suggesting and before claiming: its own facts, as
+ * checkIssueFacts reads them, and no open PR linked to it in the project's
+ * code repo or issue repo, by the sync's rule. `names` are other names
+ * GitHub gives the project's repos now, as after a rename.
  */
 export async function checkIssueOnGitHub(
   db: D1Database,
@@ -194,35 +270,13 @@ export async function checkIssueOnGitHub(
   issue: string,
   names: readonly string[] = [],
 ): Promise<IssueCheck> {
-  const found = await readIssue(reader, issue);
-  if (found === null) return notEligible(`GitHub shows you no issue ${issue}. Pick another issue.`);
-  if (found.isPullRequest) return notEligible(`${issue} is a pull request on GitHub. Pick an issue.`);
-  if (!found.open) return notEligible(`${issue} is closed on GitHub. Pick another issue.`);
-  if (found.assigned) return notEligible(`${issue} has an assignee on GitHub, so someone is on it. Pick another issue.`);
-  const { carries, excluded } = await judgeLabels(db, project.repo, found.labels);
-  if (!carries) {
-    return notEligible(
-      excluded === null
-        ? `${issue} no longer carries a tag ${project.repo} marks work for outside help with. Pick another issue.`
-        : `${issue} carries ${excluded}, a label ${project.repo} keeps for people. Pick another issue.`,
-    );
-  }
+  const checked = await checkIssueFacts(db, reader, project, issue);
+  if (!checked.ok) return checked;
+  const found = checked.issue;
 
-  const { repo: issueRepo, number } = splitIssue(issue);
-  const closes = (await closingReferences(reader, issueRepo, [number])).get(number);
-  const mentions = await crossReferences(reader, issueRepo, number);
-  if (closes === undefined || mentions === null) return notEligible(`GitHub shows you no issue ${issue}. Pick another issue.`);
-  // A PR counts only in the project's code repo or issue repo, as the sync
-  // counts it, by the names the project keeps and the names GitHub gives.
-  const ours = new Set(
-    [project.repo, project.settings.issueRepo ?? project.repo, found.repo ?? issueRepo, ...names].map((name) =>
-      name.toLowerCase(),
-    ),
-  );
-  const linked = chooseLink(
-    null,
-    linksOf(closes, mentions).filter((link) => ours.has(link.pr.repo.toLowerCase())),
-  );
+  const links = await linkedPrs(reader, project, issue, found.repo === null ? names : [...names, found.repo]);
+  if (links === null) return notEligible(`GitHub shows you no issue ${issue}. Pick another issue.`);
+  const linked = chooseLink(null, links);
   if (linked !== null) {
     return {
       ok: false,

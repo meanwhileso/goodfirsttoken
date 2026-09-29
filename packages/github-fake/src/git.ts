@@ -13,10 +13,31 @@ export interface Blob {
   size: number;
 }
 
+// A file's mode, as Git keeps it in a tree: a file, an executable file, a
+// symbolic link, whose blob holds where it points, or a submodule, whose
+// entry names a commit in another repo.
+export type FileMode = '100644' | '100755' | '120000' | '160000';
+
 export interface TreeEntry {
   name: string;
-  type: 'blob' | 'tree';
+  // A submodule's entry is a commit, which the store doesn't have.
+  type: 'blob' | 'tree' | 'commit';
   oid: Oid;
+  // Only a file with a mode other than 100644 has one. State saved before
+  // the fake kept modes has none.
+  mode?: FileMode;
+}
+
+// A file in a tree, with its mode.
+export interface FileEntry {
+  oid: Oid;
+  mode: FileMode;
+}
+
+// The mode GitHub gives an entry: 040000 for a folder.
+export function entryMode(entry: TreeEntry): FileMode | '040000' {
+  if (entry.type === 'tree') return '040000';
+  return entry.mode ?? (entry.type === 'commit' ? '160000' : '100644');
 }
 
 export interface Tree {
@@ -85,6 +106,12 @@ export function blobText(blob: Blob): string | null {
   }
 }
 
+// The ID a blob with this content has, whether or not it is stored.
+export function blobOid(content: string | Uint8Array): Oid {
+  const bytes = typeof content === 'string' ? encoder.encode(content) : content;
+  return hashOid(`blob\0${bytesToBase64(bytes)}`);
+}
+
 export function writeBlob(store: ObjectStore, content: string | Uint8Array): Oid {
   const bytes = typeof content === 'string' ? encoder.encode(content) : content;
   const base64 = bytesToBase64(bytes);
@@ -93,19 +120,23 @@ export function writeBlob(store: ObjectStore, content: string | Uint8Array): Oid
   return oid;
 }
 
-// Builds nested trees from a flat map of file path to blob ID.
-export function writeTree(store: ObjectStore, files: Map<string, Oid>): Oid {
+// Builds nested trees from a flat map of file path to blob ID, or to a
+// file with its mode.
+export function writeTree(store: ObjectStore, files: Map<string, Oid | FileEntry>): Oid {
   const here = new Map<string, TreeEntry>();
-  const below = new Map<string, Map<string, Oid>>();
-  for (const [path, oid] of files) {
+  const below = new Map<string, Map<string, Oid | FileEntry>>();
+  for (const [path, file] of files) {
     const slash = path.indexOf('/');
     if (slash === -1) {
-      here.set(path, { name: path, type: 'blob', oid });
+      const { oid, mode }: FileEntry = typeof file === 'string' ? { oid: file, mode: '100644' } : file;
+      // A 100644 file keeps no mode, so a tree's ID is what it was before the fake kept modes.
+      if (mode === '100644') here.set(path, { name: path, type: 'blob', oid });
+      else here.set(path, { name: path, type: mode === '160000' ? 'commit' : 'blob', oid, mode });
       continue;
     }
     const dir = path.slice(0, slash);
-    const sub = below.get(dir) ?? new Map<string, Oid>();
-    sub.set(path.slice(slash + 1), oid);
+    const sub = below.get(dir) ?? new Map<string, Oid | FileEntry>();
+    sub.set(path.slice(slash + 1), file);
     below.set(dir, sub);
   }
   for (const [dir, sub] of below) here.set(dir, { name: dir, type: 'tree', oid: writeTree(store, sub) });
@@ -125,18 +156,29 @@ export function readObject<T extends GitObject['type']>(
   return object as Extract<GitObject, { type: T }>;
 }
 
-// Every file in a tree, by path.
+// Every file in a tree, by path, with a submodule left out.
 export function listFiles(store: ObjectStore, treeOid: Oid, prefix = ''): Map<string, Oid> {
   const files = new Map<string, Oid>();
-  for (const entry of readObject(store, treeOid, 'tree').entries) {
-    const path = prefix + entry.name;
-    if (entry.type === 'blob') files.set(path, entry.oid);
-    else for (const [sub, oid] of listFiles(store, entry.oid, `${path}/`)) files.set(sub, oid);
+  for (const [path, file] of listEntries(store, treeOid, prefix)) {
+    if (file.mode !== '160000') files.set(path, file.oid);
   }
   return files;
 }
 
-// The object at a path in a tree. An empty path is the tree itself.
+// Every file in a tree, by path, with its mode, a submodule included.
+export function listEntries(store: ObjectStore, treeOid: Oid, prefix = ''): Map<string, FileEntry> {
+  const files = new Map<string, FileEntry>();
+  for (const entry of readObject(store, treeOid, 'tree').entries) {
+    const path = prefix + entry.name;
+    const mode = entryMode(entry);
+    if (mode !== '040000') files.set(path, { oid: entry.oid, mode });
+    else for (const [sub, file] of listEntries(store, entry.oid, `${path}/`)) files.set(sub, file);
+  }
+  return files;
+}
+
+// The object at a path in a tree. An empty path is the tree itself. A
+// submodule's commit is in another repo, so a path to one finds nothing.
 export function lookupPath(
   store: ObjectStore,
   treeOid: Oid,
@@ -147,7 +189,7 @@ export function lookupPath(
   for (const name of path.split('/').filter(Boolean)) {
     if (object.type !== 'tree') return null;
     const entry: TreeEntry | undefined = object.entries.find((e) => e.name === name);
-    if (!entry) return null;
+    if (!entry || entry.type === 'commit') return null;
     oid = entry.oid;
     object = entry.type === 'blob' ? readObject(store, oid, 'blob') : readObject(store, oid, 'tree');
   }

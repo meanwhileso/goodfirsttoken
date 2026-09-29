@@ -31,6 +31,8 @@ export interface Ctx {
   viewer: string | null;
   // The OAuth scopes of that token. A private repo needs `repo` to be seen.
   scopes: readonly string[];
+  // The fake's time for the call, as ISO 8601.
+  now: string;
 }
 
 const encoder = new TextEncoder();
@@ -353,31 +355,82 @@ export function timelineEventShape(ctx: Ctx, repo: RepoRecord, event: TimelineEv
   return shape;
 }
 
+/** A file that differs between two commits, with its lines added and removed. */
+export interface FileDiff {
+  path: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed';
+  /** For a file renamed, its path at `from`. */
+  previousPath?: string;
+  /** The blob at `to`, or at `from` for a file removed. */
+  sha: Oid;
+  additions: number;
+  deletions: number;
+}
+
+// The files that differ from one commit to another, in path order. A line
+// counts as added when the old text lacks it, and as removed when the new
+// text lacks it, which is close to what GitHub counts for small changes.
+export function diffFiles(ctx: Ctx, from: Oid, to: Oid): FileDiff[] {
+  const store = ctx.state.objects;
+  const before = listFiles(store, readObject(store, from, 'commit').tree);
+  const after = listFiles(store, readObject(store, to, 'commit').tree);
+  const lines = (oid: Oid | undefined) =>
+    oid ? (blobText(readObject(store, oid, 'blob')) ?? '').split('\n').filter(Boolean) : [];
+  const files: FileDiff[] = [];
+  // A file removed from one path and added at another with the same blob is
+  // one file renamed, as GitHub lists it. GitHub also finds renames with a
+  // changed text, which the fake doesn't.
+  const removed = [...before].filter(([path]) => !after.has(path));
+  const renamedFrom = new Map<string, string>();
+  for (const [path, oid] of after) {
+    if (before.has(path)) continue;
+    const match = removed.find(([old, was]) => was === oid && ![...renamedFrom.values()].includes(old));
+    if (match) renamedFrom.set(path, match[0]);
+  }
+  const moved = new Set(renamedFrom.values());
+  for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    const was = before.get(path);
+    const is = after.get(path);
+    if (was === is || moved.has(path)) continue;
+    const previousPath = renamedFrom.get(path);
+    if (previousPath !== undefined) {
+      files.push({ path, status: 'renamed', previousPath, sha: is ?? '', additions: 0, deletions: 0 });
+      continue;
+    }
+    const old = lines(was);
+    const next = lines(is);
+    files.push({
+      path,
+      status: was === undefined ? 'added' : is === undefined ? 'removed' : 'modified',
+      sha: is ?? was ?? '',
+      additions: next.filter((line) => !old.includes(line)).length,
+      deletions: old.filter((line) => !next.includes(line)).length,
+    });
+  }
+  return files;
+}
+
+// The commits on `head` since `base`, following first parents.
+export function commitsSince(ctx: Ctx, base: Oid, head: Oid): Oid[] {
+  const found: Oid[] = [];
+  for (let oid: Oid | undefined = head; oid && oid !== base; ) {
+    found.push(oid);
+    oid = readObject(ctx.state.objects, oid, 'commit').parents[0];
+  }
+  return found.reverse();
+}
+
 function diffStats(ctx: Ctx, repo: RepoRecord, pull: PullData) {
   const store = ctx.state.objects;
   // From where the PR branched off, which stays put after it merges.
   const since = mergeBase(store, pull.base.sha, pull.head.sha) ?? pull.base.sha;
-  const before = listFiles(store, readObject(store, since, 'commit').tree);
-  const after = listFiles(store, readObject(store, pull.head.sha, 'commit').tree);
-  const lines = (oid: Oid | undefined) =>
-    oid ? (blobText(readObject(store, oid, 'blob')) ?? '').split('\n').filter(Boolean) : [];
-  let additions = 0;
-  let deletions = 0;
-  let changed = 0;
-  for (const path of new Set([...before.keys(), ...after.keys()])) {
-    if (before.get(path) === after.get(path)) continue;
-    changed++;
-    const old = lines(before.get(path));
-    const next = lines(after.get(path));
-    additions += next.filter((line) => !old.includes(line)).length;
-    deletions += old.filter((line) => !next.includes(line)).length;
-  }
-  let commits = 0;
-  for (let oid: Oid | undefined = pull.head.sha; oid && oid !== since; ) {
-    commits++;
-    oid = readObject(store, oid, 'commit').parents[0];
-  }
-  return { commits, additions, deletions, changed_files: changed };
+  const files = diffFiles(ctx, since, pull.head.sha);
+  return {
+    commits: commitsSince(ctx, since, pull.head.sha).length,
+    additions: files.reduce((sum, file) => sum + file.additions, 0),
+    deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+    changed_files: files.length,
+  };
 }
 
 // https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request
@@ -560,6 +613,64 @@ export function contentShape(
     shape.content = (object.base64.match(/.{1,60}/g) ?? []).join('\n') + '\n';
   }
   return shape;
+}
+
+// https://docs.github.com/en/rest/git/blobs#get-a-blob
+export function blobShape(ctx: Ctx, repo: RepoRecord, sha: Oid, blob: Blob) {
+  return {
+    sha,
+    node_id: nodeId('B', repo.id, sha),
+    size: blob.size,
+    url: `${ctx.apiUrl}/repos/${fullName(repo)}/git/blobs/${sha}`,
+    content: (blob.base64.match(/.{1,60}/g) ?? []).join('\n') + '\n',
+    encoding: 'base64',
+  };
+}
+
+// https://docs.github.com/en/rest/commits/commits#compare-two-commits
+// The files are the change from the merge base to `head`, as GitHub's
+// three-dot comparison shows it.
+export function compareShape(ctx: Ctx, repo: RepoRecord, base: Oid, head: Oid) {
+  const name = fullName(repo);
+  const api = `${ctx.apiUrl}/repos/${name}`;
+  const since = mergeBase(ctx.state.objects, base, head) ?? base;
+  const ahead = commitsSince(ctx, since, head);
+  const behind = commitsSince(ctx, since, base);
+  const status =
+    ahead.length === 0 && behind.length === 0
+      ? 'identical'
+      : behind.length === 0
+        ? 'ahead'
+        : ahead.length === 0
+          ? 'behind'
+          : 'diverged';
+  const html = `${ctx.webUrl}/${name}/compare/${base}...${head}`;
+  return {
+    url: `${api}/compare/${base}...${head}`,
+    html_url: html,
+    permalink_url: html,
+    diff_url: `${html}.diff`,
+    patch_url: `${html}.patch`,
+    base_commit: commitShape(ctx, repo, base),
+    merge_base_commit: commitShape(ctx, repo, since),
+    status,
+    ahead_by: ahead.length,
+    behind_by: behind.length,
+    total_commits: ahead.length,
+    commits: ahead.map((sha) => commitShape(ctx, repo, sha)),
+    files: diffFiles(ctx, since, head).map((file) => ({
+      sha: file.sha,
+      filename: file.path,
+      ...(file.previousPath === undefined ? {} : { previous_filename: file.previousPath }),
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      changes: file.additions + file.deletions,
+      blob_url: `${ctx.webUrl}/${name}/blob/${head}/${file.path}`,
+      raw_url: `${ctx.webUrl}/${name}/raw/${head}/${file.path}`,
+      contents_url: `${api}/contents/${file.path}?ref=${head}`,
+    })),
+  };
 }
 
 // https://docs.github.com/en/rest/commits/commits#get-a-commit (the commit inside a branch)
