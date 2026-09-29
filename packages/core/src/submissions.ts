@@ -12,6 +12,11 @@ import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName,
  * - `pr_exists`: a PR is already open on the issue, so a person decides
  *   whether a second one helps.
  * - `workflow_files`: the change touches a GitHub Actions workflow file.
+ * - `too_many_files`: someone else pushed to the branch, and GitHub's
+ *   comparison lists 300 files, its most, so it may leave a workflow file
+ *   out.
+ * - `comparison_unread`: someone else pushed to the branch, and GitHub gave
+ *   no comparison to check for workflow files.
  * - `reviewed_mode`: the project's PR mode is `reviewed`.
  * - `person_written_description`: the project wants the donor to write the
  *   PR description.
@@ -21,6 +26,8 @@ import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName,
 export const reviewReasons = [
   'pr_exists',
   'workflow_files',
+  'too_many_files',
+  'comparison_unread',
   'reviewed_mode',
   'person_written_description',
   'open_pr_cap',

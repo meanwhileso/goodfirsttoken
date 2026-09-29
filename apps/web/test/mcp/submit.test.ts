@@ -750,6 +750,75 @@ describe('workflow files', () => {
     expect([...pullsBy(APP, 'kenji'), ...pullsBy(APP, 'sam')]).toEqual([]);
   });
 
+  /**
+   * A claim of kenji's, who can push to the repo, whose branch a maintainer
+   * made at the start commit and pushed `files` to, with the head it left.
+   */
+  async function pushedClaim(kenji: Donor, files: Record<string, string | null>) {
+    const issue = await tagged(APP);
+    const { claimId, start } = await claim(kenji, issue);
+    const branch = branchOf(issue, claimId);
+    repoState(APP).branches[branch] = start;
+    return { claimId, branch, pushed: github.commitFiles(APP, files, BY, { branch }) };
+  }
+
+  /** `count` small files in one folder. */
+  const many = (count: number) =>
+    Object.fromEntries(Array.from({ length: count }, (_, i) => [`gen/f${String(i).padStart(3, '0')}.txt`, `${String(i)}\n`]));
+
+  test("after someone's push, a comparison of 299 files is checked, and one of 300, GitHub's most, goes to review as too many to check", async () => {
+    await project(APP, { ...automatic, openPrsPerDonor: 5 });
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const notes = { 'NOTES.md': 'From the maintainer.\n' };
+    const under = await pushedClaim(kenji, notes);
+    const at = await pushedClaim(kenji, notes);
+    const plain = await claim(kenji, await tagged(APP));
+
+    // With the maintainer's file, 299 files and 300.
+    const checked = await submit(kenji, under.claimId, many(298), { onto: under.pushed });
+    const tooMany = await submit(kenji, at.claimId, many(299), { onto: at.pushed });
+    // With no push on the branch, the submitted paths are all it changes.
+    const own = await submit(kenji, plain.claimId, many(300));
+
+    expect(checked.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
+    expect(tooMany.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null, reviewReason: 'too_many_files' });
+    expect(textOf(tooMany)).toContain(
+      "because the branch holds someone else's push, and GitHub's comparison of it lists 300 files, its most, too many to check every file for workflow files.",
+    );
+    expect(own.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
+  });
+
+  test("after someone's push, a comparison GitHub doesn't give goes to review, and with no push the submitted paths are enough", async () => {
+    await project(APP, automatic);
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const pushed = await pushedClaim(kenji, { 'NOTES.md': 'From the maintainer.\n' });
+    const plain = await claim(kenji, await tagged(APP));
+    vi.spyOn(DonorWriter.prototype, 'lineCounts').mockResolvedValue(null);
+
+    const unread = await submit(kenji, pushed.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, { onto: pushed.pushed });
+    const own = await submit(kenji, plain.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
+
+    expect(unread.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null, reviewReason: 'comparison_unread' });
+    expect(textOf(unread)).toContain("GitHub gave no comparison of it, so its files couldn't be checked for workflow files");
+    expect(own.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
+  });
+
+  test('a push that moves a workflow out of .github/workflows/ counts as touching workflow files, by the old name the comparison gives', async () => {
+    await project(APP, automatic);
+    const ci = 'name: CI\non: [pull_request]\n';
+    github.commitFiles(APP, { '.github/workflows/ci.yml': ci }, BY);
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const moved = await pushedClaim(kenji, { '.github/workflows/ci.yml': null, 'docs/ci.yml': ci });
+
+    const result = await submit(kenji, moved.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, { onto: moved.pushed });
+
+    expect(result.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null, reviewReason: 'workflow_files' });
+    expect(pullsBy(APP, 'kenji')).toEqual([]);
+  });
+
   test("a workflow change GitHub won't take from the donor's token is refused with GitHub's reason, and the claim goes on", async () => {
     await project(APP, automatic);
     const issue = await tagged(APP);

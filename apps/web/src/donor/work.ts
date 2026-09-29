@@ -29,6 +29,12 @@ export interface ReviewFacts {
   prOnIssue: boolean;
   /** The branch's change touches a workflow file. */
   workflowFiles: boolean;
+  /**
+   * Why the branch's change couldn't be checked for workflow files, when it
+   * holds someone else's push: GitHub's comparison was too long to list
+   * every file, or GitHub gave none. Null when it was checked.
+   */
+  unchecked: 'too_many_files' | 'comparison_unread' | null;
   prMode: 'automatic' | 'reviewed';
   personWrittenDescription: boolean;
   /** The donor has as many open PRs in the project as it allows. */
@@ -43,6 +49,7 @@ export interface ReviewFacts {
 export function reviewReason(facts: ReviewFacts): ReviewReason | null {
   if (facts.prOnIssue) return 'pr_exists';
   if (facts.workflowFiles) return 'workflow_files';
+  if (facts.unchecked !== null) return facts.unchecked;
   if (facts.prMode === 'reviewed') return 'reviewed_mode';
   if (facts.personWrittenDescription) return 'person_written_description';
   if (facts.atOpenPrCap) return 'open_pr_cap';

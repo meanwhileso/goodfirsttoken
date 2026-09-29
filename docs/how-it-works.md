@@ -1836,19 +1836,25 @@ never reaches the tool.
   second PR opens.
 - Otherwise the PR opens by itself when the project's PR mode is
   `automatic`, no other PR is open on the issue, no path the branch
-  changes is under `.github/workflows/`, compared without case, the
-  project doesn't want a person-written description, and the donor has
-  fewer open PRs in the project than it allows. When one of these doesn't
-  hold, the work goes to the donor's review queue, with a reason:
-  `pr_exists`, `workflow_files`, `reviewed_mode`,
+  changes is under `.github/workflows/`, compared without case, and every
+  path it changes could be checked for that, the project doesn't want a
+  person-written description, and the donor has fewer open PRs in the
+  project than it allows. When one of these doesn't hold, the work goes to
+  the donor's review queue, with a reason: `pr_exists`, `workflow_files`,
+  `too_many_files`, `comparison_unread`, `reviewed_mode`,
   `person_written_description`, or `open_pr_cap`, the first that applies
   in that order. When GitHub refuses a PR that was to open by itself, the
   work goes there with `pr_refused`.
 - The paths the branch changes are the submitted ones and the ones
-  GitHub's comparison lists, so a workflow file someone else pushed to the
-  branch, which `onto` then built on, counts too. GitHub lists at most 300
-  files, so a comparison that lists 300 counts as touching a workflow. When
-  GitHub gives no comparison, the submitted paths are the ones read.
+  GitHub's comparison lists, a renamed file's old name with its new one.
+  So a workflow file someone else pushed to the branch, which `onto` then
+  built on, counts too, and so does one a push moved out of
+  `.github/workflows/`. Until the claim's base is a head someone else
+  pushed, the branch holds only the claim's submits, and the submitted
+  paths are all it changes. After, the comparison is the one list of the
+  rest. GitHub lists at most 300 files, so when it lists 300 the work goes
+  to review with `too_many_files`, and when GitHub gives no comparison,
+  with `comparison_unread`.
 - The summary, what was checked, the model, and a title the agent gave go
   into the commit, the PR, and the database with their keys and tokens
   replaced, as a posted line's are under [The issue room](#the-issue-room).

@@ -34,6 +34,7 @@ describe('why work waits for the donor', () => {
   const opens: ReviewFacts = {
     prOnIssue: false,
     workflowFiles: false,
+    unchecked: null,
     prMode: 'automatic',
     personWrittenDescription: false,
     atOpenPrCap: false,
@@ -46,22 +47,26 @@ describe('why work waits for the donor', () => {
   test('each reason alone sends the work to the review queue', () => {
     expect(reviewReason({ ...opens, prOnIssue: true })).toBe('pr_exists');
     expect(reviewReason({ ...opens, workflowFiles: true })).toBe('workflow_files');
+    expect(reviewReason({ ...opens, unchecked: 'too_many_files' })).toBe('too_many_files');
+    expect(reviewReason({ ...opens, unchecked: 'comparison_unread' })).toBe('comparison_unread');
     expect(reviewReason({ ...opens, prMode: 'reviewed' })).toBe('reviewed_mode');
     expect(reviewReason({ ...opens, personWrittenDescription: true })).toBe('person_written_description');
     expect(reviewReason({ ...opens, atOpenPrCap: true })).toBe('open_pr_cap');
   });
 
-  test('with several reasons, a PR on the issue comes first, then workflow files, then the PR mode', () => {
+  test('with several reasons, a PR on the issue comes first, then workflow files, then a change not checked for them, then the PR mode', () => {
     const all: ReviewFacts = {
       prOnIssue: true,
       workflowFiles: true,
+      unchecked: 'comparison_unread',
       prMode: 'reviewed',
       personWrittenDescription: true,
       atOpenPrCap: true,
     };
     expect(reviewReason(all)).toBe('pr_exists');
     expect(reviewReason({ ...all, prOnIssue: false })).toBe('workflow_files');
-    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false })).toBe('reviewed_mode');
+    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false })).toBe('comparison_unread');
+    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false, unchecked: null })).toBe('reviewed_mode');
   });
 });
 

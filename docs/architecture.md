@@ -569,7 +569,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   commit before the push, and the text of the ones the push changed, to
   find a file that would go back to how it was.
 - **The workflow rule** reads the paths from the same comparison that
-  counts the lines, beside the submitted ones.
+  counts the lines, each file's `filename` and a rename's
+  `previous_filename`, beside the submitted ones. Once the claim's base is
+  a head someone else pushed, a comparison GitHub doesn't give, or one of
+  300 files, which may leave one out, sends the work to review.
 - **The commit** is `createCommitOnBranch` with `expectedHeadOid` set to the
   head the change was worked out from, and each file's text in base64.
   GitHub's `STALE_DATA` means the branch moved, and the branch is read

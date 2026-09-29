@@ -443,6 +443,10 @@ function describeReviewReason(reason: ReviewReason): string {
       return 'a PR is already open on the issue';
     case 'workflow_files':
       return 'the change touches GitHub Actions workflow files';
+    case 'too_many_files':
+      return "the branch holds someone else's push, and GitHub's comparison of it lists 300 files, its most, too many to check every file for workflow files";
+    case 'comparison_unread':
+      return "the branch holds someone else's push, and GitHub gave no comparison of it, so its files couldn't be checked for workflow files";
     case 'reviewed_mode':
       return 'the project reviews agent PRs';
     case 'person_written_description':

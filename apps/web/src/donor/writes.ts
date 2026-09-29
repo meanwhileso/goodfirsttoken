@@ -331,8 +331,9 @@ export class DonorWriter {
   }
 
   /**
-   * The paths changed from `base` to `head`, with the lines added and
-   * removed, as GitHub lists them in a comparison, which names at most 300
+   * The paths changed from `base` to `head`, a renamed file's old path
+   * with its new one, with the lines added and removed and the number of
+   * files, as GitHub lists them in a comparison, which names at most 300
    * files, or null when GitHub doesn't say.
    * https://docs.github.com/en/rest/commits/commits#compare-two-commits
    */
@@ -340,11 +341,11 @@ export class DonorWriter {
     repo: string,
     base: string,
     head: string,
-  ): Promise<{ additions: number; deletions: number; paths: string[] } | null> {
+  ): Promise<{ additions: number; deletions: number; files: number; paths: string[] } | null> {
     try {
-      const { data } = await this.reader.read<{ files?: { filename?: unknown; additions?: unknown; deletions?: unknown }[] }>(
-        `/repos/${repo}/compare/${base}...${head}`,
-      );
+      const { data } = await this.reader.read<{
+        files?: { filename?: unknown; previous_filename?: unknown; additions?: unknown; deletions?: unknown }[];
+      }>(`/repos/${repo}/compare/${base}...${head}`);
       if (!Array.isArray(data.files)) return null;
       let additions = 0;
       let deletions = 0;
@@ -356,8 +357,10 @@ export class DonorWriter {
         additions += file.additions;
         deletions += file.deletions;
         paths.push(file.filename);
+        // A file renamed was at its old path too.
+        if (typeof file.previous_filename === 'string') paths.push(file.previous_filename);
       }
-      return { additions, deletions, paths };
+      return { additions, deletions, files: data.files.length, paths };
     } catch (error) {
       if (error instanceof GitHubError && error.status !== 401) return null;
       throw error;

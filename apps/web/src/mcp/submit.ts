@@ -607,17 +607,19 @@ export async function submitWork(
   const lines = await writer.lineCounts(target, diffFrom, committed.sha);
   const prs = await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name]);
   const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  // Until onto builds on someone else's push, the branch holds only the
+  // claim's submits, which change the submitted paths and no others. After
+  // it, only GitHub's comparison names what the branch changes, so one too
+  // long to list every file, or none at all, leaves the check undone.
+  const pushedIn = base !== claim.startCommit;
+  const unchecked = !pushedIn ? null : lines === null ? 'comparison_unread' : lines.files >= COMPARE_FILES ? 'too_many_files' : null;
   const reason =
     recorded.claim.state === 'pr_opened'
       ? null
       : reviewReason({
           prOnIssue: prs.length > 0,
-          // The branch's whole change counts, with any commit someone else
-          // pushed that onto built on. GitHub lists at most 300 files, so a
-          // list that long may leave one out.
-          workflowFiles:
-            input.files.some((file) => isWorkflowPath(file.path)) ||
-            (lines !== null && (lines.paths.some(isWorkflowPath) || lines.paths.length >= COMPARE_FILES)),
+          workflowFiles: input.files.some((file) => isWorkflowPath(file.path)) || (lines?.paths.some(isWorkflowPath) ?? false),
+          unchecked,
           prMode: project.settings.prMode,
           personWrittenDescription: project.settings.personWrittenDescription,
           atOpenPrCap: openPrRefusal(project, openPrs) !== null,
