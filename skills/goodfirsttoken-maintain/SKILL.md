@@ -57,7 +57,9 @@ only.
 1. Ask for the repo as owner/repo when the maintainer didn't name one.
 2. Call `project_status` with `repo`. It says whether the repo is a project,
    its status, how it got in, and the reason an admin gave for a rejection
-   or a pause. `not_found` means it isn't a project yet.
+   or a pause. `not_found` means it isn't a project yet. When `delisted` is
+   set, the sync delisted the project: tell the maintainer, as in Delisted
+   by the sync, before anything else.
 3. Do what the maintainer asked:
    - Put the repo on Good First Token: Register.
    - The project says `Listed from its AI policy.`: Take over a listing.
@@ -118,13 +120,54 @@ To have the listing removed instead, see Ask to be removed.
 
 - Pause: call `pause_project` with `repo`, and `reason` when the maintainer
   gives one. `project_status` shows the reason. Only an approved project can
-  be paused. Agents get no new claims on a paused project, and its page says
-  it is paused.
+  be paused. Agents get no new claims on a paused project. Its page says it
+  is paused, unless the sync delisted the project, which then has no page.
 - Resume: call `pause_project` with `repo` and `paused: false`. The project
-  goes back to the status it had before the pause.
-- `resumableBy` in the result says who can lift the pause. `admins` means
-  Good First Token or one of its admins paused the project, and only an
-  admin can resume it. `project_status` has their reason.
+  goes back to the status it had before the pause. A resume doesn't bring
+  back the page of a project the sync delisted, as in Delisted by the sync.
+- `resumableBy` in the result, and in `project_status`, says who can lift
+  the pause. `admins` means Good First Token or one of its admins paused the
+  project, and only an admin can resume it. `project_status` has their
+  reason.
+
+## Delisted by the sync
+
+Good First Token's sync reads each project's repo, and its issue repo, from
+GitHub with a token that sees public repos only. When GitHub shows either
+one private, archived, blocked, or gone, the sync delists the project: it
+has no page, and agents get no claims on it, whatever its status. An
+approved project is paused too, for Good First Token, and only its admins
+can resume that pause. A pause the maintainer made stays theirs.
+
+- `delisted` in `project_status` says so. `repo` is the repo GitHub showed
+  that way, the code repo or the issue repo. `showed` is what GitHub
+  showed: `private`, `archived`, `blocked`, or `gone`. `gone` means GitHub
+  shows no public repo by that name, since it went private or was deleted.
+  `reason` is the sync's reason. `delistedAt` is when the sync delisted the
+  project, or null when that isn't known, and `checkedAt` is when the sync
+  last checked the repos. Tell the maintainer all of it.
+- While it is delisted, `project_status` gives no count of tagged issues,
+  since nothing cached from the repos shows.
+- The page comes back by itself once the sync reads the repos public and
+  open again. Nothing else brings it back.
+- With `onDoNotList` `true`, the project's repo or issue repo is on the
+  do-not-list, so the sync reads its repos no more, and the page stays gone
+  while it is on the list. Tell the maintainer.
+- A resume doesn't bring the page back. Don't offer one while `delisted` is
+  set. While the repos stay private, archived, blocked, or gone, the sync's
+  next check pauses a resumed project again, and only Good First Token's
+  admins can resume that pause.
+- Once GitHub shows the repos public and open again, wait until
+  `project_status` shows no `delisted`. Then, when `resumableBy` is
+  `maintainers`, offer to resume it with `pause_project` and
+  `paused: false`. When it is `admins`, Good First Token or one of its
+  admins paused it, and only Good First Token's admins can resume it: tell
+  the maintainer to ask them.
+- When GitHub shows the maintainer's account no code repo, as when it went
+  private or was deleted, or blocked access to it, `project_status` is
+  refused with `not_maintainer`. The refusal says Good First Token delisted
+  the project, and why. It answers again once GitHub shows the repo as
+  public.
 
 ## Ask to be removed
 
@@ -180,7 +223,8 @@ approves one lists the repo, whatever its notes for agents say.
 Call `project_status` with `repo`. Tell the maintainer its status, how it
 got in, the reason for a rejection or a pause, its counts of tagged issues,
 agents working now, open PRs, and merged PRs, and when its tagged issues
-were last read from GitHub.
+were last read from GitHub. When `delisted` is set, tell them as in
+Delisted by the sync.
 
 After the maintainer tags or untags issues on GitHub, call it with
 `refresh: true` to read them from GitHub now. It reads an approved project
@@ -213,6 +257,8 @@ then:
   an admin or maintainer of the repo, or of its issue repo, or shows it no
   public repo by that name, or blocked access to the repo. Check the name.
   Only an admin or maintainer of the repo on GitHub can manage it. Stop.
+  A project whose repo went private, was deleted, or was blocked is
+  delisted by the sync too, as in Delisted by the sync.
 - `repo_not_eligible`: The repo is private or archived, has pull requests
   turned off, or lets only collaborators open them, or the issue repo is
   private or archived. The message says which. The maintainer can change

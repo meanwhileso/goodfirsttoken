@@ -688,9 +688,9 @@ describe('admin_pause_project', () => {
     const byMaintainer = await call(maintainer, 'pause_project', { repo: HARBOR, paused: false });
     const resumed = await call(admin, 'admin_pause_project', { repo: HARBOR, paused: false });
 
-    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true });
+    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, delisted: null });
     expect(textOf(byMaintainer)).toMatch(/^Refused \(not_admin\)/);
-    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true });
+    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, delisted: null });
     expect((await call(maintainer, 'project_status', { repo: HARBOR })).structuredContent).toMatchObject({ status: 'approved' });
   });
 
@@ -702,7 +702,7 @@ describe('admin_pause_project', () => {
     const paused = await call(admin, 'admin_pause_project', { repo: HARBOR, reason: 'Release week.' });
     const byMaintainer = await call(maintainer, 'pause_project', { repo: HARBOR, paused: false });
 
-    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true });
+    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, delisted: null });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: ADMIN.githubId });
     expect(textOf(byMaintainer)).toBe(
       `Refused (not_admin): A Good First Token admin paused ${HARBOR}. Only Good First Token's admins can resume it.`,
@@ -722,7 +722,7 @@ describe('admin_pause_project', () => {
 
     const result = await adminPauseProject(adminCaller(), { repo: HARBOR, paused: true, reason: 'Release week.' }, Date.now());
 
-    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'paused', changed: true } });
+    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'paused', changed: true, delisted: null } });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: ADMIN.githubId });
   });
 
@@ -757,7 +757,7 @@ describe('admin_pause_project', () => {
 
     const result = await adminPauseProject(adminCaller(), { repo: HARBOR, paused: false }, Date.now());
 
-    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected', changed: false } });
+    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected', changed: false, delisted: null } });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
   });
 
@@ -770,7 +770,7 @@ describe('admin_pause_project', () => {
     const byAdmin = await call(admin, 'admin_pause_project', { repo: HARBOR, paused: false });
 
     expect(textOf(byMaintainer)).toMatch(/^Refused \(not_admin\): Good First Token paused/);
-    expect(byAdmin.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true });
+    expect(byAdmin.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, delisted: null });
   });
 
   test("pausing or resuming a repo that isn't a project is not found, and nothing is made", async () => {
