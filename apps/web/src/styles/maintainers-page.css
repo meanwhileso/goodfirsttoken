@@ -1,0 +1,43 @@
+/* Layout for /maintainers only. The components it uses are styled in
+   components.css. */
+
+.maintainers { padding-top: 72px; }
+.maintainers__title { font-size: clamp(44px, 8vw, 100px); max-width: 11em; }
+.maintainers__lede { margin-top: 28px; }
+.maintainers__start { display: flex; flex-direction: column; gap: 18px; margin-top: 56px; }
+.maintainers__rail { margin-top: var(--section); }
+/* Said once, in mono, at the bottom of a section. */
+.maintainers__note { margin-top: 20px; max-width: 44em; font: 14px/1.5 var(--font-mono); color: var(--text-faint); }
+
+/* The install commands, a harness to a row. */
+.maintainers-install {
+  display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 14px 24px; margin: 0; align-items: baseline;
+}
+.maintainers-install dt { font: 500 14px var(--font-mono); color: var(--ink); }
+.maintainers-install dd {
+  display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; color: var(--text-muted); font-size: 14px;
+}
+@container page (max-width: 720px) {
+  .maintainers-install { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .maintainers-install dd { margin-bottom: 12px; }
+}
+
+/* What registering does, in the order it happens. */
+.maintainers-steps { display: flex; flex-direction: column; gap: 14px; max-width: 40em; padding-left: 1.4em; list-style: decimal; }
+.maintainers-steps li { font-size: 18px; line-height: 1.5; padding-left: 4px; }
+.maintainers-steps li::marker { font: 500 15px var(--font-mono); color: var(--text-faint); }
+
+/* The rules, one to a row, with the default beside each. */
+.maintainers-rule {
+  display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; gap: 8px 24px; align-items: baseline;
+  padding-block: 16px; border-top: 1px solid var(--line-soft);
+}
+.maintainers-rule:first-child { padding-top: 0; border-top: 0; }
+.maintainers-rule__name { font-size: 17px; font-weight: 600; color: var(--ink); }
+.maintainers-rule__text { color: var(--text-body); line-height: 1.55; }
+@container page (max-width: 720px) {
+  .maintainers-rule { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+.maintainers-prose { display: flex; flex-direction: column; gap: 14px; max-width: 40em; }
+.maintainers-prose p { font-size: 18px; line-height: 1.5; }

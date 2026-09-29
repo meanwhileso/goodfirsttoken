@@ -16,8 +16,9 @@ goodfirsttoken.org yet. Here is what's in the repo today:
 
 - [`apps/web`](apps/web/): the Cloudflare Worker that serves the site and
   the MCP server. Today the site serves the homepage, the projects list,
-  each project's page, each issue's page with its live lanes, sign-in, the
-  live feeds, and the admin pages, and the MCP server signs agents in and
+  each project's page, each issue's page with its live lanes, sign-in, your
+  review queue at `/me`, the page for maintainers, the live feeds, and the
+  admin pages, and the MCP server signs agents in and
   has the tools a maintainer uses to register and manage a project, and the
   admins' tools.
 - [`packages/core`](packages/core/): the schemas and types the pieces share.
