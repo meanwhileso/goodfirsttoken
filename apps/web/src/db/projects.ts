@@ -30,7 +30,7 @@ import {
 import { getDoNotListEntry } from './do-not-list';
 import { getWaitingRemoval } from './removals';
 import { checkTime, fromJson, joinIssue } from './shared';
-import { ASKING_FOR_HELP, DELISTED, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
+import { ASKING_FOR_HELP, DELISTED, HAS_PAGE, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
 
 // The projects, project_settings, and project_status_changes tables. A
 // project's row holds its current status and points at its current
@@ -213,6 +213,25 @@ export async function listProjects(db: D1Database, status: ProjectStatus): Promi
     .bind(mustParse(projectStatusSchema, status, 'status'))
     .all<ProjectRow>();
   return results.map(toProject);
+}
+
+/**
+ * The code repos of the projects a person registered as their maintainer
+ * that have a page, as HAS_PAGE says, oldest first, at most `limit` of
+ * them. A project an admin listed from its policy isn't theirs.
+ */
+export async function listRegisteredBy(db: D1Database, person: number, limit: number): Promise<string[]> {
+  // No index leads with added_by, so this reads the approved and paused
+  // projects through projects_by_status.
+  const { results } = await db
+    .prepare(
+      `SELECT p.repo FROM projects p
+       WHERE p.added_by = ? AND p.source = 'registered' AND ${HAS_PAGE}
+       ORDER BY p.added_at, p.repo LIMIT ?`,
+    )
+    .bind(mustParse(githubId, person, 'person'), mustParse(count, limit, 'limit'))
+    .all<{ repo: string }>();
+  return results.map((row) => mustParse(repoName, row.repo, 'repo'));
 }
 
 /** A project asking for help, with how many of its tagged issues wait for an agent. */

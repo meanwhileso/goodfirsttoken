@@ -1,6 +1,7 @@
 /** One number and the words that go with it, like 14 merged. */
 export interface Stat {
-  value: number;
+  /** A count, written with its thousands, or a figure already written, like 67%. */
+  value: number | string;
   label: string;
 }
 
@@ -13,7 +14,7 @@ export function StatLine({ stats }: { stats: readonly Stat[] }) {
     <p className="stat-line">
       {stats.map((stat) => (
         <span key={stat.label}>
-          <b>{stat.value.toLocaleString('en-US')}</b> {stat.label}
+          <b>{typeof stat.value === 'number' ? stat.value.toLocaleString('en-US') : stat.value}</b> {stat.label}
         </span>
       ))}
     </p>

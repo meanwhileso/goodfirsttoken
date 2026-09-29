@@ -1561,8 +1561,9 @@ so neither can land between the other's check and write.
 ### Indexes
 
 Each index serves a query that a page, a tool, a job, or the leaderboard
-needs. The leaderboard isn't built yet, and #26 writes its queries. The
-plans below were checked with `EXPLAIN QUERY PLAN`. The key of
+needs. The leaderboard's queries are one, `tally`, under
+[The leaderboard and the person pages](#the-leaderboard-and-the-person-pages).
+The plans below were checked with `EXPLAIN QUERY PLAN`. The key of
 `tagged_issues` leads with the project, so it serves a project's issues,
 suggestions across approved projects through `projects_by_status`, and
 pruning after a sync, with no index of its own.
@@ -1574,8 +1575,8 @@ pruning after a sync, with no index of its own.
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync, and the copies of an issue the sync checks before a room forgets its PR |
 | `project_status_changes_by_repo` | A project's status changes, newest first, and its latest, which names a registration in the admin queue |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
-| `claims_by_person` | One person's claims, newest first: `my_work`, the claims `start_session` offers to resume, a donor's open PRs by project, their follow-ups and merged PRs to share, their page, and their leaderboard row |
-| `claims_by_project` | One project's claims: its page's claims working now, merged PRs, and top helpers, its claims working now for `project_status`, and, in a time range, its row on the leaderboard by project |
+| `claims_by_person` | One person's claims, newest first: `my_work`, the claims `start_session` offers to resume, a donor's open PRs by project, their follow-ups and merged PRs to share, their page's working now, history, totals, projects helped, and activity graph, and the claims the leaderboard's all-time and weekly views scan for issues worked |
+| `claims_by_project` | One project's claims: its page's claims working now, merged PRs, and top helpers, and its claims working now for `project_status` |
 | `prs_by_number` | A PR's claim, and one claim per PR, and the claims whose closed PR a read finds open again |
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
@@ -1600,9 +1601,13 @@ indexed. So merged PRs this week filter on `closed_at` with
 uses no index, so it reads every PR or every claim, depending on the query.
 Merge rate reads the same index.
 
-Some views have no index of their own. Issues worked per person this week
-scans every claim. The all-time views scan `claims` or `prs` and look up the
-other by key, and hiding blocked donors looks up `donor_blocks` by key.
+Some views have no index of their own. The leaderboard's this week reads
+its PRs through `prs_by_opened` and `prs_by_closed` at once, but counts
+issues worked by scanning every claim, since no index leads with the claim
+time. The all-time views, the leaderboard by agent, and the leaderboard by
+project scan `claims` and look up each PR by key. A person's registered
+projects read `projects_by_status`, since no index leads with who added a
+project. Hiding blocked donors looks up `donor_blocks` by key.
 Hiding what the sync delisted looks up `issue_syncs` by key. Hiding what
 the do-not-list covers looks up `do_not_list` by key, and the
 projects whose issues live in each repo through `projects_by_issue_repo`.
@@ -2274,6 +2279,86 @@ under The projects list and The project page.
   state after the index, and the merged PRs and top helpers look up each
   claim's PR. So the rows a view reads grow with the project's claim
   history, three times over. Nothing caches any of it yet.
+
+## The leaderboard and the person pages
+
+The rules are in [how-it-works.md](how-it-works.md#the-leaderboard), under
+The leaderboard, A person's page, and The live page.
+
+| File | What it does |
+|---|---|
+| `src/routes/leaderboard.tsx` | `/leaderboard`, its four views as `Tabs` |
+| `src/routes/@{$user}.tsx` | `/@<login>`, a person's page. TanStack Router's `{$user}` takes the segment after the `@` |
+| `src/routes/live.tsx` | `/live`, the homepage's feed on a wall of 20 lines |
+| `src/db/leaderboard.ts` | `tally`, the one query every ranking and count uses, `mergeRate`, and `dailyActivity`, a person's work by UTC day |
+| `src/db/shown.ts` | `SHOWN` and `CLAIM_SHOWN`, the SQL for what the public pages show of a claim and its PR: no blocked donor's, and none the do-not-list names |
+| `src/db/waiting.ts` | Adds `HAS_PAGE`, the SQL for a project with a page, and `holdingSlot`, a claim holding its slot, beside the rule for an issue waiting |
+| `src/leaderboard/load.ts`, `src/leaderboard/data.ts` | `loadLeaderboard` and `getLeaderboard`, the four views |
+| `src/leaderboard/format.ts` | How a merge rate and a token count are written |
+| `src/person/load.ts`, `src/person/data.ts` | `loadPerson` and `getPersonPage` |
+| `src/person/activity.ts` | The activity graph's squares, for the server and the page |
+| `src/live/load.ts`, `src/live/data.ts` | `loadLive` and `getLive` |
+| `src/feed/useWallFeed.ts` | A wall's lines: what a page loaded with, then each event from its feed's socket on top. A project's page, a person's page, and `/live` use it |
+| `src/styles/leaderboard-page.css`, `src/styles/person-page.css`, `src/styles/live-page.css` | The pages' layout |
+
+- **One tally.** `tally(db, group, scope, { limit, onlyMerged })` groups by
+  person, agent, or project, over a scope: a time range, a project, a
+  person, or none. It is one SQL statement. `scoped` takes the PRs from
+  claims in the scope, opened or ended in the range, with `SHOWN`, and marks
+  each as merged, closed, or opened in the range by its own time.
+  `ranked` numbers each group's PRs, latest merge from someone else's
+  project first, for the agent a row names. `counts` adds them up, with
+  own-project work in `own_merged` only. `worked` counts the distinct
+  issues and sums the token estimates of the claims made in the range on
+  someone else's project, with `CLAIM_SHOWN`. The rows are every key in
+  either, joined to `people` for a login now, or to `projects` with
+  `HAS_PAGE` for a project's name as saved, and `COUNT(*) OVER ()` gives
+  the total before the limit. Merge rate is worked out after, by
+  `mergeRate`.
+- **Who uses it.** The homepage's `topMergers` is the person tally over a
+  week with `onlyMerged`, and a project's `topHelpers` the person tally over
+  the project, in `src/db/prs.ts`. The leaderboard's views are the person
+  tally over this week and of all time, and the agent and project tallies
+  of all time. A person's totals are the person tally over them alone, and
+  the projects they helped the project tally over them, with `onlyMerged`.
+  So the homepage, a project's page, the leaderboard, and a person's page
+  can't count one PR two ways.
+- **The week** is `startOfWeek` in `src/db/prs.ts`, Monday at 00:00 UTC.
+  The range takes a time from that moment up to the next Monday's, which
+  it leaves out.
+- **What a person's page reads.** `loadPerson` finds the person with
+  `findPersonByLogin`, through `people_by_login`, and their block by key.
+  Then at once: working now and history with `listPersonWork` in
+  `src/db/claims.ts`, which reads their claims through `claims_by_person`
+  with `holdingSlot` and `SHOWN`, each PR by key, and a title from the
+  cached copy only under `HAS_PAGE`; their totals and projects helped with
+  `tally`; their registered projects with `listRegisteredBy` in
+  `src/db/projects.ts`; the activity graph with `dailyActivity`; and a
+  `glance` at their feed. A claim's state as of now comes from core's
+  `nextClaimState` with a tick, so an expired claim the room hasn't saved
+  yet reads as expired. So a view costs eight D1 queries and one call to a
+  feed, which asks D1 which donors and repos to hide. Each list is bounded: 20 claims working, 50 in history, 10
+  projects helped, 20 maintained, and 364 days of activity.
+- **What the leaderboard reads.** `loadLeaderboard` makes the four tallies
+  at once, each limited to 50 rows, and adds the named agents with no work
+  yet with `withNamedAgents`. Any failed read makes the page answer `503`.
+  The weekly view reads its PRs through `prs_by_opened` and
+  `prs_by_closed`, and the others scan `claims`, as under
+  [Indexes](#indexes). Nothing caches it yet.
+- **No migration.** Every query uses the indexes migration
+  `0001_records.sql` made for them.
+- **Text stays text.** Every login, repo, title, and line is rendered by
+  React as text. A login comes from the path only after the `githubLogin`
+  pattern checks it, and the page names the person by the login stored.
+- **Tests.** `test/db/leaderboard.test.ts` checks the rules of `tally` and
+  `dailyActivity` against D1: the merge rate, the week's edge on each side
+  of Monday 00:00 UTC, the own-project column, blocked donors, the
+  do-not-list, ties, and the project view's pages. `test/person/person.test.ts`
+  loads a person's page and renders the three pages through the Worker:
+  404s, a rename, a delisted project's title, the 503s, and escaping.
+  `e2e/leaderboard.spec.ts`, `e2e/person.spec.ts`, and `e2e/live.spec.ts`
+  check each view and page in the browser, with screenshots at 390 and
+  1280px, under [Tests](#tests).
 
 ## The sync
 
@@ -3267,9 +3352,15 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   seeds the sample projects through `/dev/seed`, and works an issue through
   `/dev/work` to see a line reach a project's page over the real socket.
   Their events reach the homepage's feed, and the seed lists projects
-  there, so both run in the `rooms` project, which depends on the
-  `chromium` project, once the rest are done, and the homepage's tests see
-  only what they expect. `admin.spec.ts` signs in as the fake's sample
+  there, so both run in the `rooms` project, once the rest are done, and
+  the homepage's tests see only what they expect. `leaderboard.spec.ts`,
+  `person.spec.ts`, and `live.spec.ts` seed the sample work and check each
+  leaderboard view, a person's page, and `/live`, standing in for the feeds
+  with `routeWebSocket` as the homepage's tests do. Their screenshots need
+  the numbers to hold still, so they run in the `board` project, which
+  depends on the `chromium` project, once the homepage's tests have seeded
+  the same work, and before any test makes claims or PRs of its own. The
+  `rooms` project depends on `board`. `admin.spec.ts` signs in as the fake's sample
   admin, approves and rejects the seeded registrations, and replays the
   admin page's server function call as a donor. Approving lists a project
   on the homepage, so it runs in the `admin` project, which depends on
@@ -3407,7 +3498,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   fixed live lines on a day long gone filling the wall. The video is masked,
   since each Chromium build draws its own video controls, and so are the
   token field and today's count, which the seeded events light with IDs and
-  times that change each run. Up to 2% of pixels may differ,
+  times that change each run. The leaderboard's, a person's page's, and
+  `/live`'s, at 390 and 1280px in `leaderboard.spec.ts-snapshots/`,
+  `person.spec.ts-snapshots/`, and `live.spec.ts-snapshots/`, show the
+  sample work under reduced motion. The person page and `/live` fill their
+  walls with fixed lines on a day long gone, and the person page masks its
+  activity graph and its days, which the seed dates from when it ran. Up to
+  2% of pixels may differ,
   for antialiasing, and a change in page height always fails. The baselines
   must come from the Playwright build CI uses, because other Chromium builds
   can wrap text differently. To update them, after a deliberate visual

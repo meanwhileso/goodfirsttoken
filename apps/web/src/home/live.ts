@@ -8,6 +8,9 @@ import type { WallLine } from '../components/Wall';
 /** How many lines the wall shows, newest first. */
 export const WALL_LINES = 6;
 
+/** How many lines /live shows, newest first, from the same feed. */
+export const LIVE_LINES = 20;
+
 /** A feed event as a line on the wall. Times are UTC, as in the text streams. */
 export function toWallLine(event: FeedEvent): WallLine {
   const hash = event.issue.lastIndexOf('#');

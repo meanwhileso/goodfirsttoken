@@ -11,6 +11,8 @@ import {
   type PrState,
 } from '@goodfirsttoken/core';
 import { checkTime, joinIssue, prColumns, prFromColumns, splitIssue } from './shared';
+import { SHOWN } from './shown';
+import { HAS_PAGE, holdingSlot } from './waiting';
 
 // The claims table: a mirror of each issue room's claims, for search and the
 // leaderboard. The issue room holds the claim and decides every change, and
@@ -218,6 +220,50 @@ export async function listPersonClaims(db: D1Database, person: number): Promise<
     .bind(mustParse(githubId, person, 'githubId'))
     .all<ClaimRow>();
   return results.map(toClaim);
+}
+
+/** A claim on a person's page, with what the site shows beside it. */
+export interface PersonClaim extends ClaimWithPr {
+  /**
+   * The issue's title, from the project's cached copy, or null when there is
+   * none or the project has no page, so nothing cached from a delisted
+   * project's repos shows.
+   */
+  title: string | null;
+}
+
+/**
+ * A person's claims that the site shows, newest first, at most `limit` of
+ * them: those that hold a slot at `now` when `holding` is true, and the
+ * rest when it is false. A claim the do-not-list names, by its project, the
+ * repo its issue is in, the project's issue repo now, or its PR's repo, is
+ * left out, and a blocked donor's are all left out, as SHOWN says.
+ */
+export async function listPersonWork(
+  db: D1Database,
+  person: number,
+  { now, holding, limit }: { now: number; holding: boolean; limit: number },
+): Promise<PersonClaim[]> {
+  // The person's claims through claims_by_person, newest first, each one's
+  // PR by key, and its cached copy and its project by the keys of
+  // tagged_issues and projects. Inside the subquery, p is the project.
+  const { results } = await db
+    .prepare(
+      `SELECT c.*, p.state AS pr_state,
+         (SELECT t.title FROM tagged_issues t JOIN projects p ON p.repo = t.project
+          WHERE t.project = c.project AND t.issue_repo = c.issue_repo AND t.number = c.issue_number AND ${HAS_PAGE}) AS title
+       FROM claims c LEFT JOIN prs p ON p.claim_id = c.id
+       WHERE c.github_id = ?1 AND ${holding ? '' : 'NOT '}${holdingSlot('?2')} AND ${SHOWN}
+       ORDER BY c.claimed_at DESC, c.id
+       LIMIT ?3`,
+    )
+    .bind(mustParse(githubId, person, 'person'), checkTime(now), mustParse(count, limit, 'limit'))
+    .all<ClaimRow & { pr_state: string | null; title: string | null }>();
+  return results.map((row) => ({
+    claim: toClaim(row),
+    prState: row.pr_state === null ? null : mustParse(prStateSchema, row.pr_state, 'prState'),
+    title: row.title,
+  }));
 }
 
 /**

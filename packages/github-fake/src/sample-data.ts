@@ -116,6 +116,9 @@ export const people: SampleAccount[] = [
   { login: 'ines', id: 1004, name: 'Ines', created: '5y' },
   { login: 'arjun', id: 1005, name: 'Arjun', created: '3y' },
   { login: 'lena', id: 1006, name: 'Lena', created: '7y' },
+  // A donor the sample work has an admin block, so the leaderboard and the
+  // feeds hide them.
+  { login: 'rowan', id: 1011, name: 'Rowan', created: '2y' },
   // Maintainers: they register projects and tag issues.
   { login: 'octo-maintainer', id: 1008, name: 'Octo Maintainer', created: '10y' },
   { login: 'sample-maintainer', id: 1009, name: 'Sample Maintainer', created: '9y' },

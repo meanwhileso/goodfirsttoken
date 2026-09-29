@@ -15,6 +15,10 @@
   // So are /me and /maintainers.
   const ME_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#your-queue-on-me';
   const MAINTAINERS_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-maintainers-page';
+  // So are /live, /leaderboard, and each person's page, /@<login>.
+  const LIVE_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-live-page';
+  const LEADERBOARD_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-leaderboard';
+  const PERSON_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#a-persons-page';
 
   // ---------- DOM helpers ----------
 
@@ -57,8 +61,8 @@
   // ---------- Shared chrome ----------
 
   const NAV_LINKS = [
-    { id: 'live', href: 'live.html', label: 'live', dot: true },
-    { id: 'leaderboard', href: 'leaderboard.html', label: 'leaderboard' },
+    { id: 'live', href: LIVE_PAGE, label: 'live', dot: true },
+    { id: 'leaderboard', href: LEADERBOARD_PAGE, label: 'leaderboard' },
     { id: 'projects', href: PROJECTS_PAGE, label: 'projects' },
     { id: 'maintainers', href: MAINTAINERS_PAGE, label: 'maintainers' },
   ];
@@ -211,7 +215,7 @@
     const row = h('div', { class: 'wall-line' },
       h('span', { class: 'time' }, time),
       h('div', { class: 'body' },
-        h('a', { class: 'who', href: 'person.html' }, `@${ev.who}`),
+        h('a', { class: 'who', href: PERSON_PAGE }, `@${ev.who}`),
         h('span', { class: 'chip' }, ev.agent),
         h('a', { class: 'issue', href: issueHref }, ev.issue),
         text));

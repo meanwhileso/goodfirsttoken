@@ -1,6 +1,5 @@
 import { productName, type Policy } from '@goodfirsttoken/core';
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { useState } from 'react';
 import { SiteNav } from '../auth/SiteNav';
 import { Chip, Tag } from '../components/Chip';
 import { Footer } from '../components/Footer';
@@ -11,9 +10,9 @@ import { Ranks } from '../components/Ranks';
 import { Slots } from '../components/Slots';
 import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import { StatLine } from '../components/StatLine';
-import { Wall, type WallLine } from '../components/Wall';
-import { useLiveFeed } from '../feed/useLiveFeed';
-import { toWallLine, WALL_LINES } from '../home/live';
+import { Wall } from '../components/Wall';
+import { useWallFeed } from '../feed/useWallFeed';
+import { WALL_LINES } from '../home/live';
 import { repoFromPath } from '../issue/path';
 import { prUrl, refName } from '../issue/view';
 import { getProjectPage, type MergedRow, type ProjectIssueRow, type ProjectPage } from '../project/data';
@@ -102,23 +101,13 @@ function NotFoundProject() {
   );
 }
 
-// The lines the page loaded with, then each event from the project's feed,
-// on top, keeping the newest few.
-function useProjectFeed(page: ProjectPage): WallLine[] {
-  const [lines, setLines] = useState(() => (page.live ?? []).map(toWallLine));
-  useLiveFeed(`/${page.repo}/live.ndjson`, page.live?.[0]?.id ?? null, (event) => {
-    setLines((prev) => [toWallLine(event), ...prev].slice(0, WALL_LINES));
-  });
-  return lines;
-}
-
 /** A UTC day, like 2026-09-27, from an ISO 8601 time. */
 function day(time: string): string {
   return new Date(time).toISOString().slice(0, 10);
 }
 
 function Project({ page }: { page: ProjectPage }) {
-  const lines = useProjectFeed(page);
+  const lines = useWallFeed(`/${page.repo}/live.ndjson`, page.live, WALL_LINES);
   const slash = page.repo.indexOf('/');
   const { settings } = page;
 
