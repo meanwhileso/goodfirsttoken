@@ -70,7 +70,7 @@ The skills and plugins, install for every harness, and MCP Apps views.
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
 | [#18](https://github.com/meanwhileso/goodfirsttoken/issues/18) | Build every skill from one source, and publish the plugins | #3 | [#42](https://github.com/meanwhileso/goodfirsttoken/pull/42) |
-| [#19](https://github.com/meanwhileso/goodfirsttoken/issues/19) | Write the donor skills: give, work, and review | #18, #17 | |
+| [#19](https://github.com/meanwhileso/goodfirsttoken/issues/19) | Write the donor skills: give, work, and review | #18, #17 | [#96](https://github.com/meanwhileso/goodfirsttoken/pull/96) |
 | [#20](https://github.com/meanwhileso/goodfirsttoken/issues/20) | Write the maintainer and admin skills | #18, #11 | [#68](https://github.com/meanwhileso/goodfirsttoken/pull/68) |
 | [#21](https://github.com/meanwhileso/goodfirsttoken/issues/21) | Serve /start.md, document every harness, and add the token hook | #19 | |
 | [#22](https://github.com/meanwhileso/goodfirsttoken/issues/22) | Add MCP Apps views for issue cards, the live feed, and the review queue | #7, #14, #16 | [#79](https://github.com/meanwhileso/goodfirsttoken/pull/79) |
@@ -92,6 +92,8 @@ Every public page, the markdown and JSON versions, and share cards.
 | [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 | |
 | [#29](https://github.com/meanwhileso/goodfirsttoken/issues/29) | Generate share cards | #26 | |
 | [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) | Delist a paused project whose repo went private | #24 | [#73](https://github.com/meanwhileso/goodfirsttoken/pull/73) |
+| [#94](https://github.com/meanwhileso/goodfirsttoken/issues/94) | Word /me's refusals for the person reading them | #27 | |
+| [#95](https://github.com/meanwhileso/goodfirsttoken/issues/95) | Show follow-ups and claims in progress on /me | #27 | |
 
 ## M7 Policy crawler
 
@@ -115,6 +117,9 @@ Deploys, the static host, a security review, and the launch video.
 | [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
 | [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | [#57](https://github.com/meanwhileso/goodfirsttoken/pull/57) |
 | [#89](https://github.com/meanwhileso/goodfirsttoken/issues/89) | Check on GitHub that a private organization member's review counts | #17 | |
+| [#91](https://github.com/meanwhileso/goodfirsttoken/issues/91) | Fold synced issue titles, and keep the update fold fast | Nothing | |
+| [#92](https://github.com/meanwhileso/goodfirsttoken/issues/92) | Tie each project to its GitHub repo ID | Nothing | |
+| [#93](https://github.com/meanwhileso/goodfirsttoken/issues/93) | Cap the GitHub reads behind the admin queue | Nothing | |
 
 ## Dependency graph
 
@@ -165,6 +170,8 @@ flowchart TD
   n28["#28 Markdown and JSON"]:::m6
   n29["#29 Share cards"]:::m6
   n65["#65 Delist paused private repos"]:::m6
+  n94["#94 /me refusal words"]:::m6
+  n95["#95 Follow-ups and claims on /me"]:::m6
   n30["#30 Policy crawler"]:::m7
   n31["#31 Re-crawls"]:::m7
   n76["#76 Missed ban wordings"]:::m7
@@ -174,6 +181,9 @@ flowchart TD
   n34["#34 Security review"]:::m8
   n35["#35 Launch video"]:::m8
   n89["#89 Push access on GitHub"]:::m8
+  n91["#91 Fold titles, fast update fold"]:::m8
+  n92["#92 Repo IDs"]:::m8
+  n93["#93 Cap admin queue reads"]:::m8
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -231,6 +241,8 @@ flowchart TD
   n26 --> n28
   n26 --> n29
   n27 --> n28
+  n27 --> n94
+  n27 --> n95
   n28 --> n34
   n30 --> n31
   n30 --> n76
@@ -238,7 +250,7 @@ flowchart TD
   n76 --> n77
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n17,n80,n22 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n17,n80,n22,n19 done
 ```
 
 ## Maintainer steps
