@@ -7,7 +7,7 @@ import { GitHubError } from '../github';
 import { adminTools } from './admin';
 import { disconnect, markConnectionUsed } from './connections';
 import * as donor from './donor';
-import { pauseProject, projectStatus, registerProject, updateProject } from './maintainer';
+import { pauseProject, projectStatus, registerProject, requestRemoval, updateProject } from './maintainer';
 import { MCP_PATH } from './paths';
 import type { AgentProps } from './provider';
 import { openPr, submitWork } from './submit';
@@ -113,6 +113,9 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
   );
   server.registerTool('pause_project', specOf(tools.pause_project), (input) =>
     run(() => pauseProject(caller, input, Date.now())),
+  );
+  server.registerTool('request_removal', specOf(tools.request_removal), (input) =>
+    run(() => requestRemoval(caller, input, Date.now())),
   );
   // The admin's tools are listed only for admins. Each also checks the
   // caller's permission first, whenever it runs.

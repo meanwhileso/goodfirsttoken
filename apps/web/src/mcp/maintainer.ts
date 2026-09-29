@@ -7,6 +7,7 @@ import {
   type ProjectSettings,
   type ProjectStatus,
   type Refusal,
+  type RemovalRequest,
   type RefusalCode,
   type ToolInput,
   type ToolRefusal,
@@ -16,12 +17,18 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller, type ManagedRepo } from '../auth/permissions';
 import {
+  askRemoval,
   changeSettings,
+  closeRemoval,
   countProjectPrs,
   countWorkingClaims,
   createProject,
+  getDoNotListEntry,
   getIssueSync,
+  getPerson,
   getProject,
+  getWaitingRemoval,
+  lastRemovalBy,
   listIssues,
   reopenRegistration,
   setProjectStatusFrom,
@@ -43,10 +50,10 @@ import { resumableBy, statusBeforePause } from '../projects/status';
 import { refreshIssues } from '../sync/scheduled';
 
 // The maintainer's tools: register_project, update_project, project_status,
-// and pause_project. Each one first asks GitHub, with the caller's own token,
-// whether they are an admin or maintainer of the repo, through
-// requirePermission. The rules are in docs/how-it-works.md, under
-// Registering a project and Managing a project.
+// pause_project, and request_removal. Each one first asks GitHub, with the
+// caller's own token, whether they are an admin or maintainer of the repo,
+// through requirePermission. The rules are in docs/how-it-works.md, under
+// Registering a project, Managing a project, and Asking to be removed.
 
 /** A tool's answer, as the MCP SDK takes it. */
 export type Answer = CallToolResult;
@@ -346,4 +353,87 @@ export async function pauseProject(caller: Caller, input: ToolInput<'pause_proje
     if (updated !== null) return pauseAnswer(updated, true);
   }
   throw new Error(`${input.repo} kept changing status while it was paused or resumed.`);
+}
+
+/** Who asked for a request, by their login now. */
+async function askerOf(request: RemovalRequest): Promise<string> {
+  const person = await getPerson(env.DB, request.requestedBy);
+  if (person === null) throw new Error(`${request.repo}'s request to be removed names someone who isn't recorded.`);
+  return person.login;
+}
+
+/** Who withdrew a request, when it was someone other than the one who asked, and when. */
+async function withdrawnByAnother(request: RemovalRequest | null): Promise<{ by: string; at: string } | null> {
+  if (request?.status !== 'withdrawn' || request.closedBy === null || request.closedAt === null) return null;
+  if (request.closedBy === request.requestedBy) return null;
+  const withdrawer = await getPerson(env.DB, request.closedBy);
+  if (withdrawer === null) throw new Error(`${request.repo}'s request to be removed names someone who isn't recorded.`);
+  return { by: withdrawer.login, at: new Date(request.closedAt).toISOString() };
+}
+
+function removalAnswer(
+  repo: string,
+  request: RemovalRequest | null,
+  asker: string | null,
+  state: {
+    waiting: boolean;
+    onDoNotList: boolean;
+    changed: boolean;
+    lastWithdrawn: { by: string; at: string } | null;
+  },
+): Answer {
+  return answer(
+    toolResult('request_removal', {
+      repo,
+      ...state,
+      requestedBy: asker,
+      requestedAt: request === null ? null : new Date(request.requestedAt).toISOString(),
+    }),
+  );
+}
+
+/**
+ * Asks Good First Token's admins to remove a repo, or withdraws the request
+ * that waits for it. The caller must be an admin or maintainer of it on
+ * GitHub, asked with their own token, for either, and nothing else about the
+ * repo counts: a project in any status, a listing made from its policy, a
+ * repo whose pull requests are limited to collaborators or that is
+ * archived, and a repo that isn't on Good First Token at all can each be
+ * asked for. The request waits in the admin queue until an admin removes the
+ * repo, or a maintainer of it withdraws it. It pauses nothing. A repo on the
+ * do-not-list was removed already, so asking makes no request, unless a
+ * registration of it waits, which an admin's approval would take off the
+ * list.
+ */
+export async function requestRemoval(
+  caller: Caller,
+  input: ToolInput<'request_removal'>,
+  now: number,
+): Promise<Answer> {
+  const found = await requirePermission(caller, 'manage_project', { repo: input.repo });
+  // A project keeps the name it was added with, so the request takes that
+  // name, and the admin removes the project by it. Otherwise GitHub's.
+  const project = await getProject(env.DB, input.repo);
+  const repo = project?.repo ?? found.full_name;
+  const onDoNotList = (await getDoNotListEntry(env.DB, repo)) !== null;
+  // Someone else may have withdrawn the caller's last request for the repo.
+  // Each call they make says so, until they make a new request, which is
+  // then their last.
+  const lastWithdrawn = await withdrawnByAnother(await lastRemovalBy(env.DB, repo, caller.githubId));
+
+  if (input.withdraw) {
+    const withdrawn = await closeRemoval(env.DB, repo, { status: 'withdrawn', by: caller.githubId }, now);
+    const asker = withdrawn === null ? null : await askerOf(withdrawn);
+    return removalAnswer(repo, withdrawn, asker, { waiting: false, onDoNotList, changed: withdrawn !== null, lastWithdrawn });
+  }
+
+  if (onDoNotList && project?.status !== 'pending') {
+    const waiting = await getWaitingRemoval(env.DB, repo);
+    const asker = waiting === null ? null : await askerOf(waiting);
+    return removalAnswer(repo, waiting, asker, { waiting: waiting !== null, onDoNotList, changed: false, lastWithdrawn });
+  }
+  const reason = input.reason ?? '';
+  const { request, created } = await askRemoval(env.DB, { repo, reason, requestedBy: caller.githubId }, now);
+  const asker = created ? caller.login : await askerOf(request);
+  return removalAnswer(request.repo, request, asker, { waiting: true, onDoNotList, changed: created, lastWithdrawn });
 }
