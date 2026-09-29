@@ -41,12 +41,15 @@ import {
   relistFromPolicy,
   setProjectStatusFrom,
   statusHistory,
+  storedRepoIds,
   unblockDonor,
   withdrawnByOthers,
+  type RepoIds,
 } from '../db';
 import { GitHubError } from '../github';
 import { readDelisting } from '../project/shown';
-import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
+import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type ListedRepo, type Standing } from '../projects/repo';
+import { identityOf, isStoredRepo } from '../projects/repo-id';
 import { resumableBy, statusBeforePause } from '../projects/status';
 
 // What an admin does, for the admin's MCP tools (src/mcp/admin.ts) and the
@@ -269,11 +272,30 @@ function onTheList(repo: string): { ok: false; refusal: Refusal } {
 }
 
 /**
+ * Whether the repo GitHub gave for `asked` is the one every project keeps
+ * under that name, or under the name GitHub gives, by its GitHub ID, as
+ * src/projects/repo-id.ts says. True for a name no project keeps.
+ */
+async function isKeptRepo(asked: string, found: ListedRepo): Promise<boolean> {
+  const identity = identityOf(found);
+  if (identity === null) throw new Error(`GitHub described ${asked} without its ID.`);
+  return isStoredRepo(env.DB, await storedRepoIds(env.DB, [asked, found.full_name]), identity);
+}
+
+function anotherRepo(repo: string): { ok: false; refusal: Refusal } {
+  return refuse(
+    'repo_not_eligible',
+    `The repo GitHub shows as ${repo} is not the one Good First Token keeps under that name: its GitHub ID differs. It can't be listed under that name.`,
+  );
+}
+
+/**
  * Lists a repo from its written policy, or lists it again when it is already
  * listed that way, after checking it on GitHub with the admin's own token:
  * it has to be public, not archived, and take pull requests from anyone.
  * Its issue repo, when it has one of its own, has to be public and not
- * archived. A new listing takes the settings sent, with the rest at their
+ * archived. Each has to be the repo a project keeps under its name, by its
+ * GitHub ID, when one does, and the listing keeps both IDs. A new listing takes the settings sent, with the rest at their
  * defaults, and a listing again changes only the settings sent. A repo on the
  * do-not-list, or one its maintainers registered, is refused. The
  * do-not-list is checked again in the same statement as each write, so a
@@ -297,7 +319,9 @@ async function listFromPolicy(
   if (found === null) return refuse('repo_not_eligible', `GitHub shows no public repo named ${repo}. Only a public repo can be listed.`);
   const problem = whyNotEligible(repoFacts(found), 'list');
   if (problem !== null) return refuse('repo_not_eligible', problem);
+  if (!(await isKeptRepo(repo, found))) return anotherRepo(repo);
   const name = found.full_name;
+  const repoIds: RepoIds = { repo: found.id };
 
   const patch: ProjectSettingsPatch = { ...settings };
   if (typeof settings.issueRepo === 'string') {
@@ -309,7 +333,11 @@ async function listFromPolicy(
       }
       const notIssueRepo = whyNotIssueRepo(repoFacts(issues));
       if (notIssueRepo !== null) return refuse('repo_not_eligible', notIssueRepo);
-      if (issues.full_name.toLowerCase() !== name.toLowerCase()) patch.issueRepo = issues.full_name;
+      if (!(await isKeptRepo(settings.issueRepo, issues))) return anotherRepo(settings.issueRepo);
+      if (issues.full_name.toLowerCase() !== name.toLowerCase()) {
+        patch.issueRepo = issues.full_name;
+        repoIds.issueRepo = issues.id;
+      }
     }
   }
 
@@ -324,7 +352,7 @@ async function listFromPolicy(
       );
     }
     if (existing !== null) {
-      const relisted = await relistFromPolicy(env.DB, existing.repo, { policy, settings: patch }, caller.githubId, now);
+      const relisted = await relistFromPolicy(env.DB, existing.repo, { policy, settings: patch }, caller.githubId, now, repoIds);
       if (relisted?.ok === false) return { ok: false, refusal: invalidSettings(relisted.problems) };
       if (relisted?.ok) {
         const { project } = relisted;
@@ -335,7 +363,7 @@ async function listFromPolicy(
       if (!full.ok) return { ok: false, refusal: invalidSettings(full.problems) };
       const project = await createProject(
         env.DB,
-        { repo: name, status: 'approved', source: 'policy', policy, settings: full.value, addedBy: caller.githubId },
+        { repo: name, status: 'approved', source: 'policy', policy, settings: full.value, addedBy: caller.githubId, repoIds },
         now,
       );
       if (project !== null) {

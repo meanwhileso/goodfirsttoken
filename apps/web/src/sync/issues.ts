@@ -26,8 +26,10 @@ import {
   setDelisted,
   setProjectLanguage,
   setProjectStatusFrom,
+  storedRepoIds,
 } from '../db';
 import { GitHubError } from '../github';
+import { identityOf, isStoredRepo, type RepoIdentity } from '../projects/repo-id';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
 import { SyncStopped, type GitHubReader, type ServiceGitHub, type StopReason } from './github';
 import { reopenClaimPr } from './reopen';
@@ -39,7 +41,8 @@ import { reopenClaimPr } from './reopen';
 // tagged-issue cache, tells each issue's room about the linked PR it keeps,
 // and drops the issues it no longer finds. A repo that went private, was
 // archived, or is gone delists its project, and pauses it when it is
-// approved. Before it reads any issues, a run reads the repos alone of each
+// approved, and so does a repo under the project's name whose GitHub ID
+// isn't the one the project keeps, since that is another repo. Before it reads any issues, a run reads the repos alone of each
 // paused project, and of each approved one it delisted, so a project it
 // doesn't read shows nothing cached from a repo GitHub no longer shows
 // either. The rules are in docs/how-it-works.md, under Tagged issues.
@@ -120,6 +123,8 @@ const PER_PAGE = 100;
 // The parts of GitHub's REST answers the sync reads.
 // https://docs.github.com/en/rest/repos/repos#get-a-repository
 interface RestRepo {
+  id?: unknown;
+  created_at?: unknown;
   full_name?: unknown;
   private?: unknown;
   visibility?: unknown;
@@ -208,12 +213,13 @@ function notGitHub(repo: string): SyncStopped {
  * Found, a 451 with its JSON body, or a repo that says it is private or
  * archived. Any other 404 or 451, or a repo in a form GitHub doesn't send,
  * stops the run, so a proxy or a wrong GH_API_URL never pauses a project.
- * The repo's main language comes back too, or null when GitHub names none.
+ * The repo's main language comes back too, or null when GitHub names none,
+ * and its GitHub ID, for the caller to compare with the one it keeps.
  */
 async function readRepo(
   github: ServiceGitHub,
   repo: string,
-): Promise<{ name: string; language: string | null } | { unlisted: string }> {
+): Promise<{ name: string; language: string | null; identity: RepoIdentity } | { unlisted: string }> {
   let found: RestRepo;
   try {
     found = (await github.read<RestRepo>(`/repos/${repo}`)).data;
@@ -223,7 +229,13 @@ async function readRepo(
     if (error.status === 451 && error.bodyMessage !== null) return { unlisted: delistedReason(repo, 'blocked') };
     throw notGitHub(repo);
   }
-  if (typeof found.full_name !== 'string' || typeof found.private !== 'boolean' || typeof found.archived !== 'boolean') {
+  const identity = identityOf(found);
+  if (
+    identity === null ||
+    typeof found.full_name !== 'string' ||
+    typeof found.private !== 'boolean' ||
+    typeof found.archived !== 'boolean'
+  ) {
     throw notGitHub(repo);
   }
   if (found.private || (typeof found.visibility === 'string' && found.visibility !== 'public')) {
@@ -231,7 +243,7 @@ async function readRepo(
   }
   if (found.archived) return { unlisted: delistedReason(repo, 'archived') };
   const language = typeof found.language === 'string' && found.language.length <= 100 ? found.language : null;
-  return { name: found.full_name, language };
+  return { name: found.full_name, language, identity };
 }
 
 /**
@@ -252,6 +264,18 @@ async function pauseForGitHub(db: D1Database, project: ProjectRecord, reason: st
   }
 }
 
+/**
+ * Whether the repo GitHub gave for one of the project's repos is the one
+ * the project keeps under that name, by its GitHub ID.
+ */
+async function isProjectRepo(db: D1Database, project: ProjectRecord, repo: string, found: RepoIdentity): Promise<boolean> {
+  const role = lower(repo) === lower(project.repo) ? 'code' : 'issues';
+  const stored = (await storedRepoIds(db, [repo])).filter(
+    (entry) => lower(entry.project) === lower(project.repo) && entry.role === role,
+  );
+  return isStoredRepo(db, stored, found);
+}
+
 /** The code repo, then the issue repo when the project keeps its issues in another one. */
 function reposOf(project: ProjectRecord): string[] {
   const issueRepo = project.settings.issueRepo ?? project.repo;
@@ -262,9 +286,12 @@ function reposOf(project: ProjectRecord): string[] {
  * Reads the project's code repo, then its issue repo when that is another
  * one, and keeps what GitHub showed: the first that GitHub shows private,
  * archived, blocked, or gone delists the project, and pauses it when it is
- * approved, and both public and open take the mark off. The names GitHub
- * gives the repos now and the code repo's main language, or why the
- * project is delisted.
+ * approved, and both public and open take the mark off. A repo whose GitHub
+ * ID isn't the one the project keeps for it counts as gone, since the
+ * project's repo is no longer under that name. A project kept before IDs
+ * were has each ID filled in here, once, as src/projects/repo-id.ts says.
+ * The names GitHub gives the repos now and the code repo's main language,
+ * or why the project is delisted.
  */
 async function readRepos(
   deps: SyncDeps,
@@ -274,7 +301,8 @@ async function readRepos(
   const names: string[] = [];
   let language: string | null = null;
   for (const repo of reposOf(project)) {
-    const found = await readRepo(github, repo);
+    const read = await readRepo(github, repo);
+    const found = 'unlisted' in read || (await isProjectRepo(db, project, repo, read.identity)) ? read : { unlisted: delistedReason(repo, 'gone') };
     if ('unlisted' in found) {
       // The mark first, so the page is hidden even when the pause can't land.
       await setDelisted(db, project.repo, found.unlisted, now());

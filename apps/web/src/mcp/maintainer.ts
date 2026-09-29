@@ -81,17 +81,21 @@ function picksOurTag(tags: readonly string[] | undefined): boolean {
   return tags?.some((tag) => tag.toLowerCase() === OUR_LABEL.name) ?? false;
 }
 
-type IssueRepoCheck = { ok: true; issueRepo: string | null } | { ok: false; answer: Answer };
+type IssueRepoCheck =
+  | { ok: true; issueRepo: string | null; issueRepoId: number | undefined }
+  | { ok: false; answer: Answer };
 
 /**
  * Checks where a project's tagged issues will live. Issues in another repo
  * become work for agents under this project's settings, so the caller must
  * manage that repo too, asked of GitHub with their own token, and it must be
  * public and not archived. The issue repo as GitHub names it, or null when
- * the issues live in the code repo.
+ * the issues live in the code repo, with its GitHub ID from the same read.
  */
 async function checkIssueRepo(caller: Caller, repo: string, issueRepo: string | null): Promise<IssueRepoCheck> {
-  if (issueRepo === null || issueRepo.toLowerCase() === repo.toLowerCase()) return { ok: true, issueRepo: null };
+  if (issueRepo === null || issueRepo.toLowerCase() === repo.toLowerCase()) {
+    return { ok: true, issueRepo: null, issueRepoId: undefined };
+  }
   let found: ManagedRepo;
   try {
     found = await requirePermission(caller, 'manage_project', { repo: issueRepo });
@@ -103,7 +107,8 @@ async function checkIssueRepo(caller: Caller, repo: string, issueRepo: string | 
   const problem = whyNotIssueRepo(repoFacts(found));
   if (problem !== null) return { ok: false, answer: refuse('repo_not_eligible', problem) };
   const named = found.full_name;
-  return { ok: true, issueRepo: named.toLowerCase() === repo.toLowerCase() ? null : named };
+  if (named.toLowerCase() === repo.toLowerCase()) return { ok: true, issueRepo: null, issueRepoId: undefined };
+  return { ok: true, issueRepo: named, issueRepoId: found.id };
 }
 
 /**
@@ -165,7 +170,8 @@ export async function registerProject(
   input: ToolInput<'register_project'>,
   now: number,
 ): Promise<Answer> {
-  const facts = repoFacts(await requirePermission(caller, 'manage_project', { repo: input.repo }));
+  const found = await requirePermission(caller, 'manage_project', { repo: input.repo });
+  const facts = repoFacts(found);
   const token = await tokenOf(caller);
   const problem = whyNotEligible(facts);
   if (problem !== null) return refuse('repo_not_eligible', problem);
@@ -185,6 +191,8 @@ export async function registerProject(
   const place = await checkIssueRepo(caller, repo, input.settings.issueRepo);
   if (!place.ok) return place.answer;
   const settings: ProjectSettings = { ...input.settings, issueRepo: place.issueRepo };
+  // GitHub's IDs for both repos, from the reads that checked them.
+  const repoIds = { repo: found.id, issueRepo: place.issueRepoId ?? found.id };
   const created = await labelsFor(token, place.issueRepo ?? repo, settings.tags, 'register_project');
   if (!Array.isArray(created)) return answer(toolRefusal(created));
 
@@ -194,15 +202,15 @@ export async function registerProject(
     if (current === null) {
       const project = await createProject(
         env.DB,
-        { repo, status: 'pending', source: 'registered', policy: null, settings, addedBy: caller.githubId },
+        { repo, status: 'pending', source: 'registered', policy: null, settings, addedBy: caller.githubId, repoIds },
         now,
       );
       if (project !== null) return registered(project, created);
     } else if (current.source === 'registered') {
-      const project = await reopenRegistration(env.DB, current.repo, settings, caller.githubId, now);
+      const project = await reopenRegistration(env.DB, current.repo, settings, caller.githubId, now, repoIds);
       if (project !== null) return registered(project, created);
     } else {
-      const takeover = await takeOverListing(env.DB, current.repo, settings, caller.githubId, now);
+      const takeover = await takeOverListing(env.DB, current.repo, settings, caller.githubId, now, repoIds);
       if (takeover !== null) return registered(takeover.project, created);
     }
   }
@@ -236,7 +244,7 @@ export async function updateProject(caller: Caller, input: ToolInput<'update_pro
     : [];
   if (!Array.isArray(created)) return answer(toolRefusal(created));
 
-  const change = await changeSettings(env.DB, project.repo, patch, caller.githubId, now);
+  const change = await changeSettings(env.DB, project.repo, patch, caller.githubId, now, place.issueRepoId);
   if (change === null) return notAProject(input.repo);
   if (!change.ok) return answer(toolRefusal(invalidSettings(change.problems)));
   return answer(

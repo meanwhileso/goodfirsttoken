@@ -26,10 +26,13 @@ import {
   canSee,
   findIssue,
   findRepo,
+  findRepoById,
   forkOf,
   forkRepo,
+  fullName,
   getPull,
   key,
+  movedRepo,
   newId,
   openPull,
   requireGit,
@@ -559,13 +562,48 @@ function match(route: Route, method: string, path: string): Params | null {
 
 const STATUS = { not_found: 404, forbidden: 403, invalid: 422, stale: 409, empty: 409 };
 
+// The docs page for GitHub's redirects, which its 301 and 307 answers name.
+const REDIRECT_DOCS = 'https://docs.github.com/rest/guides/best-practices-for-using-the-rest-api#follow-redirects';
+
+// A repo's calls, by its ID. GitHub sends a call to a renamed or
+// transferred repo's old name here, and it answers as the repo's name now
+// does.
+const BY_ID = /^\/repositories\/([0-9]+)(\/.*)?$/;
+const BY_NAME = /^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/;
+
+// Where a call to a repo's old name goes: GitHub answers 301 to a read and
+// 307 to anything else, with the repo's ID path in Location, and the
+// caller follows it. Null when the name is a repo's, or no repo left it.
+// https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects
+function movedAway(req: RestRequest, path: string): Response | null {
+  const named = BY_NAME.exec(path);
+  if (!named) return null;
+  const [owner = '', name = ''] = [named[1], named[2]].map((part) => decodeURIComponent(part ?? ''));
+  if (findRepo(req.ctx.state, owner, name)) return null;
+  const repo = movedRepo(req.ctx.state, owner, name);
+  if (!repo || !canSee(repo, req.ctx.viewer, req.ctx.scopes)) return null;
+  const url = `${req.ctx.apiUrl}/repositories/${String(repo.id)}${named[3] ?? ''}`;
+  const status = req.method === 'GET' || req.method === 'HEAD' ? 301 : 307;
+  const message = status === 301 ? 'Moved Permanently' : 'Temporary Redirect';
+  return json({ message, url, documentation_url: REDIRECT_DOCS }, status, { location: `${url}${req.url.search}` });
+}
+
 // Returns the response and the operation name for the call log, like
-// "GET /repos/{owner}/{repo}".
-export function handleRest(req: RestRequest, path: string): { response: Response; operation: string } {
+// "GET /repos/{owner}/{repo}". A call by a repo's ID answers as a call by
+// its name.
+export function handleRest(req: RestRequest, asked: string): { response: Response; operation: string } {
+  let path = asked;
+  const byId = BY_ID.exec(asked);
+  if (byId) {
+    const repo = findRepoById(req.ctx.state, Number(byId[1]));
+    if (repo && canSee(repo, req.ctx.viewer, req.ctx.scopes)) path = `/repos/${fullName(repo)}${byId[2] ?? ''}`;
+  }
+  const redirect = movedAway(req, path);
   for (const route of routes) {
     const params = match(route, req.method, path);
     if (!params) continue;
     const operation = `${route.method} ${route.path.replace('+}', '}')}`;
+    if (redirect) return { response: redirect, operation };
     if (route.auth && req.ctx.viewer === null) {
       return { response: errorResponse(401, 'Requires authentication', route.docs), operation };
     }

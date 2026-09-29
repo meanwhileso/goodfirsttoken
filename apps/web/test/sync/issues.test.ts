@@ -22,8 +22,8 @@ import { HOLD_MS, syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
 import { ALLOWANCES } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
-import { db, emptyDatabase, maintainer, priya, registeredProject, sha, signIn } from '../db/helpers';
-import { callsTo, freshNumbers, jobDeps, SERVICE_LOGIN, TIMELINE } from './helpers';
+import { db, emptyDatabase, maintainer, priya, registeredProject, sha, signIn, t0 } from '../db/helpers';
+import { callsTo, freshNumbers, jobDeps, madeBefore, SERVICE_LOGIN, TIMELINE } from './helpers';
 
 // The tagged-issue sync, against the GitHub fake's sample repos, with the
 // issue rooms and D1 as they run deployed. sample-maintainer is an admin of
@@ -55,6 +55,8 @@ beforeEach(async () => {
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   github = startGitHub();
   freshNumbers(github, APP);
+  // Projects here are added at t0, long before the clock the fake runs on.
+  madeBefore(github, t0);
 });
 
 afterEach(() => {

@@ -2,6 +2,7 @@ import {
   changedSettings,
   count,
   githubId,
+  githubRepoId,
   issueSyncSchema,
   mustParse,
   policySchema,
@@ -51,6 +52,8 @@ interface ProjectRow {
   added_by: number;
   added_at: number;
   settings_version: number;
+  repo_id: number | null;
+  issue_repo_id: number | null;
   /** From the current row of project_settings. */
   settings: string;
 }
@@ -107,6 +110,48 @@ function issueRepoOf(repo: string, settings: ProjectSettings): string {
   return settings.issueRepo ?? repo;
 }
 
+/**
+ * GitHub's numeric IDs for a project's code repo, and for the other repo
+ * its issues live in, from the reads that checked them. `issueRepo` is left
+ * out when the caller didn't read that repo.
+ */
+export interface RepoIds {
+  repo: number;
+  issueRepo?: number;
+}
+
+/** The IDs a save knows, from the reads that checked the repos: none, some, or all. */
+type KnownIds = Partial<RepoIds>;
+
+/**
+ * What a save stores in repo_id and issue_repo_id, for setIds: the code
+ * repo's ID given, or else the one it has, and for the issue repo, which
+ * the settings after the save name, `code` for the code repo's ID when the
+ * issues live there, `keep` for the ID it has while the issues stay in the
+ * same repo, and otherwise the ID given, or none for the next read to fill
+ * in.
+ */
+function idsAfter(
+  repo: string,
+  before: ProjectSettings | null,
+  after: ProjectSettings,
+  ids: KnownIds | undefined,
+): [issueRepo: 'code' | 'keep' | 'set', repoId: number | null, issueRepoId: number | null] {
+  const code = ids?.repo === undefined ? null : mustParse(githubRepoId, ids.repo, 'repoId');
+  const next = issueRepoOf(repo, after).toLowerCase();
+  if (next === repo.toLowerCase()) return ['code', code, null];
+  if (ids?.issueRepo !== undefined) return ['set', code, mustParse(githubRepoId, ids.issueRepo, 'issueRepoId')];
+  if (before !== null && next === issueRepoOf(repo, before).toLowerCase()) return ['keep', code, null];
+  return ['set', code, null];
+}
+
+/** The SET clause for idsAfter's answer, with the parameters that hold its three values. */
+function setIds(kind: string, repoId: string, issueRepoId: string): string {
+  return `repo_id = COALESCE(${repoId}, repo_id),
+    issue_repo_id = CASE ${kind} WHEN 'code' THEN COALESCE(${repoId}, repo_id) WHEN 'keep' THEN issue_repo_id
+      ELSE ${issueRepoId} END`;
+}
+
 export interface NewProject {
   repo: string;
   /** `pending` for a registration, `approved` for a project an admin lists. */
@@ -118,6 +163,8 @@ export interface NewProject {
   settings: ProjectSettingsInput;
   /** The maintainer who registered it, or the admin who listed it. */
   addedBy: number;
+  /** GitHub's IDs for its repos, from the reads that checked them. Left out, the next read fills them in. */
+  repoIds?: RepoIds;
 }
 
 /**
@@ -152,12 +199,14 @@ export async function createProject(
     },
     'project',
   );
+  const [issuesIn, repoId, otherId] = idsAfter(record.repo, null, record.settings, project.repoIds);
+  const issueRepoId = issuesIn === 'code' ? repoId : otherId;
   const [inserted] = await db.batch([
     db
       .prepare(
         `INSERT INTO projects (repo, issue_repo, status, status_reason, status_changed_by, status_changed_at,
-           source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version)
-         SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1
+           source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version, repo_id, issue_repo_id)
+         SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13
          WHERE ?6 = 'registered' OR (${NOT_ON_DO_NOT_LIST} AND ${NO_REMOVAL_WAITING})
          ON CONFLICT DO NOTHING`,
       )
@@ -173,6 +222,8 @@ export async function createProject(
         record.policy?.tier ?? null,
         record.addedBy,
         record.addedAt,
+        repoId,
+        issueRepoId,
       ),
     // A project that already existed has its first settings. A listing the
     // do-not-list or a waiting request kept out has no row, so these add
@@ -533,7 +584,9 @@ const SAVE_ATTEMPTS = 5;
  * change applies to the settings as they are when it saves, so two
  * maintainers changing different settings at once both keep their change.
  * A change that changes nothing saves nothing. Null when there's no such
- * project.
+ * project. `issueRepoId` is GitHub's ID for the issue repo the patch names,
+ * from the read that checked it. The project keeps its issue repo's ID
+ * while the issues stay in that repo.
  */
 export async function changeSettings(
   db: D1Database,
@@ -541,6 +594,7 @@ export async function changeSettings(
   patch: ProjectSettingsPatch,
   changedBy: number,
   now: number,
+  issueRepoId?: number,
 ): Promise<SettingsChange | null> {
   const by = mustParse(githubId, changedBy, 'changedBy');
   const at = checkTime(now);
@@ -554,6 +608,9 @@ export async function changeSettings(
     if (changed.length === 0) return { ok: true, project: current, changed };
 
     const version = current.settingsVersion + 1;
+    const [idChange, , id] = idsAfter(current.repo, current.settings, settings, {
+      issueRepo: patch.issueRepo === undefined ? undefined : issueRepoId,
+    });
     // Both statements check that no other save landed since the read. The
     // batch runs as one transaction, so they both apply or neither does.
     const [, updated] = await db.batch([
@@ -566,9 +623,11 @@ export async function changeSettings(
         .bind(current.repo, version, JSON.stringify(settings), by, at, current.settingsVersion),
       db
         .prepare(
-          'UPDATE projects SET settings_version = ?, issue_repo = ? WHERE repo = ? AND settings_version = ?',
+          `UPDATE projects SET settings_version = ?1, issue_repo = ?2,
+             ${setIds('?5', 'NULL', '?6')}
+           WHERE repo = ?3 AND settings_version = ?4`,
         )
-        .bind(version, issueRepoOf(current.repo, settings), current.repo, current.settingsVersion),
+        .bind(version, issueRepoOf(current.repo, settings), current.repo, current.settingsVersion, idChange, id),
     ]);
     if (updated?.meta.changes === 1) {
       return { ok: true, project: { ...current, settings, settingsVersion: version }, changed };
@@ -594,6 +653,7 @@ export async function takeOverListing(
   settings: ProjectSettingsInput,
   by: number,
   now: number,
+  repoIds?: RepoIds,
 ): Promise<{ project: ProjectRecord; changed: SettingKey[] } | null> {
   const next = mustParse(projectSettingsSchema, settings, 'settings');
   const addedBy = mustParse(githubId, by, 'by');
@@ -652,14 +712,15 @@ export async function takeOverListing(
     const reopen = reopened
       ? `, status = 'pending', status_reason = NULL, status_changed_by = ?6, status_changed_at = ?9`
       : '';
+    const [idChange, ...id] = idsAfter(current.repo, current.settings, next, repoIds);
     statements.push(
       db
         .prepare(
           `UPDATE projects SET source = 'registered', policy_quote = NULL, policy_url = NULL, policy_tier = NULL,
-             added_by = ?6, settings_version = ?7, issue_repo = ?8${reopen}
+             added_by = ?6, settings_version = ?7, issue_repo = ?8${reopen}, ${setIds('?10', '?11', '?12')}
            WHERE ${listing}`,
         )
-        .bind(...read, addedBy, version, issueRepoOf(current.repo, next), ...(reopened ? [at] : [])),
+        .bind(...read, addedBy, version, issueRepoOf(current.repo, next), reopened ? at : null, idChange, ...id),
     );
     const results = await db.batch(statements);
     if (results.at(-1)?.meta.changes === 1) return { project, changed };
@@ -773,6 +834,7 @@ export async function relistFromPolicy(
   listing: { policy: Policy; settings: ProjectSettingsPatch },
   by: number,
   now: number,
+  repoIds?: RepoIds,
 ): Promise<Relisting | null> {
   const policy = mustParse(policySchema, listing.policy, 'policy');
   const changedBy = mustParse(githubId, by, 'by');
@@ -809,14 +871,15 @@ export async function relistFromPolicy(
           .bind(...read, version, JSON.stringify(next), changedBy, at),
       );
     }
+    const [idChange, ...id] = idsAfter(current.repo, current.settings, next, repoIds);
     statements.push(
       db
         .prepare(
           `UPDATE projects SET policy_quote = ?3, policy_url = ?4, policy_tier = ?5, settings_version = ?6,
-             issue_repo = ?7
+             issue_repo = ?7, ${setIds('?8', '?9', '?10')}
            WHERE ${still}`,
         )
-        .bind(...read, policy.quote, policy.url, policy.tier, version, issueRepoOf(current.repo, next)),
+        .bind(...read, policy.quote, policy.url, policy.tier, version, issueRepoOf(current.repo, next), idChange, ...id),
     );
     const results = await db.batch(statements);
     if (results.at(-1)?.meta.changes === 1) return { ok: true, project, changed };
@@ -840,6 +903,7 @@ export async function reopenRegistration(
   settings: ProjectSettingsInput,
   by: number,
   now: number,
+  repoIds?: RepoIds,
 ): Promise<ProjectRecord | null> {
   const next = mustParse(projectSettingsSchema, settings, 'settings');
   const addedBy = mustParse(githubId, by, 'by');
@@ -847,6 +911,7 @@ export async function reopenRegistration(
   for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
     const current = await getProject(db, repo);
     if (current?.source !== 'registered' || current.status !== 'rejected') return null;
+    const [idChange, ...id] = idsAfter(current.repo, current.settings, next, repoIds);
     const changed = changedSettings(current.settings, next);
     const version = changed.length > 0 ? current.settingsVersion + 1 : current.settingsVersion;
     const project = mustParse(
@@ -891,13 +956,108 @@ export async function reopenRegistration(
       db
         .prepare(
           `UPDATE projects SET status = 'pending', status_reason = NULL, status_changed_by = ?4,
-             status_changed_at = ?5, added_by = ?4, settings_version = ?6, issue_repo = ?7
+             status_changed_at = ?5, added_by = ?4, settings_version = ?6, issue_repo = ?7,
+             ${setIds('?8', '?9', '?10')}
            WHERE ${rejected}`,
         )
-        .bind(...read, addedBy, at, version, issueRepoOf(current.repo, next)),
+        .bind(...read, addedBy, at, version, issueRepoOf(current.repo, next), idChange, ...id),
     );
     const results = await db.batch(statements);
     if (results.at(-1)?.meta.changes === 1) return project;
   }
   throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
+}
+
+/**
+ * A GitHub ID Good First Token stored for a repo's name, with the project
+ * that stored it, and since when the project has held the name.
+ */
+export interface StoredRepoId {
+  /** The project that stored it, by its code repo. */
+  project: string;
+  /** Whether the name is the project's code repo, or the other repo its issues live in. */
+  role: 'code' | 'issues';
+  /** The repo's name as the project keeps it. */
+  repo: string;
+  /** GitHub's ID for the repo, or null for a project stored before IDs were kept. */
+  id: number | null;
+  /**
+   * When the project took the name: when it was added, for its code repo,
+   * or for its issue repo, the first save of its settings that named the
+   * issue repo it has now.
+   */
+  since: number;
+}
+
+/**
+ * Every ID stored for any of these repo names, compared without case, as a
+ * project's code repo or as the other repo its issues live in, whatever the
+ * project's status.
+ */
+export async function storedRepoIds(db: D1Database, repos: Iterable<string>): Promise<StoredRepoId[]> {
+  const names = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
+  if (names.length === 0) return [];
+  // The issue repo's time is the first save after the last one that kept
+  // the issues somewhere else.
+  const { results } = await db
+    .prepare(
+      `SELECT p.repo, p.issue_repo, p.repo_id, p.issue_repo_id, p.added_at,
+         (SELECT MIN(s.changed_at) FROM project_settings s WHERE s.repo = p.repo AND s.version > COALESCE(
+           (SELECT MAX(o.version) FROM project_settings o WHERE o.repo = p.repo
+              AND COALESCE(json_extract(o.settings, '$.issueRepo'), o.repo) <> p.issue_repo COLLATE NOCASE), 0))
+           AS issue_repo_since
+       FROM projects p
+       WHERE p.repo IN (SELECT value FROM json_each(?1)) OR p.issue_repo IN (SELECT value FROM json_each(?1))`,
+    )
+    .bind(JSON.stringify(names))
+    .all<{
+      repo: string;
+      issue_repo: string;
+      repo_id: number | null;
+      issue_repo_id: number | null;
+      added_at: number;
+      issue_repo_since: number | null;
+    }>();
+  const idOf = (id: number | null, field: string) => (id === null ? null : mustParse(githubRepoId, id, field));
+  return results.flatMap((row) => {
+    const found: StoredRepoId[] = [];
+    const [code, issues] = [row.repo.toLowerCase(), row.issue_repo.toLowerCase()];
+    if (names.includes(code)) {
+      found.push({ project: row.repo, role: 'code', repo: row.repo, id: idOf(row.repo_id, 'repoId'), since: checkTime(row.added_at) });
+    }
+    if (issues !== code && names.includes(issues)) {
+      found.push({
+        project: row.repo,
+        role: 'issues',
+        repo: row.issue_repo,
+        id: idOf(row.issue_repo_id, 'issueRepoId'),
+        since: checkTime(row.issue_repo_since ?? row.added_at),
+      });
+    }
+    return found;
+  });
+}
+
+/**
+ * Stores GitHub's ID for a repo a project stored with none, while it still
+ * has none and the project still keeps the repo under that name. A code
+ * repo that also holds the project's issues gets the ID for both.
+ */
+export async function fillRepoId(db: D1Database, stored: StoredRepoId, id: number): Promise<void> {
+  const value = mustParse(githubRepoId, id, 'id');
+  if (stored.role === 'code') {
+    await db
+      .prepare(
+        `UPDATE projects SET repo_id = ?2,
+           issue_repo_id = CASE WHEN issue_repo = repo THEN COALESCE(issue_repo_id, ?2) ELSE issue_repo_id END
+         WHERE repo = ?1 AND repo_id IS NULL`,
+      )
+      .bind(stored.project, value)
+      .run();
+    return;
+  }
+  await db
+    .prepare('UPDATE projects SET issue_repo_id = ?3 WHERE repo = ?1 AND issue_repo = ?2 AND issue_repo_id IS NULL')
+    .bind(stored.project, stored.repo, value)
+    .run();
 }

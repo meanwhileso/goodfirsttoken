@@ -380,7 +380,58 @@ that build them.
   its owner's, so for a private repo the answer is no too. For a repo GitHub
   blocked access to, it answers `451` and names no role, so the answer is
   no.
+- `manage_project` also checks that the repo GitHub answered with is the
+  one Good First Token keeps, under [Repo IDs](#repo-ids). When a project
+  keeps another ID for the name asked, or for the name GitHub gives, the
+  answer is no, with `not_maintainer`, whatever the caller's role on the
+  repo GitHub shows now.
 - Being a Good First Token admin is no permission on anyone's repo.
+
+## Repo IDs
+
+A repo's name can pass to another repo: GitHub frees it when the repo is
+renamed, moved to another account, or deleted, and anyone can then make a
+repo under it. A repo's GitHub ID never passes on. It stays the same
+through a rename or a move, and a new repo gets a new one. So each project
+keeps GitHub's numeric ID for its code repo, and for its issue repo when
+that is another one.
+
+- The IDs come from the reads that check the repos: `register_project`,
+  `admin_add_project`, and approving a crawler find, which lists the repo
+  the same way. `update_project` keeps the new issue repo's ID when it
+  moves the issues. A project keeps a repo's ID while it keeps the repo.
+- Every read that decides something about a project's repo compares the ID
+  GitHub gives now with the one kept: every `manage_project` check, an
+  admin's listing, and each read of the sync. A different ID is a
+  different repo. The check refuses it, a listing refuses it with
+  `repo_not_eligible`, and the sync treats the project's repo as gone,
+  under Delisting in [Tagged issues](#tagged-issues).
+- A check compares every ID any project keeps for the name asked, and for
+  the name GitHub gives, as a code repo or an issue repo, whatever the
+  project's status. So a rejected registration, a listing, or a project an
+  admin removed keeps its name for the repo it was made for.
+- A project kept before the IDs were has none. The first check or sync read
+  of each of its repos fills the ID in, trusting the name this once, when
+  GitHub made the repo no later than the project took the name: when the
+  project was added, for its code repo, or for its issue repo, when its
+  settings first named the issue repo it has now. A repo GitHub made later,
+  or whose making GitHub didn't date, is a different repo, and nothing is
+  filled in. This way a repo made under the name after the listing is never
+  taken for the project's.
+- A rename GitHub follows keeps the ID, so it changes nothing here: the
+  check and the sync pass, and the project keeps the name it was added
+  with. Its page, its issues, its claims, its settings history, and any
+  request to remove it are all kept under that name, and GitHub sends calls
+  to the old name on to the repo, so the name keeps working. Moving all of
+  those records to the new name would be a change of its own. So a
+  maintainer names the project the way `project_status` does. When someone later makes a new repo under the old
+  name, GitHub stops sending those calls on, the ID differs, and the sync
+  delists the project.
+- A request to remove a repo keeps no ID. It names a repo, which need not
+  be a project, and it changes nothing but the do-not-list and the
+  project, which are both kept by name. When the repo is a project, the
+  check already compares the project's ID. When it isn't, nothing on Good
+  First Token belongs to the repo that had the name before.
 
 ## People
 
@@ -1117,6 +1168,10 @@ rejection's reason with `project_status`.
   change of status that lands while the takeover saves stays. A rejected
   listing goes back to `pending`, changed by the maintainer, so an admin
   reviews it again.
+- Registering again over a rejected registration, and taking over a
+  listing, need the repo the project was made for, by its GitHub ID, under
+  [Repo IDs](#repo-ids). A new repo under the name is refused with
+  `not_maintainer`, and the project stays as it was.
 - A repo on the [do-not-list](#crawl-candidates) can be registered, a new
   one, a takeover of a rejected listing, or a rejected registration
   registered again. It stays on the list while the registration waits, so
@@ -1711,6 +1766,11 @@ too, with the same reason.
   answer stops the run and delists nothing, so a proxy, or an API that
   isn't GitHub's, can't delist a project.
 
+- A repo under the project's name whose GitHub ID isn't the one the
+  project keeps, under [Repo IDs](#repo-ids), counts as gone: the
+  project's repo is no longer under that name. The sync delists and pauses
+  the project with the `gone` reason, and the mark stays while GitHub
+  gives that name to the other repo.
 - The service token reads public repos only, so for a repo that went
   private and for one that was deleted, the reason is the same:
   `GitHub shows no public repo named sample-owner/app. It went private or
@@ -1734,9 +1794,9 @@ too, with the same reason.
   resume it, as [Managing a project](#managing-a-project) says.
 - It lands only on the approved status the sync read, so a change someone
   made at the same moment stays.
-- GitHub answers a renamed or moved repo from its new name, so the sync
-  reads it and pauses nothing. The project and its copies of issues keep
-  the old name, since nothing renames them yet. GitHub gives the repo's PRs
+- GitHub answers a renamed or moved repo from its new name, with the same
+  ID, so the sync reads it and pauses nothing. The project and its copies
+  of issues keep the old name, under [Repo IDs](#repo-ids). GitHub gives the repo's PRs
   under the new name, and they count as the project's: the sync compares a
   PR's repo, without case, with the names the project keeps and the names
   GitHub gave its code repo and issue repo in the same run.

@@ -22,6 +22,8 @@ import {
   canPush,
   closeIssue,
   commitOnBranch,
+  createRepo,
+  deleteRepo,
   dismissReview,
   findAccount,
   findIssue,
@@ -34,6 +36,7 @@ import {
   newId,
   openIssue,
   openPull,
+  renameRepo,
   reopenIssue,
   roleOf,
   unlabelIssue,
@@ -139,7 +142,18 @@ export interface GitHubFake {
   // Counts `requests` more calls against the person's budget for the
   // resource, as other clients of theirs would.
   spendRateLimit: (login: string, resource: RateResource, requests: number) => void;
+  // Renames or transfers a repo to `to`, as `owner/name`. It keeps its ID,
+  // and calls to the old name go on to it, until a repo is made there.
+  renameRepo: (repo: string, to: string) => void;
+  // Deletes a repo.
+  deleteRepo: (repo: string) => void;
+  // Makes a new, empty, public repo as `owner/name`, with a new ID, and
+  // returns the ID. `admins` get the admin role on it besides its owner.
+  createRepo: (repo: string, options?: { admins?: string[] }) => number;
 }
+
+// The most redirects a call follows, as fetch does.
+const MAX_REDIRECTS = 20;
 
 const ALPHANUMERIC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -288,8 +302,29 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     return answer(rest.response, rest.operation);
   }
 
+  // Answers one request, and follows a redirect the way fetch does when the
+  // request asks it to: GitHub's 301 goes on as a GET, and its 307 goes on
+  // with the same method and body.
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input, init);
+    let request = new Request(input, init);
+    for (let hops = 0; ; hops++) {
+      const replay = request.method === 'GET' || request.method === 'HEAD' ? null : request.clone();
+      const response = await answer(request);
+      const location = response.headers.get('location');
+      if (request.redirect !== 'follow' || location === null || ![301, 302, 303, 307, 308].includes(response.status)) {
+        return response;
+      }
+      if (hops >= MAX_REDIRECTS) throw new TypeError('The GitHub fake redirected a call too many times.');
+      const keep = response.status === 307 || response.status === 308;
+      request = new Request(new URL(location, request.url), {
+        method: keep ? request.method : 'GET',
+        headers: request.headers,
+        body: keep && replay !== null ? await replay.arrayBuffer() : null,
+      });
+    }
+  };
+
+  const answer = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const apiPath = relativePath(url, api);
     const webPath = apiPath === null ? relativePath(url, web) : null;
@@ -419,6 +454,17 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     },
     spendRateLimit: (login, resource, requests) => {
       rateWindow(state, login, resource, now()).used += requests;
+    },
+    renameRepo: (repo, to) => {
+      renameRepo(state, repoNamed(repo), to);
+    },
+    deleteRepo: (repo) => {
+      deleteRepo(state, repoNamed(repo));
+    },
+    createRepo: (repo, options = {}) => {
+      const made = createRepo(state, repo, now().toISOString());
+      for (const login of options.admins ?? []) setOwn(made.collaborators, getAccount(state, login).login.toLowerCase(), 'admin');
+      return made.id;
     },
   };
 }
