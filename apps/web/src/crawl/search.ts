@@ -154,10 +154,17 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
     const name = repoName.safeParse(item.full_name);
     return name.success ? [name.data] : [];
   });
-  // A seed this pass queued already is read once in it.
+  // A seed this pass queued already is read once in it. A seed the search
+  // queues first counts as handled in the pass, so the seed step leaves it.
   const seeded = await seedsQueuedSince(deps.db, found, pass.startedAt);
   const repos = found.filter((repo) => !seeded.has(repo.toLowerCase()));
   const { queued } = await send(deps, repos, { readRejected: true });
+  await markSeedsHandled(
+    deps.db,
+    queued.map((repo) => ({ repo, outcome: 'queued' as const })),
+    deps.now(),
+    pass.startedAt,
+  );
   run.queued += queued.length;
   next.queued += queued.length;
   const pages = Math.min(SEARCH_PAGES, Math.ceil(Math.min(total, SEARCH_LIMIT) / PER_PAGE));

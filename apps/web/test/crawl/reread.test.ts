@@ -541,15 +541,21 @@ describe('a listing whose policy changes', () => {
   });
 
   test('a policy change shows nothing read from a repo the sync delisted: no policy, no lines, and no sentences', async () => {
+    const trailer = 'Disclose it with a Generated-by: trailer.';
     await listing();
     await week();
-    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${CHANGED}\n` });
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${CHANGED}\n\n${trailer}\n` });
     await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const before = await onlyItem(admin, 'policy_change', INVITES);
     sampleRepo(INVITES).private = true;
     await syncTaggedIssues(jobDeps(github));
-    const admin = await connectAgent(github, ADMIN.login);
 
     const { item, text } = await onlyItem(admin, 'policy_change', INVITES);
+
+    // While the repo was public, the admin saw the line behind the trailer the docs name.
+    expect(before.item.sources).toContainEqual({ about: 'disclosure', path: 'AI_POLICY.md', line: trailer });
+    expect(before.text).toContain(trailer);
 
     const reason = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
     const delisted = { repo: INVITES, showed: 'gone', reason, delistedAt: A_TIME, checkedAt: A_TIME, onDoNotList: false };
@@ -557,6 +563,7 @@ describe('a listing whose policy changes', () => {
     expect(text).toContain(`: ${reason}`);
     expect(text).toContain('Nothing read from its repo shows here.');
     expect(text).not.toContain('Agents may open pull requests');
+    expect(text).not.toContain(trailer);
   });
 
   test("a registered project whose docs change stays out of the queue, since its maintainers chose its settings", async () => {
@@ -700,6 +707,19 @@ describe('a ban', () => {
 
     expect(run?.reread.paused).toEqual([INVITES]);
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: BAN_REASON });
+  });
+
+  test('a listing made from a find that a maintainer takes over before its first weekly read takes its docs as they are, a ban included', async () => {
+    await listedFromFind();
+    const maintainer = await connectAgent(github, MAINTAINER.login);
+    const taken = await call(maintainer, 'register_project', { repo: INVITES, settings: { tags: ['help wanted'] } });
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+
+    const { run } = await week();
+
+    expect(taken.structuredContent).toMatchObject({ saved: true });
+    expect(await getProject(db, INVITES)).toMatchObject({ source: 'registered', status: 'approved' });
+    expect(run?.reread).toMatchObject({ read: 1, paused: [], changed: [] });
   });
 
   test('a listing made by hand whose docs the rules read as a ban at its first read takes them as they are: no pause, and it goes back once as a policy change', async () => {
@@ -1070,6 +1090,30 @@ describe('the monthly pass', () => {
     const repos = sent.splice(0).flatMap((m) => m.repos);
     expect(run.searches).toBeGreaterThan(0);
     expect(repos.filter((repo) => repo === SILENT)).toEqual([SILENT]);
+  });
+
+  test('a seed the search queues before the seed step reaches it is read once in that pass, and again in the next', async () => {
+    // More seeds than one run queues, all older than SILENT, so the search finds SILENT before the seed step does.
+    const fillers = Array.from({ length: 500 }, (_, i) => `sample-owner/filler-${String(i).padStart(3, '0')}`);
+    await db
+      .prepare('INSERT INTO crawl_seeds (repo, added_by, added_at) SELECT value, ?, ? FROM json_each(?)')
+      .bind(ADMIN.githubId, clock - DAY, JSON.stringify(fillers))
+      .run();
+    await addSeed(db, { repo: SILENT, addedBy: ADMIN.githubId }, clock);
+    const silentSent = () => sent.splice(0).flatMap((m) => m.repos).filter((repo) => repo === SILENT).length;
+
+    const first = await fill();
+    const firstRun = silentSent();
+    advance(DAY);
+    await fill();
+    const laterRun = silentSent();
+    advance(30 * DAY);
+    commit(SILENT, { 'CHANGELOG.md': `Pushed at ${String(clock)}.\n` });
+    const next = await fill();
+    const nextPass = silentSent();
+
+    expect([first.seeds, first.searches > 0, next.seeds, next.searches > 0]).toEqual([500, true, 500, true]);
+    expect([firstRun, laterRun, nextPass]).toEqual([1, 0, 1]);
   });
 
   test('a rejected find stored before finds kept what their docs read takes what they read now, and stays out', async () => {

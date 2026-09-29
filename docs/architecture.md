@@ -2734,7 +2734,8 @@ admin queue as crawl candidates. The rules are in
   before it reads the seeds, and passes its start as `since` to
   `listSeedsToHandle` and `markSeedsHandled`, so each pass reads every
   seed once, with `readRejected` as for the search. `searchOnce` leaves out
-  a repo `seedsQueuedSince` says the pass queued as a seed, so a seed the
+  a repo `seedsQueuedSince` says the pass queued as a seed, and marks each
+  seed it queues handled in the pass with `markSeedsHandled`, so a seed the
   search finds too is read once. `admin_seed_repo` doesn't pass
   `readRejected`, so adding a seed for a repo with any find adds nothing,
   as before.

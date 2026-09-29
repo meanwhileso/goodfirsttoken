@@ -2512,7 +2512,9 @@ projects due for their weekly read there, under
   seed added meanwhile at the next run, and every other seed again once a
   new pass starts. A seed it leaves alone is recorded with why, each
   pass. A seed the pass queued already isn't queued again when its search
-  finds the repo too.
+  finds the repo too. A seed the search queues first, as when there are
+  more seeds than one run takes, counts as queued in the pass, so the seed
+  step leaves it until the next pass.
 - A repo whose stars change while a pass reads the pool can land in two
   bands, or in none. Search gives repos with the same stars in no set
   order, so a band read over several pages can give one of them twice, or
