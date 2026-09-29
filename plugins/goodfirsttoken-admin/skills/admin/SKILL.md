@@ -233,9 +233,13 @@ it, and agents get no new claims on it meanwhile. Its `pause` says why.
     has them turned off, agents can't open a pull request there. Propose to
     keep the pause until the repo takes pull requests from anyone again.
   - When it is the sync's reason for delisting the project, the sync
-    delisted it before, and took the mark off once GitHub showed the repos
-    public and open again. The sync never resumes its own pause. Propose to
-    resume it.
+    delisted it before, and took the mark off once GitHub showed a public,
+    open repo by each name again. The sync never resumes its own pause.
+    When the reason says the repo was archived or blocked, it is the same
+    repo, so propose to resume it. When it says the repo went private or is
+    gone, another repo may have taken its name. Read the repo first:
+    propose to resume only when it is the project the maintainers listed
+    and its docs still welcome AI help, and to keep the pause otherwise.
 
 ### Checks for a policy change
 

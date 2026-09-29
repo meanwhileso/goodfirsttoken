@@ -1092,7 +1092,7 @@ describe('the monthly pass', () => {
     expect(repos.filter((repo) => repo === SILENT)).toEqual([SILENT]);
   });
 
-  test('a seed the search queues before the seed step reaches it is read once in that pass, and again in the next', async () => {
+  test('a seed the search queues before the seed step reaches it is read once in that pass, and once in the next', async () => {
     // More seeds than one run queues, all older than SILENT, so the search finds SILENT before the seed step does.
     const fillers = Array.from({ length: 500 }, (_, i) => `sample-owner/filler-${String(i).padStart(3, '0')}`);
     await db
@@ -1111,9 +1111,12 @@ describe('the monthly pass', () => {
     commit(SILENT, { 'CHANGELOG.md': `Pushed at ${String(clock)}.\n` });
     const next = await fill();
     const nextPass = silentSent();
+    advance(DAY);
+    await fill();
+    const laterInNextPass = silentSent();
 
     expect([first.seeds, first.searches > 0, next.seeds, next.searches > 0]).toEqual([500, true, 500, true]);
-    expect([firstRun, laterRun, nextPass]).toEqual([1, 0, 1]);
+    expect([firstRun, laterRun, nextPass, laterInNextPass]).toEqual([1, 0, 1, 0]);
   });
 
   test('a rejected find stored before finds kept what their docs read takes what they read now, and stays out', async () => {
