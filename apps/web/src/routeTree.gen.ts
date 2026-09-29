@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DesignRouteImport } from './routes/design'
 import { Route as HealthzRouteImport } from './routes/healthz'
+import { Route as MaintainersRouteImport } from './routes/maintainers'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as SignInRouteImport } from './routes/sign-in'
@@ -40,6 +41,11 @@ const DesignRoute = DesignRouteImport.update({
 const HealthzRoute = HealthzRouteImport.update({
   id: '/healthz',
   path: '/healthz',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MaintainersRoute = MaintainersRouteImport.update({
+  id: '/maintainers',
+  path: '/maintainers',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MeRoute = MeRouteImport.update({
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
+  '/maintainers': typeof MaintainersRoute
   '/me': typeof MeRoute
   '/projects': typeof ProjectsRoute
   '/sign-in': typeof SignInRoute
@@ -102,6 +109,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
+  '/maintainers': typeof MaintainersRoute
   '/me': typeof MeRoute
   '/projects': typeof ProjectsRoute
   '/sign-in': typeof SignInRoute
@@ -117,6 +125,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
+  '/maintainers': typeof MaintainersRoute
   '/me': typeof MeRoute
   '/projects': typeof ProjectsRoute
   '/sign-in': typeof SignInRoute
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/design'
     | '/healthz'
+    | '/maintainers'
     | '/me'
     | '/projects'
     | '/sign-in'
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/design'
     | '/healthz'
+    | '/maintainers'
     | '/me'
     | '/projects'
     | '/sign-in'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/design'
     | '/healthz'
+    | '/maintainers'
     | '/me'
     | '/projects'
     | '/sign-in'
@@ -176,6 +188,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   DesignRoute: typeof DesignRoute
   HealthzRoute: typeof HealthzRoute
+  MaintainersRoute: typeof MaintainersRoute
   MeRoute: typeof MeRoute
   ProjectsRoute: typeof ProjectsRoute
   SignInRoute: typeof SignInRoute
@@ -214,6 +227,13 @@ declare module '@tanstack/react-router' {
       path: '/healthz'
       fullPath: '/healthz'
       preLoaderRoute: typeof HealthzRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/maintainers': {
+      id: '/maintainers'
+      path: '/maintainers'
+      fullPath: '/maintainers'
+      preLoaderRoute: typeof MaintainersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/me': {
@@ -280,6 +300,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   DesignRoute: DesignRoute,
   HealthzRoute: HealthzRoute,
+  MaintainersRoute: MaintainersRoute,
   MeRoute: MeRoute,
   ProjectsRoute: ProjectsRoute,
   SignInRoute: SignInRoute,

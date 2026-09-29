@@ -33,8 +33,10 @@ test("a Pick in the issue cards claims with the donor's own agent and follows th
   data(await call('set_interests', { languages: [], projects: [PROJECT], kinds: [] }));
 
   // The project reviews agent PRs, so the work waits for the donor to open it.
-  let suggested = await call('suggest_issues', { sessionId });
-  const shown: string[] = [];
+  // me.spec.ts claims sample-desktop#1431 and opens its PR, so this test
+  // leaves it out, and the two never find each other's PR on the issue.
+  const shown: string[] = [`${PROJECT}#1431`];
+  let suggested = await call('suggest_issues', { sessionId, exclude: shown });
   for (let tries = 0; tries < 5 && !suggestionsOf(suggested).some((s) => s.issue.startsWith(`${PROJECT}#`)); tries++) {
     shown.push(...suggestionsOf(suggested).map((s) => s.issue));
     suggested = await call('suggest_issues', { sessionId, exclude: shown });
