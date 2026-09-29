@@ -58,11 +58,23 @@ export type CandidateSource = z.infer<typeof candidateSourceSchema>;
  */
 export const MAX_AI_SENTENCES = 60;
 
-/** A sentence in the repo's docs that names AI, as the file has it, cut to MAX_SOURCE_LINE characters. */
+/** The longest passage the crawler keeps around a sentence that names AI. */
+export const MAX_AI_PASSAGE = 1000;
+
+/**
+ * A sentence in the repo's docs that names AI, with the rest of its
+ * paragraph, as the file has it. A paragraph longer than MAX_AI_PASSAGE
+ * characters is cut around the sentence, and says where.
+ */
 export const aiSentenceSchema = z.object({
   /** The file's path in the repo. */
   path: trimmedText(MAX_SOURCE_LINE),
-  text: trimmedText(MAX_SOURCE_LINE),
+  /** The paragraph, or the part of it around the sentence. */
+  text: trimmedText(MAX_AI_PASSAGE),
+  /** True when the paragraph starts before the text. */
+  cutBefore: z.boolean().default(false),
+  /** True when the paragraph goes on after the text. */
+  cutAfter: z.boolean().default(false),
 });
 export type AiSentence = z.infer<typeof aiSentenceSchema>;
 
@@ -80,9 +92,13 @@ export const crawlCandidateSchema = z
     suggestedTags: z.array(suggestedTagSchema),
     /** The line behind each suggestion the docs gave, and any canary. */
     sources: z.array(candidateSourceSchema).default([]),
-    /** The first MAX_AI_SENTENCES sentences in the docs that name AI, for the admin to read. */
+    /**
+     * The first MAX_AI_SENTENCES sentences in the docs that name AI, each
+     * with the rest of its paragraph, for the admin to read. A sentence in a
+     * paragraph already kept is not kept again.
+     */
     aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES).default([]),
-    /** How many more sentences that name AI the docs have. */
+    /** How many more sentences that name AI the docs have, in no paragraph kept. */
     moreAiSentences: count.default(0),
     status: candidateStatusSchema,
     /** The admin who decided, or null while it waits. */

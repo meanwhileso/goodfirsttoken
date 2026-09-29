@@ -976,7 +976,9 @@ that break the rules, so it returns the problems for the caller to show.
   `crawl_candidates_by_repo`, and `crawl_candidates.sources`, JSON text
   that a find stored before it reads as an empty list, and
   `crawl_candidates.ai_sentences` and `more_ai_sentences`, the sentences
-  that name AI, which a find stored before has none of. `crawl_passes.open`
+  that name AI with their paragraphs, which a find stored before has none
+  of. A kept paragraph stored without `cutBefore` or `cutAfter` reads as
+  uncut. `crawl_passes.open`
   is 1 or 0. A seed's `handled_at` and `outcome` are null until the cron
   job handles it, and set together. A pass keeps
   where it stands in its own row, and moves on only with a compare-and-set
@@ -2109,16 +2111,22 @@ admin queue as crawl candidates. The rules are in
   whatever `GH_WEB_URL` says, since the policy schema takes https links
   only and the GitHub fake serves plain http locally. The branch and each
   part of the path are URL-encoded.
-- **Every sentence that names AI goes to the admin.** Plain rules can miss
-  a ban worded in a way they don't know, so `readPolicy` keeps each
-  sentence that names AI, that the rules read as about AI, or that bans AI
-  with no AI word, as the file has it, cut to 500 characters, the first
-  `MAX_AI_SENTENCES`, 60, and counts the rest. A find stores them in
-  `crawl_candidates.ai_sentences` and `more_ai_sentences`, and
-  `admin_queue`, the admin page, and the admin skill show them before a
-  verdict, marked as the repo's words. The rules' tests hold a corpus of
-  every ban wording three reviews found, 66, all read as bans, and 38
-  made-up welcoming policies, of which the rules read 2 as bans.
+- **Every sentence that names AI goes to the admin, with its paragraph.**
+  Plain rules can miss a ban worded in a way they don't know, even in the
+  sentence after one that names AI, so `readPolicy` keeps each sentence
+  that names AI, that the rules read for a ban, or that bans AI with no AI
+  word, with the rest of its paragraph as the file has it. A paragraph
+  longer than `MAX_AI_PASSAGE`, 1,000 characters, is cut around the
+  sentence, from the first sentence at most 300 characters before it, and
+  `cutBefore` and `cutAfter` say where. A sentence inside the last passage
+  kept from its file is not kept again. It keeps the first `MAX_AI_SENTENCES`, 60, and counts
+  the rest. A find stores them in `crawl_candidates.ai_sentences` and
+  `more_ai_sentences`, and `admin_queue`, the admin page, and the admin
+  skill show them before a verdict, marked as the repo's words, with each
+  cut said in our own words. The rules' tests hold a corpus of every ban
+  wording four reviews found, 76, all read as bans, 38 made-up welcoming
+  policies written alongside the rules, of which the rules read 2 as bans,
+  and 12 held out from the rules, of which they read 8 as bans.
 - **The rules' speed.** Every pattern runs on one sentence, with a few
   words of slack at most, and a sentence's end is one mark before a space,
   so no pattern tries a start again after it fails. Each file's lines are
@@ -2134,7 +2142,8 @@ admin queue as crawl candidates. The rules are in
   sentences that name AI go in `crawl_candidates.sources` and
   `ai_sentences`, shown to the admin as the repo's words, and no setting
   holds them. `admin_queue` marks each line of a quote, a source line, or
-  a sentence that names AI with `> `, and puts label names in quotes, so
+  a paragraph with a sentence that names AI with `> `, and puts label
+  names in quotes, so
   no line of a repo's text can pass for a line of the result. It breaks a
   line at a vertical tab, a form feed, and the file, group, and record
   separators too, as some readers do.

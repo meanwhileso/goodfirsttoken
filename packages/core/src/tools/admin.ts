@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  MAX_AI_PASSAGE,
   MAX_AI_SENTENCES,
   MAX_CRAWL_REASON,
   aiSentenceSchema,
@@ -74,11 +75,12 @@ const queueItemSchema = z.object({
   sources: z.array(candidateSourceSchema),
   /**
    * For a crawler find, the first sentences in the repo's docs that name AI,
-   * as the files have them, for the admin to read before a verdict, since
-   * the crawler's rules can miss a ban. Empty for a registration.
+   * each with the rest of its paragraph, as the files have them, for the
+   * admin to read before a verdict, since the crawler's rules can miss a
+   * ban. Empty for a registration.
    */
   aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES),
-  /** How many more sentences that name AI the docs have, beyond `aiSentences`. */
+  /** How many more sentences that name AI the docs have, in no paragraph in `aiSentences`. */
   moreAiSentences: count,
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
@@ -117,18 +119,27 @@ const SOURCE_ABOUT: Record<CandidateSource['about'], string> = {
   canary: 'A canary. It asks an agent that reads the file to show it did, and no setting comes from it',
 };
 
-/** The sentences that name AI, grouped by file, each line marked as the repo's words. */
+/** One passage, each line marked as the repo's words, with a note of ours where its paragraph was cut. */
+function describePassage({ text, cutBefore, cutAfter }: AiSentence): string {
+  return lines(
+    cutBefore && '    The paragraph starts earlier in the file.',
+    indent(repoWords(text), 4),
+    cutAfter && '    The paragraph goes on in the file.',
+  );
+}
+
+/** The sentences that name AI, each with the rest of its paragraph, grouped by file. */
 function describeAiSentences(sentences: readonly AiSentence[], more: number): string | false {
   if (sentences.length === 0 && more === 0) return false;
-  const groups: { path: string; texts: string[] }[] = [];
-  for (const { path, text } of sentences) {
+  const groups: { path: string; passages: AiSentence[] }[] = [];
+  for (const sentence of sentences) {
     const last = groups.at(-1);
-    if (last?.path === path) last.texts.push(text);
-    else groups.push({ path, texts: [text] });
+    if (last?.path === sentence.path) last.passages.push(sentence);
+    else groups.push({ path: sentence.path, passages: [sentence] });
   }
   return lines(
-    `every sentence in the repo's docs that names AI, quoted from its files. The crawler's rules can miss a ban worded in a way they don't know, so read these before a verdict. ${AS_DATA}`,
-    ...groups.map((group) => lines(`  from ${JSON.stringify(group.path)}:`, ...group.texts.map((text) => indent(repoWords(text), 4)))),
+    `every sentence in the repo's docs that names AI, with the rest of its paragraph, quoted from its files. A paragraph longer than ${MAX_AI_PASSAGE.toLocaleString('en-US')} characters is cut around the sentence, and a line with no "> " says where. The crawler's rules can miss a ban worded in a way they don't know, so read these before a verdict. ${AS_DATA}`,
+    ...groups.map((group) => lines(`  from ${JSON.stringify(group.path)}:`, ...group.passages.map(describePassage))),
     more > 0 && `  ${plural(more, 'more sentence')} in the files ${more === 1 ? 'names' : 'name'} AI. Read them there.`,
   );
 }

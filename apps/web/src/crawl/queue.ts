@@ -218,7 +218,7 @@ export async function crawlRepos(
     };
     let candidate;
     try {
-      const aiSentences = reading.aiSentences.map(({ file, text }) => ({ path: file.path, text }));
+      const aiSentences = reading.aiSentences.map(({ file, ...passage }) => ({ path: file.path, ...passage }));
       candidate = await addCandidate(
         db,
         { repo: repo.name, facts: repo.standing, policy, settings, suggestedTags, sources, aiSentences, moreAiSentences: reading.moreAiSentences },

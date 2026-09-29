@@ -202,6 +202,14 @@ describe('crawl candidates', () => {
     expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: Array<typeof sentence>(61).fill(sentence) }))).toEqual([
       'aiSentences',
     ]);
+    // A kept paragraph stored before it could be cut reads as uncut, and holds at most 1,000 characters.
+    const kept = validate(crawlCandidateSchema, { ...candidate, aiSentences: [sentence] });
+    expect(kept.ok && kept.value.aiSentences).toEqual([{ ...sentence, cutBefore: false, cutAfter: false }]);
+    const long = { path: 'AI_POLICY.md', text: 'x'.repeat(1000), cutBefore: true, cutAfter: false };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: [long] }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: [{ ...long, text: 'x'.repeat(1001) }] }))).toEqual([
+      'aiSentences[0].text',
+    ]);
     const source = { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' };
     expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [source] }))).toEqual([]);
     expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [{ ...source, line: 'x'.repeat(501) }] }))).toEqual([

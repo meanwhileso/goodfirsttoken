@@ -273,7 +273,7 @@ export const samples: Samples = {
           ],
           aiSentences: [
             { path: 'CONTRIBUTING.md', text: 'Agent pull requests are welcome once a person has read the diff.' },
-            { path: 'CONTRIBUTING.md', text: 'Mark AI help with an Assisted-by: trailer.' },
+            { path: 'CONTRIBUTING.md', text: 'Mark AI help with an Assisted-by: trailer.', cutBefore: false, cutAfter: true },
           ],
           moreAiSentences: 3,
         },
@@ -304,6 +304,7 @@ export const samples: Samples = {
       '> Sign the CLA at https://cla.example.org/sample-app.',
       'the repo has the file "VOUCHED.td"',
       '> Mark AI help with an Assisted-by: trailer.',
+      'The paragraph goes on in the file.',
       '3 more sentences in the files name AI. Read them there.',
       'reg_7',
       'from @octo-maintainer',

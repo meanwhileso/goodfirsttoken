@@ -1109,8 +1109,10 @@ waited longest first, each with an ID that `admin_decide` takes.
   policy quote, link, and tier, the settings the crawler suggests, the
   labels that could mean ready for help, the line behind each suggestion,
   and every sentence in the repo's docs that names AI, the first 60 of
-  them. The crawler's rules can miss a ban worded in a way they don't know,
-  so the admin reads those sentences before a verdict. The
+  them, each with the rest of its paragraph. The crawler's rules can miss a
+  ban worded in a way they don't know, as in "AI tools are fine for
+  questions. Any code from a machine gets closed right away.", so the admin
+  reads those paragraphs before a verdict. The
   [policy crawler](#the-policy-crawler) makes them, and so does the sample
   data.
 - Each item has the repo's facts: its stars, when it was made, its last
@@ -1776,11 +1778,14 @@ never lists a project. An admin does, under
 
 **What the rules can't do.** The crawler sorts a repo with plain rules over
 its text, and plain rules can miss a ban worded in a way they don't know.
-Three reviews found new wordings in turn. The rules catch every one of
+Four reviews found new wordings in turn. The rules catch every one of
 them now, and the tests keep them as a corpus, but a repo can still say no
 in words the rules have never seen. So the crawler keeps every sentence in
-the repo's docs that names AI, and the admin reads them before a verdict.
-Nothing is listed without an admin. It reads public data only, with the
+the repo's docs that names AI, with the rest of its paragraph, and the
+admin reads them before a verdict. Nothing is listed without an admin.
+The rules err the other way too: on welcoming docs they had never seen,
+they read about two in three as a ban, under How often the rules are
+wrong, below. It reads public data only, with the
 service token, under [Calls to GitHub](#calls-to-github). With no service
 token it reads nothing, and the log names the secret.
 
@@ -1970,7 +1975,12 @@ would put a repo that said no in front of an admin.
      in the loop.
   6. A reminder or a request: don't forget to, don't hesitate to, don't be
      afraid to, no need to, no problem, you don't need to ask, wait, check,
-     tell, mention, or sign, and we only ask that you.
+     tell, mention, or sign, and we only ask that you. The last two count
+     only when the rest of the sentence says nothing of who writes the work
+     and leaves nothing out, or when what is asked is to disclose, mention,
+     tell, or the like. So "We only ask that you disclose AI use" is no ban,
+     and "We only ask that you write the code yourself" and "We only ask
+     that you leave AI tools out of it" are bans.
   7. Keeping a template whole: don't delete, remove, edit, change, modify,
      or skip this section, template, line, heading, checklist, or the like.
   8. A rule to disclose, ending the sentence: don't submit, open, send, use,
@@ -1987,15 +1997,21 @@ would put a repo that said no in front of an admin.
      that a pull request that fails its checks isn't merged. An agent, you,
      we, or they may come first, and up to eight words after it, which
      name no AI, say no to nothing, and say nothing of who wrote the work.
-     So "Agents should not push to main" is no ban, and "Do not modify any
-     file in this repository" in an AI policy is one.
+     A branch is one branch, like main or the release branch. Any, every,
+     all, or each branch keeps the reader off them all. So "Agents should
+     not push to main" is no ban, and "Do not modify any file in this
+     repository" and "Please do not commit code to any branch" in an AI
+     policy are bans.
   10. A rule to read what AI wrote, ending the sentence: don't use, submit,
       open, send, post, paste, or commit something without reading,
       reviewing, checking, testing, or the like, like "Do not use AI to
       write commit messages without reading them". It asks for a person in
       the loop.
   11. A condition that opens the sentence, like "If an agent cannot run
-      the tests,". It is taken out, and the rest is read again.
+      the tests,". It is taken out, and the rest is read again, unless the
+      condition names AI or says who writes the work, as "If you didn't
+      write the code yourself," and "If you can't do it without an
+      assistant," do.
   12. A label that scopes where agents work: only on issues labeled
       `agent ready`, with the label in quotes or backticks.
 
@@ -2003,12 +2019,20 @@ would put a repo that said no in front of an admin.
   left is read again, so "Don't forget to never use AI" is a ban. None is
   taken out when it holds a second word that says no.
 - **How often the rules are wrong, on made-up docs.** The tests hold every
-  ban wording three reviews found, 66 in all, and the rules read every one
+  ban wording four reviews found, 76 in all, and the rules read every one
   as a ban. They also hold 38 made-up welcoming policies, written the way
   real ones read, with ordinary rules for how to work, and the rules read
   2 of them as a ban: "Nothing changes about how we review pull requests"
-  and "We will not ask how you wrote it". Each names AI through its
-  paragraph and says no to something else.
+  and "We will not ask how you wrote it". Those 38 were written alongside
+  the rules, so they say little about docs the rules have never seen. A
+  review wrote 12 more welcoming policies that no rule was written or
+  changed to fit, and the rules read 8 of them as a ban, about two in
+  three. The tests keep them as a measurement. In six, an ordinary rule
+  for how to work, like "Never commit a `.env` file", takes its AI naming
+  from its AI policy file, from a heading that names AI, or from a
+  sentence before it that it points back to. Two name AI themselves and
+  say no to something else. A welcoming repo read as a ban is a find the
+  admin never sees.
 - **A sentence refuses outside pull requests** when it says the project
   doesn't accept, take, merge, review, consider, want, or welcome pull
   requests, PRs, patches, or contributions, isn't accepting, taking, or
@@ -2093,14 +2117,23 @@ queue with:
   about it writes the note.
 - The sentences that name AI: every sentence in the files it read that
   names AI, that the rules read as about AI, like every sentence of an AI
-  policy file, or that bans AI with no word that names it, each once, as
-  the file has it, up to 500 characters. It keeps the first 60, in the
-  order the files are read, and how many more there are. The admin reads
-  them before a verdict, under [The admin queue](#the-admin-queue).
+  policy file, that talks about contributing in a file for agents, or that
+  bans AI with no word that names it, each with the rest of its paragraph,
+  as the file has it. A paragraph up to 1,000
+  characters is kept whole. A longer one is cut to 1,000 characters,
+  starting at the first sentence at most 300 characters before the one
+  that names AI, and the find says where it was cut: before, after, or
+  both. A sentence in a paragraph already kept is not kept again, and the
+  same paragraph twice in a file is kept once. It keeps the first 60, in
+  the order the files are read, and counts the sentences after them that
+  are in no paragraph kept. The admin reads them before a verdict, under
+  [The admin queue](#the-admin-queue).
 
-`admin_queue` marks each line of a quote, a source line, and a sentence
-that names AI with `> `, as the repo's words for the admin's agent to read
-as data, and puts each label name the repo gave in quotes. A line ends at
+`admin_queue` marks each line of a quote, a source line, and a paragraph
+with a sentence that names AI with `> `, as the repo's words for the
+admin's agent to read as data, and puts each label name the repo gave in
+quotes. Where a paragraph was cut, a line of its own, with no `> `, says
+that the paragraph starts earlier or goes on in the file. A line ends at
 any character a reader might break a line at: a line feed, a carriage
 return, a vertical tab, a form feed, a file, group, or record separator,
 a next-line character, or a line or paragraph separator.

@@ -166,15 +166,20 @@ function Sources({ item }: { item: QueueItem }) {
   );
 }
 
-/** Every sentence in the repo's docs that names AI, as the files have them, for the admin to read before a verdict. */
+/**
+ * Every sentence in the repo's docs that names AI, with the rest of its
+ * paragraph, as the files have them, for the admin to read before a verdict.
+ */
 function AiSentences({ item }: { item: QueueItem }) {
   if (item.aiSentences.length === 0 && item.moreAiSentences === 0) return null;
   return (
-    <Block label="every sentence in its docs that names AI. Read them before you decide">
+    <Block label="every sentence in its docs that names AI, with the rest of its paragraph. Read them before you decide">
       {item.aiSentences.map((sentence, i) => (
         <div key={`${String(i)} ${sentence.path}`} className="stack" style={{ '--gap': '6px' } as CSSProperties}>
           <span className="mono small muted">{sentence.path}</span>
+          {sentence.cutBefore && <span className="mono small muted">The paragraph starts earlier in the file.</span>}
           <Quote>{sentence.text}</Quote>
+          {sentence.cutAfter && <span className="mono small muted">The paragraph goes on in the file.</span>}
         </div>
       ))}
       {item.moreAiSentences > 0 && (
