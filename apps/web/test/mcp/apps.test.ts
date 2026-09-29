@@ -1,6 +1,6 @@
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { Client } from '@modelcontextprotocol/client';
-import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
+import { InMemoryTransport, McpServer, Protocol } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createProject, savePerson, saveIssues } from '../../src/db';
@@ -95,6 +95,46 @@ test('a resource that is no view still lists, registered before the views or aft
   for (const uri of Object.keys(VIEWS)) expect((await client.readResource({ uri })).contents[0]?.mimeType).toBe(MIME);
   await client.close();
 });
+
+/** Ways a new MCP SDK could leave registerViews no list to wrap. Each gives back how to undo it. */
+const breaks = {
+  'has no accessor for its handlers': () => {
+    const proto = Protocol.prototype as unknown as Record<string, unknown>;
+    const accessor = proto._getRequestHandler;
+    delete proto._getRequestHandler;
+    return () => {
+      proto._getRequestHandler = accessor;
+    };
+  },
+  'has installed no resources/list handler yet': () => {
+    const spy = vi.spyOn(Protocol.prototype as unknown as { _getRequestHandler(method: string): unknown }, '_getRequestHandler').mockReturnValue(undefined);
+    return () => {
+      spy.mockRestore();
+    };
+  },
+};
+
+for (const [broken, breakIt] of Object.entries(breaks)) {
+  test(`when the MCP SDK ${broken}, every tool still answers, the views still read, and resources/list lists them as the SDK does, with a line in the log`, async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const restore = breakIt();
+    try {
+      const agent = await connectAgent(github, 'priya');
+
+      const { tools } = await agent.client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['start_session', 'suggest_issues', 'claim_issue', 'my_work']));
+      const started = await agent.client.callTool({ name: 'start_session', arguments: { agent: 'claude-code', budget: { kind: 'until_limit' } } });
+      expect(started.isError).toBeFalsy();
+      for (const uri of Object.keys(VIEWS)) expect((await read(agent, uri)).mimeType).toBe(MIME);
+      expect((await agent.client.listResources()).resources.map((r) => r.uri)).toEqual(Object.keys(VIEWS));
+      const said = warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('resources/list'));
+      expect(said.length).toBeGreaterThan(0);
+      for (const line of said) expect(line).toBe('The MCP SDK gave registerViews no resources/list handler to wrap, so resources/list lists the views too.');
+    } finally {
+      restore();
+    }
+  });
+}
 
 test('suggest_issues names the issue cards, claim_issue the live feed, and my_work the review queue, and no other tool names a view', async () => {
   const agent = await connectAgent(github, 'priya');

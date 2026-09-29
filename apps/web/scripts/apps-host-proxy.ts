@@ -9,6 +9,7 @@
 //   pnpm apps:host                                   @lena on pnpm dev, at http://localhost:3001/mcp
 //   pnpm apps:host --login priya --port 3002         another person, on another port
 //   pnpm apps:host --site http://localhost:4173      another local site
+//   pnpm apps:host --timeout 60                      a sign-in that may take 60 seconds (30 by default)
 //
 // It takes only a site on this machine, since the token it holds is a
 // person's, and anything that can reach the port acts as them. For the same
@@ -16,6 +17,7 @@
 // this machine.
 
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { agentToken, runAddress } from './skill-run.ts';
@@ -138,11 +140,14 @@ async function main(): Promise<void> {
       site: { type: 'string', default: 'http://localhost:5173' },
       login: { type: 'string', default: 'lena' },
       port: { type: 'string', default: '3001' },
+      timeout: { type: 'string', default: '30' },
     },
   });
   const site = new URL(values.site);
   if (!LOCAL.has(site.hostname)) throw new Error(`${site.origin} isn't on this machine. The proxy signs in only to a site in development.`);
   const port = Number(values.port);
+  const seconds = Number(values.timeout);
+  if (!(seconds > 0)) throw new Error(`--timeout takes a number of seconds above 0, and got ${values.timeout}.`);
   const address = runAddress();
 
   // It listens before the agent signs in, so a port that is taken stops it
@@ -159,19 +164,32 @@ async function main(): Promise<void> {
       cause: error,
     });
   }
+  // A site that takes the sign-in's requests and never answers would leave
+  // the proxy waiting with nothing said, so the sign-in has a time limit.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${site.origin} didn't sign @${values.login}'s agent in within ${String(seconds)} s. Check that the site runs there, with pnpm dev, then run this again.`));
+    }, seconds * 1000);
+  });
   try {
-    signedIn(await agentToken(site.origin, address, values.login, `MCP Apps basic-host (@${values.login})`));
+    signedIn(await Promise.race([agentToken(site.origin, address, values.login, `MCP Apps basic-host (@${values.login})`), late]));
   } catch (error) {
     server.closeAllConnections();
     server.close();
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  console.log(`@${values.login}'s agent is signed in to ${site.origin}. basic-host can reach its MCP server at http://localhost:${String(port)}/mcp`);
+  const listening = (server.address() as AddressInfo).port;
+  console.log(`@${values.login}'s agent is signed in to ${site.origin}. basic-host can reach its MCP server at http://localhost:${String(listening)}/mcp`);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
+    // It exits at once, since a sign-in past its time limit may still be
+    // waiting on the site.
+    process.exit(1);
   });
 }

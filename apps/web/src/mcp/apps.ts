@@ -118,10 +118,16 @@ export function registerViews(server: McpServer, origin: string): void {
   }
   // McpServer's own handler lists every resource registered, whenever it
   // runs. The views are taken out of its answer. _getRequestHandler is the
-  // SDK's protected accessor for a handler it installed. The SDK is pinned,
-  // and the unit tests fail if the accessor goes.
-  const listed = (server.server as unknown as { _getRequestHandler(method: string): StoredHandler | undefined })._getRequestHandler('resources/list');
-  if (listed === undefined) throw new Error("McpServer installed no resources/list handler, so the views can't be left out of it.");
+  // SDK's protected accessor for a handler it installed. The SDK is pinned.
+  // Should a new one rename the accessor, or install the handler later,
+  // resources/list stays as the SDK answers it, views and all, which does no
+  // harm, and every other request works as before. A unit test fails then.
+  const lowLevel = server.server as unknown as { _getRequestHandler?: (method: string) => StoredHandler | undefined };
+  const listed = typeof lowLevel._getRequestHandler === 'function' ? lowLevel._getRequestHandler('resources/list') : undefined;
+  if (typeof listed !== 'function') {
+    console.warn("The MCP SDK gave registerViews no resources/list handler to wrap, so resources/list lists the views too.");
+    return;
+  }
   server.server.setRequestHandler('resources/list', async (request, ctx) => {
     const result = (await listed(request as unknown as JSONRPCRequest, ctx)) as ListResourcesResult;
     return { ...result, resources: result.resources.filter((resource) => !resource.uri.startsWith('ui://')) };

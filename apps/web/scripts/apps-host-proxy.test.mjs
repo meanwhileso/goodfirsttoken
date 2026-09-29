@@ -187,35 +187,73 @@ test('a request that comes while the agent signs in waits for its token', async 
   });
   const early = proxyServer({ site: new URL(`http://127.0.0.1:${String(upstream.port)}`), token, address: ADDRESS });
   const port = await listen(early);
+  try {
+    const answer = send(port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json' }, body: '{}' });
+    // Closing the server ends the request when the test fails first.
+    answer.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(upstream.seen.length, from);
+    signedIn('later-token');
 
-  const answer = send(port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json' }, body: '{}' });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(upstream.seen.length, from);
-  signedIn('later-token');
-
-  assert.equal((await answer).status, 200);
-  assert.equal(upstream.seen.at(-1)?.headers.authorization, 'Bearer later-token');
-  await close(early);
+    assert.equal((await answer).status, 200);
+    assert.equal(upstream.seen.at(-1)?.headers.authorization, 'Bearer later-token');
+  } finally {
+    await close(early);
+  }
 });
+
+/**
+ * Runs the proxy's script with `args`, and gives back how it exited and
+ * what it said. One still running after `limit` ms is stopped, and its code
+ * is null, so a test of it fails and the run goes on.
+ */
+function runProxy(args, limit = 15_000) {
+  const script = fileURLToPath(new URL('./apps-host-proxy.ts', import.meta.url));
+  const run = spawn(process.execPath, [script, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let said = '';
+  run.stdout.on('data', (chunk) => {
+    said += String(chunk);
+  });
+  run.stderr.on('data', (chunk) => {
+    said += String(chunk);
+  });
+  const stop = setTimeout(() => run.kill(), limit);
+  return new Promise((resolve) => {
+    run.on('close', (code) => {
+      clearTimeout(stop);
+      resolve({ code, said });
+    });
+  });
+}
 
 test('on a port that is taken, the proxy stops before any agent signs in', async () => {
   const from = upstream.seen.length;
   const taken = http.createServer();
   const port = await listen(taken);
-  const script = fileURLToPath(new URL('./apps-host-proxy.ts', import.meta.url));
+  try {
+    const run = await runProxy(['--site', `http://127.0.0.1:${String(upstream.port)}`, '--port', String(port)]);
 
-  const run = spawn(process.execPath, [script, '--site', `http://127.0.0.1:${String(upstream.port)}`, '--port', String(port)], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let said = '';
-  run.stderr.on('data', (chunk) => {
-    said += String(chunk);
-  });
-  const code = await new Promise((resolve) => run.on('close', resolve));
-  await close(taken);
+    assert.equal(run.code, 1, run.said);
+    assert.match(run.said, new RegExp(`can't listen on port ${String(port)}`));
+    // Signing in starts with a request to the site's /mcp, and none came.
+    assert.equal(upstream.seen.length, from);
+  } finally {
+    await close(taken);
+  }
+});
 
-  assert.equal(code, 1);
-  assert.match(said, new RegExp(`can't listen on port ${String(port)}`));
-  // Signing in starts with a request to the site's /mcp, and none came.
-  assert.equal(upstream.seen.length, from);
+test('a sign-in the site never answers stops the proxy with a message once its time is up', async () => {
+  // A site that takes each request and never answers it.
+  const silent = http.createServer(() => undefined);
+  const port = await listen(silent);
+  try {
+    const started = Date.now();
+    const run = await runProxy(['--site', `http://127.0.0.1:${String(port)}`, '--port', '0', '--timeout', '0.5']);
+
+    assert.equal(run.code, 1, run.said);
+    assert.match(run.said, new RegExp(`127\\.0\\.0\\.1:${String(port)} didn't sign @lena's agent in within 0\\.5 s`));
+    assert.ok(Date.now() - started < 10_000, 'it stops soon after its time is up');
+  } finally {
+    await close(silent);
+  }
 });

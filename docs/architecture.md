@@ -751,8 +751,12 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
   capability, and a `resources/list` without the views, which is empty
   today. `registerViews` takes every `ui://` URI out of the SDK's own list,
   as the spec allows for resources only a view uses, so a resource another
-  part of the server registers still lists. A host reads each view by the
-  URI its tool names. Every answer is the same for every host.
+  part of the server registers still lists. It wraps the SDK's handler
+  through `_getRequestHandler`, the SDK's protected accessor. When a new SDK
+  gives it no handler to wrap, it logs a line and leaves the list as the
+  SDK answers it, views and all, so every other request still works. A
+  host reads each view by the URI its tool names. Every answer is the same
+  for every host.
 - **One page per view, built with the Worker.** `import view from
   './views/main.ts?mcp-view'` gives the Worker a script and styles as
   strings. `scripts/mcp-views.ts` answers that import with a Vite build of
@@ -823,10 +827,13 @@ needs. Anything that reaches its port acts as that person, so it takes
 only a site on this machine, listens on this machine alone, passes on only
 `/mcp`, always to that site, and answers only pages on this machine. It
 listens before the agent signs in, so a port that is taken stops it before
-a new agent shows among the person's connected agents.
+a new agent shows among the person's connected agents. A sign-in that takes
+over 30 seconds stops it too, with a message, since a site that never
+answers would leave it waiting with nothing said.
 `apps-host-proxy.test.mjs` runs `proxyServer`, the proxy's server built
 from the site, the token, and the address, between a stand-in for the site
-and a sink that no request may reach.
+and a sink that no request may reach, and runs the script itself on a port
+that is taken and against a site that never answers.
 
 1. Clone the extension's repo at 2.0.3, `git clone --branch v2.0.3 --depth 1
    https://github.com/modelcontextprotocol/ext-apps`, and copy
@@ -839,8 +846,9 @@ and a sink that no request may reach.
    sandbox its frames load on port 8081.
 4. In this repo, run `pnpm dev`, then `pnpm seed`, then `pnpm apps:host`,
    which signs in as `@lena`. `--login` names another sample person,
-   `--port` another port, and `--site` another local site. For another
-   port, start `basic-host` with `SERVERS='["http://localhost:<port>/mcp"]'`.
+   `--port` another port, `--site` another local site, and `--timeout` how
+   many seconds the sign-in may take. For another port, start `basic-host`
+   with `SERVERS='["http://localhost:<port>/mcp"]'`.
 5. Open `http://localhost:8080`. Pick a tool, fill its input as JSON, and
    press Call Tool: `start_session`, `set_interests` with a sample project,
    `suggest_issues` with the session for the issue cards, and Pick one.
