@@ -115,6 +115,28 @@ test('with no GitHub token, or a repo GitHub says is not there, the caller is no
   expect([noToken, missing]).toEqual(['not_maintainer', 'not_maintainer']);
 });
 
+test('a repo GitHub blocked access to makes no one its maintainer, since GitHub says nothing of their role', async () => {
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).pathname === '/repos/meanwhileso/goodfirsttoken') {
+      return Response.json({ message: 'Repository access blocked', block: { reason: 'dmca' } }, { status: 451 });
+    }
+    return github.fetch(request);
+  });
+
+  const refused = await requirePermission(
+    caller(1008, 'octo-maintainer', github.tokenFor('octo-maintainer')),
+    'manage_project',
+    { repo: 'meanwhileso/goodfirsttoken' },
+  ).catch((error: unknown) => error);
+
+  expect(refused).toBeInstanceOf(PermissionRefused);
+  expect(refused).toMatchObject({
+    code: 'not_maintainer',
+    message: "GitHub blocked access to meanwhileso/goodfirsttoken, so it can't say whether you are an admin or maintainer of it.",
+  });
+});
+
 test('only the person who made a claim may work it', async () => {
   const claim = { claimantGithubId: 1001 };
 

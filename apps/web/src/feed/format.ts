@@ -1,14 +1,8 @@
-import type { FeedEvent } from '@goodfirsttoken/core';
+import { UNSAFE_CHARACTER as UNSAFE, type FeedEvent } from '@goodfirsttoken/core';
 
 // The two line formats of the text streams (spec section 9, "Readable by
-// agents"). Each event is one line, whatever its text holds.
-
-/**
- * A character that could break a line or a column, or change what a
- * terminal shows: a control character, tabs and line breaks among them, a
- * Unicode line or paragraph separator, or a mark that reorders text.
- */
-const UNSAFE = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u;
+// agents"). Each event is one line, whatever its text holds. UNSAFE is the
+// set of characters that could break a line, from packages/core.
 
 /** `text` without the plain spaces at its end. */
 function trimSpaces(text: string): string {

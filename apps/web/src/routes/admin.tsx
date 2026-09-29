@@ -1,4 +1,12 @@
-import { doNotListNote, productName, type ToolOutputInput } from '@goodfirsttoken/core';
+import {
+  doNotListNote,
+  moreRemovalsWithdrawnNote,
+  productName,
+  removalProjectNote,
+  removalWaitsNote,
+  removalWithdrawnNote,
+  type ToolOutputInput,
+} from '@goodfirsttoken/core';
 import { createFileRoute, Link, notFound, redirect } from '@tanstack/react-router';
 import { useId, type CSSProperties, type ReactNode } from 'react';
 import { getAdminPage, type AdminPage, type PolicyListing } from '../admin/data';
@@ -14,8 +22,9 @@ import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import adminCss from '../styles/admin-page.css?url';
 
 // The admin pages (brand/brief-website.md), which replaced prototype/admin.html: the
-// crawler's finds and the registrations waiting for an admin, the projects
-// listed from a policy, a form to list one by hand, and the blocked donors.
+// maintainers' requests to be removed, the crawler's finds and the
+// registrations waiting for an admin, the projects listed from a policy, a
+// form to list one by hand, and the blocked donors.
 // Only admins see it. Its forms post to /admin, and go through the same
 // actions as the admin's MCP tools (src/admin/).
 export const Route = createFileRoute('/admin')({
@@ -197,6 +206,29 @@ function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
 
+/**
+ * On a registration or crawler find, a request to remove the same repo that
+ * waits, which blocks approving it, and the first few that someone other
+ * than their asker withdrew since the repo was last removed, with a count of
+ * the rest.
+ */
+function RemovalWaitsNote({ item }: { item: QueueItem }) {
+  if (item.kind === 'removal') return null;
+  return (
+    <>
+      {item.removalWaits === true && <p className="admin-item__warning">{removalWaitsNote(item.kind)}</p>}
+      {(item.removalsWithdrawn ?? []).map((withdrawn) => (
+        <p key={`${withdrawn.requestedBy} ${withdrawn.withdrawnAt}`} className="admin-item__warning">
+          {removalWithdrawnNote(withdrawn)}
+        </p>
+      ))}
+      {(item.moreRemovalsWithdrawn ?? 0) > 0 && (
+        <p className="admin-item__warning">{moreRemovalsWithdrawnNote(item.moreRemovalsWithdrawn ?? 0)}</p>
+      )}
+    </>
+  );
+}
+
 function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
   const titleId = useId();
   const tagsId = useId();
@@ -241,6 +273,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         </Block>
       )}
       <DoNotListNote item={item} />
+      <RemovalWaitsNote item={item} />
       <form method="post" action={ADMIN_PATH}>
         <input type="hidden" name="action" value="decide" />
         <input type="hidden" name="id" value={item.id} />
@@ -284,6 +317,7 @@ function Registration({ item, now, signInAgain }: { item: QueueItem; now: number
       </div>
       <Facts item={item} now={now} signInAgain={signInAgain} />
       <DoNotListNote item={item} />
+      <RemovalWaitsNote item={item} />
       <Block label="settings they chose">
         <SettingsBadges settings={item.settings} />
       </Block>
@@ -300,6 +334,38 @@ function Registration({ item, now, signInAgain }: { item: QueueItem; now: number
           </Button>
           <Button type="submit" variant="primary" name="decision" value="approve" formNoValidate>
             Approve and list
+          </Button>
+        </div>
+      </form>
+    </article>
+  );
+}
+
+/** A maintainer's request to be removed. Their reason shows as their words, with a rule on the left. */
+function Removal({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
+  const titleId = useId();
+  return (
+    <article className="admin-item" aria-labelledby={titleId}>
+      <div className="stack" style={{ '--gap': '6px' } as CSSProperties}>
+        <h3 id={titleId} className="admin-item__repo">
+          {item.repo}
+        </h3>
+        <span className="mono small muted">
+          from @{item.requestedBy} · {span(item.requestedAt, now)} ago
+        </span>
+      </div>
+      <Facts item={item} now={now} signInAgain={signInAgain} />
+      <DoNotListNote item={item} />
+      <Block label="their reason, in their own words">
+        <Quote>&ldquo;{item.removal?.reason}&rdquo;</Quote>
+      </Block>
+      <p className="small">{removalProjectNote(item.repo, item.removal?.project ?? null)}</p>
+      <form method="post" action={ADMIN_PATH}>
+        <input type="hidden" name="action" value="remove" />
+        <input type="hidden" name="repo" value={item.repo} />
+        <div className="cluster admin-item__buttons">
+          <Button type="submit" variant="danger">
+            Remove
           </Button>
         </div>
       </form>
@@ -445,6 +511,19 @@ function Admin() {
         )}
         <div className="admin__split">
           <div className="admin__main">
+            <section className="stack" aria-label="asking to be removed">
+              <div className="rail__head">
+                <Marker as="h2" count={page.removals.length}>
+                  asking to be removed
+                </Marker>
+                <span className="mono small faint">each asked by an admin or maintainer of the repo, as GitHub said</span>
+              </div>
+              {page.removals.length === 0 ? (
+                <p className="admin__empty">No requests to be removed.</p>
+              ) : (
+                page.removals.map((item) => <Removal key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />)
+              )}
+            </section>
             <section className="stack" aria-label="found by the crawler">
               <div className="rail__head">
                 <Marker as="h2" variant="label" count={page.candidates.length}>

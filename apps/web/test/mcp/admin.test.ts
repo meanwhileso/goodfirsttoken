@@ -269,6 +269,10 @@ describe('admin_queue', () => {
           sources: [],
           aiSentences: [],
           moreAiSentences: 0,
+          removal: null,
+          removalWaits: false,
+          removalsWithdrawn: [],
+          moreRemovalsWithdrawn: 0,
         },
       ],
     });

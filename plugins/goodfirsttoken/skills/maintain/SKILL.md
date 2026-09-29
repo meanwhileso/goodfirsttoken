@@ -1,7 +1,7 @@
 ---
 # Generated from skill-src/maintain.md. To change it, edit that file and run pnpm skills:build.
 name: maintain
-description: Register a public GitHub repo on Good First Token and manage it for its maintainers. Confirms the proposed settings with the maintainer, then changes settings, pauses or resumes, checks status, and takes over a listing made from the repo's AI policy. Use when a maintainer asks to put owner/repo on Good First Token, or asks about their project there.
+description: Register a public GitHub repo on Good First Token and manage it for its maintainers. Confirms the proposed settings with the maintainer, then changes settings, pauses or resumes, checks status, takes over a listing made from the repo's AI policy, and asks Good First Token's admins to remove the repo. Use when a maintainer asks to put owner/repo on Good First Token, to take it off, or asks about their project there.
 argument-hint: owner/repo
 metadata:
   internal: true
@@ -130,34 +130,49 @@ To have the listing removed instead, see Ask to be removed.
 
 ## Ask to be removed
 
-Good First Token's admins remove a repo for good when its maintainers ask.
-Nothing lists it again unless one of its maintainers registers it. No Good
-First Token tool asks for it yet, so the request is checked in the repo
-itself: a line on its default branch that only someone who can push to the
-repo, or merge a pull request into it, can put there. This works for a
-registered project, a listing made from its AI policy, a repo the admins
-found themselves, a rejected project, and a repo whose pull requests are
-now limited to collaborators.
+Good First Token's admins remove a repo when one of its maintainers asks.
+The repo goes on the do-not-list, its project is rejected, and nothing
+lists it again unless one of its maintainers registers it. Ask with
+`request_removal`. It needs only the maintainer's role on GitHub, so it
+works for a registered project, a listing made from its AI policy, a
+pending, paused, or rejected project, a repo that isn't a project, an
+archived repo, and a repo whose pull requests are now limited to
+collaborators. While the request waits, no admin can list the repo or
+approve a registration of it.
 
-Good First Token pauses a project on its own when its repo went private, is
-gone, GitHub blocked access to it, or it's archived. Then the admins can't
-check the line until the repo is public and not archived again, unless the
-line was on the default branch before it was archived. Until then the
-project stays paused, with no page, and only an admin can resume it.
+1. Ask the maintainer why they want the repo removed, in a sentence or
+   two. Only Good First Token's admins read the reason.
+2. Call `request_removal` with `repo` and `reason`. When the repo is a
+   project, use the `repo` that `project_status` answered with. A project
+   keeps the name it was listed under, so after a repo is renamed on
+   GitHub, ask by that name, or the request names no project.
+3. The request pauses nothing. When the project is approved, offer to call
+   `pause_project` with `repo` and a `reason`, so agents get no new claims
+   on it while the request waits.
+4. Tell the maintainer what the answer says. `waiting` `true` means a
+   request waits for an admin. When `changed` is `false`, it is one from
+   before: tell them who asked, from `requestedBy`, and when, from
+   `requestedAt`. When `onDoNotList` is `true` and nothing waits, the repo
+   was removed before, and there is nothing to ask. When `lastWithdrawn`
+   is set, someone else withdrew the maintainer's last request: tell them
+   who, and when.
+5. Tell them to run this skill again to see it done. Once an admin removes
+   a project, `project_status` says it is `rejected`, with the reason
+   `Removed at its maintainers' request.`
 
-1. The maintainer commits a line to the repo's default branch, in its
-   CONTRIBUTING or AI policy file, that says not to list it, like "Don't
-   list this repo on Good First Token." When they ask you to commit it,
-   show them the file and the line first, and commit it only once they say
-   yes. Keep the commit's link.
-2. The maintainer opens an issue at
-   https://github.com/meanwhileso/goodfirsttoken/issues that asks Good First
-   Token's admins to remove owner/repo, with the commit's link.
-3. When the project is approved, call `pause_project` with `repo` and a
-   `reason` that names the issue. Agents get no new claims on it while the
-   admins remove it.
-4. Tell the maintainer an admin removes it once they find the line on the
-   default branch, and to leave the line there.
+To take a request back, when the maintainer changed their mind, call
+`request_removal` with `repo` and `withdraw` `true`. Any admin or
+maintainer of the repo can, the one who asked or another. The request
+leaves the admin queue. Withdrawing someone else's request shows: the
+admins see who asked and who withdrew it, and so does the one who asked.
+`changed` `false` means none waited.
+
+When the repo went private, is gone, or GitHub blocked access to it, GitHub
+doesn't show the repo to the maintainer's account, so `request_removal` is
+refused with `not_maintainer`. Good First Token's sync delists such a
+project: it has no page, and agents get no claims on it. Ask again once
+GitHub shows the repo as public. A project the sync delisted because its
+repo is archived can ask as it is.
 
 Ask only this way. A registration asks to be listed, and an admin who
 approves one lists the repo, whatever its notes for agents say.
@@ -198,8 +213,8 @@ then:
 
 - `not_maintainer`: GitHub says the account the agent signed in with isn't
   an admin or maintainer of the repo, or of its issue repo, or shows it no
-  public repo by that name. Check the name. Only an admin or maintainer of
-  the repo on GitHub can manage it. Stop.
+  public repo by that name, or blocked access to the repo. Check the name.
+  Only an admin or maintainer of the repo on GitHub can manage it. Stop.
 - `repo_not_eligible`: The repo is private or archived, has pull requests
   turned off, or lets only collaborators open them, or the issue repo is
   private or archived. The message says which. The maintainer can change
@@ -260,3 +275,21 @@ register_project {"repo": "sample-owner/sample-parser", "settings": {"tags": ["h
 ```
 
 You tell the maintainer an admin reviews it next.
+
+Later the maintainer says: take sample-owner/sample-parser off Good First
+Token, since they now review every pull request by hand. You ask the admins
+with their reason:
+
+```
+request_removal {"repo": "sample-owner/sample-parser", "reason": "We review every pull request by hand now."}
+```
+
+It answers that the request waits for an admin. The project was approved
+since, so you offer to pause it until then.
+
+The next day the maintainer wants to stay listed after all, and no admin
+has acted yet. You withdraw the request:
+
+```
+request_removal {"repo": "sample-owner/sample-parser", "withdraw": true}
+```
