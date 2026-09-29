@@ -277,6 +277,8 @@ describe('admin_queue', () => {
           change: null,
         },
       ],
+      more: 0,
+      next: null,
     });
     expect(textOf(result)).toContain('4,200 stars');
     expect(textOf(result)).toContain('Run just test.');
@@ -453,7 +455,7 @@ describe('admin_decide on a registration', () => {
       statusReason: null,
     });
     expect(textOf(again)).toMatch(/^Refused \(not_found\)/);
-    expect(queue.structuredContent).toEqual({ items: [] });
+    expect(queue.structuredContent).toEqual({ items: [], more: 0, next: null });
   });
 
   test('a registration keeps the settings its maintainer chose: approving one with settings or a tier is refused', async () => {

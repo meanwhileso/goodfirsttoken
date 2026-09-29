@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { describe, expect, test } from 'vitest';
 import {
+  ADMIN_QUEUE_PAGE,
   MAX_PR_DESCRIPTION,
   foldLines,
   toolRefusal,
@@ -565,6 +566,35 @@ describe('what each result says', () => {
     expect(text).toContain('@kenji asked to remove this repo, and @octo-maintainer withdrew the request on 2026-09-26 12:00 UTC.');
     expect(text).toContain('Someone other than the one who asked withdrew 3 more requests to remove this repo.');
     expect(problemFields(validate(tools.admin_queue.output, { items: [six] }))).toEqual(['items[0].removalsWithdrawn']);
+  });
+
+  test('a page of the queue with more after it says how many more wait, and gives the after for the next page', () => {
+    const [candidate] = samples.admin_queue.output.items;
+    if (candidate === undefined) throw new Error('missing sample');
+    const next = `${candidate.requestedAt}~${candidate.repo}~${candidate.id}`;
+
+    const text = textOf(toolResult('admin_queue', { items: [candidate], more: 7, next }));
+    const last = textOf(toolResult('admin_queue', { items: [candidate] }));
+
+    expect(text).toContain('1 waiting here, the longest first, and 7 more after them:');
+    expect(text).toContain(`7 more wait. Read the next page with admin_queue, the same kind, and after: ${JSON.stringify(next)}.`);
+    expect(last).toContain('1 waiting:');
+    expect(last).not.toContain('more wait');
+  });
+
+  test("admin_queue takes an after only as an answer's next gives it, and a call without one gets the first page", () => {
+    const [candidate] = samples.admin_queue.output.items;
+    if (candidate === undefined) throw new Error('missing sample');
+    const next = `${candidate.requestedAt}~${candidate.repo}~${candidate.id}`;
+
+    expect(validate(tools.admin_queue.input, {})).toEqual({ ok: true, value: { kind: 'all' } });
+    expect(validate(tools.admin_queue.input, { after: next })).toEqual({ ok: true, value: { kind: 'all', after: next } });
+    for (const after of ['2', `2026-09-26T12:00:00Z~${candidate.repo}~${candidate.id}`, `${candidate.requestedAt}~${candidate.repo}`, `${next}~x`]) {
+      expect(problemFields(validate(tools.admin_queue.input, { after }))).toEqual(['after']);
+    }
+    expect(problemFields(validate(tools.admin_queue.output, { items: Array.from({ length: ADMIN_QUEUE_PAGE + 1 }, () => candidate) }))).toEqual([
+      'items',
+    ]);
   });
 
   test('request_removal says what it did: asked, found one waiting, withdrew one, or found the repo removed already', () => {

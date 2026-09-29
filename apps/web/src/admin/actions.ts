@@ -1,7 +1,11 @@
 import {
+  ADMIN_QUEUE_PAGE,
   invalidSettings,
   projectSettingsSchema,
+  queuePlaceText,
+  readQueuePlace,
   validate,
+  type QueuePlace,
   type CrawlCandidate,
   type Policy,
   type PolicyChange,
@@ -319,19 +323,44 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
   };
 }
 
+type QueueKind = QueueItem['kind'];
+
+/** Every kind of item in the admin queue. */
+export const QUEUE_KINDS: readonly QueueKind[] = ['registration', 'candidate', 'removal', 'pause', 'policy_change'];
+
+/** An item waiting in the queue before it is built: where it sits in the queue, and how to build it. */
+interface Waiting extends QueuePlace {
+  build: () => Promise<QueueItem>;
+}
+
+/** The queue's order: the one that has waited longest first, then by repo, then by ID, so no two tie. */
+function queueOrder(a: QueuePlace, b: QueuePlace): number {
+  return a.at.localeCompare(b.at) || a.repo.localeCompare(b.repo) || a.id.localeCompare(b.id);
+}
+
 /**
- * The admin queue: maintainers' registrations waiting for an admin, the
+ * One page of the admin queue, for `admin_queue` and /admin alike: of the
+ * kinds asked for, maintainers' registrations waiting for an admin, the
  * crawler's finds, maintainers' requests to be removed, the projects Good
  * First Token paused on its own, and the listings whose policy the crawler
- * reads differently now, the one that has waited longest first. The facts
- * of a registration and of a request come from GitHub now, read with the
- * admin's own token. A crawler find's and a policy change's are the ones
- * the crawler read. A pause has none.
+ * reads differently now. The one that has waited longest comes first. A page
+ * is the first ADMIN_QUEUE_PAGE items after `after`, the place where the page
+ * before ended, or from the start. Only those are built, so one look reads
+ * GitHub for at most that many items, whatever the queue holds. The facts of
+ * a registration and of a request come from GitHub now, read with the
+ * admin's own token, two calls each. A crawler find's and a policy change's
+ * are the ones the crawler read. A pause has none. The answer says how many
+ * more wait, and where this page ends.
  */
-export async function adminQueue(caller: Caller, input: ToolInput<'admin_queue'>): Promise<Outcome<'admin_queue'>> {
+export async function queuePage(
+  caller: Caller,
+  { kinds, after }: { kinds: readonly QueueKind[]; after?: string | undefined },
+): Promise<Outcome<'admin_queue'>> {
   await requirePermission(caller, 'review_projects');
+  const from = after === undefined ? null : readQueuePlace(after);
+  if (after !== undefined && from === null) throw new Error(`${after} is no place in the admin queue.`);
   const token = await caller.gitHubToken();
-  const wants = (kind: QueueItem['kind']) => input.kind === 'all' || input.kind === kind;
+  const wants = (kind: QueueKind) => kinds.includes(kind);
   const [pending, candidates, removals, paused, changes] = await Promise.all([
     wants('registration') ? listPendingProjects(env.DB) : [],
     wants('candidate') ? listCandidates(env.DB, 'waiting') : [],
@@ -339,15 +368,53 @@ export async function adminQueue(caller: Caller, input: ToolInput<'admin_queue'>
     wants('pause') ? listSelfPausedProjects(env.DB) : [],
     wants('policy_change') ? listPolicyChanges(env.DB, 'waiting') : [],
   ]);
-  const items = await Promise.all([
-    ...pending.map(({ project, changeId }) => registrationItem(token, project, changeId)),
-    ...candidates.map(candidateItem),
-    ...removals.map((request) => removalItem(token, request)),
-    ...paused.map(pauseItem),
-    ...changes.map(policyChangeItem),
-  ]);
-  items.sort((a, b) => a.requestedAt.localeCompare(b.requestedAt) || a.repo.localeCompare(b.repo));
-  return { ok: true, value: { items } };
+  const waiting: Waiting[] = [
+    ...pending.map(({ project, changeId }) => ({
+      at: iso(project.statusChangedAt),
+      repo: project.repo,
+      id: registrationId(changeId),
+      build: () => registrationItem(token, project, changeId),
+    })),
+    ...candidates.map((candidate) => ({
+      at: iso(candidate.foundAt),
+      repo: candidate.repo,
+      id: candidate.id,
+      build: () => candidateItem(candidate),
+    })),
+    ...removals.map((request) => ({
+      at: iso(request.requestedAt),
+      repo: request.repo,
+      id: request.id,
+      build: () => removalItem(token, request),
+    })),
+    ...paused.map((pause) => ({
+      at: iso(pause.project.statusChangedAt),
+      repo: pause.project.repo,
+      id: pauseId(pause.changeId),
+      build: () => pauseItem(pause),
+    })),
+    ...changes.map((change) => ({
+      at: iso(change.foundAt),
+      repo: change.repo,
+      id: change.id,
+      build: () => policyChangeItem(change),
+    })),
+  ];
+  waiting.sort(queueOrder);
+  const rest = from === null ? waiting : waiting.filter((item) => queueOrder(item, from) > 0);
+  const shown = rest.slice(0, ADMIN_QUEUE_PAGE);
+  const items = await Promise.all(shown.map((item) => item.build()));
+  const more = rest.length - shown.length;
+  const last = shown.at(-1);
+  return {
+    ok: true,
+    value: { items, more, next: more > 0 && last !== undefined ? queuePlaceText(last) : null },
+  };
+}
+
+/** The admin queue, for `admin_queue`: one kind of item, or all of them, a page at a time. */
+export async function adminQueue(caller: Caller, input: ToolInput<'admin_queue'>): Promise<Outcome<'admin_queue'>> {
+  return queuePage(caller, { kinds: input.kind === 'all' ? QUEUE_KINDS : [input.kind], after: input.after });
 }
 
 /** Settings left out of a patch, and sent as undefined, keep the value they had. */

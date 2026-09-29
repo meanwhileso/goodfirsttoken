@@ -1,4 +1,5 @@
 import {
+  ADMIN_QUEUE_PAGE,
   doNotListNote,
   moreRemovalsWithdrawnNote,
   productName,
@@ -28,9 +29,12 @@ import adminCss from '../styles/admin-page.css?url';
 // Only admins see it. Its forms post to /admin, and go through the same
 // actions as the admin's MCP tools (src/admin/).
 export const Route = createFileRoute('/admin')({
-  validateSearch: (search: Record<string, unknown>): { notice?: string; sig?: string } => ({
+  // The server checks `after` as admin_queue checks it, and shows no queue
+  // for a value that isn't a page.
+  validateSearch: (search: Record<string, unknown>): { notice?: string; sig?: string; after?: string } => ({
     ...(typeof search.notice === 'string' ? { notice: search.notice } : {}),
     ...(typeof search.sig === 'string' ? { sig: search.sig } : {}),
+    ...(typeof search.after === 'string' ? { after: search.after } : {}),
   }),
   loaderDeps: ({ search }) => search,
   loader: async ({ deps }) => {
@@ -485,6 +489,43 @@ function Blocked({ blocked }: { blocked: AdminPage['blocked'] }) {
   );
 }
 
+/**
+ * Where this page sits in the queue: how many more wait after it, with links
+ * to the next page and back to the first. An address that names no page of
+ * the queue shows why, and a link to the first page.
+ */
+function QueuePages({ page }: { page: AdminPage }) {
+  if (page.badPage !== null) {
+    return (
+      <p className="admin__notice" role="alert">
+        {page.badPage}{' '}
+        <Link to={ADMIN_PATH} className="mono small">
+          first page
+        </Link>
+      </p>
+    );
+  }
+  if (page.more === 0 && !page.laterPage) return null;
+  return (
+    <nav className="cluster" aria-label="pages of the queue">
+      <span className="mono small muted">
+        {`The queue shows ${String(ADMIN_QUEUE_PAGE)} at a time, the longest waiting first. `}
+        {page.more > 0 ? `${page.more.toLocaleString('en-US')} more wait after these.` : 'None wait after these.'}
+      </span>
+      {page.laterPage && (
+        <Link to={ADMIN_PATH} className="mono small">
+          first page
+        </Link>
+      )}
+      {page.next !== null && (
+        <Link to={ADMIN_PATH} search={{ after: page.next }} className="mono small">
+          next page
+        </Link>
+      )}
+    </nav>
+  );
+}
+
 function Admin() {
   const page = Route.useLoaderData();
   return (
@@ -511,6 +552,7 @@ function Admin() {
         )}
         <div className="admin__split">
           <div className="admin__main">
+            <QueuePages page={page} />
             <section className="stack" aria-label="asking to be removed">
               <div className="rail__head">
                 <Marker as="h2" count={page.removals.length}>
