@@ -798,7 +798,9 @@ PR job below reads it.
 
 **The PR job.** Twice an hour, at 7 and 37 minutes past, a scheduled run
 reads each PR the table has open, oldest first, from GitHub, with the
-service token under [Calls to GitHub](#calls-to-github).
+service token under [Calls to GitHub](#calls-to-github). It also reads the
+state of each PR recorded closed without merging in the last 14 days, under
+Reopened below.
 
 - A PR that merged is recorded merged, and one closed without merging is
   recorded closed, each at the time GitHub gives. The claim's issue room is
@@ -831,8 +833,8 @@ service token under [Calls to GitHub](#calls-to-github).
   next run tries again.
 - A PR GitHub no longer shows, as when its repo went private, stays open, and
   the next run reads it again.
-- The job reads open PRs only. A PR recorded closed that reopens on
-  GitHub is found by the next read of its issue, under Reopened below.
+- A PR recorded closed that opens again on GitHub, or merges after that,
+  is found by the job, or by a read of its issue, under Reopened below.
 - It stops early the way the sync does, under The budget in
   [Tagged issues](#tagged-issues), and saves what it read first. With no
   open PR and no read due, it asks GitHub nothing.
@@ -852,13 +854,18 @@ maintainer wrote there is kept as a follow-up for the claim's donor, once.
   repo that asks for changes, a member of the organization who has no role
   on the repo, or a collaborator who can only read.
 - Why push access: it is who can merge the PR, or push to its branch, so
-  their review can decide it. GitHub gives it the same to every reader.
-  GitHub's `authorAssociation` names someone `MEMBER` only to a reader who
-  can see their membership of the organization. A membership is private
-  unless its member makes it public, so a member who keeps it private and
-  can push through a team reads as `NONE` or `CONTRIBUTOR` to the service
-  token, which isn't a member. That rule would miss them, and no one would
-  know.
+  their review can decide it. GitHub's `authorAssociation` names someone
+  `MEMBER` only to a reader who can see their membership of the
+  organization. A membership is private unless its member makes it public,
+  so a member who keeps it private and can push through a team reads as
+  `NONE` or `CONTRIBUTOR` to the service token, which isn't a member. That
+  rule would miss them, and no one would know.
+- GitHub's docs describe `authorCanPushToRepository` as whether the author
+  has push access to the repo, and say nothing about who reads it. Whether
+  the service token reads it for a private member isn't checked on GitHub
+  yet. So each run's log line says how many reviews it left out for no push
+  access: reviews by a person other than the PR's author, and no bot. A
+  count that stays up while maintainers review would show it.
 - A maintainer here is wider than for managing a project, which takes the
   admin or maintain role under [Permissions](#permissions). Someone with
   write access can merge a PR, so their review counts.
@@ -916,24 +923,32 @@ again.
 **Reopened.** A PR closed without merging can open again on GitHub, as
 when someone undoes a stale bot's close. A merged PR can't.
 
-- Each read of an issue's linked PRs, a pass of the sync under
-  [Tagged issues](#tagged-issues) or the PR job's read of it again after a
-  close, looks for a claim's own PR on that issue that is recorded closed
-  without merging and that GitHub shows open. It is recorded open again,
-  with no close time.
-- The issue room hears first, under When a claim's PR ends in
+- Two reads look for one. Each run of the PR job reads the state of each
+  PR recorded closed without merging whose close was in the last 14 days,
+  whatever its issue and its project. And each read of an issue's linked
+  PRs, by a pass of the sync under [Tagged issues](#tagged-issues) or by the
+  PR job's read of it again after a close, looks for a claim's own PR on
+  that issue that is recorded closed and that GitHub shows open. Both
+  record it the same way.
+- A PR GitHub shows open again is recorded open, with no close time. The
+  issue room hears first, under When a claim's PR ends in
   [the issue room](#the-issue-room), so the claim takes posts and fixes
-  again, and the issue takes no new claims. When the room doesn't take it,
-  the PR stays closed, and the next read tries again.
-- The PR job follows it again from its next run, with its follow-ups, and
-  records it merged or closed when it ends.
+  again, and the issue takes no new claims. When the room doesn't open it
+  again, the PR stays closed, and the next read tries again.
+- A PR that opened again and merged since the job last read it is recorded
+  open, then merged, at GitHub's merge time, the way the job records any
+  merge: the room announces it, it counts among merged PRs, and the donor
+  is told once, with the link to share it.
+- The PR job follows an open one again from its next run, with its
+  follow-ups, and records it merged or closed when it ends.
 - The donor was told of the close at most once, and isn't told of it
   again. How the PR ends next is told once, under
   [The donor's tools](#the-donors-tools).
-- A PR is found open again only while its issue is read: while the issue
-  is open and tagged in a project asking for help, or when its re-read after
-  the close runs. A PR that opens again and merges between two reads, or on
-  an issue no longer read, stays closed here.
+- The limits: a PR that opens again more than 14 days after it closed is
+  found only by a read of its issue, while the issue is open and tagged in
+  a project asking for help. And a claim's PR is known by the repo name it
+  was recorded with. A read of an issue gives a PR under its repo's name
+  now, so after the repo is renamed, that read doesn't find the claim's PR.
 
 ## Projects
 

@@ -12,6 +12,7 @@ import {
   listOpenPrs,
   saveClaim,
   listEndedToOffer,
+  listReopenedClaimPrs,
   markEndedOffered,
   setPrState,
   unblockDonor,
@@ -151,6 +152,22 @@ describe('PRs', () => {
     expect(await countProjectPrs(db, repo.toUpperCase())).toEqual({ open: 1, merged: 1 });
     expect(await countProjectPrs(db, 'sample-owner/sample-tools')).toEqual({ open: 1, merged: 0 });
     expect(await countProjectPrs(db, 'sample-owner/nothing-here')).toEqual({ open: 0, merged: 0 });
+  });
+
+  test("a claim's PR recorded closed is found open again for its own issue alone, and an open or merged one never", async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    await addPr(db, { claimId: 'c_2', pr: prRef(58), openedAt: t0 });
+    await setPrState(db, 'c_1', 'closed', t0 + DAY);
+
+    // c_1 is on #17, and c_2, whose PR is still open, on #18.
+    const own = await listReopenedClaimPrs(db, [prRef(57), prRef(58)], `${repo}#17`);
+    const other = await listReopenedClaimPrs(db, [prRef(57)], `${repo}#18`);
+    await setPrState(db, 'c_1', 'open', t0 + 2 * DAY);
+    await setPrState(db, 'c_1', 'merged', t0 + 3 * DAY);
+
+    expect(own).toEqual([{ claimId: 'c_1', pr: prRef(57) }]);
+    expect(other).toEqual([]);
+    expect(await listReopenedClaimPrs(db, [prRef(57)], `${repo}#17`)).toEqual([]);
   });
 
   test('a claim with no PR has no state to set', async () => {

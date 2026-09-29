@@ -23,13 +23,13 @@ import {
   releaseProject,
   saveIssues,
   setDelisted,
-  setPrState,
   setProjectLanguage,
   setProjectStatusFrom,
 } from '../db';
 import { GitHubError } from '../github';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
 import { SyncStopped, type GitHubReader, type ServiceGitHub, type StopReason } from './github';
+import { reopenClaimPr } from './reopen';
 
 // The tagged-issue sync (spec sections 3 and 6). For each approved project
 // it reads, with the read-only service token, the open issues in its issue
@@ -480,22 +480,14 @@ async function tellRoom(deps: SyncDeps, issue: string, before: PrRef | null, aft
 }
 
 /**
- * Records open again each claim's own PR on the issue that the PR job
- * recorded closed without merging and that GitHub now shows open among
- * `open`, as when a stale bot's close was undone. The room hears first, so
- * the claim takes posts and submits again and the issue takes no new
- * claims, then the prs table, so the PR job follows the PR again. One the
- * room didn't take stays closed, and the next read tries again.
+ * Records open again each claim's own PR on the issue, among the PRs
+ * GitHub shows linked to it and open, that the PR job recorded closed
+ * without merging, as when a stale bot's close was undone, by
+ * reopenClaimPr.
  */
 async function reopenClaimPrs(deps: SyncDeps, issue: string, open: readonly PrRef[]): Promise<void> {
   for (const { claimId, pr } of await listReopenedClaimPrs(deps.db, open, issue)) {
-    try {
-      if (!(await issueRoom(deps.rooms, issue).claimPrReopened({ claimId, pr })).ok) continue;
-    } catch (error) {
-      console.warn(`The room for ${issue} didn't hear that a claim's PR is open again. The next read tries again.`, error);
-      continue;
-    }
-    await setPrState(deps.db, claimId, 'open', deps.now());
+    await reopenClaimPr(deps, { claimId, issue, pr });
   }
 }
 

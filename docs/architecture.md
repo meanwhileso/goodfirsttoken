@@ -1301,7 +1301,7 @@ pruning after a sync, with no index of its own.
 | `prs_by_number` | A PR's claim, and one claim per PR, and the claims whose closed PR a read finds open again |
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
-| `prs_by_closed` | PRs merged or closed in a time range, like this week |
+| `prs_by_closed` | PRs merged or closed in a time range, like this week, and the PRs closed in the last 14 days the PR job reads |
 | `prs_reread_due` | The issues of PRs closed without merging that wait for the PR job to read them again: those whose read never failed, oldest close first, then the rest, oldest failure first |
 | `donor_sessions_by_person` | A donor's last session, and in migration `0010_follow_ups.sql`, whether a merged PR's donor started a session since it merged |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
@@ -2005,7 +2005,8 @@ read-only service token. The rules are in
 |---|---|
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
-| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups |
+| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged |
+| `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |
 | `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
 | `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, which run holds it, and whether the sync delisted it, with the projects a run checks |
@@ -2110,10 +2111,9 @@ read-only service token. The rules are in
   use, gives the open PRs it found linked to `reopenClaimPrs` before it
   tells the room of a change. `listReopenedClaimPrs` in `src/db/prs.ts`
   finds, in one query, the claims on the issue whose own PR is among them
-  and recorded closed. For each, the room's `claimPrReopened` comes first,
-  then `setPrState` records it open, so a room that didn't hear leaves the
-  PR closed for the next read to find. An issue with no linked PR costs no
-  query.
+  and recorded closed, by the repo name the PR was recorded with. Each goes
+  to `reopenClaimPr` in `src/sync/reopen.ts`, which the PR job uses too,
+  under The PR job below. An issue with no linked PR costs no query.
 - **Which PRs count** is under Linked PRs in
   [how-it-works.md](how-it-works.md#tagged-issues), and why is in
   [spec §6](specs/v1.md#6-issues-and-claims). GitHub gives a PR's base
@@ -2178,7 +2178,26 @@ read-only service token. The rules are in
   login with the `[bot]` that REST gives it, so the type or the suffix
   marks one. The query asks for no `authorAssociation`, since GitHub gives
   it for the reader, and a comment on a line needs no author of its own,
-  since a review's comments are its author's.
+  since a review's comments are its author's. Each run's log line counts
+  the reviews it left out for no push access, by `withoutPushOf`, since
+  whether GitHub gives the field for a private member to the service token
+  isn't checked.
+- **PRs closed in the last 14 days.** `listClosedPrsSince` reads, through
+  `prs_by_closed`, each PR recorded closed without merging in the last 14
+  days, `REOPEN_WINDOW_MS`, and the job reads them in the same queries,
+  after the open PRs, each with the fragment `State`, its state and times
+  alone. That asks for no connection, so it adds no points, and a query
+  holds only the fragments its PRs use, since GitHub refuses one that goes
+  unused. A PR open again goes to `reopenClaimPr` in `src/sync/reopen.ts`,
+  the one way the job and `readCopy` both record it: the room's
+  `claimPrReopened`, then, only when that says `reopened`, `setPrState`
+  records it open. One merged since is then recorded merged by
+  `recordEnd`, the job's one way to record a PR's end, so it is announced,
+  counted, and offered like any merge. The cost: a run makes one more query
+  for each 50 PRs past a multiple of 50 in the two lists together, at one
+  point each, and the closed PRs come last, so a run that has to stop cuts
+  them first. At 50 closes a day, the 700 PRs of the 14 days take 14
+  queries, about 14 points, of the job's 100 calls.
 - **Reading an issue again** when a claim's PR closed without merging is
   `rereadIssue` in `src/sync/issues.ts`, which the PR job calls with its own
   `ServiceGitHub`, so its calls count in the job's run: one REST read of
@@ -2482,7 +2501,8 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   the repos of the projects it reads no issues for, up to about 101 calls a
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, so they seldom draw on the same budget.
-  The PR job reads each open PR's reviews in its one query, whose cost is
+  The PR job reads each open PR's reviews in its one query, and the state
+  of each PR closed in the last 14 days in the same queries, whose cost is
   under The PR job in [The sync](#the-sync), and an issue again, a few
   REST calls, for each claim's PR that closed without merging. It leaves the
   least for the others, so it still reads after they stop.

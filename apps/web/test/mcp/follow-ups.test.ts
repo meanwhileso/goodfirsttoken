@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { adminRemoveProject } from '../../src/admin/actions';
 import {
   blockDonor,
+  countProjectPrs,
   createProject,
   getIssue,
   getPr,
@@ -539,6 +540,22 @@ describe('a merged PR', () => {
     expect(fetched.filter((url) => !url.startsWith(github.apiUrl) && !url.startsWith(github.webUrl))).toEqual([]);
   });
 
+  test('two sessions started at once, and one after them, tell of each ended PR once between them', async () => {
+    await project();
+    const priya = await donor('priya');
+    const merged = await openedPr(priya);
+    const closed = await openedPr(priya);
+    github.mergePullRequest(APP, merged.pr.number, BY);
+    github.closePullRequest(APP, closed.pr.number, BY);
+    await runPrJob();
+
+    const both = await Promise.all([startSession(priya), startSession(priya)]);
+    const after = await startSession(priya);
+
+    const told = [...both, after].flatMap((session) => (session.structuredContent?.endedPrs as { pr: { number: number } }[]).map((e) => e.pr.number));
+    expect(told.sort((a, b) => a - b)).toEqual([merged.pr.number, closed.pr.number].sort((a, b) => a - b));
+  });
+
   test.each([
     ["the merged PR's own link, stored wrong", "UPDATE prs SET url = 'not a link' WHERE claim_id = ?1", 'UPDATE prs SET url = ?2 WHERE claim_id = ?1'],
     // A time past the year 9999 has no ISO 8601 form the answer takes.
@@ -590,7 +607,57 @@ describe('a merged PR', () => {
 });
 
 describe('a PR reopened on GitHub after the job recorded it closed', () => {
-  test('a re-read that finds it open records it open, so the claim takes fixes again, and the job follows it to its merge', async () => {
+  test("on an issue assigned to the donor, which no pass reads, the PR job's read of the PRs it recorded closed finds it open, and the claim takes fixes again", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { issue, claimId, pr } = await openedPr(priya);
+    await runSync();
+    github.assignIssue(APP, Number(issue.split('#')[1]), 'priya', BY);
+    github.closePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    github.reopenPullRequest(APP, pr.number, BY);
+
+    await runSync();
+    const run = await runPrJob();
+    const session = await startSession(priya);
+    const fix = await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = 2;\n' });
+
+    expect(run).toMatchObject({ reopened: 1 });
+    expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'open', closedAt: null });
+    expect(session.structuredContent?.endedPrs).toEqual([]);
+    expect(fix.structuredContent).toMatchObject({ state: 'pr_opened', pr });
+  });
+
+  test('a PR that reopens and merges between two reads is recorded merged, counted, and told once, as merged, with its link', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { issue, claimId, pr } = await openedPr(priya);
+    await runSync();
+    github.closePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    github.reopenPullRequest(APP, pr.number, BY);
+    github.mergePullRequest(APP, pr.number, BY);
+
+    await runSync();
+    const run = await runPrJob();
+    const session = await startSession(priya);
+    const again = await startSession(priya);
+
+    expect(run).toMatchObject({ reopened: 1, merged: 1 });
+    expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'merged' });
+    expect(await countProjectPrs(env.DB, APP)).toEqual({ open: 0, merged: 1 });
+    expect(session.structuredContent?.endedPrs).toEqual([
+      expect.objectContaining({ pr, outcome: 'merged', shareUrl: expect.stringMatching(/^https:\/\/x\.com\/intent\/tweet\?/) as unknown }),
+    ]);
+    expect(again.structuredContent?.endedPrs).toEqual([]);
+    expect((await issueRoom(env.ISSUE_ROOM, issue).history()).map((e) => e.kind).filter((kind) => kind.startsWith('pr_'))).toEqual([
+      'pr_opened',
+      'pr_closed',
+      'pr_merged',
+    ]);
+  });
+
+  test("while its issue's re-read waits, the PR job's next run finds it open, so the claim takes fixes again, and the job follows it to its merge", async () => {
     await project();
     const priya = await donor('priya');
     const kenji = await donor('kenji');
@@ -604,7 +671,7 @@ describe('a PR reopened on GitHub after the job recorded it closed', () => {
     await releaseProject(env.DB, APP, until);
     github.reopenPullRequest(APP, pr.number, BY);
 
-    const reread = await runPrJob();
+    const reopened = await runPrJob();
     const session = await startSession(priya);
     const claimed = await call(kenji, 'claim_issue', { sessionId: kenji.sessionId, issue });
     const fix = await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = 1;\n' });
@@ -612,7 +679,8 @@ describe('a PR reopened on GitHub after the job recorded it closed', () => {
     const merged = await runPrJob();
     const after = await startSession(priya);
 
-    expect(reread).toMatchObject({ reread: 1 });
+    // Open again, it no longer waits for its issue to be read again.
+    expect(reopened).toMatchObject({ reopened: 1, reread: 0 });
     expect(session.structuredContent?.endedPrs).toEqual([]);
     expect(refusalOf(claimed)).toBe('pr_exists');
     expect(fix.structuredContent).toMatchObject({ state: 'pr_opened', pr });

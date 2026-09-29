@@ -290,6 +290,19 @@ export async function rereadDone(db: D1Database, claimId: string): Promise<void>
   await db.prepare('UPDATE prs SET reread_due = 0 WHERE claim_id = ?').bind(mustParse(id, claimId, 'claimId')).run();
 }
 
+/**
+ * Every PR recorded closed without merging at `since` or later, oldest
+ * close first, for the job that reads whether one opened again, or merged.
+ */
+export async function listClosedPrsSince(db: D1Database, since: number): Promise<PrRecord[]> {
+  // prs_by_closed gives the range and the order.
+  const { results } = await db
+    .prepare("SELECT * FROM prs WHERE closed_at >= ? AND state = 'closed' ORDER BY closed_at, claim_id")
+    .bind(checkTime(Math.max(0, since), 'since'))
+    .all<PrRow>();
+  return results.map(toPr);
+}
+
 /** Every PR still open, oldest first, for the job that follows them. */
 export async function listOpenPrs(db: D1Database): Promise<PrRecord[]> {
   const { results } = await db

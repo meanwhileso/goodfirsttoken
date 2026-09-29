@@ -79,9 +79,10 @@ function claimAs(person: { githubId: number; login: string }, n: number) {
  * the issue, the way the MCP tools will. The room records the PR, and so
  * does the prs table.
  */
-async function claimWithPr(): Promise<{ issue: number; claim: ClaimRecord; pr: PrRef }> {
+async function claimWithPr(mentions: readonly number[] = []): Promise<{ issue: number; claim: ClaimRecord; pr: PrRef }> {
   const issue = github.openIssue(APP, { title: 'Keep the hash in rewrites', labels: ['help wanted'], by: BY });
-  const number = github.openPullRequest(APP, { title: 'Keep the hash', body: `Closes #${String(issue)}`, by: 'priya' });
+  const body = [`Closes #${String(issue)}`, ...mentions.map((n) => `See #${String(n)} too.`)].join('\n\n');
+  const number = github.openPullRequest(APP, { title: 'Keep the hash', body, by: 'priya' });
   const pr = { repo: APP, number, url: `${github.webUrl}/${APP}/pull/${String(number)}` };
   const claimed = await claimAs(priya, issue);
   if (!claimed.ok) throw new Error(claimed.refusal.message);
@@ -345,8 +346,8 @@ describe('a PR closed without merging', () => {
     });
     // A re-read that lands takes 3 calls: the issue, its closing references,
     // and its timeline. One that GitHub refuses takes 1. Each run first asks
-    // what is left of the budget.
-    const capped = () => follow(jobDeps(github, { leave: 0.1, maxCalls: 4 }));
+    // what is left of the budget, then reads the two PRs it recorded closed.
+    const capped = () => follow(jobDeps(github, { leave: 0.1, maxCalls: 5 }));
 
     // The first run also reads the two PRs, so it has calls for the refused re-read alone.
     const first = await follow(jobDeps(github, { leave: 0.1, maxCalls: 3 }));
@@ -375,6 +376,98 @@ describe('a PR closed without merging', () => {
     // The second run reads the issue no more.
     expect(callsTo(github, 'GET /repos/{owner}/{repo}/issues/{issue_number}')).toHaveLength(1);
     expect(await getIssue(db, APP, ref(issue))).toMatchObject({ linkedPr: pr });
+  });
+
+  const DAY = 24 * 60 * MINUTE;
+  test.each([
+    ['13 days', 13 * DAY, 'open'],
+    ['15 days', 15 * DAY, 'closed'],
+  ])('a PR that reopens %s after it closed is followed again only within the 14 days the job reads it', async (_, wait, state) => {
+    // No pass read the issue, so only the PR job can find the reopen.
+    const { issue, claim, pr } = await claimWithPr();
+    github.closePullRequest(APP, pr.number, BY);
+    later();
+    await follow();
+    later(wait);
+    github.reopenPullRequest(APP, pr.number, BY);
+    github.calls.length = 0;
+
+    const run = await follow();
+
+    expect(await getPr(db, claim.id)).toMatchObject({ state });
+    expect((await room(issue).snapshot()).prs).toEqual(state === 'open' ? [pr] : []);
+    expect(run.reopened).toBe(state === 'open' ? 1 : 0);
+    // Past the 14 days the job has nothing to read, so it asks GitHub nothing.
+    expect(github.calls.map((call) => call.operation)).toEqual(state === 'open' ? ['GET /rate_limit', 'query repository'] : []);
+  });
+
+  test("the PRs the job recorded closed ride in the same query as the open ones, with their state alone", async () => {
+    const closed = await claimWithPr();
+    await claimWithPr();
+    github.closePullRequest(APP, closed.pr.number, BY);
+    later();
+    await follow();
+    later();
+    github.calls.length = 0;
+
+    await follow();
+
+    expect(github.calls.map((call) => call.operation)).toEqual(['GET /rate_limit', 'query repository']);
+  });
+
+  test("a room that doesn't take the reopen leaves the PR closed, and the next run tries again", async () => {
+    const { claim, pr } = await claimWithPr();
+    github.closePullRequest(APP, pr.number, BY);
+    later();
+    await follow();
+    github.reopenPullRequest(APP, pr.number, BY);
+    later();
+    const unheld = {
+      getByName: () => ({ claimPrReopened: () => Promise.resolve({ ok: true, reopened: false }) }),
+    } as unknown as DurableObjectNamespace<IssueRoom>;
+
+    const refused = await follow({ rooms: unheld });
+    const kept = await getPr(db, claim.id);
+    later();
+    const next = await follow();
+
+    expect([refused.reopened, next.reopened]).toEqual([0, 1]);
+    expect(kept).toMatchObject({ state: 'closed' });
+    expect(await getPr(db, claim.id)).toMatchObject({ state: 'open' });
+  });
+
+  test("a claim's PR that another issue links too is opened again in its own issue's room alone", async () => {
+    const other = github.openIssue(APP, { title: 'Keep the query too', labels: ['help wanted'], by: BY });
+    const { issue, claim, pr } = await claimWithPr([other]);
+    await syncTaggedIssues(jobDeps(github));
+    const linked = (await getIssue(db, APP, ref(other)))?.linkedPr;
+    github.closePullRequest(APP, pr.number, BY);
+    later();
+    await follow();
+    // Only the other issue is read from here, and it links the PR too.
+    github.unlabelIssue(APP, issue, 'help wanted', BY);
+    github.reopenPullRequest(APP, pr.number, BY);
+    later();
+    const asked: string[] = [];
+    const rooms = {
+      getByName: (name: string) => {
+        const real = env.ISSUE_ROOM.getByName(name);
+        return {
+          prOpened: (opened: PrRef) => real.prOpened(opened),
+          prClosed: (gone: PrRef) => real.prClosed(gone),
+          claimPrReopened: (request: { claimId: string; pr: PrRef }) => {
+            asked.push(name);
+            return real.claimPrReopened(request);
+          },
+        };
+      },
+    } as unknown as DurableObjectNamespace<IssueRoom>;
+
+    await syncTaggedIssues({ ...jobDeps(github), rooms });
+
+    expect(linked).toEqual(pr);
+    expect(asked).toEqual([]);
+    expect(await getPr(db, claim.id)).toMatchObject({ state: 'closed' });
   });
 
   test('a PR that merged leaves its issue to the next sync, and the job reads nothing more', async () => {
@@ -468,14 +561,19 @@ describe('follow-ups', () => {
     });
     github.reviewPullRequest(APP, pr.number, { login: 'lena', state: 'CHANGES_REQUESTED', body: 'Drop the flag.', comments: [{ path, line: 1, body: 'Not this.' }] });
     github.reviewPullRequest(APP, pr.number, { login: 'ines', state: 'CHANGES_REQUESTED', body: 'Start over.', comments: [{ path, line: 1, body: 'Or this.' }] });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
-    await follow();
+    const run = await follow();
 
     expect((await listClaimFollowUps(db, claim.id)).map((f) => [f.reviewer, f.body])).toEqual([
       ['kenji', 'Name the flag.'],
       ['arjun', 'Add a test.'],
       ['arjun', 'Say why here.'],
     ]);
+    // The run's line says how many reviews it left out for no push access,
+    // so a GitHub that hid a maintainer's push access would show in the logs.
+    expect(run.withoutPush).toBe(3);
+    expect(log.mock.calls.map((call) => String(call[0])).at(-1)).toContain('reviews left out for no push access: 3');
   });
 
   test("a reviewer's text is kept as one line, cut to 1,000 characters", async () => {
