@@ -1,5 +1,7 @@
 import type { ManagedRepo } from '../auth/permissions';
 import { GitHubError, gitHubGraphQL, gitHubRest } from '../github';
+import { docFolderFields, findDocs, type DocKind, type RepoDocs, type TreeEntry } from './docs';
+import { OUR_LABEL } from './rules';
 
 // What registering a project reads from GitHub, and the one thing it writes
 // there: the goodfirsttoken label. Every call runs with the maintainer's own
@@ -151,41 +153,7 @@ export async function readLabels(token: string, repo: string): Promise<string[]>
   return names;
 }
 
-/** A file read from the repo's default branch. */
-export interface RepoFile {
-  /** The path in the repo, like `.github/CONTRIBUTING.md`. */
-  path: string;
-  text: string;
-}
-
-/** The files a proposal reads. Each is null when the repo has none. */
-export interface RepoDocs {
-  contributing: RepoFile | null;
-  aiPolicy: RepoFile | null;
-  agents: RepoFile | null;
-  prTemplate: RepoFile | null;
-}
-
-type DocKind = keyof RepoDocs;
-
-/** Where each file is looked for, in order, and the names it goes by, without case. */
-const DOC_FILES: Record<DocKind, { folders: string[]; name: RegExp }> = {
-  contributing: { folders: ['', '.github', 'docs'], name: /^contributing(\.(md|markdown|rst|txt|adoc))?$/i },
-  aiPolicy: { folders: ['', '.github', 'docs'], name: /^ai[-_]?policy(\.(md|markdown|rst|txt))?$/i },
-  agents: { folders: [''], name: /^agents\.md$/i },
-  prTemplate: { folders: ['', '.github', 'docs'], name: /^pull_request_template(\.(md|markdown|txt))?$/i },
-};
-
-/** Files larger than this are left unread. */
-export const MAX_DOC_BYTES = 100_000;
-
-const FOLDER_ALIASES: Record<string, string> = { '': 'root', '.github': 'dotGithub', docs: 'docs' };
-
-interface TreeEntry {
-  name: string;
-  type: string;
-  size: number;
-}
+export { MAX_DOC_BYTES, type RepoDocs, type RepoFile } from './docs';
 
 type Tree = { entries?: TreeEntry[] } | null;
 
@@ -207,28 +175,14 @@ export async function readDocs(token: string, repo: string): Promise<RepoDocs> {
     token,
     `query ($owner: String!, $name: String!) {
       repository(owner: $owner, name: $name) {
-        root: object(expression: "HEAD:") { ... on Tree { entries { name type size } } }
-        dotGithub: object(expression: "HEAD:.github") { ... on Tree { entries { name type size } } }
-        docs: object(expression: "HEAD:docs") { ... on Tree { entries { name type size } } }
+        ${docFolderFields()}
       }
     }`,
     { owner, name },
   );
   if (listing.errors.length > 0) throw graphQLFailure(repo, listing.errors);
   const folders = listing.data?.repository ?? {};
-
-  const paths: Partial<Record<DocKind, string>> = {};
-  for (const [kind, { folders: where, name: pattern }] of Object.entries(DOC_FILES) as [DocKind, (typeof DOC_FILES)[DocKind]][]) {
-    for (const folder of where) {
-      const entry = folders[FOLDER_ALIASES[folder] ?? '']?.entries?.find(
-        (e) => e.type === 'blob' && pattern.test(e.name) && e.size <= MAX_DOC_BYTES,
-      );
-      if (entry) {
-        paths[kind] = folder ? `${folder}/${entry.name}` : entry.name;
-        break;
-      }
-    }
-  }
+  const paths = findDocs((alias) => folders[alias]?.entries);
 
   const docs: RepoDocs = { contributing: null, aiPolicy: null, agents: null, prTemplate: null };
   const kinds = Object.keys(paths) as DocKind[];
@@ -254,12 +208,7 @@ export async function readDocs(token: string, repo: string): Promise<RepoDocs> {
   return docs;
 }
 
-/** The label Good First Token creates when a maintainer picks the tag. */
-export const OUR_LABEL = {
-  name: 'goodfirsttoken',
-  color: '7057ff',
-  description: 'Tagged for outside help through Good First Token',
-};
+export { OUR_LABEL };
 
 /**
  * Makes sure the repo has the goodfirsttoken label, creating it with the

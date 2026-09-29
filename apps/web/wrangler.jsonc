@@ -42,9 +42,10 @@
   // nothing.
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET", "GH_SERVICE_TOKEN"] },
   // The cron triggers. Each names one job in src/sync/scheduled.ts: the
-  // tagged-issue sync every 15 minutes, and the PR job twice an hour, apart
-  // from it. Times are UTC.
-  "triggers": { "crons": ["*/15 * * * *", "7,37 * * * *"] },
+  // tagged-issue sync every 15 minutes, the PR job twice an hour, apart
+  // from it, and the policy crawler's search once an hour, apart from both.
+  // Times are UTC.
+  "triggers": { "crons": ["*/15 * * * *", "7,37 * * * *", "52 * * * *"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   // One issue room per issue, named by the issue (src/rooms/issue-room.ts),
   // and one feed each for the homepage, each project, and each person
@@ -84,6 +85,22 @@
         "max_retries": 90,
         "retry_delay": 30,
         "dead_letter_queue": "feed-dlq"
+      },
+      // The crawl queue's consumer (src/crawl/queue.ts), which reads
+      // GitHub. One batch at a time, since GitHub asks for one call at a
+      // time from a token. src/crawl/queue.ts sends the repos that wait for
+      // the budget back as a new message, which takes none of a message's
+      // tries, and sets the wait for a message it asks for again, at most
+      // an hour. max_retries keeps the last retry inside the time the queue
+      // keeps a message, as for the feed.
+      {
+        "queue": "crawl",
+        "max_batch_size": 5,
+        "max_batch_timeout": 30,
+        "max_concurrency": 1,
+        "max_retries": 90,
+        "retry_delay": 300,
+        "dead_letter_queue": "crawl-dlq"
       }
     ]
   },

@@ -64,12 +64,13 @@ export function describeDisclosure(settings: ProjectSettings): string {
   return inBody ?? '';
 }
 
-function settingValue(settings: ProjectSettings, key: SettingKey): string {
+function settingValue(settings: ProjectSettings, key: SettingKey, quoteLabels: boolean): string {
+  const labels = (names: readonly string[]) => listOrNone(quoteLabels ? names.map((name) => JSON.stringify(name)) : names);
   switch (key) {
     case 'tags':
-      return listOrNone(settings.tags);
+      return labels(settings.tags);
     case 'excludedTags':
-      return listOrNone(settings.excludedTags);
+      return labels(settings.excludedTags);
     case 'issueRepo':
       return settings.issueRepo ?? 'same as the code repo';
     case 'prMode':
@@ -91,15 +92,20 @@ function settingValue(settings: ProjectSettings, key: SettingKey): string {
   }
 }
 
-/** Every setting on its own line, with the reason for any the server proposed. */
+/**
+ * Every setting on its own line, with the reason for any the server proposed.
+ * With `quoteLabels`, each label name is in quotes, as for labels a repo
+ * named and no person chose.
+ */
 export function renderSettings(
   settings: ProjectSettings,
   reasons: readonly { setting: SettingKey; reason: string }[] = [],
+  { quoteLabels = false }: { quoteLabels?: boolean } = {},
 ): string {
   const width = Math.max(...Object.values(SETTING_LABELS).map((label) => label.length)) + 2;
   const rows = (Object.keys(SETTING_LABELS) as SettingKey[]).map((key) => {
     const reason = reasons.find((r) => r.setting === key)?.reason;
-    const value = settingValue(settings, key);
+    const value = settingValue(settings, key, quoteLabels);
     return SETTING_LABELS[key].padEnd(width) + (reason ? `${value} (${reason})` : value);
   });
   return lines(

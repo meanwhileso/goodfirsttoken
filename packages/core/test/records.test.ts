@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   changedSettings,
   crawlCandidateSchema,
+  crawlSeedSchema,
   mustParse,
   parseProjectSettings,
   prRecordSchema,
@@ -190,6 +191,44 @@ describe('crawl candidates', () => {
     expect(fields(validate(crawlCandidateSchema, { ...candidate, settings: { prMode: 'yolo' } }))).toEqual([
       'settings.prMode',
     ]);
+  });
+
+  test('a candidate stored before it had source lines or AI sentences has none, a source line is at most 500 characters, and it keeps at most 60 AI sentences', () => {
+    const stored = validate(crawlCandidateSchema, candidate);
+    expect(stored.ok && stored.value.sources).toEqual([]);
+    expect(stored.ok && [stored.value.aiSentences, stored.value.moreAiSentences]).toEqual([[], 0]);
+    const sentence = { path: 'AI_POLICY.md', text: 'AI help is fine.' };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: Array<typeof sentence>(60).fill(sentence) }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: Array<typeof sentence>(61).fill(sentence) }))).toEqual([
+      'aiSentences',
+    ]);
+    // A kept paragraph stored before it could be cut reads as uncut, and holds at most 1,000 characters.
+    const kept = validate(crawlCandidateSchema, { ...candidate, aiSentences: [sentence] });
+    expect(kept.ok && kept.value.aiSentences).toEqual([{ ...sentence, cutBefore: false, cutAfter: false }]);
+    const long = { path: 'AI_POLICY.md', text: 'x'.repeat(1000), cutBefore: true, cutAfter: false };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: [long] }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, aiSentences: [{ ...long, text: 'x'.repeat(1001) }] }))).toEqual([
+      'aiSentences[0].text',
+    ]);
+    const source = { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [source] }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [{ ...source, line: 'x'.repeat(501) }] }))).toEqual([
+      'sources[0].line',
+    ]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, sources: [{ ...source, about: 'agentNotes' }] }))).toEqual([
+      'sources[0].about',
+    ]);
+  });
+});
+
+describe('crawl seeds', () => {
+  const seed = { repo: 'sample-owner/sample-app', addedBy: 9001, addedAt: at, handledAt: null, outcome: null };
+
+  test('a seed the cron job handled says what it did, and one it has not handled says nothing', () => {
+    expect(fields(validate(crawlSeedSchema, seed))).toEqual([]);
+    expect(fields(validate(crawlSeedSchema, { ...seed, handledAt: at + DAY, outcome: 'project' }))).toEqual([]);
+    expect(fields(validate(crawlSeedSchema, { ...seed, handledAt: at + DAY }))).toEqual(['outcome']);
+    expect(fields(validate(crawlSeedSchema, { ...seed, outcome: 'queued' }))).toEqual(['outcome']);
   });
 });
 

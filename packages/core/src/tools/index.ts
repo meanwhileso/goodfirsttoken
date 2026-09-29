@@ -7,6 +7,7 @@ import {
   adminPauseProject,
   adminQueue,
   adminRemoveProject,
+  adminSeedRepo,
 } from './admin';
 import {
   claimIssue,
@@ -43,6 +44,7 @@ export const tools = {
   admin_block_donor: adminBlockDonor,
   admin_pause_project: adminPauseProject,
   admin_remove_project: adminRemoveProject,
+  admin_seed_repo: adminSeedRepo,
 } as const;
 
 export type Tools = typeof tools;

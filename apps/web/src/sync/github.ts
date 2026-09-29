@@ -24,11 +24,17 @@ export type StopReason =
 
 export class SyncStopped extends Error {
   readonly reason: StopReason;
+  /**
+   * When the budget that stopped the run starts over, in milliseconds since
+   * the epoch, when GitHub said. Null for any other stop.
+   */
+  readonly resetAt: number | null;
 
-  constructor(reason: StopReason, message: string) {
+  constructor(reason: StopReason, message: string, resetAt: number | null = null) {
     super(message);
     this.name = 'SyncStopped';
     this.reason = reason;
+    this.resetAt = resetAt;
   }
 }
 
@@ -54,6 +60,8 @@ export interface Allowance {
 const REST = 'core';
 /** GitHub's name for the budget GraphQL queries count against. */
 const GRAPHQL = 'graphql';
+/** GitHub's name for the budget search calls count against, which starts over each minute. */
+const SEARCH = 'search';
 
 // https://docs.github.com/en/rest/rate-limit/rate-limit#get-rate-limit-status-for-the-authenticated-user
 interface RateLimitStatus {
@@ -111,21 +119,24 @@ export class ServiceGitHub implements GitHubReader {
       if (!(error instanceof GitHubError)) throw error;
       throw new SyncStopped('github_error', `GitHub's API answered ${String(error.status)} when asked its rate limit.`);
     }
-    const budgets = [REST, GRAPHQL].map((resource) => {
+    const budgetOf = (resource: string): RateLimit | null => {
       const found = data.resources?.[resource];
       const [limit, remaining, reset] = [found?.limit, found?.remaining, found?.reset];
       if (typeof limit !== 'number' || typeof remaining !== 'number' || typeof reset !== 'number') return null;
       return { resource, limit, remaining, resetAt: reset * 1000 };
-    });
+    };
+    const budgets = [REST, GRAPHQL].map(budgetOf);
     if (budgets.some((budget) => budget === null)) {
       throw new SyncStopped('github_error', "GitHub's API answered its rate limit in a form GitHub doesn't use.");
     }
-    for (const budget of budgets) this.note(budget);
+    // Only the crawler searches, so a job reads on when GitHub leaves the
+    // search budget out, and the first search's headers give it.
+    for (const budget of [...budgets, budgetOf(SEARCH)]) this.note(budget);
   }
 
-  /** Reads one page of a REST path, or stops the run. */
+  /** Reads one page of a REST path, or stops the run. A search counts against the search budget. */
   async read<T>(path: string): Promise<GitHubPage<T>> {
-    this.before(REST);
+    this.before(path.startsWith('/search/') ? SEARCH : REST);
     try {
       const page = await gitHubRead<T>(this.token, path);
       this.note(page.rateLimit);
@@ -146,7 +157,13 @@ export class ServiceGitHub implements GitHubReader {
     }
     this.note(result.rateLimit);
     const limited = result.errors.find(limitsRate);
-    if (limited) throw new SyncStopped('rate_limited', `GitHub refused a query for the rate limit: ${limited.message}`);
+    if (limited) {
+      throw new SyncStopped(
+        'rate_limited',
+        `GitHub refused a query for the rate limit: ${limited.message}`,
+        result.rateLimit?.resetAt ?? null,
+      );
+    }
     return { data: result.data, errors: result.errors };
   }
 
@@ -155,11 +172,12 @@ export class ServiceGitHub implements GitHubReader {
       throw new SyncStopped('calls', `The run made ${String(this.calls)} calls to GitHub, as many as one run makes.`);
     }
     const budget = this.budgets.get(resource);
-    // A budget whose hour is over has started again.
+    // A budget whose time is up has started again.
     if (budget && budget.resetAt > this.now() && budget.remaining < budget.limit * this.allowance.leave) {
       throw new SyncStopped(
         'budget',
-        `GitHub has ${String(budget.remaining)} of ${String(budget.limit)} ${resource} calls left this hour, and the run leaves the rest for other jobs.`,
+        `GitHub has ${String(budget.remaining)} of ${String(budget.limit)} ${resource} calls left until it starts over, and the run leaves the rest for other jobs.`,
+        budget.resetAt,
       );
     }
     this.calls += 1;
@@ -181,7 +199,14 @@ export class ServiceGitHub implements GitHubReader {
     }
     this.note(error.rateLimit);
     if (error.status === 401) return new SyncStopped('bad_token', 'GitHub refused the service token (401).');
-    if (error.rateLimited) return new SyncStopped('rate_limited', `GitHub refused a call for the rate limit: ${error.message}`);
+    if (error.rateLimited) {
+      const wait = error.retryAfter === null ? null : this.now() + error.retryAfter * 1000;
+      return new SyncStopped(
+        'rate_limited',
+        `GitHub refused a call for the rate limit: ${error.message}`,
+        wait ?? error.rateLimit?.resetAt ?? null,
+      );
+    }
     if (error.status >= 500) return new SyncStopped('github_error', `GitHub answered ${String(error.status)}: ${error.message}`);
     return error;
   }

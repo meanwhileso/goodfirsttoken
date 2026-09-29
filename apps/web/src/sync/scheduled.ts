@@ -1,4 +1,5 @@
 import { ISSUE_REFRESH_INTERVAL_MS, type ProjectRecord, type ToolOutput } from '@goodfirsttoken/core';
+import { fillCrawlQueue } from '../crawl/search';
 import { getDoNotListEntry, releaseProject, takeRefresh } from '../db';
 import { ServiceGitHub, SyncStopped, type Allowance } from './github';
 import { HOLD_MS, newSyncRun, syncProject, syncTaggedIssues } from './issues';
@@ -12,23 +13,29 @@ import { followPrs } from './prs';
 export const ISSUE_SYNC_CRON = '*/15 * * * *';
 /** Twice an hour, apart from the sync: the PR job (src/sync/prs.ts). */
 export const PR_JOB_CRON = '7,37 * * * *';
+/** Once an hour, apart from both: the policy crawler's search (src/crawl/search.ts). */
+export const CRAWL_CRON = '52 * * * *';
 
 /**
  * What each job may spend of the token's hourly budget, how many calls one
  * run makes, and how many of the sync's go to its checks of the repos of
  * the projects it reads no issues for. docs/how-it-works.md gives the rule,
- * under Tagged issues, and docs/architecture.md, under The sync, why these
- * numbers.
+ * under Tagged issues, and docs/architecture.md, under The sync and The
+ * policy crawler, why these numbers. The crawler's search spends the search
+ * budget, which only it uses, and each run of its queue's consumer spends
+ * from the others.
  */
 export const ALLOWANCES = {
   sync: { leave: 0.2, maxCalls: 1000, checkCalls: 100 },
   prs: { leave: 0.1, maxCalls: 100 },
   refresh: { leave: 0.5, maxCalls: 60 },
+  crawlSearch: { leave: 0.1, maxCalls: 20 },
+  crawlRead: { leave: 0.6, maxCalls: 60 },
 } satisfies Record<string, Allowance>;
 
 /** The read-only service token, or null when the deployment has none. */
-function serviceToken(env: Env): string | null {
-  const token = (env as Partial<Pick<Env, 'GH_SERVICE_TOKEN'>>).GH_SERVICE_TOKEN;
+export function serviceToken(env: Partial<Pick<Env, 'GH_SERVICE_TOKEN'>>): string | null {
+  const token = env.GH_SERVICE_TOKEN;
   return token ? token : null;
 }
 
@@ -46,6 +53,9 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       return;
     case PR_JOB_CRON:
       await followPrs({ db: env.DB, rooms: env.ISSUE_ROOM, github: new ServiceGitHub(token, ALLOWANCES.prs), now });
+      return;
+    case CRAWL_CRON:
+      await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, github: new ServiceGitHub(token, ALLOWANCES.crawlSearch), now });
       return;
     default:
       console.error(`No job runs on the cron ${cron}. Each cron trigger in wrangler.jsonc needs one in src/sync/scheduled.ts.`);

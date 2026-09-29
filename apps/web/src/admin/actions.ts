@@ -16,6 +16,8 @@ import {
 import { env } from 'cloudflare:workers';
 import { requirePermission, type Caller } from '../auth/permissions';
 import {
+  addSeed,
+  crawlerSkips,
   addToDoNotList,
   blockDonor,
   createProject,
@@ -121,6 +123,9 @@ async function registrationItem(token: string | null, project: ProjectRecord, ch
     policy: project.policy,
     suggestedTags: [],
     onDoNotList: doNotList !== null,
+    sources: [],
+    aiSentences: [],
+    moreAiSentences: 0,
   };
 }
 
@@ -138,6 +143,9 @@ async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
     policy: candidate.policy,
     suggestedTags: candidate.suggestedTags,
     onDoNotList: doNotList !== null,
+    sources: candidate.sources,
+    aiSentences: candidate.aiSentences,
+    moreAiSentences: candidate.moreAiSentences,
   };
 }
 
@@ -410,6 +418,32 @@ export async function adminPauseProject(
     if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true } };
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
+}
+
+/**
+ * Adds a repo to the crawler's seed list, for the crawler to read whatever
+ * its stars or last push. A repo on the do-not-list is refused, since the
+ * crawler never reads one. A repo that is a project already, or one the
+ * crawler put in the admin queue before, isn't added, and the answer says
+ * why, since the crawler reads it no further. Nothing is read from GitHub:
+ * the crawler reads the repo when it queues it.
+ */
+export async function adminSeedRepo(
+  caller: Caller,
+  input: ToolInput<'admin_seed_repo'>,
+  now: number,
+): Promise<Outcome<'admin_seed_repo'>> {
+  await requirePermission(caller, 'review_projects');
+  const skip = (await crawlerSkips(env.DB, [input.repo])).get(input.repo.toLowerCase());
+  if (skip === 'do_not_list') {
+    return refuse(
+      'repo_not_eligible',
+      `${input.repo} is on the do-not-list, because its maintainers asked to be removed, so the crawler never reads it.`,
+    );
+  }
+  if (skip !== undefined) return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip } };
+  const { seed, added } = await addSeed(env.DB, { repo: input.repo, addedBy: caller.githubId }, now);
+  return { ok: true, value: { repo: seed.repo, added, leftAlone: null } };
 }
 
 /**

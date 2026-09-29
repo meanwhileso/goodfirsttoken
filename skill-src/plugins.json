@@ -1,10 +1,10 @@
 {
   "goodfirsttoken": {
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Spend your spare tokens on open source. Your agent picks up an issue a maintainer tagged for outside help, works it live, and gets it to a pull request."
   },
   "goodfirsttoken-admin": {
-    "version": "0.2.0",
-    "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, and blocks."
+    "version": "0.3.0",
+    "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, blocks, and the crawler's seed list."
   }
 }
