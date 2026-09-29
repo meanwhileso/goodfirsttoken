@@ -15,9 +15,11 @@ import {
   isOpenClaimPr,
   listIssueCopies,
   listIssues,
+  listProjectsToCheck,
   listProjectsToSync,
   releaseProject,
   saveIssues,
+  setDelisted,
   setProjectLanguage,
   setProjectStatusFrom,
 } from '../db';
@@ -31,8 +33,11 @@ import { SyncStopped, type GitHubReader, type ServiceGitHub, type StopReason } f
 // an assignee, and the open PRs linked to each. It saves them to the
 // tagged-issue cache, tells each issue's room about the linked PR it keeps,
 // and drops the issues it no longer finds. A repo that went private, was
-// archived, or is gone pauses its project. The rules are in
-// docs/how-it-works.md, under Tagged issues.
+// archived, or is gone delists its project, and pauses it when it is
+// approved. Before it reads any issues, a run reads the repos alone of each
+// paused project, and of each approved one it delisted, so a project it
+// doesn't read shows nothing cached from a repo GitHub no longer shows
+// either. The rules are in docs/how-it-works.md, under Tagged issues.
 //
 // A pass reads each of a project's issues once, and can take several runs.
 // A run that stops early, for the GitHub budget or its limit on calls,
@@ -67,6 +72,10 @@ export interface SyncRun {
   skipped: string[];
   /** Projects another run held, which this one left. */
   held: string[];
+  /** Projects whose repos alone the run read: paused ones, and approved ones delisted before. */
+  checked: number;
+  /** Of those, the ones GitHub showed a repo of private, archived, blocked, or gone. */
+  delisted: string[];
   /** Issues saved. */
   issues: number;
   /**
@@ -87,6 +96,8 @@ export function newSyncRun(): SyncRun {
     paused: [],
     skipped: [],
     held: [],
+    checked: 0,
+    delisted: [],
     issues: 0,
     linked: { closing: 0, cross: 0, both: 0, elsewhere: 0 },
     calls: 0,
@@ -221,7 +232,8 @@ async function readRepo(
 /**
  * Pauses the project for Good First Token, with no person named, so only an
  * admin can resume it. It lands only on the approved status it was decided
- * on, so a change someone made meanwhile stays.
+ * on, so a change someone made meanwhile stays. A project that isn't
+ * approved keeps its status.
  */
 async function pauseForGitHub(db: D1Database, project: ProjectRecord, reason: string, now: number): Promise<void> {
   let current: ProjectRecord | null = project;
@@ -233,6 +245,42 @@ async function pauseForGitHub(db: D1Database, project: ProjectRecord, reason: st
     }
     current = await getProject(db, project.repo);
   }
+}
+
+/** The code repo, then the issue repo when the project keeps its issues in another one. */
+function reposOf(project: ProjectRecord): string[] {
+  const issueRepo = project.settings.issueRepo ?? project.repo;
+  return lower(issueRepo) === lower(project.repo) ? [project.repo] : [project.repo, issueRepo];
+}
+
+/**
+ * Reads the project's code repo, then its issue repo when that is another
+ * one, and keeps what GitHub showed: the first that GitHub shows private,
+ * archived, blocked, or gone delists the project, and pauses it when it is
+ * approved, and both public and open take the mark off. The names GitHub
+ * gives the repos now and the code repo's main language, or why the
+ * project is delisted.
+ */
+async function readRepos(
+  deps: SyncDeps,
+  project: ProjectRecord,
+): Promise<{ names: string[]; language: string | null } | { unlisted: string }> {
+  const { db, github, now } = deps;
+  const names: string[] = [];
+  let language: string | null = null;
+  for (const repo of reposOf(project)) {
+    const found = await readRepo(github, repo);
+    if ('unlisted' in found) {
+      // The mark first, so the page is hidden even when the pause can't land.
+      await setDelisted(db, project.repo, found.unlisted, now());
+      await pauseForGitHub(db, project, found.unlisted, now());
+      return found;
+    }
+    names.push(found.name);
+    if (repo === project.repo) language = found.language;
+  }
+  await setDelisted(db, project.repo, null, now());
+  return { names, language };
 }
 
 function labelsOf(issue: RestIssue): string[] {
@@ -448,17 +496,12 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
   const projectRepos = new Set([lower(project.repo), lower(issueRepo)]);
   const ours = (pr: PrRef) => projectRepos.has(lower(pr.repo));
   try {
-    for (const repo of lower(issueRepo) === lower(project.repo) ? [project.repo] : [project.repo, issueRepo]) {
-      const found = await readRepo(github, repo);
-      if ('unlisted' in found) {
-        await pauseForGitHub(db, project, found.unlisted, now());
-        return { outcome: 'paused', reason: found.unlisted };
-      }
-      projectRepos.add(lower(found.name));
-      // The code repo's language ranks the project's issues for donors who
-      // name languages among their interests.
-      if (repo === project.repo) await setProjectLanguage(db, project.repo, found.language);
-    }
+    const repos = await readRepos(deps, project);
+    if ('unlisted' in repos) return { outcome: 'paused', reason: repos.unlisted };
+    for (const name of repos.names) projectRepos.add(lower(name));
+    // The code repo's language ranks the project's issues for donors who
+    // name languages among their interests.
+    await setProjectLanguage(db, project.repo, repos.language);
 
     const passStart = await beginPass(db, project.repo, now());
     const listed = await listTagged(github, issueRepo, project.settings.tags, project.settings.excludedTags);
@@ -531,16 +574,45 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
 }
 
 /**
- * The scheduled run: syncs the approved projects in the order
- * listProjectsToSync gives, until they are done or the run has to stop. It
- * first asks GitHub what is left of the budget, and leaves a project a
- * maintainer's refresh is reading.
+ * Reads the repos alone of each project the run reads no issues for, in the
+ * order listProjectsToCheck gives, and keeps what GitHub shows, until they
+ * are done or the checks have made the calls the job's allowance gives them,
+ * `checkCalls`. A check starts only below that, so one that reads two repos
+ * can pass it by one. The next run starts with the projects this one left.
+ * Throws SyncStopped when the run has to stop.
+ */
+async function checkProjects(deps: SyncDeps, repos: readonly string[], run: SyncRun): Promise<void> {
+  const before = deps.github.calls;
+  const cap = deps.github.allowance.checkCalls ?? deps.github.allowance.maxCalls;
+  for (const repo of repos) {
+    if (deps.github.calls - before >= cap) return;
+    const project = await getProject(deps.db, repo);
+    if (project?.status !== 'paused' && project?.status !== 'approved') continue;
+    try {
+      const read = await readRepos(deps, project);
+      run.checked += 1;
+      if ('unlisted' in read) run.delisted.push(project.repo);
+    } catch (error) {
+      // A refusal about this project alone. The next run checks it again.
+      if (!(error instanceof GitHubError)) throw error;
+      console.warn(`The tagged-issue sync skipped a check of ${project.repo}. GitHub answered ${String(error.status)}: ${error.message}`);
+    }
+  }
+}
+
+/**
+ * The scheduled run: first checks the repos of the paused projects, and of
+ * the approved ones it delisted, then syncs the approved projects in the
+ * order listProjectsToSync gives, until they are done or the run has to
+ * stop. It first asks GitHub what is left of the budget, and leaves a
+ * project a maintainer's refresh is reading.
  */
 export async function syncTaggedIssues(deps: SyncDeps): Promise<SyncRun> {
   const run = newSyncRun();
-  const repos = await listProjectsToSync(deps.db);
+  const [checks, repos] = await Promise.all([listProjectsToCheck(deps.db), listProjectsToSync(deps.db)]);
   try {
-    if (repos.length > 0) await deps.github.checkGitHub();
+    if (checks.length > 0 || repos.length > 0) await deps.github.checkGitHub();
+    await checkProjects(deps, checks, run);
     for (const repo of repos) {
       const project = await getProject(deps.db, repo);
       if (project?.status !== 'approved') continue;
@@ -571,7 +643,7 @@ export async function syncTaggedIssues(deps: SyncDeps): Promise<SyncRun> {
   // One line a run. The linked PRs it counts say how often each way finds
   // a PR the other misses.
   console.log(
-    `The tagged-issue sync read issues: ${String(run.issues)}, projects started: ${String(run.projects)}, finished: ${String(run.finished)}, calls to GitHub: ${String(run.calls)}. Linked PRs found by a closing reference only: ${String(run.linked.closing)}, by a cross-reference only: ${String(run.linked.cross)}, both ways: ${String(run.linked.both)}, in another repo: ${String(run.linked.elsewhere)}. Left: ${JSON.stringify(deps.github.left())}.${run.held.length === 0 ? '' : ` Not read, held by another run: ${run.held.join(', ')}.`}${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The tagged-issue sync read issues: ${String(run.issues)}, projects started: ${String(run.projects)}, finished: ${String(run.finished)}, calls to GitHub: ${String(run.calls)}. Linked PRs found by a closing reference only: ${String(run.linked.closing)}, by a cross-reference only: ${String(run.linked.cross)}, both ways: ${String(run.linked.both)}, in another repo: ${String(run.linked.elsewhere)}. Left: ${JSON.stringify(deps.github.left())}.${run.checked === 0 ? '' : ` Projects whose repos alone it read: ${String(run.checked)}, delisted: ${run.delisted.length === 0 ? 'none' : run.delisted.join(', ')}.`}${run.held.length === 0 ? '' : ` Not read, held by another run: ${run.held.join(', ')}.`}${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

@@ -226,7 +226,7 @@ describe('reading tagged issues', () => {
     expect(callsTo(github, TIMELINE)).toHaveLength(3);
   });
 
-  test('a paused, pending, or do-not-listed project is not read', async () => {
+  test("a paused project's repo alone is read, and a pending or do-not-listed project is not read at all", async () => {
     await registeredProject({ tags: ['help wanted'] });
     await setProjectStatus(db, APP, { status: 'paused', reason: null, changedBy: maintainer.githubId }, Date.now());
     await createProject(
@@ -240,7 +240,8 @@ describe('reading tagged issues', () => {
     const run = await sync();
 
     expect(run.projects).toBe(0);
-    expect(github.calls).toEqual([]);
+    expect(run.checked).toBe(1);
+    expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual(['/rate_limit', `/repos/${APP}`]);
   });
 });
 

@@ -25,6 +25,7 @@ import {
   blockedAmong,
   countOpenPrsByProject,
   createSession,
+  delistedProjects,
   doNotListedProjects,
   editSessionQueue,
   getClaim,
@@ -182,6 +183,19 @@ async function stoppedProjects(claims: readonly ClaimRecord[]): Promise<Set<stri
   );
 }
 
+/**
+ * The projects the sync delisted among the claims', with the reason GitHub
+ * gave, by the rule in src/db/waiting.ts. GitHub no longer shows their repo
+ * or issue repo public and open, so no more work goes into those claims, as
+ * for the do-not-list, and nothing cached from the repos titles them.
+ */
+async function delistedAmong(claims: readonly ClaimRecord[]): Promise<Map<string, string>> {
+  return delistedProjects(
+    env.DB,
+    claims.map((claim) => claim.project),
+  );
+}
+
 export async function startSession(
   caller: Caller,
   input: ToolInput<'start_session'>,
@@ -210,8 +224,9 @@ export async function startSession(
 /** The donor's unfinished claims that can go on, for start_session to offer. */
 async function offeredToResume(person: number, origin: string, now: number): Promise<ClaimSummary[]> {
   const claims = await unfinishedClaims(person, now);
-  const stopped = await stoppedProjects(claims);
-  return Promise.all(claims.filter((claim) => !stopped.has(lower(claim.project))).map((claim) => summaryFor(claim, origin)));
+  const [stopped, delisted] = await Promise.all([stoppedProjects(claims), delistedAmong(claims)]);
+  const goesOn = (claim: ClaimRecord) => !stopped.has(lower(claim.project)) && !delisted.has(lower(claim.project));
+  return Promise.all(claims.filter(goesOn).map((claim) => summaryFor(claim, origin)));
 }
 
 export async function setInterests(caller: Caller, input: ToolInput<'set_interests'>): Promise<Answer> {
@@ -224,14 +239,19 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
   // Every unfinished claim is the donor's own record, so each is listed, and
   // one on a project on the do-not-list says to release it.
   const claims = await unfinishedClaims(caller.githubId, now);
-  const stopped = await stoppedProjects(claims);
+  const [stopped, delisted] = await Promise.all([stoppedProjects(claims), delistedAmong(claims)]);
   const working = await Promise.all(
     claims.map(async (claim) => {
-      const resumable = !stopped.has(lower(claim.project));
-      const reason = resumable
-        ? null
-        : `${claim.project} is on the do-not-list, since its maintainers asked Good First Token to stop. Release the claim with release_claim.`;
-      return { ...(await summaryFor(claim, origin)), resumable, reason };
+      const gone = delisted.get(lower(claim.project));
+      const reason = stopped.has(lower(claim.project))
+        ? `${claim.project} is on the do-not-list, since its maintainers asked Good First Token to stop. Release the claim with release_claim.`
+        : gone === undefined
+          ? null
+          : `${gone} So the claim can't go on. Release it with release_claim.`;
+      // A delisted project's claim goes by its issue alone, with no cached title.
+      const summary =
+        gone === undefined ? await summaryFor(claim, origin) : summaryOf(claim, claim.issue, gitHubIssueUrl(claim.issue), origin);
+      return { ...summary, resumable: reason === null, reason };
     }),
   );
   return answer(
@@ -472,7 +492,12 @@ const SKIPS = new Set<RefusalCode>([
   'open_pr_cap',
 ]);
 
-function notOpen(project: ProjectRecord, issue: string): Attempt {
+async function notOpen(project: ProjectRecord, issue: string): Promise<Attempt> {
+  // An approved project takes no claims when it is on the do-not-list, or
+  // when the sync delisted it, which says why.
+  const gone =
+    project.status === 'approved' ? (await delistedProjects(env.DB, [project.repo])).get(lower(project.repo)) : undefined;
+  if (gone !== undefined) return refused('project_not_open', `${gone} So ${issue} takes no claims. Pick another issue.`);
   const why =
     project.status === 'approved'
       ? `${project.repo} is on the do-not-list`
@@ -509,12 +534,17 @@ async function claimOne(context: ClaimContext, issue: string): Promise<Attempt> 
   const own = holders.find((claim) => claim.githubId === donor.githubId);
   if (own) {
     // The refusal a project not asking for help gets, since no more work
-    // goes into a claim on a project on the do-not-list.
+    // goes into a claim on a project on the do-not-list, or one the sync
+    // delisted.
     if ((await stoppedProjects([own])).size > 0) {
       return refused(
         'project_not_open',
         `${own.project} is on the do-not-list, so your claim on ${issue} can't go on. Release it with release_claim.`,
       );
+    }
+    const gone = (await delistedAmong([own])).get(lower(own.project));
+    if (gone !== undefined) {
+      return refused('project_not_open', `${gone} So your claim on ${issue} can't go on. Release it with release_claim.`);
     }
     const project = await getProject(env.DB, own.project);
     if (project === null) return refused('not_found', `${own.project} is no longer a project on Good First Token.`);

@@ -125,9 +125,13 @@ async function read(request: Request, asked: string): Promise<IssuePageResult> {
 
   // The open PRs: the room's, and the one the last sync saw linked to the
   // issue, as the homepage counts them. Each by its repo and number only.
+  // The sync tells the room of the PR it saw linked too, so while the
+  // project has no page, the room's PRs shown are the claims' own.
   const linked = cached?.linkedPr;
+  const claimed = glance.claims.flatMap((claim) => (claim.pr === null ? [] : [claim.pr]));
+  const held = withPage ? glance.prs : glance.prs.filter((pr) => claimed.some((own) => samePr(own, pr)));
   const open: PrLink[] = [];
-  for (const pr of [...glance.prs, ...(linked ? [linked] : [])]) {
+  for (const pr of [...held, ...(linked ? [linked] : [])]) {
     if (!open.some((known) => samePr(known, pr))) open.push({ repo: pr.repo, number: pr.number });
   }
   view.openPrs = open;
