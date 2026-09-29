@@ -273,6 +273,8 @@ describe('admin_queue', () => {
           removalWaits: false,
           removalsWithdrawn: [],
           moreRemovalsWithdrawn: 0,
+          pause: null,
+          change: null,
         },
       ],
     });
@@ -427,7 +429,7 @@ describe('admin_decide on a registration', () => {
     expect(noReason.isError).toBe(true);
     expect(textOf(noReason)).toContain('reason: is required to reject');
     expect(textOf(noReason)).not.toContain('Refused');
-    expect(rejected.structuredContent).toEqual({ repo: HARBOR, kind: 'registration', status: 'rejected' });
+    expect(rejected.structuredContent).toEqual({ repo: HARBOR, kind: 'registration', status: 'rejected', delisted: null });
     expect(status.structuredContent).toMatchObject({ status: 'rejected', statusReason: 'The notes ask agents to skip the tests.' });
     expect(textOf(status)).toContain('Reason: The notes ask agents to skip the tests.');
     expect(await statusHistory(env.DB, HARBOR)).toMatchObject([
@@ -445,7 +447,7 @@ describe('admin_decide on a registration', () => {
     const again = await call(admin, 'admin_decide', { id, decision: 'approve' });
     const queue = await call(admin, 'admin_queue', {});
 
-    expect(approved.structuredContent).toEqual({ repo: HARBOR, kind: 'registration', status: 'approved' });
+    expect(approved.structuredContent).toEqual({ repo: HARBOR, kind: 'registration', status: 'approved', delisted: null });
     expect((await call(maintainer, 'project_status', { repo: HARBOR })).structuredContent).toMatchObject({
       status: 'approved',
       statusReason: null,
@@ -492,7 +494,7 @@ describe('admin_decide on a crawler find', () => {
     });
 
     expect(textOf(noTags)).toBe('Refused (invalid_settings): Settings not saved.\ntags: is required');
-    expect(approved.structuredContent).toEqual({ repo: BUNDLER, kind: 'candidate', status: 'approved' });
+    expect(approved.structuredContent).toEqual({ repo: BUNDLER, kind: 'candidate', status: 'approved', delisted: null });
     expect(await getProject(env.DB, BUNDLER)).toMatchObject({
       status: 'approved',
       source: 'policy',
@@ -509,7 +511,7 @@ describe('admin_decide on a crawler find', () => {
 
     const result = await call(admin, 'admin_decide', { id: candidate.id, decision: 'reject', reason: 'The policy is about docs only.' });
 
-    expect(result.structuredContent).toEqual({ repo: BUNDLER, kind: 'candidate', status: 'rejected' });
+    expect(result.structuredContent).toEqual({ repo: BUNDLER, kind: 'candidate', status: 'rejected', delisted: null });
     expect(await getCandidate(env.DB, candidate.id)).toMatchObject({ status: 'rejected', reason: 'The policy is about docs only.' });
     expect(await getProject(env.DB, BUNDLER)).toBeNull();
   });
@@ -688,9 +690,9 @@ describe('admin_pause_project', () => {
     const byMaintainer = await call(maintainer, 'pause_project', { repo: HARBOR, paused: false });
     const resumed = await call(admin, 'admin_pause_project', { repo: HARBOR, paused: false });
 
-    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, delisted: null });
+    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, restored: false, delisted: null });
     expect(textOf(byMaintainer)).toMatch(/^Refused \(not_admin\)/);
-    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, delisted: null });
+    expect(resumed.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, restored: false, delisted: null });
     expect((await call(maintainer, 'project_status', { repo: HARBOR })).structuredContent).toMatchObject({ status: 'approved' });
   });
 
@@ -702,7 +704,7 @@ describe('admin_pause_project', () => {
     const paused = await call(admin, 'admin_pause_project', { repo: HARBOR, reason: 'Release week.' });
     const byMaintainer = await call(maintainer, 'pause_project', { repo: HARBOR, paused: false });
 
-    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, delisted: null });
+    expect(paused.structuredContent).toEqual({ repo: HARBOR, status: 'paused', changed: true, restored: false, delisted: null });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: ADMIN.githubId });
     expect(textOf(byMaintainer)).toBe(
       `Refused (not_admin): A Good First Token admin paused ${HARBOR}. Only Good First Token's admins can resume it.`,
@@ -722,7 +724,7 @@ describe('admin_pause_project', () => {
 
     const result = await adminPauseProject(adminCaller(), { repo: HARBOR, paused: true, reason: 'Release week.' }, Date.now());
 
-    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'paused', changed: true, delisted: null } });
+    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'paused', changed: true, restored: false, delisted: null } });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'paused', statusChangedBy: ADMIN.githubId });
   });
 
@@ -757,7 +759,7 @@ describe('admin_pause_project', () => {
 
     const result = await adminPauseProject(adminCaller(), { repo: HARBOR, paused: false }, Date.now());
 
-    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected', changed: false, delisted: null } });
+    expect(result).toEqual({ ok: true, value: { repo: HARBOR, status: 'rejected', changed: false, restored: false, delisted: null } });
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
   });
 
@@ -770,7 +772,7 @@ describe('admin_pause_project', () => {
     const byAdmin = await call(admin, 'admin_pause_project', { repo: HARBOR, paused: false });
 
     expect(textOf(byMaintainer)).toMatch(/^Refused \(not_admin\): Good First Token paused/);
-    expect(byAdmin.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, delisted: null });
+    expect(byAdmin.structuredContent).toEqual({ repo: HARBOR, status: 'approved', changed: true, restored: false, delisted: null });
   });
 
   test("pausing or resuming a repo that isn't a project is not found, and nothing is made", async () => {
@@ -829,9 +831,9 @@ describe('admin_seed_repo', () => {
     const proposed = await call(admin, 'admin_seed_repo', { repo: candidate.repo });
 
     expect(project.structuredContent).toEqual({ repo: HARBOR.toUpperCase(), added: false, leftAlone: 'project' });
-    expect(textOf(project)).toBe(`${HARBOR.toUpperCase()} is a project already, so the crawler reads it no further. Nothing changed.`);
+    expect(textOf(project)).toBe(`${HARBOR.toUpperCase()} is a project already, so a seed adds nothing. Nothing changed.`);
     expect(proposed.structuredContent).toEqual({ repo: candidate.repo, added: false, leftAlone: 'proposed' });
-    expect(textOf(proposed)).toBe(`The crawler put ${candidate.repo} in the admin queue before, so it reads it no further. Nothing changed.`);
+    expect(textOf(proposed)).toBe(`The crawler put ${candidate.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`);
     expect(await getSeed(env.DB, HARBOR)).toBeNull();
     expect(await getSeed(env.DB, candidate.repo)).toBeNull();
   });

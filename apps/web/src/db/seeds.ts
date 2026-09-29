@@ -63,23 +63,46 @@ export async function getSeed(db: D1Database, repo: string): Promise<CrawlSeed |
   return row === null ? null : toSeed(row);
 }
 
-/** Up to `limit` seeds the crawler's cron job hasn't handled yet, oldest first. */
-export async function listSeedsToHandle(db: D1Database, limit: number): Promise<CrawlSeed[]> {
+/**
+ * Up to `limit` seeds the crawler's cron job hasn't handled yet, oldest
+ * first. With `since`, as when a pass of the search started then, a seed it
+ * handled before that is due again.
+ */
+export async function listSeedsToHandle(db: D1Database, limit: number, since: number | null = null): Promise<CrawlSeed[]> {
   const { results } = await db
-    .prepare('SELECT * FROM crawl_seeds WHERE handled_at IS NULL ORDER BY added_at, repo LIMIT ?')
-    .bind(mustParse(count, limit, 'limit'))
+    .prepare('SELECT * FROM crawl_seeds WHERE handled_at IS NULL OR handled_at < ? ORDER BY added_at, repo LIMIT ?')
+    .bind(since === null ? null : checkTime(since, 'since'), mustParse(count, limit, 'limit'))
     .all<SeedRow>();
   return results.map(toSeed);
 }
 
 /**
+ * Which of these repos are seeds the cron job queued at `since` or after, as
+ * in the pass that started then, by name in lower case. The repos go in as
+ * one JSON array, so any number of them takes one query.
+ */
+export async function seedsQueuedSince(db: D1Database, repos: readonly string[], since: number): Promise<Set<string>> {
+  if (repos.length === 0) return new Set();
+  const { results } = await db
+    .prepare(
+      `SELECT repo FROM crawl_seeds
+       WHERE outcome = 'queued' AND handled_at >= ? AND repo IN (SELECT value FROM json_each(?))`,
+    )
+    .bind(checkTime(since, 'since'), JSON.stringify(repos.map((repo) => mustParse(repoName, repo, 'repo'))))
+    .all<{ repo: string }>();
+  return new Set(results.map((row) => row.repo.toLowerCase()));
+}
+
+/**
  * Records what the cron job did with each seed at `now`: queued it, or left
- * it alone, and why. A seed handled before keeps its time and outcome.
+ * it alone, and why. A seed handled before keeps its time and outcome, unless
+ * it was handled before `since`, as for listSeedsToHandle.
  */
 export async function markSeedsHandled(
   db: D1Database,
   handled: readonly { repo: string; outcome: CrawlSeedOutcome }[],
   now: number,
+  since: number | null = null,
 ): Promise<void> {
   const byOutcome = new Map<CrawlSeedOutcome, string[]>();
   for (const { repo, outcome } of handled) {
@@ -88,14 +111,15 @@ export async function markSeedsHandled(
   }
   if (byOutcome.size === 0) return;
   const at = checkTime(now);
+  const before = since === null ? null : checkTime(since, 'since');
   await db.batch(
     [...byOutcome].map(([outcome, repos]) =>
       db
         .prepare(
           `UPDATE crawl_seeds SET handled_at = ?, outcome = ?
-           WHERE handled_at IS NULL AND repo IN (SELECT value FROM json_each(?))`,
+           WHERE (handled_at IS NULL OR handled_at < ?) AND repo IN (SELECT value FROM json_each(?))`,
         )
-        .bind(at, outcome, JSON.stringify(repos)),
+        .bind(at, outcome, before, JSON.stringify(repos)),
     ),
   );
 }
