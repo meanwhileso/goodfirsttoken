@@ -1482,6 +1482,82 @@ describe('who can submit and open a PR', () => {
     ]);
   });
 
+  /** A claim priya made `ago` milliseconds ago, straight through its room, and submitted `submittedAgo` ago when given. */
+  async function claimMadeAgo(issue: string, ago: number, submittedAgo?: number): Promise<string> {
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const githubId = people.priya.githubId;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const now = Date.now();
+      vi.setSystemTime(now - ago);
+      const made = await room.claim({
+        issue,
+        project: APP,
+        githubId,
+        login: 'priya',
+        agent: 'claude-code',
+        ownProject: false,
+        startCommit: repoState(APP).branches.main ?? '',
+        slots: 3,
+      });
+      if (!made.ok) throw new Error(made.refusal.message);
+      if (submittedAgo !== undefined) {
+        vi.setSystemTime(now - submittedAgo);
+        const submitted = await room.submit({ claimId: made.claim.id, githubId });
+        if (!submitted.ok) throw new Error(submitted.refusal.message);
+      }
+      return made.claim.id;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  test('an unknown claim, and one that expired, take no submit and no PR, and nothing reaches GitHub', async () => {
+    await project(APP, reviewed);
+    const [unsent, unopened] = [await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    // 25 hours with no submit, and 8 days awaiting review.
+    const lapsed = await claimMadeAgo(unsent, 25 * HOUR);
+    const waited = await claimMadeAgo(unopened, 8 * 24 * HOUR + HOUR, 8 * 24 * HOUR);
+    const before = pathCalls.length;
+
+    const results = [
+      await submit(priya, 'c_noSuchClaimAnywhere0', { 'a.txt': 'a\n' }),
+      await call(priya, 'open_pr', { claimId: 'c_noSuchClaimAnywhere0' }),
+      await submit(priya, lapsed, { 'a.txt': 'a\n' }),
+      await call(priya, 'open_pr', { claimId: waited }),
+    ];
+
+    expect(results.map(refusalOf)).toEqual(['not_found', 'not_found', 'claim_expired', 'claim_expired']);
+    expect(pathCalls.slice(before).flatMap((p) => p.calls)).toEqual([]);
+  });
+
+  test('open_pr refuses a blocked donor, a released claim, and a claim with nothing submitted, and nothing reaches GitHub', async () => {
+    await project(APP, reviewed);
+    const [blockedIssue, releasedIssue, unsubmittedIssue] = [await tagged(APP), await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const blocked = await claim(priya, blockedIssue);
+    await submit(priya, blocked.claimId, { 'a.txt': 'a\n' });
+    const released = await claim(kenji, releasedIssue);
+    await submit(kenji, released.claimId, { 'a.txt': 'a\n' });
+    await call(kenji, 'release_claim', { claimId: released.claimId, reason: 'Out of time.' });
+    const unsubmitted = await claim(kenji, unsubmittedIssue);
+    await savePerson(env.DB, admin, Date.now());
+    await blockDonor(env.DB, { githubId: people.priya.githubId, reason: 'Spam.', blockedBy: admin.githubId }, Date.now());
+    const before = pathCalls.length;
+
+    const results = [
+      await call(priya, 'open_pr', { claimId: blocked.claimId }),
+      await call(kenji, 'open_pr', { claimId: released.claimId }),
+      await call(kenji, 'open_pr', { claimId: unsubmitted.claimId }),
+    ];
+
+    expect(results.map(refusalOf)).toEqual(['donor_blocked', 'claim_released', 'not_submitted']);
+    expect(pathCalls.slice(before).flatMap((p) => p.calls)).toEqual([]);
+    expect([...pullsBy(APP, 'priya'), ...pullsBy(APP, 'kenji')].filter((p) => p.pull?.head.ref.startsWith('goodfirsttoken/'))).toEqual([]);
+  });
+
   test('a blocked donor, a paused project, and a released claim take no submit, and nothing reaches GitHub', async () => {
     await project(APP, reviewed);
     await project(TOOLS, reviewed);

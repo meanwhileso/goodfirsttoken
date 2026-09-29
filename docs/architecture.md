@@ -725,11 +725,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `validation.ts` the check that names the field in every problem.
 - **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
   maintainers, and admins: who sees it, a description for agents, input and
-  output schemas, and a function that renders the output as text. A
-  maintainer's or admin's tool also lists, in `refusals`, every refusal code
-  an agent can get from it. The skills are checked against those lists, under
-  [Skills and plugins](#skills-and-plugins). The donor's tools can add
-  theirs when their skills name them.
+  output schemas, and a function that renders the output as text. Each
+  maintainer's and admin's tool, and the donor's `submit_work` and
+  `open_pr`, also lists, in `refusals`, every refusal code an agent can get
+  from it. The skills are checked against those lists, under
+  [Skills and plugins](#skills-and-plugins). The donor's other tools can
+  add theirs when their skills name them.
   `src/tools/index.ts` lists them all, and its `toolResult` and
   `toolRefusal` build MCP results without depending on the MCP SDK.
 - **The claim state machine never reads the clock.** Its caller passes the
