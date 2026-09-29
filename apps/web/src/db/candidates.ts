@@ -147,7 +147,10 @@ export type CrawlerSkip =
   | 'do_not_list'
   /** It is a project already, whatever its status. */
   | 'project'
-  /** The crawler put it in the admin queue before, whatever the admin decided. */
+  /**
+   * The crawler put it in the admin queue before, whatever the admin
+   * decided, or, with `readRejected`, a find for it waits or was approved.
+   */
   | 'proposed';
 
 /**

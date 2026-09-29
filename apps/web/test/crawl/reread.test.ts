@@ -508,6 +508,23 @@ describe('a ban', () => {
 
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: BAN_REASON });
   });
+
+  test("the line read as a ban shows only with the crawler's own pause, and a later pause for another reason shows none of it", async () => {
+    await listing();
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+    await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item: banned } = await onlyItem(admin, 'pause', INVITES);
+    await call(admin, 'admin_decide', { id: banned.id, decision: 'approve' });
+    sampleRepo(INVITES).archived = true;
+
+    await syncTaggedIssues(jobDeps(github));
+
+    const { item, text } = await onlyItem(admin, 'pause', INVITES);
+    expect(item).toMatchObject({ pause: { reason: `${INVITES} is archived on GitHub.`, ban: null }, aiSentences: [] });
+    expect(text).not.toContain(BAN);
+  });
 });
 
 describe('pull requests limited to collaborators', () => {

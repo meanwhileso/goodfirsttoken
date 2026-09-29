@@ -1268,7 +1268,9 @@ pruning after a sync, with no index of its own.
 | `donor_sessions_by_person` | A donor's last session, for what merged since |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
-| `crawl_candidates_by_repo` | Whether the crawler proposed a repo before, whatever the admin decided, which it asks for every repo it reads |
+| `crawl_candidates_by_repo` | Whether the crawler proposed a repo before, and how the admin decided, which it asks for every repo it reads, and a repo's last rejected find, for its hash |
+| `policy_changes_waiting` | One waiting policy change per project |
+| `policy_changes_by_status` | The admin queue's policy changes, oldest first |
 | `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal`, a removal, and the check before a listing or an approval |
 | `removal_requests_queue` | The admin queue's requests to be removed, oldest first |
 | `removal_requests_by_repo` | A repo's requests to be removed that someone other than their asker withdrew, for a registration or crawler find in the queue, and one person's last request for a repo, for `request_removal` to say who withdrew it |
@@ -2303,8 +2305,8 @@ admin queue as crawl candidates. The rules are in
   text. `FINGERPRINT_VERSION` goes up when what it covers changes, like a
   change to the rules that reads most repos differently, and
   `comparable` makes a hash of another version compare with nothing, so a
-  change like that takes a new baseline once, instead of sending every
-  listing back to the queue. Hashing the files whole would send a listing
+  change like that takes a new baseline once, and sends no listing back
+  to the queue for it. Hashing the files whole would send a listing
   back for every build step added to its CONTRIBUTING. Hashing the quote
   and tier alone would miss a new condition, like a CLA, and a new
   sentence that names AI, which the rules can misread, and which an admin
@@ -2454,7 +2456,8 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   leaves. The sync spends mostly REST, on timelines and on its checks of
   the repos of the projects it reads no issues for, up to about 101 calls a
   run with its first question, about 400 an hour, all inside its own cap.
-  The crawl spends mostly GraphQL, so they seldom draw on the same budget.
+  The crawl spends mostly GraphQL, and its weekly reads one REST call for
+  each listed project a week, so they seldom draw on the same budget.
 - **A monthly crawl.** A pass reads the pool once, and the next starts 30
   days after it started. At these rates a pass spends about 3,000 GraphQL
   points for each 10,000 repos, well under a tenth of a percent of the 3.6

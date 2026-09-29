@@ -1286,10 +1286,11 @@ of them but a request to be removed.
 - Approving a policy change lists the project from the policy its docs
   give now, as `admin_add_project` lists a repo again, below: the new
   quote and link replace the old, with the tier the admin confirms, and
-  only the settings they send change. The project keeps its status. A
-  change whose docs give no policy is refused with `repo_not_eligible`,
-  since there is none to list from, and the admin pauses the project or
-  rejects the change. Rejecting it keeps the listing as it is, and its
+  only the settings they send change. The project keeps its status. It is
+  refused as `admin_add_project` refuses, as while a request to remove the
+  repo waits. A change whose docs give no policy is refused with
+  `repo_not_eligible`, since there is none to list from, and the admin
+  pauses the project or rejects the change. Rejecting it keeps the listing as it is, and its
   reason stays with the change, where no one else sees it.
 
 **Listing from a policy.** `admin_add_project` lists a repo from its

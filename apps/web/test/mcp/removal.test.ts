@@ -267,7 +267,8 @@ describe('request_removal', () => {
     const admin = await connectAgent(github, ADMIN.login);
 
     const asked = await call(maintainer, 'request_removal', { repo: HARBOR, reason: REASON });
-    const [item] = await queue(admin);
+    // The sync's pause waits in the queue too, as a pause.
+    const [item] = await queue(admin, 'removal');
 
     expect(asked.structuredContent).toMatchObject({ repo: HARBOR, changed: true });
     expect(item).toMatchObject({ kind: 'removal', removal: { project: { status: 'paused', source: 'registered' } } });

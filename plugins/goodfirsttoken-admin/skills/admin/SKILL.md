@@ -262,8 +262,8 @@ change waits.
   status and every setting not sent.
 - Reject a policy change: `admin_decide` with `id`, `decision` `reject`,
   and `reason`. The listing stays as it is, and only admins see the reason.
-- To pause the project instead, pause it with `admin_pause_project`. Then
-  reject the policy change.
+- To pause a project with a policy change, pause it with
+  `admin_pause_project`. Then reject the policy change.
 
 ## List a repo from its AI policy
 
