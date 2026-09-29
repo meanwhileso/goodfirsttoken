@@ -147,8 +147,8 @@ const AGENT_REFUSAL = new RegExp(
   'i',
 );
 
-// Bans with no AI word of their own: work a tool made, turned away; work a
-// person must write alone; and a project free of AI.
+// Bans with no AI word of their own: generated work turned away, work only a
+// person may write, and a project free of AI.
 const GENERATED_WORK =
   /\b(?:fully\s+|auto[- ]?|machine[- ]|tool[- ])?generated\s+(?:code|pull requests?|PRs?|contributions?|patch(?:es)?|issues?|changes|commits?|content|text|comments?|reviews?)\b|\b(?:code|pull requests?|PRs?|contributions?|patch(?:es)?|issues|changes|content|output|text)\s+(?:(?:that|which)\s+(?:was|were|is|are)\s+)?generated\s+by\s+(?:a\s+|an\s+|any\s+)?(?:tools?|models?|machines?|assistants?)\b/i;
 const HUMAN_ONLY =
