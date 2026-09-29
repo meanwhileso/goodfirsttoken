@@ -27,7 +27,7 @@ pnpm check       # lint, typecheck, and a check that the skills match skill-src/
 pnpm test        # unit tests, the Worker's inside the Workers runtime
 pnpm test:e2e    # browser tests against a production build
 pnpm skills:build  # the skills and plugins, from skill-src/
-pnpm skills:run    # the maintain and admin skills' steps, against pnpm dev
+pnpm skills:run    # the maintain, admin, and give skills' steps, against pnpm dev
 ```
 
 Before the first `pnpm test:e2e`, run `pnpm exec playwright install chromium`.
@@ -51,13 +51,16 @@ http://localhost:5173/sign-in as any sample person. How the pieces fit is in
 
 ## Changing a skill or a plugin
 
-Each skill has one source file in `skill-src/`. The build writes
+Each skill has one source file in `skill-src/`. Text several skills
+share, like the steps to add the MCP server in each harness, is in
+`skill-src/shared/`, and a skill takes it with a line of its own,
+`{{include <part>}}`. The build writes
 `skills/`, `.claude-plugin/`, and the `skills/` and `.claude-plugin/`
 folders inside each plugin under `plugins/`. They are committed, and CI
 fails when they are not what the build writes. Anything else in a plugin
 folder is written by hand. To release a change:
 
-1. Edit the skill in `skill-src/`, or a hand-written file in a plugin
+1. Edit the skill or a shared part in `skill-src/`, or a hand-written file in a plugin
    folder.
 2. Raise the plugin's version in `skill-src/plugins.json`, once per pull
    request. Any change under `plugins/<name>/` needs a version higher than
@@ -80,12 +83,16 @@ browser opens on the site's page to approve it, then on the fake GitHub's
 page, where you pick a sample person. Run `pnpm skills:build` without the
 variable before you commit.
 
-To check the maintain and admin skills' steps with no model, and no tokens
-spent, run `pnpm skills:run` while `pnpm dev` runs. It connects a sample
-maintainer's agent and the sample admin's agent with the MCP client SDK,
-registers `sample-owner/sample-parser` with the proposed settings, approves
-it from the admin queue, and prints each call and its answer. The end-to-end
-tests run the same steps. When a skill names another tool or refusal,
+To check the maintain, admin, and give skills' steps with no model, and no
+tokens spent, run `pnpm seed`, then `pnpm skills:run`, while `pnpm dev`
+runs. It connects a sample maintainer's agent and the sample admin's agent
+with the MCP client SDK, registers `sample-owner/sample-parser` with the
+proposed settings, and approves it from the admin queue. Then a sample
+donor's agent claims `sample-owner/sample-app#311`, posts as it works, and
+submits, which opens a PR on the fake GitHub. It prints each call and its
+answer. That PR keeps the issue from taking the claim again, so on one
+local database the donor's steps run once. The end-to-end tests run the
+same steps. When a skill names another tool or refusal,
 `pnpm test` checks it against the server, and a tool's refusals are listed
 in its spec in `packages/core`.
 
