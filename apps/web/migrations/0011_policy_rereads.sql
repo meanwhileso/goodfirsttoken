@@ -6,7 +6,8 @@
 -- Each listed project the crawler reads again. queued_at is when its cron
 -- job last put the project in the crawl queue, which spaces the reads a
 -- week apart. fingerprint is a hash of what the crawler's rules read in the
--- project's docs the last time it read them whole, or null before. The
+-- project's docs the last time it read them whole, and banned is 1 when
+-- they read a ban then, and 0 when they didn't. Both are null before. The
 -- docs' text isn't kept. pause is the crawler's last pause of the project,
 -- as JSON: when it was made, and for a ban, the line its rules read as one
 -- and the sentences that name AI, which the admin queue shows.
@@ -14,6 +15,7 @@ CREATE TABLE policy_reads (
   project TEXT PRIMARY KEY COLLATE NOCASE REFERENCES projects (repo),
   queued_at INTEGER NOT NULL,
   fingerprint TEXT,
+  banned INTEGER,
   pause TEXT
 ) STRICT;
 

@@ -253,6 +253,8 @@ export const policyReadSchema = z.object({
   queuedAt: epochMs,
   /** What the rules read in its docs the last time the crawler read them whole, or null before. */
   fingerprint: policyFingerprintSchema.nullable(),
+  /** Whether the rules read a ban in its docs then, or null before. */
+  banned: z.boolean().nullable(),
   /** The crawler's last pause of the project, or null. */
   pause: crawlerPauseSchema.nullable(),
 });

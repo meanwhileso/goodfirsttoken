@@ -23,6 +23,7 @@ import {
   countProjectPrs,
   countWorkingClaims,
   createProject,
+  dropWaitingPolicyChange,
   getDoNotListEntry,
   getIssueSync,
   getPerson,
@@ -201,7 +202,11 @@ export async function registerProject(
       if (project !== null) return registered(project, created);
     } else {
       const takeover = await takeOverListing(env.DB, current.repo, settings, caller.githubId, now);
-      if (takeover !== null) return registered(takeover.project, created);
+      if (takeover !== null) {
+        // A policy change waiting for the listing has no listing left to list again from.
+        await dropWaitingPolicyChange(env.DB, takeover.project.repo);
+        return registered(takeover.project, created);
+      }
     }
   }
   throw new Error(`${repo} kept changing while it was registered.`);

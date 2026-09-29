@@ -1238,15 +1238,26 @@ of them but a request to be removed.
   did, and its settings and the policy it is listed from. For the
   crawler's pause on a ban, it also has the line the rules read as one,
   with a link to its file, and every sentence in the repo's docs that
-  names AI, from the read that paused it. Its ID names the status change
-  that paused it, so once its status changes, the ID names nothing.
+  names AI, from the read that paused it. When it took over a pause a
+  maintainer or an admin made, it says who made that one, when, and their
+  reason, as a JSON string, from the status history. Its ID names the
+  status change that paused it, so once its status changes, the ID names
+  nothing.
 - A **policy change** is a listing made from a policy whose policy the
   crawler's rules read differently now, under
   [Keeping listings current](#keeping-listings-current). It has the policy
   the project is listed from, the policy its docs give now, or none when
   the rules read none, and the project's status and settings now. Like a
   crawler find, it has the line behind each setting the docs give, and
-  every sentence in the docs that names AI.
+  every sentence in the docs that names AI. Removing the repo at its
+  maintainers' request, or a maintainer taking the listing over with
+  `register_project`, drops it from the queue, since no listing is left
+  to list again from it.
+- While the sync has a pause's or a policy change's project delisted, the
+  item shows nothing read from its repo: no ban line, no sentences, no
+  lines, and no policy, only its reason and why the sync delisted it, as
+  nothing cached from a repo GitHub no longer shows is shown, under
+  Delisting in [Tagged issues](#tagged-issues).
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
   request to be removed they are read from GitHub when the queue is read,
@@ -1278,11 +1289,13 @@ of them but a request to be removed.
   with `already_registered`. Their settings and status stay, and the find
   keeps waiting until an admin rejects it.
 - Approving a pause resumes the project, putting back the status it had
-  before the pause, as `admin_pause_project` does. Rejecting it keeps the
-  project paused as the admin's own pause, with their reason, which its
-  maintainers read. Either way the change names the admin, and the pause
-  leaves the queue. Settings or a tier sent with it are refused with
-  `invalid_settings`.
+  before the pause, as `admin_pause_project` does, named for the admin.
+  When the pause took over one a maintainer or an admin made, approving
+  puts that one back, with its reason, named for whoever made it, so they
+  can lift it themselves. Rejecting it keeps the project paused as
+  the admin's own pause, with their reason, which its maintainers read.
+  Either way the pause leaves the queue. Settings or a tier sent with it
+  are refused with `invalid_settings`.
 - Approving a policy change lists the project from the policy its docs
   give now, as `admin_add_project` lists a repo again, below: the new
   quote and link replace the old, with the tier the admin confirms, and
@@ -1376,8 +1389,10 @@ stars or last push.
   answer says so.
 - A repo on the do-not-list is refused with `repo_not_eligible`.
 - A repo that is a project already, whatever its status, or that the
-  crawler put in the admin queue before, isn't added, since the crawler
-  reads it no further. The answer says which, and that nothing changed.
+  crawler put in the admin queue before, isn't added. The crawler reads a
+  listed project each week, and an earlier find again as its passes find
+  it, under [Keeping listings current](#keeping-listings-current). The
+  answer says which, and that nothing changed.
 - It asks GitHub nothing. The crawler reads the repo when it queues it.
 
 **Checking a request to be removed.** `admin_remove_project` doesn't check
@@ -2155,12 +2170,11 @@ projects due for their weekly read there, under
   leaves out forks, as it does by default.
 - It leaves out a repo on the do-not-list, a repo that is a project
   already, whatever its status, and a repo whose find waits in the admin
-  queue, or was approved. From the search, a repo whose finds an admin
-  rejected is read again, and goes back in the queue only when its docs
-  read differently, under
-  [Keeping listings current](#keeping-listings-current). A seed with any
-  find is left out, whatever the admin decided. Names compare without
-  case.
+  queue, or was approved. A repo whose finds an admin rejected, from the
+  search or the seed list, is read again, and goes back in the queue only
+  when its docs read differently, under
+  [Keeping listings current](#keeping-listings-current). Names compare
+  without case.
 - Search serves at most 1,000 repos for one query, so a pass reads the pool
   in bands of star counts, fewest stars first. The first band is every repo
   with 1,000 stars or more, which counts the whole pool.
@@ -2180,7 +2194,10 @@ projects due for their weekly read there, under
   the run. The pass stays where it was, and the next run asks again.
 - A pass that is done stays done until 30 days after it started. The next
   run then starts a new pass, so the search reads the pool once a month.
-  A seed added meanwhile is read at the next run.
+- Each pass reads every seed once, whatever its stars or last push: a
+  seed added meanwhile at the next run, and every other seed again once a
+  new pass starts. A seed it leaves alone is recorded with why, each
+  pass.
 - A repo whose stars change while a pass reads the pool can land in two
   bands, or in none. Search gives repos with the same stars in no set
   order, so a band read over several pages can give one of them twice, or
@@ -2623,41 +2640,64 @@ branch, then one REST call for who can open pull requests.
   names it and says why.
 
 **What it compares.** What the rules read in the docs, kept as a hash with
-none of the repo's text:
+none of the repo's text, and whether they read a ban:
 
-- the tier, the words of the quote, the words of each sentence that names
-  AI with the rest of its paragraph, the disclosure trailer, the
-  person-written PR description, the CLA link, whether there is a vouch
-  file, the labels the docs keep for people or keep agents to, whether they
-  keep agents from working on their own or ask for a person in the loop,
-  and the words of a canary.
+- the tier, the words of the quote and the file it is in, which a listing
+  links to, the words of each sentence that names AI with the rest of its
+  paragraph, the disclosure trailer, the person-written PR description,
+  the CLA link, whether there is a vouch file, the labels the docs keep
+  for people or keep agents to, whether they keep agents from working on
+  their own or ask for a person in the loop, and the words of a canary.
+- The sentences that name AI are the first 60, as a find keeps, and how
+  many more there are. So an edit to a sentence past the 60th reads the
+  same, unless it adds or takes away such a sentence.
 - Only the words count, in lower case, so a reformat reads the same: a
-  wrapped line, bold text, a list mark, or a heading's level. A line the
-  rules take nothing from, like a build step in CONTRIBUTING, and a file
-  they don't read, like a changelog, change nothing.
+  wrapped line, bold text, a list mark, or a heading's level.
+- A sentence counts when the rules read it as naming AI, which takes in
+  more than its own words: every sentence of an AI policy file, every
+  sentence under a heading that names AI, the rest of a paragraph with a
+  sentence that names AI in it, and in `AGENTS.md`, `CLAUDE.md`, and the
+  skills, a sentence about contributing, like one about opening a pull
+  request. So a build step added there changes what the rules read. A
+  line in a paragraph of its own that names no AI and sets nothing, like a
+  build step in CONTRIBUTING, and a file the rules don't read, like a
+  changelog, change nothing.
 - Each whole read compares its hash with the last one's, and keeps its
-  own.
+  own, with whether it read a ban.
 - The first read of a project has nothing to compare with. A listing made
   from a policy then compares with the policy it was listed from: another
-  tier, or other words in its quote, is a change. A registered project
-  takes its docs as they are.
+  tier, or other words in its quote, is a change, and a ban is a move into
+  one, since a listing's tier is never a ban. A registered project takes
+  its docs as they are, a ban included.
 - When what the hash covers changes, as when the rules change what they
-  read in most repos, its version goes up, and a hash of an older version
-  compares with nothing, as at a first read.
+  read in most repos, its version goes up. A hash of another version
+  compares with nothing: the read takes the new hash, and sends nothing to
+  the queue and pauses nothing for what it read. So a change to the rules
+  sends no listing back. A ban that lands in the week of such a change is
+  taken as the docs are, like a registered project's at its first read.
+  The pull request settings are checked as on every read, since no change
+  to the rules touches them.
 
 **What it does.**
 
-- **Docs that now read as a ban** pause the project at once: the hash
-  changed, and the tier is bans or restricts. A registered project too,
-  since the people who can change the repo's docs wrote the ban after it
-  was listed. A ban its docs had at a registered project's first read
-  stays its maintainers' call, since they registered it with its docs as
-  they were, as [spec §4](specs/v1.md#4-projects-maintainers-and-admins)
+- **Docs that move into a ban** pause the project at once: the rules read a
+  ban now, and didn't at the last read. A registered project too, since
+  the people who can change the repo's docs wrote the ban after it was
+  listed. A ban its docs had at a registered project's first read stays
+  its maintainers' call, since they registered it with its docs as they
+  were, as [spec §4](specs/v1.md#4-projects-maintainers-and-admins)
   allows.
+  - Once the rules read a ban, a later change to the docs that still reads
+    as one pauses nothing more, as when an admin lifted the pause after
+    reading the docs, or a registered project's maintainers reword their
+    ban. A listing's goes back to the queue as a policy change, below.
   - The pause takes over any pause the project had, its maintainers', an
     admin's, or one Good First Token made for another reason, so only an
-    admin can lift it. The ban is found once, when the docs change, and a
-    pause left as someone else's could be lifted with no one reading it.
+    admin can lift it. The move into a ban is found once, and a pause left
+    as someone else's could be lifted with no one reading it. The admin
+    queue shows the pause it took over, and approving the crawler's pause
+    puts that one back, for whoever made it to lift, under
+    [The admin queue](#the-admin-queue).
   - Its reason is `Its docs now read as a ban on AI help, by the policy
     crawler's rules. An admin checks them before agents can claim its
     issues again.` It holds none of the repo's text.
@@ -2674,9 +2714,9 @@ none of the repo's text:
   its maintainers made stays theirs. One resumed while the repo still
   limits pull requests is paused again at its next read. When GitHub
   doesn't say who can open pull requests, it pauses nothing, and logs it.
-- **A listing whose policy changed**, in any other way, goes back to the
-  admin queue as a policy change, under [The admin queue](#the-admin-queue),
-  and stays listed while it waits. A newer change replaces the one that
+- **A listing whose policy changed**, in any way but a move into a ban,
+  goes back to the admin queue as a policy change, under
+  [The admin queue](#the-admin-queue), and stays listed while it waits. A newer change replaces the one that
   waits, under a new ID. A change costs a read of the repo's labels, for
   the lines behind the settings its docs give.
 - **A registered project whose docs changed** in any other way stays as it
@@ -2701,7 +2741,7 @@ sync makes, under [Projects](#projects).
   An admin does, from the admin queue.
 
 **The wider pool, monthly.** The search reads the pool again in a new pass
-30 days after the last pass started, under
+30 days after the last pass started, and every seed with it, under
 [The policy crawler](#the-policy-crawler). An earlier find comes back like
 this:
 
@@ -2710,9 +2750,9 @@ this:
 - A find an admin approved is a project, and is read only as a listing.
 - A repo removed at its maintainers' request is on the do-not-list, and
   never comes back.
-- A find an admin rejected is read again when the search finds its repo,
-  and goes back in the queue only when its docs read differently from the
-  last rejected find's, by the hash above. So an admin decides the same
+- A find an admin rejected is read again when the search or the seed list
+  gives its repo, and goes back in the queue only when its docs read
+  differently from the last rejected find's, by the hash above. So an admin decides the same
   docs once. A find stored before finds kept a hash, or with one of an
   older version, takes the new one, and stays out.
 

@@ -124,10 +124,13 @@ const queueItemSchema = z.object({
   moreRemovalsWithdrawn: count.default(0),
   /**
    * For a pause Good First Token made on its own: its reason, which the
-   * project's maintainers read, why the sync delisted it when it did, and
-   * the line the policy crawler's rules read as a ban, when that is why.
-   * Null for every other kind. A pause has no facts, and its `aiSentences`
-   * are the crawler's, from the read that paused it.
+   * project's maintainers read, why the sync delisted it when it did, the
+   * line the policy crawler's rules read as a ban, when that is why, and the
+   * pause someone made that it took over, which approving puts back. Null
+   * for every other kind. A pause has no facts, and its `aiSentences` are the
+   * crawler's, from the read that paused it. While the sync has the project
+   * delisted, nothing read from its repo shows: no ban line, no sentences,
+   * and no policy.
    */
   pause: z
     .object({
@@ -135,15 +138,29 @@ const queueItemSchema = z.object({
       /** Why the sync delisted the project: GitHub shows its repo or issue repo private, archived, blocked, or gone. */
       delisted: trimmedText(MAX_STATUS_REASON).nullable(),
       ban: banLineSchema.nullable(),
+      /** The pause a maintainer or an admin made before this one took it over: who, when, and their reason, in their own words. */
+      tookOver: z
+        .object({ by: githubLogin, at: isoTime, reason: trimmedText(MAX_STATUS_REASON).nullable() })
+        .nullable()
+        .default(null),
     })
     .nullable()
     .default(null),
   /**
-   * For a policy change: the policy the project is listed from now, and its
-   * status. Its `policy` is the one its docs give now, or null when the
-   * crawler's rules read none. Null for every other kind.
+   * For a policy change: the policy the project is listed from now, its
+   * status, and why the sync delisted it when it did. Its `policy` is the
+   * one its docs give now, or null when the crawler's rules read none. While
+   * the sync has the project delisted, nothing read from its repo shows: no
+   * policy, no lines, and no sentences. Null for every other kind.
    */
-  change: z.object({ listed: policySchema.nullable(), status: projectStatusSchema }).nullable().default(null),
+  change: z
+    .object({
+      listed: policySchema.nullable(),
+      status: projectStatusSchema,
+      delisted: trimmedText(MAX_STATUS_REASON).nullable().default(null),
+    })
+    .nullable()
+    .default(null),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -291,6 +308,18 @@ function describeBan(ban: BanLine): string {
   );
 }
 
+/** What a queue item says while the sync has its project delisted, so nothing read from its repo shows. */
+function delistedNote(delisted: string): string {
+  return `The sync delisted it, so it has no page, and nothing read from its repo shows here: ${delisted}`;
+}
+
+/** The pause a maintainer or an admin made that this one took over, with their reason as a JSON string, so no quote mark in it ends the quote. */
+function describeTookOver(tookOver: { by: string; at: string; reason: string | null }): string {
+  const reason =
+    tookOver.reason === null ? 'with no reason' : `with their reason, in their own words, as a JSON string: ${JSON.stringify(tookOver.reason)}`;
+  return `It took over a pause @${tookOver.by} made on ${when(tookOver.at)}, ${reason}. Approving it puts that pause back, for them to lift.`;
+}
+
 /** A pause Good First Token made on its own, with why, and how to decide it. */
 function renderPause(item: QueueItem): string {
   const pause = item.pause;
@@ -298,7 +327,8 @@ function renderPause(item: QueueItem): string {
     `pause · ${item.repo} · id ${item.id}`,
     `paused by Good First Token on ${when(item.requestedAt)}, and only an admin can resume it`,
     pause?.reason && `its reason, which its maintainers read: ${pause.reason}`,
-    pause?.delisted && `The sync delisted it, so it has no page: ${pause.delisted}`,
+    pause?.delisted && delistedNote(pause.delisted),
+    pause?.tookOver && describeTookOver(pause.tookOver),
     item.onDoNotList && doNotListNote(item.kind),
     pause?.ban && describeBan(pause.ban),
     describeAiSentences(item.aiSentences, item.moreAiSentences),
@@ -311,16 +341,19 @@ function renderPause(item: QueueItem): string {
 function renderPolicyChange(item: QueueItem): string {
   const facts = item.facts;
   const listed = item.change?.listed ?? null;
+  const delisted = item.change?.delisted ?? null;
   return lines(
     `policy change · ${item.repo} · id ${item.id}`,
     `read on ${when(item.requestedAt)}, and ${item.change ? `the project is ${item.change.status}` : 'the project is listed'} while it waits`,
     facts &&
       `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`,
+    delisted !== null && delistedNote(delisted),
     item.onDoNotList && doNotListNote(item.kind),
-    listed === null ? 'It is not listed from a policy now.' : describePolicy(listed, 'listed from'),
-    item.policy
-      ? describePolicy(item.policy, 'its docs now')
-      : "The crawler's rules read no policy in its docs now that welcomes AI help.",
+    delisted === null && (listed === null ? 'It is not listed from a policy now.' : describePolicy(listed, 'listed from')),
+    delisted === null &&
+      (item.policy
+        ? describePolicy(item.policy, 'its docs now')
+        : "The crawler's rules read no policy in its docs now that welcomes AI help."),
     describeSources(item.sources),
     describeAiSentences(item.aiSentences, item.moreAiSentences),
     'its settings now, which approving keeps, with label names in quotes:',
@@ -424,8 +457,11 @@ export const adminDecide = defineTool({
   }),
   text: (out) => {
     if (out.kind === 'pause') {
-      return out.decision === 'reject'
-        ? `Kept ${out.repo} paused, as your pause. Its maintainers see your reason with project_status.`
+      if (out.decision === 'reject') {
+        return `Kept ${out.repo} paused, as your pause. Its maintainers see your reason with project_status.`;
+      }
+      return out.status === 'paused'
+        ? `Lifted Good First Token's pause on ${out.repo}, and put back the pause it took over, for whoever made it to lift. Status: paused.`
         : `Resumed ${out.repo}. Status: ${out.status}.`;
     }
     if (out.kind === 'policy_change') {
@@ -546,7 +582,7 @@ export const adminRemoveProject = defineTool({
 export const adminSeedRepo = defineTool({
   audience: 'admin',
   description:
-    "Add a repo to the policy crawler's seed list. The crawler reads a seed's docs whatever its stars or last push, and puts it in the admin queue when they welcome AI help. A repo that is a project already, or one the crawler put in the queue before, isn't added, since the crawler reads it no further. A repo on the do-not-list is refused.",
+    "Add a repo to the policy crawler's seed list. The crawler reads a seed's docs whatever its stars or last push, and puts it in the admin queue when they welcome AI help. A repo that is a project already, or one the crawler put in the queue before, isn't added: the crawler reads a listed project each week, and an earlier find again as its passes find it. A repo on the do-not-list is refused.",
   refusals: ['repo_not_eligible'],
   input: z.object({ repo: repoName }),
   output: z.object({
@@ -557,9 +593,9 @@ export const adminSeedRepo = defineTool({
     leftAlone: z.enum(['project', 'proposed']).nullable(),
   }),
   text: (out) => {
-    if (out.leftAlone === 'project') return `${out.repo} is a project already, so the crawler reads it no further. Nothing changed.`;
+    if (out.leftAlone === 'project') return `${out.repo} is a project already, so a seed adds nothing. Nothing changed.`;
     if (out.leftAlone === 'proposed') {
-      return `The crawler put ${out.repo} in the admin queue before, so it reads it no further. Nothing changed.`;
+      return `The crawler put ${out.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`;
     }
     return out.added
       ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`

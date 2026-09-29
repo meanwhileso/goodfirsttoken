@@ -181,36 +181,41 @@ async function queueRereads(deps: FillDeps): Promise<number> {
 }
 
 /**
- * The cron job: queues the seeds an admin added that it hasn't handled yet,
- * and records for each seed whether it queued it or left it alone, and why.
- * Then it queues the listed projects due for their weekly read. Then it reads
- * the pool on from where the pass stands, until the pass is done or the run
- * has to stop. It starts a pass when there has never been one, or when the
+ * The cron job: it starts a pass when there has never been one, or when the
  * last one is done and started CRAWL_PASS_EVERY_MS ago or more, so the
- * search reads the pool once a month.
+ * search reads the pool once a month. It queues the seeds an admin added
+ * that it hasn't handled in this pass, and records for each seed whether it
+ * queued it or left it alone, and why. Then it queues the listed projects
+ * due for their weekly read. Then it reads the pool on from where the pass
+ * stands, until the pass is done or the run has to stop.
  */
 export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   const { db, github, now } = deps;
   const run: FillRun = { seeds: 0, rereads: 0, searches: 0, queued: 0, pass: null, calls: 0, stopped: null };
 
-  // The seeds need no call to GitHub.
-  const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN)).map((seed) => seed.repo);
-  const { queued: seeded, skips } = await send(deps, seeds);
-  run.seeds = seeded.length;
-  await markSeedsHandled(
-    db,
-    seeds.map((repo) => ({ repo, outcome: skips.get(repo.toLowerCase()) ?? 'queued' })),
-    now(),
-  );
-
-  // The weekly reads need no call to GitHub either.
-  run.rereads = await queueRereads(deps);
-
+  // Starting a pass, the seeds, and the weekly reads need no call to GitHub.
   let pass = await latestCrawlPass(db);
   if (pass === null || (pass.finishedAt !== null && now() - pass.startedAt >= CRAWL_PASS_EVERY_MS)) {
     pass = (await startCrawlPass(db, newPass(now()))) ?? (await latestCrawlPass(db));
   }
   run.pass = pass;
+
+  // A seed is read once in each pass, whatever its stars or last push. A
+  // seed whose finds an admin rejected goes in, and comes back only when its
+  // docs read differently, as a repo the search finds does.
+  const since = pass?.startedAt ?? null;
+  const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN, since)).map((seed) => seed.repo);
+  const { queued: seeded, skips } = await send(deps, seeds, { readRejected: true });
+  run.seeds = seeded.length;
+  await markSeedsHandled(
+    db,
+    seeds.map((repo) => ({ repo, outcome: skips.get(repo.toLowerCase()) ?? 'queued' })),
+    now(),
+    since,
+  );
+
+  run.rereads = await queueRereads(deps);
+
   try {
     if (pass !== null && pass.finishedAt === null) await github.checkGitHub();
     while (pass !== null && pass.finishedAt === null) {

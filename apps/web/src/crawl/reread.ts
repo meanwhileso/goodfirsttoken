@@ -20,11 +20,14 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 // the same rules as a crawl, and compares what the rules read with the last
 // read. The crawler's cron job queues them (src/crawl/search.ts).
 //
-// - Docs that now read as a ban on AI help pause the project at once.
+// - Docs that move into a ban on AI help, from a last read that wasn't one,
+//   pause the project at once. A ban a registered project's docs had at its
+//   first read stays its maintainers' call.
 // - A repo that now lets only collaborators open pull requests, or has them
 //   turned off, pauses an approved project at once.
-// - A listing made from a policy whose policy reads differently goes back to
-//   the admin queue as a policy change, and stays listed while it waits.
+// - A listing made from a policy whose policy reads differently otherwise
+//   goes back to the admin queue as a policy change, and stays listed while
+//   it waits.
 //
 // Each pause is the one the sync makes: a pause that names no one, so only
 // an admin lifts it, kept in the status history. The admin queue shows every
@@ -152,12 +155,40 @@ async function pauseForCrawler(
 }
 
 /**
+ * What the rules read now, against the last whole read: whether it changed,
+ * and whether it moved into the ban tier.
+ *
+ * - With a last read of this version, it changed when the hashes differ, and
+ *   moved into a ban when it reads a ban now and didn't then.
+ * - With a last read of another version, as after a change to the rules, it
+ *   takes the new one and reads as neither, so a change to the rules sends
+ *   nothing back to the queue and pauses nothing.
+ * - With no last read, a listing made from a policy compares with the policy
+ *   it was listed from, whose tier is never a ban, and a registered project
+ *   reads as neither, since its maintainers registered it with its docs as
+ *   they were.
+ */
+function compare(
+  project: ProjectRecord,
+  last: { fingerprint: string | null; banned: boolean | null } | null,
+  reading: PolicyReading,
+  fingerprint: string,
+): { changed: boolean; intoBan: boolean } {
+  const banned = reading.tier === 'bans_or_restricts';
+  if (last?.fingerprint == null) {
+    return { changed: readsOtherwise(project.policy, reading), intoBan: project.policy !== null && banned };
+  }
+  if (!comparable(last.fingerprint)) return { changed: false, intoBan: false };
+  return { changed: last.fingerprint !== fingerprint, intoBan: banned && last.banned !== true };
+}
+
+/**
  * Compares what the rules read in a listed project's docs now with the last
- * read, and acts on it: a ban pauses the project, a listing whose policy
- * changed goes back to the admin queue, and pull requests limited to
- * collaborators pause an approved project. Then it keeps what they read now
- * for the next read. Throws RepoFailed when GitHub fails on the repo's
- * labels, which a change reads.
+ * read, and acts on it: docs that move into a ban pause the project, a
+ * listing whose policy changed otherwise goes back to the admin queue, and
+ * pull requests limited to collaborators pause an approved project. Then it
+ * keeps what they read now for the next read. Throws RepoFailed when GitHub
+ * fails on the repo's labels, which a change reads.
  */
 async function keepCurrent(
   deps: CrawlDeps,
@@ -170,11 +201,9 @@ async function keepCurrent(
   const { db, github, now } = deps;
   const reading = readPolicy(files);
   const fingerprint = await policyFingerprint(reading, files, repo.vouch);
-  const before = (await getPolicyRead(db, project.repo))?.fingerprint ?? null;
-  // With no earlier read to compare with, a listing compares with the policy it was listed from.
-  const changed = comparable(before) ? before !== fingerprint : readsOtherwise(project.policy, reading);
+  const { changed, intoBan } = compare(project, await getPolicyRead(db, project.repo), reading, fingerprint);
 
-  if (changed && reading.tier === 'bans_or_restricts') {
+  if (intoBan) {
     const ban =
       reading.ban === null
         ? null
@@ -205,7 +234,7 @@ async function keepCurrent(
     const why = { ban: null, aiSentences: [], moreAiSentences: 0 };
     if (await pauseForCrawler(deps, project.repo, pullRequests.limited, why, false)) run.paused.push(project.repo);
   }
-  await keepFingerprint(db, project.repo, fingerprint, now());
+  await keepFingerprint(db, project.repo, { fingerprint, banned: reading.tier === 'bans_or_restricts' }, now());
   return 'read';
 }
 

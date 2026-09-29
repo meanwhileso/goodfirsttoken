@@ -831,9 +831,9 @@ describe('admin_seed_repo', () => {
     const proposed = await call(admin, 'admin_seed_repo', { repo: candidate.repo });
 
     expect(project.structuredContent).toEqual({ repo: HARBOR.toUpperCase(), added: false, leftAlone: 'project' });
-    expect(textOf(project)).toBe(`${HARBOR.toUpperCase()} is a project already, so the crawler reads it no further. Nothing changed.`);
+    expect(textOf(project)).toBe(`${HARBOR.toUpperCase()} is a project already, so a seed adds nothing. Nothing changed.`);
     expect(proposed.structuredContent).toEqual({ repo: candidate.repo, added: false, leftAlone: 'proposed' });
-    expect(textOf(proposed)).toBe(`The crawler put ${candidate.repo} in the admin queue before, so it reads it no further. Nothing changed.`);
+    expect(textOf(proposed)).toBe(`The crawler put ${candidate.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`);
     expect(await getSeed(env.DB, HARBOR)).toBeNull();
     expect(await getSeed(env.DB, candidate.repo)).toBeNull();
   });

@@ -27,13 +27,20 @@ interface ReadRow {
   project: string;
   queued_at: number;
   fingerprint: string | null;
+  banned: number | null;
   pause: string | null;
 }
 
 function toRead(row: ReadRow): PolicyRead {
   return mustParse(
     policyReadSchema,
-    { project: row.project, queuedAt: row.queued_at, fingerprint: row.fingerprint, pause: fromJson(row.pause) },
+    {
+      project: row.project,
+      queuedAt: row.queued_at,
+      fingerprint: row.fingerprint,
+      banned: row.banned === null ? null : row.banned === 1,
+      pause: fromJson(row.pause),
+    },
     'policy read',
   );
 }
@@ -70,8 +77,8 @@ export async function markRereadsQueued(db: D1Database, projects: readonly strin
   if (checked.length === 0) return;
   await db
     .prepare(
-      `INSERT INTO policy_reads (project, queued_at, fingerprint, pause)
-       SELECT p.repo, ?2, NULL, NULL FROM json_each(?1) j JOIN projects p ON p.repo = j.value WHERE true
+      `INSERT INTO policy_reads (project, queued_at, fingerprint, banned, pause)
+       SELECT p.repo, ?2, NULL, NULL, NULL FROM json_each(?1) j JOIN projects p ON p.repo = j.value WHERE true
        ON CONFLICT (project) DO UPDATE SET queued_at = excluded.queued_at`,
     )
     .bind(JSON.stringify(checked), checkTime(now))
@@ -87,14 +94,27 @@ export async function getPolicyRead(db: D1Database, project: string): Promise<Po
   return row === null ? null : toRead(row);
 }
 
-/** Keeps what the rules read in the project's docs, read whole at `now`, for the next read to compare with. */
-export async function keepFingerprint(db: D1Database, project: string, fingerprint: string, now: number): Promise<void> {
+/**
+ * Keeps what the rules read in the project's docs, read whole at `now`, for
+ * the next read to compare with: the hash, and whether they read a ban.
+ */
+export async function keepFingerprint(
+  db: D1Database,
+  project: string,
+  read: { fingerprint: string; banned: boolean },
+  now: number,
+): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO policy_reads (project, queued_at, fingerprint, pause) VALUES (?1, ?3, ?2, NULL)
-       ON CONFLICT (project) DO UPDATE SET fingerprint = ?2`,
+      `INSERT INTO policy_reads (project, queued_at, fingerprint, banned, pause) VALUES (?1, ?3, ?2, ?4, NULL)
+       ON CONFLICT (project) DO UPDATE SET fingerprint = ?2, banned = ?4`,
     )
-    .bind(mustParse(repoName, project, 'project'), mustParse(policyFingerprintSchema, fingerprint, 'fingerprint'), checkTime(now))
+    .bind(
+      mustParse(repoName, project, 'project'),
+      mustParse(policyFingerprintSchema, read.fingerprint, 'fingerprint'),
+      checkTime(now),
+      read.banned ? 1 : 0,
+    )
     .run();
 }
 
@@ -103,7 +123,7 @@ export async function keepCrawlerPause(db: D1Database, project: string, pause: C
   const checked = mustParse(crawlerPauseSchema, pause, 'pause');
   await db
     .prepare(
-      `INSERT INTO policy_reads (project, queued_at, fingerprint, pause) VALUES (?1, ?3, NULL, ?2)
+      `INSERT INTO policy_reads (project, queued_at, fingerprint, banned, pause) VALUES (?1, ?3, NULL, NULL, ?2)
        ON CONFLICT (project) DO UPDATE SET pause = ?2`,
     )
     .bind(mustParse(repoName, project, 'project'), JSON.stringify(checked), checkTime(now))
@@ -187,6 +207,18 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
       ),
   ]);
   return inserted?.meta.changes === 1 ? c : null;
+}
+
+/**
+ * Drops the project's policy change that waits in the admin queue, if one
+ * does: when the repo is removed at its maintainers' request, or a maintainer
+ * takes the listing over, there is no listing left to list again from it.
+ */
+export async function dropWaitingPolicyChange(db: D1Database, project: string): Promise<void> {
+  await db
+    .prepare("DELETE FROM policy_changes WHERE project = ? AND status = 'waiting'")
+    .bind(mustParse(repoName, project, 'project'))
+    .run();
 }
 
 export async function getPolicyChange(db: D1Database, changeId: string): Promise<PolicyChange | null> {

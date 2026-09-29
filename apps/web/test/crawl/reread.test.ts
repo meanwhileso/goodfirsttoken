@@ -2,16 +2,19 @@ import type { CrawlMessage, Policy, ProjectSettingsInput, ProjectStatus } from '
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { FINGERPRINT_VERSION } from '../../src/crawl/fingerprint';
 import { readCrawlBatch } from '../../src/crawl/queue';
 import { BAN_REASON } from '../../src/crawl/reread';
 import { fillCrawlQueue } from '../../src/crawl/search';
 import {
   addCandidate,
+  addSeed,
   addToDoNotList,
   createProject,
   decideCandidate,
   getPolicyRead,
   getProject,
+  getSeed,
   listCandidates,
   listPolicyChanges,
   savePerson,
@@ -54,6 +57,10 @@ const QUOTE = 'Agents may open pull requests on their own, on issues labeled `ag
 const LISTED: Policy = { quote: QUOTE, url: `https://github.com/${INVITES}/blob/main/AI_POLICY.md`, tier: 'invites_agents' };
 const AI_POLICY = `# AI policy\n\n${QUOTE}\n\nDisclose it with an Assisted-by: trailer.\n`;
 const BAN = 'We no longer accept pull requests written with AI.';
+const NO_AUTONOMY = 'sample-policies/no-autonomous-agents';
+const CHANGED = 'Agents may open pull requests on their own, on issues labeled `agent ready` or `help wanted`.';
+/** A fingerprint of the version the crawler makes now. */
+const THIS_VERSION = new RegExp(`^v${String(FINGERPRINT_VERSION)}:[0-9a-f]{64}$`);
 
 let github: GitHubFake;
 let clock: number;
@@ -239,6 +246,29 @@ describe('the weekly read', () => {
     expect(await getPolicyRead(db, INVITES)).toMatchObject({ queuedAt: clock });
   });
 
+  test('one run queues at most 500 listed projects for their weekly read, and the next run takes the rest', async () => {
+    const names = Array.from({ length: 501 }, (_, i) => `sample-bulk/listed-${String(i).padStart(3, '0')}`);
+    for (const repo of names) {
+      await createProject(
+        db,
+        { repo, status: 'approved', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: MAINTAINER.githubId },
+        clock,
+      );
+    }
+    const rereads = () => sent.splice(0).filter((m) => m.reread === true).flatMap((m) => m.repos);
+
+    const first = await fill();
+    const firstRepos = rereads();
+    clock += HOUR;
+    const second = await fill();
+    const secondRepos = rereads();
+
+    expect(first.rereads).toBe(500);
+    expect(firstRepos).toEqual(names.slice(0, 500));
+    expect(second.rereads).toBe(1);
+    expect(secondRepos).toEqual(names.slice(500));
+  });
+
   test('reads through GitHub with the service token only: a GraphQL query for the repos, one for their files, and a REST call each', async () => {
     await listing(INVITES);
     await registered('sample-owner/sample-app');
@@ -262,8 +292,6 @@ describe('the weekly read', () => {
 });
 
 describe('a listing whose policy changes', () => {
-  const CHANGED = 'Agents may open pull requests on their own, on issues labeled `agent ready` or `help wanted`.';
-
   test('goes back to the admin queue with its new policy, stays listed while it waits, and an admin lists it from the new policy', async () => {
     await listing();
     await week();
@@ -361,6 +389,74 @@ describe('a listing whose policy changes', () => {
     expect(first.run?.reread.changed).toEqual([INVITES]);
     expect(second.run?.reread.changed).toEqual([]);
     expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
+  });
+
+  test('a hash of another version, as after a change to the rules, takes the new one, and sends nothing back to the queue', async () => {
+    await listing(INVITES, { ...LISTED, quote: 'Agents are welcome here.' });
+    await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'policy_change', INVITES);
+    await call(admin, 'admin_decide', { id: item.id, decision: 'reject', reason: 'The listing quotes it well enough.' });
+    const other = `v${String(FINGERPRINT_VERSION + 1)}:${'0'.repeat(64)}`;
+    await db.prepare('UPDATE policy_reads SET fingerprint = ? WHERE project = ?').bind(other, INVITES).run();
+
+    const bumped = await week();
+    const after = await week();
+
+    expect(bumped.run?.reread).toMatchObject({ read: 1, changed: [], paused: [] });
+    expect(after.run?.reread).toMatchObject({ read: 1, changed: [], paused: [] });
+    expect((await getPolicyRead(db, INVITES))?.fingerprint).toMatch(THIS_VERSION);
+    expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
+  });
+
+  test('a quote that moves to another file goes back to the queue, since the listing links to the file', async () => {
+    await listing();
+    await week();
+    commit(INVITES, {
+      'AI_POLICY.md': null,
+      'CONTRIBUTING.md': `# Contributing\n\n## AI policy\n\n${QUOTE}\n\nDisclose it with an Assisted-by: trailer.\n`,
+    });
+
+    const { run } = await week();
+
+    expect(run?.reread.changed).toEqual([INVITES]);
+    const [change] = await listPolicyChanges(db, 'waiting');
+    expect(change?.policy).toMatchObject({ quote: QUOTE, url: `https://github.com/${INVITES}/blob/main/CONTRIBUTING.md` });
+  });
+
+  test("removing the repo at its maintainers' request, or a maintainer taking the listing over, drops its policy change from the queue", async () => {
+    await listing(INVITES);
+    await listing(CONDITIONS, { quote: 'AI help is welcome.', url: `https://github.com/${CONDITIONS}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' });
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${CHANGED}\n` });
+    await week();
+    const waiting = (await listPolicyChanges(db, 'waiting')).map((c) => c.repo).sort();
+    const admin = await connectAgent(github, ADMIN.login);
+    const maintainer = await connectAgent(github, MAINTAINER.login);
+
+    await call(admin, 'admin_remove_project', { repo: INVITES, note: 'Asked in an issue.' });
+    const taken = await call(maintainer, 'register_project', { repo: CONDITIONS, settings: { tags: ['help wanted'] } });
+
+    expect(waiting).toEqual([INVITES, CONDITIONS].sort());
+    expect(taken.structuredContent).toMatchObject({ saved: true });
+    expect(itemsOf(await call(admin, 'admin_queue', { kind: 'policy_change' }))).toEqual([]);
+  });
+
+  test('a policy change shows nothing read from a repo the sync delisted: no policy, no lines, and no sentences', async () => {
+    await listing();
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${CHANGED}\n` });
+    await week();
+    sampleRepo(INVITES).private = true;
+    await syncTaggedIssues(jobDeps(github));
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const { item, text } = await onlyItem(admin, 'policy_change', INVITES);
+
+    const delisted = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
+    expect(item).toMatchObject({ policy: null, sources: [], aiSentences: [], change: { listed: null, delisted } });
+    expect(text).toContain(delisted);
+    expect(text).not.toContain('Agents may open pull requests');
   });
 
   test("a registered project whose docs change stays out of the queue, since its maintainers chose its settings", async () => {
@@ -464,7 +560,7 @@ describe('a ban', () => {
     expect(itemsOf(await call(admin, 'admin_queue', { kind: 'pause' }))).toEqual([]);
   });
 
-  test('a ban takes over a pause its maintainers made, so only an admin can lift it, and a resume puts back the approval', async () => {
+  test('a ban takes over a pause its maintainers made, which the queue shows, and approving puts their pause back for them to lift', async () => {
     await listing();
     await week();
     await setProjectStatus(db, INVITES, { status: 'paused', reason: 'Taking a break.', changedBy: MAINTAINER.githubId }, clock);
@@ -479,9 +575,72 @@ describe('a ban', () => {
       ['approved', ADMIN.githubId],
     ]);
     const admin = await connectAgent(github, ADMIN.login);
+    const { item, text } = await onlyItem(admin, 'pause', INVITES);
+    expect(item.pause).toMatchObject({ tookOver: { by: MAINTAINER.login, reason: 'Taking a break.' } });
+    expect(text).toContain(`It took over a pause @${MAINTAINER.login} made on`);
+    expect(text).toContain('with their reason, in their own words, as a JSON string: "Taking a break."');
+    const decided = await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
+    expect(decided.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'paused', decision: 'approve' });
+    expect(await getProject(db, INVITES)).toMatchObject({
+      status: 'paused',
+      statusChangedBy: MAINTAINER.githubId,
+      statusReason: 'Taking a break.',
+    });
+    expect(itemsOf(await call(admin, 'admin_queue', { kind: 'pause' }))).toEqual([]);
+    const maintainer = await connectAgent(github, MAINTAINER.login);
+    const lifted = await call(maintainer, 'pause_project', { repo: INVITES, paused: false });
+    expect(lifted.structuredContent).toMatchObject({ status: 'approved', changed: true });
+  });
+
+  test("a ban its docs had at a registered project's first read stays the maintainers' call, reworded, or beside a new build step", async () => {
+    await registered(BANS_AI);
+    await week();
+    commit(BANS_AI, {
+      'CONTRIBUTING.md': "# Contributing\n\nWe welcome contributions from everyone.\n\n## AI\n\nWe don't accept AI-generated pull requests.\n",
+    });
+    const reworded = await week();
+    commit(BANS_AI, { 'AGENTS.md': '# AGENTS.md\n\nRun make test before you open a pull request.\n' });
+    const buildStep = await week();
+
+    expect(reworded.run?.reread).toMatchObject({ read: 1, paused: [] });
+    expect(buildStep.run?.reread).toMatchObject({ read: 1, paused: [] });
+    expect(await getProject(db, BANS_AI)).toMatchObject({ status: 'approved' });
+  });
+
+  test('a listing whose ban pause an admin lifted is not paused again when its banned docs change, and goes back to the queue as a policy change', async () => {
+    await listing();
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+    await week();
+    const admin = await connectAgent(github, ADMIN.login);
     const { item } = await onlyItem(admin, 'pause', INVITES);
     await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n\nRun the tests first.\n` });
+
+    const next = await week();
+
+    expect(next.run?.reread).toMatchObject({ read: 1, paused: [], changed: [INVITES] });
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved' });
+    const { item: change } = await onlyItem(admin, 'policy_change', INVITES);
+    expect(change.policy).toBeNull();
+  });
+
+  test('a pause shows nothing read from a repo the sync delisted: no ban line, no sentences, and no policy', async () => {
+    await listing();
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+    await week();
+    sampleRepo(INVITES).private = true;
+    await syncTaggedIssues(jobDeps(github));
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const { item, text } = await onlyItem(admin, 'pause', INVITES);
+
+    const delisted = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
+    expect(item).toMatchObject({ pause: { reason: BAN_REASON, delisted, ban: null }, aiSentences: [], moreAiSentences: 0, policy: null });
+    expect(text).toContain(delisted);
+    expect(text).not.toContain(BAN);
+    expect(text).not.toContain(QUOTE);
   });
 
   test("a registered project whose docs come to ban AI is paused too, though a ban its docs had at the first read stays the maintainers' call", async () => {
@@ -518,11 +677,14 @@ describe('a ban', () => {
     const { item: banned } = await onlyItem(admin, 'pause', INVITES);
     await call(admin, 'admin_decide', { id: banned.id, decision: 'approve' });
     sampleRepo(INVITES).archived = true;
+    await syncTaggedIssues(jobDeps(github));
+    // Unarchived, the sync takes its mark off, and its pause stays until an admin lifts it.
+    sampleRepo(INVITES).archived = false;
 
     await syncTaggedIssues(jobDeps(github));
 
     const { item, text } = await onlyItem(admin, 'pause', INVITES);
-    expect(item).toMatchObject({ pause: { reason: `${INVITES} is archived on GitHub.`, ban: null }, aiSentences: [] });
+    expect(item).toMatchObject({ pause: { reason: `${INVITES} is archived on GitHub.`, delisted: null, ban: null }, aiSentences: [] });
     expect(text).not.toContain(BAN);
   });
 });
@@ -550,7 +712,38 @@ describe('pull requests limited to collaborators', () => {
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: reason });
     const admin = await connectAgent(github, ADMIN.login);
     const { item } = await onlyItem(admin, 'pause', INVITES);
-    expect(item.pause).toEqual({ reason, delisted: null, ban: null });
+    expect(item.pause).toEqual({ reason, delisted: null, ban: null, tookOver: null });
+  });
+
+  test.each([
+    ['who can open pull requests', (repo: GitHubFake['state']['repos'][string]) => Reflect.deleteProperty(repo, 'pullRequestCreationPolicy')],
+    ['whether it takes pull requests', (repo: GitHubFake['state']['repos'][string]) => Reflect.deleteProperty(repo, 'hasPullRequests')],
+  ])("a repo GitHub doesn't say %s for pauses nothing, and the log says so", async (_what, change) => {
+    await listing();
+    await week();
+    change(sampleRepo(INVITES));
+
+    const { run } = await week();
+
+    expect(run?.reread).toMatchObject({ read: 1, paused: [] });
+    expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved' });
+    expect(logged.some((line) => line.includes(`GitHub didn't say who can open pull requests on ${INVITES}`))).toBe(true);
+  });
+
+  test('a pause is resumed or kept with no tier and no settings, and one sent with either changes nothing', async () => {
+    await listing();
+    await week();
+    sampleRepo(INVITES).pullRequestCreationPolicy = 'collaborators_only';
+    await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'pause', INVITES);
+
+    const withSettings = await call(admin, 'admin_decide', { id: item.id, decision: 'approve', settings: { claimsPerIssue: 2 } });
+    const withTier = await call(admin, 'admin_decide', { id: item.id, decision: 'reject', reason: 'Kept.', tier: 'invites_agents' });
+
+    expect(textOf(withSettings)).toMatch(/^Refused \(invalid_settings\)/);
+    expect(textOf(withTier)).toMatch(/^Refused \(invalid_settings\)/);
+    expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, settings: { claimsPerIssue: 3 } });
   });
 
   test('a registered project is paused too, and a pause its maintainers made stays theirs', async () => {
@@ -584,8 +777,8 @@ describe('an archived repo', () => {
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: reason });
     const admin = await connectAgent(github, ADMIN.login);
     const { item, text } = await onlyItem(admin, 'pause', INVITES);
-    expect(item.pause).toEqual({ reason, delisted: reason, ban: null });
-    expect(text).toContain(`The sync delisted it, so it has no page: ${reason}`);
+    expect(item.pause).toEqual({ reason, delisted: reason, ban: null, tookOver: null });
+    expect(text).toContain(`The sync delisted it, so it has no page, and nothing read from its repo shows here: ${reason}`);
     // Delisted, it isn't queued for a weekly read again.
     clock += WEEK;
     await fill();
@@ -639,6 +832,42 @@ describe('the monthly pass', () => {
     );
   });
 
+  test('reads each seed again in every pass, whatever its stars, and never one that is a project, has a find waiting, or is on the do-not-list', async () => {
+    const SMALL = 'sample-policies/small-seed';
+    await registered(INVITES);
+    await addCandidate(
+      db,
+      {
+        repo: CONDITIONS,
+        facts: { stars: 2400, createdAt: clock - DAY, pushedAt: clock - HOUR, ownerCreatedAt: clock - DAY },
+        policy: { quote: 'AI help is welcome.', url: `https://github.com/${CONDITIONS}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' },
+        settings: {},
+        suggestedTags: [],
+      },
+      clock - HOUR,
+    );
+    await addToDoNotList(db, { repo: NO_AUTONOMY, reason: null, addedBy: ADMIN.githubId }, clock);
+    for (const repo of [SMALL, INVITES, CONDITIONS, NO_AUTONOMY]) await addSeed(db, { repo, addedBy: ADMIN.githubId }, clock);
+    const seedsSent = () => {
+      const repos = sent.splice(0).flatMap((m) => m.repos);
+      return [SMALL, INVITES, CONDITIONS, NO_AUTONOMY].filter((repo) => repos.includes(repo) && repo !== INVITES);
+    };
+
+    await fill();
+    const firstPass = seedsSent();
+    advance(DAY);
+    await fill();
+    const samePass = seedsSent();
+    advance(30 * DAY);
+    await fill();
+    const nextPass = seedsSent();
+
+    expect([firstPass, samePass, nextPass]).toEqual([[SMALL], [], [SMALL]]);
+    const outcomes = await Promise.all([SMALL, INVITES, CONDITIONS, NO_AUTONOMY].map(async (repo) => (await getSeed(db, repo))?.outcome));
+    expect(outcomes).toEqual(['queued', 'project', 'proposed', 'do_not_list']);
+    expect((await getSeed(db, SMALL))?.handledAt).toBe(clock);
+  });
+
   test('a rejected find stored before finds kept what their docs read takes what they read now, and stays out', async () => {
     const find = await addCandidate(
       db,
@@ -660,7 +889,7 @@ describe('the monthly pass', () => {
     expect(second.run?.skipped).toMatchObject({ rejected_before: 1 });
     expect(await listCandidates(db, 'waiting')).toEqual([]);
     const stored = await db.prepare('SELECT fingerprint FROM crawl_candidates WHERE id = ?').bind(find?.id ?? '').first<string | null>('fingerprint');
-    expect(stored).toMatch(/^v1:[0-9a-f]{64}$/);
+    expect(stored).toMatch(THIS_VERSION);
   });
 });
 
@@ -684,7 +913,7 @@ describe('the budget', () => {
     expect(stopped).toMatchObject({ acked: ['m0'], retried: [], run: { stopped: 'budget' } });
     expect(back).toEqual([{ body: { repos: [INVITES], reread: true }, delaySeconds: 3600 }]);
     expect(resumed).toMatchObject({ acked: ['m0'], run: { stopped: null, reread: { read: 1 } } });
-    expect((await getPolicyRead(db, INVITES))?.fingerprint).toMatch(/^v1:/);
+    expect((await getPolicyRead(db, INVITES))?.fingerprint).toMatch(THIS_VERSION);
   });
 });
 

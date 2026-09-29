@@ -27,6 +27,7 @@ import {
   decideCandidate,
   decidePolicyChange,
   doNotListWhenRejected,
+  dropWaitingPolicyChange,
   findPersonByLogin,
   getCandidate,
   getDoNotListEntry,
@@ -55,7 +56,7 @@ import {
 } from '../db';
 import { GitHubError } from '../github';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
-import { resumableBy, statusBeforePause } from '../projects/status';
+import { pauseTakenOver, resumableBy, statusBeforePause } from '../projects/status';
 
 // What an admin does, for the admin's MCP tools (src/mcp/admin.ts) and the
 // admin pages (src/admin/page.ts) alike. Every action first checks the
@@ -239,18 +240,25 @@ async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
 
 /**
  * A pause Good First Token made on its own, with its reason, why the sync
- * delisted the project when it did, and for the policy crawler's pause on a
- * ban, the line its rules read as one and the sentences that name AI, from
- * the read that paused it. It reads nothing from GitHub.
+ * delisted the project when it did, the pause someone made that it took
+ * over, and for the policy crawler's pause on a ban, the line its rules read
+ * as one and the sentences that name AI, from the read that paused it. While
+ * the sync has the project delisted, nothing read from its repo shows: no
+ * ban line, no sentences, and no policy. It reads nothing from GitHub.
  */
 async function pauseItem({ project, changeId }: SelfPausedProject): Promise<QueueItem> {
-  const [sync, read, doNotList] = await Promise.all([
+  const [sync, read, doNotList, history] = await Promise.all([
     getIssueSync(env.DB, project.repo),
     getPolicyRead(env.DB, project.repo),
     getDoNotListEntry(env.DB, project.repo),
+    statusHistory(env.DB, project.repo),
   ]);
-  // What the crawler kept belongs to this pause only when it made this one.
-  const crawler = read?.pause?.pausedAt === project.statusChangedAt ? read.pause : null;
+  const delisted = sync?.delisted ?? null;
+  // What the crawler kept belongs to this pause only when it made this one,
+  // and shows only while GitHub shows the repo.
+  const crawler = delisted === null && read?.pause?.pausedAt === project.statusChangedAt ? read.pause : null;
+  const taken = pauseTakenOver(history);
+  const takenBy = taken?.changedBy == null ? null : await getPerson(env.DB, taken.changedBy);
   return {
     id: pauseId(changeId),
     kind: 'pause',
@@ -260,13 +268,19 @@ async function pauseItem({ project, changeId }: SelfPausedProject): Promise<Queu
     facts: null,
     factsMissing: null,
     settings: project.settings,
-    policy: project.policy,
+    policy: delisted === null ? project.policy : null,
     suggestedTags: [],
     onDoNotList: doNotList !== null,
     sources: [],
     aiSentences: crawler?.aiSentences ?? [],
     moreAiSentences: crawler?.moreAiSentences ?? 0,
-    pause: { reason: project.statusReason, delisted: sync?.delisted ?? null, ban: crawler?.ban ?? null },
+    pause: {
+      reason: project.statusReason,
+      delisted,
+      ban: crawler?.ban ?? null,
+      tookOver:
+        taken === null || takenBy === null ? null : { by: takenBy.login, at: iso(taken.changedAt), reason: taken.reason },
+    },
   };
 }
 
@@ -276,8 +290,15 @@ async function pauseItem({ project, changeId }: SelfPausedProject): Promise<Queu
  * has now.
  */
 async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
-  const [project, doNotList] = await Promise.all([getProject(env.DB, change.repo), getDoNotListEntry(env.DB, change.repo)]);
+  const [project, doNotList, sync] = await Promise.all([
+    getProject(env.DB, change.repo),
+    getDoNotListEntry(env.DB, change.repo),
+    getIssueSync(env.DB, change.repo),
+  ]);
   if (project === null) throw new Error(`The policy change ${change.id} is for ${change.repo}, which isn't a project.`);
+  // While the sync has the project delisted, nothing read from its repo shows.
+  const delisted = sync?.delisted ?? null;
+  const shown = delisted === null;
   return {
     id: change.id,
     kind: 'policy_change',
@@ -287,13 +308,13 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
     facts: factsOf(change.facts),
     factsMissing: null,
     settings: project.settings,
-    policy: change.policy,
+    policy: shown ? change.policy : null,
     suggestedTags: [],
     onDoNotList: doNotList !== null,
-    sources: change.sources,
-    aiSentences: change.aiSentences,
-    moreAiSentences: change.moreAiSentences,
-    change: { listed: project.policy, status: project.status },
+    sources: shown ? change.sources : [],
+    aiSentences: shown ? change.aiSentences : [],
+    moreAiSentences: shown ? change.moreAiSentences : 0,
+    change: { listed: shown ? project.policy : null, status: project.status, delisted },
   };
 }
 
@@ -520,9 +541,11 @@ async function decideCandidateItem(
 /**
  * Resumes a project Good First Token paused on its own, putting back the
  * status it had before the pause, or keeps it paused as the admin's own
- * pause, with the reason they give, which its maintainers read. Either way
- * it leaves the queue. It lands only on the pause the ID names, and is
- * decided again when the status changed while it ran.
+ * pause, with the reason they give, which its maintainers read. When the
+ * pause took over one a maintainer or an admin made, approving puts that
+ * one back as they made it, for them to lift. Either way it leaves the
+ * queue. It lands only on the pause the ID names, and is decided again when
+ * the status changed while it ran.
  */
 async function decidePause(
   caller: Caller,
@@ -540,11 +563,15 @@ async function decidePause(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const paused = await getSelfPausedProject(env.DB, changeId);
     if (paused === null) return nothingWaits(input.id);
-    const change: { status: ProjectStatus; reason: string | null } =
-      input.decision === 'approve'
-        ? statusBeforePause(await statusHistory(env.DB, paused.project.repo))
-        : { status: 'paused', reason: input.reason ?? null };
-    const decided = await setProjectStatusFrom(env.DB, paused.project, { ...change, changedBy: caller.githubId }, now);
+    const history = await statusHistory(env.DB, paused.project.repo);
+    const taken = pauseTakenOver(history);
+    const change: { status: ProjectStatus; reason: string | null; changedBy: number | null } =
+      input.decision === 'reject'
+        ? { status: 'paused', reason: input.reason ?? null, changedBy: caller.githubId }
+        : taken !== null
+          ? { status: 'paused', reason: taken.reason, changedBy: taken.changedBy }
+          : { ...statusBeforePause(history), changedBy: caller.githubId };
+    const decided = await setProjectStatusFrom(env.DB, paused.project, change, now);
     if (decided === null) continue;
     return { ok: true, value: { repo: decided.repo, kind: 'pause', status: decided.status, decision: input.decision } };
   }
@@ -691,8 +718,9 @@ export async function adminPauseProject(
  * its stars or last push. A repo on the do-not-list is refused, since the
  * crawler never reads one. A repo that is a project already, or one the
  * crawler put in the admin queue before, isn't added, and the answer says
- * why, since the crawler reads it no further. Nothing is read from GitHub:
- * the crawler reads the repo when it queues it.
+ * why: the crawler reads a listed project each week, and an earlier find
+ * again as its passes find it. Nothing is read from GitHub: the crawler
+ * reads the repo when it queues it.
  */
 export async function adminSeedRepo(
   caller: Caller,
@@ -750,6 +778,8 @@ export async function adminRemoveProject(
   if (waiting !== null) {
     await decideCandidate(env.DB, waiting.id, { status: 'rejected', decidedBy: caller.githubId, reason: REMOVED_REASON }, now);
   }
+  // A policy change for its listing has nothing left to list again from.
+  await dropWaitingPolicyChange(env.DB, repo);
   const removed = await rejectAsRemoved(caller, repo, entry, now);
   await closeRemoval(env.DB, repo, { status: 'removed', by: caller.githubId }, now);
   return { ok: true, value: removed };

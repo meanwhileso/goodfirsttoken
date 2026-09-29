@@ -8,19 +8,21 @@ import { suggestSettings, type PolicyFile, type PolicyReading } from './rules';
 // read differently (src/crawl/queue.ts). The rules are in
 // docs/how-it-works.md, under Keeping listings current.
 //
-// It covers what the rules take from the docs: the tier, the quote, every
-// sentence that names AI with the rest of its paragraph, and the conditions
-// the settings follow. Each is reduced to its words, so a reformat, like
-// wrapping a line, bold text, a list mark, or a heading's level, reads the
-// same. A file the rules take nothing from, or a line in one that names no
-// AI and sets nothing, like a build step in CONTRIBUTING, isn't in it. Only
-// the hash is kept, never the repo's text.
+// It covers what the rules take from the docs: the tier, the quote and the
+// file it is in, the first MAX_AI_SENTENCES sentences that name AI, each
+// with the rest of its paragraph, how many more there are, and the
+// conditions the settings follow. Each text is reduced to its words, so a
+// reformat, like wrapping a line, bold text, a list mark, or a heading's
+// level, reads the same. A file the rules take nothing from, and a
+// paragraph in one where no sentence names AI or sets anything, like a
+// build step of its own in CONTRIBUTING, aren't in it. The hash is all
+// that is kept of the repo's text.
 
 /**
  * Raised when what the fingerprint covers changes, like a change to the
- * rules that changes what they read in most repos. A fingerprint of an older
- * version compares with nothing, so the next read takes a new one, instead
- * of reading every listed project as changed.
+ * rules that changes what they read in most repos. A fingerprint of another
+ * version compares with nothing, so the next read takes a new one, and acts
+ * on nothing else, so no listed project reads as changed for it.
  */
 export const FINGERPRINT_VERSION = 1;
 
@@ -45,6 +47,8 @@ export async function policyFingerprint(
   const read = {
     tier: reading.tier,
     quote: reading.welcome === null ? null : wordsOf(reading.welcome.quote),
+    // The file the quote is in, which a listing links to.
+    quoteFile: reading.welcome?.file.path ?? null,
     // Sorted, so moving a section reads the same.
     passages: [...new Set(reading.aiSentences.map((passage) => wordsOf(passage.text)))].sort(),
     more: reading.moreAiSentences,

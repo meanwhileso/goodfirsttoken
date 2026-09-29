@@ -357,9 +357,9 @@ describe('what each result says', () => {
   test("a seed the crawler leaves alone says why, and that nothing changed", () => {
     const seed = (output: Partial<ToolOutput<'admin_seed_repo'>>) =>
       textOf(toolResult('admin_seed_repo', { ...samples.admin_seed_repo.output, ...output }));
-    expect(seed({ added: false, leftAlone: 'project' })).toBe(`${repoName} is a project already, so the crawler reads it no further. Nothing changed.`);
+    expect(seed({ added: false, leftAlone: 'project' })).toBe(`${repoName} is a project already, so a seed adds nothing. Nothing changed.`);
     expect(seed({ added: false, leftAlone: 'proposed' })).toBe(
-      `The crawler put ${repoName} in the admin queue before, so it reads it no further. Nothing changed.`,
+      `The crawler put ${repoName} in the admin queue before, so a seed adds nothing. Nothing changed.`,
     );
     expect(seed({ added: false })).toBe(`${repoName} is on the crawler's seed list already. Nothing changed.`);
   });
@@ -501,6 +501,15 @@ describe('what each result says', () => {
     expect(queue([candidate])).toContain(decide);
     expect(queue([registration, removal])).toContain(decide);
     expect(queue([pause])).toContain(decide);
+  });
+
+  test('an approved pause says whether it resumed the project or put back the pause it took over', () => {
+    const decide = (status: 'approved' | 'paused') =>
+      textOf(toolResult('admin_decide', { repo: repoName, kind: 'pause', status, decision: 'approve' }));
+    expect(decide('approved')).toBe(`Resumed ${repoName}. Status: approved.`);
+    expect(decide('paused')).toBe(
+      `Lifted Good First Token's pause on ${repoName}, and put back the pause it took over, for whoever made it to lift. Status: paused.`,
+    );
   });
 
   test("a pause's ban line and a policy change's quotes are marked as the repo's words, line by line", () => {
