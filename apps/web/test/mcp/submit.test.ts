@@ -1039,6 +1039,43 @@ describe("someone else's push to the claim's branch", () => {
     },
   );
 
+  test("onto with the files from before a reviewer's suggestion is refused, naming the files, since it would undo the suggestion", async () => {
+    const { priya, claimId, branch } = await openedClaim();
+    const suggested = github.commitFiles(FORK, { 'a.txt': 'one, as the reviewer suggested\n' }, 'kenji', { branch });
+    const added = github.commitFiles(FORK, { 'NOTES.md': 'From the reviewer.\n' }, 'kenji', { branch });
+
+    // The agent copies the head from the refusal and sends what it had.
+    const same = await submit(priya, claimId, { 'a.txt': 'one\n', 'z.txt': 'z\n' }, { onto: added });
+    const sameCalls = lastCalls();
+    // It deletes the file the reviewer added, which the branch didn't have.
+    const deleted = await submit(priya, claimId, { 'NOTES.md': null, 'b.txt': 'b\n' }, { onto: added });
+    const both = await submit(priya, claimId, { 'a.txt': 'one\n', 'NOTES.md': null }, { onto: added });
+
+    for (const refused of [same, deleted, both]) expect(refusalOf(refused)).toBe('branch_moved');
+    expect(textOf(same)).toContain(
+      `a.txt would go back to how it was before someone pushed to ${FORK}:${branch}, whose head is ${added}, which undoes that push, so nothing was committed. Leave it out, so the push's change stays, or send new text.`,
+    );
+    expect(textOf(same)).not.toContain('z.txt');
+    expect(textOf(deleted)).toContain('NOTES.md would go back to how it was');
+    expect(textOf(both)).toContain('a.txt and NOTES.md would go back to how they were');
+    expect(writes(sameCalls)).toEqual([]);
+    expect(repoState(FORK).branches[branch]).toBe(added);
+    expect(filesAt(FORK, branch).get('a.txt')).toBe('one, as the reviewer suggested\n');
+    expect(suggested).not.toBe(added);
+
+    // Left out, the suggestion stays. New text for it is the agent's change.
+    const leftOut = await submit(priya, claimId, { 'b.txt': 'b\n' }, { onto: added });
+    const kept = filesAt(FORK, branch);
+    const changed = await submit(priya, claimId, { 'a.txt': 'one, and more\n', 'b.txt': 'b\n' });
+
+    expect(leftOut.structuredContent).toMatchObject({ state: 'pr_opened' });
+    expect(kept.get('a.txt')).toBe('one, as the reviewer suggested\n');
+    expect(kept.get('NOTES.md')).toBe('From the reviewer.\n');
+    expect(kept.get('b.txt')).toBe('b\n');
+    expect(changed.isError).toBeFalsy();
+    expect(filesAt(FORK, branch).get('a.txt')).toBe('one, and more\n');
+  });
+
   test('a submit onto a head the branch has moved past is stopped too, naming the head it is at now', async () => {
     const { priya, claimId, branch } = await openedClaim();
     const first = github.commitFiles(FORK, { 'NOTES.md': 'One.\n' }, BY, { branch });

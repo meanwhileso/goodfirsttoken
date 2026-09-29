@@ -196,8 +196,14 @@ async function planChange(
   base: { repo: string; rev: string; where: string },
   files: readonly { path: string; content: string | null }[],
   putBack: readonly string[],
+  /** The branch before a push that `at` holds and onto built on, or null. */
+  pushedOver: { repo: string; rev: string } | null = null,
 ): Promise<Change | Refusal> {
   const entries = await writer.entries(at.repo, at.rev, [...files.map((file) => file.path), ...putBack]);
+  if (pushedOver !== null) {
+    const undone = await undoingPush(writer, pushedOver, entries, files);
+    if (undone.length > 0) return undoesPush(at.where, at.rev, undone);
+  }
   // A file whose text may be the one submitted: one of the same size.
   const sameSize = files.filter((file) => {
     const entry = entries.get(file.path);
@@ -227,6 +233,43 @@ async function planChange(
     }
   }
   return change;
+}
+
+/**
+ * The submitted paths a push changed that go back to how they were before
+ * it: sent with their text from then, or deleted when the push added them.
+ * A commit of them would undo the push. `before` is the branch before the
+ * push, and `now` what each path is at the head the push left.
+ */
+async function undoingPush(
+  writer: DonorWriter,
+  before: { repo: string; rev: string },
+  now: Map<string, Entry | null>,
+  files: readonly { path: string; content: string | null }[],
+): Promise<string[]> {
+  const was = await writer.entries(before.repo, before.rev, files.map((file) => file.path));
+  const pushed = files.filter((file) => (was.get(file.path)?.oid ?? null) !== (now.get(file.path)?.oid ?? null));
+  const undone = pushed.filter((file) => file.content === null && (was.get(file.path) ?? null) === null).map((file) => file.path);
+  const sameSize = pushed.filter((file) => {
+    const entry = was.get(file.path);
+    return file.content !== null && entry?.file === true && entry.byteSize === utf8Length(file.content);
+  });
+  if (sameSize.length > 0) {
+    const texts = await writer.texts(before.repo, before.rev, sameSize.map((file) => file.path));
+    for (const file of sameSize) if (texts.get(file.path) === file.content) undone.push(file.path);
+  }
+  // In the order they were sent.
+  return files.map((file) => file.path).filter((path) => undone.includes(path));
+}
+
+/** `where` is the branch, as `owner/repo:branch`, and `head` the head the push left. */
+function undoesPush(where: string, head: string, paths: readonly string[]): Refusal {
+  const one = paths.length === 1;
+  const named = one ? paths.join('') : `${paths.slice(0, -1).join(', ')} and ${paths.slice(-1).join('')}`;
+  return refusal(
+    'branch_moved',
+    `${named} would go back to how ${one ? 'it was' : 'they were'} before someone pushed to ${where}, whose head is ${head}, which undoes that push, so nothing was committed. Leave ${one ? 'it' : 'them'} out, so the push's change stays, or send new text.`,
+  );
 }
 
 function branchMoved(repo: string, branch: string, head: string): Refusal {
@@ -280,6 +323,8 @@ async function commitWork(
     expected: string;
     /** The head the agent built on, which the branch must be at, or undefined. */
     onto: string | undefined;
+    /** The branch before the push onto built on, or null when onto names no one else's push. */
+    pushedOver: { repo: string; rev: string } | null;
     donor: string;
     files: readonly { path: string; content: string | null }[];
     putBack: readonly string[];
@@ -296,7 +341,7 @@ async function commitWork(
     const moved = head !== null && head !== expected;
     if (moved && !(await ownCommitOn(writer, target, head, expected, input.donor))) return branchMoved(target, branch, head);
     const at = head === null ? base : { repo: target, rev: head, where: `${target}:${branch}` };
-    const change = await planChange(writer, at, base, input.files, input.putBack);
+    const change = await planChange(writer, at, base, input.files, input.putBack, moved ? null : input.pushedOver);
     if (isRefusal(change)) return change;
     if (change.additions.length + change.deletions.length === 0) {
       if (moved) return { sha: head, recovered: true };
@@ -453,6 +498,14 @@ export async function submitWork(
           : { repo: target, rev: base, where: `the commit ${base}` },
       expected: input.onto ?? earlier?.commit ?? claim.startCommit,
       onto: input.onto,
+      // Where the branch was before the push onto names: the last submit's
+      // commit, or the start commit before the first.
+      pushedOver:
+        input.onto === undefined || input.onto === (earlier?.commit ?? claim.startCommit)
+          ? null
+          : earlier === null
+            ? { repo: facts.name, rev: claim.startCommit }
+            : { repo: target, rev: earlier.commit },
       donor: donor.login,
       files: input.files,
       // A file goes back to the base. After onto, that is the head the branch is at.

@@ -1750,6 +1750,12 @@ never reaches the tool.
   on a first submit, is refused with `branch_moved`, and no branch is made
   and nothing is committed. So a branch only ever starts at the start
   commit.
+- A submit with `onto` can't undo the push it builds on. A path the push
+  changed, since the last submit's commit or the start commit before the
+  first, that comes back with the text it had before the push, or comes
+  back deleted when the push added it, is refused with `branch_moved`,
+  naming the paths, and nothing is committed. Left out, such a path stays
+  as the push left it. New text for it is the agent's own change.
 - The files are read against the claim's base: its start commit, or the
   head the latest submit with `onto` named. So after `onto`, every file
   changed from that head is sent, on that submit and the later ones.
@@ -2113,7 +2119,7 @@ tool say what to do with each one on its list, under
 | `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit |
 | `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, so nothing was committed |
 | `fork_not_ready` | GitHub was still making the donor's fork, so nothing was committed. The same submit works once it is done |
-| `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, so nothing was committed. The refusal names the head to build on |
+| `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, or there is no branch for `onto` to name, or the files would undo the push `onto` builds on, so nothing was committed. The refusal names the head to build on, or the files |
 | `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo |
 | `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list |

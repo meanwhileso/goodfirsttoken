@@ -555,7 +555,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   commit with one parent, the expected head, and the donor as its author
   can be a submit that died after its commit. `onto` with no branch is
   refused before `createBranch`, which only ever takes the base: the start
-  commit, or a head an earlier `onto` checked against the branch.
+  commit, or a head an earlier `onto` checked against the branch. A submit
+  with `onto` past someone's push also reads the submitted paths at the
+  commit before the push, and the text of the ones the push changed, to
+  find a file that would go back to how it was.
 - **The workflow rule** reads the paths from the same comparison that
   counts the lines, beside the submitted ones.
 - **The commit** is `createCommitOnBranch` with `expectedHeadOid` set to the
