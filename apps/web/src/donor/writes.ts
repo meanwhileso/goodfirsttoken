@@ -293,24 +293,33 @@ export class DonorWriter {
   }
 
   /**
-   * Lines added and removed from `base` to `head`, as GitHub counts them in
-   * a comparison, or null when GitHub doesn't say.
+   * The paths changed from `base` to `head`, with the lines added and
+   * removed, as GitHub lists them in a comparison, which names at most 300
+   * files, or null when GitHub doesn't say.
    * https://docs.github.com/en/rest/commits/commits#compare-two-commits
    */
-  async lineCounts(repo: string, base: string, head: string): Promise<{ additions: number; deletions: number } | null> {
+  async lineCounts(
+    repo: string,
+    base: string,
+    head: string,
+  ): Promise<{ additions: number; deletions: number; paths: string[] } | null> {
     try {
-      const { data } = await this.reader.read<{ files?: { additions?: unknown; deletions?: unknown }[] }>(
+      const { data } = await this.reader.read<{ files?: { filename?: unknown; additions?: unknown; deletions?: unknown }[] }>(
         `/repos/${repo}/compare/${base}...${head}`,
       );
       if (!Array.isArray(data.files)) return null;
       let additions = 0;
       let deletions = 0;
+      const paths: string[] = [];
       for (const file of data.files) {
-        if (typeof file.additions !== 'number' || typeof file.deletions !== 'number') return null;
+        if (typeof file.additions !== 'number' || typeof file.deletions !== 'number' || typeof file.filename !== 'string') {
+          return null;
+        }
         additions += file.additions;
         deletions += file.deletions;
+        paths.push(file.filename);
       }
-      return { additions, deletions };
+      return { additions, deletions, paths };
     } catch (error) {
       if (error instanceof GitHubError && error.status !== 401) return null;
       throw error;

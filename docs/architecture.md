@@ -553,7 +553,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   first submit, or `onto`. A head that differs is read with one GraphQL
   query for its parents and its author's login, `commitFacts`. Only a
   commit with one parent, the expected head, and the donor as its author
-  can be a submit that died after its commit.
+  can be a submit that died after its commit. `onto` with no branch is
+  refused before `createBranch`, which only ever takes the base: the start
+  commit, or a head an earlier `onto` checked against the branch.
+- **The workflow rule** reads the paths from the same comparison that
+  counts the lines, beside the submitted ones.
 - **The commit** is `createCommitOnBranch` with `expectedHeadOid` set to the
   head the change was worked out from, and each file's text in base64.
   GitHub's `STALE_DATA` means the branch moved, and the branch is read

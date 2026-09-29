@@ -74,6 +74,9 @@ import {
  */
 export const FORK_WAITS_MS = [500, 1000, 2000] as const;
 
+/** The most files GitHub lists in a comparison. */
+const COMPARE_FILES = 300;
+
 /** How many times a commit is tried when the branch moved since it was read. */
 const COMMIT_TRIES = 3;
 
@@ -233,6 +236,13 @@ function branchMoved(repo: string, branch: string, head: string): Refusal {
   );
 }
 
+function noBranchForOnto(repo: string, branch: string): Refusal {
+  return refusal(
+    'branch_moved',
+    `onto names the head of the claim's branch, and ${repo}:${branch} isn't there, so there is no head to build on, and nothing was committed. Submit again without onto.`,
+  );
+}
+
 /**
  * Whether `head` is a commit the donor made on `expected`, as a submit that
  * died after its commit leaves one: its one parent is `expected`, and GitHub
@@ -268,6 +278,8 @@ async function commitWork(
     base: { repo: string; rev: string; where: string };
     /** Where the branch should be: the last submit's commit, the head the agent named with onto, or the base. */
     expected: string;
+    /** The head the agent built on, which the branch must be at, or undefined. */
+    onto: string | undefined;
     donor: string;
     files: readonly { path: string; content: string | null }[];
     putBack: readonly string[];
@@ -278,6 +290,9 @@ async function commitWork(
   for (let tries = 0; tries < COMMIT_TRIES; tries++) {
     const head = await whenReady(() => writer.branchHead(target, branch));
     if (head === NOT_READY) return forkNotReady(target);
+    // onto names a head of the branch, so with no branch there is nothing to
+    // build on. A branch made at it would carry whatever commit it names.
+    if (input.onto !== undefined && head === null) return noBranchForOnto(target, branch);
     const moved = head !== null && head !== expected;
     if (moved && !(await ownCommitOn(writer, target, head, expected, input.donor))) return branchMoved(target, branch, head);
     const at = head === null ? base : { repo: target, rev: head, where: `${target}:${branch}` };
@@ -437,6 +452,7 @@ export async function submitWork(
           ? { repo: facts.name, rev: base, where: 'the start commit' }
           : { repo: target, rev: base, where: `the commit ${base}` },
       expected: input.onto ?? earlier?.commit ?? claim.startCommit,
+      onto: input.onto,
       donor: donor.login,
       files: input.files,
       // A file goes back to the base. After onto, that is the head the branch is at.
@@ -473,7 +489,12 @@ export async function submitWork(
       ? null
       : reviewReason({
           prOnIssue: prs.length > 0,
-          workflowFiles: input.files.some((file) => isWorkflowPath(file.path)),
+          // The branch's whole change counts, with any commit someone else
+          // pushed that onto built on. GitHub lists at most 300 files, so a
+          // list that long may leave one out.
+          workflowFiles:
+            input.files.some((file) => isWorkflowPath(file.path)) ||
+            (lines !== null && (lines.paths.some(isWorkflowPath) || lines.paths.length >= COMPARE_FILES)),
           prMode: project.settings.prMode,
           personWrittenDescription: project.settings.personWrittenDescription,
           atOpenPrCap: openPrRefusal(project, openPrs) !== null,

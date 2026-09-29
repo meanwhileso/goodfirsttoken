@@ -1091,6 +1091,77 @@ describe("someone else's push to the claim's branch", () => {
     expect((await room.history()).filter((e) => e.kind === 'submitted')).toHaveLength(1);
     expect(await getSubmission(env.DB, claimId)).toMatchObject({ commit: died, base: start });
   });
+
+  // Commits a first submit's onto could name, with no branch to be the head
+  // of, each with the file it would carry into the PR.
+  const elsewhere: [string, () => string, string][] = [
+    ["main's newer head", () => github.commitFiles(APP, { 'LATER.md': 'Made on main after the claim.\n' }, BY), 'LATER.md'],
+    [
+      "a commit in someone else's fork",
+      () => {
+        const number = github.openPullRequest(APP, { title: "Sam's change", body: 'Unrelated.', by: 'sam' });
+        return repoState(APP).issues[String(number)]?.pull?.head.sha ?? '';
+      },
+      'changes/',
+    ],
+    [
+      'a commit that adds a workflow',
+      () => {
+        repoState(APP).branches.evil = repoState(APP).branches.main ?? '';
+        return github.commitFiles(APP, { '.github/workflows/evil.yml': 'on: [pull_request_target]\n' }, BY, { branch: 'evil' });
+      },
+      '.github/workflows/evil.yml',
+    ],
+  ];
+
+  test.each(elsewhere)(
+    'onto on a first submit, with no branch yet, is refused, so no branch starts at %s',
+    async (_, commit, carried) => {
+      await project(APP, automatic);
+      const issue = await tagged(APP);
+      const priya = await donor('priya');
+      const { claimId } = await claim(priya, issue);
+      const branch = branchOf(issue, claimId);
+      const onto = commit();
+      expect(onto).toMatch(/^[0-9a-f]{40}$/);
+
+      const refused = await submit(priya, claimId, { 'a.txt': 'a\n' }, { onto });
+
+      expect(refusalOf(refused)).toBe('branch_moved');
+      expect(textOf(refused)).toContain(`${FORK}:${branch} isn't there, so there is no head to build on, and nothing was committed.`);
+      // GitHub answers the fork call with the fork priya has, which it makes nothing for.
+      expect(writes(lastCalls())).toEqual(['POST /repos/{owner}/{repo}/forks']);
+      expect(Object.keys(github.state.repos).filter((name) => name.startsWith('priya/sample-app'))).toEqual([FORK]);
+      expect(repoState(FORK).branches[branch]).toBeUndefined();
+      expect(pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branch)).toEqual([]);
+      expect(await getSubmission(env.DB, claimId)).toBeNull();
+      expect((await issueRoom(env.ISSUE_ROOM, issue).snapshot()).claims[0]?.state).toBe('active');
+      // Without onto, the branch starts at the start commit and holds none of it.
+      const after = await submit(priya, claimId, { 'a.txt': 'a\n' });
+      expect(after.structuredContent).toMatchObject({ state: 'pr_opened' });
+      expect([...filesAt(FORK, branch).keys()].filter((path) => path.startsWith(carried))).toEqual([]);
+    },
+  );
+
+  test("a workflow file someone else pushed to the branch sends the work to review, though the agent's files leave workflows alone", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const { claimId, start } = await claim(kenji, issue);
+    const branch = branchOf(issue, claimId);
+    // A maintainer makes the claim's branch in the repo with a workflow on it.
+    repoState(APP).branches[branch] = start;
+    const pushed = github.commitFiles(APP, { '.github/workflows/evil.yml': 'on: [pull_request_target]\n' }, BY, { branch });
+
+    const moved = await submit(kenji, claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
+    const onto = await submit(kenji, claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, { onto: pushed });
+
+    expect(refusalOf(moved)).toBe('branch_moved');
+    expect(onto.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null, reviewReason: 'workflow_files' });
+    expect(commitAt(repoState(APP).branches[branch]).parents).toEqual([pushed]);
+    expect(pullsBy(APP, 'kenji')).toEqual([]);
+  });
 });
 
 describe('the issue on GitHub', () => {

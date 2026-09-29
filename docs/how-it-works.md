@@ -1745,8 +1745,11 @@ never reaches the tool.
   Update branch, the submit is refused with `branch_moved`, naming the
   head, and nothing is committed, so that work stays. The agent fetches
   the branch, brings its work onto that head, and submits again with
-  `onto` set to it. `onto` must be the branch's head, or the submit is
-  refused with `branch_moved` again.
+  `onto` set to it. `onto` must be the branch's head. A submit with `onto`
+  when the branch is at another head, or when there is no branch yet, as
+  on a first submit, is refused with `branch_moved`, and no branch is made
+  and nothing is committed. So a branch only ever starts at the start
+  commit.
 - The files are read against the claim's base: its start commit, or the
   head the latest submit with `onto` named. So after `onto`, every file
   changed from that head is sent, on that submit and the later ones.
@@ -1808,14 +1811,20 @@ never reaches the tool.
 - A claim whose PR is open takes the commit onto that PR's branch, and no
   second PR opens.
 - Otherwise the PR opens by itself when the project's PR mode is
-  `automatic`, no other PR is open on the issue, no submitted path is under
-  `.github/workflows/`, compared without case, the project doesn't want a
-  person-written description, and the donor has fewer open PRs in the
-  project than it allows. When one of these doesn't hold, the work goes to
-  the donor's review queue, with a reason: `pr_exists`, `workflow_files`,
-  `reviewed_mode`, `person_written_description`, or `open_pr_cap`, the
-  first that applies in that order. When GitHub refuses a PR that was to
-  open by itself, the work goes there with `pr_refused`.
+  `automatic`, no other PR is open on the issue, no path the branch
+  changes is under `.github/workflows/`, compared without case, the
+  project doesn't want a person-written description, and the donor has
+  fewer open PRs in the project than it allows. When one of these doesn't
+  hold, the work goes to the donor's review queue, with a reason:
+  `pr_exists`, `workflow_files`, `reviewed_mode`,
+  `person_written_description`, or `open_pr_cap`, the first that applies
+  in that order. When GitHub refuses a PR that was to open by itself, the
+  work goes there with `pr_refused`.
+- The paths the branch changes are the submitted ones and the ones
+  GitHub's comparison lists, so a workflow file someone else pushed to the
+  branch, which `onto` then built on, counts too. GitHub lists at most 300
+  files, so a comparison that lists 300 counts as touching a workflow. When
+  GitHub gives no comparison, the submitted paths are the ones read.
 - The summary, what was checked, the model, and a title the agent gave go
   into the commit, the PR, and the database with their keys and tokens
   replaced, as a posted line's are under [The issue room](#the-issue-room).
