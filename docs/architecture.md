@@ -3421,6 +3421,15 @@ A pull request can switch off its own checks with a `nosemgrep` comment, a
 `scripts/new-advisories.mjs` or these workflows, since each job runs from the
 pull request's checkout. Reviewers watch for changes to any of them.
 
+Semgrep marks a finding under a `nosemgrep` comment as suppressed in its
+SARIF, and code scanning files it as an alert all the same. So both `semgrep`
+jobs leave out a suppressed finding whose level is known to be below error,
+and the comment, with whatever reason it gives, in the diff that adds it is
+the record. Its alert, if it had one, closes as fixed. Any other suppressed
+finding still goes up, so the ruleset's "Alerts: Errors" still needs a
+maintainer to dismiss it. A bare `nosemgrep` with no rule ID covers every
+rule on its line, which is one more reason reviewers watch for them.
+
 `.github/workflows/security-main.yml` runs Semgrep, CodeQL, zizmor, and
 OSV-Scanner on `main` on every push, every Monday at 05:23 UTC, and by hand
 from the Actions tab. The push runs give each pull request a fresh analysis
