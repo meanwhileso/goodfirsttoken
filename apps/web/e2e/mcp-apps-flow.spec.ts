@@ -55,7 +55,8 @@ test("a Pick in the issue cards claims with the donor's own agent and follows th
   // The room's own event comes over the issue's socket on the site.
   await expect(card.locator('.wall-line').filter({ hasText: '@lena' }).filter({ hasText: 'claimed the issue' })).toHaveCount(1);
   const [told] = sent(await cards.messages(), 'ui/message');
-  const claimId = /claim (c_\w+)/.exec(JSON.stringify(told?.params))?.[1] ?? '';
+  // A claim ID is base64url, so it can hold - as well as _.
+  const claimId = /claim (c_[\w-]+)/.exec(JSON.stringify(told?.params))?.[1] ?? '';
   expect(claimId).not.toBe('');
   // The agent takes the claim up, as the card told it to, and posts as it works.
   expect(data(await call('claim_issue', { sessionId, issue: pick.issue })).resumed).toBe(true);
