@@ -115,26 +115,21 @@ async function factsFromGitHub(token: string | null, repo: string): Promise<Fact
 
 /**
  * What a registration or crawler find says of the repo's requests to be
- * removed: whether one waits, and each one that someone other than its asker
- * withdrew since the repo was last removed, with who asked, who withdrew it,
- * and when. Every such withdrawal counts, so asking and withdrawing a request
- * of one's own afterwards hides none.
+ * removed: whether one waits, and the first few that someone other than
+ * their asker withdrew since the repo was last removed, with who asked, who
+ * withdrew each, and when, and how many more there are. Every such
+ * withdrawal counts, so asking and withdrawing a request of one's own
+ * afterwards hides none.
  */
-async function removalsOf(repo: string): Promise<Pick<QueueItem, 'removalWaits' | 'removalsWithdrawn'>> {
+async function removalsOf(
+  repo: string,
+): Promise<Pick<QueueItem, 'removalWaits' | 'removalsWithdrawn' | 'moreRemovalsWithdrawn'>> {
   const [waiting, withdrawn] = await Promise.all([getWaitingRemoval(env.DB, repo), withdrawnByOthers(env.DB, repo)]);
-  const removalsWithdrawn = await Promise.all(
-    withdrawn.map(async (request) => {
-      const [asker, withdrawer] = await Promise.all([
-        getPerson(env.DB, request.requestedBy),
-        request.closedBy === null ? null : getPerson(env.DB, request.closedBy),
-      ]);
-      if (asker === null || withdrawer === null || request.closedAt === null) {
-        throw new Error(`${repo}'s request to be removed names someone who isn't recorded.`);
-      }
-      return { requestedBy: asker.login, withdrawnBy: withdrawer.login, withdrawnAt: iso(request.closedAt) };
-    }),
-  );
-  return { removalWaits: waiting !== null, removalsWithdrawn };
+  return {
+    removalWaits: waiting !== null,
+    removalsWithdrawn: withdrawn.first.map((request) => ({ ...request, withdrawnAt: iso(request.withdrawnAt) })),
+    moreRemovalsWithdrawn: withdrawn.more,
+  };
 }
 
 async function registrationItem(token: string | null, project: ProjectRecord, changeId: number): Promise<QueueItem> {

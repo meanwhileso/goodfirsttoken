@@ -6,6 +6,7 @@ import type { Caller } from '../../src/auth/permissions';
 import {
   addCandidate,
   askRemoval,
+  closeRemoval,
   createProject,
   getDoNotListEntry,
   getIssueSync,
@@ -750,6 +751,50 @@ describe('a request withdrawn by someone other than the one who asked', () => {
         { requestedBy: 'kenji', withdrawnBy: 'sample-maintainer' },
       ],
     });
+  });
+
+  test('lists the first five withdrawn, first withdrawn first, and counts the rest', async () => {
+    const registrant = await approvedHarbor();
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_remove_project', { repo: HARBOR });
+    await call(registrant, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+    await savePerson(env.DB, { githubId: 1002, login: 'kenji' }, Date.now());
+    await savePerson(env.DB, { githubId: 1009, login: 'sample-maintainer' }, Date.now());
+    // Seven requests, each withdrawn by one of the other two maintainers, a
+    // minute after it was made.
+    const [kenji, octo, sample] = [1002, 1008, 1009];
+    const rounds: [number, number][] = [
+      [kenji, octo],
+      [sample, octo],
+      [kenji, sample],
+      [octo, kenji],
+      [sample, kenji],
+      [octo, sample],
+      [kenji, octo],
+    ];
+    const MINUTE = 60_000;
+    const t0 = Date.now() + MINUTE;
+    for (const [i, [asker, withdrawer]] of rounds.entries()) {
+      await askRemoval(env.DB, { repo: HARBOR, reason: REASON, requestedBy: asker }, t0 + 2 * i * MINUTE);
+      await closeRemoval(env.DB, HARBOR, { status: 'withdrawn', by: withdrawer }, t0 + (2 * i + 1) * MINUTE);
+    }
+    const withdrawnAt = (i: number) => new Date(t0 + (2 * i + 1) * MINUTE).toISOString();
+
+    const [item] = await queue(admin, 'registration');
+    const text = textOf(await call(admin, 'admin_queue', { kind: 'registration' }));
+
+    expect(item).toMatchObject({
+      removalsWithdrawn: [
+        { requestedBy: 'kenji', withdrawnBy: 'octo-maintainer', withdrawnAt: withdrawnAt(0) },
+        { requestedBy: 'sample-maintainer', withdrawnBy: 'octo-maintainer', withdrawnAt: withdrawnAt(1) },
+        { requestedBy: 'kenji', withdrawnBy: 'sample-maintainer', withdrawnAt: withdrawnAt(2) },
+        { requestedBy: 'octo-maintainer', withdrawnBy: 'kenji', withdrawnAt: withdrawnAt(3) },
+        { requestedBy: 'sample-maintainer', withdrawnBy: 'kenji', withdrawnAt: withdrawnAt(4) },
+      ],
+      moreRemovalsWithdrawn: 2,
+    });
+    expect(text.match(/withdrew the request on /g)).toHaveLength(5);
+    expect(text).toContain('Someone other than the one who asked withdrew 2 more requests to remove this repo.');
   });
 
   test("tells no one but the one who asked who withdrew their request", async () => {

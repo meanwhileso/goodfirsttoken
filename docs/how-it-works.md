@@ -1150,14 +1150,16 @@ removes the repo, or a maintainer of the repo withdraws it.
   beside who asked, and leaves the queue. With none waiting, nothing
   changes, and the answer says so.
 - A request withdrawn by someone other than its asker shows, in two
-  places. A registration or crawler find of the repo in the queue lists
-  each one withdrawn that way since an admin last removed the repo on a
-  request, with who asked, who withdrew it, and when, so asking and
-  withdrawing a request of one's own afterwards hides none. And each call
-  the asker makes to `request_removal` says who withdrew their last request,
-  and when, until they make a new request. It shows nowhere else: while no
-  registration or crawler find of the repo waits, there is nothing for an
-  admin to approve, and no admin sees it.
+  places. A registration or crawler find of the repo in the queue counts
+  every one withdrawn that way since an admin last removed the repo on a
+  request, so asking and withdrawing a request of one's own afterwards
+  hides none. It lists the first five withdrawn, first withdrawn first,
+  with who asked, who withdrew each, and when, and says how many more
+  there are, so trading withdrawals can't make the queue longer. And each
+  call the asker makes to `request_removal` says who withdrew their last
+  request, and when, until they make a new request. It shows nowhere else:
+  while no registration or crawler find of the repo waits, there is nothing
+  for an admin to approve, and no admin sees it.
 - A closed request is kept, as the record of who asked, and only a waiting
   one closes, so a closed one keeps who closed it. Nothing else closes one.
   An admin can't decline one: the plan puts a repo on the do-not-list when
@@ -1217,10 +1219,10 @@ registration's or a crawler find's.
   that names nothing waiting, is `not_found`.
 - A registration or a crawler find says when a request to remove the same
   repo waits, since it can't be approved while that waits. It also lists
-  each request to remove the repo that someone other than its asker
-  withdrew, under [Asking to be removed](#asking-to-be-removed), with who
-  asked, who withdrew it, and when, for the admin to weigh before
-  approving.
+  the first five requests to remove the repo that someone other than their
+  asker withdrew, under [Asking to be removed](#asking-to-be-removed), with
+  who asked, who withdrew each, and when, and says how many more there
+  are, for the admin to weigh before approving.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
   request to be removed they are read from GitHub when the queue is read,
@@ -1374,9 +1376,9 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   when, and their reason, quoted as theirs, and its button removes the
   repo, as `admin_remove_project` does with no note, which closes the
   request. A registration or a crawler find whose repo has a request to be
-  removed waiting says so, and lists each request someone other than its
-  asker withdrew, as the queue does. A registration's form takes a
-  reason.
+  removed waiting says so, and lists the requests someone other than
+  their asker withdrew, the first five and a count of the rest, as the
+  queue does. A registration's form takes a reason.
   Rejecting or skipping needs the reason, and the form refuses to send
   without one. Approving doesn't.
 - Every form posts to `/admin`. It has to come from the site itself, by its
@@ -3361,6 +3363,7 @@ Each limit the schemas enforce, other than those under project settings:
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
 | Suggestions left out with `exclude` | 100 | Us |
 | Picks waiting in a session's queue | 20 | Us |
+| Requests withdrawn by someone other than their asker, listed on a registration or crawler find | 5, and a count of the rest | Us |
 | Agent name | 1 to 40 lowercase letters, digits, dots, underscores, and hyphens, starting with a letter or digit | Us |
 | Model name | 100 characters | Us |
 | IDs the server gives out | 1 to 64 letters, digits, underscores, and hyphens | Us |

@@ -1,5 +1,6 @@
 import {
   doNotListNote,
+  moreRemovalsWithdrawnNote,
   productName,
   removalProjectNote,
   removalWaitsNote,
@@ -207,8 +208,9 @@ function DoNotListNote({ item }: { item: QueueItem }) {
 
 /**
  * On a registration or crawler find, a request to remove the same repo that
- * waits, which blocks approving it, and each one that someone other than its
- * asker withdrew since the repo was last removed.
+ * waits, which blocks approving it, and the first few that someone other
+ * than their asker withdrew since the repo was last removed, with a count of
+ * the rest.
  */
 function RemovalWaitsNote({ item }: { item: QueueItem }) {
   if (item.kind === 'removal') return null;
@@ -220,6 +222,9 @@ function RemovalWaitsNote({ item }: { item: QueueItem }) {
           {removalWithdrawnNote(withdrawn)}
         </p>
       ))}
+      {(item.moreRemovalsWithdrawn ?? 0) > 0 && (
+        <p className="admin-item__warning">{moreRemovalsWithdrawnNote(item.moreRemovalsWithdrawn ?? 0)}</p>
+      )}
     </>
   );
 }

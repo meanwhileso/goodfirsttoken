@@ -514,6 +514,19 @@ describe('what each result says', () => {
     expect(queue(registration)).not.toContain('A request to be removed waits');
   });
 
+  test('a registration or crawler find lists at most five requests someone other than their asker withdrew, and counts the rest in our words', () => {
+    const [candidate] = samples.admin_queue.output.items;
+    if (candidate === undefined) throw new Error('missing sample');
+    const withdrawn = { requestedBy: 'kenji', withdrawnBy: 'octo-maintainer', withdrawnAt: '2026-09-26T12:00:00.000Z' };
+    const item = { ...candidate, removalsWithdrawn: [withdrawn], moreRemovalsWithdrawn: 3 };
+    const text = textOf(toolResult('admin_queue', { items: [item] }));
+    const six = { ...candidate, removalsWithdrawn: Array.from({ length: 6 }, () => withdrawn) };
+
+    expect(text).toContain('@kenji asked to remove this repo, and @octo-maintainer withdrew the request on 2026-09-26 12:00 UTC.');
+    expect(text).toContain('Someone other than the one who asked withdrew 3 more requests to remove this repo.');
+    expect(problemFields(validate(tools.admin_queue.output, { items: [six] }))).toEqual(['items[0].removalsWithdrawn']);
+  });
+
   test('request_removal says what it did: asked, found one waiting, withdrew one, or found the repo removed already', () => {
     const out = samples.request_removal.output;
     const say = (change: Partial<typeof out>) => textOf(toolResult('request_removal', { ...out, ...change }));

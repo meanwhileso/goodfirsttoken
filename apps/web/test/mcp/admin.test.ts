@@ -272,6 +272,7 @@ describe('admin_queue', () => {
           removal: null,
           removalWaits: false,
           removalsWithdrawn: [],
+          moreRemovalsWithdrawn: 0,
         },
       ],
     });

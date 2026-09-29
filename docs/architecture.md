@@ -397,11 +397,13 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   to a waiting request, so a withdrawal and an admin's removal at the same
   moment close it once. Who withdrew a request is its `closed_by`, beside
   its `requested_by`. `lastRemovalBy` reads one person's last request for a
-  repo, for `request_removal` to tell them, and `withdrawnByOthers` reads a
-  repo's requests withdrawn by someone other than their asker since the
-  latest one an admin closed as `removed`, for the queue. `removalReason`
-  in core drops the characters a person can't see, on top of folding the
-  ones that could break a line. A `451` from GitHub is a `PermissionRefused` in
+  repo, for `request_removal` to tell them. `withdrawnByOthers` reads, for
+  the queue, a repo's requests withdrawn by someone other than their asker
+  since the latest one an admin closed as `removed`, in one query: the
+  first five withdrawn, with both logins joined from `people`, and a count
+  of the rest from `COUNT(*) OVER ()`. `removalReason` in core drops the
+  characters a person can't see, on top of folding the ones that could
+  break a line. A `451` from GitHub is a `PermissionRefused` in
   `requirePermission`, as a `404` is, so every maintainer's tool refuses a
   repo GitHub blocked with `not_maintainer`.
 - **Resuming reads the status history,** newest first, for the change

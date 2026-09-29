@@ -1,5 +1,7 @@
 import {
+  MAX_REMOVALS_WITHDRAWN,
   githubId,
+  githubLogin,
   id,
   mustParse,
   removalRequestSchema,
@@ -115,23 +117,53 @@ export async function lastRemovalBy(db: D1Database, repo: string, requestedBy: n
   return row === null ? null : toRequest(row);
 }
 
+/** A request someone other than its asker withdrew: who asked, who withdrew it, and when. */
+export interface WithdrawnByOther {
+  requestedBy: string;
+  withdrawnBy: string;
+  withdrawnAt: number;
+}
+
+interface WithdrawnRow {
+  requested_by: string;
+  withdrawn_by: string;
+  withdrawn_at: number;
+  total: number;
+}
+
 /**
  * The repo's requests, compared without case, that someone other than their
- * asker withdrew since an admin last removed the repo on a request, the
- * first withdrawn first. With no such removal, every one.
+ * asker withdrew since an admin last removed the repo on a request, or every
+ * one with no such removal. One query reads the first
+ * MAX_REMOVALS_WITHDRAWN withdrawn, first withdrawn first, with the logins
+ * of who asked and who withdrew each, and counts the rest, so the repo's
+ * maintainers can't make the queue longer or slower by trading withdrawals.
  */
-export async function withdrawnByOthers(db: D1Database, repo: string): Promise<RemovalRequest[]> {
+export async function withdrawnByOthers(
+  db: D1Database,
+  repo: string,
+): Promise<{ first: WithdrawnByOther[]; more: number }> {
   const { results } = await db
     .prepare(
-      `SELECT * FROM removal_requests
-       WHERE repo = ?1 AND status = 'withdrawn' AND closed_by != requested_by
-         AND requested_at >= COALESCE(
+      `SELECT asker.login AS requested_by, withdrawer.login AS withdrawn_by, r.closed_at AS withdrawn_at,
+              COUNT(*) OVER () AS total
+       FROM removal_requests r
+       JOIN people asker ON asker.github_id = r.requested_by
+       JOIN people withdrawer ON withdrawer.github_id = r.closed_by
+       WHERE r.repo = ?1 AND r.status = 'withdrawn' AND r.closed_by != r.requested_by
+         AND r.requested_at >= COALESCE(
            (SELECT MAX(closed_at) FROM removal_requests WHERE repo = ?1 AND status = 'removed'), 0)
-       ORDER BY closed_at, id`,
+       ORDER BY r.closed_at, r.id
+       LIMIT ?2`,
     )
-    .bind(mustParse(repoName, repo, 'repo'))
-    .all<RequestRow>();
-  return results.map(toRequest);
+    .bind(mustParse(repoName, repo, 'repo'), MAX_REMOVALS_WITHDRAWN)
+    .all<WithdrawnRow>();
+  const first = results.map((row) => ({
+    requestedBy: mustParse(githubLogin, row.requested_by, 'requestedBy'),
+    withdrawnBy: mustParse(githubLogin, row.withdrawn_by, 'withdrawnBy'),
+    withdrawnAt: checkTime(row.withdrawn_at, 'withdrawnAt'),
+  }));
+  return { first, more: (results[0]?.total ?? 0) - first.length };
 }
 
 /** The request with this ID, waiting or closed, or null. */

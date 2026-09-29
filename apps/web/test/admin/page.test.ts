@@ -397,6 +397,21 @@ describe("maintainers' requests to be removed on /admin", () => {
     expect(page).toContain('@kenji asked to remove this repo, and @octo-maintainer withdrew the request on ');
   });
 
+  test('a registration shows the first five requests withdrawn by someone other than their asker, and counts the rest', async () => {
+    await savePerson(env.DB, { githubId: 1002, login: 'kenji' }, Date.now());
+    const t0 = Date.now() - 60 * 60_000;
+    for (let i = 0; i < 6; i++) {
+      await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1002 }, t0 + 2 * i * 60_000);
+      await closeRemoval(env.DB, HARBOR, { status: 'withdrawn', by: 1008 }, t0 + (2 * i + 1) * 60_000);
+    }
+    const browser = await signedIn('sample-admin');
+
+    const page = await (await browser.fetch('/admin')).text();
+
+    expect(page.match(/@kenji asked to remove this repo, and @octo-maintainer withdrew the request on /g)).toHaveLength(5);
+    expect(page).toContain('Someone other than the one who asked withdrew 1 more request to remove this repo.');
+  });
+
   test("someone who isn't an admin sees no request, and their form removes nothing", async () => {
     await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1008 }, Date.now());
     const maintainer = await signedIn('octo-maintainer');

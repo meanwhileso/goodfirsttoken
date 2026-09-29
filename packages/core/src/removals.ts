@@ -11,6 +11,12 @@ import { epochMs, githubId, id, repoName } from './primitives';
 export const MAX_REMOVAL_REASON = 500;
 
 /**
+ * The most requests withdrawn by someone other than their asker that a
+ * registration or crawler find in the admin queue lists. It counts the rest.
+ */
+export const MAX_REMOVALS_WITHDRAWN = 5;
+
+/**
  * A character a person reading the text doesn't see, which an agent reading
  * it could: a format character, like a zero-width space, a word joiner, or a
  * Unicode tag character, a private-use character, an unassigned one, or one

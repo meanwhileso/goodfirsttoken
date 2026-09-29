@@ -25,7 +25,7 @@ import {
   type ProjectSettings,
   type ProjectSettingsPatch,
 } from '../projects';
-import { removalReason } from '../removals';
+import { MAX_REMOVALS_WITHDRAWN, removalReason } from '../removals';
 import { defineTool } from './spec';
 import { indent, lines, numbered, plural, renderSettings, when } from './text';
 
@@ -103,13 +103,17 @@ const queueItemSchema = z.object({
    */
   removalWaits: z.boolean().default(false),
   /**
-   * For a registration or a crawler find, each request to remove the repo
-   * that someone other than its asker withdrew since the repo was last
-   * removed: who asked, who withdrew it, and when, the first withdrawn first.
+   * For a registration or a crawler find, the requests to remove the repo
+   * that someone other than their asker withdrew since the repo was last
+   * removed, the first five withdrawn: who asked, who withdrew it, and when,
+   * the first withdrawn first.
    */
   removalsWithdrawn: z
     .array(z.object({ requestedBy: githubLogin, withdrawnBy: githubLogin, withdrawnAt: isoTime }))
+    .max(MAX_REMOVALS_WITHDRAWN)
     .default([]),
+  /** How many more requests someone other than their asker withdrew, past the ones in `removalsWithdrawn`. */
+  moreRemovalsWithdrawn: count.default(0),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -227,9 +231,14 @@ export function removalWaitsNote(kind: QueueItem['kind']): string {
   return `A request to be removed waits for this repo too, so it ${blocked} while that waits.`;
 }
 
-/** What a registration or crawler find says when someone other than its asker withdrew the repo's last request to be removed. */
+/** What a registration or crawler find says of a request to remove the repo that someone other than its asker withdrew. */
 export function removalWithdrawnNote(withdrawn: { requestedBy: string; withdrawnBy: string; withdrawnAt: string }): string {
   return `@${withdrawn.requestedBy} asked to remove this repo, and @${withdrawn.withdrawnBy} withdrew the request on ${when(withdrawn.withdrawnAt)}.`;
+}
+
+/** What a registration or crawler find says of the withdrawn requests past the ones it lists. */
+export function moreRemovalsWithdrawnNote(more: number): string {
+  return `Someone other than the one who asked withdrew ${plural(more, 'more request')} to remove this repo.`;
 }
 
 /**
@@ -259,6 +268,7 @@ function renderQueueItem(item: QueueItem): string {
     item.onDoNotList && doNotListNote(item.kind),
     item.removalWaits && item.kind !== 'removal' && removalWaitsNote(item.kind),
     item.kind !== 'removal' && item.removalsWithdrawn.map(removalWithdrawnNote).join('\n'),
+    item.kind !== 'removal' && item.moreRemovalsWithdrawn > 0 && moreRemovalsWithdrawnNote(item.moreRemovalsWithdrawn),
     item.removal && describeRemoval(item.repo, item.removal),
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
