@@ -17,14 +17,16 @@ export const PR_JOB_CRON = '7,37 * * * *';
 export const CRAWL_CRON = '52 * * * *';
 
 /**
- * What each job may spend of the token's hourly budget, and how many calls
- * one run makes. docs/how-it-works.md gives the rule, under Tagged issues,
- * and docs/architecture.md, under The sync and The policy crawler, why these
- * numbers. The crawler's search spends the search budget, which only it
- * uses, and each run of its queue's consumer spends from the others.
+ * What each job may spend of the token's hourly budget, how many calls one
+ * run makes, and how many of the sync's go to its checks of the repos of
+ * the projects it reads no issues for. docs/how-it-works.md gives the rule,
+ * under Tagged issues, and docs/architecture.md, under The sync and The
+ * policy crawler, why these numbers. The crawler's search spends the search
+ * budget, which only it uses, and each run of its queue's consumer spends
+ * from the others.
  */
 export const ALLOWANCES = {
-  sync: { leave: 0.2, maxCalls: 1000 },
+  sync: { leave: 0.2, maxCalls: 1000, checkCalls: 100 },
   prs: { leave: 0.1, maxCalls: 100 },
   refresh: { leave: 0.5, maxCalls: 60 },
   crawlSearch: { leave: 0.1, maxCalls: 20 },

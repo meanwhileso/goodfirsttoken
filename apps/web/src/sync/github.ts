@@ -47,6 +47,13 @@ export interface Allowance {
   leave: number;
   /** The most calls one run makes, which keeps it inside Cloudflare's limit on subrequests. */
   maxCalls: number;
+  /**
+   * The tagged-issue sync's alone: the most calls of `maxCalls` its checks
+   * of the repos of the projects it reads no issues for make, before its
+   * passes, so the passes get the rest. Left out, the checks may spend the
+   * whole run.
+   */
+  checkCalls?: number;
 }
 
 /** GitHub's name for the budget REST calls count against. */
@@ -83,7 +90,8 @@ export class ServiceGitHub implements GitHubReader {
   calls = 0;
   private readonly budgets = new Map<string, RateLimit>();
   private readonly token: string;
-  private readonly allowance: Allowance;
+  /** What the job may spend. */
+  readonly allowance: Allowance;
   private readonly now: () => number;
 
   constructor(token: string, allowance: Allowance, now: () => number = Date.now) {

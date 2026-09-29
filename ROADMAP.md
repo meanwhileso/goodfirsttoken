@@ -87,7 +87,7 @@ Every public page, the markdown and JSON versions, and share cards.
 | [#27](https://github.com/meanwhileso/goodfirsttoken/issues/27) | Build /me and /maintainers | #7, #9, #16 | |
 | [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 | |
 | [#29](https://github.com/meanwhileso/goodfirsttoken/issues/29) | Generate share cards | #26 | |
-| [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) | Delist a paused project whose repo went private | #24 | |
+| [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) | Delist a paused project whose repo went private | #24 | [#73](https://github.com/meanwhileso/goodfirsttoken/pull/73) |
 
 ## M7 Policy crawler
 
@@ -217,7 +217,7 @@ flowchart TD
   n31 --> n34
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n30 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n30 done
 ```
 
 ## Maintainer steps

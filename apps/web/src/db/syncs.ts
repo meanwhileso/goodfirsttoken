@@ -13,6 +13,8 @@ interface SyncRow {
   refreshed_at: number | null;
   reading_until: number | null;
   language: string | null;
+  delisted: string | null;
+  repos_read_at: number | null;
 }
 
 function toSync(row: SyncRow): IssueSync {
@@ -25,12 +27,15 @@ function toSync(row: SyncRow): IssueSync {
       refreshedAt: row.refreshed_at,
       readingUntil: row.reading_until,
       language: row.language,
+      delisted: row.delisted,
+      reposReadAt: row.repos_read_at,
     },
     'issue sync',
   );
 }
 
 const languageOf = issueSyncSchema.shape.language;
+const delistedFor = issueSyncSchema.shape.delisted;
 
 /** Keeps the code repo's main language as GitHub named it, or null when it names none. */
 export async function setProjectLanguage(db: D1Database, project: string, language: string | null): Promise<void> {
@@ -67,6 +72,42 @@ export async function listProjectsToSync(db: D1Database): Promise<string[]> {
        WHERE p.status = 'approved'
          AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))
        ORDER BY s.pass_started_at IS NULL, s.read_at IS NOT NULL, s.read_at, p.added_at, p.repo`,
+    )
+    .all<{ repo: string }>();
+  return results.map((row) => mustParse(repoName, row.repo, 'repo'));
+}
+
+/**
+ * Keeps what the sync saw of the project's code repo and issue repo at
+ * `now`: why GitHub delists the project, or null when it showed both repos
+ * public and open. The mark hides what the site cached from them, whatever
+ * the project's status, until the sync sees them again.
+ */
+export async function setDelisted(db: D1Database, project: string, delisted: string | null, now: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until, delisted, repos_read_at)
+       VALUES (?1, NULL, NULL, NULL, NULL, ?2, ?3)
+       ON CONFLICT (project) DO UPDATE SET delisted = ?2, repos_read_at = ?3`,
+    )
+    .bind(mustParse(repoName, project, 'project'), mustParse(delistedFor, delisted, 'delisted'), checkTime(now))
+    .run();
+}
+
+/**
+ * The projects whose repos alone a scheduled run reads, before it reads any
+ * project's issues: every paused project, and every approved one the sync
+ * delisted, as after a resume, the one whose repos were read longest ago
+ * first, never first, then the oldest added. Projects whose repo or issue
+ * repo is on the do-not-list are left out, as they are from the passes.
+ */
+export async function listProjectsToCheck(db: D1Database): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.repo FROM projects p LEFT JOIN issue_syncs s ON s.project = p.repo
+       WHERE (p.status = 'paused' OR (p.status = 'approved' AND s.delisted IS NOT NULL))
+         AND NOT EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo IN (p.repo, p.issue_repo))
+       ORDER BY s.repos_read_at IS NOT NULL, s.repos_read_at, p.added_at, p.repo`,
     )
     .all<{ repo: string }>();
   return results.map((row) => mustParse(repoName, row.repo, 'repo'));
