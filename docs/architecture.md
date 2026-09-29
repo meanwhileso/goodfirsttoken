@@ -641,7 +641,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   is `reg_` and the ID of its latest row in `project_status_changes`, which
   `listPendingProjects` reads with each pending project, so the queue needs
   no table of its own, and `getPendingProject` finds the project only while
-  that change is still its latest.
+  that change is still its latest. A pause's is `pause_` and the ID of the
+  status change that paused it, read the same way by
+  `listSelfPausedProjects` and `getSelfPausedProject`, for every project
+  paused with `status_changed_by` null. A policy change's is its row's ID
+  in `policy_changes`, with the prefix `pchg_`.
 - **The repo's facts** for a registration come from two REST calls with
   the admin's token, `GET /repos/{owner}/{repo}` and `GET /users/{owner}`,
   in `readStanding` in `src/projects/repo.ts`. Every registration's are
@@ -973,8 +977,9 @@ Worker's name, so no setting names them.
 D1, bound as `DB`, holds the structured records that search and the
 leaderboard read: people, projects with their settings and status changes,
 the tagged-issue cache, claims, their submitted work, PRs, donor sessions,
-blocks, the do-not-list, crawl candidates, and the crawler's seed list and
-passes. GitHub is the source of truth for issues
+blocks, the do-not-list, crawl candidates, the crawler's seed list and
+passes, and its weekly reads of listed projects with the policy changes they
+found. GitHub is the source of truth for issues
 and PRs, and the issue room is for claims, so those tables are caches and
 mirrors. None of these tables holds a GitHub token. The rules these records
 follow are in [how-it-works.md](how-it-works.md#people), under
@@ -1014,6 +1019,8 @@ in `people`.
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
 | `crawl_passes` | Pass of the crawler's search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
+| `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read, and why the crawler last paused it | `project` |
+| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, status, and the admin's decision | `id` |
 
 Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns the
 three project tables. Its functions take the database first, so the Worker
@@ -1093,6 +1100,13 @@ that break the rules, so it returns the problems for the caller to show.
   `crawlerSkips` in `src/db/candidates.ts` asks the do-not-list, the
   projects, and the crawl candidates about any number of repos in one
   query.
+- **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
+  `policy_changes`, owned by `src/db/rereads.ts`, and adds
+  `crawl_candidates.fingerprint`, null for a find stored before.
+  `policy_reads.pause` and a change's `facts`, `policy`, `sources`, and
+  `ai_sentences` are JSON text. A change's `policy` is null when the docs
+  give none. A partial unique index keeps one change waiting for each
+  project, as `crawl_candidates_waiting` does for finds.
 
 ### Who sees what
 
@@ -2139,6 +2153,9 @@ admin queue as crawl candidates. The rules are in
 | `src/crawl/rules.ts` | The tiers and the suggestions, as pure functions of the files and labels |
 | `src/db/seeds.ts` | The `crawl_seeds` table, the seed list |
 | `src/db/crawls.ts` | The `crawl_passes` table, where each pass of the search stands |
+| `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue |
+| `src/crawl/fingerprint.ts` | The hash of what the rules read in a repo's docs, which a weekly read and a crawler find keep |
+| `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
 
 - **A cron fills a queue, and the queue's consumer reads.** The cron job,
   at 52 minutes past each hour, makes only searches, and the consumer only
@@ -2216,9 +2233,71 @@ admin queue as crawl candidates. The rules are in
   for again. `crawlerSkips` leaves out the finds a batch wrote before it
   stopped, before any read, so a repo that comes back after it was proposed
   costs no reads.
-- **Only candidates.** The consumer writes with `addCandidate` alone, whose
-  insert checks the do-not-list in the same statement. Nothing in
-  `src/crawl/` writes a project.
+- **Only candidates, and pauses.** A crawl writes with `addCandidate`
+  alone, whose insert checks the do-not-list in the same statement. A
+  weekly read writes a pause that names no one, through
+  `setProjectStatusFrom`, and the tables in `src/db/rereads.ts`. Nothing in
+  `src/crawl/` creates a project, saves its settings, or writes any other
+  status, which a test checks.
+- **Weekly reads ride the crawl queue.** The cron job queues the projects
+  `listProjectsToReread` gives, in messages with `reread: true`, before its
+  search, and records `policy_reads.queued_at` with `markRereadsQueued`.
+  The consumer hands such a message to `rereadRepos` in
+  `src/crawl/reread.ts`, and sends one back marked the same way, so the
+  budget, the retries, and the dead-letter queue work as for a crawl. It
+  adds no cron, queue, or binding.
+- **The same reads and rules.** `rereadRepos` calls `readRepos`,
+  `readFiles`, and `readPolicy`, as `crawlRepos` does, and `readRepoFacts`
+  in `src/crawl/reads.ts` for the REST answer, which `whyNotListable` now
+  reads through too. It calls the rules only through `readPolicy` and
+  `suggestSettings`, so a change to the rules reaches it.
+- **The hash.** `policyFingerprint` in `src/crawl/fingerprint.ts` hashes
+  with SHA-256 a JSON object of what the rules read: the tier, the words of
+  the quote and of each passage that names AI, sorted, the conditions
+  `suggestSettings` reads with no labels, the label names, and the canary's
+  words. It keeps a string like `v1:` and 64 hex digits, and never the
+  text. `FINGERPRINT_VERSION` goes up when what it covers changes, like a
+  change to the rules that reads most repos differently, and
+  `comparable` makes a hash of another version compare with nothing, so a
+  change like that takes a new baseline once, instead of sending every
+  listing back to the queue. Hashing the files whole would send a listing
+  back for every build step added to its CONTRIBUTING. Hashing the quote
+  and tier alone would miss a new condition, like a CLA, and a new
+  sentence that names AI, which the rules can misread, and which an admin
+  reads when a change comes back.
+- **Who can open pull requests is read each week,** in one REST call,
+  since GitHub's GraphQL doesn't give it. The sync reads the same REST
+  answer for each approved project every 15 minutes, and doesn't look at
+  those fields. Reading them there would catch a change sooner at no cost,
+  but would give the sync a second kind of pause.
+- **Archived is the sync's.** A weekly read that finds the repo archived,
+  private, or gone, by GraphQL or REST, does nothing more. The sync's own
+  read sets the mark and pauses, so the reason, the mark, and the pause
+  come from one place.
+- **A ban's pause takes over any pause.** `pauseForCrawler` with
+  `anyPause` lands on an approved or a paused project, whoever paused it,
+  through the compare-and-set, since the ban is found only once, when the
+  hash changes. The pause for pull request settings lands only on an
+  approved project, since every read checks it again.
+- **The admin queue shows every pause that names no one,** the sync's and
+  the crawler's, so admins hear of both with no table of their own. A
+  crawler's pause keeps why in `policy_reads.pause`, with `pausedAt`, its
+  `status_changed_at`, and the queue shows that only while the project's
+  pause is that one.
+- **Policy changes** wait in `policy_changes`. A newer one deletes the one
+  that waits and inserts itself in one batch, with a new ID, so a decision
+  on the old ID is `not_found`, and an admin never approves a reading they
+  didn't see. Approving one calls `listFromPolicy` in
+  `src/admin/actions.ts`, the path of `admin_add_project`, which reads the
+  repo on GitHub with the admin's token and keeps the project's status.
+- **A pass a month.** `fillCrawlQueue` starts a pass when the last one is
+  done and started `CRAWL_PASS_EVERY_MS`, 30 days, ago. `crawlerSkips`
+  takes `readRejected`, which the search and the consumer pass, so a repo
+  whose finds were all rejected is read, and `lastRejectedFind` gives the
+  hash to compare. A find with no hash, or one of another version, takes
+  the new one through `setFindFingerprint`. The seeds and
+  `admin_seed_repo` don't pass it, so a seed with any find is left alone,
+  as before.
 - **The link** is on `https://github.com`, as the sample data's are,
   whatever `GH_WEB_URL` says, since the policy schema takes https links
   only and the GitHub fake serves plain http locally. The branch and each
@@ -2322,7 +2401,7 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   | The PR job | GraphQL | 500 of 5,000 |
   | The sync | REST | 1,000 of 5,000 |
   | A maintainer's refresh | REST | 2,500 of 5,000 |
-  | The crawler's consumer | GraphQL | 3,000 of 5,000 |
+  | The crawler's consumer, crawls and weekly reads | GraphQL, and REST for weekly reads | 3,000 of 5,000 |
   | The crawler's search | Search | 3 of 30 a minute |
 
   The consumer spends only the top 2,000 of either hourly budget, and about
@@ -2332,12 +2411,25 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   the repos of the projects it reads no issues for, up to about 101 calls a
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, so they seldom draw on the same budget.
-- **A monthly crawl.** A pass reads the pool once, and reading it again
-  each month is the re-crawl's job (#31). At these rates a pass spends
-  about 3,000 GraphQL points for each 10,000 repos, well under a tenth of a
-  percent of the 3.6 million points in a 30-day month, and takes about an
-  hour of runs for each 1,900 repos. The search's cap on calls sets how
-  long a pass takes, and GitHub's budget has room to spare.
+- **A monthly crawl.** A pass reads the pool once, and the next starts 30
+  days after it started. At these rates a pass spends about 3,000 GraphQL
+  points for each 10,000 repos, well under a tenth of a percent of the 3.6
+  million points in a 30-day month, and takes about an hour of runs for
+  each 1,900 repos. The search's cap on calls sets how long a pass takes,
+  and GitHub's budget has room to spare. A find an admin rejected costs its
+  share of a batch again when the search finds it, about 0.3 points, and
+  its REST call and labels only when its docs read differently.
+- **What a week of weekly reads costs, for N listed projects.** A batch of
+  10 costs a GraphQL query for the facts and folders, about two for the
+  files and the checks on the folders, and a REST call for each project:
+  about 0.3N GraphQL points and N REST calls a week. A policy change costs
+  a GraphQL query more, for the labels. For 1,000 listed projects, that is
+  about 300 points and 1,000 REST calls a week, well under a percent of
+  either week's budget of 840,000. The cron job queues at most 500 a run,
+  so after a deploy, or when many were listed at once, they spread over a
+  few hours: 500 is 50 batches, about 650 calls, which the consumer's 60
+  calls a run take in about 11 runs, and its share of three fifths leaves
+  the others 3,000 of each hour's 5,000.
 
 ## Sample data in development
 

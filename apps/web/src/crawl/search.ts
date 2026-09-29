@@ -2,7 +2,9 @@ import { repoName, SEARCH_PAGES, type CrawlMessage, type CrawlPass } from '@good
 import {
   crawlerSkips,
   latestCrawlPass,
+  listProjectsToReread,
   listSeedsToHandle,
+  markRereadsQueued,
   markSeedsHandled,
   moveCrawlPass,
   startCrawlPass,
@@ -17,8 +19,11 @@ import { SyncStopped, type ServiceGitHub, type StopReason } from '../sync/github
 // 1,000 results for a query, so it reads the pool in bands of star counts,
 // each narrow enough for search to serve whole, and keeps where it stands in
 // crawl_passes. A run stops when its share of the search budget or its calls
-// run out, and the next run picks up there. The rules are in
-// docs/how-it-works.md, under The policy crawler.
+// run out, and the next run picks up there. A new pass starts a month after
+// the last one started. Each run also queues the listed projects due for
+// their weekly read, which src/crawl/reread.ts keeps current. The rules are
+// in docs/how-it-works.md, under The policy crawler and Keeping listings
+// current.
 
 /** The fewest stars a repo needs for the search to find it. */
 export const CRAWL_MIN_STARS = 1000;
@@ -28,6 +33,8 @@ export const CRAWL_PUSHED_DAYS = 30;
 export const CRAWL_BATCH = 10;
 /** The most seeds one run queues. */
 const SEEDS_PER_RUN = 500;
+/** The most listed projects one run queues for their weekly read. */
+const REREADS_PER_RUN = 500;
 /** How many star counts the first closed band spans. */
 const FIRST_WIDTH = 10;
 /** A band with fewer repos than this is sparse, and the next one spans twice as many star counts. */
@@ -36,6 +43,10 @@ const SPARSE = 250;
 const PER_PAGE = 100;
 const SEARCH_LIMIT = PER_PAGE * SEARCH_PAGES;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** How often a listed project's docs are read again. */
+export const REREAD_EVERY_MS = 7 * DAY_MS;
+/** How long after a pass started the next one starts, once it is done. */
+export const CRAWL_PASS_EVERY_MS = 30 * DAY_MS;
 
 export interface FillDeps {
   db: D1Database;
@@ -48,6 +59,8 @@ export interface FillDeps {
 /** What one run did, for its log line. */
 export interface FillRun {
   seeds: number;
+  /** Listed projects queued for their weekly read. */
+  rereads: number;
   searches: number;
   queued: number;
   /** The pass as the run left it, or null when there is none. */
@@ -66,11 +79,17 @@ interface SearchAnswer {
 /**
  * Puts the repos in the queue, in messages of CRAWL_BATCH repos, leaving out
  * the ones the crawler leaves alone: on the do-not-list, a project already,
- * or proposed before. Their consumer checks again. Returns the repos it
- * queued, and why it left each other one out.
+ * or proposed before. With `readRejected`, as for the search, a repo whose
+ * finds an admin rejected goes in, and comes back when its docs read
+ * differently. Their consumer checks again. Returns the repos it queued, and
+ * why it left each other one out.
  */
-async function send(deps: FillDeps, repos: readonly string[]): Promise<{ queued: string[]; skips: Map<string, CrawlerSkip> }> {
-  const skips = await crawlerSkips(deps.db, repos);
+async function send(
+  deps: FillDeps,
+  repos: readonly string[],
+  options: { readRejected?: boolean } = {},
+): Promise<{ queued: string[]; skips: Map<string, CrawlerSkip> }> {
+  const skips = await crawlerSkips(deps.db, repos, options);
   const queued = repos.filter((repo) => !skips.has(repo.toLowerCase()));
   const messages: { body: CrawlMessage }[] = [];
   for (let start = 0; start < queued.length; start += CRAWL_BATCH) {
@@ -134,7 +153,7 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
     const name = repoName.safeParse(item.full_name);
     return name.success ? [name.data] : [];
   });
-  const { queued } = await send(deps, repos);
+  const { queued } = await send(deps, repos, { readRejected: true });
   run.queued += queued.length;
   next.queued += queued.length;
   const pages = Math.min(SEARCH_PAGES, Math.ceil(Math.min(total, SEARCH_LIMIT) / PER_PAGE));
@@ -146,16 +165,33 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
 }
 
 /**
+ * Queues the listed projects due for their weekly read, in messages of
+ * CRAWL_BATCH marked as weekly reads, and records when. Returns how many.
+ */
+async function queueRereads(deps: FillDeps): Promise<number> {
+  const due = await listProjectsToReread(deps.db, deps.now() - REREAD_EVERY_MS, REREADS_PER_RUN);
+  const messages: { body: CrawlMessage }[] = [];
+  for (let start = 0; start < due.length; start += CRAWL_BATCH) {
+    messages.push({ body: { repos: due.slice(start, start + CRAWL_BATCH), reread: true } });
+  }
+  if (messages.length === 0) return 0;
+  await deps.queue.sendBatch(messages);
+  await markRereadsQueued(deps.db, due, deps.now());
+  return due.length;
+}
+
+/**
  * The cron job: queues the seeds an admin added that it hasn't handled yet,
  * and records for each seed whether it queued it or left it alone, and why.
- * Then it reads the pool on from where the pass stands, until the pass is
- * done or the run has to stop. It starts a pass when there has never been
- * one. A pass that is done stays done. Reading the pool again is for
- * re-crawls (#31).
+ * Then it queues the listed projects due for their weekly read. Then it reads
+ * the pool on from where the pass stands, until the pass is done or the run
+ * has to stop. It starts a pass when there has never been one, or when the
+ * last one is done and started CRAWL_PASS_EVERY_MS ago or more, so the
+ * search reads the pool once a month.
  */
 export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   const { db, github, now } = deps;
-  const run: FillRun = { seeds: 0, searches: 0, queued: 0, pass: null, calls: 0, stopped: null };
+  const run: FillRun = { seeds: 0, rereads: 0, searches: 0, queued: 0, pass: null, calls: 0, stopped: null };
 
   // The seeds need no call to GitHub.
   const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN)).map((seed) => seed.repo);
@@ -167,8 +203,13 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
     now(),
   );
 
+  // The weekly reads need no call to GitHub either.
+  run.rereads = await queueRereads(deps);
+
   let pass = await latestCrawlPass(db);
-  pass ??= (await startCrawlPass(db, newPass(now()))) ?? (await latestCrawlPass(db));
+  if (pass === null || (pass.finishedAt !== null && now() - pass.startedAt >= CRAWL_PASS_EVERY_MS)) {
+    pass = (await startCrawlPass(db, newPass(now()))) ?? (await latestCrawlPass(db));
+  }
   run.pass = pass;
   try {
     if (pass !== null && pass.finishedAt === null) await github.checkGitHub();
@@ -194,7 +235,7 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
         ? `the pass is done, with ${String(run.pass.queued)} repos of ${String(run.pass.pool ?? 'an unknown number')} queued`
         : `the pass is at ${run.pass.open ? `${String(run.pass.low)} stars and up` : `${String(run.pass.low)} to ${String(run.pass.low + run.pass.width - 1)} stars`}, page ${String(run.pass.page)}, with ${String(run.pass.queued)} repos of ${String(run.pass.pool ?? 'an unknown number')} queued`;
   console.log(
-    `The crawler queued seeds: ${String(run.seeds)}, repos from search: ${String(run.queued)}, searches: ${String(run.searches)}, calls to GitHub: ${String(run.calls)}. ${where[0]?.toUpperCase() ?? ''}${where.slice(1)}. Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The crawler queued seeds: ${String(run.seeds)}, listed projects to read again: ${String(run.rereads)}, repos from search: ${String(run.queued)}, searches: ${String(run.searches)}, calls to GitHub: ${String(run.calls)}. ${where[0]?.toUpperCase() ?? ''}${where.slice(1)}. Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

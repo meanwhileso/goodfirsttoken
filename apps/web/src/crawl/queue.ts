@@ -1,8 +1,10 @@
 import { crawlMessageSchema, describeProblems, validate, type CrawlMessage, type PolicyTier } from '@goodfirsttoken/core';
-import { addCandidate, crawlerSkips, type CrawlerSkip } from '../db';
+import { addCandidate, crawlerSkips, lastRejectedFind, setFindFingerprint, type CrawlerSkip } from '../db';
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
 import { ALLOWANCES, serviceToken } from '../sync/scheduled';
-import { readFiles, readLabels, readRepos, RepoFailed, whyNotListable, type FoundRepo } from './reads';
+import { comparable, policyFingerprint } from './fingerprint';
+import { fileUrl, readFiles, readLabels, readRepos, RepoFailed, whyNotListable, type FoundRepo } from './reads';
+import { newRereadRun, rereadRepos, type RereadRun } from './reread';
 import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type PolicyReading } from './rules';
 
 // The crawl queue's consumer (spec section 5). Each message holds a batch of
@@ -13,8 +15,10 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 // nothing else: an admin lists a project. When the budget runs low, the
 // repos a message hasn't finished go back to the queue in a new message
 // until the budget starts over, and the repos it put in the admin queue
-// already are left alone when they come back. The rules are in
-// docs/how-it-works.md, under The policy crawler.
+// already are left alone when they come back. A message of listed projects,
+// which the cron job queues each week, goes to src/crawl/reread.ts, which
+// keeps their listings current. The rules are in docs/how-it-works.md,
+// under The policy crawler.
 
 /** Why the crawler read a repo no further. */
 export type Skip =
@@ -32,7 +36,9 @@ export type Skip =
    * the size limit, a symbolic link, or one GitHub gave no text for. It gets
    * no verdict.
    */
-  | 'unreadable_docs';
+  | 'unreadable_docs'
+  /** An admin rejected an earlier find for it, and its docs read the same as then. */
+  | 'rejected_before';
 
 /** What one batch did, for its log line. */
 export interface CrawlRun {
@@ -43,6 +49,8 @@ export interface CrawlRun {
   proposed: string[];
   /** Repos GitHub answered with an error, sent back to the queue alone. */
   failed: string[];
+  /** What the weekly reads of listed projects did. */
+  reread: RereadRun;
   calls: number;
   stopped: StopReason | null;
 }
@@ -62,7 +70,7 @@ export interface CrawlProgress {
 }
 
 export function newCrawlRun(): CrawlRun {
-  return { messages: 0, repos: 0, skipped: {}, tiers: {}, proposed: [], failed: [], calls: 0, stopped: null };
+  return { messages: 0, repos: 0, skipped: {}, tiers: {}, proposed: [], failed: [], reread: newRereadRun(), calls: 0, stopped: null };
 }
 
 export function newCrawlProgress(): CrawlProgress {
@@ -103,12 +111,6 @@ function waitsForBudget(stop: SyncStopped): boolean {
   return stop.reason === 'budget' || stop.reason === 'rate_limited' || stop.reason === 'calls';
 }
 
-/** The file on github.com, on the repo's default branch. */
-function fileUrl(repo: string, branch: string, path: string): string {
-  const encoded = (text: string) => text.split('/').map(encodeURIComponent).join('/');
-  return `https://github.com/${repo}/blob/${encoded(branch)}/${encoded(path)}`;
-}
-
 function listed(tier: CrawlTier): tier is PolicyTier {
   return tier === 'invites_agents' || tier === 'allows_with_conditions';
 }
@@ -141,8 +143,10 @@ export async function crawlRepos(
   };
   run.repos += repos.length;
 
-  // A repo on the do-not-list, a project, or one proposed before is read no further.
-  const known = await crawlerSkips(db, repos);
+  // A repo on the do-not-list, a project, or one waiting in the admin queue
+  // or listed from it is read no further. A repo whose finds an admin
+  // rejected is read, and comes back when its docs read differently.
+  const known = await crawlerSkips(db, repos, { readRejected: true });
   const toRead = repos.filter((repo) => {
     const why = known.get(repo.toLowerCase());
     if (why !== undefined) skip(repo, why);
@@ -164,7 +168,7 @@ export async function crawlRepos(
   });
 
   const files = await readFiles(github, readable);
-  const welcoming: { repo: FoundRepo; reading: PolicyReading; files: PolicyFile[] }[] = [];
+  const welcoming: { repo: FoundRepo; reading: PolicyReading; files: PolicyFile[]; fingerprint: string }[] = [];
   for (const repo of readable) {
     const result = files.get(repo) ?? { failed: `GitHub gave nothing for ${repo.name}.` };
     if ('failed' in result) {
@@ -177,8 +181,9 @@ export async function crawlRepos(
     }
     const reading = readPolicy(result.files);
     run.tiers[reading.tier] = (run.tiers[reading.tier] ?? 0) + 1;
-    if (listed(reading.tier) && reading.welcome !== null) welcoming.push({ repo, reading, files: result.files });
-    else progress.done.add(repo.asked);
+    if (listed(reading.tier) && reading.welcome !== null) {
+      welcoming.push({ repo, reading, files: result.files, fingerprint: await policyFingerprint(reading, result.files, repo.vouch) });
+    } else progress.done.add(repo.asked);
   }
   if (welcoming.length === 0) return;
 
@@ -187,11 +192,21 @@ export async function crawlRepos(
   const now = await crawlerSkips(
     db,
     welcoming.map(({ repo }) => repo.name),
+    { readRejected: true },
   );
-  for (const { repo, reading, files: read } of welcoming) {
+  for (const { repo, reading, files: read, fingerprint } of welcoming) {
     const why = now.get(repo.name.toLowerCase());
     if (why !== undefined) {
       skip(repo.asked, why);
+      continue;
+    }
+    // A rejected find comes back only when its docs read differently from
+    // when it was found. One found before finds kept what they read, or
+    // under an older version, takes what they read now, and stays out.
+    const rejected = await lastRejectedFind(db, repo.name);
+    if (rejected !== null && (!comparable(rejected.fingerprint) || rejected.fingerprint === fingerprint)) {
+      if (rejected.fingerprint !== fingerprint) await setFindFingerprint(db, rejected.id, fingerprint);
+      skip(repo.asked, 'rejected_before');
       continue;
     }
     if ((await whyNotListable(github, repo.name)) !== null) {
@@ -221,7 +236,17 @@ export async function crawlRepos(
       const aiSentences = reading.aiSentences.map(({ file, ...passage }) => ({ path: file.path, ...passage }));
       candidate = await addCandidate(
         db,
-        { repo: repo.name, facts: repo.standing, policy, settings, suggestedTags, sources, aiSentences, moreAiSentences: reading.moreAiSentences },
+        {
+          repo: repo.name,
+          facts: repo.standing,
+          policy,
+          settings,
+          suggestedTags,
+          sources,
+          aiSentences,
+          moreAiSentences: reading.moreAiSentences,
+          fingerprint,
+        },
         deps.now(),
       );
     } catch (error) {
@@ -286,11 +311,15 @@ export async function readCrawlBatch(
     stop = error;
   }
 
-  /** Sends repos back in a new message, and acknowledges the old one, or asks for the old one again when that fails. */
-  const sendBack = async (message: Message, repos: readonly string[], delaySeconds: number): Promise<boolean> => {
+  /**
+   * Sends repos back in a new message, a weekly read again when the old one
+   * was one, and acknowledges the old one, or asks for the old one again when
+   * that fails.
+   */
+  const sendBack = async (message: Message, body: CrawlMessage, repos: readonly string[], delaySeconds: number): Promise<boolean> => {
     if (repos.length === 0) return true;
     try {
-      await env.CRAWL_QUEUE.send({ repos: [...repos] }, { delaySeconds });
+      await env.CRAWL_QUEUE.send({ repos: [...repos], ...(body.reread ? { reread: true } : {}) }, { delaySeconds });
       return true;
     } catch (error) {
       console.error(`The crawler couldn't send repos from crawl message ${message.id} back to the queue.`, error);
@@ -306,15 +335,17 @@ export async function readCrawlBatch(
       message.retry({ delaySeconds: 0 });
       continue;
     }
-    const repos = checked.value.repos;
+    const body = checked.value;
+    const repos = body.repos;
     if (stop !== null) {
       if (!waitsForBudget(stop)) message.retry({ delaySeconds: waitAfter(stop, message.attempts, now()) });
-      else if (await sendBack(message, repos, waitAfter(stop, message.attempts, now()))) message.ack();
+      else if (await sendBack(message, body, repos, waitAfter(stop, message.attempts, now()))) message.ack();
       continue;
     }
     const progress = newCrawlProgress();
     try {
-      await crawlRepos({ db: env.DB, github, now }, repos, run, progress);
+      const read = body.reread ? rereadRepos : crawlRepos;
+      await read({ db: env.DB, github, now }, repos, run, progress);
     } catch (error) {
       if (!(error instanceof SyncStopped)) {
         console.error(`The crawler didn't finish crawl message ${message.id}. It will be tried again.`, error);
@@ -335,8 +366,8 @@ export async function readCrawlBatch(
       continue;
     }
     let sent = true;
-    for (const repo of failed) sent &&= await sendBack(message, [repo], backoff(1));
-    if (sent && stop !== null) sent = await sendBack(message, rest, waitAfter(stop, message.attempts, now()));
+    for (const repo of failed) sent &&= await sendBack(message, body, [repo], backoff(1));
+    if (sent && stop !== null) sent = await sendBack(message, body, rest, waitAfter(stop, message.attempts, now()));
     if (!sent) continue;
     if (stop === null) run.messages += 1;
     message.ack();
@@ -344,8 +375,13 @@ export async function readCrawlBatch(
   run.stopped = stop?.reason ?? null;
   run.calls = github.calls;
   if (stop !== null) console.warn(`The crawler stopped. ${stop.message}`);
+  const { reread } = run;
+  const rereads =
+    reread.read === 0 && Object.keys(reread.skipped).length === 0
+      ? ''
+      : ` Listed projects read again: ${String(reread.read)}, left alone: ${JSON.stringify(reread.skipped)}, whose policy changed: ${reread.changed.length === 0 ? 'none' : reread.changed.join(', ')}, paused: ${reread.paused.length === 0 ? 'none' : reread.paused.join(', ')}.`;
   console.log(
-    `The crawler read ${String(run.messages)} of ${String(batch.messages.length)} messages, with repos: ${String(run.repos)}, skipped: ${JSON.stringify(run.skipped)}, tiers: ${JSON.stringify(run.tiers)}, put in the admin queue: ${run.proposed.length === 0 ? 'none' : run.proposed.join(', ')}, sent back alone after GitHub failed on them: ${run.failed.length === 0 ? 'none' : run.failed.join(', ')}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The crawler read ${String(run.messages)} of ${String(batch.messages.length)} messages, with repos: ${String(run.repos)}, skipped: ${JSON.stringify(run.skipped)}, tiers: ${JSON.stringify(run.tiers)}, put in the admin queue: ${run.proposed.length === 0 ? 'none' : run.proposed.join(', ')}, sent back alone after GitHub failed on them: ${run.failed.length === 0 ? 'none' : run.failed.join(', ')}, calls to GitHub: ${String(run.calls)}.${rereads} Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

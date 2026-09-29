@@ -1,7 +1,7 @@
 ---
 # Generated from skill-src/admin.md. To change it, edit that file and run pnpm skills:build.
 name: admin
-description: Work Good First Token's admin queue with one of its admins. Reads each registration and crawler find, proposes a verdict from its policy quote, facts, settings, and notes for agents, and approves or rejects it as the admin decides. Also lists a repo from its AI policy, pauses or resumes a project, blocks a donor, removes a repo at its maintainers' request, and adds a repo to the policy crawler's seed list. For Good First Token's own admins.
+description: Work Good First Token's admin queue with one of its admins. Reads each registration and crawler find, proposes a verdict from its policy quote, facts, settings, and notes for agents, and approves or rejects it as the admin decides. Also reads each project Good First Token paused on its own, and each listing whose policy changed, and resumes, keeps, or relists it as the admin decides. Also lists a repo from its AI policy, pauses or resumes a project, blocks a donor, removes a repo at its maintainers' request, and adds a repo to the policy crawler's seed list. For Good First Token's own admins.
 metadata:
   internal: true
 ---
@@ -75,8 +75,9 @@ The same queue is at `/admin` on the Good First Token site.
 ## Work the queue
 
 1. Call `admin_queue`. Leave out `kind` for everything, or set it to
-   `registration` or `candidate`. The item that has waited longest comes
-   first. Each item has an `id` for `admin_decide`.
+   `registration`, `candidate`, `pause`, or `policy_change`. The item that
+   has waited longest comes first. Each item has an `id` for
+   `admin_decide`.
 2. When nothing waits, say so and stop.
 3. For each item:
    1. Show the admin its kind, its repo, who registered it or when the
@@ -86,7 +87,11 @@ The same queue is at `/admin` on the Good First Token site.
       mean ready for help, with their open issue counts, its `sources`: the
       line in the repo's files behind each suggested setting, and any
       `canary`, and its `aiSentences`: every sentence in the repo's docs
-      that names AI, with the rest of its paragraph.
+      that names AI, with the rest of its paragraph. For a pause, show its
+      `pause`, with its `reason`, `delisted`, and `ban` with its link, and
+      its `aiSentences`. For a policy change, show the policy it is
+      `listed` from, the `policy` its docs give now, its `sources`, and its
+      `aiSentences`.
    2. Propose a verdict with your reasons, from the checks below. For a
       crawler find you'd approve, also propose its tier and its tags.
    3. Ask the admin to approve, reject with a reason, or skip it.
@@ -167,6 +172,46 @@ the server checked. The settings are theirs.
   and ask its maintainers for the commit, as in Remove at the maintainers'
   request.
 
+### Checks for a pause
+
+Good First Token paused the project on its own, so only an admin can resume
+it, and agents get no new claims on it meanwhile. Its `pause` says why.
+
+- When `ban` is set, the policy crawler's rules read that line in the
+  repo's docs as a ban on AI help, where they read none before. The rules
+  err toward a ban, and read many welcoming sentences as one. Read the line
+  and every paragraph in `aiSentences`, and open the link when you can read
+  the web. When the line bans or restricts AI, or says the project takes no
+  pull requests, propose to keep the pause, and quote the line. When it
+  says something else, propose to resume it, and say why.
+- When `delisted` is set, the sync found the repo private, archived,
+  blocked, or gone. Propose to keep the pause. A resume leaves the project
+  with no page, and the sync pauses it again while GitHub shows the repo
+  that way.
+- Otherwise the `reason` says the repo lets only collaborators open pull
+  requests, or has them turned off. Agents can't open a pull request there.
+  Propose to keep the pause until the repo takes pull requests from anyone
+  again.
+
+### Checks for a policy change
+
+The project is listed from its AI policy, and the crawler's rules read its
+docs differently now, in a way that isn't a ban. It stays listed while the
+change waits.
+
+- Compare the policy it is `listed` from with the `policy` its docs give
+  now, and read every paragraph in `aiSentences`, as for a crawler find.
+  When a sentence bans or restricts AI, or says the project takes no pull
+  requests, tell the admin, and propose to pause the project.
+- When `policy` is null, the rules read no policy in its docs that welcomes
+  AI help. Propose to pause the project, or to reject the change when the
+  paragraphs still welcome AI help in words the rules missed.
+- When the new policy still welcomes AI help, propose to approve it, with
+  its tier, and each setting the lines in `sources` call for, as for a
+  crawler find. Approving keeps the tags and every setting not sent.
+- When only the wording changed, and nothing it asks of agents did,
+  propose to reject it.
+
 ### Deciding
 
 - Approve a registration: `admin_decide` with `id` and `decision`
@@ -181,6 +226,20 @@ the server checked. The settings are theirs.
   policy at once.
 - Reject a crawler find: `admin_decide` with `id`, `decision` `reject`, and
   `reason`. Only admins see the reason.
+- Resume a pause: `admin_decide` with `id` and `decision` `approve`. Send no
+  `tier` and no `settings`. The project goes back to the status it had
+  before the pause.
+- Keep a pause: `admin_decide` with `id`, `decision` `reject`, and
+  `reason`. It stays paused as your pause, and its maintainers read the
+  reason.
+- Approve a policy change: `admin_decide` with `id`, `decision` `approve`,
+  `tier` as the admin confirmed it, and `settings` with each setting the
+  admin changed. The project is listed from the new policy, and keeps its
+  status and every setting not sent.
+- Reject a policy change: `admin_decide` with `id`, `decision` `reject`,
+  and `reason`. The listing stays as it is, and only admins see the reason.
+- To pause the project instead, pause it with `admin_pause_project`. Then
+  reject the policy change.
 
 ## List a repo from its AI policy
 
@@ -206,6 +265,8 @@ a listing.
   an admin's.
 - `admin_pause_project` with `repo` and `paused: false` resumes any paused
   project. It goes back to the status it had before the pause.
+- A pause Good First Token made on its own waits in the queue too, where
+  you resume or keep it, as in Deciding above.
 - `changed` in the result says whether the call changed anything.
 
 ## Block a donor
@@ -279,17 +340,21 @@ A refusal reads `Refused (code): message`. Tell the admin the message,
 then:
 
 - `not_found`: The queue item no longer waits, because someone decided or
-  changed it after you read the queue. Read the queue again with
+  changed it after you read the queue, or a newer reading replaced a
+  policy change. Read the queue again with
   `admin_queue`. Or the repo to pause isn't a project, or nobody has signed
   in to Good First Token with the login to block. Check the name with the
   admin.
 - `invalid_settings`: The message names each setting and its problem. The
-  approval of a registration takes no `tier` and no `settings`. A crawler
+  approval of a registration, and a pause resumed or kept, take no `tier`
+  and no `settings`. A crawler
   find or a new listing needs its `tags`. Fix it with the admin, then call
   again.
 - `repo_not_eligible`: The repo is private or archived, doesn't take pull
   requests from anyone, or is on the do-not-list. The message says which.
-  Tell the admin, and leave it unlisted. From `admin_seed_repo`, the repo
+  Tell the admin, and leave it unlisted. For a policy change with no
+  policy, there is none to list the project from. Reject the change, or
+  pause the project. From `admin_seed_repo`, the repo
   is on the do-not-list, so the crawler never reads it, and it stays off
   the seed list.
 - `already_registered`: Its maintainers registered the repo, and their

@@ -9,8 +9,9 @@ project's page, each issue's page, sign-in with GitHub, the MCP server's
 sign-in for agents with the donor's tools, the maintainer's tools, and the
 admins' tools, the admin pages, the design system at `/design`, and the
 live feeds as text streams and sockets. It reads tagged issues and PRs from
-GitHub on a schedule, and looks for projects whose docs welcome AI help,
-while the build goes on in the open.
+GitHub on a schedule, looks for projects whose docs welcome AI help, and
+reads each listed project's docs again every week, while the build goes on
+in the open.
 
 ## Health check
 
@@ -812,7 +813,10 @@ service token under [Calls to GitHub](#calls-to-github).
   when. Adding the project is the first change, made by whoever added it.
 - Only a pause can name no person, for when Good First Token pauses a
   project on its own. The sync does that for a repo that went private, was
-  archived, or is gone, under [Tagged issues](#tagged-issues). An approval
+  archived, or is gone, under [Tagged issues](#tagged-issues), and the
+  policy crawler for docs that now read as a ban on AI help, or a repo that
+  lets only collaborators open pull requests, under
+  [Keeping listings current](#keeping-listings-current). An approval
   or a rejection always names the admin who made it. A resume, a rejected
   listing's return to `pending` when its maintainer takes it over, or a
   rejected registration's when its maintainer registers it again, names
@@ -1066,7 +1070,8 @@ a project is `not_found`.
   cached shown, and no claims, until the sync sees its repos public and
   open again, under Delisting in [Tagged issues](#tagged-issues).
 - A pause Good First Token made, or one made by someone who is one of its
-  admins, stays until an admin lifts it with `admin_pause_project`, under
+  admins, stays until an admin lifts it with `admin_pause_project`, or
+  from the admin queue with `admin_decide`, under
   [Permissions](#permissions). A maintainer who isn't an admin and tries is
   refused with `not_admin`. Who is an admin is read from `ADMIN_GITHUB_IDS`
   at the time, so a pause by someone no longer an admin counts as a
@@ -1086,7 +1091,8 @@ remove projects at their maintainers' request, and add repos to the
 crawler's seed list, from their agent with seven tools listed only for
 admins, or from the [admin pages](#the-admin-pages). Both go through the
 same actions, so the rules below hold for both. The pages have no form for
-pausing, removing, or the seed list yet.
+pausing, removing, or the seed list yet, and don't show the pauses and
+policy changes that wait in the queue.
 
 - Every action first checks the caller's admin permission, under
   [Permissions](#permissions), before it reads or writes anything. Anyone
@@ -1099,7 +1105,7 @@ pausing, removing, or the seed list yet.
   decided on, the way a maintainer's pause does. When someone else changed
   the status first, the action decides again on the new status.
 
-**What waits.** `admin_queue` lists two kinds of item, the one that has
+**What waits.** `admin_queue` lists four kinds of item, the one that has
 waited longest first, each with an ID that `admin_decide` takes.
 
 - A **registration** is a pending project, with the maintainer who
@@ -1116,6 +1122,23 @@ waited longest first, each with an ID that `admin_decide` takes.
   reads those paragraphs before a verdict. The
   [policy crawler](#the-policy-crawler) makes them, and so does the sample
   data.
+- A **pause** is a project Good First Token paused on its own: the sync,
+  for a repo GitHub shows private, archived, blocked, or gone, under
+  Delisting in [Tagged issues](#tagged-issues), or the policy crawler,
+  under [Keeping listings current](#keeping-listings-current). It has its
+  reason, which its maintainers read, why the sync delisted it when it
+  did, and its settings and the policy it is listed from. For the
+  crawler's pause on a ban, it also has the line the rules read as one,
+  with a link to its file, and every sentence in the repo's docs that
+  names AI, from the read that paused it. Its ID names the status change
+  that paused it, so once its status changes, the ID names nothing.
+- A **policy change** is a listing made from a policy whose policy the
+  crawler's rules read differently now, under
+  [Keeping listings current](#keeping-listings-current). It has the policy
+  the project is listed from, the policy its docs give now, or none when
+  the rules read none, and the project's status and settings now. Like a
+  crawler find, it has the line behind each setting the docs give, and
+  every sentence in the docs that names AI.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration they are
   read from GitHub when the queue is read, with the admin's own token: the
@@ -1123,7 +1146,8 @@ waited longest first, each with an ID that `admin_decide` takes.
   name, the item still waits, with no facts, and says so. When GitHub
   doesn't answer, as on a rate limit, the item says that instead, and
   never that the repo isn't public. `factsMissing` tells the two apart. A
-  crawler find has the facts the crawler read.
+  crawler find and a policy change have the facts the crawler read. A
+  pause has none, and reads nothing from GitHub.
 - An item says when the repo is on the do-not-list. A registration of one
   says that approving it takes the repo off.
 
@@ -1144,6 +1168,20 @@ waited longest first, each with an ID that `admin_decide` takes.
 - Approving a crawler find for a repo its maintainers registered is refused
   with `already_registered`. Their settings and status stay, and the find
   keeps waiting until an admin rejects it.
+- Approving a pause resumes the project, putting back the status it had
+  before the pause, as `admin_pause_project` does. Rejecting it keeps the
+  project paused as the admin's own pause, with their reason, which its
+  maintainers read. Either way the change names the admin, and the pause
+  leaves the queue. Settings or a tier sent with it are refused with
+  `invalid_settings`.
+- Approving a policy change lists the project from the policy its docs
+  give now, as `admin_add_project` lists a repo again, below: the new
+  quote and link replace the old, with the tier the admin confirms, and
+  only the settings they send change. The project keeps its status. A
+  change whose docs give no policy is refused with `repo_not_eligible`,
+  since there is none to list from, and the admin pauses the project or
+  rejects the change. Rejecting it keeps the listing as it is, and its
+  reason stays with the change, where no one else sees it.
 
 **Listing from a policy.** `admin_add_project` lists a repo from its
 written AI policy, with the quote, its link, the tier, the settings, and
@@ -1286,6 +1324,9 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   nothing, and the page says to sign in again. Beside them are
   the projects listed from a policy, a form to list one by hand, and the
   blocked donors, with a form to block one and a button to lift each block.
+- It doesn't show the pauses and policy changes in the queue yet. The
+  admin's agent reads them with `admin_queue`, under
+  [The admin queue](#the-admin-queue).
 - A crawler find's form takes its tags, separated by commas, starting with
   the ones suggested, and its tier. The form to list a repo by hand takes
   its policy and tags. Listing a repo that is listed already changes those
@@ -1447,7 +1488,7 @@ the first question included.
 | The PR job | A tenth of the hour's | 100 |
 | A maintainer's refresh | Half of the hour's | 60 |
 | The crawler's search | A tenth of the minute's searches | 20 |
-| The crawler's queue, each run of up to 5 batches | Three fifths of the hour's | 60 |
+| The crawler's queue, each run of up to 5 batches, weekly reads of listed projects included | Three fifths of the hour's | 60 |
 
 - The sync's reads of repos alone, before its passes, start no new project
   once they have made 100 of its calls in a run, so the passes always get
@@ -1956,6 +1997,10 @@ A candidate is a repo the crawler found whose own docs welcome AI help. The
 - A repo on the do-not-list never enters the admin queue.
 - A repo waits in the admin queue at most once, whatever the case of its
   name. Once decided, it can wait again.
+- A candidate keeps a hash of what the crawler's rules read in its docs,
+  and none of their text, so a rejected find comes back only when its docs
+  read differently, under
+  [Keeping listings current](#keeping-listings-current).
 - A candidate is decided once, approved or rejected, with who decided and
   when. A rejection needs a reason.
 
@@ -2006,7 +2051,9 @@ service token, under [Calls to GitHub](#calls-to-github). With no service
 token it reads nothing, and the log names the secret.
 
 **Which repos it reads.** Once an hour, at 52 minutes past, a scheduled run
-puts repos in the crawl queue, 10 to a batch.
+puts repos in the crawl queue, 10 to a batch. It also puts the listed
+projects due for their weekly read there, under
+[Keeping listings current](#keeping-listings-current).
 
 - First the seeds admins added that it hasn't handled yet, under The seed
   list in [The admin queue](#the-admin-queue), whatever their stars or last
@@ -2016,8 +2063,13 @@ puts repos in the crawl queue, 10 to a batch.
   a push in the 30 days before the pass started, and not archived. Search
   leaves out forks, as it does by default.
 - It leaves out a repo on the do-not-list, a repo that is a project
-  already, whatever its status, and a repo it put in the admin queue
-  before, whatever the admin decided. Names compare without case.
+  already, whatever its status, and a repo whose find waits in the admin
+  queue, or was approved. From the search, a repo whose finds an admin
+  rejected is read again, and goes back in the queue only when its docs
+  read differently, under
+  [Keeping listings current](#keeping-listings-current). A seed with any
+  find is left out, whatever the admin decided. Names compare without
+  case.
 - Search serves at most 1,000 repos for one query, so a pass reads the pool
   in bands of star counts, fewest stars first. The first band is every repo
   with 1,000 stars or more, which counts the whole pool.
@@ -2035,8 +2087,9 @@ puts repos in the crawl queue, 10 to a batch.
   included. The next run picks up where it stopped.
 - A search GitHub says ran out of time, with `incomplete_results`, stops
   the run. The pass stays where it was, and the next run asks again.
-- A pass that is done stays done, so nothing reads the pool a second time
-  yet, and a seed added later is still read.
+- A pass that is done stays done until 30 days after it started. The next
+  run then starts a new pass, so the search reads the pool once a month.
+  A seed added meanwhile is read at the next run.
 - A repo whose stars change while a pass reads the pool can land in two
   bands, or in none. Search gives repos with the same stars in no set
   order, so a band read over several pages can give one of them twice, or
@@ -2090,7 +2143,8 @@ It follows no path through a folder that is a symbolic link, like skills
 under a linked `.claude/`. A repo GitHub shows archived or private, or
 doesn't show at all, is read no further. The consumer checks the
 do-not-list, the projects, and the crawler's earlier finds again before it
-reads a batch, and a repo on any of them is read no further. It checks once
+reads a batch, and a repo on any of them is read no further, but for a repo
+whose finds were all rejected. It checks once
 more before it puts a repo in the admin queue, under the name GitHub gives
 the repo now, since a repo can be renamed.
 
@@ -2440,8 +2494,146 @@ time, and first asks GitHub what is left of the budget.
   budget, and why it stopped. A repo it gave no verdict, a repo GitHub
   failed on, and a find it couldn't write each get a line that names it.
   It names no other repo it left out. The search's run logs one line too:
-  the seeds and repos it queued, its searches, where the pass stands, how
-  many repos the pool has, and why it stopped.
+  the seeds, listed projects, and repos it queued, its searches, where the
+  pass stands, how many repos the pool has, and why it stopped.
+
+## Keeping listings current
+
+The policy crawler reads each listed project's docs again every week, with
+the reads and the rules of a crawl, under
+[The policy crawler](#the-policy-crawler), and acts on what changed. It can
+pause a project on its own. It never lists, approves, adds, or resumes one.
+
+**Which projects, and when.** Each run of the crawler's cron job, once an
+hour, queues the listed projects due for a read, before its search.
+
+- A listed project is an approved or paused project, whoever paused it,
+  whether a maintainer registered it or an admin listed it from its policy.
+  A pending or rejected project is never read.
+- One is due when the cron job hasn't queued it in the last 7 days. The one
+  queued longest ago goes first, never queued first. A run queues at most
+  500, 10 to a message of the crawl queue, each marked as a weekly read.
+- It leaves out a project whose repo or issue repo is on the
+  [do-not-list](#crawl-candidates), and one the sync delisted, under
+  Delisting in [Tagged issues](#tagged-issues), since the crawler can't
+  read a repo GitHub doesn't show.
+
+**What a read does.** The crawl queue's consumer reads the project's repo
+as a crawl does: its folders, then every file at one commit of its default
+branch, then one REST call for who can open pull requests.
+
+- It checks again, before it reads, that the project is still listed, off
+  the do-not-list, and not delisted.
+- A repo GitHub shows archived or private, or doesn't show, is the sync's.
+  The read leaves it alone, and the sync pauses and delists the project
+  on its next run, under Delisting. So one check decides each of those,
+  with one reason.
+- A repo it can't read whole gets no verdict, as in a crawl, and the log
+  names it and says why.
+
+**What it compares.** What the rules read in the docs, kept as a hash with
+none of the repo's text:
+
+- the tier, the words of the quote, the words of each sentence that names
+  AI with the rest of its paragraph, the disclosure trailer, the
+  person-written PR description, the CLA link, whether there is a vouch
+  file, the labels the docs keep for people or keep agents to, whether they
+  keep agents from working on their own or ask for a person in the loop,
+  and the words of a canary.
+- Only the words count, in lower case, so a reformat reads the same: a
+  wrapped line, bold text, a list mark, or a heading's level. A line the
+  rules take nothing from, like a build step in CONTRIBUTING, and a file
+  they don't read, like a changelog, change nothing.
+- Each whole read compares its hash with the last one's, and keeps its
+  own.
+- The first read of a project has nothing to compare with. A listing made
+  from a policy then compares with the policy it was listed from: another
+  tier, or other words in its quote, is a change. A registered project
+  takes its docs as they are.
+- When what the hash covers changes, as when the rules change what they
+  read in most repos, its version goes up, and a hash of an older version
+  compares with nothing, as at a first read.
+
+**What it does.**
+
+- **Docs that now read as a ban** pause the project at once: the hash
+  changed, and the tier is bans or restricts. A registered project too,
+  since the people who can change the repo's docs wrote the ban after it
+  was listed. A ban its docs had at a registered project's first read
+  stays its maintainers' call, since they registered it with its docs as
+  they were, as [spec §4](specs/v1.md#4-projects-maintainers-and-admins)
+  allows.
+  - The pause takes over any pause the project had, its maintainers', an
+    admin's, or one Good First Token made for another reason, so only an
+    admin can lift it. The ban is found once, when the docs change, and a
+    pause left as someone else's could be lifted with no one reading it.
+  - Its reason is `Its docs now read as a ban on AI help, by the policy
+    crawler's rules. An admin checks them before agents can claim its
+    issues again.` It holds none of the repo's text.
+  - The rules err toward a ban, and read about three in four welcoming
+    docs they had never seen as one, under How often the rules are wrong
+    in [The policy crawler](#the-policy-crawler). So the admin reads the
+    line and the paragraphs that name AI before a verdict, under
+    [The admin queue](#the-admin-queue).
+- **Pull requests limited to collaborators**, or turned off, pause an
+  approved project at once, with the reason an admin's listing gives, like
+  `sample-owner/app lets only collaborators open pull requests. Only a repo
+  that takes pull requests from anyone can be listed.` Every read checks
+  it, whatever else changed. A paused project stays as it is, so a pause
+  its maintainers made stays theirs. One resumed while the repo still
+  limits pull requests is paused again at its next read. When GitHub
+  doesn't say who can open pull requests, it pauses nothing, and logs it.
+- **A listing whose policy changed**, in any other way, goes back to the
+  admin queue as a policy change, under [The admin queue](#the-admin-queue),
+  and stays listed while it waits. A newer change replaces the one that
+  waits, under a new ID. A change costs a read of the repo's labels, for
+  the lines behind the settings its docs give.
+- **A registered project whose docs changed** in any other way stays as it
+  is. Its maintainers chose its settings, and change them with
+  `update_project`.
+- Docs that read the same change nothing.
+
+**A pause the crawler made** is a pause that names no one, the one the
+sync makes, under [Projects](#projects).
+
+- It lands only on the status it was decided on, and is decided again when
+  someone changed the status at the same moment.
+- It is kept in the status history. The project's maintainers read its
+  reason with `project_status`, and only an admin can lift it, under
+  [Managing a project](#managing-a-project). Nothing goes to the live
+  feeds, since only issue rooms make feed events.
+- The project page says it is paused, without the reason.
+- Its open claims stay open, as for any pause. They take no submit and no
+  PR, under [The donor's tools](#the-donors-tools), their donors can still
+  post to them and release them, and the issues take no new claims.
+- The crawler never resumes it, even when the docs welcome AI help again.
+  An admin does, from the admin queue.
+
+**The wider pool, monthly.** The search reads the pool again in a new pass
+30 days after the last pass started, under
+[The policy crawler](#the-policy-crawler). An earlier find comes back like
+this:
+
+- A find that waits in the admin queue stays as it is, and its repo isn't
+  read again.
+- A find an admin approved is a project, and is read only as a listing.
+- A repo removed at its maintainers' request is on the do-not-list, and
+  never comes back.
+- A find an admin rejected is read again when the search finds its repo,
+  and goes back in the queue only when its docs read differently from the
+  last rejected find's, by the hash above. So an admin decides the same
+  docs once. A find stored before finds kept a hash, or with one of an
+  older version, takes the new one, and stays out.
+
+**The budget.** A weekly read is a message of the crawl queue, so it shares
+its consumer's allowance and its 60 calls a run, under The budget in
+[Tagged issues](#tagged-issues). One the budget stops goes back to the
+queue as a weekly read, and a repo GitHub fails on goes back alone, as in
+a crawl.
+
+**The log.** The consumer's line says how many listed projects it read
+again, which it left alone and why, whose policy changed, and which it
+paused. The cron job's line says how many it queued.
 
 ## MCP tools
 
