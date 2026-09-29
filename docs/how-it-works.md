@@ -1758,7 +1758,10 @@ never reaches the tool.
   deleted, or moved away in a rename, that comes back with any text, which
   would undo the delete or leave the file in both places. Left out, such a
   path stays as the push left it. New text for a path the push changed and
-  kept is the agent's own change.
+  kept is the agent's own change. This check runs on the submit with
+  `onto` only. A later submit that sends a path the push deleted adds it
+  back, since from that head on the file is the agent's to send or leave
+  out.
 - The files are read against the claim's base: its start commit, or the
   head the latest submit with `onto` named. So after `onto`, every file
   changed from that head is sent, on that submit and the later ones.
