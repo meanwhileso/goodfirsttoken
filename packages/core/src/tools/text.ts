@@ -1,6 +1,8 @@
 import type { ProjectSettings, SettingKey } from '../projects';
 
-// Helpers for the plain-text side of tool results.
+// Helpers for the plain-text side of tool results. The views MCP Apps hosts
+// show use them too, as @goodfirsttoken/core/text, so this file imports
+// nothing that runs: a view's script holds it without zod.
 
 /** A time as `2026-09-26 13:02 UTC`. */
 export function when(iso: string): string {
