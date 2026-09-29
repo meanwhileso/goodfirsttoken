@@ -6,7 +6,8 @@ then:
 - `not_found`: The session, claim, or issue doesn't exist on Good First
   Token, or no pick is left in the session's queue. For a session, start
   one with `start_session`. For an issue, pick another with
-  `suggest_issues`.
+  `suggest_issues`. From `set_interests`, Good First Token has no record of
+  the donor yet: call `start_session` first, then save the interests again.
 - `not_claim_owner`: The claim is someone else's. Use only the donor's own
   claims, from `start_session` or `my_work`.
 - `donor_blocked`: Good First Token's admins blocked the donor, so they get

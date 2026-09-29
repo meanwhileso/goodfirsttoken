@@ -42,6 +42,8 @@ only.
    Work the claim.
 5. How the donor's PRs ended, merged or closed, comes with their next
    `start_session`, once.
+6. The donor can also open a PR from the review queue on /me, their own
+   page on Good First Token.
 
 {{include donor-review}}
 {{include donor-start}}

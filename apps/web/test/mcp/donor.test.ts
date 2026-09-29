@@ -1,4 +1,4 @@
-import type { ProjectSettingsInput, PrRef, ProjectStatus, TaggedIssue } from '@goodfirsttoken/core';
+import { tools, type ProjectSettingsInput, type PrRef, type ProjectStatus, type TaggedIssue } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -20,6 +20,7 @@ import {
   setProjectStatus,
 } from '../../src/db';
 import { adminRemoveProject } from '../../src/admin/actions';
+import { setInterests } from '../../src/mcp/donor';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -232,6 +233,18 @@ describe('start_session and set_interests', () => {
       issuesClaimed: 0,
       queue: [],
     });
+  });
+
+  test('set_interests for a caller Good First Token has no record of is refused with not_found, which its spec lists, and says to start a session first', async () => {
+    // Signing in records the person, so only a caller with no record, as
+    // here, reaches this refusal.
+    const caller = { githubId: 987_654_321, login: 'no-record', gitHubToken: () => Promise.resolve(null) };
+
+    const saved = (await setInterests(caller, { languages: ['TypeScript'], projects: [], kinds: ['docs'] })) as Result;
+
+    expect(refusalOf(saved)).toBe('not_found');
+    expect(textOf(saved)).toContain('Call start_session first, then save interests.');
+    expect(tools.set_interests.refusals).toContain('not_found');
   });
 
   test("a new session offers the donor's paused claims first, then the rest still working, and my_work lists the same", async () => {

@@ -105,6 +105,7 @@ Finding projects whose own docs welcome AI, and keeping listings current.
 | [#31](https://github.com/meanwhileso/goodfirsttoken/issues/31) | Re-crawl listed projects and pause on negative signals | #30 | |
 | [#76](https://github.com/meanwhileso/goodfirsttoken/issues/76) | Catch the policy wordings the crawler misses | #30 | |
 | [#77](https://github.com/meanwhileso/goodfirsttoken/issues/77) | Read fewer welcoming policies as bans | #76 | |
+| [#98](https://github.com/meanwhileso/goodfirsttoken/issues/98) | Show pauses and policy changes on /admin | #31 | |
 
 ## M8 Launch readiness
 
@@ -176,6 +177,7 @@ flowchart TD
   n31["#31 Re-crawls"]:::m7
   n76["#76 Missed ban wordings"]:::m7
   n77["#77 Fewer false bans"]:::m7
+  n98["#98 Pauses on /admin"]:::m7
   n32["#32 Deploy workflow"]:::m8
   n33["#33 Static host"]:::m8
   n34["#34 Security review"]:::m8
@@ -247,6 +249,7 @@ flowchart TD
   n30 --> n31
   n30 --> n76
   n31 --> n34
+  n31 --> n98
   n76 --> n77
   n32 --> n33
   n33 --> n34

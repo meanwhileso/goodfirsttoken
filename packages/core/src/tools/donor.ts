@@ -135,8 +135,9 @@ export const setInterests = defineTool({
   audience: 'donor',
   description:
     "Save the donor's interests: languages, projects, and kinds of work, like tests, docs, or bugs. Suggestions are ranked against them.",
-  // The agent's sign-in records its person, so no agent finds none.
-  refusals: [],
+  // The agent's sign-in records its person. A caller with no record is
+  // refused: "Call start_session first, then save interests."
+  refusals: ['not_found'],
   input: interestsSchema,
   output: z.object({ interests: interestsSchema }),
   text: (out) => `Saved interests: ${describeInterests(out.interests)}.`,

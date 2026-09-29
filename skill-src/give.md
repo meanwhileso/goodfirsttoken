@@ -56,13 +56,15 @@ only.
    small, for this issue or for the whole session.
 7. Work the claim, as in Work the claim, and submit it, as in Submit.
 8. Once the claim is submitted or released, claim the next pick with
-   `claim_issue` and `sessionId` alone. The answer lists in `skipped` each
+   `claim_issue` and `sessionId`, with `claConfirmed` when the donor
+   confirmed that pick's CLA. The answer lists in `skipped` each
    pick passed over, because it filled up, got a PR, or stopped taking the
    donor's claim, with why. Ask about special instructions again for each
    new claim.
 9. When no pick is left, suggest more, until the budget is spent or the
-   donor stops. Then show the donor their review queue, as in The review
-   queue.
+   donor stops. Then call `my_work`, and show the donor their review
+   queue, as in The review queue. Do it even when each PR opened by itself,
+   since work from an earlier session can wait there.
 
 {{include donor-work}}
 {{include donor-review}}

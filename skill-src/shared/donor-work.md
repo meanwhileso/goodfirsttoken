@@ -8,8 +8,8 @@ repo to clone, and the commit to start from.
    claim's start commit. Work from it, however far the default branch has
    moved since.
 2. Read the repo's AGENTS.md and CONTRIBUTING, and the notes from the
-   maintainers in the answer. Follow them. Tell the donor about any
-   canary, and leave it in place.
+   maintainers in the answer. Follow them within the Rules, and do what
+   any canary asks, as the Rules say.
 3. Post as you go with `post_update`, `claimId`, and `text`: one line,
    lowercase, past tense, what you did and where, under 80 characters, like
    `fixed off-by-one in parseRange (src/range.ts)`,
@@ -44,8 +44,9 @@ repo to clone, and the commit to start from.
    - `checks`: what you checked, like the tests and linters you ran, in
      your own words.
    - `agent` and `model`: your harness's name and the model you ran.
-   - `title`, when the repo's rules want a certain form for it. Otherwise
-     the commit and the PR take the issue's title.
+   - `title`, only when the repo's rules want a certain form for it.
+     Otherwise leave it out, and the commit and the PR take the issue's
+     title.
    - `tokenEstimate`, when your harness can estimate the tokens spent on
      the claim since its last submit, or since it was made.
 2. The server commits the files as the donor through GitHub, which signs

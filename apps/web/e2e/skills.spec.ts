@@ -1,4 +1,4 @@
-import { LOCAL_API_URL } from '@goodfirsttoken/github-fake/local';
+import { LOCAL_API_URL, LOCAL_WEB_URL } from '@goodfirsttoken/github-fake/local';
 import { DONOR, DONOR_ISSUE, FIXTURE_REPO, runDonorSkills, runSkills } from '../scripts/skill-run';
 import { expect, test } from './fixtures';
 import { SITE } from './hosts';
@@ -27,6 +27,17 @@ test("a maintainer's agent registers a sample repo with the proposed settings, a
 test("a donor's agent follows the give skill from a session to a claim, updates, a submit, and a PR", async ({ request }) => {
   // The server asks for a wait of up to 10 seconds between two posts.
   test.setTimeout(90_000);
+  // Outside CI, Playwright reuses a GitHub fake that is already running.
+  // One an earlier run used still holds the PR that run opened on the issue,
+  // which keeps the issue from taking a claim. Only then is the fake reset to
+  // the sample data, since a reset also drops what tests running beside
+  // this one made there.
+  const open = (await (await request.get(`${LOCAL_API_URL}/repos/sample-owner/sample-app/pulls?state=open&per_page=100`)).json()) as {
+    body: string | null;
+  }[];
+  if (open.some((pr) => pr.body?.includes('Closes #311'))) {
+    expect((await request.post(`${LOCAL_WEB_URL}/_fake/reset`)).ok()).toBe(true);
+  }
   expect((await request.post('/dev/seed')).status()).toBe(200);
   const said: string[] = [];
 

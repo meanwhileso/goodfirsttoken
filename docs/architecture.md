@@ -1120,8 +1120,8 @@ its version did not go up.
   shows, and the donor's rules, steps, and refusals, which give, work, and
   review share. A line of its own, `{{include <part>}}`, in a skill's body
   becomes the part's text, before `{{MCP_URL}}` is filled in. A part can't
-  include another. A missing part, or an include inside a line, fails the
-  build. Each copy holds the whole text, so an agent reads one file, and a
+  include another. A missing part, a name that isn't a part's, or an
+  include inside other text fails the build, and the error says which. Each copy holds the whole text, so an agent reads one file, and a
   change to a part changes every plugin that carries it, which the version
   rule then covers.
 - **The copies are committed,** because installers read them straight from
@@ -1217,12 +1217,18 @@ together.
     across the skills has to be checked, so the test can't pass on none.
   - The skill calls every tool of its audience, and each tool it calls has
     a `refusals` list.
+  - give, work, and review each carry the donor's contract in their
+    `## Rules` section, each rule in its own words, so a skill that drops
+    the shared rules, or a rule dropped from them, fails.
 - **Every tool call in the MCP tests** goes through `mcpClient` in
   `test/mcp/helpers.ts`, which fails the test when a tool refuses with a
   code its `refusals` list leaves out. Every code on the lists has a test
-  that gets it through `mcpClient`, so a list can't fall behind the server.
-  A refusal no agent can get, like `not_admin` from an admin's tool, stays
-  off the lists.
+  that gets it through `mcpClient`, so a list can't fall behind the server,
+  but one. `not_found` from `set_interests` needs a caller with no record,
+  and a signed-in agent always has one, so its test calls the tool's
+  handler and checks the list. A refusal the server never gives an agent,
+  like `not_admin` from an admin's tool, which it serves only to admins,
+  stays off the lists.
 
 ### Following the skills' steps
 
@@ -1259,13 +1265,41 @@ person's agent. No model runs, so it spends no tokens.
   that stopped early is taken up again.
 - The issue takes that claim until a PR opens on it, and only the PR job,
   which runs on a schedule, would hear of a PR closed on the fake. So the
-  donor's steps run once on one local database, after `pnpm seed`. A run
-  after that stops with the steps to empty the local data.
+  donor's steps run once on one local database, after `pnpm seed`. To run
+  them again, stop `pnpm dev`, empty its local data with
+  `pnpm --filter @goodfirsttoken/web exec node scripts/migrate-local.mjs --fresh`,
+  start `pnpm dev`, and run `pnpm seed`. A run that finds the issue taken
+  stops with these steps.
 - `e2e/skills.spec.ts` runs the same steps, the donor's in a test of its
   own, against the end-to-end tests' preview, the Worker and the GitHub fake as servers of their own, as in
   `pnpm dev`. So CI runs them on every pull request, and a person can run
-  them against `pnpm dev` and read each call and its answer. Runs of real
-  harnesses stay by hand, since they spend real tokens.
+  them against `pnpm dev` and read each call and its answer. Outside CI,
+  Playwright reuses a GitHub fake that is already running. When that fake
+  still holds the PR an earlier run opened on the issue, the donor's test
+  resets it to the sample data first. It resets it only then, since a
+  reset also drops what tests running beside it made there.
+- Runs of real harnesses stay by hand, since they spend real tokens. To
+  run the give skill in Claude Code against `pnpm dev`, on fresh local
+  data as above:
+  1. Get an access token for the sample donor `ines` with `agentToken`
+     from `skill-run.ts`, which signs an agent in the way the run does:
+     `node --input-type=module -e "import { agentToken, runAddress } from './apps/web/scripts/skill-run.ts'; console.log(await agentToken('http://localhost:5173', runAddress(), 'ines', 'Claude Code'))"`.
+  2. Write an MCP config outside the repo, with one server,
+     `goodfirsttoken`, of `type` `http`, at `http://localhost:5173/mcp`,
+     with the header `Authorization: Bearer <token>`.
+  3. From an empty folder outside the repo, run `claude -p` with the
+     prompt, `--plugin-dir plugins/goodfirsttoken` from the repo,
+     `--mcp-config` and `--strict-mcp-config` with that file, `--tools`
+     `Skill,Read,Write,Edit,Glob,Grep,Bash`, `--allowedTools` for the
+     server's tools, those tools, and `git clone`, `--max-turns 40`, and
+     `--output-format stream-json --verbose` to keep the transcript.
+  4. The prompt gives the donor's answers up front, since a headless run
+     can't ask: the budget, their interests, the pick,
+     `sample-owner/sample-app#311`, yes to any CLA, and no special
+     instructions. Then it says to follow `/goodfirsttoken:give` for one
+     issue, through the claim, the updates, the submit, and the review
+     queue. The GitHub fake serves no Git, so the clone fails, and the
+     prompt says to write the change from the issue's text then.
 
 ### What the installers read
 

@@ -401,5 +401,31 @@ test('an include of a missing part, a part that includes another, or an include 
 
   const inline = await makeSources({ give: skillSource('goodfirsttoken', 'See {{include connect}} here.\n') });
   await addPart(inline, 'connect', 'Connect.\n');
-  await assert.rejects(build(inline), /skill-src\/give\.md has an include the build can't read/);
+  await assert.rejects(build(inline), /skill-src\/give\.md has an include inside other text: "See {{include connect}} here\."\. Put/);
+});
+
+test("an include whose name isn't a part's name fails the build, and says so", async () => {
+  for (const name of ['../../secret', 'Connect']) {
+    const root = await makeSources({ give: skillSource('goodfirsttoken', `{{include ${name}}}\n`) });
+    await addPart(root, 'connect', 'Connect.\n');
+    await assert.rejects(build(root), (error) => {
+      assert.equal(
+        error.message,
+        `skill-src/give.md includes "${name}", which isn't a part's name. A part's name uses lowercase letters, digits, and hyphens, like connect for skill-src/shared/connect.md.`,
+      );
+      return true;
+    });
+  }
+});
+
+test('an include on a line of its own is read with a space after it, or on the last line with no line break', async () => {
+  const spaced = await makeSources({ give: skillSource('goodfirsttoken', '# give\n\n{{include connect}} \nThen give.\n') });
+  await addPart(spaced, 'connect', 'Connect.\n');
+  await buildAndWrite(spaced);
+  assert.ok((await read(spaced, 'skills/goodfirsttoken-give/SKILL.md')).endsWith('# give\n\nConnect.\nThen give.\n'));
+
+  const last = await makeSources({ give: skillSource('goodfirsttoken', '# give\n\n{{include connect}}') });
+  await addPart(last, 'connect', 'Connect.\n');
+  await buildAndWrite(last);
+  assert.ok((await read(last, 'skills/goodfirsttoken-give/SKILL.md')).endsWith('# give\n\nConnect.\n'));
 });

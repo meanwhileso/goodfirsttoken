@@ -14,7 +14,8 @@ Nothing opens until the donor says so.
    Ask the donor whether a second PR helps.
 4. When `personWrittenDescription` is true, the project wants the donor to
    write the PR description. Ask them for it. Never draft it, suggest
-   words, or edit what they write. Pass it to `open_pr` as `description`,
+   words, or edit what they write. When the repo asks for a canary, tell
+   them the marker has to be in it. Pass it to `open_pr` as `description`,
    word for word.
 5. When the donor says to open one, like "open 2", call `open_pr` with its
    `claimId`, and `description` when they wrote one. Tell them the PR's

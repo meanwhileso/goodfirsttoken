@@ -47,7 +47,9 @@ const SOURCE_DIR = 'skill-src';
 // Text several skills share, like the steps to add the MCP server in each
 // harness. A skill takes a part with a line of its own, {{include <part>}}.
 const SHARED_DIR = `${SOURCE_DIR}/shared`;
-const INCLUDE = /^\{\{include ([a-z][a-z0-9-]*)\}\}\n/gm;
+// Spaces or tabs after it are fine. The last line needs no line break.
+const INCLUDE_LINE = /^\{\{include ([^{}\n]*)\}\}[ \t]*$/;
+const PART_NAME = /^[a-z][a-z0-9-]*$/;
 const PLUGINS_FILE = `${SOURCE_DIR}/plugins.json`;
 const MARKETPLACE_FILE = '.claude-plugin/marketplace.json';
 // Folders that hold only what the build writes. Anything else in them is removed.
@@ -179,19 +181,35 @@ async function readPluginSettings(root) {
 // text. A part can't include another, so what a skill holds is one read away.
 async function expandIncludes(root, source) {
   const parts = new Map();
-  for (const [, name] of source.body.matchAll(INCLUDE)) {
-    if (parts.has(name)) continue;
-    const file = `${SHARED_DIR}/${name}.md`;
-    const text = await readText(root, file);
-    if (text === null) throw new Error(`${source.file} includes ${name}, but ${file} is missing.`);
-    if (text.includes('{{include')) throw new Error(`${file} includes another part. A shared part can't include one.`);
-    parts.set(name, text);
+  const lines = source.body.split('\n');
+  const out = [];
+  for (const [index, line] of lines.entries()) {
+    if (!line.includes('{{include')) {
+      out.push(line);
+      continue;
+    }
+    const name = INCLUDE_LINE.exec(line)?.[1];
+    if (name === undefined) {
+      throw new Error(`${source.file} has an include inside other text: "${line.trim()}". Put {{include <part>}} on a line of its own.`);
+    }
+    if (!PART_NAME.test(name)) {
+      throw new Error(
+        `${source.file} includes "${name}", which isn't a part's name. A part's name uses lowercase letters, digits, and hyphens, like connect for ${SHARED_DIR}/connect.md.`,
+      );
+    }
+    if (!parts.has(name)) {
+      const file = `${SHARED_DIR}/${name}.md`;
+      const text = await readText(root, file);
+      if (text === null) throw new Error(`${source.file} includes ${name}, but ${file} is missing.`);
+      if (text.includes('{{include')) throw new Error(`${file} includes another part. A shared part can't include one.`);
+      parts.set(name, text);
+    }
+    // The part's own last line break takes the place of the line's. On the
+    // body's last line, which has none, the part keeps it.
+    const text = parts.get(name);
+    out.push(index < lines.length - 1 && text.endsWith('\n') ? text.slice(0, -1) : text);
   }
-  const body = source.body.replace(INCLUDE, (_line, name) => parts.get(name));
-  if (body.includes('{{include')) {
-    throw new Error(`${source.file} has an include the build can't read. Put {{include <part>}} on a line of its own.`);
-  }
-  return body;
+  return out.join('\n');
 }
 
 // Returns every file the build writes, keyed by path from the repo root.
