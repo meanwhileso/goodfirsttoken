@@ -48,7 +48,8 @@ import {
 // A sample commit to start the work from.
 const START_COMMIT = '5a3e'.repeat(10);
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
 function text(status: number, body: string): Response {
@@ -165,8 +166,10 @@ export async function seedSampleWork(): Promise<{
 // closed one's issue isn't due to be read again.
 async function addHistory(sample: SampleHistory, now: number): Promise<boolean> {
   if ((await getClaim(env.DB, sample.id)) !== null) return false;
+  // Minutes apart, so work seeded this week was claimed and opened this week
+  // too, unless the seed runs in the first minutes of a Monday.
   const ended = now - sample.daysAgo * DAY_MS;
-  const opened = ended - 2 * HOUR_MS;
+  const opened = ended - MINUTE_MS;
   const pr = { repo: sample.project, number: sample.pr, url: prUrl(sample.project, sample.pr) };
   let claim: ClaimRecord = {
     id: sample.id,
@@ -178,10 +181,10 @@ async function addHistory(sample: SampleHistory, now: number): Promise<boolean> 
     ownProject: sample.ownProject ?? false,
     startCommit: START_COMMIT,
     tokenEstimate: sample.tokens ?? null,
-    ...newClaim(opened - HOUR_MS),
+    ...newClaim(opened - 2 * MINUTE_MS),
   };
   for (const [event, at] of [
-    [{ kind: 'submit' }, opened - 30 * 60 * 1000],
+    [{ kind: 'submit' }, opened - MINUTE_MS],
     [{ kind: 'open_pr', pr }, opened],
   ] as const) {
     const next = nextClaimState(claim, event, at);

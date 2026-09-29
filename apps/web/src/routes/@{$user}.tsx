@@ -82,8 +82,7 @@ function NotFoundPerson() {
             'There is no page at this address.'
           ) : (
             <>
-              <span className="mono">@{login}</span> has no page on Good First Token. A page starts once someone signs in
-              and their agent takes a crack at an issue.
+              <span className="mono">@{login}</span> has no page on Good First Token.
             </>
           )}
         </p>

@@ -2345,16 +2345,17 @@ The leaderboard, A person's page, and The live page.
   it leaves out.
 - **What a person's page reads.** `loadPerson` finds the person with
   `findPersonByLogin`, through `people_by_login`, and their block by key.
-  Then at once: working now and history with `listPersonWork` in
-  `src/db/claims.ts`, which reads their claims through `claims_by_person`
-  with `holdingSlot` and `SHOWN`, each PR by key, and a title from the
-  cached copy only under `HAS_PAGE`; their totals and projects helped with
-  `tally`; their registered projects with `listRegisteredBy` in
-  `src/db/projects.ts`; the activity graph with `dailyActivity`; and a
-  `glance` at their feed. A claim's state as of now comes from core's
-  `nextClaimState` with a tick, so an expired claim the room hasn't saved
-  yet reads as expired. So a view costs eight D1 queries and one call to a
-  feed, which asks D1 which donors and repos to hide. Each list is bounded: 20 claims working, 50 in history, 10
+  Then it reads the rest at once. `listPersonWork` in `src/db/claims.ts`
+  gives working now and history. It reads their claims through
+  `claims_by_person` with `holdingSlot` and `SHOWN`, each PR by key, and a
+  title from the cached copy only under `HAS_PAGE`. `tally` gives their
+  totals and the projects they helped, `listRegisteredBy` in
+  `src/db/projects.ts` their registered projects, and `dailyActivity` the
+  activity graph. A `glance` at their feed gives the wall. A claim's state
+  as of now comes from core's `nextClaimState` with a tick, so an expired
+  claim the room hasn't saved yet reads as expired. So a view costs eight
+  D1 queries and one call to a feed, which asks D1 which donors and repos
+  to hide. Each list is bounded: 20 claims working, 50 in history, 10
   projects helped, 20 maintained, and 364 days of activity.
 - **What the leaderboard reads.** `loadLeaderboard` makes the four tallies
   at once, each limited to 50 rows, and adds the named agents with no work

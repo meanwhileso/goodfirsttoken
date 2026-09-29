@@ -105,7 +105,7 @@ function details(row: Tally, extra: string[] = []): string {
 
 function Own({ row }: { row: Tally }) {
   return (
-    <span className="board-own" title="Merged on their own projects, which don't count toward the rank">
+    <span className="board-own" title="PRs merged from claims on the claimant's own project. They don't count toward the rank.">
       {row.ownMerged.toLocaleString('en-US')}
       <small>own project</small>
     </span>
@@ -197,7 +197,7 @@ function Projects({ board }: { board: Board }) {
       </ol>
       <More board={board} />
       <p className="board-note">
-        Of all time. Only projects with a page show here. Own project counts the PRs its own maintainers merged there.
+        Of all time. Only projects with a page show here. Own project counts the PRs merged from its own maintainers' claims.
       </p>
     </>
   );
