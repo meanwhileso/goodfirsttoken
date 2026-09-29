@@ -523,19 +523,25 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `claim`. The list of waiting issues reads every
   approved project's cached issues, through `projects_by_status` and the
   key of `tagged_issues`. Nothing caches any of it yet.
-- **Follow-ups and the link to share a merged PR read D1 alone,** and call
+- **Follow-ups, PRs read in part, and ended PRs read D1 alone,** and call
   GitHub for nothing. `listWaitingFollowUps` in `src/db/follow-ups.ts` is
   one query that joins the donor's claims to their follow-ups, PRs,
-  submissions, and projects, with `ASKING_FOR_HELP` from
+  submissions, and projects, by `SHOWS` there: `ASKING_FOR_HELP` from
   `src/db/waiting.ts` and the donor's block, so a follow-up shows exactly
-  when `submit_work` would take a fix. `markFollowUpsShown` marks what a
-  tool listed in one statement, and `answerFollowUps`, which `submit_work`
-  calls once the room records a submit to a claim with its PR open,
-  answers what was shown by then. `takeMergedToOffer` in `src/db/prs.ts`
-  marks the donor's merged PRs offered and returns them in one `UPDATE`
-  with `RETURNING`, by `SHOWN`, the rule for the merged PRs the site shows.
-  `shareOnXUrl` in `packages/core` builds the link, and `foldUntrusted`
-  there folds a reviewer's text.
+  when `submit_work` would take a fix. It takes them in turn from each
+  claim with `ROW_NUMBER() OVER (PARTITION BY claim_id)`, counts them all
+  with `COUNT(*) OVER ()`, and gives the ones it took oldest first.
+  `listReadInPart` reads the counts the PR job kept on `prs` by the same
+  `SHOWS`. `markFollowUpsShown` marks what a tool listed in one statement,
+  once the tool's answer is made, and `answerFollowUps`, which
+  `submit_work` calls once the room records a submit to a claim with its
+  PR open, answers what was shown by then. `takeEndedToOffer` in
+  `src/db/prs.ts` marks the donor's merged and closed PRs offered and
+  returns them in one `UPDATE` with `RETURNING`, by `SHOWN`, the rule for
+  the merged PRs the site shows. `shareOnXUrl` in `packages/core` builds
+  the link for a merged one, with the submission's agent. `foldUntrusted`
+  there folds a reviewer's text, and `cutGraphemes` cuts it, the rule the
+  name an agent's client gives itself is cut by too.
 - **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
   reads the claim from the claims table, checks `work_claim`, the block,
   and the project with `projectClosedRefusal`, whose do-not-list check is
@@ -1020,7 +1026,7 @@ in `people`.
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
-| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, and when a session offered its donor a link to share it | `claim_id` |
+| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the PR job's latest read of its reviews covered, and whether its issue waits to be read again | `claim_id` |
 | `follow_ups` | Review or comment on a line that a reviewer wrote on a claim's open PR, as the PR job read it: GitHub's ID for it, the reviewer, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
 | `submissions` | Claim's submitted work: the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
@@ -1094,17 +1100,21 @@ that break the rules, so it returns the problems for the caller to show.
   work whose PR was to open by itself. `my_work` reads the rows of a
   donor's claims awaiting review by key.
 - **Migration `0010_follow_ups.sql`** makes `follow_ups`, with a foreign
-  key to the claim, and adds `prs.offered_at`. `src/db/follow-ups.ts` owns
-  the table, and `src/db/prs.ts` the column. A follow-up's key is its claim
-  and GitHub's node ID for the review or comment, so the PR job inserts
-  what it read on a PR in one statement, from a JSON array, with
-  `ON CONFLICT DO NOTHING`, and a follow-up read again keeps its first text
-  and its times. A PR with nothing to keep costs no query. The rows of a donor's follow-ups are
-  read through `claims_by_person` and the table's key, in the order they
-  were written, then read. The migration marks each merged PR offered when
-  it merged before its donor's latest session started, since that session
-  was the one after its merge. The test of what it marks runs the
-  migration's own `UPDATE` again, from `TEST_MIGRATIONS`.
+  key to the claim, and adds to `prs` `offered_at`, `reviews`,
+  `reviews_read`, `comments_left_out`, and `reread_due`, with the index
+  `prs_reread_due`. `src/db/follow-ups.ts` owns the table, and
+  `src/db/prs.ts` the columns. A follow-up's key is its claim and GitHub's
+  node ID for the review or comment, so the PR job inserts what it read on
+  a PR in one statement, from a JSON array, with `ON CONFLICT DO NOTHING`,
+  and a follow-up read again keeps its first text and its times. A PR with
+  nothing to keep costs no query. The counts of what a read covered are
+  written for a batch of 50 PRs in one `UPDATE ... FROM json_each`.
+  `setPrState` sets `reread_due` in the same statement that records a PR
+  closed, so no close can lose its read. The rows of a donor's follow-ups
+  are read through `claims_by_person` and the table's key. Old outcomes
+  aren't offered: the migration marks each PR offered that merged or
+  closed before its donor's latest session started. The test of what it
+  marks runs the migration's own `UPDATE` again, from `TEST_MIGRATIONS`.
 - **The crawler's tables** came with migration `0008_crawl.sql`: the seed
   list in `crawl_seeds`, owned by `src/db/seeds.ts`, the passes in
   `crawl_passes`, owned by `src/db/crawls.ts`, the index
@@ -1243,6 +1253,7 @@ pruning after a sync, with no index of its own.
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
 | `prs_by_closed` | PRs merged or closed in a time range, like this week |
+| `prs_reread_due` | The issues of PRs closed without merging that wait for the PR job to read them again, oldest close first |
 | `donor_sessions_by_person` | A donor's last session, and in migration `0010_follow_ups.sql`, whether a merged PR's donor started a session since it merged |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
@@ -2091,7 +2102,9 @@ read-only service token. The rules are in
   number, with one fragment for what it reads of each: the state and its
   times, the author, the 10 newest reviews that aren't pending or
   dismissed, by `reviews(last:, states:)`, and the first 10 comments on
-  lines of each, by `comments(first:)`. GitHub counts a query's points from
+  lines of each, by `comments(first:)`, with each connection's
+  `totalCount`, and each review's and comment's `authorAssociation`, which
+  are fields and cost nothing. GitHub counts a query's points from
   the connections it asks for, at their `first` or `last`: 50 for the
   reviews and 500 for their comments, divided by 100, so about 6 points for
   50 PRs, where the state alone cost one. Reading the reviews in the same
@@ -2108,9 +2121,13 @@ read-only service token. The rules are in
   makes of an issue. `keptIssue` is the one rule for which issues a pass
   keeps, which the pass's lists and this read share, and `readCopy` the one
   way a pass reads an issue's linked PR and tells its room. The read holds
-  the project, as a scheduled run does, and leaves a project another run
-  holds, so a pass that read the issue before the close can't write its old
-  linked PR over this read.
+  the project, as a scheduled run does, and skips a project another run
+  holds, so the two never write the same copy at once. A skipped read, and
+  one a stop or a refusal cut short, stays in `prs.reread_due`, and each
+  later run tries it again, after reading the open PRs, until
+  `rereadIssue` says every copy asking for help was read. A pass in
+  progress skips the issues it read earlier in the pass, so it can't be
+  counted on to read the issue again.
 - **A maintainer's refresh** is `project_status` with `refresh`. It runs
   inside the MCP call, so it gets few calls, under The budget in
   [how-it-works.md](how-it-works.md#tagged-issues). `takeRefresh` records
@@ -2396,9 +2413,9 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   the repos of the projects it reads no issues for, up to about 101 calls a
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, so they seldom draw on the same budget.
-  The PR job reads each open PR's reviews in its one query, about 6 points
-  for each 50 open PRs, under The sync, and an issue again, a few REST
-  calls, for each claim's PR that closed without merging. It leaves the
+  The PR job reads each open PR's reviews in its one query, whose cost is
+  under The PR job in [The sync](#the-sync), and an issue again, a few
+  REST calls, for each claim's PR that closed without merging. It leaves the
   least for the others, so it still reads after they stop.
 - **A monthly crawl.** A pass reads the pool once, and reading it again
   each month is the re-crawl's job (#31). At these rates a pass spends
@@ -2568,7 +2585,7 @@ and Playwright run it as a local HTTP server.
   open PRs that close it, through `closedByPullRequestsReferences`, a pull
   request's state, its author, and its reviews with their comments on
   lines, oldest first, through `reviews` and `comments`, with `first` or
-  `last`, and `createCommitOnBranch`. A GitHub App's bot reviews and
+  `last`, each with its `authorAssociation`, and `createCommitOnBranch`. A GitHub App's bot reviews and
   comments as a `Bot`, whose login the fake's GraphQL gives without the
   `[bot]` its REST gives. GitHub's primary rate limits:
   each person's REST, GraphQL, and search budgets, whichever of their tokens
@@ -2584,9 +2601,11 @@ and Playwright run it as a local HTTP server.
   with its endpoint, the token it carried, the login that token belongs to,
   and the status. The local server lists them at `/_fake/calls`.
 - **Tests change it the way people change GitHub.** Besides merging,
-  closing, and reviewing PRs, as a person or a bot, and committing and
-  deleting files, to any branch and with any mode, a test can open, label,
-  unlabel, assign, and close issues, open a PR
+  closing, and reviewing PRs, as a person or a bot, leaving a review
+  pending, which only its author sees, and dismissing one, and committing
+  and deleting files, to any branch and with any mode, a test can open,
+  label, unlabel, assign, and close issues, make someone a member of an
+  organization, open a PR
   from a branch or a fork, click Update branch on a PR, and spend part of
   a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
@@ -2659,10 +2678,20 @@ and Playwright run it as a local HTTP server.
   - A closing keyword in a commit message closes nothing when the PR
     merges. On GitHub it does, though it links no PR. The fake has no PRs
     linked by hand.
-  - A review is never pending or dismissed, and an edit changes no review
-    or comment. A connection pages with `first`, `last`, and `after`, and
-    refuses `before`. Whether GitHub gives a bot's login in GraphQL with
-    `[bot]` isn't checked on GitHub, so the app reads either.
+  - An edit changes no review or comment, and a review is dismissed only
+    by a test. A connection pages with `first`, `last`, and `after`, and
+    refuses `before`.
+  - `authorAssociation` gives `OWNER`, `MEMBER` for a member of the
+    organization that owns the repo, `COLLABORATOR`, `CONTRIBUTOR` for
+    someone with a merged PR there, and `NONE`. Every membership is
+    public, and the fake gives no `FIRST_TIMER` or
+    `FIRST_TIME_CONTRIBUTOR`.
+  - Not checked on GitHub, so the app is written for either answer:
+    whether GraphQL gives a bot's login with the `[bot]` REST gives it, and
+    what `authorAssociation` a member whose membership of the organization
+    is private reads as to a token that isn't a member. The app reads a
+    maintainer only from `OWNER`, `MEMBER`, and `COLLABORATOR`, so such a
+    member's comments may not come back.
   - An app has one callback URL, and any path under it is allowed, the way
     GitHub matches with wildcard matching on.
   - Git object IDs are 40 hex characters made with an FNV hash of the
@@ -2814,8 +2843,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   went, and who authored it. Its forks are ready at once, except in the
   test of a fork GitHub is still making. `follow-ups.test.ts` runs the
   review loop end to end: the donor's tools through the SDK, and the PR
-  job between their calls, as its cron would. After each test, it checks
-  that the job's calls ran with the service token and every other with the
+  job and the sync between their calls, as their crons would. After each
+  test, it checks that the jobs' calls ran with the service token and every other with the
   calling donor's own agent's token, and it wraps `fetch` to show that the
   Worker fetched nothing but GitHub, so nothing was posted to X.
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
