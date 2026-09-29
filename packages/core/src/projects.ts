@@ -94,6 +94,20 @@ export const disclosureSchema = z
   });
 export type Disclosure = z.infer<typeof disclosureSchema>;
 
+/** How many people can hold one issue at once, as a project sets it, and its default. */
+export const MIN_CLAIMS_PER_ISSUE = 1;
+export const MAX_CLAIMS_PER_ISSUE = 10;
+export const DEFAULT_CLAIMS_PER_ISSUE = 3;
+
+/** How many open PRs one donor can have in a project at once, as the project sets it, and its default. */
+export const MIN_OPEN_PRS_PER_DONOR = 1;
+export const MAX_OPEN_PRS_PER_DONOR = 10;
+export const DEFAULT_OPEN_PRS_PER_DONOR = 2;
+
+/** Who opens a project's PRs, and who can claim its issues, until the project says otherwise. */
+export const DEFAULT_PR_MODE: PrMode = 'reviewed';
+export const DEFAULT_WHO_CAN_CLAIM: ClaimPolicy = 'anyone';
+
 // Each setting's own check, with no default, so a partial update never fills
 // in a default over a value the project already has.
 const settingFields = {
@@ -109,8 +123,8 @@ const settingFields = {
     .string({ error: 'must be text' })
     .trim()
     .max(MAX_AGENT_NOTES, `must be at most ${MAX_AGENT_NOTES.toLocaleString('en-US')} characters`),
-  claimsPerIssue: wholeNumber(1, 10),
-  openPrsPerDonor: wholeNumber(1, 10),
+  claimsPerIssue: wholeNumber(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE),
+  openPrsPerDonor: wholeNumber(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR),
 };
 
 export const settingKeys = Object.keys(settingFields) as (keyof typeof settingFields)[];
@@ -133,14 +147,14 @@ export const projectSettingsSchema = z
       tags: settingFields.tags,
       excludedTags: settingFields.excludedTags.default(() => []),
       issueRepo: settingFields.issueRepo.default(null),
-      prMode: settingFields.prMode.default('reviewed'),
-      whoCanClaim: settingFields.whoCanClaim.default('anyone'),
+      prMode: settingFields.prMode.default(DEFAULT_PR_MODE),
+      whoCanClaim: settingFields.whoCanClaim.default(DEFAULT_WHO_CAN_CLAIM),
       disclosure: settingFields.disclosure.default(() => ({ ...defaultDisclosure })),
       personWrittenDescription: settingFields.personWrittenDescription.default(false),
       claUrl: settingFields.claUrl.default(null),
       agentNotes: settingFields.agentNotes.default(''),
-      claimsPerIssue: settingFields.claimsPerIssue.default(3),
-      openPrsPerDonor: settingFields.openPrsPerDonor.default(2),
+      claimsPerIssue: settingFields.claimsPerIssue.default(DEFAULT_CLAIMS_PER_ISSUE),
+      openPrsPerDonor: settingFields.openPrsPerDonor.default(DEFAULT_OPEN_PRS_PER_DONOR),
     },
     { error: wrongType('must be an object of settings') },
   )

@@ -26,7 +26,7 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: /(issue|projects|admin|skills|mcp-apps-flow)\.spec\.ts$/,
+      testIgnore: /(issue|projects|admin|skills|mcp-apps-flow|\/me)\.spec\.ts$/,
     },
     // The issue page's tests work real issue rooms, and every event they
     // make reaches the homepage's feed. The projects' tests do too, and seed
@@ -47,8 +47,12 @@ export default defineConfig({
     { name: 'skills', use: { ...devices['Desktop Chrome'] }, testMatch: /skills\.spec\.ts$/, dependencies: ['admin'] },
     // A donor's agent in a host with MCP Apps claims a sample issue and
     // opens a PR on it, which the homepage and the admin pages would show,
-    // so it runs last.
+    // so it runs after the skills' steps.
     { name: 'apps', use: { ...devices['Desktop Chrome'] }, testMatch: /mcp-apps-flow\.spec\.ts$/, dependencies: ['skills'] },
+    // /me's tests have a donor's agent claim sample issues, and open PRs on
+    // them from /me, which the homepage, the project pages, and the issue
+    // pages would show. So they run after the rest.
+    { name: 'me', use: { ...devices['Desktop Chrome'] }, testMatch: /\/me\.spec\.ts$/, dependencies: ['apps'] },
   ],
   webServer: [
     {
