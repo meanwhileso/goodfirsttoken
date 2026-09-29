@@ -11,7 +11,9 @@ import {
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller } from '../auth/permissions';
 import { readSignedIn, siteCaller } from '../auth/session';
-import { authSecret, siteOrigin } from '../auth/settings';
+import { backWithNotice, verifiedNotice } from '../auth/notice';
+import type { NoticeParams } from '../auth/notice-params';
+import { siteOrigin } from '../auth/settings';
 import { listBlocks, listPolicyListings } from '../db';
 import { GitHubError } from '../github';
 import { ADMIN_PATH } from './paths';
@@ -64,32 +66,10 @@ export interface AdminPage {
 
 export type AdminPageResult = { state: 'ready'; page: AdminPage } | { state: 'signed_out' } | { state: 'not_found' };
 
-/** A notice and its signature, from the address a form sent the admin back to. */
-export interface NoticeParams {
-  notice?: string;
-  sig?: string;
-}
+export type { NoticeParams } from '../auth/notice-params';
 
-const encoder = new TextEncoder();
-
-// A notice rides in the address, signed with AUTH_SECRET, so the page shows
-// only what one of its own forms said. A link someone else made shows none.
-async function signature(notice: string): Promise<string> {
-  const key = await crypto.subtle.importKey('raw', encoder.encode(authSecret()), { name: 'HMAC', hash: 'SHA-256' }, false, [
-    'sign',
-  ]);
-  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`admin-notice:${notice}`)));
-  return btoa(String.fromCharCode(...mac)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-}
-
-async function verifiedNotice({ notice, sig }: NoticeParams): Promise<string | null> {
-  if (typeof notice !== 'string' || typeof sig !== 'string' || notice.length > 2000) return null;
-  const expected = await signature(notice);
-  if (expected.length !== sig.length) return null;
-  let difference = 0;
-  for (let i = 0; i < expected.length; i++) difference |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
-  return difference === 0 ? notice : null;
-}
+/** What a notice on /admin is signed for, so it shows on no other page. */
+const NOTICE_PURPOSE = 'admin-notice';
 
 /** True when the caller holds `permission`, which only admins do. */
 async function holds(caller: Caller, permission: 'review_projects' | 'list_from_policy' | 'block_donors'): Promise<boolean> {
@@ -136,7 +116,7 @@ export async function loadAdminPage(
   const [listings, blocked, notice] = await Promise.all([
     readListings(caller),
     readBlocked(caller),
-    verifiedNotice(params),
+    verifiedNotice(NOTICE_PURPOSE, params),
   ]);
   return {
     result: {
@@ -177,14 +157,6 @@ function text(status: number, body: string): Response {
     status,
     headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
   });
-}
-
-/** Back to the page, with a notice of what the form did. */
-async function backWith(notice: string, setCookies: string[]): Promise<Response> {
-  const query = new URLSearchParams({ notice, sig: await signature(notice) });
-  const headers = new Headers({ location: `${ADMIN_PATH}?${query.toString()}`, 'cache-control': 'no-store' });
-  for (const cookie of setCookies) headers.append('set-cookie', cookie);
-  return new Response(null, { status: 303, headers });
 }
 
 function field(form: FormData, name: string): string | undefined {
@@ -288,5 +260,5 @@ export async function answerAdminForm(request: Request): Promise<Response> {
     if (!(error instanceof GitHubError && error.status === 401)) throw error;
     notice = 'Nothing changed. GitHub no longer takes the token this site holds for you. Sign out and in again.';
   }
-  return backWith(notice, admin.setCookies);
+  return backWithNotice(ADMIN_PATH, NOTICE_PURPOSE, notice, admin.setCookies);
 }
