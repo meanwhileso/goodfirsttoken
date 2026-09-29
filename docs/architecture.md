@@ -2968,7 +2968,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   must come from the Playwright build CI uses, because other Chromium builds
   can wrap text differently. To update them, after a deliberate visual
   change and after every Playwright upgrade, let the `e2e` job fail, take
-  each `design-<width>-actual.png` from `test-results/` in the job's
+  each `<page>-<width>-actual.png`, like `design-390-actual.png`, from
+  `test-results/` in the job's
   `playwright-report` artifact, check them by eye, and commit them as the
   baselines.
 - **The core package's tests** run with plain Vitest in Node, since the

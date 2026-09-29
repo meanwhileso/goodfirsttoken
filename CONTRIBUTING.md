@@ -44,7 +44,9 @@ http://localhost:5173/sign-in as any sample person. How the pieces fit is in
 - Keep a PR to one change, and say how you checked it. For a page change,
   show the page at phone and desktop widths: attach screenshots, or add
   Playwright screenshot tests at 390 and 1280 pixels wide, like
-  `apps/web/e2e/home.spec.ts`, whose images GitHub shows in the diff.
+  `apps/web/e2e/home.spec.ts`, whose images GitHub shows in the diff. Take
+  their baselines from CI's run, as the screenshot tests in
+  `docs/architecture.md` say.
 - Write commit messages in the imperative, and say why as well as what.
 
 ## Changing a skill or a plugin
