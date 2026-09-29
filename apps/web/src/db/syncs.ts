@@ -14,6 +14,7 @@ interface SyncRow {
   reading_until: number | null;
   language: string | null;
   delisted: string | null;
+  delisted_at: number | null;
   repos_read_at: number | null;
 }
 
@@ -28,6 +29,7 @@ function toSync(row: SyncRow): IssueSync {
       readingUntil: row.reading_until,
       language: row.language,
       delisted: row.delisted,
+      delistedAt: row.delisted_at,
       reposReadAt: row.repos_read_at,
     },
     'issue sync',
@@ -81,14 +83,25 @@ export async function listProjectsToSync(db: D1Database): Promise<string[]> {
  * Keeps what the sync saw of the project's code repo and issue repo at
  * `now`: why GitHub delists the project, or null when it showed both repos
  * public and open. The mark hides what the site cached from them, whatever
- * the project's status, until the sync sees them again.
+ * the project's status, until the sync sees them again. A mark set now,
+ * where there was none, keeps `now` as when the sync delisted the project,
+ * until it comes off. A read that finds the repos private, archived,
+ * blocked, or gone again keeps that time, whatever its words.
  */
 export async function setDelisted(db: D1Database, project: string, delisted: string | null, now: number): Promise<void> {
+  // SET reads the row as it was, so issue_syncs.delisted is the mark before this read.
   await db
     .prepare(
-      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until, delisted, repos_read_at)
-       VALUES (?1, NULL, NULL, NULL, NULL, ?2, ?3)
-       ON CONFLICT (project) DO UPDATE SET delisted = ?2, repos_read_at = ?3`,
+      `INSERT INTO issue_syncs (project, pass_started_at, read_at, refreshed_at, reading_until, delisted, delisted_at, repos_read_at)
+       VALUES (?1, NULL, NULL, NULL, NULL, ?2, CASE WHEN ?2 IS NULL THEN NULL ELSE ?3 END, ?3)
+       ON CONFLICT (project) DO UPDATE SET
+         delisted = ?2,
+         delisted_at = CASE
+           WHEN ?2 IS NULL THEN NULL
+           WHEN issue_syncs.delisted IS NULL THEN ?3
+           ELSE issue_syncs.delisted_at
+         END,
+         repos_read_at = ?3`,
     )
     .bind(mustParse(repoName, project, 'project'), mustParse(delistedFor, delisted, 'delisted'), checkTime(now))
     .run();

@@ -125,6 +125,41 @@ describe('delisting', () => {
     expect(await getIssueSync(db, repo)).toMatchObject({ delisted: null, reposReadAt: t0 + HOUR, passStartedAt: started });
   });
 
+  test('the mark keeps when the sync first set it, through later reads in the same words or others, and loses it when it comes off', async () => {
+    await registeredProject();
+
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0);
+    const set = await getIssueSync(db, repo);
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0 + MINUTE);
+    const readAgain = await getIssueSync(db, repo);
+    await setDelisted(db, repo, `${repo} is no longer public on GitHub.`, t0 + HOUR);
+    const otherWords = await getIssueSync(db, repo);
+    await setDelisted(db, repo, null, t0 + 2 * HOUR);
+    const lifted = await getIssueSync(db, repo);
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0 + 3 * HOUR);
+
+    expect(set).toMatchObject({ delistedAt: t0, reposReadAt: t0 });
+    expect(readAgain).toMatchObject({ delistedAt: t0, reposReadAt: t0 + MINUTE });
+    expect(otherWords).toMatchObject({ delisted: `${repo} is no longer public on GitHub.`, delistedAt: t0, reposReadAt: t0 + HOUR });
+    expect(lifted).toMatchObject({ delisted: null, delistedAt: null, reposReadAt: t0 + 2 * HOUR });
+    expect(await getIssueSync(db, repo)).toMatchObject({ delistedAt: t0 + 3 * HOUR, reposReadAt: t0 + 3 * HOUR });
+  });
+
+  test('a mark set before the sync kept its time stays without one while it stays, and a new one gets its time', async () => {
+    await registeredProject();
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0);
+    // As migration 0012 leaves a mark that was there before it.
+    await db.prepare('UPDATE issue_syncs SET delisted_at = NULL WHERE project = ?').bind(repo).run();
+
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0 + HOUR);
+    const stillUnknown = await getIssueSync(db, repo);
+    await setDelisted(db, repo, null, t0 + 2 * HOUR);
+    await setDelisted(db, repo, `${repo} is archived on GitHub.`, t0 + 3 * HOUR);
+
+    expect(stillUnknown).toMatchObject({ delisted: `${repo} is archived on GitHub.`, delistedAt: null });
+    expect(await getIssueSync(db, repo)).toMatchObject({ delistedAt: t0 + 3 * HOUR });
+  });
+
   test("the migration that brought the mark marks each project Good First Token paused before it, with its pause's reason", async () => {
     for (const name of [repo, second, third]) await registeredProject({ tags: ['help wanted'] }, name);
     await pause(repo);

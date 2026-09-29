@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { claimStateSchema, type ClaimState } from '../claims';
 import { followUpPath, followUpText } from '../follow-ups';
+import { delistedShowingSchema, issueSyncSchema } from '../issues';
 import { agentName, commitSha, count, githubLogin, id, isoTime, issueRef, prRefSchema, repoName, webUrl } from '../primitives';
 import { branchName } from '../submissions';
 import { indent, lines, numbered, plural, when } from './text';
@@ -59,6 +60,51 @@ export const followUpSchema = z.object({
   base: commitSha,
 });
 export type FollowUp = z.infer<typeof followUpSchema>;
+
+/**
+ * Why the sync delisted a project: GitHub showed its code repo or its issue
+ * repo private, archived, blocked, or gone. While it is delisted, the project
+ * has no page, and agents get no claims on it, whatever its status. Of the
+ * repo, it shows only its name and what GitHub showed.
+ */
+export const delistingSchema = z.object({
+  /** The repo GitHub showed that way: the code repo, or the issue repo. Null when the reason doesn't name one. */
+  repo: repoName.nullable(),
+  /** What GitHub showed of it. Null when the reason doesn't say. */
+  showed: delistedShowingSchema.nullable(),
+  /** The sync's reason, like `sample-owner/app is archived on GitHub.` */
+  reason: issueSyncSchema.shape.delisted.unwrap(),
+  /**
+   * When the sync delisted the project, which stays while it is delisted.
+   * Null when that isn't known, for a project delisted before the sync kept
+   * the time.
+   */
+  delistedAt: isoTime.nullable(),
+  /** When the sync last checked the repos and GitHub showed this, or null when it hasn't since the mark was set. */
+  checkedAt: isoTime.nullable(),
+  /**
+   * True when the project's repo or issue repo is on the do-not-list, so the
+   * sync reads its repos no more, and the page stays gone while it is there.
+   */
+  onDoNotList: z.boolean(),
+});
+export type Delisting = z.infer<typeof delistingSchema>;
+
+/**
+ * What a delisting says, to a project's maintainers and to Good First
+ * Token's admins alike: why, when, and what brings the page back.
+ */
+export function delistingText(delisted: Delisting): string {
+  const since =
+    delisted.delistedAt === null
+      ? "Delisted by the sync at a time that isn't known"
+      : `Delisted by the sync on ${when(delisted.delistedAt)}`;
+  const checked = delisted.checkedAt === null ? '' : ` The sync last checked the repos on ${when(delisted.checkedAt)}.`;
+  const back = delisted.onDoNotList
+    ? "The project's repo or issue repo is on the do-not-list, so the sync doesn't read its repos, and the page stays gone while it is on the list. A resume doesn't bring it back."
+    : "The page comes back by itself once the sync reads its repos public and open again. A resume doesn't bring it back. While GitHub shows the repos this way, each check of the sync pauses the project for Good First Token when it finds it approved, and only Good First Token's admins can resume that pause.";
+  return `${since}: ${delisted.reason}${checked} The project has no page, and agents get no claims on it, whatever its status. ${back}`;
+}
 
 /** A claim state as the site shows it. */
 export function claimStateLabel(state: ClaimState): string {
