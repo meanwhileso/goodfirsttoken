@@ -45,8 +45,8 @@ http://localhost:5173/sign-in as any sample person. How the pieces fit is in
   show the page at phone and desktop widths: attach screenshots, or add
   Playwright screenshot tests at 390 and 1280 pixels wide, like
   `apps/web/e2e/home.spec.ts`, whose images GitHub shows in the diff. Take
-  their baselines from CI's run, as the screenshot tests in
-  `docs/architecture.md` say.
+  their baselines from CI's run, as the Screenshot tests entry in
+  `docs/architecture.md` says.
 - Write commit messages in the imperative, and say why as well as what.
 
 ## Changing a skill or a plugin
