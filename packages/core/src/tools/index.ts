@@ -20,7 +20,7 @@ import {
   submitWork,
   suggestIssues,
 } from './donor';
-import { pauseProject, projectStatus, registerProject, updateProject } from './maintainer';
+import { pauseProject, projectStatus, registerProject, requestRemoval, updateProject } from './maintainer';
 import type { ToolSpec } from './spec';
 
 /** Every MCP tool in spec section 7, by name. */
@@ -38,6 +38,7 @@ export const tools = {
   update_project: updateProject,
   project_status: projectStatus,
   pause_project: pauseProject,
+  request_removal: requestRemoval,
   admin_queue: adminQueue,
   admin_decide: adminDecide,
   admin_add_project: adminAddProject,
@@ -99,8 +100,14 @@ export function toolRefusal(refusal: Refusal): ToolRefusal {
 
 export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
-export { doNotListNote } from './admin';
+export {
+  doNotListNote,
+  moreRemovalsWithdrawnNote,
+  removalProjectNote,
+  removalWaitsNote,
+  removalWithdrawnNote,
+} from './admin';
 export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
 export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';
-export type { ClaimSummary, FollowUp } from './shared';
+export type { ClaimSummary, Delisting, FollowUp } from './shared';

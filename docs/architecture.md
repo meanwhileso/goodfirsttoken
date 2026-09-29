@@ -324,7 +324,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 
 | File | What it does |
 |---|---|
-| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, and `pause_project`. `project_status` with `refresh` runs the sync for its project, under [The sync](#the-sync) |
+| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, `pause_project`, and `request_removal`. `project_status` with `refresh` runs the sync for its project, under [The sync](#the-sync) |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/docs.ts` | The files a repo's docs are read from, where each is looked for, and the size limit, for the proposal and the policy crawler alike |
 | `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
@@ -389,11 +389,69 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   change of its own when someone else did, so an admin's pause over a
   maintainer's names the admin. `setProjectStatus` writes whenever the
   status or reason differs, and only the tests use it now.
+- **A request to be removed needs the one read.** `request_removal` asks
+  `requirePermission` and nothing more of GitHub, since no rule of the
+  repo's own counts, and saves the request with `askRemoval` in
+  `src/db/removals.ts`. Its insert does nothing while a request for the
+  repo waits, through the partial unique index `removal_requests_waiting`,
+  so two requests at the same moment leave one, and the tool then reads the
+  one that waits. A withdrawal is `closeRemoval`, whose update applies only
+  to a waiting request, so a withdrawal and an admin's removal at the same
+  moment close it once. Who withdrew a request is its `closed_by`, beside
+  its `requested_by`. `lastRemovalBy` reads one person's last request for a
+  repo, for `request_removal` to tell them. `withdrawnByOthers` reads, for
+  the queue, a repo's requests withdrawn by someone other than their asker
+  since the latest one an admin closed as `removed`, in one query: the
+  first five withdrawn, with both logins joined from `people`, and a count
+  of the rest from `COUNT(*) OVER ()`. `removalReason` in core drops the
+  characters a person can't see, on top of folding the ones that could
+  break a line. A `451` from GitHub is a `PermissionRefused` in
+  `requirePermission`, as a `404` is, so every maintainer's tool refuses a
+  repo GitHub blocked with `not_maintainer`.
 - **Resuming reads the status history,** newest first, for the change
   before the pause. The project's row holds only its current status. A
   status change keeps who made it and no role, so whether a pause was an
   admin's is worked out when the maintainer resumes, as
   [Managing a project](how-it-works.md#managing-a-project) says.
+- **A delisting is read from the sync's mark alone.** `project_status`
+  already reads the project's row in `issue_syncs` for when its issues were
+  read, after any refresh, and hands it to `readDelisting` in
+  `src/project/shown.ts`, which reads the do-not-list entries of the
+  project's two repos and calls `delistingOf`, which is private to that
+  file. `hasPage` reads the mark through `delistingOf` too, so
+  `project_status` reports a delisting exactly when the mark takes the page
+  away, and no second rule decides it. `readDelisting` and `hasPage` each
+  check first that the project is approved or paused, and `delistingOf`
+  reads the mark alone. `admin_pause_project` calls `readDelisting` the
+  same way, once its status change lands. The answer's `delisted` is
+  `delistingSchema` in `packages/core/src/tools/shared.ts`, and its line
+  of text is `delistingText` beside it, so both tools say the same.
+- **The repo and what GitHub showed come from the reason.**
+  `issue_syncs.delisted` keeps the sync's reason, which the sync writes
+  from `delistedReason` in `packages/core/src/issues.ts`, and
+  `readDelistedReason` there reads the repo and what GitHub showed back
+  from the same words, which live in that one table. So they need no
+  column. They are null for a reason in other words, like the one
+  `0006_delisting.sql` gave a pause that had none, and the mark still
+  hides the page then, since the mark alone decides. The sync's next check
+  writes the reason again.
+- **When the sync delisted a project** is `issue_syncs.delisted_at`, from
+  migration `0012_delisted_at.sql`. `repos_read_at` moves with every read,
+  so it says only when the sync last checked the repos, which the answer
+  gives as `checkedAt`. `setDelisted` sets `delisted_at` in the same
+  statement as the mark: to the read's time when the mark goes from none to
+  set, kept while it stays set, whatever its words, and cleared when it
+  comes off. An `UPDATE` reads the row as it was, so the `CASE` sees the
+  mark before the read. A mark set before 0012 has no time, which stays
+  unknown until the mark comes off.
+- **The count of tagged issues** is null while the project is delisted,
+  since nothing cached from its repos shows. `project_status` still reads
+  the cached copies, and counts them only when `readDelisting` finds no
+  mark.
+- **A refusal can name the delisting.** `project_status` catches the
+  `PermissionRefused` of `not_maintainer`, reads the project and its mark,
+  and when the mark names the code repo as private, gone, or blocked, adds
+  the sync's reason to the refusal. Any other refusal goes on up as before.
 
 ### The donor's tools
 
@@ -639,18 +697,22 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `requirePermission` for `review_projects` on every request, and registers
   the admin tools only when it passes. A tool that isn't registered is one
   the SDK refuses to call.
-- **Queue IDs.** A crawler find's ID is its candidate ID. A registration's
+- **Queue IDs.** A crawler find's ID is its candidate ID, and a request to
+  be removed has its request's ID, `rem_` and 20 characters, which
+  `admin_decide` knows by its prefix and reads with `getRemoval`, to refuse
+  a waiting one with `invalid_input` and anything else as `not_found`. A
+  registration's
   is `reg_` and the ID of its latest row in `project_status_changes`, which
   `listPendingProjects` reads with each pending project, so the queue needs
   no table of its own, and `getPendingProject` finds the project only while
   that change is still its latest.
-- **The repo's facts** for a registration come from two REST calls with
-  the admin's token, `GET /repos/{owner}/{repo}` and `GET /users/{owner}`,
-  in `readStanding` in `src/projects/repo.ts`. Every registration's are
-  read at once, so the queue costs two GitHub calls for each registration,
-  on every read of the queue. Only a `404` for the repo gives
-  `factsMissing: 'not_public'`. Any other failure, the owner's `404`
-  included, gives `no_answer`, logged with `console.warn`, in
+- **The repo's facts** for a registration or a request to be removed come
+  from two REST calls with the admin's token, `GET /repos/{owner}/{repo}`
+  and `GET /users/{owner}`, in `readStanding` in `src/projects/repo.ts`.
+  Every item's are read at once, so the queue costs two GitHub calls for
+  each registration and each request, on every read of the queue. Only a
+  `404` for the repo gives `factsMissing: 'not_public'`. Any other failure,
+  the owner's `404` included, gives `no_answer`, logged with `console.warn`, in
   `factsFromGitHub`. A `401` goes on up, so an agent's connection ends,
   and the page reads the queue again with no token and says to sign in
   again.
@@ -658,6 +720,11 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `setProjectStatusFrom`, retried up to five times, as for the maintainer's
   pause. So a maintainer's pause or resume that lands at the same moment as
   an admin's never undoes it.
+- **A pause's answer reads the sync's mark** through `readDelisting` in
+  `src/project/shown.ts`, the way `project_status` does, after the status
+  change: one read of `issue_syncs` and one or two of the do-not-list, each
+  by key, at once. So an admin who resumes a project the sync delisted
+  hears it stays delisted.
 - **Editing a listing** is `relistFromPolicy` in `src/db/projects.ts`,
   which applies the settings sent over the listing's, with
   `updateProjectSettings`, and checks the listing's source and settings
@@ -667,11 +734,20 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   list before it asks GitHub, and again before each write, and the writes
   check it too: `createProject`'s insert and `relistFromPolicy`'s
   statements carry `NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)`,
-  so the check and the write are one step. A removal adds the entry on its own, before
-  anything else, and its rejection runs `doNotListWhenRejected` in the same
-  batch, through `setProjectStatusFrom`'s `alongside`, which adds the entry
-  again only when that rejection landed. So an approval that took the
-  repo off the list between them can't leave a removed project off it.
+  so the check and the write are one step. A removal adds the entry on its
+  own, before anything else, and its rejection runs `doNotListWhenRejected`
+  in the same batch, through `setProjectStatusFrom`'s `alongside`, which
+  adds the entry again only when that rejection landed. So an approval that
+  took the repo off the list between them can't leave a removed project off
+  it. The removal closes the repo's waiting request to be removed with
+  `closeRemoval` last, once the rejection landed, so one that throws
+  partway leaves the request in the queue.
+- **So is a waiting request to be removed.** The same statements carry
+  `NOT EXISTS (SELECT 1 FROM removal_requests WHERE repo = ?1 AND status = 'waiting')`,
+  and the listing reads for a waiting request where it reads the list. The
+  approval of a registration reads for one before its compare-and-set, with
+  no check in the write, so a request that lands at that moment still waits
+  in the queue for an admin.
 - **Blocked donors** come from `listBlocks`, one query that joins
   `donor_blocks` to `people` for each login.
 - **Forms, with no script.** The page's forms post to `/admin`, which the
@@ -906,7 +982,10 @@ that is taken and against a site that never answers.
   settings, and each saved version of the settings, `claims.ts` the claim
   state machine and the stored claim, `prs.ts` a claim's PR, `issues.ts` a
   cached tagged issue, `people.ts` people, their interests, and blocks,
-  `sessions.ts` donor sessions and budgets, `crawl.ts` crawl candidates and
+  `sessions.ts` donor sessions and budgets, `characters.ts` the characters
+  that could break a line or change what a terminal shows, `removals.ts`
+  maintainers'
+  requests to be removed, `crawl.ts` crawl candidates and
   the do-not-list, `feed.ts` feed events, `refusals.ts` the refusal codes,
   `secrets.ts` the check that replaces keys and tokens in posted text, and
   `validation.ts` the check that names the field in every problem.
@@ -1141,12 +1220,12 @@ Worker's name, so no setting names them.
 D1, bound as `DB`, holds the structured records that search and the
 leaderboard read: people, projects with their settings and status changes,
 the tagged-issue cache, claims, their submitted work, PRs, donor sessions,
-blocks, the do-not-list, crawl candidates, and the crawler's seed list and
-passes. GitHub is the source of truth for issues
-and PRs, and the issue room is for claims, so those tables are caches and
-mirrors. None of these tables holds a GitHub token. The rules these records
-follow are in [how-it-works.md](how-it-works.md#people), under
-People through Crawl candidates.
+blocks, the do-not-list, requests to be removed, crawl candidates, and
+the crawler's seed list and passes. GitHub is the source of truth for
+issues and PRs, and the issue room is for claims, so those tables are
+caches and mirrors. None of these tables holds a GitHub token. The rules
+these records follow are in [how-it-works.md](how-it-works.md#people),
+under People through Crawl candidates.
 
 It also holds Better Auth's four tables for signing in, described under
 [Better Auth's tables](#better-auths-tables). The one GitHub token they store,
@@ -1171,7 +1250,7 @@ in `people`.
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
 | `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
-| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and when the sync last read its repos | `project` |
+| `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and since when, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
 | `submissions` | Claim's submitted work: the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
@@ -1182,6 +1261,7 @@ in `people`.
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
 | `crawl_passes` | Pass of the crawler's search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
+| `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 
 Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns the
 three project tables. Its functions take the database first, so the Worker
@@ -1213,8 +1293,8 @@ that break the rules, so it returns the problems for the caller to show.
   status changes, and cached issues to their project, and a PR to its claim.
   D1 enforces them. A claim's project has none, so a claim's history can
   outlive a listing.
-- **IDs** for sessions and candidates are made in `src/db/`: a prefix and 20
-  URL-safe characters, the base64url form of 15 random bytes, like
+- **IDs** for sessions, candidates, and requests to be removed are made in
+  `src/db/`: a prefix and 20 URL-safe characters, the base64url form of 15 random bytes, like
   `s_2x8Qm0vT4kLp9aZr1yWc`. The issue room makes claim IDs.
 - **`claims.login` is the login when the claim was made.** The current login
   is in `people`, found by GitHub ID. A page should show that one, because a
@@ -1261,6 +1341,14 @@ that break the rules, so it returns the problems for the caller to show.
   `crawlerSkips` in `src/db/candidates.ts` asks the do-not-list, the
   projects, and the crawl candidates about any number of repos in one
   query.
+- **Migration `0009_removal_requests.sql`** makes `removal_requests`. A
+  closed request stays, so the table keeps who asked for each removal. A
+  request's repo has no foreign key, since a repo that isn't a project can
+  be asked for.
+- **Migration `0012_delisted_at.sql`** adds `issue_syncs.delisted_at`, when
+  the sync delisted the project, under
+  [The maintainer's tools](#the-maintainers-tools). A mark from before it
+  gets none, since that time wasn't kept.
 
 ### Who sees what
 
@@ -1273,12 +1361,13 @@ names the repos it proposed, a repo it couldn't read whole or GitHub failed
 on, with no verdict on it, and a find it couldn't write. The reason an admin gives for
 rejecting a registration reaches the maintainer's agent, and so does the
 reason a removed project is rejected with. The note an admin keeps with a
-do-not-list entry reaches no one else.
+do-not-list entry reaches no one else. A maintainer's reason for asking to
+be removed reaches the admins alone, in `admin_queue` and on `/admin`.
 
 These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
-`donor_sessions.queue`, `cla_confirmations`, `donor_blocks.reason`, and
-`do_not_list.reason`.
+`donor_sessions.queue`, `cla_confirmations`, `donor_blocks.reason`,
+`do_not_list.reason`, and `removal_requests.reason`.
 
 A submission's branch and commit are public on GitHub once they land. Its
 title, summary, and notes on what was checked go into the PR when it opens,
@@ -1382,6 +1471,9 @@ pruning after a sync, with no index of its own.
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
 | `crawl_candidates_by_repo` | Whether the crawler proposed a repo before, whatever the admin decided, which it asks for every repo it reads |
+| `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal`, a removal, and the check before a listing or an approval |
+| `removal_requests_queue` | The admin queue's requests to be removed, oldest first |
+| `removal_requests_by_repo` | A repo's requests to be removed that someone other than their asker withdrew, for a registration or crawler find in the queue, and one person's last request for a repo, for `request_removal` to say who withdrew it |
 | `session_by_user` | A person's sessions, which signing out ends |
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
 | `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |
@@ -1948,7 +2040,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
-| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
+| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims. `readDelisting`, why the sync delisted a project that could have a page, from its mark and the do-not-list, for `project_status` and `admin_pause_project`, through `delistingOf`, which `hasPage` reads the mark through too |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
@@ -2180,7 +2272,8 @@ read-only service token. The rules are in
   `issue_syncs.language` for ranking suggestions. It costs no call of its
   own.
 - **Delisting** writes the mark first, `issue_syncs.delisted` with the
-  reason, through `setDelisted` in `src/db/syncs.ts`, so the page is hidden
+  reason `delistedReason` in core gives for what GitHub showed, through
+  `setDelisted` in `src/db/syncs.ts`, so the page is hidden
   even when the pause doesn't land. Then it pauses an approved project with
   `setProjectStatusFrom`, the compare-and-set #55 added, with `changed_by`
   null, which the maintainer's `pause_project` reads as a pause only an
@@ -2989,7 +3082,16 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   signing in an agent needs, and reads what the pages show through the
   Worker. The test of what migration `0006_delisting.sql` marks runs the
   migration's own `INSERT` again, from `TEST_MIGRATIONS`, on rows made
-  before it.
+  before it. `apps/web/test/mcp/delisted.test.ts` runs the sync the same
+  way, then reads what `project_status` and `admin_pause_project` say, for
+  each thing GitHub can show. The fake has no `451`, so a stand-in for
+  `fetch` answers one for the repo it blocks, and a service token that sees
+  a private repo is the fake's service account given a role on it and the
+  `repo` scope. Every person's token in them reads public repos only, as
+  deployed, so a private or gone code repo is tested through the refusal,
+  and the other private, gone, and blocked cases use the issue repo. A mark in
+  other words is made by running `0006_delisting.sql`'s own `INSERT` again,
+  on a row from before it.
 - **Crawler tests** are in `apps/web/test/crawl/`. The rules' tests call
   them directly on made-up files, for every tier and condition. The rest
   run the search against the GitHub fake with a stand-in for the crawl

@@ -8,6 +8,7 @@ import {
   type ProjectSettingsPatch,
   type ProjectStatus,
   type Refusal,
+  type RemovalRequest,
   type RefusalCode,
   type ToolInput,
   type ToolName,
@@ -20,6 +21,7 @@ import {
   crawlerSkips,
   addToDoNotList,
   blockDonor,
+  closeRemoval,
   createProject,
   decideCandidate,
   doNotListWhenRejected,
@@ -29,16 +31,21 @@ import {
   getPendingProject,
   getPerson,
   getProject,
+  getRemoval,
   getWaitingCandidate,
+  getWaitingRemoval,
   leaveDoNotListWhenApproved,
   listCandidates,
   listPendingProjects,
+  listWaitingRemovals,
   relistFromPolicy,
   setProjectStatusFrom,
   statusHistory,
   unblockDonor,
+  withdrawnByOthers,
 } from '../db';
 import { GitHubError } from '../github';
+import { readDelisting } from '../project/shown';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
 import { resumableBy, statusBeforePause } from '../projects/status';
 
@@ -62,6 +69,9 @@ const STATUS_ATTEMPTS = 5;
 
 /** A registration's queue ID names the status change that put it in the queue. */
 const REGISTRATION_ID = /^reg_([1-9][0-9]{0,15})$/;
+
+/** A request to be removed has its own ID, which admin_decide doesn't take. */
+const REMOVAL_ID = /^rem_[A-Za-z0-9_-]+$/;
 
 function registrationId(changeId: number): string {
   return `reg_${String(changeId)}`;
@@ -104,11 +114,31 @@ async function factsFromGitHub(token: string | null, repo: string): Promise<Fact
   }
 }
 
+/**
+ * What a registration or crawler find says of the repo's requests to be
+ * removed: whether one waits, and the first few that someone other than
+ * their asker withdrew since the repo was last removed, with who asked, who
+ * withdrew each, and when, and how many more there are. Every such
+ * withdrawal counts, so asking and withdrawing a request of one's own
+ * afterwards hides none.
+ */
+async function removalsOf(
+  repo: string,
+): Promise<Pick<QueueItem, 'removalWaits' | 'removalsWithdrawn' | 'moreRemovalsWithdrawn'>> {
+  const [waiting, withdrawn] = await Promise.all([getWaitingRemoval(env.DB, repo), withdrawnByOthers(env.DB, repo)]);
+  return {
+    removalWaits: waiting !== null,
+    removalsWithdrawn: withdrawn.first.map((request) => ({ ...request, withdrawnAt: iso(request.withdrawnAt) })),
+    moreRemovalsWithdrawn: withdrawn.more,
+  };
+}
+
 async function registrationItem(token: string | null, project: ProjectRecord, changeId: number): Promise<QueueItem> {
-  const [maintainer, facts, doNotList] = await Promise.all([
+  const [maintainer, facts, doNotList, removals] = await Promise.all([
     getPerson(env.DB, project.addedBy),
     factsFromGitHub(token, project.repo),
     getDoNotListEntry(env.DB, project.repo),
+    removalsOf(project.repo),
   ]);
   if (maintainer === null) throw new Error(`${project.repo} was added by someone who isn't recorded.`);
   return {
@@ -126,11 +156,50 @@ async function registrationItem(token: string | null, project: ProjectRecord, ch
     sources: [],
     aiSentences: [],
     moreAiSentences: 0,
+    ...removals,
+  };
+}
+
+/**
+ * A maintainer's request to be removed, with the repo's facts read as a
+ * registration's are, and what the repo is on Good First Token now. The
+ * reason is the maintainer's words, which the queue quotes as theirs.
+ */
+async function removalItem(token: string | null, request: RemovalRequest): Promise<QueueItem> {
+  const [maintainer, facts, doNotList, project] = await Promise.all([
+    getPerson(env.DB, request.requestedBy),
+    factsFromGitHub(token, request.repo),
+    getDoNotListEntry(env.DB, request.repo),
+    getProject(env.DB, request.repo),
+  ]);
+  if (maintainer === null) throw new Error(`${request.repo}'s request to be removed names someone who isn't recorded.`);
+  return {
+    id: request.id,
+    kind: 'removal',
+    repo: request.repo,
+    requestedBy: maintainer.login,
+    requestedAt: iso(request.requestedAt),
+    facts: 'standing' in facts ? factsOf(facts.standing) : null,
+    factsMissing: 'missing' in facts ? facts.missing : null,
+    settings: {},
+    policy: null,
+    suggestedTags: [],
+    onDoNotList: doNotList !== null,
+    sources: [],
+    aiSentences: [],
+    moreAiSentences: 0,
+    removal: {
+      reason: request.reason,
+      project: project === null ? null : { status: project.status, source: project.source },
+    },
   };
 }
 
 async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
-  const doNotList = await getDoNotListEntry(env.DB, candidate.repo);
+  const [doNotList, removals] = await Promise.all([
+    getDoNotListEntry(env.DB, candidate.repo),
+    removalsOf(candidate.repo),
+  ]);
   return {
     id: candidate.id,
     kind: 'candidate',
@@ -146,25 +215,30 @@ async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
     sources: candidate.sources,
     aiSentences: candidate.aiSentences,
     moreAiSentences: candidate.moreAiSentences,
+    ...removals,
   };
 }
 
 /**
- * The admin queue: maintainers' registrations waiting for an admin, and the
- * crawler's finds, the one that has waited longest first. A registration's
- * facts come from GitHub now, read with the admin's own token. A crawler
- * find's are the ones the crawler read.
+ * The admin queue: maintainers' registrations waiting for an admin, the
+ * crawler's finds, and maintainers' requests to be removed, the one that has
+ * waited longest first. The facts of a registration and of a request come
+ * from GitHub now, read with the admin's own token. A crawler find's are the
+ * ones the crawler read.
  */
 export async function adminQueue(caller: Caller, input: ToolInput<'admin_queue'>): Promise<Outcome<'admin_queue'>> {
   await requirePermission(caller, 'review_projects');
   const token = await caller.gitHubToken();
-  const [pending, candidates] = await Promise.all([
-    input.kind === 'candidate' ? [] : listPendingProjects(env.DB),
-    input.kind === 'registration' ? [] : listCandidates(env.DB, 'waiting'),
+  const wants = (kind: QueueItem['kind']) => input.kind === 'all' || input.kind === kind;
+  const [pending, candidates, removals] = await Promise.all([
+    wants('registration') ? listPendingProjects(env.DB) : [],
+    wants('candidate') ? listCandidates(env.DB, 'waiting') : [],
+    wants('removal') ? listWaitingRemovals(env.DB) : [],
   ]);
   const items = await Promise.all([
     ...pending.map(({ project, changeId }) => registrationItem(token, project, changeId)),
     ...candidates.map(candidateItem),
+    ...removals.map((request) => removalItem(token, request)),
   ]);
   items.sort((a, b) => a.requestedAt.localeCompare(b.requestedAt) || a.repo.localeCompare(b.repo));
   return { ok: true, value: { items } };
@@ -173,6 +247,18 @@ export async function adminQueue(caller: Caller, input: ToolInput<'admin_queue'>
 /** Settings left out of a patch, and sent as undefined, keep the value they had. */
 function definedEntries(patch: Record<string, unknown> | undefined): Record<string, unknown> {
   return Object.fromEntries(Object.entries(patch ?? {}).filter(([, value]) => value !== undefined));
+}
+
+/**
+ * Refuses to list or approve a repo whose maintainers' request to be removed
+ * waits. GitHub vouched for whoever asked, so the request stands until an
+ * admin removes the repo or a maintainer of it withdraws the request.
+ */
+function removalWaits(repo: string): { ok: false; refusal: Refusal } {
+  return refuse(
+    'repo_not_eligible',
+    `A maintainer of ${repo} asked to have it removed, and that request waits in the admin queue. Remove the repo with admin_remove_project, or list it only once its maintainers withdraw the request.`,
+  );
 }
 
 function onTheList(repo: string): { ok: false; refusal: Refusal } {
@@ -202,6 +288,7 @@ async function listFromPolicy(
   now: number,
 ): Promise<Outcome<'admin_add_project'>> {
   if ((await getDoNotListEntry(env.DB, repo)) !== null) return onTheList(repo);
+  if ((await getWaitingRemoval(env.DB, repo)) !== null) return removalWaits(repo);
   const token = await caller.gitHubToken();
   if (token === null) {
     return refuse('repo_not_eligible', `Good First Token holds no GitHub token for you, so it can't check ${repo}. Sign in again.`);
@@ -228,6 +315,7 @@ async function listFromPolicy(
 
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     if ((await getDoNotListEntry(env.DB, name)) !== null) return onTheList(name);
+    if ((await getWaitingRemoval(env.DB, name)) !== null) return removalWaits(name);
     const existing = await getProject(env.DB, name);
     if (existing?.source === 'registered') {
       return refuse(
@@ -296,6 +384,11 @@ async function decideRegistration(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const pending = await getPendingProject(env.DB, changeId);
     if (pending === null) return nothingWaits(input.id);
+    // A maintainer asked for it to be removed too, and that request stands
+    // until an admin removes the repo or a maintainer withdraws it.
+    if (change.status === 'approved' && (await getWaitingRemoval(env.DB, pending.project.repo)) !== null) {
+      return removalWaits(pending.project.repo);
+    }
     // A maintainer asked for it to be listed, so an approval takes the repo
     // off the do-not-list, in the same transaction. A rejection leaves it on.
     const alongside =
@@ -357,6 +450,16 @@ export async function adminDecide(
   }
   const registration = REGISTRATION_ID.exec(input.id);
   if (registration) return decideRegistration(caller, input, Number(registration[1]), now);
+  if (REMOVAL_ID.test(input.id)) {
+    // A request that waits is in the queue, but isn't admin_decide's to
+    // decide. Any other ID is nothing that waits.
+    const request = await getRemoval(env.DB, input.id);
+    if (request?.status !== 'waiting') return nothingWaits(input.id);
+    return refuse(
+      'invalid_input',
+      `${input.id} is a request to remove ${request.repo}, which admin_decide doesn't decide. Remove the repo with admin_remove_project, which closes the request.`,
+    );
+  }
   return decideCandidateItem(caller, input, now);
 }
 
@@ -385,6 +488,16 @@ function notOpen(project: ProjectRecord): { ok: false; refusal: Refusal } {
 }
 
 /**
+ * The answer to an admin's pause or resume: the project's status now, whether
+ * the call changed it, and why the sync delisted it, when it did, since a
+ * resume doesn't bring back the page of a project the sync delisted.
+ */
+async function pauseAnswer(project: ProjectRecord, changed: boolean): Promise<Outcome<'admin_pause_project'>> {
+  const delisted = await readDelisting(env.DB, project);
+  return { ok: true, value: { repo: project.repo, status: project.status, changed, delisted } };
+}
+
+/**
  * Pauses an approved project, or resumes a paused one, whoever paused it. A
  * pause by an admin stays until an admin lifts it. An admin pausing a project
  * its maintainers paused takes the pause over, even with the same reason, so
@@ -400,22 +513,21 @@ export async function adminPauseProject(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const project = await getProject(env.DB, input.repo);
     if (project === null) return refuse('not_found', `${input.repo} is not a project on Good First Token.`);
-    const unchanged = { ok: true as const, value: { repo: project.repo, status: project.status, changed: false } };
     let change: { status: ProjectStatus; reason: string | null };
     if (input.paused) {
       const reason = input.reason ?? null;
       if (project.status === 'paused') {
-        if (resumableBy(project) === 'admins' && project.statusReason === reason) return unchanged;
+        if (resumableBy(project) === 'admins' && project.statusReason === reason) return pauseAnswer(project, false);
       } else if (project.status !== 'approved') {
         return notOpen(project);
       }
       change = { status: 'paused', reason };
     } else {
-      if (project.status !== 'paused') return unchanged;
+      if (project.status !== 'paused') return pauseAnswer(project, false);
       change = statusBeforePause(await statusHistory(env.DB, project.repo));
     }
     const updated = await setProjectStatusFrom(env.DB, project, { ...change, changedBy: caller.githubId }, now);
-    if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true } };
+    if (updated !== null) return pauseAnswer(updated, true);
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
 }
@@ -447,13 +559,27 @@ export async function adminSeedRepo(
 }
 
 /**
+ * The do-not-list note for a removal: the admin's own, or else who asked
+ * with request_removal and when, from the request that waits.
+ */
+async function removalNote(note: string | undefined, request: RemovalRequest | null): Promise<string | null> {
+  if (note !== undefined) return note;
+  if (request === null) return null;
+  const asker = await getPerson(env.DB, request.requestedBy);
+  const who = asker === null ? 'a maintainer' : `@${asker.login}`;
+  return `Asked by ${who} with request_removal on ${iso(request.requestedAt)}.`;
+}
+
+/**
  * Removes a repo at its maintainers' request. It goes on the do-not-list
  * first. Every listing checks the list in the same statement as its write,
  * so from then on nothing lists the repo unless its maintainers register it.
  * A crawler find for it waiting in the queue is rejected, and its project is
  * rejected, with a reason its maintainers see. The rejection puts the repo on
  * the list again in the same transaction, so an approval that took it off
- * before the rejection landed leaves it on.
+ * before the rejection landed leaves it on. A maintainer's request for it
+ * waiting in the queue closes last, once the rejection landed, so a removal
+ * that fails partway leaves the request waiting for the next try.
  */
 export async function adminRemoveProject(
   caller: Caller,
@@ -463,23 +589,36 @@ export async function adminRemoveProject(
   await requirePermission(caller, 'review_projects');
   const known = await getProject(env.DB, input.repo);
   const repo = known?.repo ?? input.repo;
-  const entry = { repo, reason: input.note ?? null, addedBy: caller.githubId };
+  const request = await getWaitingRemoval(env.DB, repo);
+  const entry = { repo, reason: await removalNote(input.note, request), addedBy: caller.githubId };
   await addToDoNotList(env.DB, entry, now);
   const waiting = await getWaitingCandidate(env.DB, repo);
   if (waiting !== null) {
     await decideCandidate(env.DB, waiting.id, { status: 'rejected', decidedBy: caller.githubId, reason: REMOVED_REASON }, now);
   }
+  const removed = await rejectAsRemoved(caller, repo, entry, now);
+  await closeRemoval(env.DB, repo, { status: 'removed', by: caller.githubId }, now);
+  return { ok: true, value: removed };
+}
+
+/** Rejects the repo's project, when it has one, with the reason its maintainers see, and answers with its status now. */
+async function rejectAsRemoved(
+  caller: Caller,
+  repo: string,
+  entry: { repo: string; reason: string | null; addedBy: number },
+  now: number,
+): Promise<{ repo: string; status: ProjectStatus | null }> {
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const project = await getProject(env.DB, repo);
-    if (project === null) return { ok: true, value: { repo, status: null } };
+    if (project === null) return { repo, status: null };
     if (project.status === 'rejected' && project.statusReason === REMOVED_REASON) {
-      return { ok: true, value: { repo: project.repo, status: project.status } };
+      return { repo: project.repo, status: project.status };
     }
     const change = { status: 'rejected' as const, reason: REMOVED_REASON, changedBy: caller.githubId };
     const updated = await setProjectStatusFrom(env.DB, project, change, now, [
       doNotListWhenRejected(env.DB, { ...entry, repo: project.repo }, now),
     ]);
-    if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status } };
+    if (updated !== null) return { repo: updated.repo, status: updated.status };
   }
   throw new Error(`${repo} kept changing status while it was removed.`);
 }

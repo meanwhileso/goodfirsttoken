@@ -1,4 +1,5 @@
 import {
+  delistedReason,
   labelName,
   prRefSchema,
   type LinkMethod,
@@ -212,19 +213,17 @@ async function readRepo(
     found = (await github.read<RestRepo>(`/repos/${repo}`)).data;
   } catch (error) {
     if (!(error instanceof GitHubError) || (error.status !== 404 && error.status !== 451)) throw error;
-    if (error.status === 404 && error.bodyMessage === 'Not Found') {
-      return { unlisted: `GitHub shows no public repo named ${repo}. It went private or was deleted.` };
-    }
-    if (error.status === 451 && error.bodyMessage !== null) return { unlisted: `GitHub blocked access to ${repo}.` };
+    if (error.status === 404 && error.bodyMessage === 'Not Found') return { unlisted: delistedReason(repo, 'gone') };
+    if (error.status === 451 && error.bodyMessage !== null) return { unlisted: delistedReason(repo, 'blocked') };
     throw notGitHub(repo);
   }
   if (typeof found.full_name !== 'string' || typeof found.private !== 'boolean' || typeof found.archived !== 'boolean') {
     throw notGitHub(repo);
   }
   if (found.private || (typeof found.visibility === 'string' && found.visibility !== 'public')) {
-    return { unlisted: `${repo} is no longer public on GitHub.` };
+    return { unlisted: delistedReason(repo, 'private') };
   }
-  if (found.archived) return { unlisted: `${repo} is archived on GitHub.` };
+  if (found.archived) return { unlisted: delistedReason(repo, 'archived') };
   const language = typeof found.language === 'string' && found.language.length <= 100 ? found.language : null;
   return { name: found.full_name, language };
 }
