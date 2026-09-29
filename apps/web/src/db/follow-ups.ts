@@ -118,30 +118,41 @@ const SHOWS = `pr.state = 'open' AND ${ASKING_FOR_HELP}
   AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)`;
 
 /**
- * The donor's follow-ups no submit answered yet, oldest first, at most
- * `limit` of them. Each is on one of their claims whose PR the PRs table
- * shows open, with its submitted work, while its project asks for help
- * and the donor isn't blocked: exactly when submit_work would take a fix.
- * A follow-up on a project on the do-not-list, or one the sync delisted,
- * stays stored, and shows nowhere.
+ * The donor's follow-ups no submit answered yet, at most `limit` of them,
+ * taken in turn from each claim, its oldest first: the oldest of each,
+ * then the next of each, and so on. So a PR with many follow-ups hides no
+ * other PR's. The ones taken come back oldest first, with how many wait in
+ * all. Each is on one of their claims whose PR the PRs table shows open,
+ * with its submitted work, while its project asks for help and the donor
+ * isn't blocked: exactly when submit_work would take a fix. A follow-up on
+ * a project on the do-not-list, or one the sync delisted, stays stored,
+ * and shows nowhere.
  */
-export async function listWaitingFollowUps(db: D1Database, person: number, limit: number): Promise<WaitingFollowUp[]> {
+export async function listWaitingFollowUps(
+  db: D1Database,
+  person: number,
+  limit: number,
+): Promise<{ followUps: WaitingFollowUp[]; waiting: number }> {
   const { results } = await db
     .prepare(
-      `SELECT f.*, c.issue_repo, c.issue_number, c.project, pr.repo AS pr_repo, pr.number AS pr_number,
-         pr.url AS pr_url, sub.repo AS branch_repo, sub.branch, sub.base
-       FROM claims c
-       JOIN follow_ups f ON f.claim_id = c.id
-       JOIN prs pr ON pr.claim_id = c.id
-       JOIN submissions sub ON sub.claim_id = c.id
-       JOIN projects p ON p.repo = c.project
-       WHERE c.github_id = ?1 AND f.answered_at IS NULL AND ${SHOWS}
-       ORDER BY f.written_at, f.rowid
-       LIMIT ?2`,
+      `SELECT * FROM (
+         SELECT f.*, f.rowid AS seq, c.issue_repo, c.issue_number, c.project, pr.repo AS pr_repo, pr.number AS pr_number,
+           pr.url AS pr_url, sub.repo AS branch_repo, sub.branch, sub.base,
+           ROW_NUMBER() OVER (PARTITION BY f.claim_id ORDER BY f.written_at, f.rowid) AS turn,
+           COUNT(*) OVER () AS waiting
+         FROM claims c
+         JOIN follow_ups f ON f.claim_id = c.id
+         JOIN prs pr ON pr.claim_id = c.id
+         JOIN submissions sub ON sub.claim_id = c.id
+         JOIN projects p ON p.repo = c.project
+         WHERE c.github_id = ?1 AND f.answered_at IS NULL AND ${SHOWS}
+         ORDER BY turn, f.written_at, f.rowid
+         LIMIT ?2)
+       ORDER BY written_at, seq`,
     )
     .bind(mustParse(githubId, person, 'githubId'), mustParse(count, limit, 'limit'))
-    .all<WaitingRow>();
-  return results.map((row) => ({
+    .all<WaitingRow & { waiting: number }>();
+  const followUps = results.map((row) => ({
     record: toFollowUp(row),
     issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
     project: mustParse(repoName, row.project, 'project'),
@@ -149,6 +160,7 @@ export async function listWaitingFollowUps(db: D1Database, person: number, limit
     branch: { repo: mustParse(repoName, row.branch_repo, 'branch.repo'), name: row.branch },
     base: mustParse(commitSha, row.base, 'base'),
   }));
+  return { followUps, waiting: mustParse(count, results[0]?.waiting ?? 0, 'waiting') };
 }
 
 /** One of the donor's open PRs whose reviews the PR job read in part. */

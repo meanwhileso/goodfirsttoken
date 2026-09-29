@@ -308,6 +308,33 @@ describe('follow-ups', () => {
     expect((await issueRoom(env.ISSUE_ROOM, issue).history()).map((e) => e.kind)).toContain('pr_closed');
   });
 
+  test('at most 20 follow-ups list at once, taken in turn from each PR, so one PR with many hides no other, and the rest are counted', async () => {
+    await project();
+    const priya = await donor('priya');
+    const busy = await openedPr(priya);
+    const quiet = await openedPr(priya);
+    const lines = (from: number) => Array.from({ length: 10 }, (_, i) => ({ path: 'src/rewrite.ts', line: 1, body: `Line ${String(from + i)}.` }));
+    github.reviewPullRequest(APP, busy.pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'First pass.', comments: lines(1) });
+    github.reviewPullRequest(APP, busy.pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'Second pass.', comments: lines(11) });
+    github.reviewPullRequest(APP, busy.pr.number, { login: BY, state: 'COMMENTED', body: 'Third pass.' });
+    await runPrJob();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    github.reviewPullRequest(APP, quiet.pr.number, { login: BY, state: 'COMMENTED', body: 'One small thing.' });
+    await runPrJob();
+    vi.useRealTimers();
+
+    const next = await startSession(priya);
+
+    const listed = next.structuredContent?.followUps as { claimId: string; comment: string }[];
+    expect(listed).toHaveLength(20);
+    expect(listed.filter((f) => f.claimId === quiet.claimId).map((f) => f.comment)).toEqual(['One small thing.']);
+    expect(listed.filter((f) => f.claimId === busy.claimId).map((f) => f.comment).slice(0, 2)).toEqual(['First pass.', 'Line 1.']);
+    // 23 wait on the busy PR and 1 on the quiet one.
+    expect(next.structuredContent?.moreFollowUps).toBe(4);
+    expect(textOf(next)).toContain('4 more follow-ups wait');
+  });
+
   test("a PR with more reviews or comments than a read covers is named, with how many, and the PR's link to read the rest", async () => {
     await project();
     const priya = await donor('priya');

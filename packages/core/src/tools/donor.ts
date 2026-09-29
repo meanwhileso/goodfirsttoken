@@ -89,6 +89,8 @@ export const startSession = defineTool({
     interests: interestsSchema.nullable(),
     /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
+    /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
+    moreFollowUps: count,
     /** The donor's open PRs whose reviews were read in part, with their links to read the rest. */
     readInPart: z.array(readInPartSchema),
     /** Active and paused claims from earlier sessions. */
@@ -102,7 +104,7 @@ export const startSession = defineTool({
       out.interests
         ? `Interests: ${describeInterests(out.interests)}.`
         : 'No saved interests. Ask the donor which languages, projects, and kinds of work they like, then call set_interests.',
-      out.followUps.length > 0 && renderFollowUps(out.followUps),
+      out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
       out.readInPart.length > 0 && renderReadInPart(out.readInPart),
       out.unfinishedClaims.length > 0 &&
         `Unfinished claims (${String(out.unfinishedClaims.length)}):\n${indent(numbered(out.unfinishedClaims, renderClaimSummary), 2)}`,
@@ -653,6 +655,8 @@ export const myWork = defineTool({
   output: z.object({
     /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
+    /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
+    moreFollowUps: count,
     /** The donor's open PRs whose reviews were read in part, with their links to read the rest. */
     readInPart: z.array(readInPartSchema),
     readyToOpen: z.array(reviewItemSchema),
@@ -663,7 +667,7 @@ export const myWork = defineTool({
     out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length === 0
       ? 'Nothing waiting: no follow-ups, no work to open, and no claims in progress.'
       : lines(
-          out.followUps.length > 0 && renderFollowUps(out.followUps),
+          out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
           out.readInPart.length > 0 && renderReadInPart(out.readInPart),
           out.readyToOpen.length > 0 &&
             `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,

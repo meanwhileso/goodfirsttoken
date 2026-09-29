@@ -59,6 +59,7 @@ export const samples: Samples = {
       budget: { kind: 'issues', count: 3 },
       interests: { languages: ['typescript'], kinds: ['tests'] },
       followUps: [followUp],
+      moreFollowUps: 2,
       readInPart: [readInPart],
       unfinishedClaims: [{ ...claim, state: 'paused' }],
       mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/tweet?text=merged' }],
@@ -70,6 +71,7 @@ export const samples: Samples = {
       '@octo-maintainer on apps/web/src/feed/format.ts',
       '> Can the formatter skip events with an empty text field?',
       'paused',
+      '2 more follow-ups wait.',
       'Share it',
       'Offer the follow-ups and paused claims first',
       "Good First Token read 10 of the PR's 12 reviews and left out 3 comments on lines. Read the rest on GitHub",
@@ -177,6 +179,7 @@ export const samples: Samples = {
   my_work: {
     output: {
       followUps: [followUp],
+      moreFollowUps: 2,
       readInPart: [readInPart],
       readyToOpen: [
         {

@@ -220,7 +220,7 @@ export async function startSession(
       login: person.login,
       budget: session.budget,
       interests: person.interests,
-      followUps: await followUpsFor(caller.githubId, now),
+      ...(await followUpsFor(caller.githubId, now)),
       readInPart: await listReadInPart(env.DB, caller.githubId),
       unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
       mergedPrs: await mergedToShare(caller.githubId, now),
@@ -235,8 +235,8 @@ export async function startSession(
  * follow-up submit_work could take a fix for shows: its PR open, its
  * project asking for help, and the donor not blocked.
  */
-async function followUpsFor(person: number, now: number): Promise<FollowUp[]> {
-  const waiting = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
+async function followUpsFor(person: number, now: number): Promise<{ followUps: FollowUp[]; moreFollowUps: number }> {
+  const { followUps: waiting, waiting: all } = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
   const titles = new Map<string, string>();
   for (const { project, issue } of waiting) {
     if (!titles.has(lower(issue))) titles.set(lower(issue), (await getIssue(env.DB, project, issue))?.title ?? issue);
@@ -246,7 +246,7 @@ async function followUpsFor(person: number, now: number): Promise<FollowUp[]> {
     waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
     now,
   );
-  return waiting.map(({ record, issue, pr, branch, base }) => ({
+  const followUps = waiting.map(({ record, issue, pr, branch, base }) => ({
     claimId: record.claimId,
     issue,
     title: titles.get(lower(issue)) ?? issue,
@@ -259,6 +259,7 @@ async function followUpsFor(person: number, now: number): Promise<FollowUp[]> {
     branch,
     base,
   }));
+  return { followUps, moreFollowUps: all - followUps.length };
 }
 
 /**
@@ -306,7 +307,7 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
   );
   return answer(
     toolResult('my_work', {
-      followUps: await followUpsFor(caller.githubId, now),
+      ...(await followUpsFor(caller.githubId, now)),
       readInPart: await listReadInPart(env.DB, caller.githubId),
       readyToOpen: await readyToOpen(caller, origin, now),
       working,
