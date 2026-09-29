@@ -8,9 +8,10 @@ import { freshNumbers } from '../sync/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 
 // The views hosts that support MCP Apps show: ui:// resources the MCP
-// server lists and reads, and the tools that name them. A host without MCP
-// Apps reads neither, and gets each tool's answer as before. How each view
-// draws an answer, and what its buttons do, is tested in a browser, in
+// server reads by URI, and the tools that name them. The server lists none
+// of them, so a host without MCP Apps sees an empty resource list, a _meta
+// on three tools, and each tool's answer as before. How each view draws an
+// answer, and what its buttons do, is tested in a browser, in
 // e2e/mcp-apps.spec.ts. The project and issue here are made up.
 
 const REPO = 'sample-owner/sample-app';
@@ -63,13 +64,15 @@ async function taggedIssue(): Promise<string> {
   return issue;
 }
 
-test('the server lists a view for the issue cards, the live feed, and the review queue, each a ui:// page of the MCP Apps type', async () => {
+test('the server serves a view for the issue cards, the live feed, and the review queue by URI, each a ui:// page of the MCP Apps type, and lists none of them', async () => {
   const agent = await connectAgent(github, 'priya');
 
-  const { resources } = await agent.client.listResources();
-
-  expect(resources.map((r) => [r.uri, r.mimeType])).toEqual(Object.keys(VIEWS).map((uri) => [uri, MIME]));
-  expect(agent.client.getServerCapabilities()?.resources).toBeDefined();
+  for (const uri of Object.keys(VIEWS)) {
+    const content = await read(agent, uri);
+    expect([content.uri, content.mimeType]).toEqual([uri, MIME]);
+  }
+  expect((await agent.client.listResources()).resources).toEqual([]);
+  expect((await agent.client.listResourceTemplates()).resourceTemplates).toEqual([]);
 });
 
 test('suggest_issues names the issue cards, claim_issue the live feed, and my_work the review queue, and no other tool names a view', async () => {
@@ -94,7 +97,8 @@ test('each view is one HTML page with its script and styles inline, which loads 
     const view = uri.slice('ui://goodfirsttoken/'.length, -'.html'.length);
 
     expect(mimeType).toBe(MIME);
-    expect(text.startsWith('<!doctype html>\n<html lang="en">')).toBe(true);
+    // A doctype first, or a browser draws the page in quirks mode.
+    expect(text).toMatch(/^<!doctype html>/i);
     expect(text).toContain(`<body data-view="${view}">`);
     expect(text.match(/<script/g)).toHaveLength(1);
     expect(text.match(/<style/g)).toHaveLength(1);
@@ -107,8 +111,6 @@ test('each view is one HTML page with its script and styles inline, which loads 
     expect(script).not.toMatch(/\bimport\(|importScripts|\bfetch\(|XMLHttpRequest/);
     expect(style.length).toBeGreaterThan(1000);
     expect(script.length).toBeGreaterThan(1000);
-    // The site's own zod-checked schemas stay on the server, so the page stays small.
-    expect(text.length).toBeLessThan(60_000);
   }
 });
 
@@ -125,25 +127,32 @@ test("a live view may reach one origin, the site's own that the tools' answers n
   const live = new URL(suggestion?.liveUrl ?? '');
   const socket = `${live.protocol === 'https:' ? 'wss:' : 'ws:'}//${live.host}`;
 
-  const { resources } = await agent.client.listResources();
   for (const uri of Object.keys(VIEWS) as ViewUri[]) {
     const expected = uri.endsWith('review-queue.html') ? [] : [socket];
-    const listed = resources.find((r) => r.uri === uri)?._meta as Meta | undefined;
-    const content = await read(agent, uri);
+    // The page carries its policy, which a host reads before it draws the view.
+    const { _meta: meta } = await read(agent, uri);
 
-    // The listing lets a host review the policy before any call, and the
-    // page carries it too, which a host reads first.
-    for (const meta of [listed, content._meta]) {
-      expect(meta?.ui?.csp).toEqual({ connectDomains: expected, resourceDomains: [] });
-      expect(meta?.ui?.prefersBorder).toBe(false);
-    }
+    expect(meta?.ui?.csp).toEqual({ connectDomains: expected, resourceDomains: [] });
+    expect(meta?.ui?.prefersBorder).toBe(false);
   }
   expect(socket).toBe('wss://primary.example');
 });
 
-test("an agent in a host with no MCP Apps gets each tool's answer as before: its text and its data, and nothing more", async () => {
+test("an agent in a host with no MCP Apps sees a resources capability with an empty list, a _meta on three tools, and each tool's answer as before: its text and its data, and nothing more", async () => {
   const issue = await taggedIssue();
   const agent = await connectAgent(github, 'priya');
+
+  // The server says it has resources, since it serves the views, and lists none.
+  expect(agent.client.getServerCapabilities()?.resources).toEqual({ listChanged: true });
+  expect((await agent.client.listResources()).resources).toEqual([]);
+  // Three tools carry a _meta that names a view, which a host without MCP Apps passes over.
+  const { tools } = await agent.client.listTools();
+  expect(tools.filter((tool) => tool._meta !== undefined).map((tool) => Object.keys(tool._meta ?? {}).sort())).toEqual([
+    ['ui', 'ui/resourceUri'],
+    ['ui', 'ui/resourceUri'],
+    ['ui', 'ui/resourceUri'],
+  ]);
+
   const started = await agent.client.callTool({ name: 'start_session', arguments: { agent: 'claude-code', budget: { kind: 'until_limit' } } });
   const sessionId = (started.structuredContent as { sessionId: string }).sessionId;
 

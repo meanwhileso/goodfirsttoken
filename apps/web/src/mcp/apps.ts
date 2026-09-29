@@ -95,7 +95,13 @@ export function toolMeta(tool: ToolName): Record<string, unknown> | undefined {
   return { ui: { resourceUri: uri }, 'ui/resourceUri': uri };
 }
 
-/** Serves each view as a ui:// resource, with its metadata when listed and when read. */
+/**
+ * Serves each view as a ui:// resource that a host reads by the URI its tool
+ * names, with its metadata. The views are left out of resources/list, as the
+ * extension's spec allows for resources only a view uses, so a harness that
+ * shows the person an MCP server's resources shows none of them. They are
+ * the server's only resources, so the list is empty.
+ */
 export function registerViews(server: McpServer, origin: string): void {
   for (const name of Object.keys(views) as ViewName[]) {
     const uri = viewUri(name);
@@ -107,4 +113,5 @@ export function registerViews(server: McpServer, origin: string): void {
       () => ({ contents: [{ uri, mimeType: VIEW_MIME_TYPE, text: viewHtml(name), _meta: meta }] }),
     );
   }
+  server.server.setRequestHandler('resources/list', () => ({ resources: [] }));
 }

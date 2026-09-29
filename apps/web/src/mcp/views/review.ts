@@ -24,7 +24,12 @@ function section(title: string, items: HTMLElement[]): HTMLElement | null {
   return h('div', { class: 'view-section' }, h('h2', { class: 'view-section__title' }, title), items);
 }
 
-function readyItem(host: Host, item: ReadyItem): HTMLElement {
+/**
+ * An item waiting to open as a PR. `told` holds what the agent heard of each
+ * PR the queue opened so far. A context update takes the place of the one
+ * before it, so each one names them all.
+ */
+function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
   const size = item.additions === null || item.deletions === null ? null : `+${String(item.additions)} -${String(item.deletions)}`;
   const description = item.personWrittenDescription
     ? h('textarea', { class: 'view-field', rows: 5, 'aria-label': 'Your PR description, in your own words' })
@@ -63,7 +68,8 @@ function readyItem(host: Host, item: ReadyItem): HTMLElement {
         ),
       );
       // The agent hears of it at its next turn, so it doesn't open it again.
-      await host.updateContext(answer.text).catch(() => undefined);
+      told.push(answer.text);
+      await host.updateContext(told.join('\n')).catch(() => undefined);
     })();
   });
 
@@ -121,11 +127,12 @@ export function renderReview(host: Host, data: Record<string, unknown>, answerTe
   if (ready.length + followUps.length + working.length === 0) {
     return [h('p', { class: 'view-quiet view-item' }, answerText || 'Nothing waiting.')];
   }
+  const told: string[] = [];
   return [
     section(`Maintainers asked for changes (${String(followUps.length)})`, followUps.map((f) => followUpItem(host, f))),
     ready.length === 0
       ? h('p', { class: 'view-quiet view-item' }, 'No work waits to open as a PR.')
-      : section(`Ready to open as a PR (${String(ready.length)})`, ready.map((item) => readyItem(host, item))),
+      : section(`Ready to open as a PR (${String(ready.length)})`, ready.map((item) => readyItem(host, item, told))),
     section(`In progress (${String(working.length)})`, working.map((claim) => workingItem(host, claim))),
   ].filter((part): part is HTMLElement => part !== null);
 }

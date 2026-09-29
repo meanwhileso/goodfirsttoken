@@ -713,6 +713,7 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
 | `src/mcp/views/parts.ts`, `dom.ts` | The pieces the three share, and the one function that makes elements |
 | `src/mcp/views/view.css` | The card, and the dark colors |
 | `scripts/mcp-views.ts` | The Vite plugin that builds the script and styles for the Worker |
+| `scripts/apps-host-proxy.ts` | `pnpm apps:host`, which lets the reference host reach `pnpm dev`, under [Trying the views in basic-host](#trying-the-views-in-basic-host) |
 | `src/feed/follow.ts` | Following a feed's socket from a browser, for pages and views alike |
 
 - **Built against the extension's stable spec of 2026-01-26,**
@@ -733,24 +734,34 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
   the spec allows. The reference host from the same repo, `basic-host` at
   2.0.3, which uses the SDK's `AppBridge`, runs the views against
   `pnpm dev`: a Pick claims, the card follows the issue live, and Open PR
-  opens a PR on the GitHub fake.
-- **Every agent gets the views.** The spec says a server should register
-  views only for a client that declares `io.modelcontextprotocol/ui` among
-  its capabilities. `createMcpHandler` builds a new server for each request.
-  A 2025-era client declares its capabilities only in `initialize`, a
-  request of its own, so a `tools/list` can't see them. The 2026-07-28
-  protocol declares them on every request, but the MCP client SDK stays on
-  the 2025 era unless told otherwise, and the reference host declares no
-  capability at all. So a check would hide the views from the hosts that show
-  them. The spec makes the `_meta` safe to ignore: a host without MCP Apps
-  treats the tool as any other, and its answers are unchanged.
+  opens a PR on the GitHub fake. The steps are under
+  [Trying the views in basic-host](#trying-the-views-in-basic-host).
+- **Every agent gets the views, by choice.** The spec says a server should
+  register views only for a client that declares `io.modelcontextprotocol/ui`
+  among its capabilities. The server could check. A request in the
+  2026-07-28 protocol carries the client's capabilities. A 2025-era client,
+  which the MCP client SDK is unless told otherwise, declares them only in
+  `initialize`, a request of its own. `createMcpHandler` builds a new server
+  for each request, so the server would keep them with the agent's
+  connection, to read at each `tools/list`. It does neither, since the
+  reference host, `basic-host` 2.0.3, declares no capability for the
+  extension, and a check would hide the views from it. So what a host
+  without MCP Apps sees is kept small: a
+  `_meta` on three tools, which the spec makes safe to ignore, a `resources`
+  capability, and an empty `resources/list`. `registerViews` leaves the
+  views out of it, as the spec allows for resources only a view uses, and a
+  host reads each view by the URI its tool names. Every answer is the same
+  for every host.
 - **One page per view, built with the Worker.** `import view from
   './views/main.ts?mcp-view'` gives the Worker a script and styles as
   strings. `scripts/mcp-views.ts` answers that import with a Vite build of
   its own: the entry and what it imports, as one minified script, and the
   styles it imports, which are the design system's `tokens.css`, `base.css`,
-  and `components.css`, and `view.css`. A build that would write any other
-  file, like a font or an image the styles name, fails. `vite.config.ts` and
+  and `components.css`, and `view.css`. Vite puts a file the styles name,
+  like a font, into them as a `data:` URL, so the plugin checks what it
+  built. The build fails when the styles name a file with `url()` or pull
+  in a stylesheet with `@import`, since a view loads nothing, or when the
+  script and styles pass `MAX_VIEW_BYTES`, 64 KB. `vite.config.ts` and
   `vitest.config.ts` both load the plugin, so `pnpm dev`, the build, and the
   tests serve the same pages. `viewHtml` puts the two in one HTML page per
   view, which differ only in `<body data-view>`. Each is about 36 KB, and
@@ -772,14 +783,64 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
   refuses an attribute that starts with `on`, and no view sets
   `innerHTML`. A link is a button that asks the host to open the page with
   `ui/open-link`, since a sandboxed frame can't open one, so no URL from an
-  answer lands in an attribute. Only an `http` or `https` URL gets one.
+  answer lands in an attribute. `webLink` in `dom.ts` takes an `https` URL,
+  or an `http` one on this machine, as in development, and a live page's
+  socket follows the same rule. Any other address shows as text. When the
+  host won't open a page, its address shows beside the link, to copy.
+- **Only the host talks to a view.** `bridge.ts` takes a message only from
+  `window.parent`, the window that framed the view. Another frame on the
+  page can't answer a view's call or set its theme.
 - **The agent hears of a view's action.** A Pick sends `ui/message`, which a
   host adds to the conversation as the donor's, so the agent takes the
-  claim up. Open PR sends `ui/update-model-context`, which the agent reads at
-  its next turn.
+  claim up, and asks the donor for special instructions first, as after a
+  pick in the terminal. Open PR sends `ui/update-model-context`, which the
+  agent reads at its next turn. Each update takes the place of the one
+  before it, so each names every PR the queue opened so far. A host can
+  refuse a request with an error, or with a result that says `isError`,
+  and a view takes both as a refusal.
+- **The first answer only.** A host sends the input and answer of the call
+  it framed the view for, and may send those of the view's own tool calls
+  after them. `main.ts` draws the first ones, and each button shows its own
+  call's answer. A change of the host's context holds only what changed, so
+  `main.ts` merges each into what it has, and the theme stays until a
+  change names another. When the host takes the view down with
+  `ui/resource-teardown`, or the view draws again, it closes its sockets.
+  When the host won't start it, the view says so.
 - **The host's policy.** A view's script and styles are inline, which the
   spec's default policy allows with `'unsafe-inline'`. It asks for no
   permission, no frame, and no resource domain.
+
+#### Trying the views in basic-host
+
+The reference host from the extension's repo shows the views against
+`pnpm dev`, by hand. It isn't a dependency of this repo. It connects to an
+MCP server with no sign-in, so `pnpm apps:host` signs a sample person's
+agent in to the site, as a harness does, and serves the site's `/mcp` on
+`http://localhost:3001/mcp`, the address `basic-host` connects to unless
+told otherwise, with that agent's token and the CORS headers a browser
+needs. It takes only a site on this machine, since anything that reaches
+its port acts as that person.
+
+1. Clone the extension's repo at 2.0.3, `git clone --branch v2.0.3 --depth 1
+   https://github.com/modelcontextprotocol/ext-apps`, and copy
+   `examples/basic-host` out of it, since inside the repo it builds against
+   the repo's own packages.
+2. In the copy, `npm install`, then build its two pages with
+   `INPUT=index.html npx vite build` and `INPUT=sandbox.html npx vite build`.
+   Its own `npm run build` needs tools from the repo's root.
+3. Start it with `node serve.ts`. It serves the host on port 8080, and the
+   sandbox its frames load on port 8081.
+4. In this repo, run `pnpm dev`, then `pnpm seed`, then `pnpm apps:host`,
+   which signs in as `@lena`. `--login` names another sample person,
+   `--port` another port, and `--site` another local site. For another
+   port, start `basic-host` with `SERVERS='["http://localhost:<port>/mcp"]'`.
+5. Open `http://localhost:8080`. Pick a tool, fill its input as JSON, and
+   press Call Tool: `start_session`, `set_interests` with a sample project,
+   `suggest_issues` with the session for the issue cards, and Pick one.
+   `post_update` sends a line the card shows live. `claim_issue` shows the
+   live feed, `submit_work` and then `my_work` show the review queue, and
+   Open PR opens the PR on the GitHub fake. The sun and moon button at the
+   bottom switches the host between light and dark.
 
 ### The design system
 
@@ -2831,10 +2892,11 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   made the call. The fake's state shows where each branch, commit, and PR
   went, and who authored it. Its forks are ready at once, except in the
   test of a fork GitHub is still making. `apps.test.ts` reads the views
-  MCP Apps hosts show as a client would, with `resources/list`,
-  `resources/read`, and each tool's `_meta`, and checks that an agent gets
-  each answer with nothing added. How a view draws an answer runs in a
-  browser, in the end-to-end tests.
+  MCP Apps hosts show as a client would, with `resources/read` and each
+  tool's `_meta`, and checks what a host without MCP Apps sees: the
+  `resources` capability, an empty `resources/list`, the `_meta` on three
+  tools, and each answer with nothing added. How a view draws an answer
+  runs in a browser, in the end-to-end tests.
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
@@ -2873,9 +2935,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   server, in `apps-host.ts`, a stand-in for a host: a page that frames the
   view in a sandbox under the policy the spec builds from the view's
   declared domains, answers `ui/initialize`, sends the call's input and
-  answer, and records what the view sends. The test hands each view answers
-  of its own, some with markup in their text, answers the tool calls its
-  buttons make, and stands in for an issue's socket with `routeWebSocket`.
+  answer, and records what the view sends. It can refuse what a view asks,
+  either way a host may, send the view more, and post to it from another
+  frame on the page. The test hands each view answers of its own, some with
+  markup in their text, answers the tool calls its buttons make, and stands
+  in for an issue's socket with `routeWebSocket`. `contrastOf` measures a
+  part's text against its background, so the dark tests check colors by
+  what they do.
   `mcp-apps-flow.spec.ts` passes the views' tool calls to the MCP server
   with a sample donor's agent: a Pick claims a seeded issue, the card
   follows the room over the real socket, and Open PR opens a PR on the

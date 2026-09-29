@@ -2,7 +2,7 @@ import type { FeedEvent, ToolOutput } from '@goodfirsttoken/core';
 import { followFeed, socketUrl } from '../../feed/follow';
 import { toWallLine } from '../../home/live';
 import type { Host } from './bridge';
-import { h } from './dom';
+import { h, webLink } from './dom';
 import { expires, issueHead, link, listOf, slots } from './parts';
 
 // The live feed view: a claim, and the lines its issue's room streams live,
@@ -13,6 +13,15 @@ export type Claimed = ToolOutput<'claim_issue'>;
 
 /** How many of the newest lines the view keeps. The issue page and its text stream have them all. */
 const LINES = 20;
+
+/** How to stop each socket the view follows. */
+const following = new Set<() => void>();
+
+/** Closes every socket the view follows, before the view draws again or the host takes it down. */
+export function closeFeeds(): void {
+  for (const stop of following) stop();
+  following.clear();
+}
 
 const EVENT_TEXT = ['id', 'time', 'user', 'agent', 'issue', 'claim', 'kind', 'text'] as const;
 
@@ -60,7 +69,7 @@ function lineOf(event: FeedEvent): HTMLElement {
  * The issue's lines, newest first, followed live over the socket of its
  * text stream, `<live page>/live.ndjson`. The socket's origin is the one the
  * server named the live page with, which is the one the view's resource
- * lets it reach.
+ * lets it reach. A live page webLink doesn't take gets no socket.
  */
 export function liveWall(host: Host, liveUrl: string): HTMLElement {
   const wall = h('div', { class: 'wall view-wall', 'aria-live': 'polite' });
@@ -72,14 +81,15 @@ export function liveWall(host: Host, liveUrl: string): HTMLElement {
     empty,
     wall,
   );
-  if (!URL.canParse(liveUrl)) return part;
-  const page = new URL(liveUrl);
-  if (page.protocol !== 'https:' && page.protocol !== 'http:') return part;
-  followFeed(socketUrl(`${page.pathname}/live.ndjson`, page.href), null, eventOf, (event) => {
+  const live = webLink(liveUrl);
+  if (live === null) return part;
+  const page = new URL(live);
+  const stop = followFeed(socketUrl(`${page.pathname}/live.ndjson`, page.href), null, eventOf, (event) => {
     empty.remove();
     wall.insertBefore(lineOf(event), wall.firstChild);
     while (wall.children.length > LINES) wall.lastElementChild?.remove();
   });
+  following.add(stop);
   return part;
 }
 

@@ -19,9 +19,13 @@ function holders(s: Suggestion): string {
   return `${String(s.slotsTaken)} of ${String(s.slots)} slots taken${named === '' ? '' : `: ${named}`}`;
 }
 
-/** What the view tells the agent once the card claimed an issue, so it takes the claim up. */
+/**
+ * What the view tells the agent once the card claimed an issue, so it takes
+ * the claim up. As after a pick in the terminal, the agent asks the donor
+ * for special instructions first (docs/specs/v1.md, "Donor instructions").
+ */
 export function pickedMessage(issue: string, claimId: string, sessionId: string): string {
-  return `I picked ${issue} in the Good First Token card, which claimed it as claim ${claimId}. Call claim_issue with sessionId ${sessionId} and issue ${issue} to get the claim, then work it.`;
+  return `I picked ${issue} in the Good First Token card, which claimed it as claim ${claimId}. Call claim_issue with sessionId ${sessionId} and issue ${issue} to get the claim, ask me "Any special instructions for this one?", then work it.`;
 }
 
 interface CardsContext {

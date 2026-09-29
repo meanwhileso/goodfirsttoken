@@ -15,7 +15,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   const element = document.createElement(tag);
   for (const [name, value] of Object.entries(attrs ?? {})) {
     if (value === null || value === undefined || value === false) continue;
-    // Handlers are added with addEventListener, never as attributes.
+    // Handlers go on with addEventListener. An attribute that would run script is refused.
     if (/^on/i.test(name)) throw new Error(`A view never sets ${name} as an attribute.`);
     element.setAttribute(name, value === true ? '' : String(value));
   }
@@ -31,11 +31,19 @@ export function append(parent: Node, children: readonly (Child | readonly Child[
   }
 }
 
-/** A web link, or null for anything that isn't http or https, which a view never links. */
+/** The hosts that may take http, the ones on this machine, as in local development. */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * A web page a view may open: an https URL, or an http one on this machine.
+ * Anything else, like a javascript: or data: URL, is null, and a view shows
+ * its text alone.
+ */
 export function webLink(url: unknown): string | null {
   if (typeof url !== 'string' || !URL.canParse(url)) return null;
   const parsed = new URL(url);
-  return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+  if (parsed.protocol === 'https:') return parsed.href;
+  return parsed.protocol === 'http:' && LOCAL_HOSTS.has(parsed.hostname) ? parsed.href : null;
 }
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string>): SVGElementTagNameMap[K] {

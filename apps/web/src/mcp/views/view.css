@@ -43,6 +43,9 @@ body { padding: 1px; }
   overflow-wrap: anywhere;
 }
 .view-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.view-link-wrap { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; max-width: 100%; }
+/* The address of a page the host wouldn't open, to copy. */
+.view-url { font: var(--mono-sm); color: var(--text-muted); overflow-wrap: anywhere; user-select: all; }
 .view-list { display: flex; flex-direction: column; gap: 4px; padding-left: 16px; list-style: disc; }
 .view-summary { font-size: 14px; }
 
@@ -83,13 +86,19 @@ body { padding: 1px; }
 /* ---------- Dark, when the host says so ----------
 
    The prompt box is the one dark surface in brand/design.md, so a dark
-   view takes its colors: code-bg under the card, code-surface for it,
+   view takes its colors: code-bg for paper, code-surface for the card,
    code-line for rules, code-text for text, and code-accent for links. The
    quieter texts and the tints are those colors mixed, so every color still
-   comes from a token. */
+   comes from a token.
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
+   tokens.css sets the colors on :root, and the dark ones are set on body,
+   under it. That way a dark color can mix from the light one it replaces,
+   which :root passes down as --light-attention. A custom property that
+   names itself on the same element is a cycle, and a browser drops it. */
+
+:root { --light-attention: var(--attention); }
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="dark"] body {
   --paper: var(--code-bg);
   --surface: var(--code-surface);
   --ink: var(--code-text);
@@ -102,8 +111,8 @@ body { padding: 1px; }
   --label-ink: var(--code-accent);
   --label-tint: color-mix(in srgb, var(--label) 24%, var(--code-surface));
   --merged-tint: color-mix(in srgb, var(--merged) 28%, var(--code-surface));
-  --attention: color-mix(in srgb, var(--attention) 35%, var(--code-text));
-  --attention-tint: color-mix(in srgb, var(--attention) 30%, var(--code-surface));
+  --attention: color-mix(in srgb, var(--light-attention) 35%, var(--code-text));
+  --attention-tint: color-mix(in srgb, var(--light-attention) 30%, var(--code-surface));
   --on-ink: var(--code-bg);
   --focus: 0 0 0 2px var(--code-bg), 0 0 0 5px var(--label);
 }

@@ -2647,40 +2647,63 @@ Apps shows each tool's text, as a terminal harness does.
 - The MCP server serves each view as a `ui://` resource of the type
   `text/html;profile=mcp-app`: `ui://goodfirsttoken/issue-cards.html`,
   `ui://goodfirsttoken/live-feed.html`, and
-  `ui://goodfirsttoken/review-queue.html`. It lists all three.
+  `ui://goodfirsttoken/review-queue.html`. A host reads a view by the URI
+  its tool names. The server lists none of them, as the extension's spec
+  allows for resources only a view uses.
 - Each of the three tools names its view in its `_meta`, as
   `ui.resourceUri`, and as `ui/resourceUri`, the key hosts read before the
   extension's spec moved it. No other tool names one.
-- The server gives every agent the resources and the `_meta`, since it
-  can't tell which hosts show views. A host without MCP Apps reads neither.
-  Each tool keeps its name, description, input, and output, and each answer
-  is its text and its data, as before, with nothing added to it.
+- The server gives every agent the same tools and resources, whether its
+  host shows views or not. It could tell some hosts apart by the
+  capabilities they declare, and doesn't, since the extension's own
+  reference host declares none and would lose the views.
+- So a host without MCP Apps sees this: the server says it has resources,
+  with `listChanged`, and `resources/list` and `resources/templates/list`
+  answer with empty lists. In `tools/list`, three tools carry the `_meta`
+  above, which such a host passes over. Each tool keeps its name,
+  description, input, and output, and each answer is its text and its data,
+  as before, with nothing added to it.
 
 **What a view is**
 
 - A view is one HTML page with its script and its styles in it. It loads
   nothing else, no script, style, font, or image from anywhere, so it uses
   the system's fonts.
-- Each view says what it may reach, in its resource's `_meta.ui.csp`, when
-  listed and when read. The issue cards and the live feed may reach one
+- Each view says what it may reach, in the `_meta.ui.csp` of the resource
+  a host reads. The issue cards and the live feed may reach one
   origin, over a WebSocket: the site's own, the one the tools' answers name
   the live pages on. The review queue reaches none. A view asks the host for
   no border, since it draws its own card.
 - A view draws the answer from its structured content, the data the tool's
   text is written from, so the two say the same thing. An answer with no
   data shows its text, and a refusal shows its own text.
+- A view draws the first input and answer its host sends, those of the call
+  it shows. A host may send the input and answer of the view's own tool
+  calls after them, and the view keeps what it drew. A button shows its own
+  call's answer.
 - Text from GitHub and from other people shows as the characters it is:
   an issue's title, a label, a login, a posted line, a summary. A view
   renders no HTML or Markdown from it.
 - A view calls tools only through its host, which calls the MCP server with
   the donor's own agent. It holds no token and reaches no API. The server's
   checks are the only checks, as for any call.
-- A link opens through the host.
+- A view takes messages only from its host, the window that framed it.
+  Another frame on the page can't answer its calls or change its theme.
+- A host can refuse what a view asks with an error, or with a result that
+  says `isError`. A view takes both as a refusal.
+- A link opens through the host: an `https` page, or an `http` one on this
+  machine, as in development. Any other address, like a `javascript:` or
+  `data:` URL, shows as text. When the host won't open a page, its address
+  shows beside the link, to copy.
 - A view is light or dark as the host says, or as the person's system says
-  when the host doesn't. Dark takes the colors of the prompt box, the one
-  dark surface in the design system.
+  when the host doesn't. A change the host sends holds only what changed,
+  so the theme stays until a change names another. Dark takes the colors
+  of the prompt box, the one dark surface in the design system, and a
+  refusal and the tough badge keep a color of their own in it.
 - A view tells the host its size each time it changes, so the frame fits
   it.
+- When the host takes a view down, the view closes its sockets. When the
+  host won't start a view, the view says so, with the host's reason.
 
 **The issue cards**
 
@@ -2694,11 +2717,13 @@ Apps shows each tool's text, as a terminal harness does.
   input. While the claim is on its way, every Pick waits. A refusal shows
   its text under the card, and every Pick works again.
 - A claim turns the card into the claim, with its issue's live lines under
-  it, as the live feed shows them, and the other cards take no Pick. The
+  it, as the live feed shows them, and every other card's Pick is off. The
   view then puts a message from the donor in the conversation, which tells
-  the agent the issue and the claim, and to call `claim_issue` with them,
-  which gives back that claim, resumed. When the host won't take the
-  message, the card says to tell the agent.
+  the agent the issue and the claim, to call `claim_issue` with them, which
+  gives back that claim, resumed, and to ask the donor "Any special
+  instructions for this one?" before it works the issue, as after a pick in
+  the terminal. When the host won't take the message, the card says to
+  tell the agent.
 
 **The live feed**
 
@@ -2720,7 +2745,8 @@ Apps shows each tool's text, as a terminal harness does.
 - Work whose PR can't open now says why, and its button is off.
 - Open PR calls `open_pr` with the claim. A refusal shows its text, and the
   button works again. An opened PR shows its link, and the view tells the
-  agent what opened, for its next turn.
+  agent, for its next turn, every PR it opened so far, since each thing a
+  view tells it takes the place of the last.
 - The follow-ups come before that work, and the claims in progress after
   it, as `my_work` lists them. With nothing at all, the view shows the
   tool's text.

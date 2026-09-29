@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 import type { FeedEvent } from '@goodfirsttoken/core';
 import { connectAgent, runAddress } from '../scripts/skill-run';
-import { openView, readViews, sent, type View, type ViewName } from './apps-host';
+import { contrastOf, openView, readViews, sent, type View, type ViewName } from './apps-host';
 import { expect, test } from './fixtures';
 import { SITE } from './hosts';
 
@@ -158,7 +158,7 @@ test("Pick claims the issue through the host with the call's session, the card t
       content: [
         {
           type: 'text',
-          text: `I picked ${ISSUE} in the Good First Token card, which claimed it as claim c_e2eclaim1. Call claim_issue with sessionId s_e2e1 and issue ${ISSUE} to get the claim, then work it.`,
+          text: `I picked ${ISSUE} in the Good First Token card, which claimed it as claim c_e2eclaim1. Call claim_issue with sessionId s_e2e1 and issue ${ISSUE} to get the claim, ask me "Any special instructions for this one?", then work it.`,
         },
       ],
     },
@@ -367,7 +367,205 @@ test('a view talks to its host as the extension says: ui/initialize with its ver
   expect(messages[1]).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
   expect(sent(messages, 'ui/notifications/size-changed').length).toBeGreaterThan(0);
   await expect(view.frame.locator('html')).toHaveAttribute('data-theme', 'dark');
-  // The card takes the prompt box's surface, code-surface, in the dark.
-  await expect(view.frame.locator('.view')).toHaveCSS('background-color', 'rgb(22, 27, 34)');
-  await expect(view.frame.locator('.view-issue__title')).toHaveCSS('color', 'rgb(230, 237, 243)');
+  // Light text on a dark card, with the contrast to read it.
+  const title = await contrastOf(view.frame, '.view-issue__title');
+  const [r = 0, g = 0, b = 0] = title.background.split(',').map(Number);
+  expect(r + g + b).toBeLessThan(3 * 80);
+  expect(title.ratio).toBeGreaterThanOrEqual(4.5);
+});
+
+test('in the dark, a refusal and the tough badge keep colors of their own, with the contrast to read them', async ({ page }) => {
+  const refusal = `Refused (issue_full): ${ISSUE} has no open slot: 3 of 3 are taken. Pick another issue.`;
+  const view = await openView(page, views['issue-cards'], {
+    input: { sessionId: 's_e2e1' },
+    result: suggested,
+    theme: 'dark',
+    callTool: () => Promise.resolve({ content: text(refusal), isError: true }),
+  });
+  await view.frame.locator('.view-pick').first().getByRole('button', { name: 'Pick' }).click();
+  await expect(view.frame.getByRole('alert')).toHaveText(refusal);
+
+  const body = await contrastOf(view.frame, '.view-issue__title');
+  for (const selector of ['.view-notice--refused', '.chip--tough']) {
+    const part = await contrastOf(view.frame, selector);
+    expect(part.text, `${selector} has a color of its own`).not.toBe(body.text);
+    expect(part.background, `${selector} sits on a tint of its own`).not.toBe(body.background);
+    expect(part.ratio, `${selector} reads at 4.5:1 or more`).toBeGreaterThanOrEqual(4.5);
+  }
+});
+
+test("a view keeps the host's theme when the host sends a change of something else, and follows a change of theme", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  const view = await openView(page, views['review-queue'], { input: {}, result: work([ready]), theme: 'dark' });
+  await expect(view.frame.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  // basic-host sends the frame's size each time it changes.
+  await view.send({ method: 'ui/notifications/host-context-changed', params: { containerDimensions: { width: 600, maxHeight: 6000 } } });
+  await view.send({ method: 'ui/notifications/host-context-changed', params: { displayMode: 'inline' } });
+  await expect.poll(async () => sent(await view.messages(), 'ui/notifications/size-changed').length).toBeGreaterThan(0);
+  await expect(view.frame.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  await view.send({ method: 'ui/notifications/host-context-changed', params: { theme: 'light' } });
+  await expect(view.frame.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+for (const refusal of ['isError', 'error'] as const) {
+  test(`when the host refuses the message about a Pick, with ${refusal === 'isError' ? 'a result that says isError' : 'an error'}, the card says to tell the agent`, async ({ page }) => {
+    const view = await openView(page, views['issue-cards'], {
+      input: { sessionId: 's_e2e1' },
+      result: suggested,
+      refuse: { 'ui/message': refusal },
+      callTool: () => Promise.resolve(claimed(ISSUE, TITLE)),
+    });
+    const card = view.frame.locator('.view-pick').first();
+
+    await card.getByRole('button', { name: 'Pick' }).click();
+
+    await expect(card.getByRole('status').filter({ hasText: 'Tell your agent' })).toHaveText(`Tell your agent to work ${ISSUE}, claim c_e2eclaim1.`);
+  });
+
+  test(`when the host won't open a link, with ${refusal === 'isError' ? 'a result that says isError' : 'an error'}, the page's address shows beside it`, async ({ page }) => {
+    const view = await openView(page, views['issue-cards'], { input: { sessionId: 's_e2e1' }, result: suggested, refuse: { 'ui/open-link': refusal } });
+    const card = view.frame.locator('.view-pick').first();
+    await expect(card.getByText(suggestion.url, { exact: true })).toHaveCount(0);
+
+    await card.getByRole('button', { name: 'Read it' }).click();
+
+    await expect(card.getByText(suggestion.url, { exact: true })).toBeVisible();
+  });
+}
+
+test("a view ignores messages from any frame but its host's, like a forged answer to its Pick or a forged theme", async ({ page }) => {
+  const refusal = `Refused (issue_full): ${ISSUE} has no open slot: 3 of 3 are taken. Pick another issue.`;
+  let answer: (result: unknown) => void = () => undefined;
+  const view = await openView(page, views['issue-cards'], {
+    input: { sessionId: 's_e2e1' },
+    result: suggested,
+    callTool: () => new Promise((resolve) => { answer = resolve; }),
+  });
+  const card = view.frame.locator('.view-pick').first();
+  await card.getByRole('button', { name: 'Pick' }).click();
+  await expect.poll(async () => sent(await view.messages(), 'tools/call').length).toBe(1);
+  const [call] = sent(await view.messages(), 'tools/call');
+
+  // Another frame on the page answers the Pick first, with a claim, and asks for the dark.
+  await view.forge({ id: call?.id, result: claimed(ISSUE, TITLE) });
+  await view.forge({ method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } });
+  await expect.poll(() => page.locator('iframe').count()).toBe(3);
+  await page.waitForTimeout(300);
+  answer({ content: text(refusal), isError: true });
+
+  await expect(card.getByRole('alert')).toHaveText(refusal);
+  await expect(card).not.toContainText('Claimed as claim');
+  await expect(view.frame.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('a view opens only an https page, or an http one on this machine, and shows any other address as text', async ({ page }) => {
+  const cards = [
+    { ...suggestion, issue: 'sample-owner/sample-app#21', title: 'Script link', url: 'javascript:parent.postMessage("owned","*")' },
+    { ...suggestion, issue: 'sample-owner/sample-app#22', title: 'Data link', url: 'data:text/html,<script>parent.postMessage("owned","*")</script>' },
+    { ...suggestion, issue: 'sample-owner/sample-app#23', title: 'Plain http elsewhere', url: 'http://github.example/sample-owner/sample-app/issues/23' },
+    { ...suggestion, issue: 'sample-owner/sample-app#24', title: 'Local http', url: 'http://127.0.0.1:8944/sample-owner/sample-app/issues/24' },
+  ];
+  const view = await openView(page, views['issue-cards'], {
+    input: { sessionId: 's_e2e1' },
+    result: { content: text('Issues maintainers tagged for outside help (4):'), structuredContent: { suggestions: cards } },
+  });
+  const card = (n: number) => view.frame.locator('.view-pick').nth(n);
+  await expect(view.frame.locator('.view-pick')).toHaveCount(4);
+
+  for (const n of [0, 1, 2]) {
+    await expect(card(n).getByRole('button', { name: 'Read it' })).toHaveCount(0);
+    await card(n).getByText('Read it', { exact: true }).click();
+  }
+  await card(3).getByRole('button', { name: 'Read it' }).click();
+
+  await expect.poll(async () => sent(await view.messages(), 'ui/open-link').map((m) => m.params)).toEqual([
+    { url: 'http://127.0.0.1:8944/sample-owner/sample-app/issues/24' },
+  ]);
+  expect(JSON.stringify(await view.messages())).not.toContain('owned');
+});
+
+test("a view draws the first answer the host sends, and keeps it when the host sends the answers of the view's own calls", async ({ page }) => {
+  const calls: Record<string, unknown>[] = [];
+  const view = await openView(page, views['issue-cards'], {
+    input: { sessionId: 's_e2e1' },
+    result: suggested,
+    callTool: (_name, args) => {
+      calls.push(args);
+      return Promise.resolve(claimed(second.issue, second.title, 'c_e2eclaim2'));
+    },
+  });
+  await expect(view.frame.locator('.view-pick')).toHaveCount(2);
+
+  // After a tools/call a view made, a host may send that call's input and answer too.
+  await view.send({ method: 'ui/notifications/tool-input', params: { arguments: { sessionId: 's_other', issue: ISSUE } } });
+  await view.send({ method: 'ui/notifications/tool-result', params: claimed(ISSUE, TITLE) });
+  await page.waitForTimeout(300);
+  await expect(view.frame.locator('.view-pick')).toHaveCount(2);
+  await view.frame.locator('.view-pick').nth(1).getByRole('button', { name: 'Pick' }).click();
+  await expect(view.frame.locator('.view-pick').nth(1)).toContainText('Claimed as claim c_e2eclaim2');
+  expect(calls).toEqual([{ sessionId: 's_e2e1', issue: second.issue }]);
+
+  const queue = await openView(await page.context().newPage(), views['review-queue'], { input: {}, result: work([ready]) });
+  await expect(queue.frame.getByRole('button', { name: 'Open PR' })).toBeVisible();
+  await queue.send({
+    method: 'ui/notifications/tool-result',
+    params: {
+      content: text('Opened PR #41.'),
+      structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' }, prOnIssue: null },
+    },
+  });
+  await page.waitForTimeout(300);
+  await expect(queue.frame.getByRole('button', { name: 'Open PR' })).toBeVisible();
+});
+
+test('each Open PR tells the agent every PR the queue opened so far, since a context update takes the place of the last', async ({ page }) => {
+  const opened = (claimId: string, number: number) => ({
+    content: text(`Opened PR #${String(number)} on sample-owner/sample-app for ${ISSUE}, claim ${claimId}.`),
+    structuredContent: { claimId, issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number, url: `https://github.example/sample-owner/sample-app/pull/${String(number)}` }, prOnIssue: null },
+  });
+  const view = await openView(page, views['review-queue'], {
+    input: {},
+    result: work([ready, { ...ready, claimId: 'c_e2eclaim4', issue: 'sample-owner/sample-app#8' }]),
+    callTool: (_name, args) => Promise.resolve(args.claimId === 'c_e2eclaim3' ? opened('c_e2eclaim3', 41) : opened('c_e2eclaim4', 42)),
+  });
+  const items = view.frame.locator('.view-ready');
+
+  await items.first().getByRole('button', { name: 'Open PR' }).click();
+  await expect(items.first().getByRole('status')).toContainText('Opened PR #41');
+  await items.nth(1).getByRole('button', { name: 'Open PR' }).click();
+  await expect(items.nth(1).getByRole('status')).toContainText('Opened PR #42');
+
+  await expect.poll(async () => sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([
+    { content: text(`Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3.`) },
+    {
+      content: text(
+        `Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3.\nOpened PR #42 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim4.`,
+      ),
+    },
+  ]);
+});
+
+test('when the host takes the view down, the view closes its socket to the site', async ({ page }) => {
+  let closed = false;
+  const sockets: { send: (message: string) => void }[] = [];
+  await page.routeWebSocket(/\/live\.ndjson/, (socket) => {
+    sockets.push(socket);
+    socket.onClose(() => { closed = true; });
+  });
+  const view = await openView(page, views['live-feed'], { input: { sessionId: 's_e2e1', issue: ISSUE }, result: claimed(ISSUE, TITLE) });
+  await expect.poll(() => sockets.length).toBe(1);
+
+  await view.send({ id: 99, method: 'ui/resource-teardown', params: {} });
+
+  await expect.poll(async () => (await view.messages()).some((m) => m.id === 99 && 'result' in m)).toBe(true);
+  await expect.poll(() => closed).toBe(true);
+});
+
+test("when the host won't start the view, it says so", async ({ page }) => {
+  const view = await openView(page, views['issue-cards'], { input: { sessionId: 's_e2e1' }, result: suggested, refuse: { 'ui/initialize': 'error' } });
+
+  await expect(view.frame.getByRole('alert')).toHaveText("The host didn't start the view: The host refused ui/initialize.");
+  await expect(view.frame.getByText('Waiting for the answer.')).toHaveCount(0);
 });

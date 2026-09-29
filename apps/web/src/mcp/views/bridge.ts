@@ -31,18 +31,20 @@ export interface Handlers {
   result(answer: ToolAnswer): void;
   /** The tool call was cancelled before it answered. */
   cancelled(reason: string): void;
-  /** The host's context, when the view starts and when it changes. */
+  /** The host's context when the view starts, then each change to it, which holds only the fields that changed. */
   context(context: HostContext): void;
+  /** The host is about to take the view down. */
+  teardown(): void;
 }
 
 export interface Host {
   /** Calls one of the server's tools through the host. */
   callTool(name: string, args: Record<string, unknown>): Promise<ToolAnswer>;
-  /** Asks the host to open a link. */
+  /** Asks the host to open a link. Throws when the host refuses. */
   openLink(url: string): Promise<void>;
-  /** Puts a message from the person into the conversation, which the agent answers. */
+  /** Puts a message from the person into the conversation, which the agent answers. Throws when the host refuses. */
   message(text: string): Promise<void>;
-  /** Tells the agent something for its next turn, without a message. */
+  /** Tells the agent something for its next turn, without a message. Throws when the host refuses. */
   updateContext(text: string): Promise<void>;
 }
 
@@ -76,9 +78,10 @@ export function answerOf(result: unknown): ToolAnswer {
 export async function connect(handlers: Handlers, appInfo: { name: string; version: string }): Promise<Host> {
   let next = 1;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
-  // Hosts send to the view's frame with any origin, and a sandboxed frame
-  // can't know its parent's, so the parent window itself is the check.
-  const send = (message: Json) => { window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*'); };
+  const send = (message: Json) => {
+    // A sandboxed view can't know its host's origin, so it posts to any, and takes messages from its parent window alone.
+    window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*'); // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration
+  };
   const request = (method: string, params: Json): Promise<unknown> =>
     new Promise((resolve, reject) => {
       const id = next++;
@@ -86,6 +89,11 @@ export async function connect(handlers: Handlers, appInfo: { name: string; versi
       send({ id, method, params });
     });
   const notify = (method: string, params?: Json) => { send(params === undefined ? { method } : { method, params }); };
+  // A host can refuse with an error, or with a result that says isError.
+  const ask = async (method: string, params: Json): Promise<void> => {
+    const result = await request(method, params);
+    if (isObject(result) && result.isError === true) throw new Error(`The host refused ${method}.`);
+  };
 
   window.addEventListener('message', (event) => {
     if (event.source !== window.parent || !isObject(event.data) || event.data.jsonrpc !== '2.0') return;
@@ -107,6 +115,7 @@ export async function connect(handlers: Handlers, appInfo: { name: string; versi
     if ('id' in message) {
       // The host asks something of the view. It closes the view after
       // ui/resource-teardown, and checks it is there with ping.
+      if (method === 'ui/resource-teardown') handlers.teardown();
       if (method === 'ui/resource-teardown' || method === 'ping') send({ id: message.id, result: {} });
       else send({ id: message.id, error: { code: -32601, message: `The view doesn't answer ${method}.` } });
       return;
@@ -139,15 +148,9 @@ export async function connect(handlers: Handlers, appInfo: { name: string; versi
         return { isError: true, text: error instanceof Error ? error.message : String(error), data: null };
       }
     },
-    openLink: async (url) => {
-      await request('ui/open-link', { url });
-    },
-    message: async (text) => {
-      await request('ui/message', { role: 'user', content: [{ type: 'text', text }] });
-    },
-    updateContext: async (text) => {
-      await request('ui/update-model-context', { content: [{ type: 'text', text }] });
-    },
+    openLink: (url) => ask('ui/open-link', { url }),
+    message: (text) => ask('ui/message', { role: 'user', content: [{ type: 'text', text }] }),
+    updateContext: (text) => ask('ui/update-model-context', { content: [{ type: 'text', text }] }),
   };
 }
 

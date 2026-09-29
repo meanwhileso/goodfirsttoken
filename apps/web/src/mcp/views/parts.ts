@@ -18,17 +18,21 @@ export function frame(title: string, ...parts: Node[]): HTMLElement {
 
 /**
  * A button that asks the host to open a web page, since a sandboxed frame
- * can't open one, and the host decides. It carries no URL of its own. Anything
- * but an http or https URL is plain text.
+ * can't open one, and the host decides. It carries no URL of its own. When
+ * the host won't open it, the page's address shows beside it, to copy. A URL
+ * webLink doesn't take shows as its text alone.
  */
 export function link(host: Host, url: unknown, text: string, className = 'view-link'): HTMLElement {
   const page = webLink(url);
   if (page === null) return h('span', null, text);
   const button = h('button', { type: 'button', class: className }, text);
+  const shown = h('span', { class: 'view-link-wrap' }, button);
   button.addEventListener('click', () => {
-    void host.openLink(page).catch(() => undefined);
+    void host.openLink(page).catch(() => {
+      if (shown.querySelector('.view-url') === null) shown.appendChild(h('span', { class: 'view-url' }, page));
+    });
   });
-  return button;
+  return shown;
 }
 
 /** An issue's reference and title, as the cards and the queue head each item. */
