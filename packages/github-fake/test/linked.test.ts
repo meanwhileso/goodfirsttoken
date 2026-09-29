@@ -111,6 +111,28 @@ test('a closed or merged PR is left out, unless includeClosedPrs asks for it', a
   expect(await closedBy(918, true)).toEqual([[957, 'MERGED']]);
 });
 
+test('a PR closed without merging opens again, as open with no close time, and closes its issue again, and a merged one never does', async () => {
+  fake.closePullRequest(REPO, 958, 'octo-maintainer');
+  fake.mergePullRequest(REPO, 957, 'octo-maintainer');
+  const closed = await closedBy(925);
+
+  fake.reopenPullRequest(REPO, 958, 'arjun');
+  const reply = await graphql<{ repository: { pullRequest: { state: string; closedAt: string | null } } }>(
+    fake,
+    token,
+    '{ repository(owner: "meanwhileso", name: "goodfirsttoken") { pullRequest(number: 958) { state closedAt } } }',
+  );
+  const issue = await rest<{ state: string; state_reason: string | null; closed_at: string | null }>(fake, 'GET', `/repos/${REPO}/issues/958`);
+
+  expect(closed).toEqual([]);
+  expect(await closedBy(925)).toEqual([[958, 'OPEN']]);
+  expect(reply.body.data?.repository.pullRequest).toEqual({ state: 'OPEN', closedAt: null });
+  expect(issue.body).toMatchObject({ state: 'open', state_reason: 'reopened', closed_at: null });
+  expect(() => {
+    fake.reopenPullRequest(REPO, 957, 'octo-maintainer');
+  }).toThrow();
+});
+
 test('a pull request reads as open, merged, or closed, with its times', async () => {
   fake.closePullRequest(REPO, 958, 'octo-maintainer');
   const reply = await graphql<Record<string, { pullRequest: { state: string; merged: boolean; mergedAt: string | null; closedAt: string | null } | null }>>(

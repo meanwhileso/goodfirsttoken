@@ -34,6 +34,7 @@ import {
   newId,
   openIssue,
   openPull,
+  reopenIssue,
   roleOf,
   unlabelIssue,
   updatePullBranch,
@@ -103,6 +104,9 @@ export interface GitHubFake {
   // Things maintainers do on GitHub, for tests to set up what the app sees.
   mergePullRequest: (repo: string, number: number, by: string) => void;
   closePullRequest: (repo: string, number: number, by: string) => void;
+  // Opens a PR closed without merging again, as a stale bot's close is
+  // undone. A merged PR can't open again.
+  reopenPullRequest: (repo: string, number: number, by: string) => void;
   // Reviews a PR, and returns the review's ID. A PENDING review is one its
   // author hasn't submitted, which only they see.
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => number;
@@ -352,6 +356,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     },
     closePullRequest: (repo, number, by) => {
       closeIssue(state, getPull(repoNamed(repo), number), by, null, now().toISOString());
+    },
+    reopenPullRequest: (repo, number, by) => {
+      reopenIssue(state, getPull(repoNamed(repo), number), by, now().toISOString());
     },
     reviewPullRequest: (repo, number, review) => addReview(state, repoNamed(repo), number, review, now().toISOString()).id,
     dismissReview: (repo, number, reviewId) => {

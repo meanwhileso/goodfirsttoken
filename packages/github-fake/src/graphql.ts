@@ -250,6 +250,7 @@ const schema = buildSchema(/* GraphQL */ `
     databaseId: Int
     author: Actor
     authorAssociation: CommentAuthorAssociation!
+    authorCanPushToRepository: Boolean!
     body: String!
     state: PullRequestReviewState!
     url: URI!
@@ -673,7 +674,8 @@ function reviewNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull: Pul
     id: nodeId('PRR', review.id),
     databaseId: review.id,
     author: () => actorNode(ctx, review.user),
-    authorAssociation: authorAssociation(ctx.state, repo, review.user),
+    authorAssociation: authorAssociation(ctx.state, repo, review.user, ctx.viewer),
+    authorCanPushToRepository: canPush(roleOf(repo, review.user)),
     body: review.body,
     state: review.state,
     url: `${pullUrl}#pullrequestreview-${String(review.id)}`,
@@ -688,7 +690,7 @@ function reviewNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull: Pul
             id: nodeId('PRRC', comment.id),
             databaseId: comment.id,
             author: () => actorNode(ctx, comment.user),
-            authorAssociation: authorAssociation(ctx.state, repo, comment.user),
+            authorAssociation: authorAssociation(ctx.state, repo, comment.user, ctx.viewer),
             body: comment.body,
             path: comment.path,
             url: `${pullUrl}#discussion_r${String(comment.id)}`,

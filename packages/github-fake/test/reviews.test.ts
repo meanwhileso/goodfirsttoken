@@ -207,3 +207,63 @@ test('a pending review and its comments show only to its author, and a dismissed
   expect(byOthers.reviews).toMatchObject([{ state: 'DISMISSED', body: 'Undo this.' }]);
   expect(byOthers.comments).toEqual(['Draft note.']);
 });
+
+test('a review says whether its author can push to the repo, from their role there, whatever GitHub names them', async () => {
+  const org = fake.state.accounts.meanwhileso;
+  const repo = fake.state.repos[REPO];
+  if (!org || !repo) throw new Error('no meanwhileso/goodfirsttoken');
+  // lena's membership of the organization is public, and gives her no role
+  // on the repo. priya's is private, and she can push through a team. ines
+  // is a collaborator who can only read.
+  org.members = ['lena'];
+  org.privateMembers = ['priya'];
+  repo.teamRoles = { priya: 'write' };
+  repo.collaborators.ines = 'read';
+  for (const login of ['octo-maintainer', 'kenji', 'priya', 'lena', 'ines', 'sam']) {
+    fake.reviewPullRequest(REPO, 958, { login, state: 'COMMENTED', body: `From ${login}.` });
+  }
+
+  const reply = await graphql<{
+    repository: { pullRequest: { reviews: { nodes: { author: Actor; authorAssociation: string; authorCanPushToRepository: boolean }[] } } };
+  }>(
+    fake,
+    token,
+    'query { repository(owner: "meanwhileso", name: "goodfirsttoken") { pullRequest(number: 958) { reviews(first: 10) { nodes { author { __typename login } authorAssociation authorCanPushToRepository } } } } }',
+  );
+
+  expect(reply.body.errors).toBeUndefined();
+  const nodes = reply.body.data?.repository.pullRequest.reviews.nodes ?? [];
+  expect(nodes.map((n) => [n.author.login, n.authorAssociation, n.authorCanPushToRepository])).toEqual([
+    ['octo-maintainer', 'COLLABORATOR', true],
+    ['kenji', 'COLLABORATOR', true],
+    ['priya', 'NONE', true],
+    ['lena', 'MEMBER', false],
+    ['ines', 'COLLABORATOR', false],
+    ['sam', 'NONE', false],
+  ]);
+});
+
+test('a member whose membership of the organization is private reads as a member only to another member', async () => {
+  const org = fake.state.accounts.meanwhileso;
+  if (!org) throw new Error('no meanwhileso');
+  org.members = ['lena'];
+  org.privateMembers = ['priya', 'ines'];
+  fake.reviewPullRequest(REPO, 958, { login: 'priya', state: 'COMMENTED', body: 'From priya.' });
+  const read = async (as: string) => {
+    const asToken = fake.tokenFor(as);
+    const reply = await rest<{ author_association: string }[]>(fake, 'GET', `${UPSTREAM}/pulls/958/reviews`, { token: asToken });
+    const query = await graphql<{ repository: { pullRequest: { reviews: { nodes: { authorAssociation: string }[] } } } }>(
+      fake,
+      asToken,
+      'query { repository(owner: "meanwhileso", name: "goodfirsttoken") { pullRequest(number: 958) { reviews(first: 10) { nodes { authorAssociation } } } } }',
+    );
+    return [reply.body.map((r) => r.author_association), query.body.data?.repository.pullRequest.reviews.nodes.map((n) => n.authorAssociation)];
+  };
+  const anonymous = await rest<{ author_association: string }[]>(fake, 'GET', `${UPSTREAM}/pulls/958/reviews`);
+
+  // A public member and a private one see her as a member, and anyone else doesn't.
+  expect(await read('lena')).toEqual([['MEMBER'], ['MEMBER']]);
+  expect(await read('ines')).toEqual([['MEMBER'], ['MEMBER']]);
+  expect(await read('sam')).toEqual([['NONE'], ['NONE']]);
+  expect(anonymous.body.map((r) => r.author_association)).toEqual(['NONE']);
+});

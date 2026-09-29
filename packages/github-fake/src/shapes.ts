@@ -256,14 +256,21 @@ export function labelShape(ctx: Ctx, repo: RepoRecord, label: LabelRecord) {
   };
 }
 
-// How the author relates to the repo, as GitHub reports it: its owner, a
-// member of the organization that owns it, a collaborator, someone whose PR
-// merged there, or none of those.
+// How the author relates to the repo, as GitHub reports it to `viewer`: its
+// owner, a member of the organization that owns it, a collaborator, someone
+// whose PR merged there, or none of those. A member whose membership is
+// private is a member only to another member of the organization. A role
+// through a team makes no one a collaborator.
 // https://docs.github.com/en/graphql/reference/enums#commentauthorassociation
-export function authorAssociation(state: FakeState, repo: RepoRecord, login: string): string {
+export function authorAssociation(state: FakeState, repo: RepoRecord, login: string, viewer: string | null): string {
   if (key(repo.owner) === key(login)) return 'OWNER';
   const owner = findAccount(state, repo.owner);
-  if (owner?.type === 'Organization' && (owner.members ?? []).some((member) => key(member) === key(login))) return 'MEMBER';
+  if (owner?.type === 'Organization') {
+    const among = (logins: string[] | undefined, who: string | null) =>
+      who !== null && (logins ?? []).some((member) => key(member) === key(who));
+    const isMember = (who: string | null) => among(owner.members, who) || among(owner.privateMembers, who);
+    if (among(owner.members, login) || (among(owner.privateMembers, login) && isMember(viewer))) return 'MEMBER';
+  }
   if (own(repo.collaborators, key(login))) return 'COLLABORATOR';
   const merged = Object.values(repo.issues).some((i) => key(i.user) === key(login) && i.pull?.mergedAt);
   return merged ? 'CONTRIBUTOR' : 'NONE';
@@ -304,7 +311,7 @@ export function issueShape(ctx: Ctx, repo: RepoRecord, issue: IssueRecord, singl
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
     closed_at: issue.closedAt,
-    author_association: authorAssociation(ctx.state, repo, issue.user),
+    author_association: authorAssociation(ctx.state, repo, issue.user, ctx.viewer),
     type: null,
     active_lock_reason: null,
     body: issue.body,
@@ -502,7 +509,7 @@ export function pullShape(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pul
       commits: { href: `${api}/pulls/${n}/commits` },
       statuses: { href: `${api}/statuses/${pull.head.sha}` },
     },
-    author_association: authorAssociation(ctx.state, repo, issue.user),
+    author_association: authorAssociation(ctx.state, repo, issue.user, ctx.viewer),
     auto_merge: null,
     draft: pull.draft,
   };
@@ -535,7 +542,7 @@ export function reviewShape(ctx: Ctx, repo: RepoRecord, number: number, review: 
     state: review.state,
     html_url: html,
     pull_request_url: pullUrl,
-    author_association: authorAssociation(ctx.state, repo, review.user),
+    author_association: authorAssociation(ctx.state, repo, review.user, ctx.viewer),
     _links: { html: { href: html }, pull_request: { href: pullUrl } },
     submitted_at: review.submittedAt,
     commit_id: review.commitId,
@@ -574,7 +581,7 @@ export function reviewCommentShape(ctx: Ctx, repo: RepoRecord, number: number, c
     updated_at: comment.createdAt,
     html_url: html,
     pull_request_url: pullUrl,
-    author_association: authorAssociation(ctx.state, repo, comment.user),
+    author_association: authorAssociation(ctx.state, repo, comment.user, ctx.viewer),
     _links: { self: { href: url }, html: { href: html }, pull_request: { href: pullUrl } },
     start_line: null,
     original_start_line: null,

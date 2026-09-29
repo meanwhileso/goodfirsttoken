@@ -36,6 +36,10 @@ export interface Account {
   // An organization's members, by login. GitHub names them MEMBER on the
   // organization's repos. State saved before the fake kept them has none.
   members?: string[];
+  // Members whose membership is private, which GitHub makes the default.
+  // GitHub names them MEMBER only to someone who is a member too. State
+  // saved before the fake kept them has none.
+  privateMembers?: string[];
 }
 
 export interface LabelRecord {
@@ -142,6 +146,10 @@ export interface RepoRecord {
   // a repo with none is ready.
   gitReadyAt?: string | null;
   collaborators: Record<string, Role>;
+  // The roles members of the organization that owns the repo have through
+  // its teams, by login. GitHub doesn't name them collaborators. State saved
+  // before the fake kept them has none.
+  teamRoles?: Record<string, Role>;
   branches: Record<string, Oid>;
   labels: LabelRecord[];
   issues: Record<string, IssueRecord>;
@@ -243,12 +251,14 @@ export function findIssue(repo: RepoRecord, number: number): IssueRecord | null 
 }
 
 // The person's role on a repo. Anyone signed in can read a public repo. A
-// repo's owner is its admin. Everyone else gets the role they were given, and
-// on a private repo, someone given no role has none.
+// repo's owner is its admin. Everyone else gets the role they were given, as
+// a collaborator or through a team, and on a private repo, someone given no
+// role has none.
 export function roleOf(repo: RepoRecord, login: string | null): Role | null {
   if (login === null) return null;
   if (key(repo.owner) === key(login)) return 'admin';
-  return own(repo.collaborators, key(login)) ?? (repo.private === true ? null : 'read');
+  const given = own(repo.collaborators, key(login)) ?? own(repo.teamRoles ?? {}, key(login));
+  return given ?? (repo.private === true ? null : 'read');
 }
 
 // Whether a call can see the repo at all. Anyone can see a public repo. A
@@ -756,6 +766,19 @@ export function closeIssue(
   issue.closedBy = getAccount(state, login).login;
   issue.updatedAt = now;
   issue.timeline.push({ id: newId(state), event: 'closed', actor: issue.closedBy, createdAt: now, stateReason: reason });
+}
+
+// Opens a closed issue or PR again, as `login`. A merged PR stays merged.
+// https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
+export function reopenIssue(state: FakeState, issue: IssueRecord, login: string, now: string): void {
+  if (issue.state === 'open') return;
+  if (issue.pull?.mergedAt) throw new FakeError('invalid', 'A merged pull request cannot be reopened.');
+  issue.state = 'open';
+  issue.stateReason = 'reopened';
+  issue.closedAt = null;
+  issue.closedBy = null;
+  issue.updatedAt = now;
+  issue.timeline.push({ id: newId(state), event: 'reopened', actor: getAccount(state, login).login, createdAt: now });
 }
 
 // The newest commit both branches share.
