@@ -27,7 +27,15 @@ interface Resources {
   /** Pause any project. */
   pause_any_project: undefined;
   /** Register a repo as a project, change its settings, pause it, have its tagged issues read now, or ask for it to be removed. */
-  manage_project: { repo: string };
+  manage_project: {
+    repo: string;
+    /**
+     * True when the call takes the name on for a project, as registering a
+     * repo or naming a new issue repo does. The ID stored for the name
+     * GitHub gives is checked too, since that is the name the project takes.
+     */
+    takesName?: boolean;
+  };
   /** Post to a claim, submit its work, release it, or open its PR. */
   work_claim: { claimantGithubId: number };
 }
@@ -93,9 +101,10 @@ type Granted<P extends Permission> = P extends 'manage_project' ? ManagedRepo : 
  *   and keeps nothing. It hands back the repo as GitHub described it, so a
  *   tool reads it once. A repo GitHub doesn't show, or blocked access to,
  *   is refused. So is a repo whose GitHub ID isn't the one a project keeps
- *   for the name asked or the name GitHub gives, since that is another
- *   repo under the name. A project kept before IDs were has its ID filled
- *   in here, once, as src/projects/repo-id.ts says.
+ *   for the name asked, since that is another repo under the name. When the
+ *   call takes the name on, `takesName`, the name GitHub gives is checked
+ *   too. A project kept before IDs were has its ID filled in here, once, as
+ *   src/projects/repo-id.ts says.
  * - `work_claim` goes to the person who made the claim.
  */
 export async function requirePermission<P extends Permission>(
@@ -108,7 +117,7 @@ export async function requirePermission<P extends Permission>(
     throw new PermissionRefused('not_admin', permission, "Only Good First Token's admins can do this.");
   }
   if (permission === 'manage_project') {
-    const { repo } = resource as Resources['manage_project'];
+    const { repo, takesName = false } = resource as Resources['manage_project'];
     const name = mustParse(repoName, repo, 'repo');
     const refused = new PermissionRefused(
       'not_maintainer',
@@ -145,7 +154,7 @@ export async function requirePermission<P extends Permission>(
     if (found.permissions?.admin !== true && found.permissions?.maintain !== true) throw refused;
     const identity = identityOf(found);
     if (identity === null) throw new Error(`GitHub described ${name} without its ID.`);
-    const stored = await storedRepoIds(env.DB, [name, found.full_name]);
+    const stored = await storedRepoIds(env.DB, takesName ? [name, found.full_name] : [name]);
     if (!(await isStoredRepo(env.DB, stored, identity))) {
       throw new PermissionRefused(
         'not_maintainer',

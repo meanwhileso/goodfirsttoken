@@ -4,10 +4,11 @@ import { graphql, rest } from './call.ts';
 
 // Renamed, transferred, deleted, and new repos. A repo keeps its ID through a
 // rename or a transfer, and GitHub sends calls to the old name on to it:
-// 301 for a read, 307 for anything else. A new repo made under the old name
-// takes the name, with an ID of its own.
+// 301 for a read, 307 for anything else, the split by method people
+// observe. A new repo made under the old name takes the name, with an ID
+// of its own.
 // https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository
-// https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects
+// https://developer.github.com/changes/2015-04-17-preview-repository-redirects/
 
 let fake: GitHubFake;
 // sample-maintainer is an admin of sample-owner/sample-app.

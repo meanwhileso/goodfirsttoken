@@ -1,5 +1,5 @@
 import { githubRepoId } from '@goodfirsttoken/core';
-import { fillRepoId, type StoredRepoId } from '../db';
+import { fillRepoId, storedRepoIds, type StoredRepoId } from '../db';
 
 // A project is kept under its repo's name, and GitHub can give that name to
 // another repo after a rename or a delete. So each project also keeps
@@ -56,4 +56,18 @@ export async function isStoredRepo(db: D1Database, stored: readonly StoredRepoId
     if (verdict === 'fill') await fillRepoId(db, entry, found.id);
   }
   return true;
+}
+
+/**
+ * Whether the repo GitHub gave for one of a project's repos, its code repo
+ * or the other repo its issues live in, is the one the project keeps under
+ * that name, by its GitHub ID. It compares only the project's own stored
+ * ID, and fills it in as isStoredRepo does.
+ */
+export async function isProjectRepo(db: D1Database, project: string, repo: string, found: RepoIdentity): Promise<boolean> {
+  const role = repo.toLowerCase() === project.toLowerCase() ? 'code' : 'issues';
+  const stored = (await storedRepoIds(db, [repo])).filter(
+    (entry) => entry.project.toLowerCase() === project.toLowerCase() && entry.role === role,
+  );
+  return isStoredRepo(db, stored, found);
 }

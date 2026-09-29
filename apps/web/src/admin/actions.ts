@@ -49,6 +49,7 @@ import {
   listWaitingRemovals,
   relistFromPolicy,
   setProjectStatusFrom,
+  projectWithRepoId,
   statusHistory,
   storedRepoIds,
   unblockDonor,
@@ -401,12 +402,14 @@ function anotherRepo(repo: string): { ok: false; refusal: Refusal } {
  * it has to be public, not archived, and take pull requests from anyone.
  * Its issue repo, when it has one of its own, has to be public and not
  * archived. Each has to be the repo a project keeps under its name, by its
- * GitHub ID, when one does, and the listing keeps both IDs. A new listing takes the settings sent, with the rest at their
- * defaults, and a listing again changes only the settings sent. A repo on the
- * do-not-list, or one its maintainers registered, is refused. The
- * do-not-list is checked again in the same statement as each write, so a
- * removal that lands while this reads GitHub keeps the repo unlisted. The
- * caller has checked `list_from_policy`.
+ * GitHub ID, when one does, and the listing keeps both IDs. A repo a
+ * project keeps under another name, as after a rename, is listed again
+ * under that name only. A new listing takes the settings sent, with the
+ * rest at their defaults, and a listing again changes only the settings
+ * sent. A repo on the do-not-list, or one its maintainers registered, is
+ * refused. The do-not-list is checked again in the same statement as each
+ * write, so a removal that lands while this reads GitHub keeps the repo
+ * unlisted. The caller has checked `list_from_policy`.
  */
 async function listFromPolicy(
   caller: Caller,
@@ -426,7 +429,16 @@ async function listFromPolicy(
   const problem = whyNotEligible(repoFacts(found), 'list');
   if (problem !== null) return refuse('repo_not_eligible', problem);
   if (!(await isKeptRepo(repo, found))) return anotherRepo(repo);
-  const name = found.full_name;
+  // A repo GitHub renamed keeps its ID, and its project keeps the old name.
+  // It is listed again under that name, and never as a second project.
+  const listedAs = await projectWithRepoId(env.DB, found.id);
+  if (listedAs !== null && ![repo, found.full_name].some((named) => named.toLowerCase() === listedAs.toLowerCase())) {
+    return refuse(
+      'repo_not_eligible',
+      `The repo GitHub shows as ${repo} is listed as ${listedAs}, by its GitHub ID. List it as ${listedAs}.`,
+    );
+  }
+  const name = listedAs ?? found.full_name;
   const repoIds: RepoIds = { repo: found.id };
 
   const patch: ProjectSettingsPatch = { ...settings };

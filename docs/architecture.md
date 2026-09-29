@@ -332,7 +332,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
 | `src/projects/status.ts` | Who can lift a pause, the status a resume puts back, for the maintainer's tools and the admin's alike, and the pause an admin's resume puts back when Good First Token's pause took it over |
-| `src/projects/repo-id.ts` | Whether the repo GitHub gives under a name is the one a project keeps there, by its GitHub ID, for `requirePermission`, the admin's listing, and the sync alike |
+| `src/projects/repo-id.ts` | Whether the repo GitHub gives under a name is the one a project keeps there, by its GitHub ID, for `requirePermission`, the admin's listing, the sync, and the weekly read alike |
 
 - **One permission check, one read.** Every tool starts with
   `requirePermission(caller, 'manage_project', { repo })`, which reads the
@@ -357,11 +357,18 @@ The rules are under [Repo IDs](how-it-works.md#repo-ids) in how-it-works.md.
   kept ID matches GitHub's, or may be filled in once from GitHub's
   `created_at`. `isStoredRepo` applies it to every ID kept for a name, and
   fills in only when none differs. `requirePermission` calls it for the
-  name asked and the name GitHub gives, so every maintainer tool gets it,
-  the admin's listing calls it the same way, and the sync calls it for the
-  one project it reads. The sync's answer for a different ID is the `gone`
-  reason from core's `delistedReason`, through the same `setDelisted` and
-  pause as a deleted repo.
+  name asked, and with `takesName`, from `register_project` and a new
+  issue repo, for the name GitHub gives too. The admin's listing calls it
+  for both names. `isProjectRepo` calls it for one project's own ID, for
+  the sync and for the policy crawler's weekly read, which asks GraphQL for
+  `databaseId` and `createdAt`. The sync's answer for a different ID is
+  the `replaced` reason from core's `delistedReason`, through the same
+  `setDelisted` and pause as a deleted repo. The weekly read skips it as
+  `left_for_sync`.
+- **One project per ID.** The admin's listing looks up the project that
+  keeps GitHub's ID for the repo, `projectWithRepoId`, and lists that
+  project again under its own name, or refuses another name, so a renamed
+  repo is never listed twice.
 - **Written with the settings.** `createProject`, `takeOverListing`,
   `reopenRegistration`, `relistFromPolicy`, and `changeSettings` take the
   IDs their caller read. A save that keeps the issues in the same repo
@@ -371,8 +378,8 @@ The rules are under [Repo IDs](how-it-works.md#repo-ids) in how-it-works.md.
   counts from is the first settings save after the last one that named
   another repo, found in `project_settings`.
 - **The crawler.** Approving a crawler find lists the repo through the same
-  listing, so it keeps the IDs of the admin's read. The crawler's own reads
-  of candidates keep no ID yet.
+  listing, so it keeps the IDs of the admin's read. The crawler's reads of
+  candidates keep no ID.
 - **Refusals and lost tokens.** `asCaller` in `src/mcp/server.ts` runs every
   tool. It turns a `PermissionRefused` into the tool's refusal, and a GitHub
   `401` from any call into the end of the connection.

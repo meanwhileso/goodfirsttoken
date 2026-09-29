@@ -1062,6 +1062,18 @@ export async function fillRepoId(db: D1Database, stored: StoredRepoId, id: numbe
     .run();
 }
 
+/**
+ * The name of the project whose code repo has GitHub's ID `id`, whatever
+ * its status, or null when no project stored that ID. A repo GitHub renamed
+ * keeps its ID, so the project can be under the repo's old name.
+ */
+export async function projectWithRepoId(db: D1Database, id: number): Promise<string | null> {
+  return db
+    .prepare('SELECT repo FROM projects WHERE repo_id = ? ORDER BY added_at, repo LIMIT 1')
+    .bind(mustParse(githubRepoId, id, 'id'))
+    .first<string>('repo');
+}
+
 /** A project Good First Token paused on its own, with the ID of the status change that paused it. */
 export interface SelfPausedProject {
   project: ProjectRecord;

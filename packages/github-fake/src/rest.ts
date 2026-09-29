@@ -562,7 +562,8 @@ function match(route: Route, method: string, path: string): Params | null {
 
 const STATUS = { not_found: 404, forbidden: 403, invalid: 422, stale: 409, empty: 409 };
 
-// The docs page for GitHub's redirects, which its 301 and 307 answers name.
+// The page GitHub's redirect answers name as documentation_url. It says to
+// follow redirects, and nothing of which status a call gets.
 const REDIRECT_DOCS = 'https://docs.github.com/rest/guides/best-practices-for-using-the-rest-api#follow-redirects';
 
 // A repo's calls, by its ID. GitHub sends a call to a renamed or
@@ -571,10 +572,12 @@ const REDIRECT_DOCS = 'https://docs.github.com/rest/guides/best-practices-for-us
 const BY_ID = /^\/repositories\/([0-9]+)(\/.*)?$/;
 const BY_NAME = /^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/;
 
-// Where a call to a repo's old name goes: GitHub answers 301 to a read and
-// 307 to anything else, with the repo's ID path in Location, and the
-// caller follows it. Null when the name is a repo's, or no repo left it.
-// https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#follow-redirects
+// Where a call to a repo's old name goes: GitHub answers with the repo's ID
+// path in Location, and the caller follows it. GitHub's changelog says it
+// answers 301 or 307. The split by method, 301 to a read and 307 to
+// anything else, is what people observe. Null when the name is a repo's, or
+// no repo left it.
+// https://developer.github.com/changes/2015-04-17-preview-repository-redirects/
 function movedAway(req: RestRequest, path: string): Response | null {
   const named = BY_NAME.exec(path);
   if (!named) return null;

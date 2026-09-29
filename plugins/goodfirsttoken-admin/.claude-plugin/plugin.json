@@ -1,6 +1,6 @@
 {
   "name": "goodfirsttoken-admin",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "The admin skill for Good First Token's own admins: the project queue, approvals, pauses, the listings the crawler reads again, blocks, removals, and the crawler's seed list.",
   "author": {
     "name": "Meanwhile",

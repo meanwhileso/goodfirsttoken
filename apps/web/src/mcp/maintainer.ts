@@ -99,7 +99,7 @@ async function checkIssueRepo(caller: Caller, repo: string, issueRepo: string | 
   }
   let found: ManagedRepo;
   try {
-    found = await requirePermission(caller, 'manage_project', { repo: issueRepo });
+    found = await requirePermission(caller, 'manage_project', { repo: issueRepo, takesName: true });
   } catch (error) {
     if (!(error instanceof PermissionRefused)) throw error;
     const message = `Only an admin or maintainer of ${issueRepo} on GitHub can keep this project's issues there.`;
@@ -171,7 +171,7 @@ export async function registerProject(
   input: ToolInput<'register_project'>,
   now: number,
 ): Promise<Answer> {
-  const found = await requirePermission(caller, 'manage_project', { repo: input.repo });
+  const found = await requirePermission(caller, 'manage_project', { repo: input.repo, takesName: true });
   const facts = repoFacts(found);
   const token = await tokenOf(caller);
   const problem = whyNotEligible(facts);
@@ -270,13 +270,16 @@ function isTagged(labels: readonly string[], settings: ProjectSettings): boolean
   return has(settings.tags) && !has(settings.excludedTags);
 }
 
-/** What GitHub can show of a code repo that leaves it showing no one's role on the repo. */
-const HIDDEN: readonly (DelistedShowing | null)[] = ['private', 'gone', 'blocked'];
+/**
+ * What GitHub can show of a code repo that leaves it showing no one's role
+ * on the repo under its name: none, or another repo's.
+ */
+const HIDDEN: readonly (DelistedShowing | null)[] = ['private', 'gone', 'blocked', 'replaced'];
 
 /**
  * The sync's reason, when it delisted the project because GitHub showed its
- * code repo private, gone, or blocked, so GitHub shows no one their role on
- * it. The project's public page is gone, so saying so tells a caller only
+ * code repo private, gone, or blocked, or another repo under its name, so
+ * GitHub shows no one their role on it by that name. The project's public page is gone, so saying so tells a caller only
  * what anyone can see. Null otherwise.
  */
 async function hiddenCodeRepo(repo: string): Promise<string | null> {

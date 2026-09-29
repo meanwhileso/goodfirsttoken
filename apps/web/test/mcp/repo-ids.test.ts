@@ -188,17 +188,44 @@ describe('a new repo under a project’s name', () => {
     expect(await getProject(env.DB, BUNDLER)).toMatchObject({ source: 'policy', policy: POLICY, addedBy: ADMIN.githubId });
   });
 
-  test('the sync treats the project’s repo as gone, delists the project, and pauses it', async () => {
+  test('the admin can’t list another project with its issues in a new repo under the name of a project’s issue repo', async () => {
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await registered(maintainer, APP, { tags: ['help wanted'], issueRepo: TOOLS });
+    replace(TOOLS, 'renamed');
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const listed = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['help wanted'], issueRepo: TOOLS } });
+
+    expect(textOf(listed)).toBe(
+      `Refused (repo_not_eligible): The repo GitHub shows as ${TOOLS} is not the one Good First Token keeps under that name: its GitHub ID differs. It can't be listed under that name.`,
+    );
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('the sync delists the project, and pauses it, saying another repo has its name', async () => {
     const maintainer = await connectAgent(github, 'sample-maintainer');
     await registered(maintainer);
     replace(APP, 'deleted');
 
     const run = await sync();
 
-    const gone = `GitHub shows no public repo named ${APP}. It went private or was deleted.`;
+    const taken = `GitHub shows another repo under the name ${APP} now.`;
     expect(run.paused).toEqual([APP]);
-    expect(await getIssueSync(env.DB, APP)).toMatchObject({ delisted: gone });
-    expect(await getProject(env.DB, APP)).toMatchObject({ status: 'paused', statusReason: gone, statusChangedBy: null });
+    expect(await getIssueSync(env.DB, APP)).toMatchObject({ delisted: taken });
+    expect(await getProject(env.DB, APP)).toMatchObject({ status: 'paused', statusReason: taken, statusChangedBy: null });
+  });
+
+  test('project_status tells the project’s maintainer that another repo has its name, once the sync delisted it', async () => {
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await registered(maintainer);
+    replace(APP, 'renamed');
+
+    await sync();
+    const status = await call(maintainer, 'project_status', { repo: APP });
+
+    expect(textOf(status)).toBe(
+      `Refused (not_maintainer): Only an admin or maintainer of ${APP} on GitHub can do this. Good First Token delisted this project: GitHub shows another repo under the name ${APP} now.`,
+    );
   });
 
   test('a new repo under the name of a project’s issue repo delists the project, and its maintainer can’t keep the issues there', async () => {
@@ -213,9 +240,51 @@ describe('a new repo under a project’s name', () => {
 
     expect(run.paused).toEqual([APP]);
     expect(await getIssueSync(env.DB, APP)).toMatchObject({
-      delisted: `GitHub shows no public repo named ${TOOLS}. It went private or was deleted.`,
+      delisted: `GitHub shows another repo under the name ${TOOLS} now.`,
     });
     expect(textOf(update)).toBe(`Refused (not_maintainer): Only an admin or maintainer of ${TOOLS} on GitHub can keep this project's issues there.`);
+  });
+});
+
+describe('a repo renamed onto a name another project keeps', () => {
+  test('its own project’s maintainer still manages it by its name, and can’t manage the other project by the name it took', async () => {
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await registered(maintainer);
+    await registered(maintainer, TOOLS);
+    // The first project's repo is deleted, and the second's is renamed onto its name.
+    github.deleteRepo(APP);
+    github.renameRepo(TOOLS, APP);
+
+    const own = await call(maintainer, 'project_status', { repo: TOOLS });
+    const other = await call(maintainer, 'project_status', { repo: APP });
+
+    expect(own.structuredContent).toMatchObject({ repo: TOOLS, status: 'approved' });
+    expect(textOf(other)).toBe(REFUSED);
+  });
+
+  test('can’t be registered by an old name GitHub sends on to it, over the other project', async () => {
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await registered(maintainer, TOOLS, { tags: ['help wanted'] }, 'rejected');
+    github.deleteRepo(TOOLS);
+    github.renameRepo(APP, TOOLS);
+
+    const result = await call(maintainer, 'register_project', { repo: APP, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(result)).toContain('Refused (not_maintainer)');
+    expect(await getProject(env.DB, TOOLS)).toMatchObject({ status: 'rejected' });
+    expect(await idsOf(TOOLS)).not.toMatchObject({ code: idOf(TOOLS) });
+  });
+});
+
+describe('moving a project’s issues', () => {
+  test('keeps the new issue repo’s ID, so a new repo under its name is caught at once', async () => {
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await registered(maintainer);
+
+    const moved = await call(maintainer, 'update_project', { repo: APP, settings: { issueRepo: TOOLS } });
+
+    expect(moved.structuredContent).toMatchObject({ repo: APP, changed: ['issueRepo'] });
+    expect(await idsOf(APP)).toEqual({ code: idOf(APP), issues: idOf(TOOLS) });
   });
 });
 
@@ -238,6 +307,27 @@ describe('a rename GitHub follows', () => {
     expect(await getProject(env.DB, RENAMED)).toBeNull();
     expect(textOf(byNewName)).toBe(`Refused (not_found): ${RENAMED} is not a project on Good First Token. Register it with register_project.`);
     expect(await idsOf(APP)).toEqual({ code: idOf(RENAMED), issues: idOf(RENAMED) });
+  });
+});
+
+describe('a renamed project listed again', () => {
+  test('is listed again under the name it has, and the admin can’t list it again under its new name', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: { tags: ['help wanted'] } });
+    const renamed = `${BUNDLER}-next`;
+    github.renameRepo(BUNDLER, renamed);
+    const quote = { ...POLICY, quote: 'Agents welcome. Write the PR description yourself.' };
+
+    const byNewName = await call(admin, 'admin_add_project', { repo: renamed, policy: quote, settings: { tags: ['help wanted'] } });
+    const byOldName = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: quote, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(byNewName)).toBe(
+      `Refused (repo_not_eligible): The repo GitHub shows as ${renamed} is listed as ${BUNDLER}, by its GitHub ID. List it as ${BUNDLER}.`,
+    );
+    expect(byOldName.structuredContent).toMatchObject({ repo: BUNDLER, updated: true });
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({ policy: quote });
+    expect(await getProject(env.DB, renamed)).toBeNull();
+    expect(await storedRepoIds(env.DB, [renamed])).toEqual([]);
   });
 });
 
@@ -290,6 +380,18 @@ describe('a project stored before IDs were kept', () => {
     expect(stored).toEqual([{ project: APP, role: 'issues', repo: TOOLS, id: null, since: now - 2 * HOUR }]);
     expect(await idsOf(APP)).toEqual({ code: idOf(APP), issues: idOf(TOOLS) });
     expect(await getIssueSync(env.DB, APP)).toMatchObject({ delisted: null });
+  });
+
+  test('takes on a repo GitHub made at the same moment the project was stored', async () => {
+    const addedAt = Date.now() - HOUR;
+    await storedWithoutIds(APP, { tags: ['help wanted'] }, addedAt);
+    repoRecord(APP).createdAt = new Date(addedAt).toISOString();
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+
+    const status = await call(maintainer, 'project_status', { repo: APP });
+
+    expect(status.structuredContent).toMatchObject({ repo: APP, status: 'approved' });
+    expect(await idsOf(APP)).toEqual({ code: idOf(APP), issues: idOf(APP) });
   });
 
   test('never takes on a repo GitHub made after the project was stored: the check refuses, and the sync delists it', async () => {
