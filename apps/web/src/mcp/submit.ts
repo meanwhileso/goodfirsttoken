@@ -63,9 +63,10 @@ import {
 
 // submit_work and open_pr: finished work becomes a signed commit on the
 // claim's branch, and then a PR, or waits in the donor's review queue for
-// open_pr. Every GitHub call runs with the donor's own token, for their own
-// claim. The claim changes only in its issue's room, so the live feeds and
-// the issue page see each submit and each PR. The rules are in
+// open_pr, or for the Open PR button on /me (src/me/page.ts), which opens it
+// by the same rules. Every GitHub call runs with the donor's own token, for
+// their own claim. The claim changes only in its issue's room, so the live
+// feeds and the issue page see each submit and each PR. The rules are in
 // docs/how-it-works.md, under The donor's tools.
 
 /**
@@ -667,18 +668,29 @@ export async function submitWork(
   return result(recorded.claim.state, null, 'pr_refused');
 }
 
-export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: number): Promise<Answer> {
+/** What opening a claim's PR did: the PR, as open_pr answers with it, or why none opened. */
+export type Opened = { ok: true; value: ToolOutput<'open_pr'> } | { ok: false; refusal: Refusal };
+
+/**
+ * Opens the PR for the caller's work in their review queue, by open_pr's
+ * rules, with the caller's own GitHub token. The MCP tool and the Open PR
+ * button on /me both call it: the tool with the token of the donor's agent,
+ * the page with the one from their sign-in on the site. A claim that isn't
+ * the caller's throws PermissionRefused, as every donor's tool does.
+ */
+export async function openPrAs(caller: Caller, input: ToolInput<'open_pr'>, now: number): Promise<Opened> {
+  const refused = (why: Refusal): Opened => ({ ok: false, refusal: why });
   // Any PR will do to ask the claim whether it can take one now.
   const probe = { repo: 'goodfirsttoken/goodfirsttoken', number: 1, url: 'https://github.com/' };
   const work = await workOn(caller, input.claimId, { kind: 'open_pr', pr: probe }, now);
-  if (isRefusal(work)) return refuse(work);
+  if (isRefusal(work)) return refused(work);
   const { claim, project, donor } = work;
   const submission = await getSubmission(env.DB, claim.id);
   if (submission === null) {
-    return refuse(refusal('not_submitted', `Claim ${claim.id} has no submitted work to open a PR for. Submit it with submit_work.`));
+    return refused(refusal('not_submitted', `Claim ${claim.id} has no submitted work to open a PR for. Submit it with submit_work.`));
   }
   if (project.settings.personWrittenDescription && input.description === undefined) {
-    return refuse(
+    return refused(
       refusal(
         'description_required',
         `${project.repo} asks the donor to write the PR description. Ask them to write it, and pass it as description, word for word. Don't draft it.`,
@@ -687,33 +699,38 @@ export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: n
   }
   const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
   const capped = openPrRefusal(project, openPrs);
-  if (capped) return refuse(capped);
+  if (capped) return refused(capped);
 
   const writer = new DonorWriter(await tokenOf(caller));
   const facts = await codeRepo(writer, project);
-  if (isRefusal(facts)) return refuse(facts);
+  if (isRefusal(facts)) return refused(facts);
   // The issue is checked on GitHub as submit_work checks it, and a failing
   // one opens no PR. GitHub is checked for a PR on the issue too, but the
   // donor decides whether a second one helps, so that doesn't stop them.
   const checked = await checkIssueFacts(env.DB, writer.reader, project, claim.issue, ownIssue(donor, NOT_OPENED));
-  if (!checked.ok) return refuse(checked.refusal);
+  if (!checked.ok) return refused(checked.refusal);
   const names = checked.issue.repo === null ? [facts.name] : [facts.name, checked.issue.repo];
   const [prOnIssue = null] = await otherPrs(writer, work, names);
   const opened = await openFor(writer, work, facts, submission, input.description);
-  if (isRefusal(opened)) return refuse(opened);
-  return answer(
-    toolResult('open_pr', { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue }),
-  );
+  if (isRefusal(opened)) return refused(opened);
+  return { ok: true, value: { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue } };
 }
 
-type ReviewItem = ToolOutput<'my_work'>['readyToOpen'][number];
+export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: number): Promise<Answer> {
+  const opened = await openPrAs(caller, input, now);
+  return opened.ok ? answer(toolResult('open_pr', opened.value)) : refuse(opened.refusal);
+}
+
+/** Work in the donor's review queue, as my_work lists it and /me shows it. */
+export type ReviewItem = ToolOutput<'my_work'>['readyToOpen'][number];
 
 /**
  * The donor's submitted work waiting for them to open its PR: their claims
  * awaiting review, as each one's room holds it now, with their latest
  * submits. Each names a PR open on the issue, from its room or, read with
  * the donor's token, from GitHub. One whose PR can't be opened now says why,
- * and nothing about it is read from GitHub.
+ * and nothing about it is read from GitHub. my_work lists it with the token
+ * of the donor's agent, and /me with the one from their sign-in on the site.
  */
 export async function readyToOpen(caller: Caller, origin: string, now: number): Promise<ReviewItem[]> {
   const listed = (await listPersonClaims(env.DB, caller.githubId)).filter((claim) => holdsSlot(claim, now));

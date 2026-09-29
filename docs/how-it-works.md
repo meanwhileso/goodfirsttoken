@@ -5,10 +5,11 @@ plan for what comes next is in [specs/v1.md](specs/v1.md). When a piece of the
 plan is built, its rules move here in the same pull request.
 
 Nothing is live yet. The site serves the homepage, the projects list, each
-project's page, each issue's page, sign-in with GitHub, the MCP server's
-sign-in for agents with the donor's tools, the maintainer's tools, and the
-admins' tools, the admin pages, the design system at `/design`, and the
-live feeds as text streams and sockets. It reads tagged issues and PRs from
+project's page, each issue's page, sign-in with GitHub, the signed-in
+person's review queue at `/me`, the page for maintainers at `/maintainers`,
+the MCP server's sign-in for agents with the donor's tools, the maintainer's
+tools, and the admins' tools, the admin pages, the design system at
+`/design`, and the live feeds as text streams and sockets. It reads tagged issues and PRs from
 GitHub on a schedule, and looks for projects whose docs welcome AI help,
 while the build goes on in the open.
 
@@ -61,7 +62,9 @@ are.
   most once a day.
 
 **The GitHub token.** Sign-in keeps the token GitHub gives, to act for the
-person later.
+person later: [the review queue on /me](#your-queue-on-me) reads GitHub and
+opens PRs with it, and [the admin pages](#the-admin-pages) read GitHub with
+it.
 
 - It is encrypted with the `AUTH_SECRET` secret before it is stored. It never
   appears in a page, a response, or a log.
@@ -243,8 +246,8 @@ hold one token for the site, and one for each connected agent.
   agent to reconnect. The agent's next call gets `401`, and it signs in
   again.
 - A site token GitHub revoked stays stored until the person's next sign-in
-  replaces it. Nothing on the site needs it yet, and signing out works
-  without it.
+  replaces it. Until then, `/me` and the admin pages say to sign out and in
+  again, and signing out works without it.
 - GitHub's docs also limit an app to 10 new tokens an hour for one person
   and scope. Past that, GitHub asks the person in the browser to approve the
   app again. When GitHub gives an agent's sign-in no token, the person goes
@@ -255,8 +258,8 @@ hold one token for the site, and one for each connected agent.
   GitHub turns them on for a new app. With them on, GitHub stops accepting
   each token after 8 hours, since the site doesn't refresh them yet. Then an
   agent's next tool call ends its connection, as above, so the agent signs in
-  again. The site's own token stops working too. Nothing on the
-  site needs it yet, and signing out works without it.
+  again. The site's own token stops working too, so `/me` and the admin
+  pages say to sign out and in again, and signing out works without it.
 
 **Where the tokens are kept.**
 
@@ -355,7 +358,8 @@ permission, resource)`. It returns, or refuses with a
 `pause_any_project`. The admins' tools and the admin pages call it with
 the admin permissions below before they read or write anything.
 `post_update`, `release_claim`, `submit_work`, and `open_pr` call it with
-`work_claim`. The other tools and pages that need it arrive with the issues
+`work_claim`, and so does Open PR on [/me](#your-queue-on-me), through
+`open_pr`'s rules. The other tools and pages that need it arrive with the issues
 that build them.
 
 | Permission | Allows | Who holds it | Refusal |
@@ -1652,7 +1656,8 @@ maintainer's token or other donor's ever does their work.
   donor's PRs, come first when there are any. The list is empty until #17
   fills it. So is the list of PRs merged since the last session.
 - `set_interests` saves the donor's languages, projects, and kinds of work,
-  which rank their suggestions.
+  which rank their suggestions. [/me](#your-queue-on-me) saves them the same
+  way.
 - `my_work` lists the same claims in progress, and those on a project on
   the do-not-list or one the sync delisted too, since they are the donor's
   own record. Each is marked `resumable`. One of those isn't, and its
@@ -2044,7 +2049,7 @@ never reaches the tool.
   The files, and a description the donor wrote, go as they are.
 
 **Opening the PR.** `open_pr` opens the PR for work in the donor's review
-queue.
+queue. Open PR on [/me](#your-queue-on-me) opens it by the same rules.
 
 - It refuses what `submit_work` refuses before anything goes to GitHub. It
   also refuses a claim with no work submitted with `not_submitted`, one
@@ -2084,7 +2089,82 @@ When GitHub refuses that read, the room's PRs are the ones named.
 One whose PR can't open now is marked `openable: false` with the reason:
 the donor is blocked or the project isn't open, and then nothing about it
 is read from GitHub, or the issue fails the check `open_pr` makes on
-GitHub.
+GitHub. [/me](#your-queue-on-me) shows the same queue.
+
+## Your queue on /me
+
+`/me` is the signed-in person's own page: their review queue, their
+connected agents, their interests, and sign-out. What it shows, and in what
+order, is in [brand/brief-website.md](../brand/brief-website.md).
+
+- Someone signed out is sent to `/sign-in`, under
+  [Signing in](#signing-in). The page's data also loads from a server
+  function at a URL of its own, under `/_serverFn/`, which anyone can call.
+  It reads the session first, reads nothing for someone signed out, and
+  reads only the signed-in person's own agents, queue, and interests.
+- The agents, each with Disconnect, are under Connected agents on /me in
+  [Connecting an agent](#connecting-an-agent).
+- Each part is read on its own. When GitHub no longer takes the token from
+  the person's sign-in on the site, the queue says to sign out and in
+  again. When the queue can't be read otherwise, it says so. Either way the
+  rest of the page shows, Disconnect included.
+
+**The review queue** is the one `my_work` lists, under The review queue in
+[The donor's tools](#the-donors-tools), read with the token from the
+person's sign-in on the site, so it reads GitHub as them.
+
+- It lists the person's own claims awaiting review, and no one else's. Each
+  shows the issue's title, its latest submit's summary, what was checked,
+  the lines added and removed, the agent and model, why it waits, how long
+  it has before it expires, and a PR already open on the issue. It links
+  the diff, the issue on GitHub, and the issue's page.
+- Titles, summaries, and anything else from GitHub or an agent show as text.
+- Work whose PR can't open now says why, and has no Open PR.
+
+**Open PR** opens the item's PR by `open_pr`'s rules, under Opening the PR
+in [The donor's tools](#the-donors-tools), with the token from the person's
+sign-in on the site. The PR is theirs, as when their agent opens it.
+
+- The form names the claim by its ID, and `open_pr`'s checks run on it. A
+  claim that isn't the person's is refused, as `open_pr` refuses it with
+  `not_claim_owner`, before anything is read from GitHub, and nothing
+  changes.
+- The page's notice names the PR it opened, or says why none opened, in
+  the words of `open_pr`'s refusal.
+
+**A description the donor writes.** For a project that wants a
+person-written PR description, the item has a field for it, which starts
+empty. It never holds the agent's summary.
+
+- The browser won't send it empty. One sent blank, or with spaces alone,
+  counts as none, which `open_pr` refuses with `description_required`, and
+  the page says to write it.
+- Written, it is checked with `open_pr`'s own input schema: at most 60,000
+  characters once the spaces at its ends are trimmed. It goes into the PR
+  as the donor wrote it, in place of the agent's summary. A browser sends
+  each line break in a form as CR LF, and it goes to the PR as LF, like the
+  rest of the description.
+- When no PR opens, the page doesn't keep the words, and the field starts
+  empty again.
+
+**Interests** show as the lists `set_interests` saves, and a form changes
+them, with the items in each list separated by commas. The form is checked
+with `set_interests`' own input schema, 20 items to a list and 50
+characters to an item, and saved the same way, so the person's agent reads
+the same interests from `start_session`. A form that breaks the schema saves
+nothing, and says why.
+
+**Forms.** The Open PR and interests forms post to `/me`. Disconnect and
+sign-out post under `/auth`, under [Signing in](#signing-in).
+
+- A form to `/me` is checked as Disconnect is. It has to come from the site
+  itself, by its `Origin`, and anything else is refused with `403`. Signed
+  out, it goes to `/sign-in`, and does nothing. It acts only as the
+  signed-in person.
+- After a form, the page says what it did, or why nothing changed. The
+  words ride in the address back to the page, signed with `AUTH_SECRET` for
+  `/me` and for the person, so a link someone else made shows none of its
+  words, and neither does a notice made for another person or another page.
 
 ## Crawl candidates
 
@@ -3204,9 +3284,9 @@ and the UTC day they did.
 - A project listed from its AI policy shows the policy's quote, a link to
   the file, named by its file and section, like `CONTRIBUTING.md#ai`, and
   says it was listed from its AI policy. Beside that, `take it over or
-  remove it` links to `/maintainers`, the page that says how a maintainer
-  takes over a listing from their agent, with `register_project`, or asks
-  to have it removed. `/maintainers` isn't built yet.
+  remove it` links to [/maintainers](#the-maintainers-page), the page that
+  says how a maintainer takes over a listing from their agent, with
+  `register_project`, or asks to have it removed.
 
 **Merged work** is the PRs opened for claims on the project that merged,
 as the [PR job](#prs) records them, the newest merge first. The page shows
@@ -3348,6 +3428,32 @@ take their slots, and the pane says the project isn't taking claims.
 **Watch as text** shows the `curl -N` command for the issue's text stream,
 with a copy button. On a narrow screen its URL wraps the same way: whole
 on a line of its own when it fits, and after its slashes when it doesn't.
+
+## The maintainers page
+
+`/maintainers` tells a maintainer how to put their repo on Good First Token
+from their own agent. What it shows is in
+[brand/brief-website.md](../brand/brief-website.md).
+
+- It is public, reads nothing, and sets no cookie for a visitor who isn't
+  signed in.
+- It gives the prompt `Put my repo on Good First Token.`, with its copy
+  button and open-in links, under [The design system](#the-design-system),
+  and the maintain skill's command in Claude Code,
+  `/goodfirsttoken:maintain owner/repo`.
+- It gives the commands that install the Claude Code plugin and the
+  skills, the ones the homepage's setup gives, and links to the maintain
+  skill, whose steps add the MCP server in each harness.
+- It says what registering does, under
+  [Registering a project](#registering-a-project), the rules a maintainer
+  sets and their defaults, under [Project settings](#project-settings), how
+  to take over a listing made from a policy, under Saving in
+  [Registering a project](#registering-a-project), and how to ask to be
+  removed and withdraw the request, under
+  [Asking to be removed](#asking-to-be-removed). Those sections hold the
+  rules, and the page says them as they do.
+- A project page listed from a policy links here from `take it over or
+  remove it`, under [the project page](#the-project-page).
 
 ## Sample data in development
 
@@ -3634,6 +3740,8 @@ A deployment can serve them from a static host, on a hostname of its own.
   `open_pr`, and `submit_work` when the PR opens by itself, read the code
   repo and the issue's linked PRs, then open the PR. `my_work` reads the
   linked PRs of each issue whose work waits in the review queue.
+- `/me`'s review queue and its Open PR make the calls `my_work` and
+  `open_pr` make, with the token from the person's own sign-in on the site.
 - The admin queue reads each registration's repo and its owner's account,
   and listing a project from its policy reads the repo and its issue repo.
   These use the admin's own token: their agent's, or on the admin pages,

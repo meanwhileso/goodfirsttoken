@@ -23,7 +23,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(issue|projects|admin|skills)\.spec\.ts$/ },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(issue|projects|admin|skills|\/me)\.spec\.ts$/ },
     // The issue page's tests work real issue rooms, and every event they
     // make reaches the homepage's feed. The projects' tests do too, and seed
     // the sample projects, which the homepage lists. So they run once the
@@ -41,6 +41,10 @@ export default defineConfig({
     // queue, which the admin pages' tests expect to hold only what they
     // seeded. So they run after those.
     { name: 'skills', use: { ...devices['Desktop Chrome'] }, testMatch: /skills\.spec\.ts$/, dependencies: ['admin'] },
+    // /me's tests have a donor's agent claim sample issues, and open PRs on
+    // them from /me, which the homepage, the project pages, and the issue
+    // pages would show. So they run last.
+    { name: 'me', use: { ...devices['Desktop Chrome'] }, testMatch: /\/me\.spec\.ts$/, dependencies: ['skills'] },
   ],
   webServer: [
     {

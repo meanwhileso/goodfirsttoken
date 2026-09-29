@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -94,6 +94,9 @@ The repo is a pnpm workspace.
   [The policy crawler](#the-policy-crawler).
 - **The admin's actions and the admin pages live in `src/admin/`,**
   described under [The admin's tools and pages](#the-admins-tools-and-pages).
+- **`/me` is `src/routes/me.tsx`, with what it reads and its forms in
+  `src/me/`,** described under [/me](#me). **`/maintainers` is
+  `src/routes/maintainers.tsx`,** which reads nothing.
 
 ### Sign-in
 
@@ -180,7 +183,7 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
 | `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and the tools it serves, each run as the caller, the admin's to admins only |
 | `src/mcp/donor.ts` | The donor's tools, under [The donor's tools](#the-donors-tools) |
-| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and the review queue `my_work` lists, under [The donor's tools](#the-donors-tools) |
+| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and the review queue `my_work` lists, which `/me` uses too, under [The donor's tools](#the-donors-tools) |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
 | `src/mcp/admin.ts` | The admin's tools, under [The admin's tools and pages](#the-admins-tools-and-pages) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
@@ -188,7 +191,6 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | `src/routes/oauth/authorize.tsx` | That page |
 | `src/mcp/page-status.ts` | Sets the status that page names for itself |
 | `src/mcp/connections.ts` | The `connected_agents` table, Disconnect, and ending connections whose grants ended |
-| `src/mcp/agents.ts` | The server function that lists a person's agents on `/me` |
 | `src/mcp/paths.ts` | The paths, with no imports, so pages can use them |
 
 - **`@cloudflare/workers-oauth-provider` 1.1.0, pinned,** set up the way
@@ -458,7 +460,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | File | What it does |
 |---|---|
 | `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
-| `src/mcp/submit.ts` | `submit_work` and `open_pr`, and the review queue that `my_work` lists |
+| `src/mcp/submit.ts` | `submit_work` and `open_pr`, and the review queue that `my_work` lists. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
@@ -757,7 +759,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   too, through the tool's input schema from core.
 - **Notices in the address.** The page says what a form did with a notice
   in the address it sends the admin back to, beside an HMAC-SHA256 of it
-  keyed with `AUTH_SECRET`. The server function shows the notice only when
+  keyed with `AUTH_SECRET`, from `src/auth/notice.ts`, which `/me` uses
+  too. The server function shows the notice only when
   the signature matches, so a link made elsewhere can't put words on the
   page. The notice's dismiss link is a router link, so it reads the page's
   data again through the server function.
@@ -773,6 +776,58 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   fake's `@sample-admin` when `isDevelopment()` holds, the check the dev
   sign-in and the secret stand-ins use. So `pnpm dev` and the end-to-end
   tests have an admin, and `wrangler.jsonc` names none.
+
+### /me
+
+The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
+
+| File | What it does |
+|---|---|
+| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR and the interests |
+| `src/me/data.ts` | `getMePage`, the server function the route's loader calls |
+| `src/me/paths.ts` | The page's path, with no imports, so pages can use it |
+| `src/routes/me.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler |
+| `src/styles/account-page.css` | The page's layout and its form fields, beside `/sign-in`'s |
+| `src/auth/notice.ts` | Signs the notice a form sends a person back to a page with, and checks it, for `/admin` and `/me` |
+| `src/auth/notice-params.ts` | The notice and its signature as they ride in the address, with no imports, so pages can use them |
+| `src/routes/maintainers.tsx` | `/maintainers`, which reads nothing, with its layout in `src/styles/maintainers-page.css` |
+
+- **One set of rules.** The review queue is `readyToOpen` in
+  `src/mcp/submit.ts`, the one `my_work` lists. Open PR is `openPrAs` there,
+  which the `open_pr` tool wraps as its answer, so the page and the tool
+  check the same things in the same order, from `workOn` on. The interests
+  form checks `set_interests`' input schema from core with `validate`, and
+  saves with `setInterests` in `src/db/people.ts`, as the tool does. The
+  description goes through `open_pr`'s input schema.
+- **The site's token.** Both run as a `Caller` from `siteCaller` in
+  `src/auth/session.ts`, whose token is the one from the person's sign-in
+  on the site, decrypted only when a call asks GitHub something. The MCP
+  tools run the same code with the agent's grant.
+- **A claim that isn't theirs** throws `PermissionRefused` from `ownClaim`,
+  as it does for the tool, before a `DonorWriter` exists, so nothing reads
+  GitHub. The form's answer turns it into the page's notice.
+- **The server function** runs `loadMePage`, which reads the session first
+  and answers `signed_out` with nothing read. It reads the agents, the
+  queue, the person, and the notice at once. `readQueue` catches a failure
+  of the queue alone, so a GitHub that doesn't answer leaves the agents and
+  Disconnect on the page. A `401` there means GitHub no longer takes the
+  site's token, and the page says to sign in again. Opening `/me` still
+  ends the person's lapsed connections first, as the old
+  `src/mcp/agents.ts`, which this replaced, did.
+- **Forms, with no script.** The forms post to `/me`, which the route
+  answers with a `server.handlers.POST`, and TanStack Start leaves `GET` to
+  the page. `answerMeForm` checks `Origin` first, then the session, the way
+  `/auth/agents/disconnect` does, and sends the person back to `/me` with
+  `303`. The description field is `required`, and the server treats one
+  sent blank as none.
+- **Notices in the address.** `src/auth/notice.ts` holds what `/admin` did
+  alone before: an HMAC-SHA256 of the notice keyed with `AUTH_SECRET`,
+  checked in constant time. Each page signs for a purpose of its own,
+  `admin-notice` and `me-notice:<GitHub ID>`, so a notice shows only on the
+  page, and for `/me` only to the person, it was made for. The notice's
+  dismiss link is a router link, so it reads the page's data again through
+  the server function.
+- **No migration.** The page reads and writes what the tools already do.
 
 ### The design system
 
@@ -2764,7 +2819,7 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   stream's body, read by two readers. It also checks that `workerFetch`
   hands the Worker a request like the runtime's. The end-to-end tests reach
   pages, sign-in, the OAuth routes, disconnecting an agent, the admin
-  forms, and the issue page's socket through the runtime. When a test
+  forms, `/me`'s forms, and the issue page's socket through the runtime. When a test
   cancels a stream's body through `workerFetch`, the Worker's stream ends at
   once. Behind the runtime it doesn't yet, as
   [The live feeds](#the-live-feeds) says. Code no route uses yet, like
@@ -2835,6 +2890,16 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `apps/web/test/admin/`. Server functions have no URL in the unit tests,
   since the Vitest build sets no base for them, so the end-to-end tests
   call the page's own.
+- **`/me` tests** fetch `/me` and post its forms through the Worker with the
+  same small browser, signed in on the site with the GitHub fake, beside
+  the donor's own agent, which claims and submits through the MCP client
+  SDK, as in the MCP tests. They check which token each GitHub call ran
+  with, so an Open PR from the page is shown to use the one from the
+  person's sign-in on the site, and another donor's claim to read nothing
+  from GitHub. They read the page's notice where the page shows it, since
+  the address that carries it also rides in the page's own data. They live
+  in `apps/web/test/me/`, and `/maintainers`' test in
+  `apps/web/test/maintainers/`.
 - **End-to-end tests** run with Playwright against the production build,
   served by `vite preview` inside `workerd`, beside the GitHub fake's local
   server. The web server applies the D1 migrations first. They live in
@@ -2861,8 +2926,13 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   follows the maintain and admin skills' steps, under
   [Following the skills' steps](#following-the-skills-steps). It registers
   a project and approves it from the admin queue, where `admin.spec.ts`
-  expects only what it seeded, so it runs last, in the `skills` project,
-  which depends on `admin`.
+  expects only what it seeded, so it runs after them, in the `skills`
+  project, which depends on `admin`. `me.spec.ts` connects a sample donor's
+  agent with the MCP client SDK, through `scripts/skill-run.ts`, which
+  claims and submits work on two sample issues. Then it opens their PRs
+  from `/me`, and disconnects the agent there. The other pages would show
+  those PRs, so it runs last, in the `me` project, which depends on
+  `skills`.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
@@ -2957,7 +3027,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   anywhere else, so a lint rule allows them only in `cookies.spec.ts`.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
-  clock paused so the live wall holds still. The homepage's, in
+  clock paused so the live wall holds still. `/me`, with two pieces of work
+  in the queue and an agent connected, and `/maintainers` are compared at
+  390 and 1280px with the baselines in `me.spec.ts-snapshots/`, with the
+  times the agent connected and last called a tool masked. The homepage's, in
   `home.spec.ts-snapshots/`, show it with the sample work seeded, its ranks
   and projects, and the setup open. They run under reduced motion, with six
   fixed live lines on a day long gone filling the wall. The video is masked,

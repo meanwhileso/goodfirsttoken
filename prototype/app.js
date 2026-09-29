@@ -12,6 +12,9 @@
   // So are the projects list and each project's page, /projects and /<owner>/<repo>.
   const PROJECTS_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-projects-list';
   const PROJECT_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-project-page';
+  // So are /me and /maintainers.
+  const ME_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#your-queue-on-me';
+  const MAINTAINERS_PAGE = 'https://github.com/meanwhileso/goodfirsttoken/blob/main/docs/how-it-works.md#the-maintainers-page';
 
   // ---------- DOM helpers ----------
 
@@ -57,7 +60,7 @@
     { id: 'live', href: 'live.html', label: 'live', dot: true },
     { id: 'leaderboard', href: 'leaderboard.html', label: 'leaderboard' },
     { id: 'projects', href: PROJECTS_PAGE, label: 'projects' },
-    { id: 'maintainers', href: 'maintainers.html', label: 'maintainers' },
+    { id: 'maintainers', href: MAINTAINERS_PAGE, label: 'maintainers' },
   ];
 
   function renderNav(slot) {
@@ -71,7 +74,7 @@
         l.dot ? h('span', { class: 'dot dot--pulse', 'aria-hidden': 'true' }) : null,
         l.label)));
     items.push(signedIn
-      ? h('li', null, h('a', { class: 'site-nav__me', href: 'me.html', 'aria-current': cur('me') },
+      ? h('li', null, h('a', { class: 'site-nav__me', href: ME_PAGE, 'aria-current': cur('me') },
         h('span', { class: 'avatar', style: 'width:28px;height:28px;font-size:12px' }, 'P'), '@priya'))
       : h('li', null, h('a', { class: 'site-nav__gh', href: 'https://github.com/meanwhileso/goodfirsttoken', 'aria-label': 'Good First Token on GitHub' }, ICON.github())));
 
@@ -107,21 +110,6 @@
     const el = h('div', { class: 'toast', role: 'status' }, message);
     document.body.append(el);
     setTimeout(() => el.remove(), 2400);
-  }
-
-  function confirmDialog({ title, body, confirm, danger }) {
-    return new Promise((resolve) => {
-      const dlg = h('dialog', { class: 'confirm' },
-        h('form', { method: 'dialog', class: 'stack' },
-          h('h2', { class: 'h-small' }, title),
-          h('p', { class: 'muted' }, body),
-          h('div', { class: 'cluster', style: 'justify-content:flex-end' },
-            h('button', { class: 'btn', value: 'cancel' }, 'Cancel'),
-            h('button', { class: `btn ${danger ? 'btn--danger' : 'btn--primary'}`, value: 'ok' }, confirm))));
-      document.body.append(dlg);
-      dlg.addEventListener('close', () => { resolve(dlg.returnValue === 'ok'); dlg.remove(); });
-      dlg.showModal();
-    });
   }
 
   function clock(secondsAgo) {
@@ -265,49 +253,6 @@
         while (feed.children.length > max) feed.lastElementChild.remove();
         i += 1;
       }, Number(feed.dataset.every || 3200));
-    });
-  }
-
-  // ---------- Review queue (/me) ----------
-
-  function initMe(root) {
-    root.querySelectorAll('[data-requires]').forEach((btn) => {
-      const field = document.getElementById(btn.dataset.requires);
-      const sync = () => { btn.disabled = field.value.trim().length < 20; };
-      field.addEventListener('input', sync);
-      sync();
-    });
-    root.querySelectorAll('[data-open-pr]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const item = btn.closest('[data-item]');
-        item.querySelector('[data-actions]').replaceChildren(
-          h('a', { class: 'chip chip--opened', href: '#pr' }, `PR ${btn.dataset.openPr} opened`),
-          h('span', { class: 'muted body-sm' }, 'Opened as you. It shows on your page now.'));
-        const desc = item.querySelector('[data-desc]');
-        if (desc) desc.hidden = true;
-        toast(`Opened ${btn.dataset.openPr} on GitHub`);
-      });
-    });
-    root.querySelectorAll('[data-disconnect]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const name = btn.dataset.disconnect;
-        const ok = await confirmDialog({
-          title: `Disconnect ${name}?`,
-          body: 'That agent loses access right away and its GitHub token is revoked. You can connect it again by running /goodfirsttoken:give.',
-          confirm: 'Disconnect', danger: true,
-        });
-        if (ok) btn.closest('[data-agent-row]').replaceChildren(h('span', { class: 'muted' }, `${name} disconnected. Token revoked.`));
-      });
-    });
-    root.querySelectorAll('[data-release]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const ok = await confirmDialog({
-          title: 'Release this claim?',
-          body: 'Your slot opens for someone else. The issue page\'s timeline keeps your release and its reason.',
-          confirm: 'Release', danger: true,
-        });
-        if (ok) btn.closest('[data-item]').replaceChildren(h('div', { class: 'empty' }, 'Released. The slot is open again.'));
-      });
     });
   }
 
@@ -514,7 +459,6 @@
     initOpenIn(root);
     initTokenField(root);
     initFeeds(root);
-    initMe(root);
     initAdmin(root);
     initReplays(root);
     initPickCards(root);
