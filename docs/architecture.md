@@ -3055,6 +3055,12 @@ A pull request can switch off its own checks with a `nosemgrep` comment, a
 `scripts/new-advisories.mjs` or these workflows, since each job runs from the
 pull request's checkout. Reviewers watch for changes to any of them.
 
+Semgrep marks a finding under a `nosemgrep` comment as suppressed in its
+SARIF, and code scanning files it as an alert all the same. So both `semgrep`
+jobs leave suppressed findings out of what they upload, and the comment, with
+its reason, in the diff that adds it is the whole record. A `nosemgrep`
+comment is a dismissal, which is one more reason reviewers watch for them.
+
 `.github/workflows/security-main.yml` runs Semgrep, CodeQL, zizmor, and
 OSV-Scanner on `main` on every push, every Monday at 05:23 UTC, and by hand
 from the Actions tab. The push runs give each pull request a fresh analysis
