@@ -1,10 +1,11 @@
-import { productName, toolRefusal, tools, type ToolSpec } from '@goodfirsttoken/core';
+import { productName, toolRefusal, tools, type ToolName, type ToolSpec } from '@goodfirsttoken/core';
 import { createMcpHandler, McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { PermissionRefused, requirePermission, type Caller } from '../auth/permissions';
 import { siteOrigin } from '../auth/settings';
 import { GitHubError } from '../github';
 import { adminTools } from './admin';
+import { registerViews, toolMeta } from './apps';
 import { disconnect, markConnectionUsed } from './connections';
 import * as donor from './donor';
 import { pauseProject, projectStatus, registerProject, requestRemoval, updateProject } from './maintainer';
@@ -52,9 +53,14 @@ async function asCaller(props: AgentProps, origin: string, tool: () => Promise<A
   }
 }
 
-/** A tool's description and schemas, as packages/core defines them. */
+/**
+ * A tool's description and schemas, as packages/core defines them, and for
+ * a tool whose answer shows in a view, the view it names in _meta.
+ */
 function specOf<I extends ToolSpec['input'], O extends ToolSpec['output']>(spec: ToolSpec<I, O>) {
-  return { description: spec.description, inputSchema: spec.input, outputSchema: spec.output };
+  const name = (Object.keys(tools) as ToolName[]).find((tool) => tools[tool] === (spec as unknown));
+  const _meta = name === undefined ? undefined : toolMeta(name);
+  return { description: spec.description, inputSchema: spec.input, outputSchema: spec.output, ...(_meta ? { _meta } : {}) };
 }
 
 /**
@@ -73,6 +79,8 @@ async function isAdmin(caller: Caller): Promise<boolean> {
 
 async function buildServer(props: AgentProps, origin: string): Promise<McpServer> {
   const server = new McpServer({ name: productName, version: '0.1.0' });
+  // The views hosts with MCP Apps show, as ui:// resources.
+  registerViews(server, origin);
   const caller = callerOf(props);
   const run = (tool: () => Promise<Answer>) => asCaller(props, origin, tool);
   // The donor's tools. Each acts as the caller alone, and reads GitHub with

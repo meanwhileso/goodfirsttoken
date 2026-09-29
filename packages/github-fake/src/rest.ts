@@ -34,6 +34,7 @@ import {
   openPull,
   requireGit,
   requirePush,
+  reviewVisible,
   type IssueRecord,
   type PullData,
   type RepoRecord,
@@ -488,7 +489,8 @@ const routes: Route[] = [
     handle: (req, params) => {
       const repo = repoOf(req, params);
       const number = Number(params.pull_number);
-      return list(req, getPull(repo, number).pull.reviews, (r) => reviewShape(req.ctx, repo, number, r));
+      const reviews = getPull(repo, number).pull.reviews.filter((r) => reviewVisible(r, req.ctx.viewer));
+      return list(req, reviews, (r) => reviewShape(req.ctx, repo, number, r));
     },
   },
   {
@@ -498,7 +500,12 @@ const routes: Route[] = [
     handle: (req, params) => {
       const repo = repoOf(req, params);
       const number = Number(params.pull_number);
-      const comments = [...getPull(repo, number).pull.reviewComments];
+      const { reviews, reviewComments } = getPull(repo, number).pull;
+      // A pending review's comments show only to its author, as the review does.
+      const comments = reviewComments.filter((c) => {
+        const review = reviews.find((r) => r.id === c.reviewId);
+        return review === undefined || reviewVisible(review, req.ctx.viewer);
+      });
       if (req.url.searchParams.get('direction') === 'desc') comments.reverse();
       return list(req, comments, (c) => reviewCommentShape(req.ctx, repo, number, c));
     },

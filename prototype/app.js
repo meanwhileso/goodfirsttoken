@@ -351,101 +351,6 @@
     }
   }
 
-  // ---------- In-agent replays ----------
-
-  const SCRIPTS = {
-    donor: [
-      { k: 'you', t: 'spend some of my tokens on open source' },
-      { k: 'sys', t: '● good first token · signed in as @priya (GitHub)' },
-      { k: 'plain', t: 'How much should I spend this session?\n  1. three issues   2. two hours   3. until my limit' },
-      { k: 'you', t: '3' },
-      { k: 'plain', t: 'From your interests (TypeScript, tests). Three issues maintainers tagged for help:' },
-      { k: 'plain', t: '\n  1  meanwhileso/goodfirsttoken#18  Stream /live as NDJSON\n     help wanted · 1 working (@kenji, codex) · slot 2 of 3 open\n     goodfirsttoken.org/meanwhileso/goodfirsttoken/issues/18\n\n  2  cloudflare/vinext#311  Handle trailing slashes in rewrites\n     help wanted · nobody on it · agent PRs welcome\n\n  3  omacom/omarchy#1440  Lock screen ignores the keyboard layout\n     ready · tough: claimed 6 times · reviewed PRs\n' },
-      { k: 'plain', t: 'Pick one or more ("1 2"), or say "more".' },
-      { k: 'you', t: '1' },
-      { k: 'plain', t: 'Any special instructions for this one? Enter to skip.' },
-      { k: 'you', t: 'use my /tdd skill and keep the diff small' },
-      { k: 'ok', t: 'Claimed meanwhileso/goodfirsttoken#18 · slot 2 of 3 · live at goodfirsttoken.org/…/issues/18' },
-      { k: 'sys', t: 'cloned at 4f2a91c into a scratch folder' },
-      { k: 'sys', t: 'read AGENTS.md and CONTRIBUTING' },
-      { k: 'sys', t: 'posted: wrote failing test: /live.ndjson returns one JSON object per line' },
-    ],
-    maintainer: [
-      { k: 'you', t: 'put meanwhileso/goodfirsttoken on Good First Token' },
-      { k: 'sys', t: '● good first token · signed in as @octo-maintainer (GitHub)' },
-      { k: 'ok', t: '✓ public and open to pull requests from anyone' },
-      { k: 'ok', t: '✓ you are an admin of meanwhileso/goodfirsttoken' },
-      { k: 'plain', t: 'I read CONTRIBUTING.md, AGENTS.md, and the PR template. Proposed settings:' },
-      { k: 'plain', t: '\n  Tags                 help wanted, goodfirsttoken (new, I can create it)\n  PR mode              automatic (your CONTRIBUTING welcomes agent PRs)\n  Who can claim        anyone\n  Disclosure           Assisted-by: trailer, plus one line in the PR\n  Person-written desc  no\n  CLA                  none\n  Claims per issue     3\n  Open PRs per donor   2\n  Notes for agents     "Run pnpm test before submitting."\n' },
-      { k: 'plain', t: 'Change anything?' },
-      { k: 'you', t: 'create the tag, keep the rest' },
-      { k: 'ok', t: '✓ created label goodfirsttoken (#7057FF)' },
-      { k: 'ok', t: 'Submitted for review. A Good First Token admin looks at every new project. You will see the result next time you run /goodfirsttoken:maintain.' },
-    ],
-  };
-
-  function initReplays(root) {
-    root.querySelectorAll('[data-script]').forEach((term) => {
-      const steps = SCRIPTS[term.dataset.script];
-      const controls = root.querySelector(`[data-controls="${term.dataset.script}"]`);
-      let timer = null;
-      let idx = 0;
-
-      function type(el, text, done) {
-        let n = 0;
-        const cursor = h('span', { class: 'cursor' });
-        const tick = () => {
-          el.replaceChildren(text.slice(0, n), cursor);
-          if (n++ < text.length) timer = setTimeout(tick, 32);
-          else { cursor.remove(); done(); }
-        };
-        tick();
-      }
-      function next() {
-        if (idx >= steps.length) return;
-        const step = steps[idx++];
-        const el = h('div', { class: step.k });
-        term.append(el);
-        const after = () => { timer = setTimeout(next, step.k === 'you' ? 700 : 900); };
-        if (step.k === 'you') type(el, step.t, after);
-        else { el.textContent = step.t; el.classList.add('is-new'); after(); }
-      }
-      function restart() {
-        clearTimeout(timer);
-        term.replaceChildren();
-        idx = 0;
-        next();
-      }
-      if (controls) {
-        controls.querySelector('[data-restart]').addEventListener('click', restart);
-        controls.querySelector('[data-skip]').addEventListener('click', () => {
-          clearTimeout(timer);
-          term.replaceChildren(...steps.map((st) => h('div', { class: st.k }, st.t)));
-          idx = steps.length;
-        });
-      }
-      restart();
-    });
-  }
-
-  function initPickCards(root) {
-    root.querySelectorAll('[data-pick]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const pick = btn.closest('.pick');
-        pick.dataset.picked = 'true';
-        pick.querySelector('[data-pick-more]').hidden = false;
-        btn.hidden = true;
-      });
-    });
-    root.querySelectorAll('[data-start]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        btn.closest('.pick').querySelector('[data-pick-more]').replaceChildren(
-          h('div', { class: 'notice notice--merged' }, ICON.check(),
-            h('span', null, 'Claimed · slot 2 of 3. ', h('a', { href: ISSUE_PAGE }, 'Watch it live'))));
-      });
-    });
-  }
-
   // ---------- Token field: every square is a token spent ----------
 
   function seeded(seed) {
@@ -516,8 +421,6 @@
     initFeeds(root);
     initMe(root);
     initAdmin(root);
-    initReplays(root);
-    initPickCards(root);
     initSwatches(root);
   });
 })();

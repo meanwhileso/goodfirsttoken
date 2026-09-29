@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -183,6 +183,8 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | `src/mcp/submit.ts` | `submit_work`, `open_pr`, and the review queue `my_work` lists, under [The donor's tools](#the-donors-tools) |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
 | `src/mcp/admin.ts` | The admin's tools, under [The admin's tools and pages](#the-admins-tools-and-pages) |
+| `src/mcp/apps.ts` | The views MCP Apps hosts show, as `ui://` resources, and the `_meta` that names each from its tool, under [The views for MCP Apps hosts](#the-views-for-mcp-apps-hosts) |
+| `src/mcp/views/` | The views' own script and styles, which run in the host's frame |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
 | `src/mcp/consent.ts` | The server function that starts the page where a person approves an agent |
 | `src/routes/oauth/authorize.tsx` | That page |
@@ -581,6 +583,30 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `claim`. The list of waiting issues reads every
   approved project's cached issues, through `projects_by_status` and the
   key of `tagged_issues`. Nothing caches any of it yet.
+- **Follow-ups, PRs read in part, and ended PRs read D1 alone,** and call
+  GitHub for nothing. `listWaitingFollowUps` in `src/db/follow-ups.ts` is
+  one query that joins the donor's claims to their follow-ups, PRs,
+  submissions, and projects, by `SHOWS` there: `ASKING_FOR_HELP` from
+  `src/db/waiting.ts` and the donor's block, so a follow-up shows exactly
+  when `submit_work` would take a fix. It takes them in turn from each
+  claim with `ROW_NUMBER() OVER (PARTITION BY claim_id)`, counts them all
+  with `COUNT(*) OVER ()`, and gives the ones it took oldest first.
+  `listReadInPart` reads the counts the PR job kept on `prs` by the same
+  `SHOWS`. `markFollowUpsShown` marks what a tool listed in one statement,
+  once the tool's answer is made, and `answerFollowUps`, which
+  `submit_work` calls once the room records a submit to a claim with its
+  PR open, answers what was shown by then. `listEndedToOffer` in
+  `src/db/prs.ts` reads the donor's merged and closed PRs no session
+  offered, by `SHOWN`, the rule for the merged PRs the site shows, and
+  once `start_session`'s answer is made, `markEndedOffered` marks them in
+  one `UPDATE` with `RETURNING` that takes only those no session marked
+  yet. A PR another session marked between the two is left out of the
+  answer, which is made again without it. `shareOnXUrl` in `packages/core`
+  builds the link for a merged one, with the submission's agent.
+  `foldUntrusted` there folds a reviewer's text by `UNSAFE_CHARACTER` and
+  `HIDDEN_CHARACTER` in `characters.ts`, the sets `removalReason` folds
+  by, and `cutGraphemes` cuts it after, the rule the name an agent's
+  client gives itself is cut by too.
 - **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
   reads the claim from the claims table, checks `work_claim`, the block,
   and the project with `projectClosedRefusal`, whose do-not-list check is
@@ -778,6 +804,163 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   sign-in and the secret stand-ins use. So `pnpm dev` and the end-to-end
   tests have an admin, and `wrangler.jsonc` names none.
 
+### The views for MCP Apps hosts
+
+The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
+
+| File | What it does |
+|---|---|
+| `src/mcp/apps.ts` | Which tools have a view, each view's resource and `_meta.ui`, its page, and `registerViews`, which `buildServer` calls |
+| `src/mcp/views/main.ts` | The views' one script: it picks the view from `<body data-view>`, waits for the answer, and draws it |
+| `src/mcp/views/bridge.ts` | The view's side of the extension: JSON-RPC over `postMessage` with the host |
+| `src/mcp/views/cards.ts`, `live.ts`, `review.ts` | The issue cards, the live feed, and the review queue |
+| `src/mcp/views/parts.ts`, `dom.ts` | The pieces the three share, and the one function that makes elements |
+| `src/mcp/views/view.css` | The card, and the dark colors |
+| `scripts/mcp-views.ts` | The Vite plugin that builds the script and styles for the Worker |
+| `scripts/apps-host-proxy.ts` | `pnpm apps:host`, which lets the reference host reach `pnpm dev`, under [Trying the views in basic-host](#trying-the-views-in-basic-host) |
+| `src/feed/follow.ts` | Following a feed's socket from a browser, for pages and views alike |
+
+- **Built against the extension's stable spec of 2026-01-26,**
+  [`specification/2026-01-26/apps.mdx`](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)
+  in modelcontextprotocol/ext-apps, read with its SDK,
+  `@modelcontextprotocol/ext-apps` 2.0.3, on 2026-09-29. A view speaks
+  protocol version `2026-01-26`.
+- **The SDK and the MCP SDK.** The extension's server helpers,
+  `registerAppTool` and `registerAppResource`, take
+  `@modelcontextprotocol/server` 2.x as a peer, which 2.1.0 is, and only add
+  the MIME type and `_meta` through `McpServer`'s own `registerTool` and
+  `registerResource`. `apps.ts` does the same with 2.1.0's API, so the Worker
+  takes no new dependency. The SDK's `App`, the view's side, brings zod and
+  the MCP SDK's protocol with it, 418 KB bundled. A view needs a handful of
+  messages, `ui/initialize`, the tool's input and answer, `tools/call`,
+  `ui/open-link`, `ui/message`, `ui/update-model-context`, and its size, so
+  `bridge.ts` speaks them itself, in the shapes the SDK's schemas check, as
+  the spec allows. The reference host from the same repo, `basic-host` at
+  2.0.3, which uses the SDK's `AppBridge`, runs the views against
+  `pnpm dev`: a Pick claims, the card follows the issue live, and Open PR
+  opens a PR on the GitHub fake. The steps are under
+  [Trying the views in basic-host](#trying-the-views-in-basic-host).
+- **Every agent gets the views, by choice.** The spec says a server should
+  register views only for a client that declares `io.modelcontextprotocol/ui`
+  among its capabilities. The server could check. A request in the
+  2026-07-28 protocol carries the client's capabilities. A 2025-era client,
+  which the MCP client SDK is unless told otherwise, declares them only in
+  `initialize`, a request of its own. `createMcpHandler` builds a new server
+  for each request, so the server would keep them with the agent's
+  connection, to read at each `tools/list`. It does neither, since the
+  reference host, `basic-host` 2.0.3, declares no capability for the
+  extension, and a check would hide the views from it. So what a host
+  without MCP Apps sees is kept small: a
+  `_meta` on three tools, which the spec makes safe to ignore, a `resources`
+  capability, and a `resources/list` without the views, which is empty
+  today. `registerViews` takes every `ui://` URI out of the SDK's own list,
+  as the spec allows for resources only a view uses, so a resource another
+  part of the server registers still lists. It wraps the SDK's handler
+  through `_getRequestHandler`, the SDK's protected accessor. When a new SDK
+  gives it no handler to wrap, it logs a line and leaves the list as the
+  SDK answers it, views and all, so every other request still works. A
+  host reads each view by the URI its tool names. Every answer is the same
+  for every host.
+- **One page per view, built with the Worker.** `import view from
+  './views/main.ts?mcp-view'` gives the Worker a script and styles as
+  strings. `scripts/mcp-views.ts` answers that import with a Vite build of
+  its own: the entry and what it imports, as one minified script, and the
+  styles it imports, which are the design system's `tokens.css`, `base.css`,
+  and `components.css`, and `view.css`. Vite puts a file the styles name,
+  like a font, into them as a `data:` URL, so the plugin checks what it
+  built. The build fails when the styles name a file with `url()` or pull
+  in a stylesheet with `@import`, since a view loads nothing, or when the
+  script and styles pass `MAX_VIEW_BYTES`, 64 KB. `vite.config.ts` and
+  `vitest.config.ts` both load the plugin, so `pnpm dev`, the build, and the
+  tests serve the same pages. `viewHtml` puts the two in one HTML page per
+  view, which differ only in `<body data-view>`. Each is about 36 KB, and
+  the Worker builds none at request time.
+- **The views reuse the site's code where it runs without zod:**
+  `followFeed` for the socket, which `useLiveFeed` wraps for pages,
+  `toWallLine` from the homepage, and the tools' text helpers from
+  `@goodfirsttoken/core/text`, a subpath of the core package with no import
+  that runs. Every other import from core is a type. So a view checks a
+  socket's message by the fields it shows, where a page checks it with
+  `feedEventSchema`. The room checked each event before it stored it.
+- **The socket's origin comes from the request.** A view's socket runs to
+  the live page the tool's answer names, and `viewMeta` declares the same
+  origin, `siteOrigin(request)` as `ws:` or `wss:`: the primary domain from
+  the deployment's settings, or the request's own origin in development.
+  No config names it. The socket is public and reads no cookie, so a view's
+  frame may open it from whatever origin the host gives it.
+- **Text stays text.** `h` in `dom.ts` adds every string as a text node,
+  refuses an attribute that starts with `on`, and no view sets
+  `innerHTML`. A link is a button that asks the host to open the page with
+  `ui/open-link`, since a sandboxed frame can't open one, so no URL from an
+  answer lands in an attribute. `webLink` in `dom.ts` takes an `https` URL,
+  or an `http` one on this machine, as in development, and a live page's
+  socket follows the same rule. Any other address shows as text. When the
+  host won't open a page, its address shows beside the link, to copy.
+- **Only the host talks to a view.** `bridge.ts` takes a message only from
+  `window.parent`, the window that framed the view. Another frame on the
+  page can't answer a view's call or set its theme.
+- **The agent hears of a view's action.** A Pick sends `ui/message`, which a
+  host adds to the conversation as the donor's, so the agent takes the
+  claim up, and asks the donor for special instructions first, as after a
+  pick in the terminal. Open PR sends `ui/update-model-context`, which the
+  agent reads at its next turn. Each update takes the place of the one
+  before it, so each names every PR the queue opened so far. A host can
+  refuse a request with an error, or with a result that says `isError`,
+  and a view takes both as a refusal.
+- **The first answer only.** A host sends the input and answer of the call
+  it framed the view for, and may send those of the view's own tool calls
+  after them. `main.ts` draws the first ones, and each button shows its own
+  call's answer. A change of the host's context holds only what changed, so
+  `main.ts` merges each into what it has, and the theme stays until a
+  change names another. When the host takes the view down with
+  `ui/resource-teardown`, or the view draws again, it closes its sockets.
+  When the host won't start it, the view says so.
+- **The host's policy.** A view's script and styles are inline, which the
+  spec's default policy allows with `'unsafe-inline'`. It asks for no
+  permission, no frame, and no resource domain.
+
+#### Trying the views in basic-host
+
+The reference host from the extension's repo shows the views against
+`pnpm dev`, by hand. It isn't a dependency of this repo. It connects to an
+MCP server with no sign-in, so `pnpm apps:host` signs a sample person's
+agent in to the site, as a harness does, and serves the site's `/mcp` on
+`http://localhost:3001/mcp`, the address `basic-host` connects to unless
+told otherwise, with that agent's token and the CORS headers a browser
+needs. Anything that reaches its port acts as that person, so it takes
+only a site on this machine, listens on this machine alone, passes on only
+`/mcp`, always to that site, and answers only pages on this machine. It
+listens before the agent signs in, so a port that is taken stops it before
+a new agent shows among the person's connected agents. A sign-in that takes
+over 30 seconds stops it too, with a message, since a site that never
+answers would leave it waiting with nothing said.
+`apps-host-proxy.test.mjs` runs `proxyServer`, the proxy's server built
+from the site, the token, and the address, between a stand-in for the site
+and a sink that no request may reach, and runs the script itself on a port
+that is taken and against a site that never answers.
+
+1. Clone the extension's repo at 2.0.3, `git clone --branch v2.0.3 --depth 1
+   https://github.com/modelcontextprotocol/ext-apps`, and copy
+   `examples/basic-host` out of it, since inside the repo it builds against
+   the repo's own packages.
+2. In the copy, `npm install`, then build its two pages with
+   `INPUT=index.html npx vite build` and `INPUT=sandbox.html npx vite build`.
+   Its own `npm run build` needs tools from the repo's root.
+3. Start it with `node serve.ts`. It serves the host on port 8080, and the
+   sandbox its frames load on port 8081.
+4. In this repo, run `pnpm dev`, then `pnpm seed`, then `pnpm apps:host`,
+   which signs in as `@lena`. `--login` names another sample person,
+   `--port` another port, `--site` another local site, and `--timeout` how
+   many seconds the sign-in may take. For another port, start `basic-host`
+   with `SERVERS='["http://localhost:<port>/mcp"]'`.
+5. Open `http://localhost:8080`. Pick a tool, fill its input as JSON, and
+   press Call Tool: `start_session`, `set_interests` with a sample project,
+   `suggest_issues` with the session for the issue cards, and Pick one.
+   `post_update` sends a line the card shows live. `claim_issue` shows the
+   live feed, `submit_work` and then `my_work` show the review queue, and
+   Open PR opens the PR on the GitHub fake. The sun and moon button at the
+   bottom switches the host between light and dark.
+
 ### The design system
 
 - **Components are React components in `src/components/`,** one file per
@@ -792,6 +975,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `design-page.css`, is linked from that route's `head`.
 - **The launch video links these stylesheets too.** How it draws the site's
   pages with them is in [video/README.md](../video/README.md).
+- **So do the views MCP Apps hosts show,** inline, under
+  [The views for MCP Apps hosts](#the-views-for-mcp-apps-hosts). They build
+  their elements with the components' class names in plain script, since
+  React would be most of each page. Their dark colors, in `view.css`, are the
+  prompt box's code tokens, and mixes of them, so the design system keeps one
+  palette in `tokens.css`.
 - **Class names are BEM-style:** a block like `wall-line`, its parts like
   `wall-line__time`, and its variants like `chip--live`. State lives in
   attributes, like `aria-pressed`, `aria-current`, and the token field's
@@ -819,12 +1008,13 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   rest are built from: GitHub logins and numeric IDs, repos, issues, labels,
   and PRs, and our IDs, times, and links. `projects.ts` holds projects, their
   settings, and each saved version of the settings, `claims.ts` the claim
-  state machine and the stored claim, `prs.ts` a claim's PR, `issues.ts` a
-  cached tagged issue, `people.ts` people, their interests, and blocks,
-  `sessions.ts` donor sessions and budgets, `characters.ts` the characters
-  that could break a line or change what a terminal shows, `removals.ts`
-  maintainers'
-  requests to be removed, `crawl.ts` crawl candidates and
+  state machine and the stored claim, `prs.ts` a claim's PR and the link to
+  share it, `issues.ts` a cached tagged issue, `people.ts` people, their
+  interests, and blocks, `sessions.ts` donor sessions and budgets,
+  `characters.ts` the characters that could break a line or change what a
+  terminal shows, and the ones a reader can't see, `follow-ups.ts` what
+  reviewers wrote on a donor's PR and how it is folded, `removals.ts`
+  maintainers' requests to be removed, `crawl.ts` crawl candidates and
   the do-not-list, `feed.ts` feed events, `refusals.ts` the refusal codes,
   `secrets.ts` the check that replaces keys and tokens in posted text, and
   `validation.ts` the check that names the field in every problem.
@@ -838,6 +1028,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   add theirs when their skills name them.
   `src/tools/index.ts` lists them all, and its `toolResult` and
   `toolRefusal` build MCP results without depending on the MCP SDK.
+- **`@goodfirsttoken/core/text` is the tools' text helpers alone,**
+  `src/tools/text.ts`, which imports nothing that runs. The views MCP Apps
+  hosts show use it, so their script carries no zod.
 - **The claim state machine never reads the clock.** Its caller passes the
   time in, in the unit Durable Object alarms use, so an alarm can drive it
   and a test can set any time. The units are in
@@ -1089,7 +1282,8 @@ in `people`.
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and since when, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
-| `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
+| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the PR job's reads of its reviews covered, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
+| `follow_ups` | Review or comment on a line that a reviewer wrote on a claim's open PR, as the PR job read it: GitHub's ID for it, the reviewer, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
 | `submissions` | Claim's submitted work: the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
@@ -1184,6 +1378,26 @@ that break the rules, so it returns the problems for the caller to show.
   closed request stays, so the table keeps who asked for each removal. A
   request's repo has no foreign key, since a repo that isn't a project can
   be asked for.
+- **Migration `0010_follow_ups.sql`** makes `follow_ups`, with a foreign
+  key to the claim, and adds to `prs` `offered_at`, `reviews`,
+  `reviews_read`, `comments_left_out`, `reread_due`, and
+  `reread_failed_at`, with the index `prs_reread_due`.
+  `src/db/follow-ups.ts` owns the table, and `src/db/prs.ts` the columns.
+  A follow-up's key is its claim and GitHub's node ID for the review or
+  comment, so the PR job inserts what it read on a PR in one statement,
+  from a JSON array, with `ON CONFLICT DO NOTHING`, and a follow-up read
+  again keeps its first text and its times. A PR with nothing to keep
+  costs no query. `setReviewsRead` adds what a read covered to what the
+  reads before it covered, for a batch of 50 PRs in one `UPDATE ... FROM
+  json_each`, whose `SET` reads each row as it was, so the last read's
+  count of reviews says which are new. `setPrState` sets `reread_due` in
+  the same statement that records a PR closed, so no close can lose its
+  read, and clears `offered_at` in the one that records it open again, so
+  how it ends next is offered. The rows of a donor's follow-ups are read
+  through `claims_by_person` and the table's key. Old outcomes aren't
+  offered: the migration marks each PR offered that merged or closed
+  before its donor's latest session started. The test of what it marks
+  runs the migration's own `UPDATE` again, from `TEST_MIGRATIONS`.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -1220,6 +1434,11 @@ A submission's branch and commit are public on GitHub once they land. Its
 title, summary, and notes on what was checked go into the PR when it opens,
 with keys and tokens replaced before they are stored. Until then only the
 donor's `my_work` shows them.
+
+A follow-up's text is public on GitHub, where the reviewer wrote it, and
+only its donor's `start_session` and `my_work` show it. `prs.offered_at`,
+`follow_ups.shown_at`, and `follow_ups.answered_at` say what the donor's
+agent was shown and did, and nothing shows them.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -1308,13 +1527,14 @@ pruning after a sync, with no index of its own.
 | `projects_by_issue_repo` | The projects whose issues live in a repo, for a claim or a sync, and the copies of an issue the sync checks before a room forgets its PR |
 | `project_status_changes_by_repo` | A project's status changes, newest first, and its latest, which names a registration in the admin queue |
 | `claims_by_issue` | An issue's lanes, its slots, how many times it was claimed, and the tough badge |
-| `claims_by_person` | One person's claims, newest first: `my_work`, the claims `start_session` offers to resume, a donor's open PRs by project, their page, and their leaderboard row |
+| `claims_by_person` | One person's claims, newest first: `my_work`, the claims `start_session` offers to resume, a donor's open PRs by project, their follow-ups and merged PRs to share, their page, and their leaderboard row |
 | `claims_by_project` | One project's claims: its page's claims working now, merged PRs, and top helpers, its claims working now for `project_status`, and, in a time range, its row on the leaderboard by project |
-| `prs_by_number` | A PR's claim, and one claim per PR |
+| `prs_by_number` | A PR's claim, and one claim per PR, and the claims whose closed PR a read finds open again |
 | `prs_open` | The open PRs the PR job follows, oldest first, and whether a PR the sync saw is a claim's still open |
 | `prs_by_opened` | PRs opened in a time range, like this week |
-| `prs_by_closed` | PRs merged or closed in a time range, like this week |
-| `donor_sessions_by_person` | A donor's last session, for what merged since |
+| `prs_by_closed` | PRs merged or closed in a time range, like this week, and the PRs closed in the last 14 days the PR job reads |
+| `prs_reread_due` | The issues of PRs closed without merging that wait for the PR job to read them again: those whose read never failed, oldest close first, then the rest, oldest failure first |
+| `donor_sessions_by_person` | A donor's last session, and in migration `0010_follow_ups.sql`, whether a merged PR's donor started a session since it merged |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
 | `crawl_candidates_by_repo` | Whether the crawler proposed a repo before, and how the admin decided, which it asks for every repo it reads, and a repo's last rejected find, for its hash |
@@ -1373,6 +1593,7 @@ before 2026-03-15. The ID comparison holds either way.
 
 **Its interface** is RPC methods on the stub, for the MCP tools to call:
 `claim`, `postUpdate`, `submit`, `openPr`, `release`, `prOpened`, `prClosed`,
+`claimPrEnded`, `claimPrReopened`,
 `snapshot`, and `history`, and `glance` for the
 [issue page](#the-issue-page). `fetch` takes a WebSocket upgrade for a watcher,
 with `?since=<event ID>`. Who is asking comes in as a numeric GitHub ID. A
@@ -1397,6 +1618,7 @@ it fails.
 | `facts` | Fact about the room: `issue`, the issue it holds, as the first claim spelled it, and `watchers_retry_at`, when to try again a send to the watchers that D1 kept from going out |
 | `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, when the last try started, the time before which no try is made, until when a call's try is out, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
+| `pr_outcomes` | Claim whose own PR merged or closed, as the PR job told the room, with which |
 | `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
 | `outbox` | Event not yet sent to the feed queue, by its place in `events`: the message to send, the failed tries, and the time before which no try is made |
 
@@ -1468,10 +1690,20 @@ the alarm doesn't fire again and again.
 **IDs.** Claim IDs are `c_` and event IDs `e_`, each followed by 20
 URL-safe characters, made the same way as session IDs.
 
-**Not here yet.** The PR job records when a claim's PR merged or closed, and
-tells the room, which forgets it. The room keeps no state of its own for
-that, so it doesn't refuse with `pr_closed`, and makes no `pr_merged` or
-`pr_closed` event.
+**A claim's PR that ends.** `claimPrEnded` takes the claim, its PR, and
+whether it merged. In one step, with no await, it forgets the PR in
+`issue_prs`, inserts a row in `pr_outcomes`, and makes the event, so the
+event is made once, whoever tells the room and however often. The claim's
+record doesn't change: `claimRecordSchema` has no field for the outcome,
+since every stored claim would need a step that rewrites it, and the
+outcome is a fact about the PR, which `prs` keeps too. `postUpdate`, and
+`submit` through `change`, read `pr_outcomes` before the state machine,
+and refuse with `pr_closed`. The event's time is the room's clock when it
+heard, so the times in the history never go back. `claimPrReopened` undoes
+a close for a claim whose PR a read found open again: in one step it
+deletes the claim's row in `pr_outcomes`, unless it says merged, and puts
+the PR back in `issue_prs`. It makes no event, since no event kind says a
+PR opened again, and the feed's next event about the PR is how it ends.
 
 ## The live feeds
 
@@ -1485,7 +1717,8 @@ streams' in [Text streams](how-it-works.md#text-streams).
 | `src/feed/queue.ts` | The feed queue's consumer |
 | `src/feed/streams.ts` | The text streams, and the live sockets pages open on them |
 | `src/feed/format.ts` | The two line formats |
-| `src/feed/useLiveFeed.ts` | The page's side of a live socket, as a React hook |
+| `src/feed/follow.ts` | Following a live socket from a browser, with its reconnects, for pages and the views MCP Apps hosts show |
+| `src/feed/useLiveFeed.ts` | The page's side of a live socket, as a React hook around `followFeed` |
 
 - **One class, three kinds of feed.** `getByName` names each: `home`,
   `repo:` and the project's code repo in lower case, and `person:` and the
@@ -1653,7 +1886,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   [Live sockets](how-it-works.md#live-sockets) says. It closes the socket
   when the component unmounts. It checks each message with core's
   `feedEventSchema`, as the streams do, and skips one that isn't a feed
-  event.
+  event. The socket, the reconnects, and the check for an event seen twice
+  are `followFeed` in `src/feed/follow.ts`, which imports nothing that runs,
+  so the views MCP Apps hosts show follow an issue's socket with it too.
 - **Which streams exist.** A person's stream needs the person in `people`,
   a repo's the project in `projects`, and an issue's a claim in `claims` or
   the issue in `tagged_issues`, which `findIssue` in `src/issue/find.ts`
@@ -2006,7 +2241,9 @@ read-only service token. The rules are in
 |---|---|
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
-| `src/sync/prs.ts` | The PR job |
+| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged |
+| `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
+| `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |
 | `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
 | `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, which run holds it, and whether the sync delisted it, with the projects a run checks |
 
@@ -2104,8 +2341,15 @@ read-only service token. The rules are in
   that fails is made again on the next pass. The sync leaves `prClosed` to
   the PR job only for a claim's PR in the claim's own issue's room, found by
   joining `prs` to `claims`, since the PR job closes it there and nowhere
-  else. The PR job calls `prClosed` before it writes the table, for the same
-  reason.
+  else. The PR job calls the room's `claimPrEnded` before it writes the
+  table, for the same reason, and the room announces the outcome.
+- **A claim's PR open again.** `readCopy`, which a pass and a re-read both
+  use, gives the open PRs it found linked to `reopenClaimPrs` before it
+  tells the room of a change. `listReopenedClaimPrs` in `src/db/prs.ts`
+  finds, in one query, the claims on the issue whose own PR is among them
+  and recorded closed, by the repo name the PR was recorded with. Each goes
+  to `reopenClaimPr` in `src/sync/reopen.ts`, which the PR job uses too,
+  under The PR job below. An issue with no linked PR costs no query.
 - **Which PRs count** is under Linked PRs in
   [how-it-works.md](how-it-works.md#tagged-issues), and why is in
   [spec §6](specs/v1.md#6-issues-and-claims). GitHub gives a PR's base
@@ -2156,7 +2400,61 @@ read-only service token. The rules are in
   holds no project, since it only reads the repos, sets the mark, and
   pauses through the compare-and-set.
 - **The PR job** reads 50 PRs in one GraphQL query, each by its repo and
-  number, so one point covers them.
+  number, with one fragment for what it reads of each: the state and its
+  times, the author, the 10 newest reviews that aren't pending or
+  dismissed, by `reviews(last:, states:)`, and the first 10 comments on
+  lines of each, by `comments(first:)`, with each connection's
+  `totalCount`, and each review's `authorCanPushToRepository`, which are
+  fields and cost nothing. GitHub counts a query's points from
+  the connections it asks for, at their `first` or `last`: 50 for the
+  reviews and 500 for their comments, divided by 100, so about 6 points for
+  50 PRs, where the state alone cost one. Reading the reviews in the same
+  query makes no call of its own, so the job's cap on calls and its share
+  of the budget stay as they were. The author's `__typename` says whether a
+  reviewer is a bot. GitHub's docs don't say whether GraphQL gives a bot's
+  login with the `[bot]` that REST gives it, so the type or the suffix
+  marks one. The query asks for no `authorAssociation`, since GitHub gives
+  it for the reader, and a comment on a line needs no author of its own,
+  since a review's comments are its author's. Each run's log line counts
+  the reviews it left out for no push access, by `withoutPushOf`, since
+  whether GitHub gives the field for a private member to the service token
+  isn't checked.
+- **PRs closed in the last 14 days.** `listClosedPrsSince` reads, through
+  `prs_by_closed`, each PR recorded closed without merging in the last 14
+  days, `REOPEN_WINDOW_MS`, and the job reads them in the same queries,
+  after the open PRs, each with the fragment `State`, its state and times
+  alone. That asks for no connection, so it adds no points, and a query
+  holds only the fragments its PRs use, since GitHub refuses one that goes
+  unused. A PR open again goes to `reopenClaimPr` in `src/sync/reopen.ts`,
+  the one way the job and `readCopy` both record it: the room's
+  `claimPrReopened`, then, only when that says `reopened`, `setPrState`
+  records it open. One merged since is then recorded merged by
+  `recordEnd`, the job's one way to record a PR's end, so it is announced,
+  counted, and offered like any merge. The cost: a run makes one more query
+  for each 50 PRs past a multiple of 50 in the two lists together, at one
+  point each. The closed PRs come after the open ones, so a run that has to
+  stop cuts them before any open PR, and the reads of issues due again come
+  after both, so it cuts those first, which takes thousands of PRs within
+  the job's 100 calls. At 50 closes a day, the 700 PRs of the 14 days take
+  14 queries, about 14 points, of the job's 100 calls.
+- **Reading an issue again** when a claim's PR closed without merging is
+  `rereadIssue` in `src/sync/issues.ts`, which the PR job calls with its own
+  `ServiceGitHub`, so its calls count in the job's run: one REST read of
+  the issue, then for an issue still open and tagged, one GraphQL query for
+  its closing references and one timeline page or more, the reads a pass
+  makes of an issue. `keptIssue` is the one rule for which issues a pass
+  keeps, which the pass's lists and this read share, and `readCopy` the one
+  way a pass reads an issue's linked PR and tells its room. The read holds
+  the project, as a scheduled run does, and skips a project another run
+  holds, so the two never write the same copy at once. A skipped read, and
+  one a stop or a refusal cut short, stays in `prs.reread_due`, and each
+  later run tries it again, after reading the open PRs, until
+  `rereadIssue` says every copy asking for help was read. One that
+  returned false gets `prs.reread_failed_at` from `rereadFailed`, so
+  `listRereadsDue` puts it behind the reads that never failed. One a stop
+  cut short keeps its place, since it was the run that ran out. A pass in
+  progress skips the issues it read earlier in the pass, so it can't be
+  counted on to read the issue again.
 - **A maintainer's refresh** is `project_status` with `refresh`. It runs
   inside the MCP call, so it gets few calls, under The budget in
   [how-it-works.md](how-it-works.md#tagged-issues). `takeRefresh` records
@@ -2559,6 +2857,11 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, and its weekly reads one REST call for
   each listed project a week, so they seldom draw on the same budget.
+  The PR job reads each open PR's reviews in its one query, and the state
+  of each PR closed in the last 14 days in the same queries, whose cost is
+  under The PR job in [The sync](#the-sync), and an issue again, a few
+  REST calls, for each claim's PR that closed without merging. It leaves the
+  least for the others, so it still reads after they stop.
 - **A monthly crawl.** A pass reads the pool once, and the next starts 30
   days after it started. At these rates a pass spends about 3,000 GraphQL
   points for each 10,000 repos, well under a tenth of a percent of the 3.6
@@ -2738,7 +3041,12 @@ and Playwright run it as a local HTTP server.
   `object(expression:)` across many repos in one query, a repo's labels
   with the open issues that carry each, an issue with the
   open PRs that close it, through `closedByPullRequestsReferences`, a pull
-  request's state, and `createCommitOnBranch`. GitHub's primary rate limits:
+  request's state, its author, and its reviews with their comments on
+  lines, oldest first, through `reviews` and `comments`, with `first` or
+  `last`, each with its `authorAssociation`, and whether a review's author
+  can push to the repo, and `createCommitOnBranch`. A GitHub App's bot reviews and
+  comments as a `Bot`, whose login the fake's GraphQL gives without the
+  `[bot]` its REST gives. GitHub's primary rate limits:
   each person's REST, GraphQL, and search budgets, whichever of their tokens
   made the calls, in the `x-ratelimit` headers of every answer, with a `403`,
   or a `RATE_LIMITED` GraphQL error, once one is spent. The OAuth web flow: the authorize page and the
@@ -2752,8 +3060,12 @@ and Playwright run it as a local HTTP server.
   with its endpoint, the token it carried, the login that token belongs to,
   and the status. The local server lists them at `/_fake/calls`.
 - **Tests change it the way people change GitHub.** Besides merging,
-  closing, and reviewing PRs and committing and deleting files, to any
-  branch and with any mode, a test can open, label, assign, and close issues, open a PR
+  closing, reopening, and reviewing PRs, as a person or a bot, leaving a
+  review pending, which only its author sees, and dismissing one, and
+  committing and deleting files, to any branch and with any mode, a test
+  can open, label, unlabel, assign, and close issues, make someone a
+  member of an organization, in public or in private, give someone a role
+  on a repo through a team, open a PR
   from a branch or a fork, click Update branch on a PR, and spend part of
   a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
@@ -2826,6 +3138,28 @@ and Playwright run it as a local HTTP server.
   - A closing keyword in a commit message closes nothing when the PR
     merges. On GitHub it does, though it links no PR. The fake has no PRs
     linked by hand.
+  - An edit changes no review or comment, and a review is dismissed only
+    by a test. A connection pages with `first`, `last`, and `after`, and
+    refuses `before`.
+  - `authorAssociation` gives `OWNER`, `MEMBER` for a member of the
+    organization that owns the repo, whose membership is public or the
+    caller's is too, `COLLABORATOR` for someone given a role on the repo
+    directly, `CONTRIBUTOR` for someone with a merged PR there, and `NONE`.
+    A role through a team makes no one a collaborator, and the fake gives
+    no `FIRST_TIMER` or `FIRST_TIME_CONTRIBUTOR`.
+  - `authorCanPushToRepository` is true for the repo's owner and anyone
+    whose role there, direct or through a team, is admin, maintain, or
+    write, a bot's too, the fake's rule for push access.
+  - A closed PR opens again as open with no close time, whatever became of
+    its branch, and a merged one can't.
+  - Not checked on GitHub, so the app is written for either answer:
+    whether GraphQL gives a bot's login with the `[bot]` REST gives it, and
+    whether the service token, which is no member of the organization,
+    reads `authorCanPushToRepository` as true for a member whose membership
+    is private and who can push through a team. The docs say the field
+    tells whether the author has push access, and nothing about the
+    reader, so the app takes it as it comes. A check on GitHub needs such a
+    member's review on a PR in an organization's repo.
   - An app has one callback URL, and any path under it is allowed, the way
     GitHub matches with wildcard matching on.
   - Git object IDs are 40 hex characters made with an FNV hash of the
@@ -2975,7 +3309,18 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   calls made ran with the token of the donor whose claim it was, who also
   made the call. The fake's state shows where each branch, commit, and PR
   went, and who authored it. Its forks are ready at once, except in the
-  test of a fork GitHub is still making.
+  test of a fork GitHub is still making. `follow-ups.test.ts` runs the
+  review loop end to end: the donor's tools through the SDK, and the PR
+  job and the sync between their calls, as their crons would. After each
+  test, it checks that the jobs' calls ran with the service token and every other with the
+  calling donor's own agent's token, and it wraps `fetch` to show that the
+  Worker fetched nothing but GitHub, so nothing was posted to X.
+  `apps.test.ts` reads the views MCP Apps hosts show as a client would,
+  with `resources/read` and each tool's `_meta`, and checks what a host
+  without MCP Apps sees: the `resources` capability, a `resources/list`
+  without the views, the `_meta` on three tools, and each answer with
+  nothing added. A resource that is no view still lists. How a view draws
+  an answer runs in a browser, in the end-to-end tests.
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
@@ -3008,8 +3353,26 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   follows the maintain and admin skills' steps, under
   [Following the skills' steps](#following-the-skills-steps). It registers
   a project and approves it from the admin queue, where `admin.spec.ts`
-  expects only what it seeded, so it runs last, in the `skills` project,
-  which depends on `admin`.
+  expects only what it seeded, so it runs in the `skills` project, which
+  depends on `admin`.
+  `mcp-apps.spec.ts` opens each view MCP Apps hosts show, read from the MCP
+  server, in `apps-host.ts`, a stand-in for a host: a page that frames the
+  view in a sandbox under the policy the spec builds from the view's
+  declared domains, answers `ui/initialize`, sends the call's input and
+  answer, and records what the view sends. It can refuse what a view asks,
+  either way a host may, send the view more, and post to it from another
+  frame on the page. The test hands each view answers of its own, some with
+  markup in their text, answers the tool calls its buttons make, and stands
+  in for an issue's socket with `routeWebSocket`. `contrastOf` measures a
+  part's text against its background, so the dark tests check colors by
+  what they do.
+  `mcp-apps-flow.spec.ts` passes the views' tool calls to the MCP server
+  with a sample donor's agent: a Pick claims a seeded issue, the card
+  follows the room over the real socket, and Open PR opens a PR on the
+  GitHub fake. That claim and PR would show on the homepage and to the
+  admin pages' tests, so it runs last, in the `apps` project, which depends
+  on `skills`. Both specs read the views with `connectAgent` from
+  `scripts/skill-run.ts`.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
@@ -3124,8 +3487,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `packages/github-fake/test/`.
 - **The tests for `scripts/`** cover the static server, the skill build, the
   deploy, and the check for advisories a pull request adds. They use Node's
-  own test runner, and so does `apps/web/scripts/state-folder.test.mjs`,
-  which checks what `--fresh` may empty. The deploy's tests fake
+  own test runner, and so do the tests beside `apps/web/scripts/`:
+  `state-folder.test.mjs`, which checks what `--fresh` may empty,
+  `mcp-views.test.mjs`, which checks what a view's build refuses, and
+  `apps-host-proxy.test.mjs`. The deploy's tests fake
   Cloudflare's API, GitHub's OIDC endpoint, and Wrangler, and check the
   scripts, the deploy workflows, and
   [self-hosting.md](self-hosting.md) against each other.

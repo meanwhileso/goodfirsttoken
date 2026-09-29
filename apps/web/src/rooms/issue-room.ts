@@ -168,6 +168,7 @@ const SCHEMA = `
     url TEXT NOT NULL,
     PRIMARY KEY (repo, number)
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS pr_outcomes (claim_id TEXT PRIMARY KEY, state TEXT NOT NULL) STRICT;
   CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, event TEXT NOT NULL) STRICT;
   CREATE TABLE IF NOT EXISTS outbox (
     seq INTEGER PRIMARY KEY,
@@ -350,6 +351,8 @@ export class IssueRoom extends DurableObject<Env> {
     const found = this.ownClaim(claimId, poster);
     if (!found.ok) return this.done(now, found);
     const stored = found.stored;
+    const ended = this.prEnded(stored.record);
+    if (ended) return this.done(now, ended);
     const prOnIssue = this.prOnIssueFor(stored.record);
     const result = nextClaimState(stored.record, { kind: 'update' }, now);
     if (!result.ok) return this.done(now, { ok: false, refusal: result.refusal });
@@ -419,6 +422,70 @@ export class IssueRoom extends DurableObject<Env> {
     return this.guard(() => {
       this.addIssuePr(input(prRefSchema, pr, 'pr'));
       return Promise.resolve({ ok: true as const });
+    });
+  }
+
+  /**
+   * Records that a claim's own PR merged, or closed without merging, as the
+   * PR job read it on GitHub. The room forgets the PR, so the issue takes
+   * claims again once no PR is open on it, and announces the outcome once,
+   * with a `pr_merged` or `pr_closed` event. The claim stays `pr_opened`,
+   * and takes no more posts or submits. Telling the room again changes
+   * nothing. A claim the room doesn't hold with this PR is left as it is,
+   * and the PR is still forgotten.
+   */
+  async claimPrEnded(request: { claimId: string; pr: PrRef; merged: boolean }): Promise<{ ok: true; announced: boolean } | Refused> {
+    return this.guard(() => {
+      const claimId = input(id, request.claimId, 'claimId');
+      const pr = input(prRefSchema, request.pr, 'pr');
+      if (typeof request.merged !== 'boolean') throw new BadInput('merged: must be true or false');
+      const { merged } = request;
+      const now = Date.now();
+      this.settle(now);
+      this.sql.exec('DELETE FROM issue_prs WHERE repo = ? AND number = ?', pr.repo, pr.number);
+      const stored = this.readClaim(claimId);
+      const claim = stored?.record;
+      const announced =
+        claim !== undefined &&
+        claim.pr !== null &&
+        samePr(claim.pr, pr) &&
+        this.sql.exec('INSERT OR IGNORE INTO pr_outcomes (claim_id, state) VALUES (?, ?)', claimId, merged ? 'merged' : 'closed')
+          .rowsWritten > 0;
+      if (announced) {
+        this.emit(
+          claim,
+          merged ? 'pr_merged' : 'pr_closed',
+          merged ? `PR ${prName(pr)} merged` : `PR ${prName(pr)} closed without merging`,
+          null,
+          now,
+        );
+      }
+      return this.done(now, { ok: true as const, announced });
+    });
+  }
+
+  /**
+   * Records that a claim's own PR, which the PR job told the room closed
+   * without merging, is open again on GitHub, as a read found it, like when
+   * a stale bot's close was undone. The claim takes posts and submits again,
+   * and the PR is open on the issue again, so the issue takes no new claims.
+   * A merged PR stays merged. A claim the room doesn't hold with this PR is
+   * left as it is. Telling the room again changes nothing.
+   */
+  async claimPrReopened(request: { claimId: string; pr: PrRef }): Promise<{ ok: true; reopened: boolean } | Refused> {
+    return this.guard(() => {
+      const claimId = input(id, request.claimId, 'claimId');
+      const pr = input(prRefSchema, request.pr, 'pr');
+      const now = Date.now();
+      this.settle(now);
+      const claim = this.readClaim(claimId)?.record;
+      const merged = this.sql.exec("SELECT 1 FROM pr_outcomes WHERE claim_id = ? AND state = 'merged'", claimId).toArray().length > 0;
+      const reopened = claim !== undefined && claim.pr !== null && samePr(claim.pr, pr) && !merged;
+      if (reopened) {
+        this.sql.exec('DELETE FROM pr_outcomes WHERE claim_id = ?', claimId);
+        this.addIssuePr(pr);
+      }
+      return this.done(now, { ok: true as const, reopened });
     });
   }
 
@@ -551,6 +618,8 @@ export class IssueRoom extends DurableObject<Env> {
     const found = this.ownClaim(claimId, caller);
     if (!found.ok) return this.done(now, found);
     const before = found.stored.record;
+    const ended = event.kind === 'submit' ? this.prEnded(before) : null;
+    if (ended) return this.done(now, ended);
     const result = nextClaimState(before, event, now);
     if (!result.ok) return this.done(now, { ok: false, refusal: result.refusal });
     const { claim, kind, text } = describe(before, result.claim);
@@ -747,6 +816,22 @@ export class IssueRoom extends DurableObject<Env> {
 
   private addIssuePr(pr: PrRef): void {
     this.sql.exec('INSERT OR IGNORE INTO issue_prs (repo, number, url) VALUES (?, ?, ?)', pr.repo, pr.number, pr.url);
+  }
+
+  /**
+   * The refusal for a post or a submit to a claim whose PR merged or closed,
+   * which the PR job told the room of, or null while its PR is open.
+   */
+  private prEnded(claim: ClaimRecord): Refused | null {
+    const [row] = this.sql.exec<{ state: string }>('SELECT state FROM pr_outcomes WHERE claim_id = ?', claim.id).toArray();
+    if (!row || claim.pr === null) return null;
+    const pr = claim.pr.url;
+    return refused(
+      'pr_closed',
+      row.state === 'merged'
+        ? `Claim ${claim.id}'s PR, ${pr}, merged, so the claim takes no more posts or work. Pick another issue.`
+        : `Claim ${claim.id}'s PR, ${pr}, closed without merging, so the claim takes no more posts or work. While ${claim.issue} is open and tagged, it takes claims again: claim it with claim_issue to try again.`,
+    );
   }
 
   /** An open PR on the issue other than the claim's own, for its claimant to hear about. */

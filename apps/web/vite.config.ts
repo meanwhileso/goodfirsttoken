@@ -5,6 +5,7 @@ import { cloudflare } from '@cloudflare/vite-plugin';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
+import { mcpViews } from './scripts/mcp-views.ts';
 
 // Where pages load the built files from. With STATIC_ORIGIN set, like
 // https://static.example.org, every built file's URL is on that origin: the
@@ -65,5 +66,6 @@ export default defineConfig({
     tanstackStart(),
     react(),
     everyAsset(fileURLToPath(new URL('./src/assets/', import.meta.url))),
+    mcpViews(),
   ],
 });

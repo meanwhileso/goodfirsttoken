@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { UNSAFE_CHARACTER } from './characters';
+import { HIDDEN_CHARACTER, UNSAFE_CHARACTER } from './characters';
 import { epochMs, githubId, id, repoName } from './primitives';
 
 // Maintainers' requests to be removed (spec section 4). A maintainer asks
@@ -15,15 +15,6 @@ export const MAX_REMOVAL_REASON = 500;
  * registration or crawler find in the admin queue lists. It counts the rest.
  */
 export const MAX_REMOVALS_WITHDRAWN = 5;
-
-/**
- * A character a person reading the text doesn't see, which an agent reading
- * it could: a format character, like a zero-width space, a word joiner, or a
- * Unicode tag character, a private-use character, an unassigned one, or one
- * Unicode says to ignore when it can't be shown, like a variation selector,
- * a combining grapheme joiner, or a Hangul filler.
- */
-const HIDDEN_CHARACTER = /[\p{Cf}\p{Co}\p{Cn}\p{Default_Ignorable_Code_Point}]/u;
 
 /**
  * The text as one line, with only what a person can see: each run of
