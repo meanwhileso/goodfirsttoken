@@ -203,6 +203,19 @@ export async function lastRejectedFind(db: D1Database, repo: string): Promise<{ 
 }
 
 /**
+ * Whether an admin approved a find of the repo. Approving a find lists the
+ * repo from it, and a project is never deleted, so for a listing this says
+ * whether a find is behind it.
+ */
+export async function hasApprovedFind(db: D1Database, repo: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 AS found FROM crawl_candidates WHERE repo = ? AND status = 'approved' LIMIT 1")
+    .bind(mustParse(repoName, repo, 'repo'))
+    .first<{ found: number }>();
+  return row !== null;
+}
+
+/**
  * Keeps what the rules read in a find's repo now, as the one to compare the
  * next read with, for a find that kept none, or one of an older version.
  */

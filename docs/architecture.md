@@ -327,7 +327,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/projects/docs.ts` | The files a repo's docs are read from, where each is looked for, and the size limit, for the proposal and the policy crawler alike |
 | `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
-| `src/projects/status.ts` | Who can lift a pause, and the status a resume puts back, for the maintainer's tools and the admin's alike |
+| `src/projects/status.ts` | Who can lift a pause, the status a resume puts back, for the maintainer's tools and the admin's alike, and the pause an admin's resume puts back when Good First Token's pause took it over |
 
 - **One permission check, one read.** Every tool starts with
   `requirePermission(caller, 'manage_project', { repo })`, which reads the
@@ -2311,11 +2311,13 @@ admin queue as crawl candidates. The rules are in
   covers changes, like a change to the rules that reads most repos
   differently. `compare` in `src/crawl/reread.ts` reads a hash of another
   version, by `comparable`, as a new baseline: it keeps the new hash, so a
-  change like that sends no listing back to the queue. It still pauses on a
-  move into a ban, read from `policy_reads.banned`, which no version
-  touches. So a change to the rules can pause a listing that the new rules
-  read as a ban, and an admin reviews the pause, since a missed ban is the
-  worse error. Hashing the files whole would send a listing back for every
+  change like that sends no listing back to the queue. For a listing made
+  from a policy, by hand or from a find, it still pauses on a move into a
+  ban, read from `policy_reads.banned`, which no version touches. So a
+  change to the rules can pause a listing that the new rules read as a
+  ban, and an admin reviews the pause, since a missed ban is the worse
+  error. A registered project takes the new rules' ban as it takes one at
+  its first read, and isn't paused. Hashing the files whole would send a listing back for every
   build step added to its CONTRIBUTING. Hashing the quote and tier alone
   would miss a new condition, like a CLA, and a new sentence that names AI,
   which the rules can misread, and which an admin reads when a change comes
@@ -2331,10 +2333,16 @@ admin queue as crawl candidates. The rules are in
   come from one place.
 - **A pause on a move into a ban.** `policy_reads.banned` keeps whether
   the last whole read was a ban, beside its hash, and `compare` pauses only
-  when this read is a ban and that one wasn't, whatever the hash's
-  version. A hash that changed while the docs stay a ban pauses nothing, so
-  an admin's resume and a registered project's ban at its first read stay
-  as they are. With no read kept, `compare` follows the first read's rules.
+  when this read is a ban and that one wasn't, across a change of the
+  hash's version only for a listing. A hash that changed while the docs
+  stay a ban pauses nothing, so an admin's resume and a first read's ban
+  stay as they are.
+- **A find behind a listing.** With no read kept, `compare` pauses on a ban
+  only for a listing made from a crawler find, since the find read its
+  docs as a welcome. `hasApprovedFind` in `src/db/candidates.ts` asks
+  whether an admin approved a find of the repo, since approving one lists
+  it, and no project is deleted. Only a listing's first read asks. A listing made by hand, and a registered project, take a ban at
+  their first read as it is, and `policy_reads.banned` keeps it.
 - **A ban's pause takes over any pause.** `pauseForCrawler` with
   `anyPause` lands on an approved or a paused project, whoever paused it,
   through the compare-and-set, since the move into a ban is found only
@@ -2343,10 +2351,15 @@ admin queue as crawl candidates. The rules are in
 - **The pause it took over comes back.** `pauseTakenOver` in
   `src/projects/status.ts` reads it from the status history: the change
   before a pause that names no one, when that one is a pause that names
-  someone. The queue item shows it, and approving the item puts it back
-  through `setProjectStatusFrom`, named for whoever made it, so
-  `resumableBy` lets them lift it. No table keeps it, since the history
-  does.
+  someone. The queue item shows it. `adminResume` beside it gives the
+  change an admin's resume makes, for approving the item and for
+  `admin_pause_project`'s resume alike: that pause, named for whoever made
+  it, so `resumableBy` lets them lift it, or else the status before the
+  pause, named for the admin. It goes through `setProjectStatusFrom`, and
+  `admin_pause_project` says `restored`. The change it puts back names its
+  maker, and no admin, since the status history keeps one person for each
+  change. No
+  table keeps the pause it took over, since the history does.
 - **The admin queue shows every pause that names no one,** the sync's and
   the crawler's, so admins hear of both with no table of their own. A
   crawler's pause keeps why in `policy_reads.pause`, with `pausedAt`, its
@@ -2370,8 +2383,10 @@ admin queue as crawl candidates. The rules are in
   the new one through `setFindFingerprint`. The cron job starts the pass
   before it reads the seeds, and passes its start as `since` to
   `listSeedsToHandle` and `markSeedsHandled`, so each pass reads every
-  seed once, with `readRejected` as for the search. `admin_seed_repo`
-  doesn't pass it, so adding a seed for a repo with any find adds nothing,
+  seed once, with `readRejected` as for the search. `searchOnce` leaves out
+  a repo `seedsQueuedSince` says the pass queued as a seed, so a seed the
+  search finds too is read once. `admin_seed_repo` doesn't pass
+  `readRejected`, so adding a seed for a repo with any find adds nothing,
   as before.
 - **The link** is on `https://github.com`, as the sample data's are,
   whatever `GH_WEB_URL` says, since the policy schema takes https links
@@ -2480,11 +2495,14 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   | The crawler's search | Search | 3 of 30 a minute |
 
   The consumer spends only the top 2,000 of either hourly budget, and about
-  720 GraphQL points and 500 REST calls an hour at most: about 570 points
-  for the 1,900 repos the search queues at most in an hour, and about 150
-  points and 500 REST calls for the 500 listed projects the cron job
-  queues at most for their weekly reads. Both are well inside its 2,000. A maintainer's refresh always has 500 more than the crawl
-  leaves. The sync spends mostly REST, on timelines and on its checks of
+  870 GraphQL points and 500 REST calls an hour at most: about 570 points
+  for the 1,900 repos the search queues at most in an hour, about 150
+  points for the 500 seeds the cron job queues at most in a run, which a
+  pass reads once, mostly in its first hour, and about 150 points and 500
+  REST calls for the 500 listed projects the cron job queues at most for
+  their weekly reads. Each find costs a REST call and about a point more.
+  All are well inside its 2,000. A maintainer's refresh always
+  has 500 more than the crawl leaves. The sync spends mostly REST, on timelines and on its checks of
   the repos of the projects it reads no issues for, up to about 101 calls a
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, and its weekly reads one REST call for

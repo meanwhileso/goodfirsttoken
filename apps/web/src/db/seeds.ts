@@ -77,6 +77,23 @@ export async function listSeedsToHandle(db: D1Database, limit: number, since: nu
 }
 
 /**
+ * Which of these repos are seeds the cron job queued at `since` or after, as
+ * in the pass that started then, by name in lower case. The repos go in as
+ * one JSON array, so any number of them takes one query.
+ */
+export async function seedsQueuedSince(db: D1Database, repos: readonly string[], since: number): Promise<Set<string>> {
+  if (repos.length === 0) return new Set();
+  const { results } = await db
+    .prepare(
+      `SELECT repo FROM crawl_seeds
+       WHERE outcome = 'queued' AND handled_at >= ? AND repo IN (SELECT value FROM json_each(?))`,
+    )
+    .bind(checkTime(since, 'since'), JSON.stringify(repos.map((repo) => mustParse(repoName, repo, 'repo'))))
+    .all<{ repo: string }>();
+  return new Set(results.map((row) => row.repo.toLowerCase()));
+}
+
+/**
  * Records what the cron job did with each seed at `now`: queued it, or left
  * it alone, and why. A seed handled before keeps its time and outcome, unless
  * it was handled before `since`, as for listSeedsToHandle.

@@ -5,6 +5,7 @@ import {
   getIssueSync,
   getPolicyRead,
   getProject,
+  hasApprovedFind,
   keepCrawlerPause,
   keepFingerprint,
   setProjectStatusFrom,
@@ -21,8 +22,9 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 // read. The crawler's cron job queues them (src/crawl/search.ts).
 //
 // - Docs that move into a ban on AI help, from a last read that wasn't one,
-//   pause the project at once. A ban a registered project's docs had at its
-//   first read stays its maintainers' call.
+//   pause the project at once. A ban the docs had at the first read of a
+//   registered project, or of a listing an admin made by hand, is taken as
+//   it is. So is one a change to the rules reads in a registered project.
 // - A repo that now lets only collaborators open pull requests, or has them
 //   turned off, pauses an approved project at once.
 // - A listing made from a policy whose policy reads differently otherwise
@@ -158,16 +160,20 @@ async function pauseForCrawler(
  * What the rules read now, against the last whole read: whether it changed,
  * and whether it moved into the ban tier.
  *
- * - It moved into a ban when it reads a ban now and the last read, of any
- *   version, didn't. When no read kept whether it was a ban, as before the
- *   first, a listing made from a policy compares with the tier it was
- *   listed at, which is never a ban, and a registered project doesn't move,
- *   since its maintainers registered it with its docs as they were.
+ * - It moved into a ban when it reads a ban now and the last read didn't.
+ *   Across a change to the rules, that holds for a listing made from a
+ *   policy, since a missed ban is the worse error and an admin reviews the
+ *   pause. A registered project takes its docs as the new rules read them,
+ *   as at its first read.
+ * - When no read kept whether it was a ban, as before the first, only a
+ *   listing made from a crawler find moved into one, `fromFind`: the find
+ *   read its docs as a welcome. A listing an admin made by hand, and a
+ *   registered project, take their docs as they are, since an admin or its
+ *   maintainers listed it with its docs as they were.
  * - With a last read of this version, it changed when the hashes differ.
  * - With a last read of another version, as after a change to the rules, it
  *   takes the new one and reads as no change, so a change to the rules sends
- *   nothing back to the queue. A move into a ban still pauses, and an admin
- *   reviews it.
+ *   nothing back to the queue.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
  */
@@ -176,11 +182,14 @@ function compare(
   last: { fingerprint: string | null; banned: boolean | null } | null,
   reading: PolicyReading,
   fingerprint: string,
+  fromFind: boolean,
 ): { changed: boolean; intoBan: boolean } {
   const banned = reading.tier === 'bans_or_restricts';
-  const intoBan = banned && (last?.banned == null ? project.policy !== null : !last.banned);
+  const sameRules = comparable(last?.fingerprint ?? null);
+  const intoBan =
+    banned && (last?.banned == null ? fromFind : !last.banned && (sameRules || project.source === 'policy'));
   if (last?.fingerprint == null) return { changed: readsOtherwise(project.policy, reading), intoBan };
-  if (!comparable(last.fingerprint)) return { changed: false, intoBan };
+  if (!sameRules) return { changed: false, intoBan };
   return { changed: last.fingerprint !== fingerprint, intoBan };
 }
 
@@ -203,7 +212,10 @@ async function keepCurrent(
   const { db, github, now } = deps;
   const reading = readPolicy(files);
   const fingerprint = await policyFingerprint(reading, files, repo.vouch);
-  const { changed, intoBan } = compare(project, await getPolicyRead(db, project.repo), reading, fingerprint);
+  const last = await getPolicyRead(db, project.repo);
+  // Only the first read of a listing asks whether a find is behind it.
+  const fromFind = last?.banned == null && project.source === 'policy' && (await hasApprovedFind(db, project.repo));
+  const { changed, intoBan } = compare(project, last, reading, fingerprint, fromFind);
 
   if (intoBan) {
     const ban =

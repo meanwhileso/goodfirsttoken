@@ -202,12 +202,16 @@ Good First Token paused the project on its own, so only an admin can resume
 it, and agents get no new claims on it meanwhile. Its `pause` says why.
 
 - When `ban` is set, the policy crawler's rules read that line in the
-  repo's docs as a ban on AI help, where their last read found none. The
-  rules err toward a ban, and read many welcoming sentences as one. Read
-  the line and every paragraph in `aiSentences`, and open the link when
-  you can read the web. When the line bans or restricts AI, or says the project takes no
-  pull requests, propose to keep the pause, and quote the line. When it
-  says something else, propose to resume it, and say why.
+  repo's docs as a ban on AI help, where they read none before: at the last
+  read, or, at the first read of a listing made from a crawler find, when
+  the crawler found it. The docs may have changed. For a listing made from
+  a policy, by hand or from a find, the rules may have changed, and read
+  the same docs as a ban now. The rules err toward a ban, and read many
+  welcoming sentences as one. Read the line and every paragraph in
+  `aiSentences`, and open the link when you can read the web.
+  When the line bans or restricts AI, or says the project takes no pull
+  requests, propose to keep the pause, and quote the line. When it says
+  something else, propose to resume it, and say why.
 - When `delisted` is set, the sync found the repo private, archived,
   blocked, or gone, and the item shows nothing read from the repo. Propose
   to keep the pause. A resume leaves the project with no page, and the
@@ -293,7 +297,10 @@ a listing.
   admin lifts it. Pausing a project its maintainers paused makes the pause
   an admin's.
 - `admin_pause_project` with `repo` and `paused: false` resumes any paused
-  project. It goes back to the status it had before the pause.
+  project. It goes back to the status it had before the pause. When Good
+  First Token's pause took over one someone made, that pause comes back,
+  as when you approve the pause in the queue, and `restored` is true. The
+  project stays paused until they lift it, or you resume it again.
 - A pause Good First Token made on its own waits in the queue too, where
   you resume or keep it, as in Deciding above.
 - `changed` in the result says whether the call changed anything.

@@ -44,3 +44,20 @@ export function pauseTakenOver(history: readonly ProjectStatusChange[]): Project
   if (latest?.status !== 'paused' || latest.changedBy !== null) return null;
   return before?.status === 'paused' && before.changedBy !== null ? before : null;
 }
+
+/**
+ * The change an admin's resume makes, with admin_pause_project or by
+ * approving a pause in the admin queue, from the status history, newest
+ * first. When the pause took over one someone made, it puts that one back,
+ * with its reason, named for whoever made it, so they lift it, and
+ * `restored` is true. Otherwise it puts back the status before the pause,
+ * named for the admin.
+ */
+export function adminResume(
+  history: readonly ProjectStatusChange[],
+  admin: number,
+): { status: ProjectStatus; reason: string | null; changedBy: number | null; restored: boolean } {
+  const taken = pauseTakenOver(history);
+  if (taken !== null) return { status: 'paused', reason: taken.reason, changedBy: taken.changedBy, restored: true };
+  return { ...statusBeforePause(history), changedBy: admin, restored: false };
+}

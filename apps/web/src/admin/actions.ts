@@ -56,7 +56,7 @@ import {
 } from '../db';
 import { GitHubError } from '../github';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
-import { pauseTakenOver, resumableBy, statusBeforePause } from '../projects/status';
+import { adminResume, pauseTakenOver, resumableBy } from '../projects/status';
 
 // What an admin does, for the admin's MCP tools (src/mcp/admin.ts) and the
 // admin pages (src/admin/page.ts) alike. Every action first checks the
@@ -543,7 +543,8 @@ async function decideCandidateItem(
  * status it had before the pause, or keeps it paused as the admin's own
  * pause, with the reason they give, which its maintainers read. When the
  * pause took over one a maintainer or an admin made, approving puts that
- * one back as they made it, for them to lift. Either way it leaves the
+ * one back as they made it, for them to lift, by `adminResume`, as
+ * admin_pause_project's resume does. Either way it leaves the
  * queue. It lands only on the pause the ID names, and is decided again when
  * the status changed while it ran.
  */
@@ -563,14 +564,10 @@ async function decidePause(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const paused = await getSelfPausedProject(env.DB, changeId);
     if (paused === null) return nothingWaits(input.id);
-    const history = await statusHistory(env.DB, paused.project.repo);
-    const taken = pauseTakenOver(history);
     const change: { status: ProjectStatus; reason: string | null; changedBy: number | null } =
       input.decision === 'reject'
         ? { status: 'paused', reason: input.reason ?? null, changedBy: caller.githubId }
-        : taken !== null
-          ? { status: 'paused', reason: taken.reason, changedBy: taken.changedBy }
-          : { ...statusBeforePause(history), changedBy: caller.githubId };
+        : adminResume(await statusHistory(env.DB, paused.project.repo), caller.githubId);
     const decided = await setProjectStatusFrom(env.DB, paused.project, change, now);
     if (decided === null) continue;
     return { ok: true, value: { repo: decided.repo, kind: 'pause', status: decided.status, decision: input.decision } };
@@ -681,8 +678,10 @@ function notOpen(project: ProjectRecord): { ok: false; refusal: Refusal } {
  * Pauses an approved project, or resumes a paused one, whoever paused it. A
  * pause by an admin stays until an admin lifts it. An admin pausing a project
  * its maintainers paused takes the pause over, even with the same reason, so
- * they can't lift it. Each change lands only on the status it was decided
- * on, and is decided again when someone else changed the status first.
+ * they can't lift it. A resume of a pause Good First Token made over someone
+ * else's puts theirs back, as approving it in the admin queue does. Each
+ * change lands only on the status it was decided on, and is decided again
+ * when someone else changed the status first.
  */
 export async function adminPauseProject(
   caller: Caller,
@@ -694,7 +693,7 @@ export async function adminPauseProject(
     const project = await getProject(env.DB, input.repo);
     if (project === null) return refuse('not_found', `${input.repo} is not a project on Good First Token.`);
     const unchanged = { ok: true as const, value: { repo: project.repo, status: project.status, changed: false } };
-    let change: { status: ProjectStatus; reason: string | null };
+    let change: { status: ProjectStatus; reason: string | null; changedBy: number | null; restored: boolean };
     if (input.paused) {
       const reason = input.reason ?? null;
       if (project.status === 'paused') {
@@ -702,13 +701,14 @@ export async function adminPauseProject(
       } else if (project.status !== 'approved') {
         return notOpen(project);
       }
-      change = { status: 'paused', reason };
+      change = { status: 'paused', reason, changedBy: caller.githubId, restored: false };
     } else {
       if (project.status !== 'paused') return unchanged;
-      change = statusBeforePause(await statusHistory(env.DB, project.repo));
+      change = adminResume(await statusHistory(env.DB, project.repo), caller.githubId);
     }
-    const updated = await setProjectStatusFrom(env.DB, project, { ...change, changedBy: caller.githubId }, now);
-    if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true } };
+    const { restored, ...next } = change;
+    const updated = await setProjectStatusFrom(env.DB, project, next, now);
+    if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true, restored } };
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
 }

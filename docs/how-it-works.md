@@ -818,11 +818,17 @@ service token under [Calls to GitHub](#calls-to-github).
   archived, or is gone, under [Tagged issues](#tagged-issues), and the
   policy crawler for docs that now read as a ban on AI help, or a repo that
   lets only collaborators open pull requests, under
-  [Keeping listings current](#keeping-listings-current). An approval
-  or a rejection always names the admin who made it. A resume, a rejected
-  listing's return to `pending` when its maintainer takes it over, or a
-  rejected registration's when its maintainer registers it again, names
-  the maintainer.
+  [Keeping listings current](#keeping-listings-current). An approval or a
+  rejection names the admin who made it, except a pause restored by an
+  admin's decision, below. A resume, a rejected listing's return to
+  `pending` when its maintainer takes it over, or a rejected
+  registration's when its maintainer registers it again, names the
+  maintainer.
+- A pause restored by an admin's decision names whoever made it. When an
+  admin lifts a pause Good First Token made over someone's pause, with
+  `admin_decide` or `admin_pause_project`, the pause put back names that
+  maintainer or admin, with their reason, so they can lift it. The change
+  is made when the admin decides, and doesn't name the admin.
 - A change to the status and reason the project already has adds nothing,
   except an admin's pause over a pause its maintainers made, which names the
   admin, as under [The admin queue](#the-admin-queue).
@@ -1077,7 +1083,9 @@ a project is `not_found`.
   [Permissions](#permissions). A maintainer who isn't an admin and tries is
   refused with `not_admin`. Who is an admin is read from `ADMIN_GITHUB_IDS`
   at the time, so a pause by someone no longer an admin counts as a
-  maintainer's.
+  maintainer's. When Good First Token's pause took over one a maintainer
+  made, an admin who lifts it, either way, puts the maintainer's back, for
+  them to lift, under [The admin queue](#the-admin-queue).
 - The answer says whether the call changed anything, and for a paused
   project, whether its maintainers or only the admins can resume it.
 - A pause or resume lands only on the status it was decided on. When
@@ -1292,10 +1300,10 @@ of them but a request to be removed.
   before the pause, as `admin_pause_project` does, named for the admin.
   When the pause took over one a maintainer or an admin made, approving
   puts that one back, with its reason, named for whoever made it, so they
-  can lift it themselves. Rejecting it keeps the project paused as
-  the admin's own pause, with their reason, which its maintainers read.
-  Either way the pause leaves the queue. Settings or a tier sent with it
-  are refused with `invalid_settings`.
+  can lift it themselves, as `admin_pause_project` does too. Rejecting it
+  keeps the project paused as the admin's own pause, with their reason,
+  which its maintainers read. Either way the pause leaves the queue.
+  Settings or a tier sent with it are refused with `invalid_settings`.
 - Approving a policy change lists the project from the policy its docs
   give now, as `admin_add_project` lists a repo again, below: the new
   quote and link replace the old, with the tier the admin confirms, and
@@ -1345,6 +1353,10 @@ project with `paused: false`.
   maintainer's resume does, whoever paused it, Good First Token included.
   A project the sync delisted stays delisted, as a maintainer's resume
   leaves it.
+- Resuming a pause Good First Token made over one a maintainer or an admin
+  made puts that one back, with its reason, named for whoever made it, as
+  approving the pause in the admin queue does. The project stays paused,
+  and `restored` says so. Resuming again lifts that one too.
 - The answer says whether the call changed anything.
 
 **Blocking.** `admin_block_donor` blocks a donor, or lifts a block with
@@ -2197,7 +2209,8 @@ projects due for their weekly read there, under
 - Each pass reads every seed once, whatever its stars or last push: a
   seed added meanwhile at the next run, and every other seed again once a
   new pass starts. A seed it leaves alone is recorded with why, each
-  pass.
+  pass. A seed the pass queued already isn't queued again when its search
+  finds the repo too.
 - A repo whose stars change while a pass reads the pool can land in two
   bands, or in none. Search gives repos with the same stars in no set
   order, so a band read over several pages can give one of them twice, or
@@ -2666,18 +2679,27 @@ none of the repo's text, and whether they read a ban:
   own, with whether it read a ban.
 - The first read of a project has nothing to compare with. A listing made
   from a policy then compares with the policy it was listed from: another
-  tier, or other words in its quote, is a change, and a ban is a move into
-  one, since a listing's tier is never a ban. A registered project takes
-  its docs as they are, a ban included.
+  tier, or other words in its quote, is a change.
+  - For a listing made from a crawler find, a ban is a move into one, since
+    the find read the docs as a welcome.
+  - A listing an admin made by hand takes its docs as they are, a ban
+    included, since the admin listed it with its docs as they were. A ban
+    still reads as another tier, so it goes back to the queue once as a
+    policy change, with no pause.
+  - A registered project takes its docs as they are, a ban included.
 - When what the hash covers changes, as when the rules change what they
   read in most repos, its version goes up. A hash of another version
   compares with nothing: the read takes the new hash, and sends nothing to
   the queue for what it read. So a change to the rules sends no listing
-  back. Whether the last read was a ban is kept apart from the hash, so a
-  move into a ban still pauses the project. A change to the rules can then
-  pause a listing that the new rules read as a ban, and an admin reviews
-  the pause. The pull request settings are checked as on every read, since
-  no change to the rules touches them.
+  back. The pull request settings are checked as on every read, since no
+  change to the rules touches them.
+  - Whether the last read was a ban is kept apart from the hash. So a
+    listing made from a policy, by hand or from a find, whose docs the new
+    rules read as a ban, and the old rules didn't, is paused, and an admin
+    reviews the pause, since a missed ban is the worse error. The docs may
+    not have changed at all.
+  - A registered project takes its docs as the new rules read them, a ban
+    included, as at its first read, and isn't paused for a ban they read.
 
 **What it does.**
 
@@ -2687,18 +2709,30 @@ none of the repo's text, and whether they read a ban:
   listed. A ban its docs had at a registered project's first read stays
   its maintainers' call, since they registered it with its docs as they
   were, as [spec §4](specs/v1.md#4-projects-maintainers-and-admins)
-  allows.
+  allows. So does one a hand listing's docs had at its first read, which
+  goes back to the queue as a policy change.
   - Once the rules read a ban, a later change to the docs that still reads
     as one pauses nothing more, as when an admin lifted the pause after
     reading the docs, or a registered project's maintainers reword their
     ban. A listing's goes back to the queue as a policy change, below.
+  - A known limit: when the rules misread a registered project's docs as a
+    ban at its first read, a real ban its maintainers add later pauses
+    nothing, since the rules read a ban all along. A hand listing's real
+    ban goes back to the queue as a policy change, with no pause. Both
+    shrink as the rules misread fewer welcoming docs as bans
+    ([#77](https://github.com/meanwhileso/goodfirsttoken/issues/77)).
   - The pause takes over any pause the project had, its maintainers', an
     admin's, or one Good First Token made for another reason, so only an
     admin can lift it. The move into a ban is found once, and a pause left
     as someone else's could be lifted with no one reading it. The admin
-    queue shows the pause it took over, and approving the crawler's pause
-    puts that one back, for whoever made it to lift, under
-    [The admin queue](#the-admin-queue).
+    queue shows the pause it took over, and lifting the crawler's pause,
+    by approving it or with `admin_pause_project`, puts that one back, for
+    whoever made it to lift, under [The admin queue](#the-admin-queue).
+  - A pause Good First Token made names no one, so none is put back over
+    one of those. Lifting a ban's pause that took over the sync's or the
+    crawler's own pause resumes the project to the status before both. When
+    the crawler's pause was for pull requests limited to collaborators, the
+    next weekly read pauses the project again for them, below.
   - Its reason is `Its docs now read as a ban on AI help, by the policy
     crawler's rules. An admin checks them before agents can claim its
     issues again.` It holds none of the repo's text.

@@ -525,7 +525,7 @@ export const adminBlockDonor = defineTool({
 export const adminPauseProject = defineTool({
   audience: 'admin',
   description:
-    'Pause an approved project, with a reason its maintainers see, or resume any paused project with paused: false. A pause by an admin stays until an admin lifts it, and pausing a project its maintainers paused makes it yours.',
+    "Pause an approved project, with a reason its maintainers see, or resume any paused project with paused: false. A pause by an admin stays until an admin lifts it, and pausing a project its maintainers paused makes it yours. Resuming a pause Good First Token made over someone else's puts theirs back, for them to lift. Resume again to lift that one too.",
   refusals: ['not_found', 'project_not_open'],
   input: z
     .object({
@@ -543,8 +543,16 @@ export const adminPauseProject = defineTool({
     status: projectStatusSchema,
     /** Whether this call paused or resumed the project. False when it was already as asked. */
     changed: z.boolean(),
+    /**
+     * True when a resume lifted a pause Good First Token made over someone
+     * else's pause, and put theirs back, for them to lift.
+     */
+    restored: z.boolean().default(false),
   }),
   text: (out) => {
+    if (out.restored) {
+      return `Lifted Good First Token's pause on ${out.repo}, and put back the pause it took over, for whoever made it to lift. Status: ${out.status}.`;
+    }
     if (out.status === 'paused') {
       return out.changed
         ? `Paused ${out.repo}. Agents get no new claims on it until an admin resumes it.`

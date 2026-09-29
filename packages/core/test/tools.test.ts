@@ -599,6 +599,13 @@ describe('what each result says', () => {
     expect(pause({ status: 'approved', changed: false })).toBe(`${repoName} isn't paused, so nothing changed. Status: approved.`);
   });
 
+  test('a resume that puts back the pause Good First Token took over says so, and who lifts it', () => {
+    const lifted = textOf(toolResult('admin_pause_project', { repo: repoName, status: 'paused', changed: true, restored: true }));
+    expect(lifted).toBe(
+      `Lifted Good First Token's pause on ${repoName}, and put back the pause it took over, for whoever made it to lift. Status: paused.`,
+    );
+  });
+
   test('an empty suggestion list says so', () => {
     expect(textOf(toolResult('suggest_issues', { suggestions: [] }))).toBe('No eligible issues right now.');
   });

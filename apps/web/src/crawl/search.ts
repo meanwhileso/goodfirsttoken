@@ -7,6 +7,7 @@ import {
   markRereadsQueued,
   markSeedsHandled,
   moveCrawlPass,
+  seedsQueuedSince,
   startCrawlPass,
   type CrawlerSkip,
 } from '../db';
@@ -148,11 +149,14 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
     if (pass.width > 1) return { ...next, width: Math.floor(pass.width / 2) };
     console.warn(`The crawler's search counts ${String(total)} repos with ${String(pass.low)} stars, more than it serves. It reads the first ${String(SEARCH_LIMIT)}.`);
   }
-  const repos = data.items.flatMap((item) => {
+  const found = data.items.flatMap((item) => {
     if (item.archived === true || item.private === true) return [];
     const name = repoName.safeParse(item.full_name);
     return name.success ? [name.data] : [];
   });
+  // A seed this pass queued already is read once in it.
+  const seeded = await seedsQueuedSince(deps.db, found, pass.startedAt);
+  const repos = found.filter((repo) => !seeded.has(repo.toLowerCase()));
   const { queued } = await send(deps, repos, { readRejected: true });
   run.queued += queued.length;
   next.queued += queued.length;
