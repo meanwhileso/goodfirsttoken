@@ -2,7 +2,7 @@ import { repoName } from '@goodfirsttoken/core';
 import type { ManagedRepo } from '../auth/permissions';
 import { GitHubError, type GraphQLError, type GraphQLResult } from '../github';
 import { DOC_FILES, MAX_DOC_BYTES, type DocKind, type TreeEntry } from '../projects/docs';
-import { repoFacts, whyNotEligible, type Standing } from '../projects/repo';
+import { repoFacts, whyNotEligible, type RepoFacts, type Standing } from '../projects/repo';
 import type { ServiceGitHub } from '../sync/github';
 import type { PolicyFile, PolicyFileKind, RepoLabel } from './rules';
 
@@ -493,22 +493,42 @@ export async function readLabels(github: ServiceGitHub, repo: string): Promise<R
 }
 
 /**
+ * The repo's facts from its REST answer: whether it is public and archived,
+ * and who can open pull requests, which GitHub's GraphQL doesn't give. Why
+ * not, with GitHub's status, when GitHub refused, or null for an answer in a
+ * form GitHub doesn't use.
+ */
+// https://docs.github.com/en/rest/repos/repos#get-a-repository
+export async function readRepoFacts(
+  github: ServiceGitHub,
+  repo: string,
+): Promise<RepoFacts | { failed: string; status: number | null }> {
+  let found: Partial<ManagedRepo>;
+  try {
+    found = (await github.read<Partial<ManagedRepo>>(`/repos/${repo}`)).data;
+  } catch (error) {
+    if (error instanceof GitHubError) return { failed: `GitHub answered ${String(error.status)} when asked about ${repo}.`, status: error.status };
+    throw error;
+  }
+  if (typeof found.full_name !== 'string' || typeof found.private !== 'boolean' || typeof found.archived !== 'boolean') {
+    return { failed: `GitHub described ${repo} in a form it doesn't use.`, status: null };
+  }
+  return repoFacts(found as ManagedRepo);
+}
+
+/**
  * Why a repo can't be listed, from its REST answer, or null when it can: it
  * has to be public, not archived, and take pull requests from anyone, the
  * rule an admin's listing checks. GitHub's GraphQL doesn't give who can open
  * pull requests, so this is a REST call.
  */
-// https://docs.github.com/en/rest/repos/repos#get-a-repository
 export async function whyNotListable(github: ServiceGitHub, repo: string): Promise<string | null> {
-  let found: Partial<ManagedRepo>;
-  try {
-    found = (await github.read<Partial<ManagedRepo>>(`/repos/${repo}`)).data;
-  } catch (error) {
-    if (error instanceof GitHubError) return `GitHub answered ${String(error.status)} when asked about ${repo}.`;
-    throw error;
-  }
-  if (typeof found.full_name !== 'string' || typeof found.private !== 'boolean' || typeof found.archived !== 'boolean') {
-    return `GitHub described ${repo} in a form it doesn't use.`;
-  }
-  return whyNotEligible(repoFacts(found as ManagedRepo), 'list');
+  const facts = await readRepoFacts(github, repo);
+  return 'failed' in facts ? facts.failed : whyNotEligible(facts, 'list');
+}
+
+/** A file on github.com, on the repo's default branch, with the branch and each part of the path URL-encoded. */
+export function fileUrl(repo: string, branch: string, path: string): string {
+  const encoded = (text: string) => text.split('/').map(encodeURIComponent).join('/');
+  return `https://github.com/${repo}/blob/${encoded(branch)}/${encoded(path)}`;
 }
