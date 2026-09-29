@@ -818,8 +818,10 @@ MCP server with no sign-in, so `pnpm apps:host` signs a sample person's
 agent in to the site, as a harness does, and serves the site's `/mcp` on
 `http://localhost:3001/mcp`, the address `basic-host` connects to unless
 told otherwise, with that agent's token and the CORS headers a browser
-needs. It takes only a site on this machine, since anything that reaches
-its port acts as that person.
+needs. Anything that reaches its port acts as that person, so it takes
+only a site on this machine, listens on this machine alone, passes on only
+`/mcp`, always to that site, and answers only pages on this machine. A test
+checks that no request can send the token to another host or path.
 
 1. Clone the extension's repo at 2.0.3, `git clone --branch v2.0.3 --depth 1
    https://github.com/modelcontextprotocol/ext-apps`, and copy

@@ -11,25 +11,53 @@
 //   pnpm apps:host --site http://localhost:4173      another local site
 //
 // It takes only a site on this machine, since the token it holds is a
-// person's, and anything that can reach the port acts as them.
+// person's, and anything that can reach the port acts as them. For the same
+// reason it passes on only /mcp, to that site, and answers only pages on
+// this machine.
 
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { agentToken, runAddress } from './skill-run.ts';
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Where a request to the proxy goes: the site's /mcp, whatever the request
+ * asks for, or null when it asks for anything else. The address is built
+ * from the site alone, so no request can send the token to another host or
+ * path.
+ */
+export function upstreamUrl(requestUrl: string | undefined, site: URL): URL | null {
+  if (requestUrl === undefined) return null;
+  const path = requestUrl.split('?', 1)[0];
+  return path === '/mcp' ? new URL('/mcp', site.origin) : null;
+}
+
+/** Whether a page's origin is on this machine, the only pages the proxy answers. */
+export function localOrigin(origin: string | undefined): boolean {
+  if (origin === undefined) return false;
+  try {
+    const url = new URL(origin);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && LOCAL.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 /** The request headers the proxy passes on. The rest name the proxy, or the browser's page, and the site sets its own. */
 const DROPPED = new Set(['host', 'origin', 'referer', 'cookie', 'authorization', 'content-length', 'connection']);
 /** The answer's headers it drops, since it sends the body as it reads it. */
 const DROPPED_BACK = new Set(['content-encoding', 'content-length', 'transfer-encoding', 'connection']);
 
-const CORS = {
-  'access-control-allow-origin': '*',
+/** The CORS headers for a page on this machine at `origin`. */
+const cors = (origin: string) => ({
+  'access-control-allow-origin': origin,
+  vary: 'origin',
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   'access-control-allow-headers': 'content-type, accept, mcp-protocol-version, mcp-session-id, last-event-id, mcp-method, mcp-name',
   'access-control-expose-headers': 'mcp-session-id, mcp-protocol-version',
-};
+});
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -47,6 +75,19 @@ async function main(): Promise<void> {
   const token = await agentToken(site.origin, address, values.login, `MCP Apps basic-host (@${values.login})`);
 
   const server = http.createServer((request, response) => {
+    const origin = request.headers.origin;
+    // A request from a browser page names its origin. basic-host's page is on
+    // this machine, and any other page is refused.
+    if (origin !== undefined && !localOrigin(origin)) {
+      response.writeHead(403).end();
+      return;
+    }
+    const CORS = origin === undefined ? {} : cors(origin);
+    const upstreamAt = upstreamUrl(request.url, site);
+    if (upstreamAt === null) {
+      response.writeHead(404, CORS).end();
+      return;
+    }
     void (async () => {
       if (request.method === 'OPTIONS') {
         response.writeHead(204, CORS).end();
@@ -61,7 +102,7 @@ async function main(): Promise<void> {
       headers.set('authorization', `Bearer ${token}`);
       headers.set('cf-connecting-ip', address);
       const method = request.method ?? 'GET';
-      const upstream = await fetch(new URL(request.url ?? '/', site.origin), {
+      const upstream = await fetch(upstreamAt, {
         method,
         headers,
         body: method === 'GET' || method === 'HEAD' ? undefined : Buffer.concat(chunks),
@@ -83,7 +124,9 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}
