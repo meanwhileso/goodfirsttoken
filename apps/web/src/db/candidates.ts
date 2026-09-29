@@ -3,6 +3,7 @@ import {
   crawlCandidateSchema,
   id,
   mustParse,
+  policyFingerprintSchema,
   repoName,
   type AiSentence,
   type CandidateSource,
@@ -79,6 +80,8 @@ export interface NewCandidate {
   /** The sentences in the docs that name AI, for the admin to read, and how many more there are. None when left out. */
   aiSentences?: AiSentence[];
   moreAiSentences?: number;
+  /** What the crawler's rules read in the repo's docs, from src/crawl/fingerprint.ts. None when left out. */
+  fingerprint?: string;
 }
 
 /**
@@ -91,6 +94,7 @@ export async function addCandidate(
   candidate: NewCandidate,
   now: number,
 ): Promise<CrawlCandidate | null> {
+  const fingerprint = candidate.fingerprint === undefined ? null : mustParse(policyFingerprintSchema, candidate.fingerprint, 'fingerprint');
   const c = mustParse(
     crawlCandidateSchema,
     {
@@ -110,8 +114,8 @@ export async function addCandidate(
     .prepare(
       `INSERT INTO crawl_candidates (id, repo, found_at, stars, repo_created_at, repo_pushed_at,
          owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, sources, ai_sentences,
-         more_ai_sentences, status, decided_by, decided_at, reason)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL
+         more_ai_sentences, status, decided_by, decided_at, reason, fingerprint)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL, ?16
        WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?2)
        ON CONFLICT DO NOTHING`,
     )
@@ -131,6 +135,7 @@ export async function addCandidate(
       JSON.stringify(c.sources),
       JSON.stringify(c.aiSentences),
       c.moreAiSentences,
+      fingerprint,
     )
     .run();
   return result.meta.changes === 1 ? c : null;
@@ -142,16 +147,25 @@ export type CrawlerSkip =
   | 'do_not_list'
   /** It is a project already, whatever its status. */
   | 'project'
-  /** The crawler put it in the admin queue before, whatever the admin decided. */
+  /**
+   * The crawler put it in the admin queue before, whatever the admin
+   * decided, or, with `readRejected`, a find for it waits or was approved.
+   */
   | 'proposed';
 
 /**
  * Which of these repos the crawler leaves alone, and why, by the repo's name
  * in lower case. The do-not-list comes first, then projects, then earlier
  * finds. Names compare without case. The repos go in as one JSON array, so
- * any number of them takes one query.
+ * any number of them takes one query. With `readRejected`, a repo whose
+ * finds were all rejected isn't left alone, so the search's monthly pass
+ * reads it again, and it comes back when its docs read differently.
  */
-export async function crawlerSkips(db: D1Database, repos: Iterable<string>): Promise<Map<string, CrawlerSkip>> {
+export async function crawlerSkips(
+  db: D1Database,
+  repos: Iterable<string>,
+  { readRejected = false }: { readRejected?: boolean } = {},
+): Promise<Map<string, CrawlerSkip>> {
   const checked = [...new Set([...repos].map((repo) => mustParse(repoName, repo, 'repo').toLowerCase()))];
   if (checked.length === 0) return new Map();
   const { results } = await db
@@ -160,14 +174,56 @@ export async function crawlerSkips(db: D1Database, repos: Iterable<string>): Pro
          SELECT j.value AS repo,
            CASE WHEN EXISTS (SELECT 1 FROM do_not_list d WHERE d.repo = j.value) THEN 'do_not_list'
                 WHEN EXISTS (SELECT 1 FROM projects p WHERE p.repo = j.value) THEN 'project'
-                WHEN EXISTS (SELECT 1 FROM crawl_candidates c WHERE c.repo = j.value) THEN 'proposed'
+                WHEN EXISTS (SELECT 1 FROM crawl_candidates c WHERE c.repo = j.value AND (?2 = 0 OR c.status <> 'rejected'))
+                  THEN 'proposed'
            END AS why
-         FROM json_each(?) j)
+         FROM json_each(?1) j)
        WHERE why IS NOT NULL`,
     )
-    .bind(JSON.stringify(checked))
+    .bind(JSON.stringify(checked), readRejected ? 1 : 0)
     .all<{ repo: string; why: CrawlerSkip }>();
   return new Map(results.map((row) => [row.repo.toLowerCase(), row.why]));
+}
+
+/**
+ * The repo's find an admin rejected last, with what the crawler's rules
+ * read in its docs then, or null when an admin rejected none. The
+ * fingerprint is null for a find stored before finds kept one.
+ */
+export async function lastRejectedFind(db: D1Database, repo: string): Promise<{ id: string; fingerprint: string | null } | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, fingerprint FROM crawl_candidates WHERE repo = ? AND status = 'rejected'
+       ORDER BY decided_at DESC, found_at DESC, id DESC LIMIT 1`,
+    )
+    .bind(mustParse(repoName, repo, 'repo'))
+    .first<{ id: string; fingerprint: string | null }>();
+  if (row === null) return null;
+  return { id: row.id, fingerprint: row.fingerprint === null ? null : mustParse(policyFingerprintSchema, row.fingerprint, 'fingerprint') };
+}
+
+/**
+ * Whether an admin approved a find of the repo. Approving a find lists the
+ * repo from it, and a project is never deleted, so for a listing this says
+ * whether a find is behind it.
+ */
+export async function hasApprovedFind(db: D1Database, repo: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 AS found FROM crawl_candidates WHERE repo = ? AND status = 'approved' LIMIT 1")
+    .bind(mustParse(repoName, repo, 'repo'))
+    .first<{ found: number }>();
+  return row !== null;
+}
+
+/**
+ * Keeps what the rules read in a find's repo now, as the one to compare the
+ * next read with, for a find that kept none, or one of an older version.
+ */
+export async function setFindFingerprint(db: D1Database, candidateId: string, fingerprint: string): Promise<void> {
+  await db
+    .prepare('UPDATE crawl_candidates SET fingerprint = ? WHERE id = ?')
+    .bind(mustParse(policyFingerprintSchema, fingerprint, 'fingerprint'), mustParse(id, candidateId, 'candidateId'))
+    .run();
 }
 
 export async function getCandidate(db: D1Database, candidateId: string): Promise<CrawlCandidate | null> {

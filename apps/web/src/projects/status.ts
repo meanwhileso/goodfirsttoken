@@ -30,3 +30,34 @@ export function statusBeforePause(history: readonly ProjectStatusChange[]): {
   const before = history.find((change) => change.status !== 'paused');
   return { status: before?.status ?? 'pending', reason: before?.reason ?? null };
 }
+
+/**
+ * The pause someone made that a pause Good First Token made took over, or
+ * null: the status change before the latest, from the status history, newest
+ * first, when the latest is a pause that names no one and the one before it
+ * is a pause that names someone, a maintainer or an admin. The policy
+ * crawler's pause on a ban takes over any pause, and lifting it puts this
+ * one back.
+ */
+export function pauseTakenOver(history: readonly ProjectStatusChange[]): ProjectStatusChange | null {
+  const [latest, before] = history;
+  if (latest?.status !== 'paused' || latest.changedBy !== null) return null;
+  return before?.status === 'paused' && before.changedBy !== null ? before : null;
+}
+
+/**
+ * The change an admin's resume makes, with admin_pause_project or by
+ * approving a pause in the admin queue, from the status history, newest
+ * first. When the pause took over one someone made, it puts that one back,
+ * with its reason, named for whoever made it, so they lift it, and
+ * `restored` is true. Otherwise it puts back the status before the pause,
+ * named for the admin.
+ */
+export function adminResume(
+  history: readonly ProjectStatusChange[],
+  admin: number,
+): { status: ProjectStatus; reason: string | null; changedBy: number | null; restored: boolean } {
+  const taken = pauseTakenOver(history);
+  if (taken !== null) return { status: 'paused', reason: taken.reason, changedBy: taken.changedBy, restored: true };
+  return { ...statusBeforePause(history), changedBy: admin, restored: false };
+}
