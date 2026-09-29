@@ -14,8 +14,8 @@ import { mcpViews } from './scripts/mcp-views.ts';
 // URLs are under .test, a domain that never resolves. Tests answer them with
 // the in-process GitHub fake. The D1 migrations are read here, in Node, and a
 // setup file applies them to the test database. So are the cron triggers in
-// wrangler.jsonc, so a test can run each one's job, and the skill sources in
-// skill-src/ with the text of the tools' answers, so a test can check what
+// wrangler.jsonc, so a test can run each one's job, and the skills as the
+// plugins carry them with the text of the tools' answers, so a test can check what
 // the skills name and quote against the MCP server. Browser tests are in e2e/
 // and use Playwright.
 /** Every string, and each fixed part of every template, in a TypeScript file. */
@@ -34,11 +34,17 @@ export default defineConfig(async () => {
   const migrations = await readD1Migrations(fileURLToPath(new URL('migrations', import.meta.url)));
   const wrangler = ts.parseConfigFileTextToJson('wrangler.jsonc', readFileSync(new URL('wrangler.jsonc', import.meta.url), 'utf8'));
   const crons = (wrangler.config as { triggers?: { crons?: string[] } }).triggers?.crons ?? [];
-  const skillSources = new URL('../../skill-src/', import.meta.url);
+  // Each skill as the Claude Code plugins carry it, built from skill-src/
+  // with its shared parts in place, so the checks read what an agent reads.
+  // pnpm check fails when these differ from what skill-src/ builds.
+  const plugins = new URL('../../plugins/', import.meta.url);
   const skills = Object.fromEntries(
-    readdirSync(skillSources)
-      .filter((file) => file.endsWith('.md'))
-      .map((file) => [file.slice(0, -'.md'.length), readFileSync(new URL(file, skillSources), 'utf8')]),
+    readdirSync(plugins, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((plugin) => {
+        const folder = new URL(`${plugin.name}/skills/`, plugins);
+        return readdirSync(folder).map((skill) => [skill, readFileSync(new URL(`${skill}/SKILL.md`, folder), 'utf8')]);
+      }),
   );
   // The text in the code that writes the MCP tools' answers, so a test can
   // find each sentence a skill quotes from the server: every string and each

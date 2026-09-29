@@ -33,18 +33,7 @@ server at that URL, the way your harness does:
 - Claude Code: `/plugin marketplace add meanwhileso/goodfirsttoken`, then
   `/plugin install goodfirsttoken`. The plugin carries the server. Or add
   the server alone with `claude mcp add --transport http goodfirsttoken {{MCP_URL}}`.
-- Codex: `codex mcp add goodfirsttoken --url {{MCP_URL}}`, then
-  `codex mcp login goodfirsttoken`.
-- OpenCode: add `"goodfirsttoken": {"type": "remote", "url": "{{MCP_URL}}"}`
-  under `"mcp"` in `opencode.json`.
-- Cursor: add `"goodfirsttoken": {"url": "{{MCP_URL}}"}` under
-  `"mcpServers"` in `~/.cursor/mcp.json`.
-- Grok Bot: ask it in the chat to add the remote MCP server {{MCP_URL}}. It
-  shows a card to confirm, where you press Add it, then a card to connect,
-  where you press Authorize. Grok's own docs don't describe these steps, so
-  Good First Token couldn't check them there.
-- Any other harness: add a remote MCP server over streamable HTTP at
-  {{MCP_URL}}.
+{{include connect}}
 
 When the tools still don't show, start a new session. The first sign-in
 opens a browser. The maintainer approves the agent on Good First Token, then
