@@ -68,8 +68,11 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
         ),
       );
       // The agent hears of it at its next turn, so it doesn't open it again.
+      // When the host won't tell it, the donor can.
       told.push(answer.text);
-      await host.updateContext(told.join('\n')).catch(() => undefined);
+      await host.updateContext(told.join('\n')).catch(() => {
+        status.appendChild(notice(`Tell your agent you opened PR #${String(opened.pr.number)} for claim ${item.claimId}.`, 'note'));
+      });
     })();
   });
 

@@ -2658,8 +2658,9 @@ Apps shows each tool's text, as a terminal harness does.
   capabilities they declare, and doesn't, since the extension's own
   reference host declares none and would lose the views.
 - So a host without MCP Apps sees this: the server says it has resources,
-  with `listChanged`, and `resources/list` and `resources/templates/list`
-  answer with empty lists. In `tools/list`, three tools carry the `_meta`
+  with `listChanged`. `resources/list` leaves out every `ui://` resource,
+  so today it and `resources/templates/list` answer with empty lists. In
+  `tools/list`, three tools carry the `_meta`
   above, which such a host passes over. Each tool keeps its name,
   description, input, and output, and each answer is its text and its data,
   as before, with nothing added to it.
@@ -2746,7 +2747,8 @@ Apps shows each tool's text, as a terminal harness does.
 - Open PR calls `open_pr` with the claim. A refusal shows its text, and the
   button works again. An opened PR shows its link, and the view tells the
   agent, for its next turn, every PR it opened so far, since each thing a
-  view tells it takes the place of the last.
+  view tells it takes the place of the last. When the host won't tell the
+  agent, the item asks the donor to.
 - The follow-ups come before that work, and the claims in progress after
   it, as `my_work` lists them. With nothing at all, the view shows the
   tool's text.

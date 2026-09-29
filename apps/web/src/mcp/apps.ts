@@ -1,5 +1,5 @@
 import type { ToolName } from '@goodfirsttoken/core';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { JSONRPCRequest, ListResourcesResult, McpServer, Result, ServerContext } from '@modelcontextprotocol/server';
 import view from './views/main.ts?mcp-view';
 
 // The views that hosts supporting MCP Apps show in place of a tool's text:
@@ -95,12 +95,15 @@ export function toolMeta(tool: ToolName): Record<string, unknown> | undefined {
   return { ui: { resourceUri: uri }, 'ui/resourceUri': uri };
 }
 
+/** A request handler as the MCP SDK's Server keeps it. */
+type StoredHandler = (request: JSONRPCRequest, ctx: ServerContext) => Promise<Result>;
+
 /**
  * Serves each view as a ui:// resource that a host reads by the URI its tool
  * names, with its metadata. The views are left out of resources/list, as the
  * extension's spec allows for resources only a view uses, so a harness that
- * shows the person an MCP server's resources shows none of them. They are
- * the server's only resources, so the list is empty.
+ * shows the person an MCP server's resources shows none of them. Every other
+ * resource the server registers, before or after the views, still lists.
  */
 export function registerViews(server: McpServer, origin: string): void {
   for (const name of Object.keys(views) as ViewName[]) {
@@ -113,5 +116,14 @@ export function registerViews(server: McpServer, origin: string): void {
       () => ({ contents: [{ uri, mimeType: VIEW_MIME_TYPE, text: viewHtml(name), _meta: meta }] }),
     );
   }
-  server.server.setRequestHandler('resources/list', () => ({ resources: [] }));
+  // McpServer's own handler lists every resource registered, whenever it
+  // runs. The views are taken out of its answer. _getRequestHandler is the
+  // SDK's protected accessor for a handler it installed. The SDK is pinned,
+  // and the unit tests fail if the accessor goes.
+  const listed = (server.server as unknown as { _getRequestHandler(method: string): StoredHandler | undefined })._getRequestHandler('resources/list');
+  if (listed === undefined) throw new Error("McpServer installed no resources/list handler, so the views can't be left out of it.");
+  server.server.setRequestHandler('resources/list', async (request, ctx) => {
+    const result = (await listed(request as unknown as JSONRPCRequest, ctx)) as ListResourcesResult;
+    return { ...result, resources: result.resources.filter((resource) => !resource.uri.startsWith('ui://')) };
+  });
 }

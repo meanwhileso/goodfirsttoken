@@ -748,10 +748,11 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
   extension, and a check would hide the views from it. So what a host
   without MCP Apps sees is kept small: a
   `_meta` on three tools, which the spec makes safe to ignore, a `resources`
-  capability, and an empty `resources/list`. `registerViews` leaves the
-  views out of it, as the spec allows for resources only a view uses, and a
-  host reads each view by the URI its tool names. Every answer is the same
-  for every host.
+  capability, and a `resources/list` without the views, which is empty
+  today. `registerViews` takes every `ui://` URI out of the SDK's own list,
+  as the spec allows for resources only a view uses, so a resource another
+  part of the server registers still lists. A host reads each view by the
+  URI its tool names. Every answer is the same for every host.
 - **One page per view, built with the Worker.** `import view from
   './views/main.ts?mcp-view'` gives the Worker a script and styles as
   strings. `scripts/mcp-views.ts` answers that import with a Vite build of
@@ -820,8 +821,12 @@ agent in to the site, as a harness does, and serves the site's `/mcp` on
 told otherwise, with that agent's token and the CORS headers a browser
 needs. Anything that reaches its port acts as that person, so it takes
 only a site on this machine, listens on this machine alone, passes on only
-`/mcp`, always to that site, and answers only pages on this machine. A test
-checks that no request can send the token to another host or path.
+`/mcp`, always to that site, and answers only pages on this machine. It
+listens before the agent signs in, so a port that is taken stops it before
+a new agent shows among the person's connected agents.
+`apps-host-proxy.test.mjs` runs `proxyServer`, the proxy's server built
+from the site, the token, and the address, between a stand-in for the site
+and a sink that no request may reach.
 
 1. Clone the extension's repo at 2.0.3, `git clone --branch v2.0.3 --depth 1
    https://github.com/modelcontextprotocol/ext-apps`, and copy
@@ -2896,9 +2901,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   test of a fork GitHub is still making. `apps.test.ts` reads the views
   MCP Apps hosts show as a client would, with `resources/read` and each
   tool's `_meta`, and checks what a host without MCP Apps sees: the
-  `resources` capability, an empty `resources/list`, the `_meta` on three
-  tools, and each answer with nothing added. How a view draws an answer
-  runs in a browser, in the end-to-end tests.
+  `resources` capability, a `resources/list` without the views, the `_meta`
+  on three tools, and each answer with nothing added. A resource that is no
+  view still lists. How a view draws an answer runs in a browser, in the
+  end-to-end tests.
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
@@ -3056,8 +3062,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `packages/github-fake/test/`.
 - **The tests for `scripts/`** cover the static server, the skill build, the
   deploy, and the check for advisories a pull request adds. They use Node's
-  own test runner, and so does `apps/web/scripts/state-folder.test.mjs`,
-  which checks what `--fresh` may empty. The deploy's tests fake
+  own test runner, and so do the tests beside `apps/web/scripts/`:
+  `state-folder.test.mjs`, which checks what `--fresh` may empty,
+  `mcp-views.test.mjs`, which checks what a view's build refuses, and
+  `apps-host-proxy.test.mjs`. The deploy's tests fake
   Cloudflare's API, GitHub's OIDC endpoint, and Wrangler, and check the
   scripts, the deploy workflows, and
   [self-hosting.md](self-hosting.md) against each other.

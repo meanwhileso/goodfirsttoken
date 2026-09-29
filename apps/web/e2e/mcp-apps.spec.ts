@@ -274,6 +274,9 @@ test('the review queue shows each piece of work with its notes and diff, and Ope
 
   await expect(first.getByRole('status')).toContainText('Opened PR #41: https://github.example/sample-owner/sample-app/pull/41');
   await expect(first.getByRole('button', { name: 'Open PR' })).toHaveCount(0);
+  // The host told the agent, so the donor needn't.
+  await expect.poll(async () => sent(await view.messages(), 'ui/update-model-context').length).toBe(1);
+  await expect(first.getByText(/Tell your agent/)).toHaveCount(0);
   expect(calls).toEqual([{ name: 'open_pr', args: { claimId: 'c_e2eclaim3' } }]);
   // The agent hears of the PR at its next turn.
   expect(sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([
@@ -432,6 +435,25 @@ for (const refusal of ['isError', 'error'] as const) {
     await card.getByRole('button', { name: 'Read it' }).click();
 
     await expect(card.getByText(suggestion.url, { exact: true })).toBeVisible();
+  });
+
+  test(`when the host won't tell the agent of an Open PR, with ${refusal === 'isError' ? 'a result that says isError' : 'an error'}, the queue says to tell it`, async ({ page }) => {
+    const view = await openView(page, views['review-queue'], {
+      input: {},
+      result: work([ready]),
+      refuse: { 'ui/update-model-context': refusal },
+      callTool: () =>
+        Promise.resolve({
+          content: text(`Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3.`),
+          structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' }, prOnIssue: null },
+        }),
+    });
+    const item = view.frame.locator('.view-ready');
+
+    await item.getByRole('button', { name: 'Open PR' }).click();
+
+    await expect(item.getByRole('status').filter({ hasText: 'Tell your agent' })).toHaveText('Tell your agent you opened PR #41 for claim c_e2eclaim3.');
+    expect(sent(await view.messages(), 'ui/update-model-context')).toHaveLength(1);
   });
 }
 

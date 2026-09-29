@@ -1,7 +1,10 @@
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createProject, savePerson, saveIssues } from '../../src/db';
+import { registerViews } from '../../src/mcp/apps';
 import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { freshNumbers } from '../sync/helpers';
@@ -73,6 +76,24 @@ test('the server serves a view for the issue cards, the live feed, and the revie
   }
   expect((await agent.client.listResources()).resources).toEqual([]);
   expect((await agent.client.listResourceTemplates()).resourceTemplates).toEqual([]);
+});
+
+test('a resource that is no view still lists, registered before the views or after them, and the views still read', async () => {
+  const server = new McpServer({ name: 'goodfirsttoken-test', version: '0.0.0' });
+  const text = (uri: URL) => ({ contents: [{ uri: uri.href, mimeType: 'text/plain', text: 'A note.' }] });
+  server.registerResource('before', 'goodfirsttoken://notes/before', { mimeType: 'text/plain' }, text);
+  registerViews(server, 'https://primary.example');
+  server.registerResource('after', 'goodfirsttoken://notes/after', { mimeType: 'text/plain' }, text);
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: 'goodfirsttoken-test', version: '0.0.0' });
+  await client.connect(clientSide);
+
+  const { resources } = await client.listResources();
+
+  expect(resources.map((r) => r.uri)).toEqual(['goodfirsttoken://notes/before', 'goodfirsttoken://notes/after']);
+  for (const uri of Object.keys(VIEWS)) expect((await client.readResource({ uri })).contents[0]?.mimeType).toBe(MIME);
+  await client.close();
 });
 
 test('suggest_issues names the issue cards, claim_issue the live feed, and my_work the review queue, and no other tool names a view', async () => {
