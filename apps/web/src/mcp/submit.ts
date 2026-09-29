@@ -20,6 +20,7 @@ import { env } from 'cloudflare:workers';
 import type { Caller } from '../auth/permissions';
 import {
   addPr,
+  answerFollowUps,
   countOpenPrsByProject,
   getIssue,
   getPr,
@@ -134,10 +135,13 @@ async function workOn(caller: Caller, claimId: string, event: ClaimEvent, now: n
   if (!checked.ok) return checked.refusal;
   if (claim.pr !== null) {
     const pr = await getPr(env.DB, claim.id);
-    if (pr !== null && pr.state !== 'open') {
+    if (pr?.state === 'merged') {
+      return refusal('pr_closed', `Claim ${claim.id}'s PR, ${claim.pr.url}, merged, so the claim takes no more work. Pick another issue.`);
+    }
+    if (pr?.state === 'closed') {
       return refusal(
         'pr_closed',
-        `Claim ${claim.id}'s PR, ${claim.pr.url}, is ${pr.state}, so the claim takes no more work. Pick another issue.`,
+        `Claim ${claim.id}'s PR, ${claim.pr.url}, closed without merging, so the claim takes no more work. While ${claim.issue} is open and tagged, it takes claims again: claim it with claim_issue to try again.`,
       );
     }
   }
@@ -658,8 +662,12 @@ export async function submitWork(
         reviewReason: why,
       }),
     );
-  // A claim whose PR is open takes the commit on that PR's branch.
-  if (recorded.claim.state === 'pr_opened') return result('pr_opened', recorded.claim.pr, null);
+  // A claim whose PR is open takes the commit on that PR's branch, which
+  // answers the follow-ups on it a tool showed before this submit.
+  if (recorded.claim.state === 'pr_opened') {
+    await answerFollowUps(env.DB, claim.id, now);
+    return result('pr_opened', recorded.claim.pr, null);
+  }
   if (reason !== null) return result(recorded.claim.state, null, reason);
   const opened = await openFor(writer, { ...work, claim: recorded.claim }, facts, submission, undefined);
   if (!isRefusal(opened)) return result(opened.claim.state, opened.pr, null);

@@ -1,0 +1,124 @@
+/* The views MCP Apps hosts show in a chat: a card in the design system's
+   own tokens and components (tokens.css and components.css), which the view
+   loads before this file. A host sizes the frame to the view, so the page
+   around the card stays clear. */
+
+html, body { background: transparent; }
+body { padding: 1px; }
+
+/* ---------- The card ---------- */
+
+.view {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden;
+  color: var(--text); font: var(--body-sm);
+}
+.view__head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.view__head .logo-chip { gap: 6px; padding: 3px 10px 3px 6px; font-size: 12px; }
+.view__head .logo-chip svg { width: 14px; height: 14px; }
+.view__title { font: var(--mono-sm); color: var(--text-muted); }
+
+.view-item { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-top: 1px solid var(--line-soft); }
+.view__head + .view-item, .view-section__title + .view-item { border-top: 0; }
+.view-section + .view-section, .view-section + .view-item, .view-item + .view-section { border-top: 1px solid var(--line); }
+.view-section__title { padding: 14px 16px 0; font: 500 13px/1.4 var(--font-mono); color: var(--text-muted); }
+
+.view-issue { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.view-issue__ref { font: var(--mono-sm); color: var(--text-muted); overflow-wrap: anywhere; }
+.view-issue__title { font-weight: 600; color: var(--ink); font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; }
+
+.view-pick__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.view-pick__top .slots { flex: none; margin-top: 4px; }
+.view-tags { --gap: 6px; }
+.view-actions { --gap: 8px; }
+
+.view-quiet { color: var(--text-muted); font-size: 14px; overflow-wrap: anywhere; }
+.view-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font: var(--mono-sm); color: var(--text-muted); overflow-wrap: anywhere; }
+.view-links { font: var(--mono-sm); }
+/* A link the host opens, drawn as the site draws a link. */
+.view-link {
+  padding: 0; border: 0; background: none; color: var(--label-ink); font: inherit; text-align: left; cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.view-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.view-link-wrap { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; max-width: 100%; }
+/* The address of a page the host wouldn't open, to copy. */
+.view-url { font: var(--mono-sm); color: var(--text-muted); overflow-wrap: anywhere; user-select: all; }
+.view-list { display: flex; flex-direction: column; gap: 4px; padding-left: 16px; list-style: disc; }
+.view-summary { font-size: 14px; }
+
+.view-text {
+  margin: 0; padding: 16px; font: var(--mono-sm); color: var(--text-body); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.view-status:empty { display: none; }
+.view-status { display: flex; flex-direction: column; gap: 10px; }
+.view-notice { padding: 10px 12px; border-radius: var(--r-md); font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.view-notice--refused { background: var(--attention-tint); color: var(--attention); }
+.view-notice--done { background: var(--merged-tint); color: var(--ink); }
+.view-notice--note { background: var(--label-tint); color: var(--text-body); }
+
+.view-check { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--text-body); overflow-wrap: anywhere; }
+.view-check__box { margin: 3px 0 0; accent-color: var(--label); }
+.view-label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-body); }
+.view-field {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+  color: var(--text); font: var(--body-sm); resize: vertical;
+}
+
+/* ---------- A claim, and its issue's live lines ---------- */
+
+.view-claim { display: flex; flex-direction: column; gap: 10px; }
+.view-live { display: flex; flex-direction: column; gap: 8px; }
+.view-live__head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font: var(--mono-sm); }
+.view-wall { font-size: 14px; }
+.view-wall .wall-line { grid-template-columns: 64px minmax(0, 1fr); gap: 2px 12px; padding: 8px 0; }
+.view-wall .wall-line__time { font-size: 12.5px; padding-top: 2px; }
+.view-wall .wall-line:first-child { border-top: 0; }
+
+@container page (max-width: 480px) {
+  .view-wall .wall-line { grid-template-columns: minmax(0, 1fr); }
+  .view-pick__top { flex-direction: column; }
+}
+
+/* ---------- Dark, when the host says so ----------
+
+   The prompt box is the one dark surface in brand/design.md, so a dark
+   view takes its colors: code-bg for paper, code-surface for the card,
+   code-line for rules, code-text for text, and code-accent for links. The
+   quieter texts and the tints are those colors mixed, so every color still
+   comes from a token.
+
+   tokens.css sets the colors on :root, and the dark ones are set on body,
+   under it. That way a dark color can mix from the light one it replaces,
+   which :root passes down as --light-attention. A custom property that
+   names itself on the same element is a cycle, and a browser drops it. */
+
+:root { --light-attention: var(--attention); }
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="dark"] body {
+  --paper: var(--code-bg);
+  --surface: var(--code-surface);
+  --ink: var(--code-text);
+  --text: var(--code-text);
+  --text-body: var(--code-text);
+  --text-muted: color-mix(in srgb, var(--code-text) 72%, var(--code-bg));
+  --text-faint: color-mix(in srgb, var(--code-text) 60%, var(--code-bg));
+  --line: var(--code-line);
+  --line-soft: color-mix(in srgb, var(--code-line) 55%, var(--code-surface));
+  --label-ink: var(--code-accent);
+  --label-tint: color-mix(in srgb, var(--label) 24%, var(--code-surface));
+  --merged-tint: color-mix(in srgb, var(--merged) 28%, var(--code-surface));
+  --attention: color-mix(in srgb, var(--light-attention) 35%, var(--code-text));
+  --attention-tint: color-mix(in srgb, var(--light-attention) 30%, var(--code-surface));
+  --on-ink: var(--code-bg);
+  --focus: 0 0 0 2px var(--code-bg), 0 0 0 5px var(--label);
+}
+/* components.css spells a few grays out, for paper. On the dark card they
+   take the same mixes. */
+:root[data-theme="dark"] .badge__rule { background: var(--code-line); }
+:root[data-theme="dark"] .slots__slot:not(.slots__slot--taken) { border-color: var(--text-faint); }
+:root[data-theme="dark"] .btn:hover { border-color: var(--text-faint); }
+:root[data-theme="dark"] .btn--primary:hover { background: var(--text-muted); border-color: var(--text-muted); }

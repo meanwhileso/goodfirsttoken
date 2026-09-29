@@ -334,6 +334,26 @@ describe('the slots', () => {
     expect(slotsTaken(page.view)).toBe(1);
   });
 
+  test("once a claim's PR merges or closes, its lane says which, the timeline shows it, and the slots open again", async () => {
+    await tag();
+    const [p, k] = [await claim(priya), await claim(kenji, 'codex')];
+    await openPr(p, 57);
+    await openPr(k, 58);
+    const whileOpen = (await load()).view.openPrs;
+
+    await room().claimPrEnded({ claimId: p.id, pr: prRef(57), merged: true });
+    await room().claimPrEnded({ claimId: k.id, pr: prRef(58), merged: false });
+    const page = await load();
+
+    expect(whileOpen).toEqual([prLink(57), prLink(58)]);
+    expect(lanesInPlay(page.view).map((lane) => [lane.login, lane.state, lane.prOutcome])).toEqual([
+      ['priya', 'pr_opened', 'merged'],
+      ['kenji', 'pr_opened', 'closed'],
+    ]);
+    expect(page.view.timeline.map((entry) => entry.kind).slice(-2)).toEqual(['pr_merged', 'pr_closed']);
+    expect(page.view.openPrs).toEqual([]);
+  });
+
   test('a PR someone opened outside Good First Token closes the slots too', async () => {
     await claim(priya);
     const outside = { repo, number: 61, url: `https://github.com/${repo}/pull/61` };

@@ -40,8 +40,14 @@ const followUp = {
   pr,
   reviewer: 'octo-maintainer',
   comment: 'Can the formatter skip events with an empty text field?',
+  path: 'apps/web/src/feed/format.ts',
   commentUrl: `${pr.url}#discussion_r1`,
+  writtenAt: at,
+  branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-912-c_0' },
+  base: sha,
 };
+
+const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3 };
 
 const counts = { taggedIssues: 3, working: 2, openPrs: 1, merged: 14 };
 
@@ -53,17 +59,27 @@ export const samples: Samples = {
       budget: { kind: 'issues', count: 3 },
       interests: { languages: ['typescript'], kinds: ['tests'] },
       followUps: [followUp],
+      moreFollowUps: 2,
+      readInPart: [readInPart],
       unfinishedClaims: [{ ...claim, state: 'paused' }],
-      mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/post?text=merged' }],
+      endedPrs: [
+        { issue, title, pr, outcome: 'merged', shareUrl: 'https://x.com/intent/tweet?text=merged' },
+        { issue: `${repo}#912`, title, pr: { ...pr, number: 958, url: `https://github.com/${repo}/pull/958` }, outcome: 'closed', shareUrl: null },
+      ],
     },
     mentions: [
       '@priya',
       '3 issues',
       'typescript',
-      '@octo-maintainer asked for changes',
+      '@octo-maintainer on the file "apps/web/src/feed/format.ts"',
+      '> Can the formatter skip events with an empty text field?',
       'paused',
+      '2 more follow-ups wait.',
       'Share it',
+      `PR #958 closed without merging: https://github.com/${repo}/pull/958`,
+      'it takes claims again, so the donor can try again with claim_issue.',
       'Offer the follow-ups and paused claims first',
+      "Good First Token read 10 of the PR's 12 reviews and left out 3 comments on lines. Read the rest on GitHub",
       'Resume a claim with claim_issue and its issue.',
     ],
   },
@@ -168,6 +184,8 @@ export const samples: Samples = {
   my_work: {
     output: {
       followUps: [followUp],
+      moreFollowUps: 2,
+      readInPart: [readInPart],
       readyToOpen: [
         {
           claimId: 'c_2',
@@ -193,7 +211,9 @@ export const samples: Samples = {
       working: [{ ...claim, resumable: true, reason: null }],
     },
     mentions: [
-      'asked for changes',
+      '> Can the formatter skip events with an empty text field?',
+      'Fixes go on priya/goodfirsttoken:goodfirsttoken/issue-912-c_0',
+      `Read the rest on GitHub: ${pr.url}`,
       '+23 -4',
       'codex (gpt-5.5-codex)',
       'waiting because a PR is already open on the issue',

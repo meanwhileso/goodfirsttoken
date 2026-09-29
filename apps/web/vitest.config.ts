@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { defineConfig } from 'vitest/config';
+import { mcpViews } from './scripts/mcp-views.ts';
 
 // Tests run inside the Workers runtime against the whole Worker, with the
 // bindings from wrangler.jsonc. ENVIRONMENT, the domains, and the OAuth app
@@ -60,6 +61,7 @@ export default defineConfig(async () => {
   return {
     plugins: [
       tanstackStart(),
+      mcpViews(),
       cloudflareTest({
         wrangler: { configPath: './wrangler.jsonc' },
         miniflare: {

@@ -26,11 +26,20 @@ import { own } from './own.ts';
 export type Role = 'admin' | 'maintain' | 'write' | 'triage' | 'read';
 
 export interface Account {
+  // A bot's login ends in [bot], as GitHub's REST API gives it, like
+  // github-actions[bot].
   login: string;
   id: number;
-  type: 'User' | 'Organization';
+  type: 'User' | 'Organization' | 'Bot';
   name: string;
   createdAt: string;
+  // An organization's members, by login. GitHub names them MEMBER on the
+  // organization's repos. State saved before the fake kept them has none.
+  members?: string[];
+  // Members whose membership is private, which GitHub makes the default.
+  // GitHub names them MEMBER only to someone who is a member too. State
+  // saved before the fake kept them has none.
+  privateMembers?: string[];
 }
 
 export interface LabelRecord {
@@ -53,14 +62,17 @@ export interface TimelineEvent {
   commitId?: Oid;
 }
 
-export type ReviewState = 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED';
+// A PENDING review is one its author hasn't submitted, which only they see.
+// A DISMISSED one was submitted, then dismissed by a maintainer.
+export type ReviewState = 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'PENDING' | 'DISMISSED';
 
 export interface ReviewRecord {
   id: number;
   user: string;
   state: ReviewState;
   body: string;
-  submittedAt: string;
+  // Null while the review is pending.
+  submittedAt: string | null;
   commitId: Oid;
 }
 
@@ -134,6 +146,10 @@ export interface RepoRecord {
   // a repo with none is ready.
   gitReadyAt?: string | null;
   collaborators: Record<string, Role>;
+  // The roles members of the organization that owns the repo have through
+  // its teams, by login. GitHub doesn't name them collaborators. State saved
+  // before the fake kept them has none.
+  teamRoles?: Record<string, Role>;
   branches: Record<string, Oid>;
   labels: LabelRecord[];
   issues: Record<string, IssueRecord>;
@@ -235,12 +251,14 @@ export function findIssue(repo: RepoRecord, number: number): IssueRecord | null 
 }
 
 // The person's role on a repo. Anyone signed in can read a public repo. A
-// repo's owner is its admin. Everyone else gets the role they were given, and
-// on a private repo, someone given no role has none.
+// repo's owner is its admin. Everyone else gets the role they were given, as
+// a collaborator or through a team, and on a private repo, someone given no
+// role has none.
 export function roleOf(repo: RepoRecord, login: string | null): Role | null {
   if (login === null) return null;
   if (key(repo.owner) === key(login)) return 'admin';
-  return own(repo.collaborators, key(login)) ?? (repo.private === true ? null : 'read');
+  const given = own(repo.collaborators, key(login)) ?? own(repo.teamRoles ?? {}, key(login));
+  return given ?? (repo.private === true ? null : 'read');
 }
 
 // Whether a call can see the repo at all. Anyone can see a public repo. A
@@ -558,6 +576,21 @@ export function labelIssue(state: FakeState, repo: RepoRecord, issue: IssueRecor
   });
 }
 
+export function unlabelIssue(state: FakeState, repo: RepoRecord, issue: IssueRecord, name: string, login: string, now: string) {
+  const found = issue.labels.find((l) => key(l) === key(name));
+  if (found === undefined) return;
+  const label = repo.labels.find((l) => key(l.name) === key(found));
+  issue.labels = issue.labels.filter((l) => key(l) !== key(found));
+  issue.updatedAt = now;
+  issue.timeline.push({
+    id: newId(state),
+    event: 'unlabeled',
+    actor: getAccount(state, login).login,
+    createdAt: now,
+    label: { name: found, color: label?.color ?? 'ededed' },
+  });
+}
+
 export function assignIssue(state: FakeState, issue: IssueRecord, assignee: string, login: string, now: string) {
   const person = getAccount(state, assignee).login;
   if (issue.assignees.some((a) => key(a) === key(person))) return;
@@ -735,6 +768,19 @@ export function closeIssue(
   issue.timeline.push({ id: newId(state), event: 'closed', actor: issue.closedBy, createdAt: now, stateReason: reason });
 }
 
+// Opens a closed issue or PR again, as `login`. A merged PR stays merged.
+// https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
+export function reopenIssue(state: FakeState, issue: IssueRecord, login: string, now: string): void {
+  if (issue.state === 'open') return;
+  if (issue.pull?.mergedAt) throw new FakeError('invalid', 'A merged pull request cannot be reopened.');
+  issue.state = 'open';
+  issue.stateReason = 'reopened';
+  issue.closedAt = null;
+  issue.closedBy = null;
+  issue.updatedAt = now;
+  issue.timeline.push({ id: newId(state), event: 'reopened', actor: getAccount(state, login).login, createdAt: now });
+}
+
 // The newest commit both branches share.
 export function mergeBase(store: ObjectStore, a: Oid, b: Oid): Oid | null {
   const queue = [b];
@@ -788,14 +834,29 @@ export interface ReviewInput {
   comments?: { path: string; line: number; body: string }[];
 }
 
+// Whether `viewer` sees the review: everyone sees a submitted one, and
+// only its author a pending one.
+export function reviewVisible(review: ReviewRecord, viewer: string | null): boolean {
+  return review.state !== 'PENDING' || (viewer !== null && key(viewer) === key(review.user));
+}
+
+// A maintainer dismisses a submitted review. It stays on the PR, marked
+// dismissed, with its comments.
+export function dismissReview(repo: RepoRecord, number: number, reviewId: number) {
+  const review = getPull(repo, number).pull.reviews.find((r) => r.id === reviewId);
+  if (!review || review.state === 'PENDING') throw new Error(`#${String(number)} has no submitted review ${String(reviewId)}`);
+  review.state = 'DISMISSED';
+}
+
 export function addReview(state: FakeState, repo: RepoRecord, number: number, input: ReviewInput, now: string) {
   const { pull } = getPull(repo, number);
+  if (input.state === 'DISMISSED') throw new Error('A review is dismissed after it is submitted, with dismissReview.');
   const review: ReviewRecord = {
     id: newId(state),
     user: getAccount(state, input.login).login,
     state: input.state,
     body: input.body,
-    submittedAt: now,
+    submittedAt: input.state === 'PENDING' ? null : now,
     commitId: pull.head.sha,
   };
   pull.reviews.push(review);

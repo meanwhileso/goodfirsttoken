@@ -47,6 +47,9 @@ export function buildState(sample: SampleData, now: Date): FakeState {
   for (const org of sample.orgs) {
     state.accounts[key(org.login)] = { ...org, type: 'Organization', createdAt: ago(org.created, now) };
   }
+  for (const bot of sample.bots ?? []) {
+    state.accounts[key(bot.login)] = { ...bot, type: 'Bot', createdAt: ago(bot.created, now) };
+  }
   for (const app of sample.oauthApps) state.oauthApps[app.clientId] = { ...app };
   for (const repo of sample.repos) addRepo(state, repo, now);
   return state;

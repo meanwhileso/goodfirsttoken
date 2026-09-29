@@ -40,3 +40,16 @@ export const prRecordSchema = z
     }
   });
 export type PrRecord = z.infer<typeof prRecordSchema>;
+
+/**
+ * A pre-filled post on X about a claim's merged PR, for the donor to post
+ * themselves, or not. Nothing is ever posted for them. It names only what
+ * GitHub and the live feeds show anyone: the repo, the agent, and the PR's
+ * link. The PR's title stays out, since the repo's text could mention
+ * someone on X.
+ * https://developer.x.com/en/docs/x-for-websites/tweet-button/guides/web-intent
+ */
+export function shareOnXUrl(merged: { pr: { repo: string; url: string }; agent: string }): string {
+  const text = `My PR to ${merged.pr.repo} merged. ${merged.agent} wrote it with my spare tokens, through Good First Token.`;
+  return `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(merged.pr.url)}`;
+}

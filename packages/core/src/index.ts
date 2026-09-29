@@ -6,6 +6,7 @@ export * from './characters';
 export * from './claims';
 export * from './crawl';
 export * from './feed';
+export * from './follow-ups';
 export * from './issues';
 export * from './people';
 export * from './primitives';

@@ -549,6 +549,115 @@ describe('a PR on the issue', () => {
   });
 });
 
+describe("a claim's PR that merged or closed", () => {
+  /** priya's claim with its PR open, as #74's tools leave it. */
+  async function withPr(number: number): Promise<ClaimRecord> {
+    const made = await claim(priya);
+    at(t0 + HOUR);
+    await room.submit({ claimId: made.id, githubId: priya.githubId });
+    const opened = await room.openPr({ claimId: made.id, githubId: priya.githubId, pr: prRef(number) });
+    if (!opened.ok) throw new Error(opened.refusal.message);
+    at(t0 + 2 * HOUR);
+    return opened.claim;
+  }
+
+  test('a merge is announced once, the claim stays pr_opened, and it takes no more posts or submits', async () => {
+    const made = await withPr(70);
+
+    const told = await room.claimPrEnded({ claimId: made.id, pr: prRef(70), merged: true });
+    const again = await room.claimPrEnded({ claimId: made.id, pr: prRef(70), merged: true });
+    const posted = await post(made, 'one more fix');
+    const submitted = await room.submit({ claimId: made.id, githubId: priya.githubId });
+
+    expect([told, again]).toEqual([
+      { ok: true, announced: true },
+      { ok: true, announced: false },
+    ]);
+    const events = await room.history();
+    expect(events.map((e) => [e.kind, e.text]).slice(-2)).toEqual([
+      ['pr_opened', `opened PR ${repo}#70`],
+      ['pr_merged', `PR ${repo}#70 merged`],
+    ]);
+    expect(events.at(-1)).toMatchObject({ user: 'priya', claim: made.id, time: new Date(t0 + 2 * HOUR).toISOString() });
+    expect(posted).toMatchObject({ ok: false, refusal: { code: 'pr_closed' } });
+    expect(!posted.ok && posted.refusal.message).toContain('merged, so the claim takes no more posts or work');
+    expect(submitted).toMatchObject({ ok: false, refusal: { code: 'pr_closed' } });
+    expect(await stateOf(made)).toBe('pr_opened');
+    expect((await room.snapshot()).prs).toEqual([]);
+  });
+
+  test('a close without merging is announced, and the issue takes claims again, the claimant too', async () => {
+    const made = await withPr(71);
+    const blocked = await room.claim(request(kenji));
+
+    await room.claimPrEnded({ claimId: made.id, pr: prRef(71), merged: false });
+    const posted = await post(made, 'still here');
+
+    expect(blocked).toMatchObject({ ok: false, refusal: { code: 'pr_exists' } });
+    expect((await room.history()).at(-1)).toMatchObject({ kind: 'pr_closed', text: `PR ${repo}#71 closed without merging` });
+    expect(posted).toMatchObject({ ok: false, refusal: { code: 'pr_closed' } });
+    expect(!posted.ok && posted.refusal.message).toContain('claim it with claim_issue to try again');
+    expect(await room.claim(request(kenji))).toMatchObject({ ok: true, created: true });
+    expect(await room.claim(request(priya))).toMatchObject({ ok: true, created: true });
+  });
+
+  test("another claim's PR, or one the claim doesn't have, is forgotten and announces nothing", async () => {
+    const made = await withPr(72);
+    await room.prOpened(prRef(73));
+
+    const other = await room.claimPrEnded({ claimId: made.id, pr: prRef(73), merged: false });
+    const unknown = await room.claimPrEnded({ claimId: 'c_nobody', pr: prRef(72), merged: true });
+
+    expect([other, unknown]).toEqual([
+      { ok: true, announced: false },
+      { ok: true, announced: false },
+    ]);
+    expect((await room.history()).map((e) => e.kind)).not.toContain('pr_merged');
+    expect((await room.history()).map((e) => e.kind)).not.toContain('pr_closed');
+    expect((await room.snapshot()).prs).toEqual([]);
+    expect(await post(made, 'answered the review')).toMatchObject({ ok: true, posted: true });
+  });
+
+  test('a close undone on GitHub opens the PR again: the claim takes posts and submits, and the issue takes no new claims', async () => {
+    const made = await withPr(76);
+    await room.claimPrEnded({ claimId: made.id, pr: prRef(76), merged: false });
+
+    const reopened = await room.claimPrReopened({ claimId: made.id, pr: prRef(76) });
+    const again = await room.claimPrReopened({ claimId: made.id, pr: prRef(76) });
+    const posted = await post(made, 'back on it');
+    const submitted = await room.submit({ claimId: made.id, githubId: priya.githubId });
+    const blocked = await room.claim(request(kenji));
+    await room.claimPrEnded({ claimId: made.id, pr: prRef(76), merged: true });
+
+    expect([reopened, again]).toEqual([
+      { ok: true, reopened: true },
+      { ok: true, reopened: true },
+    ]);
+    expect(posted).toMatchObject({ ok: true, posted: true });
+    expect(submitted).toMatchObject({ ok: true });
+    expect(blocked).toMatchObject({ ok: false, refusal: { code: 'pr_exists' } });
+    // Its merge after that is announced too.
+    expect((await room.history()).map((e) => e.kind).filter((kind) => kind.startsWith('pr_'))).toEqual(['pr_opened', 'pr_closed', 'pr_merged']);
+  });
+
+  test("a merged PR stays merged, and another claim's PR opens nothing", async () => {
+    const made = await withPr(77);
+    await room.claimPrEnded({ claimId: made.id, pr: prRef(77), merged: true });
+
+    const merged = await room.claimPrReopened({ claimId: made.id, pr: prRef(77) });
+    const other = await room.claimPrReopened({ claimId: made.id, pr: prRef(78) });
+    const unknown = await room.claimPrReopened({ claimId: 'c_nobody', pr: prRef(77) });
+
+    expect([merged, other, unknown]).toEqual([
+      { ok: true, reopened: false },
+      { ok: true, reopened: false },
+      { ok: true, reopened: false },
+    ]);
+    expect(await post(made, 'one more')).toMatchObject({ ok: false, refusal: { code: 'pr_closed' } });
+    expect((await room.snapshot()).prs).toEqual([]);
+  });
+});
+
 describe('keys and tokens', () => {
   // Built at run time, so no token-shaped string sits in this file.
   const token = `ghp_${'aB3dE5gH7jK9'.repeat(3)}`;

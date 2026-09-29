@@ -24,8 +24,10 @@ Route slugs and nav labels use the same word for each concept.
 | `/design` | | none, the route is built | The living design system |
 
 Every page also has a `.md` version and, where it has a feed, a `live.txt`
-stream. The in-agent views (the issue picker, the maintainer flow, and the
-MCP Apps cards) are in `agent.html`.
+stream. The views inside an agent are built: each tool's text, the
+maintainer's flow in the maintain skill, and the cards hosts with MCP Apps
+show, which [docs/how-it-works.md](../docs/how-it-works.md#views-in-mcp-apps-hosts)
+describes.
 
 ## Homepage, top to bottom
 

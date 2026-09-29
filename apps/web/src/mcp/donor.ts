@@ -2,12 +2,15 @@ import {
   budgetLeft,
   claimDeadlines,
   holdsSlot,
+  MAX_FOLLOW_UPS,
   nextClaimState,
+  shareOnXUrl,
   toolRefusal,
   toolResult,
   type ClaimRecord,
   type ClaimState,
   type ClaimSummary,
+  type FollowUp,
   type Interests,
   type ProjectRecord,
   type Refusal,
@@ -34,13 +37,19 @@ import {
   getProject,
   getSession,
   listClaimsOn,
+  listEndedToOffer,
   listPersonClaims,
+  listReadInPart,
+  listWaitingFollowUps,
   listWaitingIssues,
+  markEndedOffered,
+  markFollowUpsShown,
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
   takeSessionIssue,
   type ClaimWithPr,
+  type EndedToOffer,
   type WaitingIssue,
 } from '../db';
 import {
@@ -207,18 +216,87 @@ export async function startSession(
   if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
   const person = await savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, now);
   const session = await createSession(env.DB, { githubId: caller.githubId, agent: input.agent, budget: input.budget }, now);
-  return answer(
+  const followUps = await followUpsFor(caller.githubId);
+  const readInPart = await listReadInPart(env.DB, caller.githubId);
+  const unfinishedClaims = await offeredToResume(caller.githubId, origin, now);
+  const ended = await listEndedToOffer(env.DB, caller.githubId);
+  const resultWith = (offered: readonly EndedToOffer[]) =>
     toolResult('start_session', {
       sessionId: session.id,
       login: person.login,
       budget: session.budget,
       interests: person.interests,
-      // Maintainers' requests for changes arrive with the PR follow-ups (#17).
-      followUps: [],
-      unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
-      mergedPrs: [],
-    }),
+      followUps: followUps.followUps,
+      moreFollowUps: followUps.moreFollowUps,
+      readInPart,
+      unfinishedClaims,
+      endedPrs: offered.map(endedPrOf),
+    });
+  const result = resultWith(ended);
+  // Marked only once the answer is made, so an answer that fails leaves the
+  // follow-ups unshown, for a submit not to answer, and the ended PRs for
+  // the next session to offer.
+  await followUps.markShown(now);
+  const taken = await markEndedOffered(
+    env.DB,
+    ended.map((pr) => pr.claimId),
+    now,
   );
+  // A session that started at the same moment marked the others first, and offers them.
+  return answer(taken.size === ended.length ? result : resultWith(ended.filter((pr) => taken.has(pr.claimId))));
+}
+
+/**
+ * What maintainers wrote on the donor's open PRs that no submit answered
+ * yet, as start_session and my_work list them, and how many more wait.
+ * `markShown` marks the ones listed shown, once the answer is made. A
+ * submit to the claim answers the ones shown before it. Only a follow-up
+ * submit_work could take a fix for shows: its PR open, its project asking
+ * for help, and the donor not blocked.
+ */
+async function followUpsFor(
+  person: number,
+): Promise<{ followUps: FollowUp[]; moreFollowUps: number; markShown: (now: number) => Promise<void> }> {
+  const { followUps: waiting, waiting: all } = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
+  const titles = new Map<string, string>();
+  for (const { project, issue } of waiting) {
+    if (!titles.has(lower(issue))) titles.set(lower(issue), (await getIssue(env.DB, project, issue))?.title ?? issue);
+  }
+  const markShown = (now: number) =>
+    markFollowUpsShown(
+      env.DB,
+      waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
+      now,
+    );
+  const followUps = waiting.map(({ record, issue, pr, branch, base }) => ({
+    claimId: record.claimId,
+    issue,
+    title: titles.get(lower(issue)) ?? issue,
+    pr,
+    reviewer: record.reviewer,
+    comment: record.body,
+    path: record.path,
+    commentUrl: record.url,
+    writtenAt: new Date(record.writtenAt).toISOString(),
+    branch,
+    base,
+  }));
+  return { followUps, moreFollowUps: all - followUps.length, markShown };
+}
+
+/**
+ * A donor's PR that merged or closed without merging, as start_session
+ * offers it. A merged one comes with a pre-filled X post link. Nothing is
+ * posted for the donor.
+ */
+function endedPrOf({ issue, title, pr, outcome, agent }: EndedToOffer) {
+  return {
+    issue,
+    title: title ?? issue,
+    pr,
+    outcome,
+    shareUrl: outcome === 'merged' ? shareOnXUrl({ pr, agent }) : null,
+  };
 }
 
 /** The donor's unfinished claims that can go on, for start_session to offer. */
@@ -254,14 +332,16 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
       return { ...summary, resumable: reason === null, reason };
     }),
   );
-  return answer(
-    toolResult('my_work', {
-      // Follow-ups arrive with #17.
-      followUps: [],
-      readyToOpen: await readyToOpen(caller, origin, now),
-      working,
-    }),
-  );
+  const followUps = await followUpsFor(caller.githubId);
+  const result = toolResult('my_work', {
+    followUps: followUps.followUps,
+    moreFollowUps: followUps.moreFollowUps,
+    readInPart: await listReadInPart(env.DB, caller.githubId),
+    readyToOpen: await readyToOpen(caller, origin, now),
+    working,
+  });
+  await followUps.markShown(now);
+  return answer(result);
 }
 
 /** The claim, found by its ID in the claims table, once the caller is the one who made it. */

@@ -60,6 +60,19 @@ export function trimmedText(max: number) {
     .max(max, `must be at most ${max.toLocaleString('en-US')} characters`);
 }
 
+const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
+/**
+ * `text` in at most `max` graphemes, what a reader counts as characters:
+ * as it is when it fits, and otherwise cut to `max - 3` of them and ended
+ * with `...`. A cut never splits a grapheme, like an emoji made of several
+ * code points, or a letter and its accent.
+ */
+export function cutGraphemes(text: string, max: number): string {
+  const parts = Array.from(graphemes.segment(text), ({ segment }) => segment);
+  return parts.length > max ? `${parts.slice(0, max - 3).join('')}...` : text;
+}
+
 /**
  * Text as one line: each run of whitespace that holds a tab or a line break
  * becomes one space, and the ends are trimmed, in one pass over the text.

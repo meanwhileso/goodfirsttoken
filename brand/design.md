@@ -191,7 +191,8 @@ is that ring and dot on a purple tile.
 Everything else stays quiet so the chip, the live feed, and the work carry the
 page: warm near-white paper, GitHub ink, and hairlines to group things. There
 are no gradients, glows, or illustrations. The only dark
-surface is the prompt box, because it is the one thing people copy.
+surface is the prompt box, because it is the one thing people copy. A view
+in a chat whose host is dark borrows its colors, under Colors.
 
 The organizing idea is **GitHub, alive**:
 
@@ -246,6 +247,14 @@ pages are deleted as the real routes ship.
 - **Code colors**: `code-bg` `#0E1116`, `code-surface` `#161B22`, `code-line`
   `#30363D`, `code-text` `#E6EDF3`, and `code-accent` `#B7A8FF` for the URL
   inside the prompt.
+- **A view in a dark chat**: the issue cards, the live feed, and the review
+  queue that hosts with MCP Apps show in a chat are a `surface` card on the
+  chat's own background, and dark when the host is. The dark card takes the
+  code colors: `code-surface` for it, `code-line` for its rules, `code-text`
+  for its text, and `code-accent` for its links. Quieter text and the tints
+  are those colors mixed. The tough badge and a refusal mix `attention`
+  into `code-text`, on a tint of `attention` in `code-surface`, and read at
+  4.5:1 or more.
 
 **Project labels keep their own colors.** When a page shows a project's real
 GitHub label, render it in that label's hex from GitHub, with white or ink
@@ -256,6 +265,11 @@ text chosen by contrast.
 Two open-licensed families, served by the site itself: **Geist** for reading
 and **Geist Mono** for anything a machine says (feed lines, prompts, commands,
 repo names, issue numbers, counts, timestamps, the logo).
+
+A view in a chat loads no font, since it loads nothing from anywhere. It
+uses the system's fonts that follow Geist and Geist Mono in the site's
+stacks: `ui-sans-serif` and `system-ui` for reading, and `ui-monospace` for
+what a machine says. The sizes and weights stay the same.
 
 | Token | Size | Weight | Line height | Use |
 |---|---|---|---|---|
