@@ -298,6 +298,13 @@ export const postUpdate = defineTool({
 
 export const MAX_PATH = 4096;
 
+/**
+ * The most folders a submitted path can be in, one inside the other. The
+ * server reads a path's folders a level at a time, so this caps the reads
+ * one after another. Real repos keep their files far shallower.
+ */
+export const MAX_PATH_DEPTH = 20;
+
 /** The most a submitted file can hold: 1 MiB of UTF-8, the largest file GitHub recommends. */
 export const MAX_FILE_BYTES = 1_048_576;
 
@@ -370,7 +377,9 @@ function pathProblem(path: string): string | null {
   if (path.startsWith('/') || path.includes('\\')) return `${inside}, with / between its parts`;
   if (CONTROL.test(path)) return `${inside}, with no control characters`;
   if (BIDI.test(path)) return `${inside}, with no characters that change the direction text shows in`;
-  for (const part of path.split('/')) {
+  const parts = path.split('/');
+  if (parts.length - 1 > MAX_PATH_DEPTH) return `${inside}, at most ${String(MAX_PATH_DEPTH)} folders deep`;
+  for (const part of parts) {
     if (part === '' || part === '.' || part === '..') return `${inside}, with no empty, ., or .. part`;
     if (isGitDir(part)) return `${inside}, outside Git's own folder: no part can name .git, however it is spelled`;
     if (part.endsWith('.') || part.endsWith(' ')) {

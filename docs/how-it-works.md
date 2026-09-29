@@ -2034,7 +2034,7 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   backslashes, no control characters, no characters that change the
   direction text shows in (U+202A to U+202E and U+2066 to U+2069), no
   empty, `.`, or `..` parts, and no part that ends in a dot or a space,
-  which Windows drops.
+  which Windows drops. A path is at most 20 folders deep.
 - No part names Git's own folder, by the rules Git checks a tree with
   before it writes one out, `is_ntfs_dotgit` and `is_hfs_dotgit`: `.git`,
   or `git~1`, its short name on Windows, in any case, once the characters

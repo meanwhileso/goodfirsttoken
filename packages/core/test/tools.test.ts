@@ -369,6 +369,15 @@ describe('tool inputs', () => {
     expect(problemFields(submit(['Src/a.ts', 'src/a.ts/b.ts']))).toEqual(['files']);
   });
 
+  test('a submitted path is at most 20 folders deep', () => {
+    const deep = (folders: number) => `${'d/'.repeat(folders)}f.txt`;
+    expect(submit([deep(20)]).ok).toBe(true);
+    expect(submit([deep(21)])).toMatchObject({
+      ok: false,
+      problems: [{ field: 'files[0].path', message: 'must be a path inside the repo, like src/index.ts, at most 20 folders deep' }],
+    });
+  });
+
   test('a submit can not list two paths that differ only in how an accent is written', () => {
     // é as one character, and as e and a combining accent.
     expect(problemFields(submit(['caf\u00E9.md', 'cafe\u0301.md']))).toEqual(['files']);

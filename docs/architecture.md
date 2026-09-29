@@ -535,28 +535,32 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   so a submit to a new fork can take about 4 seconds more. A Worker's wait
   uses no CPU time.
 - **Working out the change.** The folders on the way to each path are
-  read at the branch head, or at the start commit in the code repo while
-  there is no branch, a level at a time from the root, with one GraphQL
-  query for each 100 folders of a level, `object(expression:)`, and the
-  folders as variables: each entry's name, type, mode, blob ID, and size.
-  A level reads only the folders the level above has, so the reads follow
-  the repo's own folders, and nothing is read past the first folder a path
-  makes new. A path five folders deep costs six queries, one after another.
-  Tree entries are the one place GitHub gives a file's mode. A folder's
-  entries come back whole, so a path in a folder of thousands of files
-  reads all their names, which the case check uses too. A file whose new
-  text has the same size in UTF-8 as the one there is read in full in a
-  second query and compared. A change to an entry whose mode is 100755,
-  120000, or 160000 is refused with `file_mode` before anything is
-  written.
+  read at the branch head, or at the base while there is no branch, a
+  level at a time from the root, with one GraphQL query for each 100
+  folders of a level, `object(expression:)`, and the folders as
+  variables: each entry's name, type, mode, blob ID, and size. A level
+  reads only the folders the level above has, so the reads follow the
+  repo's own folders, and nothing is read past the first folder a path
+  makes new. A path five folders deep costs six queries, one after
+  another, and a path is at most 20 folders deep, so no submit costs more
+  than 21 levels. Tree entries are the one place GitHub gives a file's
+  mode. A folder's entries come back whole, so a path in a folder of
+  thousands of files reads all their names, which the case check uses
+  too. A file whose new text has the same size in UTF-8 as the one there
+  is read in full in a second query and compared. A change to an entry
+  whose mode is 100755, 120000, or 160000 is refused with `file_mode`
+  before anything is written.
+- **Putting back.** A path to put back is read at the base, the start
+  commit in the code repo or the head an `onto` named in the branch's
+  repo, compared with the branch by blob ID, and its bytes read with
+  `GET .../git/blobs/{sha}`, so a binary file goes back as it was.
+  `submissions.paths` keeps the paths the latest submit sent, for the
+  next, and `submissions.base` the base.
 - **Modes.** GitHub's docs call `TreeEntry.mode` the entry's file mode, an
   `Int`, and don't say how it is written. The fake gives the number the
   octal mode reads as, 33188 for 100644, and the check also takes the
   digits read in decimal, 100755, 120000, and 160000, so either is caught.
-  Neither is checked against GitHub. A path to put back is read at the start
-  commit, compared by blob ID, and its bytes read with
-  `GET .../git/blobs/{sha}`, so a binary file goes back as it was.
-  `submissions.paths` keeps the paths the latest submit sent, for the next.
+  Neither is checked against GitHub.
 - **The branch's head** is read with `GET .../git/ref/heads/{branch}`, and
   compared with `submissions.commit_sha`, or the start commit before a
   first submit, or `onto`. A head that differs is read with one GraphQL

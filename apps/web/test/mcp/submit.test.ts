@@ -992,9 +992,15 @@ describe('what a submit commits', () => {
     await project(APP, reviewed);
     github.commitFiles(
       APP,
-      { 'docs-link': 'docs', 'vendor/lib': 'c'.repeat(40), 'bin/run.sh': 'echo run\n', 'notes/caf\u00e9.md': 'Notes.\n' },
+      {
+        'docs-link': 'docs',
+        'vendor/lib': 'c'.repeat(40),
+        'bin/run.sh': 'echo run\n',
+        'tools/go.sh': 'echo go\n',
+        'notes/caf\u00e9.md': 'Notes.\n',
+      },
       BY,
-      { modes: { 'docs-link': '120000', 'vendor/lib': '160000' } },
+      { modes: { 'docs-link': '120000', 'vendor/lib': '160000', 'tools/go.sh': '100755' } },
     );
     const issue = await tagged(APP);
     const priya = await donor('priya');
@@ -1005,6 +1011,8 @@ describe('what a submit commits', () => {
       [{ 'docs-link/new.md': 'x\n' }, 'file_mode', "docs-link is a symbolic link in the start commit, so docs-link/new.md can't go under it"],
       [{ 'vendor/lib/new.txt': 'x\n' }, 'file_mode', "vendor/lib is a submodule in the start commit, so vendor/lib/new.txt can't go under it"],
       [{ 'README.md/new.md': 'x\n' }, 'path_conflict', "README.md is a file in the start commit, so README.md/new.md can't go under it"],
+      // An executable file is a file here too, and keeps its mode.
+      [{ 'tools/go.sh/new.md': 'x\n' }, 'path_conflict', "tools/go.sh is a file in the start commit, so tools/go.sh/new.md can't go under it"],
       [{ src: 'x\n' }, 'path_conflict', 'src is a folder in the start commit, and submit_work takes files'],
       [{ src: null }, 'path_conflict', 'src is a folder in the start commit, and submit_work takes files'],
       [{ 'bin/RUN.sh': 'echo walk\n' }, 'path_conflict', 'bin/RUN.sh differs only in case or accents from bin/run.sh in the start commit'],
@@ -1721,11 +1729,13 @@ describe('who can submit and open a PR', () => {
     const { claimId } = await claim(priya, issue);
 
     const outside = await submit(priya, claimId, { '../outside.ts': 'x' });
+    const deep = await submit(priya, claimId, { [`${'d/'.repeat(21)}f.txt`]: 'x' });
     const gitDir = await submit(priya, claimId, { '.git/hooks/pre-commit': 'x' });
     const binary = await submit(priya, claimId, { 'logo.png': '\u0089PNG\r\n\u001a\n\u0000' });
 
     expect(outside.isError).toBe(true);
     expect(textOf(outside)).toContain('files.0.path: must be a path inside the repo');
+    expect(textOf(deep)).toContain('files.0.path: must be a path inside the repo, like src/index.ts, at most 20 folders deep');
     expect(textOf(gitDir)).toContain('files.0.path: must be a path inside the repo');
     expect(textOf(binary)).toContain('files.0.content: must be text');
     expect(pathCalls.flatMap((p) => p.calls)).toEqual([]);
