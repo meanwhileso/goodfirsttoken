@@ -11,6 +11,7 @@ import {
   getSubmission,
   saveIssues,
   savePerson,
+  setDelisted,
   setPrState,
   setProjectStatus,
 } from '../../src/db';
@@ -1267,6 +1268,39 @@ describe('who can submit and open a PR', () => {
     expect(pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref.startsWith('goodfirsttoken/'))).toEqual([]);
     expect(work.structuredContent?.readyToOpen).toEqual([
       expect.objectContaining({ claimId: two.claimId, openable: false, reason: expect.stringContaining('do-not-list') as string }),
+    ]);
+  });
+
+  test('a claim on a project the sync delisted takes no submit and no PR, says why, and nothing reaches GitHub', async () => {
+    await project(APP, reviewed);
+    await project(TOOLS, reviewed);
+    const [working, waiting] = [await tagged(APP), await tagged(APP)];
+    const onTools = await tagged(TOOLS);
+    const priya = await donor('priya');
+    const one = await claim(priya, working);
+    const two = await claim(priya, waiting);
+    const three = await claim(priya, onTools);
+    await submit(priya, two.claimId, { 'a.txt': 'a\n' });
+    // APP's repo went private, and a maintainer resumed it meanwhile. The
+    // sync paused TOOLS, whose repo was archived, and delisted it.
+    const gone = `GitHub shows no public repo named ${APP}. It went private or was deleted.`;
+    await setDelisted(env.DB, APP, gone, Date.now());
+    await setDelisted(env.DB, TOOLS, `${TOOLS} is archived on GitHub.`, Date.now());
+    await setProjectStatus(env.DB, TOOLS, { status: 'paused', reason: `${TOOLS} is archived on GitHub.`, changedBy: null }, Date.now());
+    const before = pathCalls.length;
+
+    const submitted = await submit(priya, one.claimId, { 'b.txt': 'b\n' });
+    const opened = await call(priya, 'open_pr', { claimId: two.claimId });
+    const paused = await submit(priya, three.claimId, { 'c.txt': 'c\n' });
+    const work = await call(priya, 'my_work');
+
+    expect([submitted, opened, paused].map(refusalOf)).toEqual(['project_not_open', 'project_not_open', 'project_not_open']);
+    expect(textOf(submitted)).toContain(`${gone} So the claim can't go on. Release it with release_claim.`);
+    expect(textOf(opened)).toContain(gone);
+    expect(textOf(paused)).toContain(`${TOOLS} is archived on GitHub. So the claim can't go on.`);
+    expect(pathCalls.slice(before).flatMap((p) => p.calls)).toEqual([]);
+    expect(work.structuredContent?.readyToOpen).toEqual([
+      expect.objectContaining({ claimId: two.claimId, openable: false, reason: expect.stringContaining(gone) as string }),
     ]);
   });
 

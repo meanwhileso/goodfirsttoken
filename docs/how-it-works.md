@@ -1705,7 +1705,9 @@ never reaches the tool.
   `not_claim_owner`, by the `work_claim` permission, and a blocked donor
   with `donor_blocked`. It refuses a claim whose project isn't approved, is
   paused, or is on the do-not-list with `project_not_open`, as claiming
-  does. It refuses a claim its room holds as released or expired with
+  does, and one the sync delisted, approved or paused, with the reason the
+  sync gave, as `my_work` gives it. It refuses a claim its room holds as
+  released or expired with
   `claim_released` or `claim_expired`, and a claim whose PR the PRs table
   shows merged or closed with `pr_closed`. None of these makes a call to
   GitHub.
@@ -2088,7 +2090,7 @@ tool say what to do with each one on its list, under
 | `pr_already_opened` | Opening a PR for, or releasing, a claim that already has a PR |
 | `not_submitted` | Opening a PR before the work was submitted |
 | `pr_closed` | The claim's PR merged or closed, so the claim takes no more updates or fixes |
-| `project_not_open` | The project isn't approved, or is paused, or, for the donor's tools, is on the do-not-list or has no public repo GitHub shows them. Pausing a project that isn't approved gets it too |
+| `project_not_open` | The project isn't approved, or is paused, or, for the donor's tools, is on the do-not-list, was delisted by the sync, or has no public repo GitHub shows them. Pausing a project that isn't approved gets it too |
 | `issue_not_eligible` | GitHub shows no such issue, or it is closed, has no project tag, has an excluded tag, has an assignee, or is a pull request. For submitting and opening a PR, the donor may be its assignee |
 | `pr_exists` | A PR is open on the issue, so it takes no new claims |
 | `issue_full` | Every slot on the issue is taken |

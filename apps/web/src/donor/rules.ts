@@ -1,5 +1,5 @@
 import type { ProjectRecord, Refusal } from '@goodfirsttoken/core';
-import { confirmCla, doNotListedProjects, getBlock, getClaConfirmation } from '../db';
+import { confirmCla, delistedProjects, doNotListedProjects, getBlock, getClaConfirmation } from '../db';
 import type { RepoFacts } from './github';
 import { parseVouchFile, vouchStatus } from './vouch';
 
@@ -29,9 +29,10 @@ export async function blockedRefusal(db: D1Database, donor: Donor): Promise<Refu
 
 /**
  * A refusal when no more work goes into a claim on the project: it isn't
- * approved, it is paused, or its repo or issue repo is on the do-not-list,
- * by the rule in src/db/waiting.ts, since its maintainers asked Good First
- * Token to stop. submit_work and open_pr check it, as claim_issue does when
+ * approved, it is paused, its repo or issue repo is on the do-not-list, by
+ * the rule in src/db/waiting.ts, since its maintainers asked Good First
+ * Token to stop, or the sync delisted it, which says why, as when its repo
+ * went private. submit_work and open_pr check it, as claim_issue does when
  * a donor resumes a claim. The donor can still post to the claim and
  * release it. Null when the project is open.
  */
@@ -48,6 +49,12 @@ export async function projectClosedRefusal(
       code: 'project_not_open',
       message: `${project.repo} is on the do-not-list, since its maintainers asked Good First Token to stop, so no more work goes there. Release the claim with release_claim.`,
     };
+  }
+  // The sync's reason, which my_work gives for the same claim, says more
+  // than a pause, which the sync makes with it.
+  const gone = (await delistedProjects(db, [project.repo])).get(project.repo.toLowerCase());
+  if (gone !== undefined) {
+    return { code: 'project_not_open', message: `${gone} So the claim can't go on. Release it with release_claim.` };
   }
   if (project.status === 'approved') return null;
   return {
