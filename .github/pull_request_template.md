@@ -4,7 +4,7 @@
 
 ## How you checked it
 
-<!-- Tests you ran. For a page change, screenshots at phone and desktop widths. -->
+<!-- Tests you ran. For a page change, screenshots at phone and desktop widths, attached or as Playwright screenshot tests. -->
 
 ## AI disclosure
 

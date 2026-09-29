@@ -3364,7 +3364,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   must come from the Playwright build CI uses, because other Chromium builds
   can wrap text differently. To update them, after a deliberate visual
   change and after every Playwright upgrade, let the `e2e` job fail, take
-  each `design-<width>-actual.png` from `test-results/` in the job's
+  each `<page>-<width>-actual.png`, like `design-390-actual.png`, from
+  `test-results/` in the job's
   `playwright-report` artifact, check them by eye, and commit them as the
   baselines.
 - **The core package's tests** run with plain Vitest in Node, since the
@@ -3452,6 +3453,15 @@ A pull request can switch off its own checks with a `nosemgrep` comment, a
 `.semgrepignore` file, a zizmor ignore comment or config file, or an edit to
 `scripts/new-advisories.mjs` or these workflows, since each job runs from the
 pull request's checkout. Reviewers watch for changes to any of them.
+
+Semgrep marks a finding under a `nosemgrep` comment as suppressed in its
+SARIF, and code scanning files it as an alert all the same. So both `semgrep`
+jobs leave out a suppressed finding whose level is known to be below error,
+and the comment, with whatever reason it gives, in the diff that adds it is
+the record. Its alert, if it had one, closes as fixed. Any other suppressed
+finding still goes up, so the ruleset's "Alerts: Errors" still needs a
+maintainer to dismiss it. A bare `nosemgrep` with no rule ID covers every
+rule on its line, which is one more reason reviewers watch for them.
 
 `.github/workflows/security-main.yml` runs Semgrep, CodeQL, zizmor, and
 OSV-Scanner on `main` on every push, every Monday at 05:23 UTC, and by hand
