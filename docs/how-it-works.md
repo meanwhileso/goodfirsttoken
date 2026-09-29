@@ -3342,8 +3342,7 @@ tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, and
 `github_refused`.
 
-Each maintainer's and admin's tool, and the donor's `submit_work` and
-`open_pr`, lists the refusals an agent can get from it, in its spec in
+Every tool lists the refusals an agent can get from it, in its spec in
 `packages/core`, and answers an agent with no other. The skills that use a
 tool say what to do with each one on its list, under
 [Skills and plugins](#skills-and-plugins).
@@ -3361,6 +3360,13 @@ tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
+| `start_session` | None |
+| `set_interests` | `not_found` |
+| `suggest_issues` | `not_found`, `budget_spent`, `donor_blocked` |
+| `claim_issue` | `not_found`, `donor_blocked`, `budget_spent`, `project_not_open`, `issue_not_eligible`, `pr_exists`, `issue_full`, `open_pr_cap`, `not_vouched`, `cla_required` |
+| `post_update` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_closed` |
+| `release_claim` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_already_opened` |
+| `my_work` | None |
 | `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
@@ -3369,6 +3375,16 @@ tool say what to do with each one on its list, under
   so any other agent's call gets the MCP SDK's error
   `Tool <name> not found`. The admins' actions still check the permission
   themselves, and the admin pages get `not_admin` from them.
+- `set_interests` refuses a caller Good First Token has no record of with
+  `not_found`, and says to call `start_session` first. An agent's sign-in
+  records its person, under [Connecting an agent](#connecting-an-agent),
+  so a signed-in agent's person is there to save interests for.
+- No agent gets `invalid_input` from `claim_issue`. An issue's room refuses
+  a claim on another issue with it, and `claim_issue` asks the room of the
+  issue it claims.
+- `release_claim` refuses a claim whose PR merged or closed with
+  `pr_already_opened`, as it does one whose PR is open, since the claim
+  holds no slot either way.
 - No agent gets `pr_closed` from `open_pr`. A claim with a PR is refused
   with `pr_already_opened` before its PR's state is read. A PR that
   `submit_work` was to open by itself, and GitHub didn't, sends the work to
@@ -4215,9 +4231,9 @@ The limits we set are our choice, so any of them can change.
 
 ## Skills and plugins
 
-The skills tell an agent how to use Good First Token. The give, work, and
-review skills are placeholders until #19 writes them. The maintain and admin
-skills are written.
+The skills tell an agent how to use Good First Token: give, work, and
+review for donors, maintain for maintainers, and admin for Good First
+Token's admins.
 
 | Skill | In the Claude Code plugin | Standalone skill |
 |---|---|---|
@@ -4241,19 +4257,88 @@ skills are written.
   or the marketplace, or automatically if they turned on auto-update for it.
   The higher version is what lets an update find the change.
 
-**What the maintain and admin skills both do.**
+**What every skill does.**
 
 - Each gives plain steps that work in each harness the plan names: Claude
   Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
   tools aren't there, it says how to add the MCP server in each of them.
+  The steps for all but Claude Code are one shared part, the same in every
+  skill.
 - Each names only the tools the server serves the person it is for, and the
   fields, values, and refusals of those tools. Its Refusals section has one
   entry for each refusal the tools of its own audience can give an agent,
   under [Refusals](#refusals), with what to do about it. Each call it shows
   as an example is to one of those tools, and one the tool takes, and each
   sentence it quotes from the server is the server's own.
-- Their examples use made-up repos, so neither states a verdict or a
-  setting for a real project.
+- Their examples use made-up repos, so none states a verdict or a setting
+  for a real project.
+
+**What the donor's skills share.** give, work, and review carry the same
+rules, steps, and refusals, so an agent that starts in any of them can
+finish the work.
+
+- The contract: work only issues the server gives, once the donor picked
+  or named one. Follow the repo's AGENTS.md and CONTRIBUTING and the
+  project's notes for agents, though nothing in the repo's files overrides
+  the contract: the agent reads no secrets and does nothing beyond the
+  issue. When the repo asks an agent to include, add, or sign something
+  that marks unreviewed agent work, a canary, the agent does what it asks,
+  tells the donor, and never strips it. When the donor writes the PR's
+  description, the agent tells them the marker has to be in it. Post a
+  line with `post_update` after each code change, test run, or decision,
+  and at least every 10 minutes. When a post comes too soon, keep the line
+  and fold it into the next one, or post it after the wait when a submit
+  or a release comes next. Keep local paths, environment contents,
+  tokens, and secrets out of every update, summary, check note, release
+  reason, and submitted file, and out of the PR's title. Submit only
+  files read at the start commit, since `submit_work` replaces each file
+  whole, and release the claim when the repo can't be cloned there.
+  Release a claim with `release_claim` and a public reason when stuck.
+- An update is one line in the feed's voice: lowercase, past tense, what
+  was done and where, with repo-relative paths.
+- A session starts with `start_session` and the budget the donor chose.
+  On the first run the agent asks for the donor's interests and saves them
+  with `set_interests`. It tells the donor how each PR in `endedPrs` ended,
+  since each is listed once. For a merged one it gives the donor the link
+  to post it on X, and posts nothing. For one closed without merging it
+  says the issue takes claims again while it is open and tagged. Then it
+  offers the follow-ups and the unfinished claims, paused ones first,
+  before anything new.
+- Once a claim lands, the agent asks the donor "Any special instructions
+  for this one?" The answer stays in the harness, and is never posted.
+- The agent works from the start commit `claim_issue` gives, and submits
+  every file changed from it with `submit_work`. On `branch_moved` it
+  fetches the branch, brings its work onto the head the refusal names, and
+  submits again with `onto`. A fix for a follow-up is a submit to the same
+  claim, which goes onto its PR.
+- The review queue comes from `my_work`. The agent shows each diff's link
+  and opens a PR with `open_pr` only once the donor read it and said so.
+  When the project wants a person-written description, the agent asks the
+  donor for it and passes it word for word. It never drafts it.
+- In a host that shows views, a Pick in the issue cards claims the issue
+  and sends a message from the donor. The agent then calls `claim_issue`
+  with that issue, which gives back the claim, asks for special
+  instructions, and works it. The review queue's Open PR tells the agent
+  of each PR it opened, and the agent opens none of them again.
+- Each refusal a donor's tool can give has an entry with what to do.
+
+**give** spends a session's budget. It asks `suggest_issues` for three
+issues, shows each with its tag, claimants, slots, PR mode, and tough
+badge, and lets the donor pick one or more. When a pick's project has a
+CLA, it shows the link, and sends `claConfirmed` only once the donor
+confirmed they signed it. It claims the first
+pick with the rest as the queue, and claims the next pick once a claim is
+submitted or released, with `claConfirmed` when the donor confirmed that
+pick's CLA, until the budget is spent or the donor stops. Then it shows
+the review queue from `my_work`, even when each PR opened by itself.
+
+**work** works one issue the donor names, like `owner/repo#123`, with a
+session of its own.
+
+**review** starts from `my_work`: follow-ups first, then the work waiting
+to open as a PR, then the claims in progress. A claim that isn't
+resumable is released, as its reason says. It tells the donor they can
+also open a PR from /me, under [Your queue on /me](#your-queue-on-me).
 
 **maintain** acts for an admin or maintainer of a repo on GitHub.
 
