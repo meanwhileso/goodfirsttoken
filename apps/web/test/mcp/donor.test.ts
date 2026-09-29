@@ -958,6 +958,50 @@ describe('post_update and release_claim', () => {
     expect(room.postUpdate).not.toHaveBeenCalled();
     expect(room.release).not.toHaveBeenCalled();
   });
+
+  test('a released or expired claim takes no posts and no release, and a claim with a PR takes posts until the PR ends, and never a release', async () => {
+    await project(APP);
+    const [released, lapsed, opened, ended] = [await tagged(APP), await tagged(APP), await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    const claimOf = async (issue: string) =>
+      ((await call(priya.agent, 'claim_issue', { sessionId: priya.sessionId, issue })).structuredContent?.claim as { claimId: string }).claimId;
+    const releasedId = await claimOf(released);
+    await call(priya.agent, 'release_claim', { claimId: releasedId, reason: 'Out of time.' });
+    // Made 25 hours ago, with no submit.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() - 25 * 60 * MINUTE);
+    const lapsedId = (await claimAs('priya', lapsed, APP)).id;
+    vi.useRealTimers();
+    const withPr = await claimWithOpenPr('priya', opened, APP);
+    const endedPr = await claimWithOpenPr('priya', ended, APP);
+    const heard = await issueRoom(env.ISSUE_ROOM, ended).claimPrEnded({ claimId: endedPr.claimId, pr: endedPr.pr, merged: true });
+    if (!heard.ok) throw new Error(heard.refusal.message);
+
+    const post = (claimId: string) => call(priya.agent, 'post_update', { claimId, text: 'read CONTRIBUTING.md' });
+    const release = (claimId: string) => call(priya.agent, 'release_claim', { claimId, reason: 'Stuck on the build.' });
+    const results = [
+      await post(releasedId),
+      await release(releasedId),
+      await post(lapsedId),
+      await release(lapsedId),
+      await post(withPr.claimId),
+      await release(withPr.claimId),
+      await post(endedPr.claimId),
+      await release(endedPr.claimId),
+    ];
+
+    expect(results.map(refusalOf)).toEqual([
+      'claim_released',
+      'claim_released',
+      'claim_expired',
+      'claim_expired',
+      null,
+      'pr_already_opened',
+      'pr_closed',
+      'pr_already_opened',
+    ]);
+    expect(results[4]?.structuredContent).toMatchObject({ posted: true, state: 'pr_opened' });
+  });
 });
 
 describe('suggest_issues', () => {

@@ -89,6 +89,7 @@ export const startSession = defineTool({
   audience: 'donor',
   description:
     "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers on the donor's open PRs, unfinished claims, and PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+  refusals: [],
   input: z.object({
     agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
     budget: budgetSchema,
@@ -134,6 +135,8 @@ export const setInterests = defineTool({
   audience: 'donor',
   description:
     "Save the donor's interests: languages, projects, and kinds of work, like tests, docs, or bugs. Suggestions are ranked against them.",
+  // The agent's sign-in records its person, so no agent finds none.
+  refusals: [],
   input: interestsSchema,
   output: z.object({ interests: interestsSchema }),
   text: (out) => `Saved interests: ${describeInterests(out.interests)}.`,
@@ -182,6 +185,7 @@ export const suggestIssues = defineTool({
   audience: 'donor',
   description:
     "Suggest up to three issues that maintainers tagged for outside help, ranked against the donor's interests. Show the donor each issue's link and let them pick one or more. Claim the first pick with claim_issue, and pass the rest as its queue. For more, call it again with the issues already shown in exclude.",
+  refusals: ['not_found', 'budget_spent', 'donor_blocked'],
   input: z.object({
     sessionId: id,
     exclude: z
@@ -218,6 +222,20 @@ export const claimIssue = defineTool({
   audience: 'donor',
   description:
     "Claim an issue the donor picked, or the next pick waiting in the session's queue. Returns the issue, the project's rules and notes for agents, the repo to clone, and the commit to start from. Pass the donor's other picks as queue: each waits in the session until you call claim_issue with no issue, and a pick that filled up or got a PR meanwhile is skipped and reported. If the project has a CLA, ask the donor to confirm they signed it, then call again with claConfirmed set to its link. Claiming an issue the donor already holds resumes that claim.",
+  // The issue's room refuses a claim on another issue with invalid_input,
+  // and claim_issue always asks the issue's own room.
+  refusals: [
+    'not_found',
+    'donor_blocked',
+    'budget_spent',
+    'project_not_open',
+    'issue_not_eligible',
+    'pr_exists',
+    'issue_full',
+    'open_pr_cap',
+    'not_vouched',
+    'cla_required',
+  ],
   input: z.object({
     sessionId: id,
     issue: issueRef
@@ -291,6 +309,7 @@ export const postUpdate = defineTool({
   audience: 'donor',
   description:
     'Post one short line about what you just did and where, like "fixed off-by-one in parseRange (src/range.ts)". Post after each code change, test run, or decision: at least every 10 minutes, at most every 10 seconds. Repo-relative paths are fine. Never post local paths, environment contents, tokens, or secrets.',
+  refusals: ['not_found', 'not_claim_owner', 'claim_released', 'claim_expired', 'pr_closed'],
   input: z.object({
     claimId: id,
     text: updateText,
@@ -586,6 +605,9 @@ export const submitWork = defineTool({
 export const releaseClaim = defineTool({
   audience: 'donor',
   description: 'Give up a claim, with a short public reason. The slot opens for someone else.',
+  // A claim with a PR, open or ended, is refused with pr_already_opened, since
+  // it holds no slot.
+  refusals: ['not_found', 'not_claim_owner', 'claim_released', 'claim_expired', 'pr_already_opened'],
   input: z.object({
     claimId: id,
     reason: releaseReason.describe('Why you stopped. It is public.'),
@@ -660,6 +682,7 @@ export const myWork = defineTool({
   audience: 'donor',
   description:
     "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, and claims in progress. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+  refusals: [],
   input: z.object({}),
   output: z.object({
     /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */

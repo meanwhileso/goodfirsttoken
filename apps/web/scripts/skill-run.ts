@@ -1,6 +1,6 @@
-// Follows the steps of the maintain and admin skills against a running site
-// in development, with the MCP client SDK as each person's agent, the way a
-// harness connects. No model runs, so it spends no tokens.
+// Follows the steps of the maintain, admin, and give skills against a
+// running site in development, with the MCP client SDK as each person's
+// agent, the way a harness connects. No model runs, so it spends no tokens.
 //
 // 1. sample-maintainer's agent asks project_status about the GitHub fake's
 //    sample-owner/sample-parser, then calls register_project for a proposal
@@ -8,6 +8,13 @@
 // 2. sample-admin's agent finds the registration with admin_queue and
 //    approves it with admin_decide.
 // 3. The maintainer's agent checks with project_status that it is approved.
+// 4. The sample donor ines's agent follows the give skill: start_session,
+//    set_interests on the first run, suggest_issues until the sample work's
+//    sample-owner/sample-app#311 comes up, claim_issue, post_update three
+//    times with the second folded into the third after the wait the server
+//    asks for, submit_work, and my_work, with open_pr when the work waits
+//    in the review queue. The issue takes that claim until a PR opens on it,
+//    so on one local database the donor's steps run once, after pnpm seed.
 //
 // Each person approves their agent the way they would in a browser, on the
 // site's page and then on the GitHub fake's sign-in page, here over plain
@@ -355,6 +362,171 @@ export async function runSkills(site: string, say: (line: string) => void = cons
   }
 }
 
+/**
+ * The issue the donor run works: the one sample issue no other end-to-end
+ * test claims. Its project opens agent PRs by itself, and the sample work
+ * leaves one of its three slots open.
+ */
+export const DONOR_ISSUE = 'sample-owner/sample-app#311';
+/** A sample donor with no claim on the issue in the sample work. */
+export const DONOR = 'ines';
+
+interface Suggestion {
+  issue: string;
+  claUrl: string | null;
+}
+
+interface Claimed {
+  claim: { claimId: string; issue: string };
+  resumed: boolean;
+  clone: { url: string; commit: string };
+}
+
+interface Posted {
+  posted: boolean;
+  waitSeconds: number | null;
+}
+
+interface Submitted {
+  pr: { number: number; url: string } | null;
+  reviewReason: string | null;
+}
+
+export interface DonorRun {
+  issue: string;
+  claimId: string;
+  /** Whether the run took up a claim an earlier run left unfinished. */
+  resumed: boolean;
+  /** How long the server asked the run to wait before its folded update. */
+  waitedSeconds: number;
+  /** The PR the work is on, opened by itself or from the review queue. */
+  pr: { number: number; url: string };
+  /** Why the work waited in the review queue, or null when the PR opened by itself. */
+  reviewReason: string | null;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Runs the give skill's steps against `site`, a site in development with
+ * the sample work, as the sample donor's agent: a session, interests on the
+ * first run, suggestions, a claim, updates, a submit, and the review queue.
+ * Says each call and its answer through `say`, and throws when an answer
+ * isn't what the skill expects.
+ */
+export async function runDonorSkills(site: string, say: (line: string) => void = console.log): Promise<DonorRun> {
+  const project = DONOR_ISSUE.slice(0, DONOR_ISSUE.indexOf('#'));
+  const donor = await connectAgent(site, runAddress(), DONOR);
+  say(`@${DONOR} approved their agent on the site and signed in on the GitHub fake.`);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    say(`@${DONOR}'s agent calls ${name} ${JSON.stringify(args)}`);
+    const result = await donor.callTool({ name, arguments: args });
+    say(textOf(result).replace(/^/gm, '    '));
+    return result;
+  };
+  // The structured answer of a call that didn't fail.
+  const answer = (result: CallToolResult, step: string): unknown => {
+    if (result.isError === true || result.structuredContent === undefined) throw new Error(`${step} failed: ${textOf(result)}`);
+    return result.structuredContent;
+  };
+  try {
+    // Start a session, and save interests on the donor's first run.
+    const session = answer(
+      await call('start_session', { agent: 'claude-code', budget: { kind: 'issues', count: 1 } }),
+      'start_session',
+    ) as { sessionId: string; interests: unknown; unfinishedClaims: { issue: string }[] };
+    const { sessionId } = session;
+    if (session.interests === null) {
+      say(`@${DONOR} has no saved interests, so the agent asks, and saves what they like.`);
+      answer(await call('set_interests', { languages: ['TypeScript'], projects: [project], kinds: ['bugs'] }), 'set_interests');
+    }
+
+    // An unfinished claim comes before anything new. An earlier run that
+    // stopped before its submit left one.
+    const unfinished = session.unfinishedClaims.some((claim) => claim.issue.toLowerCase() === DONOR_ISSUE);
+    if (unfinished) {
+      say(`@${DONOR} has an unfinished claim on ${DONOR_ISSUE}, and takes it up again.`);
+    } else {
+      if (session.unfinishedClaims.length > 0) say(`@${DONOR} keeps their unfinished claims for later, and asks for new issues.`);
+      // Suggestions, until the issue comes up. The donor picks it.
+      const shown: string[] = [];
+      let pick: Suggestion | undefined;
+      for (let tries = 0; tries < 10 && pick === undefined; tries++) {
+        const { suggestions } = answer(
+          await call('suggest_issues', { sessionId, ...(shown.length > 0 ? { exclude: shown } : {}) }),
+          'suggest_issues',
+        ) as { suggestions: Suggestion[] };
+        pick = suggestions.find((s) => s.issue.toLowerCase() === DONOR_ISSUE);
+        if (suggestions.length === 0) break;
+        shown.push(...suggestions.map((s) => s.issue));
+      }
+      if (pick === undefined) {
+        throw new Error(
+          `${DONOR_ISSUE} wasn't suggested. It takes a claim once pnpm seed gave the site the sample work, until a PR opens on it, and each run opens one. For a run on the same database, stop pnpm dev, empty its local data with pnpm --filter @goodfirsttoken/web exec node scripts/migrate-local.mjs --fresh, start pnpm dev, and run pnpm seed. Then run this again.`,
+        );
+      }
+      if (pick.claUrl !== null) throw new Error(`${project} asks for a CLA, which the sample work never sets.`);
+    }
+    const claimed = answer(await call('claim_issue', { sessionId, issue: DONOR_ISSUE }), 'claim_issue') as Claimed;
+    const { claimId } = claimed.claim;
+    say(`The agent asks "Any special instructions for this one?" @${DONOR} has none.`);
+    say(`The agent clones ${claimed.clone.url} at ${claimed.clone.commit}, and reads its CONTRIBUTING.`);
+
+    // Updates as it works. Two lines close together: the second waits, and
+    // is folded into the next.
+    const first = answer(await call('post_update', { claimId, text: 'read CONTRIBUTING.md and the notes for agents' }), 'post_update') as Posted;
+    const early = answer(
+      await call('post_update', { claimId, text: 'wrote failing test: /docs/ keeps its trailing slash' }),
+      'post_update',
+    ) as Posted;
+    if (!first.posted || early.posted || early.waitSeconds === null) {
+      throw new Error('Two posts a moment apart should take the first and ask the second to wait.');
+    }
+    say(`The server asks for ${String(early.waitSeconds)}s, so the agent waits, and folds the line into its next one.`);
+    await sleep(early.waitSeconds * 1000);
+    const folded = answer(
+      await call('post_update', { claimId, text: 'wrote failing test for /docs/, kept its trailing slash (src/rewrite.ts)' }),
+      'post_update',
+    ) as Posted;
+    if (!folded.posted) throw new Error('The folded update, after the wait, was not posted.');
+
+    // Submit. GitHub may still be making the donor's fork, and the same
+    // submit works once it is done.
+    const submit = {
+      claimId,
+      files: [
+        { path: 'src/rewrite.ts', content: 'export const keepTrailingSlash = true;\n' },
+        { path: 'test/rewrite.test.ts', content: "import { keepTrailingSlash } from '../src/rewrite';\n" },
+      ],
+      summary: 'Keeps the trailing slash when a rewrite starts from a path that ends in one.',
+      checks: 'pnpm skills:run follows the give skill with no model, so it ran no tests.',
+      agent: 'claude-code',
+      model: 'skill-run',
+    };
+    let result = await call('submit_work', submit);
+    for (let tries = 0; tries < 5 && refusalOf(result) === 'fork_not_ready'; tries++) {
+      await sleep(2000);
+      result = await call('submit_work', submit);
+    }
+    const submitted = answer(result, 'submit_work') as Submitted;
+
+    // The review queue. Work that waits there opens once the donor read it.
+    const queue = answer(await call('my_work', {}), 'my_work') as { readyToOpen: { claimId: string }[] };
+    const waiting = queue.readyToOpen.some((item) => item.claimId === claimId);
+    let pr = submitted.pr;
+    if (pr === null) {
+      if (!waiting) throw new Error(`The work went to the review queue with ${String(submitted.reviewReason)}, and my_work doesn't list it.`);
+      say(`@${DONOR} reads the diff, and says to open it.`);
+      pr = (answer(await call('open_pr', { claimId }), 'open_pr') as { pr: { number: number; url: string } }).pr;
+    } else if (waiting) {
+      throw new Error(`The PR opened by itself, and my_work still lists claim ${claimId} to open.`);
+    }
+    return { issue: DONOR_ISSUE, claimId, resumed: claimed.resumed, waitedSeconds: early.waitSeconds, pr, reviewReason: submitted.reviewReason };
+  } finally {
+    await donor.close().catch(() => undefined);
+  }
+}
+
 /** Checks that `site` answers and runs as development, where the sample admin is an admin. */
 async function checkSite(site: string): Promise<void> {
   let health: { environment?: string };
@@ -374,7 +546,11 @@ async function main(): Promise<void> {
   await checkSite(site);
   const run = await runSkills(site);
   console.log(
-    `\nDone. @${MAINTAINER} registered ${run.repo} on ${site}, @${ADMIN} approved it as ${run.queueId}, and project_status says ${run.status}.`,
+    `\nDone. @${MAINTAINER} registered ${run.repo} on ${site}, @${ADMIN} approved it as ${run.queueId}, and project_status says ${run.status}.\n`,
+  );
+  const given = await runDonorSkills(site);
+  console.log(
+    `\nDone. @${DONOR} claimed ${given.issue} as claim ${given.claimId}, posted as they worked, submitted, and the work is on PR #${String(given.pr.number)}: ${given.pr.url}`,
   );
 }
 

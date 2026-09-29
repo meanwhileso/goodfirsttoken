@@ -6,11 +6,11 @@ import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv } from './helpers';
 
-// The maintain and admin skills in skill-src/, checked against the MCP
-// server they drive. Each is read by the agent of the person it is for: a
-// maintainer with no admin role, and one of Good First Token's admins. The
-// tools a skill calls are the ones of its own audience, as their specs in
-// packages/core say.
+// The skills, as the plugins carry them built from skill-src/, checked
+// against the MCP server they drive. Each is read by the agent of the person
+// it is for: a donor for give, work, and review, a maintainer with no admin
+// role, and one of Good First Token's admins. The tools a skill calls are
+// the ones of its own audience, as their specs in packages/core say.
 //
 // - A skill names only tools its reader's agent is served. The fields and
 //   values it names are in the schemas of the tools it names. The refusal
@@ -40,7 +40,7 @@ import { connectAgent, emptyKv } from './helpers';
 // harness, in that harness's words. There only a tool name alone in
 // backticks is checked. The helpers fail any MCP test in which a tool
 // refuses with a code its spec doesn't list. The Vitest config reads the
-// sources in Node and passes them in.
+// built skills in Node and passes them in.
 
 const { TEST_SKILLS: skills, TEST_ANSWER_TEXT: answerText } = env as Env & {
   TEST_SKILLS: Record<string, string>;
@@ -48,6 +48,9 @@ const { TEST_SKILLS: skills, TEST_ANSWER_TEXT: answerText } = env as Env & {
 };
 
 const READERS: Record<string, { login: string; audience: Audience }> = {
+  give: { login: 'priya', audience: 'donor' },
+  work: { login: 'priya', audience: 'donor' },
+  review: { login: 'priya', audience: 'donor' },
   maintain: { login: 'sample-maintainer', audience: 'maintainer' },
   admin: { login: 'sample-admin', audience: 'admin' },
 };
@@ -221,7 +224,7 @@ function refusalsOf(name: string): readonly string[] {
 async function skillAndServer(skill: string) {
   const reader = READERS[skill];
   const text = skills[skill];
-  if (!reader || text === undefined) throw new Error(`skill-src/${skill}.md is missing`);
+  if (!reader || text === undefined) throw new Error(`The ${skill} skill is missing. Run pnpm skills:build.`);
   const served = await servedTo(reader.login);
   const { connect, prose, codeLines } = readSkill(text);
   const calls = codeLines.map((line) => /^([a-z_]+) (\{.*\})$/.exec(line));

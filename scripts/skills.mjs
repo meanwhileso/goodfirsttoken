@@ -4,7 +4,8 @@
 //   node scripts/skills.mjs build                  # pnpm skills:build
 //   node scripts/skills.mjs check [--base <ref>]   # pnpm skills:check, part of pnpm check
 //
-// skill-src/<name>.md becomes:
+// skill-src/<name>.md becomes, with each {{include <part>}} line replaced by
+// skill-src/shared/<part>.md, so text several skills share has one source:
 //   skills/goodfirsttoken-<name>/SKILL.md          for npx skills add
 //   plugins/<plugin>/skills/<name>/SKILL.md        for the Claude Code plugin
 // The build also writes each plugin's .claude-plugin/plugin.json and the
@@ -43,6 +44,10 @@ const PLUGINS = {
 };
 
 const SOURCE_DIR = 'skill-src';
+// Text several skills share, like the steps to add the MCP server in each
+// harness. A skill takes a part with a line of its own, {{include <part>}}.
+const SHARED_DIR = `${SOURCE_DIR}/shared`;
+const INCLUDE = /^\{\{include ([a-z][a-z0-9-]*)\}\}\n/gm;
 const PLUGINS_FILE = `${SOURCE_DIR}/plugins.json`;
 const MARKETPLACE_FILE = '.claude-plugin/marketplace.json';
 // Folders that hold only what the build writes. Anything else in them is removed.
@@ -170,6 +175,25 @@ async function readPluginSettings(root) {
   return settings;
 }
 
+// The skill's body with each {{include <part>}} line replaced by the part's
+// text. A part can't include another, so what a skill holds is one read away.
+async function expandIncludes(root, source) {
+  const parts = new Map();
+  for (const [, name] of source.body.matchAll(INCLUDE)) {
+    if (parts.has(name)) continue;
+    const file = `${SHARED_DIR}/${name}.md`;
+    const text = await readText(root, file);
+    if (text === null) throw new Error(`${source.file} includes ${name}, but ${file} is missing.`);
+    if (text.includes('{{include')) throw new Error(`${file} includes another part. A shared part can't include one.`);
+    parts.set(name, text);
+  }
+  const body = source.body.replace(INCLUDE, (_line, name) => parts.get(name));
+  if (body.includes('{{include')) {
+    throw new Error(`${source.file} has an include the build can't read. Put {{include <part>}} on a line of its own.`);
+  }
+  return body;
+}
+
 // Returns every file the build writes, keyed by path from the repo root.
 // Throws when a source is invalid.
 export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
@@ -179,7 +203,7 @@ export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
   const files = new Map();
 
   for (const source of sources) {
-    const body = source.body.replaceAll('{{MCP_URL}}', mcpUrl);
+    const body = (await expandIncludes(root, source)).replaceAll('{{MCP_URL}}', mcpUrl);
     files.set(`plugins/${source.plugin}/skills/${source.name}/SKILL.md`, renderSkill(source, source.name, body, { internal: true }));
     if (PLUGINS[source.plugin].standalone) {
       const name = `${PREFIX}-${source.name}`;
