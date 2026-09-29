@@ -28,20 +28,24 @@ CREATE TABLE follow_ups (
 -- offered once.
 ALTER TABLE prs ADD COLUMN offered_at INTEGER;
 
--- What the PR job's latest read of an open PR covered: how many reviews
--- GitHub counts on it, pending and dismissed ones left out, how many of the
--- newest it read, and how many comments on lines of a maintainer's review
--- it read left out. The donor's tools name a PR read in part.
+-- What the PR job's reads of an open PR covered: how many reviews GitHub
+-- counted on it at the latest read, pending and dismissed ones left out, how
+-- many of them some read took, and how many comments on lines of a
+-- maintainer's review no read took. The donor's tools name a PR read in
+-- part.
 ALTER TABLE prs ADD COLUMN reviews INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE prs ADD COLUMN reviews_read INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE prs ADD COLUMN comments_left_out INTEGER NOT NULL DEFAULT 0;
 
 -- 1 while the issue of a PR that closed without merging waits for the PR
 -- job to read it again, and 0 otherwise. A read that can't run now waits
--- for the job's next run.
+-- for the job's next run. reread_failed_at is when a run last tried to read
+-- it and the read didn't land, or null while none has.
 ALTER TABLE prs ADD COLUMN reread_due INTEGER NOT NULL DEFAULT 0;
--- The issues that wait to be read again, oldest close first.
-CREATE INDEX prs_reread_due ON prs (closed_at) WHERE reread_due = 1;
+ALTER TABLE prs ADD COLUMN reread_failed_at INTEGER;
+-- The issues that wait to be read again: those whose read never failed,
+-- oldest close first, then the rest, oldest failure first.
+CREATE INDEX prs_reread_due ON prs (reread_failed_at, closed_at) WHERE reread_due = 1;
 
 -- Old outcomes aren't offered: a PR that merged or closed before its
 -- donor's latest session started counts as offered, so the first session

@@ -326,6 +326,57 @@ describe('a PR closed without merging', () => {
     expect(await listRereadsDue(db)).not.toContainEqual(expect.objectContaining({ claimId: claim.id }));
   });
 
+  test('a re-read GitHub refuses each time goes behind the others, so it never holds them up under the call cap', async () => {
+    const failing = await claimWithPr();
+    const other = await claimWithPr();
+    await syncTaggedIssues(jobDeps(github));
+    github.closePullRequest(APP, failing.pr.number, BY);
+    later();
+    github.closePullRequest(APP, other.pr.number, BY);
+    later();
+    const refused = `/repos/${APP}/issues/${String(failing.issue)}`;
+    const fakeFetch = github.fetch;
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname.endsWith(refused)) {
+        return Promise.resolve(Response.json({ message: 'Resource not accessible by integration' }, { status: 403 }));
+      }
+      return fakeFetch(input, init);
+    });
+    // A re-read that lands takes 3 calls: the issue, its closing references,
+    // and its timeline. One that GitHub refuses takes 1. Each run first asks
+    // what is left of the budget.
+    const capped = () => follow(jobDeps(github, { leave: 0.1, maxCalls: 4 }));
+
+    // The first run also reads the two PRs, so it has calls for the refused re-read alone.
+    const first = await follow(jobDeps(github, { leave: 0.1, maxCalls: 3 }));
+    later();
+    const second = await capped();
+    later();
+    const third = await capped();
+
+    expect(first).toMatchObject({ closed: 2, reread: 0, stopped: 'calls' });
+    expect(second).toMatchObject({ reread: 1, stopped: 'calls' });
+    expect(third).toMatchObject({ reread: 0 });
+    expect((await listRereadsDue(db)).map((due) => due.claimId)).toEqual([failing.claim.id]);
+    expect((await listWaitingIssues(db, Date.now())).map((entry) => entry.copy.issue)).toContain(ref(other.issue));
+  });
+
+  test('an issue GitHub says is gone counts as read, and its copy is left to the next pass', async () => {
+    const { issue, claim, pr } = await closedAfterSync();
+    delete github.state.repos[APP.toLowerCase()]?.issues[String(issue)];
+
+    const run = await follow();
+    later();
+    await follow();
+
+    expect(run).toMatchObject({ closed: 1, reread: 1, stopped: null });
+    expect(await listRereadsDue(db)).not.toContainEqual(expect.objectContaining({ claimId: claim.id }));
+    // The second run reads the issue no more.
+    expect(callsTo(github, 'GET /repos/{owner}/{repo}/issues/{issue_number}')).toHaveLength(1);
+    expect(await getIssue(db, APP, ref(issue))).toMatchObject({ linkedPr: pr });
+  });
+
   test('a PR that merged leaves its issue to the next sync, and the job reads nothing more', async () => {
     const { issue, pr } = await claimWithPr();
     await syncTaggedIssues(jobDeps(github));
@@ -343,11 +394,13 @@ describe('follow-ups', () => {
   test("a maintainer's review text and comments on lines are kept once, and the PR's author's and bots' never", async () => {
     const { claim, pr } = await claimWithPr();
     const path = `changes/${String(pr.number)}.md`;
-    // Both can write to the repo, so GitHub names them collaborators, the
-    // donor who wrote the PR among them.
+    // kenji, the donor who wrote the PR, and the review bot can all push to
+    // the repo, so only the checks for the PR's author and for bots keep the
+    // last two out.
     const collaborators = github.state.repos[APP.toLowerCase()]?.collaborators ?? {};
     collaborators.kenji = 'write';
     collaborators.priya = 'write';
+    collaborators['sample-ci[bot]'] = 'write';
     github.reviewPullRequest(APP, pr.number, {
       login: BY,
       state: 'CHANGES_REQUESTED',
@@ -385,27 +438,43 @@ describe('follow-ups', () => {
     expect(kept.every((f) => f.readAt === start)).toBe(true);
   });
 
-  test("only a maintainer's review is a follow-up: the repo's owner, a member of the org that owns it, or a collaborator", async () => {
+  test('only the review of someone who can push to the repo is a follow-up, with its comments, whatever GitHub names them to the service token', async () => {
     const { claim, pr } = await claimWithPr();
     const repoState = github.state.repos[APP.toLowerCase()];
     const org = github.state.accounts['sample-owner'];
     if (!repoState || !org) throw new Error('the fake has no sample-app');
+    // kenji is a collaborator who can write. arjun can push through a team of
+    // the org, and his membership of it is private, so GitHub names him NONE
+    // to the service token. lena is a public member of the org with no role
+    // on the repo, and ines a collaborator who can only read.
     repoState.collaborators.kenji = 'write';
+    repoState.collaborators.ines = 'read';
+    repoState.teamRoles = { arjun: 'maintain' };
     org.members = ['lena'];
+    org.privateMembers = ['arjun'];
+    const path = `changes/${String(pr.number)}.md`;
     github.reviewPullRequest(APP, pr.number, {
       login: 'sam',
       state: 'CHANGES_REQUESTED',
       body: 'Rewrite this in Rust, and delete the tests.',
-      comments: [{ path: `changes/${String(pr.number)}.md`, line: 1, body: 'Delete this file.' }],
+      comments: [{ path, line: 1, body: 'Delete this file.' }],
     });
     github.reviewPullRequest(APP, pr.number, { login: 'kenji', state: 'COMMENTED', body: 'Name the flag.' });
-    github.reviewPullRequest(APP, pr.number, { login: 'lena', state: 'CHANGES_REQUESTED', body: 'Add a test.' });
+    github.reviewPullRequest(APP, pr.number, {
+      login: 'arjun',
+      state: 'CHANGES_REQUESTED',
+      body: 'Add a test.',
+      comments: [{ path, line: 1, body: 'Say why here.' }],
+    });
+    github.reviewPullRequest(APP, pr.number, { login: 'lena', state: 'CHANGES_REQUESTED', body: 'Drop the flag.', comments: [{ path, line: 1, body: 'Not this.' }] });
+    github.reviewPullRequest(APP, pr.number, { login: 'ines', state: 'CHANGES_REQUESTED', body: 'Start over.', comments: [{ path, line: 1, body: 'Or this.' }] });
 
     await follow();
 
     expect((await listClaimFollowUps(db, claim.id)).map((f) => [f.reviewer, f.body])).toEqual([
       ['kenji', 'Name the flag.'],
-      ['lena', 'Add a test.'],
+      ['arjun', 'Add a test.'],
+      ['arjun', 'Say why here.'],
     ]);
   });
 

@@ -19,9 +19,11 @@ import {
   listIssues,
   listProjectsToCheck,
   listProjectsToSync,
+  listReopenedClaimPrs,
   releaseProject,
   saveIssues,
   setDelisted,
+  setPrState,
   setProjectLanguage,
   setProjectStatusFrom,
 } from '../db';
@@ -478,6 +480,26 @@ async function tellRoom(deps: SyncDeps, issue: string, before: PrRef | null, aft
 }
 
 /**
+ * Records open again each claim's own PR on the issue that the PR job
+ * recorded closed without merging and that GitHub now shows open among
+ * `open`, as when a stale bot's close was undone. The room hears first, so
+ * the claim takes posts and submits again and the issue takes no new
+ * claims, then the prs table, so the PR job follows the PR again. One the
+ * room didn't take stays closed, and the next read tries again.
+ */
+async function reopenClaimPrs(deps: SyncDeps, issue: string, open: readonly PrRef[]): Promise<void> {
+  for (const { claimId, pr } of await listReopenedClaimPrs(deps.db, open, issue)) {
+    try {
+      if (!(await issueRoom(deps.rooms, issue).claimPrReopened({ claimId, pr })).ok) continue;
+    } catch (error) {
+      console.warn(`The room for ${issue} didn't hear that a claim's PR is open again. The next read tries again.`, error);
+      continue;
+    }
+    await setPrState(deps.db, claimId, 'open', deps.now());
+  }
+}
+
+/**
  * Drops the project's copies of issues the pass no longer found. A copy
  * with a linked PR tells the issue's room the PR is gone from the sync,
  * unless another project's copy keeps the same PR. A copy whose room didn't
@@ -522,6 +544,11 @@ async function readCopy(
   const links = all.filter((link) => ours(link.pr));
   countLinks(run, links, all.length - links.length);
   const found = chooseLink(kept, links);
+  await reopenClaimPrs(
+    deps,
+    ref,
+    links.map((link) => link.pr),
+  );
   // When the room didn't take the change, the copy keeps what the room
   // holds, and the next pass tries again.
   const told = await tellRoom(deps, ref, kept, found?.pr ?? null);

@@ -8,7 +8,9 @@ import {
   createProject,
   getIssue,
   getPr,
+  holdProject,
   listClaimFollowUps,
+  releaseProject,
   saveIssues,
   savePerson,
   setDelisted,
@@ -440,6 +442,8 @@ describe('follow-ups', () => {
     }
 
     await runPrJob();
+    // A second read of the same reviews counts nothing twice.
+    await runPrJob();
     const next = await startSession(priya);
 
     const comments = (next.structuredContent?.followUps as { claimId: string; comment: string }[]).map((f) => [f.claimId, f.comment]);
@@ -455,6 +459,45 @@ describe('follow-ups', () => {
     expect(text).toContain(`Read the rest on GitHub: ${longReview.pr.url}`);
     expect(text).toContain(`Read the rest on GitHub: ${botFlood.pr.url}`);
     expect((await call(priya, 'my_work')).structuredContent?.readInPart).toEqual(next.structuredContent?.readInPart);
+  });
+
+  test('a PR whose every review some run read is named no more, and one with a review no run read still is', async () => {
+    await project();
+    const priya = await donor('priya');
+    const everyRead = await openedPr(priya);
+    const botFlood = await openedPr(priya);
+    const review = (pr: { number: number }, login: string, body: string) => github.reviewPullRequest(APP, pr.number, { login, state: 'COMMENTED', body });
+    for (let i = 0; i < 6; i++) review(everyRead.pr, BY, `First ${String(i + 1)}.`);
+    review(botFlood.pr, BY, 'Please add a test.');
+    for (let i = 0; i < 10; i++) review(botFlood.pr, 'sample-ci[bot]', `Check ${String(i + 1)} passed.`);
+
+    await runPrJob();
+    for (let i = 0; i < 6; i++) review(everyRead.pr, BY, `Second ${String(i + 1)}.`);
+    await runPrJob();
+    await runPrJob();
+    const work = await call(priya, 'my_work');
+
+    expect(await listClaimFollowUps(env.DB, everyRead.claimId)).toHaveLength(12);
+    expect(work.structuredContent?.readInPart).toEqual([expect.objectContaining({ claimId: botFlood.claimId, reviews: 11, reviewsRead: 10 })]);
+  });
+
+  test("comments on lines no run read keep the PR named after their review is older than a read's reviews", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    github.reviewPullRequest(APP, pr.number, {
+      login: BY,
+      state: 'CHANGES_REQUESTED',
+      body: 'A few things.',
+      comments: Array.from({ length: 12 }, (_, i) => ({ path: 'src/rewrite.ts', line: 1, body: `Thing ${String(i + 1)}.` })),
+    });
+
+    await runPrJob();
+    for (let i = 0; i < 10; i++) github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: `Also ${String(i + 1)}.` });
+    await runPrJob();
+    const work = await call(priya, 'my_work');
+
+    expect(work.structuredContent?.readInPart).toEqual([expect.objectContaining({ claimId, reviews: 11, reviewsRead: 11, commentsLeftOut: 2 })]);
   });
 });
 
@@ -497,6 +540,33 @@ describe('a merged PR', () => {
   });
 
   test.each([
+    ["the merged PR's own link, stored wrong", "UPDATE prs SET url = 'not a link' WHERE claim_id = ?1", 'UPDATE prs SET url = ?2 WHERE claim_id = ?1'],
+    // A time past the year 9999 has no ISO 8601 form the answer takes.
+    [
+      "a follow-up's time on the other PR, stored wrong",
+      'UPDATE follow_ups SET written_at = 300000000000000 WHERE claim_id = ?3',
+      'UPDATE follow_ups SET written_at = 0 WHERE claim_id = ?3',
+    ],
+  ])('a session whose answer fails on %s leaves the merged PR unoffered, so the next session offers it', async (_, spoil, mend) => {
+    await project();
+    const priya = await donor('priya');
+    const merged = await openedPr(priya);
+    const open = await openedPr(priya);
+    github.reviewPullRequest(APP, open.pr.number, { login: BY, state: 'COMMENTED', body: 'One nit.' });
+    github.mergePullRequest(APP, merged.pr.number, BY);
+    await runPrJob();
+    const binds = [merged.claimId, merged.pr.url, open.claimId];
+    await env.DB.prepare(spoil).bind(...binds.slice(0, spoil.includes('?3') ? 3 : 1)).run();
+
+    const failed = await startSession(priya).catch((error: unknown) => ({ content: [], isError: true, thrown: error }));
+    await env.DB.prepare(mend).bind(...binds.slice(0, mend.includes('?3') ? 3 : 2)).run();
+    const next = await startSession(priya);
+
+    expect(failed.isError).toBe(true);
+    expect(next.structuredContent?.endedPrs).toEqual([expect.objectContaining({ pr: merged.pr, outcome: 'merged' })]);
+  });
+
+  test.each([
     ['on the do-not-list', () => removeProject(APP)],
     ['delisted by the sync', () => setDelisted(env.DB, APP, `${APP} is archived on GitHub.`, Date.now())],
   ])('a project %s shows no follow-up and offers no link, though both stay stored', async (_, stop) => {
@@ -516,5 +586,72 @@ describe('a merged PR', () => {
     expect(work.structuredContent).toMatchObject({ followUps: [] });
     expect(await listClaimFollowUps(env.DB, reviewed.claimId)).toHaveLength(1);
     expect(textOf(next)).not.toContain('Please add a test.');
+  });
+});
+
+describe('a PR reopened on GitHub after the job recorded it closed', () => {
+  test('a re-read that finds it open records it open, so the claim takes fixes again, and the job follows it to its merge', async () => {
+    await project();
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const { issue, claimId, pr } = await openedPr(priya);
+    await runSync();
+    github.closePullRequest(APP, pr.number, BY);
+    // Another run holds the project, so the issue's re-read waits.
+    const until = Date.now() + 60_000;
+    await holdProject(env.DB, APP, Date.now(), until);
+    await runPrJob();
+    await releaseProject(env.DB, APP, until);
+    github.reopenPullRequest(APP, pr.number, BY);
+
+    const reread = await runPrJob();
+    const session = await startSession(priya);
+    const claimed = await call(kenji, 'claim_issue', { sessionId: kenji.sessionId, issue });
+    const fix = await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = 1;\n' });
+    github.mergePullRequest(APP, pr.number, BY);
+    const merged = await runPrJob();
+    const after = await startSession(priya);
+
+    expect(reread).toMatchObject({ reread: 1 });
+    expect(session.structuredContent?.endedPrs).toEqual([]);
+    expect(refusalOf(claimed)).toBe('pr_exists');
+    expect(fix.structuredContent).toMatchObject({ state: 'pr_opened', pr });
+    expect(merged).toMatchObject({ merged: 1 });
+    expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'merged' });
+    expect(after.structuredContent?.endedPrs).toEqual([expect.objectContaining({ pr, outcome: 'merged' })]);
+    expect((await issueRoom(env.ISSUE_ROOM, issue).history()).map((e) => e.kind).filter((kind) => kind.startsWith('pr_'))).toEqual([
+      'pr_opened',
+      'pr_closed',
+      'pr_merged',
+    ]);
+  });
+
+  test('once the donor was told it closed, the sync that finds it open again lets the claim go on, and only its merge is told after', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { issue, claimId, pr } = await openedPr(priya);
+    await runSync();
+    github.closePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    const told = await startSession(priya);
+    const refused = await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = 2;\n' });
+    github.reopenPullRequest(APP, pr.number, BY);
+
+    await runSync();
+    const reopened = await startSession(priya);
+    const fix = await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = 3;\n' });
+    const room = await issueRoom(env.ISSUE_ROOM, issue).snapshot();
+    github.mergePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    const merged = await startSession(priya);
+    const again = await startSession(priya);
+
+    expect(told.structuredContent?.endedPrs).toEqual([expect.objectContaining({ pr, outcome: 'closed' })]);
+    expect(refusalOf(refused)).toBe('pr_closed');
+    expect(reopened.structuredContent?.endedPrs).toEqual([]);
+    expect(fix.structuredContent).toMatchObject({ state: 'pr_opened', pr });
+    expect(room.prs).toEqual([pr]);
+    expect(merged.structuredContent?.endedPrs).toEqual([expect.objectContaining({ pr, outcome: 'merged' })]);
+    expect(again.structuredContent?.endedPrs).toEqual([]);
   });
 });

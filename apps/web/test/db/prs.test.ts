@@ -11,8 +11,9 @@ import {
   getPr,
   listOpenPrs,
   saveClaim,
+  listEndedToOffer,
+  markEndedOffered,
   setPrState,
-  takeEndedToOffer,
   unblockDonor,
 } from '../../src/db';
 import { admin, DAY, db, emptyDatabase, HOUR, kenji, priya, refusal, repo, sha, signIn, t0, takeOffDoNotList } from './helpers';
@@ -158,6 +159,17 @@ describe('PRs', () => {
 });
 
 describe('merged and closed PRs offered to their donor', () => {
+  /** What a session offers the donor: the ended PRs it listed and then marked offered. */
+  async function takeEndedToOffer(person: number, now: number) {
+    const listed = await listEndedToOffer(db, person);
+    const taken = await markEndedOffered(
+      db,
+      listed.map((pr) => pr.claimId),
+      now,
+    );
+    return listed.filter((pr) => taken.has(pr.claimId));
+  }
+
   beforeEach(async () => {
     await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 2 * HOUR });
     await addPr(db, { claimId: 'c_2', pr: prRef(58), openedAt: t0 + 2 * HOUR });
@@ -169,29 +181,50 @@ describe('merged and closed PRs offered to their donor', () => {
     await addPr(db, { claimId: 'c_3', pr: prRef(59), openedAt: t0 + 2 * HOUR });
     await setPrState(db, 'c_3', 'closed', t0 + DAY + HOUR);
 
-    const first = await takeEndedToOffer(db, priya.githubId, t0 + 2 * DAY);
-    const again = await takeEndedToOffer(db, priya.githubId, t0 + 3 * DAY);
+    const first = await takeEndedToOffer(priya.githubId, t0 + 2 * DAY);
+    const again = await takeEndedToOffer(priya.githubId, t0 + 3 * DAY);
 
     expect(first).toEqual([
       { claimId: 'c_1', issue: `${repo}#17`, pr: prRef(57), outcome: 'merged', agent: 'claude-code', title: null, closedAt: t0 + DAY },
       { claimId: 'c_3', issue: `${repo}#19`, pr: prRef(59), outcome: 'closed', agent: 'claude-code', title: null, closedAt: t0 + DAY + HOUR },
     ]);
     expect(again).toEqual([]);
-    expect(await takeEndedToOffer(db, kenji.githubId, t0 + 2 * DAY)).toEqual([]);
+    expect(await takeEndedToOffer(kenji.githubId, t0 + 2 * DAY)).toEqual([]);
+  });
+
+  test('of two sessions that list the same ended PR at once, only the one that marks it first offers it', async () => {
+    await setPrState(db, 'c_1', 'merged', t0 + DAY);
+    const one = await listEndedToOffer(db, priya.githubId);
+    const other = await listEndedToOffer(db, priya.githubId);
+
+    const first = await markEndedOffered(db, one.map((pr) => pr.claimId), t0 + 2 * DAY);
+    const second = await markEndedOffered(db, other.map((pr) => pr.claimId), t0 + 2 * DAY);
+
+    expect([one.length, other.length]).toEqual([1, 1]);
+    expect([...first]).toEqual(['c_1']);
+    expect([...second]).toEqual([]);
+  });
+
+  test('listing the ended PRs marks none offered, so a session whose answer fails leaves them for the next', async () => {
+    await setPrState(db, 'c_1', 'closed', t0 + DAY);
+
+    await listEndedToOffer(db, priya.githubId);
+
+    expect(await takeEndedToOffer(priya.githubId, t0 + 2 * DAY)).toMatchObject([{ claimId: 'c_1', outcome: 'closed' }]);
   });
 
   test("a blocked donor's PR, and one the do-not-list names, is not offered, and waits until neither holds", async () => {
     await signIn(admin);
     await setPrState(db, 'c_1', 'merged', t0 + DAY);
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, t0 + DAY);
-    const whileBlocked = await takeEndedToOffer(db, priya.githubId, t0 + 2 * DAY);
+    const whileBlocked = await takeEndedToOffer(priya.githubId, t0 + 2 * DAY);
     await unblockDonor(db, priya.githubId);
     await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0 + 2 * DAY);
-    const whileListed = await takeEndedToOffer(db, priya.githubId, t0 + 3 * DAY);
+    const whileListed = await takeEndedToOffer(priya.githubId, t0 + 3 * DAY);
     await takeOffDoNotList(repo);
 
     expect([whileBlocked, whileListed]).toEqual([[], []]);
-    expect(await takeEndedToOffer(db, priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_1' }]);
+    expect(await takeEndedToOffer(priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_1' }]);
   });
 
   test('the migration that brought the offer offers no PR that ended before its donor started a session', async () => {
@@ -209,6 +242,6 @@ describe('merged and closed PRs offered to their donor', () => {
     for (const query of writes) await db.prepare(query).run();
 
     expect(writes).toHaveLength(1);
-    expect(await takeEndedToOffer(db, priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_3' }]);
+    expect(await takeEndedToOffer(priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_3' }]);
   });
 });

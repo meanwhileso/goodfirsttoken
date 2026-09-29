@@ -37,17 +37,19 @@ import {
   getProject,
   getSession,
   listClaimsOn,
+  listEndedToOffer,
   listPersonClaims,
   listReadInPart,
   listWaitingFollowUps,
   listWaitingIssues,
+  markEndedOffered,
   markFollowUpsShown,
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
-  takeEndedToOffer,
   takeSessionIssue,
   type ClaimWithPr,
+  type EndedToOffer,
   type WaitingIssue,
 } from '../db';
 import {
@@ -217,23 +219,31 @@ export async function startSession(
   const followUps = await followUpsFor(caller.githubId);
   const readInPart = await listReadInPart(env.DB, caller.githubId);
   const unfinishedClaims = await offeredToResume(caller.githubId, origin, now);
-  // Taking the ended PRs marks them offered, so it comes after every read.
-  const endedPrs = await endedToOffer(caller.githubId, now);
-  const result = toolResult('start_session', {
-    sessionId: session.id,
-    login: person.login,
-    budget: session.budget,
-    interests: person.interests,
-    followUps: followUps.followUps,
-    moreFollowUps: followUps.moreFollowUps,
-    readInPart,
-    unfinishedClaims,
-    endedPrs,
-  });
-  // Marked shown only once the answer is made, so an answer that fails
-  // leaves them unshown, for a submit not to answer.
+  const ended = await listEndedToOffer(env.DB, caller.githubId);
+  const resultWith = (offered: readonly EndedToOffer[]) =>
+    toolResult('start_session', {
+      sessionId: session.id,
+      login: person.login,
+      budget: session.budget,
+      interests: person.interests,
+      followUps: followUps.followUps,
+      moreFollowUps: followUps.moreFollowUps,
+      readInPart,
+      unfinishedClaims,
+      endedPrs: offered.map(endedPrOf),
+    });
+  const result = resultWith(ended);
+  // Marked only once the answer is made, so an answer that fails leaves the
+  // follow-ups unshown, for a submit not to answer, and the ended PRs for
+  // the next session to offer.
   await followUps.markShown(now);
-  return answer(result);
+  const taken = await markEndedOffered(
+    env.DB,
+    ended.map((pr) => pr.claimId),
+    now,
+  );
+  // A session that started at the same moment marked the others first, and offers them.
+  return answer(taken.size === ended.length ? result : resultWith(ended.filter((pr) => taken.has(pr.claimId))));
 }
 
 /**
@@ -275,19 +285,18 @@ async function followUpsFor(
 }
 
 /**
- * The donor's PRs that merged or closed without merging since a session
- * last offered them, taken so no later session offers them again. A merged
- * one comes with a pre-filled X post link. Nothing is posted for the donor.
+ * A donor's PR that merged or closed without merging, as start_session
+ * offers it. A merged one comes with a pre-filled X post link. Nothing is
+ * posted for the donor.
  */
-async function endedToOffer(person: number, now: number) {
-  const ended = await takeEndedToOffer(env.DB, person, now);
-  return ended.map(({ issue, title, pr, outcome, agent }) => ({
+function endedPrOf({ issue, title, pr, outcome, agent }: EndedToOffer) {
+  return {
     issue,
     title: title ?? issue,
     pr,
     outcome,
     shareUrl: outcome === 'merged' ? shareOnXUrl({ pr, agent }) : null,
-  }));
+  };
 }
 
 /** The donor's unfinished claims that can go on, for start_session to offer. */

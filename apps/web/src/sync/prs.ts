@@ -11,6 +11,7 @@ import {
   listOpenPrs,
   listRereadsDue,
   rereadDone,
+  rereadFailed,
   saveFollowUps,
   setPrState,
   setReviewsRead,
@@ -67,19 +68,18 @@ interface Actor {
   login?: string;
 }
 
+/** A comment on a line, in a review. Its author is the review's. */
 interface ReviewComment {
   id: string;
-  authorAssociation?: string;
   body: string;
   path: string;
   url: string;
   createdAt: string;
-  author: Actor | null;
 }
 
 interface Review {
   id: string;
-  authorAssociation?: string;
+  authorCanPushToRepository?: boolean;
   state: string;
   body: string;
   url: string;
@@ -106,9 +106,9 @@ const PULL = `fragment Pull on PullRequest {
   reviews(last: ${String(REVIEWS_READ)}, states: [COMMENTED, CHANGES_REQUESTED, APPROVED]) {
     totalCount
     nodes {
-      id state body url submittedAt authorAssociation
+      id state body url submittedAt authorCanPushToRepository
       author { __typename login }
-      comments(first: ${String(COMMENTS_READ)}) { totalCount nodes { id body path url createdAt authorAssociation author { __typename login } } }
+      comments(first: ${String(COMMENTS_READ)}) { totalCount nodes { id body path url createdAt } }
     }
   }
 }`;
@@ -140,24 +140,20 @@ function outcomeOf(pull: PullState, now: number): { state: PrState; at: number }
 }
 
 /**
- * How GitHub says a maintainer relates to the repo: its owner, a member of
- * the organization that owns it, or a collaborator.
- * https://docs.github.com/en/graphql/reference/enums#commentauthorassociation
+ * The login of the maintainer who wrote a review: someone GitHub says can
+ * push to the repo, by the review's `authorCanPushToRepository`, who is
+ * neither the PR's author, who is the donor, nor a GitHub App's bot. Push
+ * access reads the same to every token, where GitHub's `authorAssociation`
+ * hides a private member of the organization from a token outside it. Good
+ * First Token posts on GitHub only as the donor, with the donor's token, so
+ * leaving out the PR's author leaves out its posts too. Null for anyone
+ * else, and for an account GitHub no longer has. The review's comments on
+ * lines are its author's too.
  */
-const MAINTAINERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-
-/**
- * The login of a maintainer who reviewed: someone GitHub names the repo's
- * owner, a member of the organization that owns it, or a collaborator, and
- * who is neither the PR's author, who is the donor, nor a GitHub App's bot.
- * Good First Token posts on GitHub only as the donor, with the donor's
- * token, so leaving out the PR's author leaves out its posts too. Null for
- * anyone else, and for an account GitHub no longer has.
- */
-function reviewerOf(author: Actor | null | undefined, association: string | undefined, prAuthor: string): string | null {
-  const login = author?.login;
-  if (typeof login !== 'string' || author?.__typename === 'Bot' || /\[bot\]$/i.test(login)) return null;
-  if (association === undefined || !MAINTAINERS.has(association)) return null;
+function reviewerOf(review: Review, prAuthor: string): string | null {
+  const login = review.author?.login;
+  if (typeof login !== 'string' || review.author?.__typename === 'Bot' || /\[bot\]$/i.test(login)) return null;
+  if (review.authorCanPushToRepository !== true) return null;
   return login.toLowerCase() === prAuthor.toLowerCase() ? null : login;
 }
 
@@ -182,8 +178,9 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
   };
   for (const review of pull.reviews?.nodes ?? []) {
     if (review === null || !['COMMENTED', 'CHANGES_REQUESTED', 'APPROVED'].includes(review.state)) continue;
-    const reviewer = reviewerOf(review.author, review.authorAssociation, prAuthor);
-    if (reviewer !== null && review.state !== 'APPROVED') {
+    const reviewer = reviewerOf(review, prAuthor);
+    if (reviewer === null) continue;
+    if (review.state !== 'APPROVED') {
       add({
         commentId: review.id,
         reviewer,
@@ -195,11 +192,9 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
     }
     for (const comment of review.comments?.nodes ?? []) {
       if (comment === null) continue;
-      const commenter = reviewerOf(comment.author, comment.authorAssociation, prAuthor);
-      if (commenter === null) continue;
       add({
         commentId: comment.id,
-        reviewer: commenter,
+        reviewer,
         body: comment.body,
         path: comment.path,
         url: comment.url,
@@ -211,17 +206,20 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
 }
 
 /**
- * How much of an open PR's reviews the read covered: every review GitHub
- * counts, pending and dismissed ones left out, the newest it read, and the
- * comments on lines of a maintainer's review it read that it left out.
+ * What the read covered of an open PR's reviews: every review GitHub counts,
+ * pending and dismissed ones left out, and for each review it took, newest
+ * first, the comments on lines of a maintainer's review it left out.
+ * setReviewsRead adds it to what earlier reads covered.
  */
 function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId'> {
   const read = (pull.reviews?.nodes ?? []).filter((review) => review !== null);
   const prAuthor = pull.author?.login ?? '';
-  const commentsLeftOut = read
-    .filter((review) => reviewerOf(review.author, review.authorAssociation, prAuthor) !== null)
-    .reduce((sum, review) => sum + Math.max(0, (review.comments?.totalCount ?? 0) - (review.comments?.nodes?.length ?? 0)), 0);
-  return { reviews: Math.max(pull.reviews?.totalCount ?? 0, read.length), reviewsRead: read.length, commentsLeftOut };
+  const leftOut = read
+    .map((review) =>
+      reviewerOf(review, prAuthor) === null ? 0 : Math.max(0, (review.comments?.totalCount ?? 0) - (review.comments?.nodes?.length ?? 0)),
+    )
+    .reverse();
+  return { reviews: Math.max(pull.reviews?.totalCount ?? 0, read.length), leftOut };
 }
 
 /**
@@ -274,9 +272,13 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
       await setReviewsRead(deps.db, covered);
     }
     // A read that can't run now, as when another run holds the project,
-    // stays due for the next run.
+    // stays due for the next run, behind the reads that never failed. One
+    // the run stopped in stays where it is.
     for (const { claimId, issue } of await listRereadsDue(deps.db)) {
-      if (!(await rereadIssue(deps, issue))) continue;
+      if (!(await rereadIssue(deps, issue))) {
+        await rereadFailed(deps.db, claimId, deps.now());
+        continue;
+      }
       await rereadDone(deps.db, claimId);
       run.reread += 1;
     }

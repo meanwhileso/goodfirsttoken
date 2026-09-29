@@ -464,6 +464,31 @@ export class IssueRoom extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Records that a claim's own PR, which the PR job told the room closed
+   * without merging, is open again on GitHub, as a read found it, like when
+   * a stale bot's close was undone. The claim takes posts and submits again,
+   * and the PR is open on the issue again, so the issue takes no new claims.
+   * A merged PR stays merged. A claim the room doesn't hold with this PR is
+   * left as it is. Telling the room again changes nothing.
+   */
+  async claimPrReopened(request: { claimId: string; pr: PrRef }): Promise<{ ok: true; reopened: boolean } | Refused> {
+    return this.guard(() => {
+      const claimId = input(id, request.claimId, 'claimId');
+      const pr = input(prRefSchema, request.pr, 'pr');
+      const now = Date.now();
+      this.settle(now);
+      const claim = this.readClaim(claimId)?.record;
+      const merged = this.sql.exec("SELECT 1 FROM pr_outcomes WHERE claim_id = ? AND state = 'merged'", claimId).toArray().length > 0;
+      const reopened = claim !== undefined && claim.pr !== null && samePr(claim.pr, pr) && !merged;
+      if (reopened) {
+        this.sql.exec('DELETE FROM pr_outcomes WHERE claim_id = ?', claimId);
+        this.addIssuePr(pr);
+      }
+      return this.done(now, { ok: true as const, reopened });
+    });
+  }
+
   /** Records that a PR linked to the issue merged or closed. */
   async prClosed(pr: PrRef): Promise<{ ok: true } | Refused> {
     return this.guard(() => {
