@@ -559,8 +559,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   returns them in one `UPDATE` with `RETURNING`, by `SHOWN`, the rule for
   the merged PRs the site shows. `shareOnXUrl` in `packages/core` builds
   the link for a merged one, with the submission's agent. `foldUntrusted`
-  there folds a reviewer's text, and `cutGraphemes` cuts it, the rule the
-  name an agent's client gives itself is cut by too.
+  there folds a reviewer's text by `UNSAFE_CHARACTER` and
+  `HIDDEN_CHARACTER` in `characters.ts`, the sets `removalReason` folds by,
+  and `cutGraphemes` cuts it after, the rule the name an agent's client
+  gives itself is cut by too.
 - **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
   reads the claim from the claims table, checks `work_claim`, the block,
   and the project with `projectClosedRefusal`, whose do-not-list check is

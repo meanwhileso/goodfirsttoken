@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { HIDDEN_CHARACTER, UNSAFE_CHARACTER } from './characters';
 import { cutGraphemes, epochMs, githubLogin, id, webUrl } from './primitives';
 
 // Follow-ups (spec section 7, steps 2 and 7): what a reviewer wrote on a
@@ -16,22 +17,31 @@ export const MAX_FOLLOW_UP_PATH = 4096;
 /** The most follow-ups start_session and my_work list at once, oldest first. */
 export const MAX_FOLLOW_UPS = 20;
 
-/**
- * A run of characters that could break a line or change what a terminal
- * shows, and the white space around it: control characters, line breaks,
- * Unicode line and paragraph separators, the marks that reorder text, and
- * every other kind of space.
- */
-const UNSAFE = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}\s]+/gu;
+/** A space between words, of any width. */
+const SPACE = /\p{Zs}/u;
+
+/** A run of the characters in characters.ts, unsafe and hidden, and of spaces. */
+const RUN = new RegExp(`(?:${UNSAFE_CHARACTER.source}|${HIDDEN_CHARACTER.source}|${SPACE.source})+`, 'gu');
 
 /**
- * Text from someone else, as one line of at most `max` graphemes: each run
- * of unsafe characters and white space becomes one space, and the ends are
- * trimmed. Longer text is cut, whole graphemes only, and ends in `...`. So
- * a reviewer's comment can't add a line that reads as the server's own.
+ * A run with an unsafe character or a space in it becomes one space, and a
+ * run of hidden characters alone goes. A mark that reorders text is both
+ * unsafe and hidden, so it becomes a space.
+ */
+function foldRun(run: string): string {
+  return UNSAFE_CHARACTER.test(run) || SPACE.test(run) ? ' ' : '';
+}
+
+/**
+ * Text from someone else, as one line of at most `max` graphemes, with only
+ * what a person can see: every hidden character goes, each run of unsafe
+ * characters and spaces becomes one space, and the ends are trimmed. Then
+ * longer text is cut, whole graphemes only, and ends in `...`, so a hidden
+ * character counts for nothing. So a reviewer's comment can't add a line
+ * that reads as the server's own, or words only an agent reads.
  */
 export function foldUntrusted(text: string, max: number): string {
-  return cutGraphemes(text.replace(UNSAFE, ' ').trim(), max);
+  return cutGraphemes(text.replace(RUN, foldRun).trim(), max);
 }
 
 /** A reviewer's text, as the follow-ups keep it. */
@@ -41,6 +51,15 @@ export const followUpText = z
   .refine(
     (text) => foldUntrusted(text, MAX_FOLLOW_UP_TEXT) === text,
     `must be one folded line of at most ${String(MAX_FOLLOW_UP_TEXT)} graphemes`,
+  );
+
+/** The file a comment on a line is on, as the follow-ups keep it. It is repo text too. */
+export const followUpPath = z
+  .string({ error: 'must be text' })
+  .min(1, 'must not be empty')
+  .refine(
+    (path) => foldUntrusted(path, MAX_FOLLOW_UP_PATH) === path,
+    `must be one folded line of at most ${String(MAX_FOLLOW_UP_PATH)} graphemes`,
   );
 
 /**
@@ -55,11 +74,7 @@ export const followUpRecordSchema = z.object({
   reviewer: githubLogin,
   body: followUpText,
   /** The file an inline comment is on, folded to one line too, or null for a review's own text. */
-  path: z
-    .string()
-    .min(1)
-    .refine((path) => foldUntrusted(path, MAX_FOLLOW_UP_PATH) === path, 'must be one folded line')
-    .nullable(),
+  path: followUpPath.nullable(),
   /** The review or comment on GitHub. */
   url: webUrl,
   /** When the reviewer wrote it, as GitHub gives it. */

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { claimStateSchema, type ClaimState } from '../claims';
-import { followUpText } from '../follow-ups';
+import { followUpPath, followUpText } from '../follow-ups';
 import { agentName, commitSha, count, githubLogin, id, isoTime, issueRef, prRefSchema, repoName, webUrl } from '../primitives';
 import { branchName } from '../submissions';
 import { indent, lines, numbered, plural, when } from './text';
@@ -48,8 +48,8 @@ export const followUpSchema = z.object({
   reviewer: githubLogin,
   /** The reviewer's own words from GitHub, folded to one line and cut. Untrusted repo text. */
   comment: followUpText,
-  /** The file an inline comment is on, or null for a review's own text. */
-  path: z.string().nullable(),
+  /** The file an inline comment is on, folded to one line and cut too, or null for a review's own text. */
+  path: followUpPath.nullable(),
   commentUrl: webUrl,
   /** When the reviewer wrote it. */
   writtenAt: isoTime,

@@ -852,13 +852,18 @@ maintainer wrote there is kept as a follow-up for the claim's donor, once.
   text. An approval's own text asks for nothing, and isn't one. Each
   comment on a line is a follow-up, with its file, in any review but a
   dismissed one, an approval included.
-- The text is untrusted repo text. Before it is kept, each run of line
-  breaks, tabs, control characters, Unicode line and paragraph separators,
-  marks that reorder text, and other white space becomes one space, and
-  the ends are trimmed, so it is one line. Text longer than its limit
-  under [Limits](#limits) is cut to fit, whole graphemes only, what a
-  reader counts as characters, and ends in `...`. Empty text is no
-  follow-up. A comment's file path is folded and cut the same way.
+- The text is untrusted repo text. Before it is kept, it becomes one
+  line, with only what a person can see. Every character a person doesn't
+  see goes, the same characters a removal's reason loses under
+  [Asking to be removed](#asking-to-be-removed). Each run of line breaks,
+  tabs, control characters, Unicode line and paragraph separators, marks
+  that reorder text, and spaces becomes one space, and the ends are
+  trimmed. Then text longer than its limit under [Limits](#limits) is cut
+  to fit, whole graphemes only, what a reader counts as characters, and
+  ends in `...`, so a character no one sees counts for nothing. Empty
+  text, like text of nothing but such characters, is no follow-up. A
+  comment's file path is folded and cut the same way, and a comment whose
+  path folds to nothing is left out.
 - A follow-up is known by GitHub's ID for the review or comment, and is
   read once. An edit or a deletion on GitHub after that, a dismissal, or a
   resolved thread changes nothing about it.
@@ -1195,8 +1200,9 @@ removes the repo, or a maintainer of the repo withdraws it.
   among them, Unicode line and paragraph separators, and marks that reorder
   text. Every character a person doesn't see goes: format characters, like
   a zero-width space, a word joiner, or Unicode tag characters, private-use
-  characters, and unassigned ones. Only admins read
-  it, in `admin_queue`, as a JSON string, so no quote mark in it can end
+  characters, unassigned ones, and ones Unicode says to ignore when they
+  can't be shown, like a variation selector or a Hangul filler. Only admins
+  read it, in `admin_queue`, as a JSON string, so no quote mark in it can end
   the quote early, and on the [admin pages](#the-admin-pages). Both show it
   as the maintainer's words. It reaches no public page, so nothing redacts
   it.
