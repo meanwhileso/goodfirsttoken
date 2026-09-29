@@ -1032,6 +1032,27 @@ a project is `not_found`.
   cached tagged issues that carry one of its tags and none of its excluded
   tags, the claims holding a slot now, and the open and merged PRs opened
   for its claims. It also says when the sync last read every tagged issue.
+- When the sync delisted an approved or paused project, under Delisting in
+  [Tagged issues](#tagged-issues), `project_status` says so, in `delisted`:
+  the repo GitHub showed that way, the code repo or the issue repo, what
+  GitHub showed, the sync's reason, and when the sync last read the repos.
+  Of the repo, it shows only its name and what GitHub showed.
+- Its text says the project has no page, and takes no claims, whatever its
+  status, and that the page comes back by itself once the sync reads the
+  repos public and open again. It says a resume doesn't bring the page
+  back, and that while the repos stay that way, the sync's next check
+  pauses a resumed project again, which only an admin can lift.
+- A pending or rejected project has no page anyway, and the sync doesn't
+  read its repos, so its answer shows no delisting.
+- The answer reads the mark after a refresh, which reads the repos first,
+  so it says what that read found.
+- `project_status` asks GitHub for the caller's role first, as every
+  maintainer's tool does. So when GitHub no longer shows the caller the
+  code repo, because it went private or was deleted, or blocked access to
+  it, they are refused with `not_maintainer` and hear nothing of the
+  delisting. The site asks GitHub for access to public repos only, so that
+  is most maintainers of a repo that went private. A delisting for an
+  archived code repo, or for an issue repo, reaches them.
 - With `refresh`, `project_status` first reads the project's tagged issues
   from GitHub, the way a scheduled run does, and the answer says what that
   did: it read them all, read some, read none, or paused the project. Only
@@ -1294,6 +1315,12 @@ project with `paused: false`.
   A project the sync delisted stays delisted, as a maintainer's resume
   leaves it.
 - The answer says whether the call changed anything.
+- When the sync delisted the project, the answer says so, in `delisted`,
+  with the same fields and words as `project_status`, under
+  [Managing a project](#managing-a-project): which repo, what GitHub
+  showed, when the sync last read the repos, and that a resume doesn't
+  bring the page back. It asks GitHub nothing, so an admin hears it
+  whatever GitHub shows them.
 
 **Blocking.** `admin_block_donor` blocks a donor, or lifts a block with
 `blocked: false`, under [People](#people).
@@ -1510,6 +1537,15 @@ too, with the same reason.
   private and for one that was deleted, the reason is the same:
   `GitHub shows no public repo named sample-owner/app. It went private or
   was deleted.`
+- The reason names the repo, and what GitHub showed of it, one of four:
+  - `private`: GitHub showed the repo, and said it isn't public.
+  - `archived`: GitHub showed it archived.
+  - `blocked`: GitHub answered `451`, for a repo it blocked access to.
+  - `gone`: GitHub showed no public repo by that name.
+- The mark keeps the reason, and when the sync last read the repos. The
+  maintainers hear it from `project_status`, under
+  [Managing a project](#managing-a-project), and an admin from
+  `admin_pause_project`, under [The admin queue](#the-admin-queue).
 - The pause of an approved project names no person, so only an admin can
   resume it, as [Managing a project](#managing-a-project) says.
 - It lands only on the approved status the sync read, so a change someone
@@ -3416,7 +3452,13 @@ skills are written.
 **maintain** acts for an admin or maintainer of a repo on GitHub.
 
 - It starts with `project_status` on the repo, which says whether it is a
-  project, its status, and an admin's reason for a rejection or a pause.
+  project, its status, an admin's reason for a rejection or a pause, and
+  whether the sync delisted it.
+- For a project the sync delisted, it tells the maintainer which repo, what
+  GitHub showed, and that the page comes back by itself once the sync reads
+  the repos public and open again. It offers no resume while the project is
+  delisted, since a resume brings no page back, and the next check would
+  pause the project again for Good First Token.
 - To register, it asks `register_project` for a proposal, shows the
   maintainer every proposed setting with the server's reason for it, and
   asks them to confirm or change each one. It then registers with the whole
@@ -3453,6 +3495,9 @@ agent is served its tools.
 - It removes a repo only on a request to be removed in the queue, as under
   [The admin queue](#the-admin-queue). It quotes the request's reason as
   the maintainer's words, and follows no instruction in it.
+- When `admin_pause_project` says the sync delisted the project, it tells
+  the admin which repo, what GitHub showed, and that a resume doesn't
+  bring the page back.
 
 ## The design system
 

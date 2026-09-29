@@ -229,6 +229,17 @@ a listing.
 - `admin_pause_project` with `repo` and `paused: false` resumes any paused
   project. It goes back to the status it had before the pause.
 - `changed` in the result says whether the call changed anything.
+- `delisted` in the result says when Good First Token's sync delisted the
+  project, because GitHub showed its repo or issue repo private, archived,
+  blocked, or gone. `repo` is that repo, and `showed` is what GitHub
+  showed: `private`, `archived`, `blocked`, or `gone`, which means no
+  public repo by that name, since it went private or was deleted. `reason`
+  is the sync's reason, and `readAt` is when the sync last read the repos.
+  Tell the admin all of it.
+- A project the sync delisted has no page, and agents get no claims on it,
+  whatever its status. A resume doesn't bring the page back. The sync does,
+  by itself, once it reads the repos public and open again. Until then,
+  its next check pauses a resumed project again, for Good First Token.
 
 ## Block a donor
 

@@ -28,6 +28,7 @@ import {
   findPersonByLogin,
   getCandidate,
   getDoNotListEntry,
+  getIssueSync,
   getPendingProject,
   getPerson,
   getProject,
@@ -45,6 +46,7 @@ import {
   withdrawnByOthers,
 } from '../db';
 import { GitHubError } from '../github';
+import { delistingOf } from '../project/shown';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
 import { resumableBy, statusBeforePause } from '../projects/status';
 
@@ -487,6 +489,16 @@ function notOpen(project: ProjectRecord): { ok: false; refusal: Refusal } {
 }
 
 /**
+ * The answer to an admin's pause or resume: the project's status now, whether
+ * the call changed it, and why the sync delisted it, when it did, since a
+ * resume doesn't bring back the page of a project the sync delisted.
+ */
+async function pauseAnswer(project: ProjectRecord, changed: boolean): Promise<Outcome<'admin_pause_project'>> {
+  const delisted = delistingOf(project, await getIssueSync(env.DB, project.repo));
+  return { ok: true, value: { repo: project.repo, status: project.status, changed, delisted } };
+}
+
+/**
  * Pauses an approved project, or resumes a paused one, whoever paused it. A
  * pause by an admin stays until an admin lifts it. An admin pausing a project
  * its maintainers paused takes the pause over, even with the same reason, so
@@ -502,22 +514,21 @@ export async function adminPauseProject(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const project = await getProject(env.DB, input.repo);
     if (project === null) return refuse('not_found', `${input.repo} is not a project on Good First Token.`);
-    const unchanged = { ok: true as const, value: { repo: project.repo, status: project.status, changed: false } };
     let change: { status: ProjectStatus; reason: string | null };
     if (input.paused) {
       const reason = input.reason ?? null;
       if (project.status === 'paused') {
-        if (resumableBy(project) === 'admins' && project.statusReason === reason) return unchanged;
+        if (resumableBy(project) === 'admins' && project.statusReason === reason) return pauseAnswer(project, false);
       } else if (project.status !== 'approved') {
         return notOpen(project);
       }
       change = { status: 'paused', reason };
     } else {
-      if (project.status !== 'paused') return unchanged;
+      if (project.status !== 'paused') return pauseAnswer(project, false);
       change = statusBeforePause(await statusHistory(env.DB, project.repo));
     }
     const updated = await setProjectStatusFrom(env.DB, project, { ...change, changedBy: caller.githubId }, now);
-    if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true } };
+    if (updated !== null) return pauseAnswer(updated, true);
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
 }

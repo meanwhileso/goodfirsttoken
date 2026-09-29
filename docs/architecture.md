@@ -411,6 +411,26 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   status change keeps who made it and no role, so whether a pause was an
   admin's is worked out when the maintainer resumes, as
   [Managing a project](how-it-works.md#managing-a-project) says.
+- **A delisting is read from the sync's mark alone.** `project_status`
+  already reads the project's row in `issue_syncs` for when its issues were
+  read, after any refresh, and hands it to `delistingOf` in
+  `src/project/shown.ts`, which `hasPage` reads the mark through too. So
+  `project_status` reports a delisting exactly when the mark takes the page
+  away, and no second rule decides it. `admin_pause_project` reads the row
+  the same way, once its status change lands. The answer's `delisted` is
+  `delistingSchema` in `packages/core/src/tools/shared.ts`, and its line of
+  text is `delistingText` beside it, so both tools say the same.
+- **No new column.** `issue_syncs.delisted` keeps the sync's reason, and
+  `repos_read_at` when the sync last read the repos. The reason already
+  names the repo and what GitHub showed, since the sync writes it from
+  `delistedReason` in `packages/core/src/issues.ts`, and
+  `readDelistedReason` there reads the two back from the same words, which
+  live in that one table. So `delisted.repo` and `delisted.showed` need no
+  migration. They are null only for a reason in other words, like the one
+  `0006_delisting.sql` gave a pause that had none, and the sync's next
+  check writes the reason again. `readAt` is `repos_read_at`: the mark
+  doesn't keep when it was first set, and the last read says whether
+  GitHub still showed the repo that way.
 
 ### The donor's tools
 
@@ -679,6 +699,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `setProjectStatusFrom`, retried up to five times, as for the maintainer's
   pause. So a maintainer's pause or resume that lands at the same moment as
   an admin's never undoes it.
+- **A pause's answer reads the sync's mark** through `delistingOf` in
+  `src/project/shown.ts`, the way `project_status` does, one read of
+  `issue_syncs` by key after the status change, so an admin who resumes a
+  project the sync delisted hears it stays delisted.
 - **Editing a listing** is `relistFromPolicy` in `src/db/projects.ts`,
   which applies the settings sent over the listing's, with
   `updateProjectSettings`, and checks the listing's source and settings
@@ -1821,7 +1845,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
-| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims |
+| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims. `delistingOf`, why the sync delisted a project that could have a page, which `hasPage` reads the mark through, for `project_status` and `admin_pause_project` |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
@@ -2053,7 +2077,8 @@ read-only service token. The rules are in
   `issue_syncs.language` for ranking suggestions. It costs no call of its
   own.
 - **Delisting** writes the mark first, `issue_syncs.delisted` with the
-  reason, through `setDelisted` in `src/db/syncs.ts`, so the page is hidden
+  reason `delistedReason` in core gives for what GitHub showed, through
+  `setDelisted` in `src/db/syncs.ts`, so the page is hidden
   even when the pause doesn't land. Then it pauses an approved project with
   `setProjectStatusFrom`, the compare-and-set #55 added, with `changed_by`
   null, which the maintainer's `pause_project` reads as a pause only an
@@ -2838,7 +2863,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   signing in an agent needs, and reads what the pages show through the
   Worker. The test of what migration `0006_delisting.sql` marks runs the
   migration's own `INSERT` again, from `TEST_MIGRATIONS`, on rows made
-  before it.
+  before it. `apps/web/test/mcp/delisted.test.ts` runs the sync the same
+  way, then reads what `project_status` and `admin_pause_project` say, for
+  each thing GitHub can show. The fake has no `451`, so a stand-in for
+  `fetch` answers one for the repo it blocks, and a service token that sees
+  a private repo is the fake's service account given a role on it and the
+  `repo` scope.
 - **Crawler tests** are in `apps/web/test/crawl/`. The rules' tests call
   them directly on made-up files, for every tier and condition. The rest
   run the search against the GitHub fake with a stand-in for the crawl

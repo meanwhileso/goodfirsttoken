@@ -36,6 +36,7 @@ import {
   takeOverListing,
 } from '../db';
 import { GitHubError } from '../github';
+import { delistingOf } from '../project/shown';
 import { proposeSettings } from '../projects/proposal';
 import {
   createOurLabel,
@@ -292,6 +293,8 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
       },
       issuesReadAt: sync?.readAt == null ? null : new Date(sync.readAt).toISOString(),
       refresh,
+      // The mark as it stands after any refresh, which reads the repos first.
+      delisted: delistingOf(project, sync),
     }),
   );
 }

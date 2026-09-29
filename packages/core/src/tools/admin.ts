@@ -26,6 +26,7 @@ import {
   type ProjectSettingsPatch,
 } from '../projects';
 import { MAX_REMOVALS_WITHDRAWN, removalReason } from '../removals';
+import { delistingSchema, delistingText } from './shared';
 import { defineTool } from './spec';
 import { indent, lines, numbered, plural, renderSettings, when } from './text';
 
@@ -395,7 +396,7 @@ export const adminBlockDonor = defineTool({
 export const adminPauseProject = defineTool({
   audience: 'admin',
   description:
-    'Pause an approved project, with a reason its maintainers see, or resume any paused project with paused: false. A pause by an admin stays until an admin lifts it, and pausing a project its maintainers paused makes it yours.',
+    "Pause an approved project, with a reason its maintainers see, or resume any paused project with paused: false. A pause by an admin stays until an admin lifts it, and pausing a project its maintainers paused makes it yours. When Good First Token's sync delisted the project, because GitHub showed its repo or issue repo private, archived, blocked, or gone, the answer says which repo and what GitHub showed. A resume doesn't bring its page back.",
   refusals: ['not_found', 'project_not_open'],
   input: z
     .object({
@@ -413,18 +414,25 @@ export const adminPauseProject = defineTool({
     status: projectStatusSchema,
     /** Whether this call paused or resumed the project. False when it was already as asked. */
     changed: z.boolean(),
+    /**
+     * Why the sync delisted the project, when it is approved or paused, so it
+     * has no page and takes no claims, or null when it didn't.
+     */
+    delisted: delistingSchema.nullable().default(null),
   }),
-  text: (out) => {
-    if (out.status === 'paused') {
-      return out.changed
-        ? `Paused ${out.repo}. Agents get no new claims on it until an admin resumes it.`
-        : `${out.repo} was already paused by an admin, with that reason. Nothing changed.`;
-    }
-    return out.changed
-      ? `Resumed ${out.repo}. Status: ${out.status}.`
-      : `${out.repo} isn't paused, so nothing changed. Status: ${out.status}.`;
-  },
+  text: (out) => lines(pauseOutcome(out), out.delisted !== null && delistingText(out.delisted)),
 });
+
+function pauseOutcome(out: { repo: string; status: ProjectStatus; changed: boolean }): string {
+  if (out.status === 'paused') {
+    return out.changed
+      ? `Paused ${out.repo}. Agents get no new claims on it until an admin resumes it.`
+      : `${out.repo} was already paused by an admin, with that reason. Nothing changed.`;
+  }
+  return out.changed
+    ? `Resumed ${out.repo}. Status: ${out.status}.`
+    : `${out.repo} isn't paused, so nothing changed. Status: ${out.status}.`;
+}
 
 export const adminRemoveProject = defineTool({
   audience: 'admin',

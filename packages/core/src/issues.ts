@@ -67,13 +67,58 @@ export const issueSyncSchema = z.object({
   language: z.string().max(100).nullable(),
   /**
    * Why GitHub showed the project's code repo or issue repo private,
-   * archived, blocked, or gone when the sync last read them, like
-   * `sample-owner/app is archived on GitHub.`, or null when it showed both
-   * public and open, or before the sync read them. While it is set, what the
-   * site cached from the repos stays hidden, whatever the project's status.
+   * archived, blocked, or gone when the sync last read them, in the words
+   * delistedReason gives, like `sample-owner/app is archived on GitHub.`, or
+   * null when it showed both public and open, or before the sync read them.
+   * While it is set, what the site cached from the repos stays hidden,
+   * whatever the project's status.
    */
   delisted: trimmedText(MAX_STATUS_REASON).nullable(),
   /** When the sync last read the project's code repo and issue repo, or null before it did. */
   reposReadAt: epochMs.nullable(),
 });
 export type IssueSync = z.infer<typeof issueSyncSchema>;
+
+/**
+ * What GitHub showed of a repo when the sync delisted its project. `private`
+ * is a repo GitHub showed and said isn't public. `archived` is an archived
+ * repo. `blocked` is a repo GitHub blocked access to, with a 451. `gone` is
+ * no public repo by that name at all: the service token reads public repos
+ * only, so a repo that went private and one that was deleted look the same.
+ */
+export const delistedShowings = ['private', 'archived', 'blocked', 'gone'] as const;
+export const delistedShowingSchema = z.enum(delistedShowings);
+export type DelistedShowing = z.infer<typeof delistedShowingSchema>;
+
+/**
+ * The sync's reason for each showing, as the words before and after the
+ * repo's name. The reason is all the mark keeps, so the repo and what GitHub
+ * showed are read back from these words, and they live here alone.
+ */
+const DELISTED_WORDS: Record<DelistedShowing, readonly [before: string, after: string]> = {
+  private: ['', ' is no longer public on GitHub.'],
+  archived: ['', ' is archived on GitHub.'],
+  blocked: ['GitHub blocked access to ', '.'],
+  gone: ['GitHub shows no public repo named ', '. It went private or was deleted.'],
+};
+
+/** The reason the sync delists a project with, which names the repo and what GitHub showed of it. */
+export function delistedReason(repo: string, showed: DelistedShowing): string {
+  const [before, after] = DELISTED_WORDS[showed];
+  return `${before}${repo}${after}`;
+}
+
+/**
+ * The repo and what GitHub showed of it, read from a reason delistedReason
+ * gave. Null for a reason in other words, like the one migration 0006 gave
+ * a pause that had none.
+ */
+export function readDelistedReason(reason: string): { repo: string; showed: DelistedShowing } | null {
+  for (const showed of delistedShowings) {
+    const [before, after] = DELISTED_WORDS[showed];
+    if (reason.length <= before.length + after.length || !reason.startsWith(before) || !reason.endsWith(after)) continue;
+    const repo = repoName.safeParse(reason.slice(before.length, reason.length - after.length));
+    if (repo.success) return { repo: repo.data, showed };
+  }
+  return null;
+}
