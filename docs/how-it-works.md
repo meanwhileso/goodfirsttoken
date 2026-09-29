@@ -1028,31 +1028,44 @@ a project is `not_found`.
   replacing its settings takes it over, which `register_project` does. The
   refusal says to take it over with `register_project` first.
 - **`project_status`** answers with the project's status, how it got in, the
-  reason for a rejection or a pause, its settings, and four counts: the
-  cached tagged issues that carry one of its tags and none of its excluded
-  tags, the claims holding a slot now, and the open and merged PRs opened
-  for its claims. It also says when the sync last read every tagged issue.
+  reason for a rejection or a pause, who can resume a paused project, as
+  `pause_project` says it, its settings, and four counts: the cached tagged
+  issues that carry one of its tags and none of its excluded tags, the
+  claims holding a slot now, and the open and merged PRs opened for its
+  claims. It also says when the sync last read every tagged issue.
 - When the sync delisted an approved or paused project, under Delisting in
   [Tagged issues](#tagged-issues), `project_status` says so, in `delisted`:
   the repo GitHub showed that way, the code repo or the issue repo, what
-  GitHub showed, the sync's reason, and when the sync last read the repos.
-  Of the repo, it shows only its name and what GitHub showed.
+  GitHub showed, the sync's reason, when the sync delisted the project,
+  when it last checked the repos, and whether the project's repo or issue
+  repo is on the do-not-list. When the sync delisted the project before
+  it kept that time, the answer says the time isn't known.
+- While the project is delisted, nothing cached from its repos shows in the
+  answer, so it gives no count of tagged issues, and its text says why. Of
+  the repo, it shows only its name and what GitHub showed.
 - Its text says the project has no page, and takes no claims, whatever its
-  status, and that the page comes back by itself once the sync reads the
-  repos public and open again. It says a resume doesn't bring the page
-  back, and that while the repos stay that way, the sync's next check
-  pauses a resumed project again, which only an admin can lift.
+  status. It says the page comes back by itself once the sync reads the
+  repos public and open again, and that a resume doesn't bring it back.
+  While GitHub shows the repos that way, each check of the sync pauses the
+  project for Good First Token when it finds it approved, and only an admin
+  can lift that pause.
+- The sync reads no repo of a project whose repo or issue repo is on the
+  do-not-list, so its mark stays, and the page stays gone while the repo
+  is on the list. The text says that in place of the page coming back.
 - A pending or rejected project has no page anyway, and the sync doesn't
   read its repos, so its answer shows no delisting.
 - The answer reads the mark after a refresh, which reads the repos first,
   so it says what that read found.
 - `project_status` asks GitHub for the caller's role first, as every
-  maintainer's tool does. So when GitHub no longer shows the caller the
-  code repo, because it went private or was deleted, or blocked access to
-  it, they are refused with `not_maintainer` and hear nothing of the
-  delisting. The site asks GitHub for access to public repos only, so that
-  is most maintainers of a repo that went private. A delisting for an
-  archived code repo, or for an issue repo, reaches them.
+  maintainer's tool does. Every token the site holds for a person reads
+  public repos only, under [Permissions](#permissions), so when GitHub no
+  longer shows the code repo, because it went private or was deleted, or
+  blocked access to it, every maintainer is refused with `not_maintainer`.
+  When the sync delisted the project for that, the refusal adds `Good First
+  Token delisted this project:` and the sync's reason. The project's page
+  is gone for everyone, so it says only what anyone can see. A delisting
+  for an archived code repo, or for an issue repo, reaches the maintainers
+  in the answer.
 - With `refresh`, `project_status` first reads the project's tagged issues
   from GitHub, the way a scheduled run does, and the answer says what that
   did: it read them all, read some, read none, or paused the project. Only
@@ -1318,9 +1331,10 @@ project with `paused: false`.
 - When the sync delisted the project, the answer says so, in `delisted`,
   with the same fields and words as `project_status`, under
   [Managing a project](#managing-a-project): which repo, what GitHub
-  showed, when the sync last read the repos, and that a resume doesn't
-  bring the page back. It asks GitHub nothing, so an admin hears it
-  whatever GitHub shows them.
+  showed, when the sync delisted the project and last checked the repos,
+  whether the project's repo or issue repo is on the do-not-list, and that
+  a resume doesn't bring the page back. It asks GitHub nothing, so an
+  admin hears it whatever GitHub shows them.
 
 **Blocking.** `admin_block_donor` blocks a donor, or lifts a block with
 `blocked: false`, under [People](#people).
@@ -1542,10 +1556,16 @@ too, with the same reason.
   - `archived`: GitHub showed it archived.
   - `blocked`: GitHub answered `451`, for a repo it blocked access to.
   - `gone`: GitHub showed no public repo by that name.
-- The mark keeps the reason, and when the sync last read the repos. The
-  maintainers hear it from `project_status`, under
-  [Managing a project](#managing-a-project), and an admin from
-  `admin_pause_project`, under [The admin queue](#the-admin-queue).
+- The mark keeps the reason, when the sync delisted the project, and when
+  it last read the repos. The first time stays while the mark does, when a
+  later read finds the repos the same way or another way, like archived
+  and then private, and goes when the mark comes off. A mark set before
+  the sync kept that time has none. The maintainers hear it from
+  `project_status`, under [Managing a project](#managing-a-project), and an
+  admin from `admin_pause_project`, under [The admin queue](#the-admin-queue).
+- A project whose repo or issue repo is on the do-not-list isn't read, so
+  a mark it has stays while the repo is on the list, and the page, gone for
+  the list anyway, stays gone.
 - The pause of an approved project names no person, so only an admin can
   resume it, as [Managing a project](#managing-a-project) says.
 - It lands only on the approved status the sync read, so a change someone
@@ -3458,7 +3478,9 @@ skills are written.
   GitHub showed, and that the page comes back by itself once the sync reads
   the repos public and open again. It offers no resume while the project is
   delisted, since a resume brings no page back, and the next check would
-  pause the project again for Good First Token.
+  pause the project again for Good First Token. Once the mark is off, it
+  offers a resume only when `project_status` says the maintainers can
+  resume the pause, and otherwise says only Good First Token's admins can.
 - To register, it asks `register_project` for a proposal, shows the
   maintainer every proposed setting with the server's reason for it, and
   asks them to confirm or change each one. It then registers with the whole

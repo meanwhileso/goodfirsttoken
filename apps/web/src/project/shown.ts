@@ -12,27 +12,58 @@ function couldHavePage(project: ProjectRecord): boolean {
   return project.status === 'approved' || project.status === 'paused';
 }
 
+const iso = (time: number | null) => (time === null ? null : new Date(time).toISOString());
+
 /**
  * Why the sync delisted a project that could have a page, from its mark in
  * `sync`: the repo GitHub showed private, archived, blocked, or gone, what it
- * showed, the sync's reason, and when the sync last read the repos. Null when
- * the mark is off, or when the project is pending or rejected, which has no
- * page whatever the mark says, and which the sync doesn't check. hasPage
- * reads the mark through this, so project_status reports a delisting
- * exactly when the mark takes a project's page away.
+ * showed, the sync's reason, when the sync delisted it, when it last checked
+ * the repos, and whether the project's repo or issue repo is on the
+ * do-not-list, `listed`, so the sync reads them no more. Null when the mark
+ * is off, or when the project is pending or rejected, which has no page
+ * whatever the mark says, and which the sync doesn't check. hasPage reads
+ * the mark through this, so project_status reports a delisting exactly when
+ * the mark takes a project's page away.
  *
- * The mark keeps the reason alone, so the repo and what GitHub showed are
- * read back from its words. Nothing the site cached from the repos is in it.
+ * The mark keeps the reason, and not the repo or what GitHub showed apart,
+ * so those two are read back from its words. Nothing the site cached from
+ * the repos is in it.
  */
-export function delistingOf(project: ProjectRecord, sync: IssueSync | null): Delisting | null {
+export function delistingOf(project: ProjectRecord, sync: IssueSync | null, listed: boolean): Delisting | null {
   if (!couldHavePage(project) || sync === null || sync.delisted === null) return null;
   const said = readDelistedReason(sync.delisted);
   return {
     repo: said?.repo ?? null,
     showed: said?.showed ?? null,
     reason: sync.delisted,
-    readAt: sync.reposReadAt === null ? null : new Date(sync.reposReadAt).toISOString(),
+    delistedAt: iso(sync.delistedAt),
+    checkedAt: iso(sync.reposReadAt),
+    onDoNotList: listed,
   };
+}
+
+/**
+ * Whether the project's repo, or the repo where its issues live, has an
+ * entry of its own on the do-not-list, as in the homepage's query.
+ */
+async function onDoNotList(db: D1Database, project: ProjectRecord): Promise<boolean> {
+  const repos = new Set([project.repo, project.settings.issueRepo ?? project.repo].map((repo) => repo.toLowerCase()));
+  const entries = await Promise.all([...repos].map((repo) => getDoNotListEntry(db, repo)));
+  return entries.some((entry) => entry !== null);
+}
+
+/**
+ * Why the sync delisted the project, as delistingOf says, with the
+ * do-not-list read now, and the mark read now unless `sync` is its row as
+ * the caller read it.
+ */
+export async function readDelisting(db: D1Database, project: ProjectRecord, sync?: IssueSync | null): Promise<Delisting | null> {
+  if (!couldHavePage(project)) return null;
+  const [mark, listed] = await Promise.all([
+    sync === undefined ? getIssueSync(db, project.repo) : Promise.resolve(sync),
+    onDoNotList(db, project),
+  ]);
+  return delistingOf(project, mark, listed);
 }
 
 /**
@@ -56,10 +87,6 @@ export function delistingOf(project: ProjectRecord, sync: IssueSync | null): Del
  */
 export async function hasPage(db: D1Database, project: ProjectRecord): Promise<boolean> {
   if (!couldHavePage(project)) return false;
-  const repos = new Set([project.repo, project.settings.issueRepo ?? project.repo].map((repo) => repo.toLowerCase()));
-  const [sync, listed] = await Promise.all([
-    getIssueSync(db, project.repo),
-    Promise.all([...repos].map((repo) => getDoNotListEntry(db, repo))),
-  ]);
-  return delistingOf(project, sync) === null && listed.every((entry) => entry === null);
+  const [sync, listed] = await Promise.all([getIssueSync(db, project.repo), onDoNotList(db, project)]);
+  return !listed && delistingOf(project, sync, listed) === null;
 }

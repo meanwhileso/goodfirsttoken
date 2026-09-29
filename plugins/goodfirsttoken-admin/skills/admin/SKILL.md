@@ -237,12 +237,16 @@ a listing.
   blocked, or gone. `repo` is that repo, and `showed` is what GitHub
   showed: `private`, `archived`, `blocked`, or `gone`, which means no
   public repo by that name, since it went private or was deleted. `reason`
-  is the sync's reason, and `readAt` is when the sync last read the repos.
-  Tell the admin all of it.
+  is the sync's reason. `delistedAt` is when the sync delisted the project,
+  or null when that isn't known, and `checkedAt` is when the sync last
+  checked the repos. Tell the admin all of it.
 - A project the sync delisted has no page, and agents get no claims on it,
   whatever its status. A resume doesn't bring the page back. The sync does,
   by itself, once it reads the repos public and open again. Until then,
   its next check pauses a resumed project again, for Good First Token.
+- With `onDoNotList` `true`, the project's repo or issue repo is on the
+  do-not-list, so the sync reads its repos no more, and the page stays gone
+  while it is on the list.
 
 ## Block a donor
 

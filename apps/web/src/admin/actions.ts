@@ -28,7 +28,6 @@ import {
   findPersonByLogin,
   getCandidate,
   getDoNotListEntry,
-  getIssueSync,
   getPendingProject,
   getPerson,
   getProject,
@@ -46,7 +45,7 @@ import {
   withdrawnByOthers,
 } from '../db';
 import { GitHubError } from '../github';
-import { delistingOf } from '../project/shown';
+import { readDelisting } from '../project/shown';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
 import { resumableBy, statusBeforePause } from '../projects/status';
 
@@ -494,7 +493,7 @@ function notOpen(project: ProjectRecord): { ok: false; refusal: Refusal } {
  * resume doesn't bring back the page of a project the sync delisted.
  */
 async function pauseAnswer(project: ProjectRecord, changed: boolean): Promise<Outcome<'admin_pause_project'>> {
-  const delisted = delistingOf(project, await getIssueSync(env.DB, project.repo));
+  const delisted = await readDelisting(env.DB, project);
   return { ok: true, value: { repo: project.repo, status: project.status, changed, delisted } };
 }
 

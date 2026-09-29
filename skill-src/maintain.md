@@ -124,9 +124,10 @@ To have the listing removed instead, see Ask to be removed.
 - Resume: call `pause_project` with `repo` and `paused: false`. The project
   goes back to the status it had before the pause. A resume doesn't bring
   back the page of a project the sync delisted, as in Delisted by the sync.
-- `resumableBy` in the result says who can lift the pause. `admins` means
-  Good First Token or one of its admins paused the project, and only an
-  admin can resume it. `project_status` has their reason.
+- `resumableBy` in the result, and in `project_status`, says who can lift
+  the pause. `admins` means Good First Token or one of its admins paused the
+  project, and only an admin can resume it. `project_status` has their
+  reason.
 
 ## Delisted by the sync
 
@@ -141,19 +142,31 @@ can resume that pause. A pause the maintainer made stays theirs.
   that way, the code repo or the issue repo. `showed` is what GitHub
   showed: `private`, `archived`, `blocked`, or `gone`. `gone` means GitHub
   shows no public repo by that name, since it went private or was deleted.
-  `reason` is the sync's reason, and `readAt` is when the sync last read
-  the repos. Tell the maintainer all of it.
+  `reason` is the sync's reason. `delistedAt` is when the sync delisted the
+  project, or null when that isn't known, and `checkedAt` is when the sync
+  last checked the repos. Tell the maintainer all of it.
+- While it is delisted, `project_status` gives no count of tagged issues,
+  since nothing cached from the repos shows.
 - The page comes back by itself once the sync reads the repos public and
   open again. Nothing else brings it back.
+- With `onDoNotList` `true`, the project's repo or issue repo is on the
+  do-not-list, so the sync reads its repos no more, and the page stays gone
+  while it is on the list. Tell the maintainer.
 - A resume doesn't bring the page back. Don't offer one while `delisted` is
   set. While the repos stay private, archived, blocked, or gone, the sync's
   next check pauses a resumed project again, and only Good First Token's
-  admins can resume that pause. Once GitHub shows the repos public and open
-  again, wait until `project_status` shows no `delisted`, then resume.
+  admins can resume that pause.
+- Once GitHub shows the repos public and open again, wait until
+  `project_status` shows no `delisted`. Then, when `resumableBy` is
+  `maintainers`, offer to resume it with `pause_project` and
+  `paused: false`. When it is `admins`, Good First Token or one of its
+  admins paused it, and only Good First Token's admins can resume it: tell
+  the maintainer to ask them.
 - When GitHub shows the maintainer's account no code repo, as when it went
   private or was deleted, or blocked access to it, `project_status` is
-  refused with `not_maintainer`, and says nothing of the delisting. It
-  answers again once GitHub shows the repo as public.
+  refused with `not_maintainer`. The refusal says Good First Token delisted
+  the project, and why. It answers again once GitHub shows the repo as
+  public.
 
 ## Ask to be removed
 

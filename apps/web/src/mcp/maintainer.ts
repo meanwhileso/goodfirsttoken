@@ -3,6 +3,7 @@ import {
   toolRefusal,
   toolResult,
   updateProjectSettings,
+  type DelistedShowing,
   type ProjectRecord,
   type ProjectSettings,
   type ProjectStatus,
@@ -36,7 +37,7 @@ import {
   takeOverListing,
 } from '../db';
 import { GitHubError } from '../github';
-import { delistingOf } from '../project/shown';
+import { readDelisting } from '../project/shown';
 import { proposeSettings } from '../projects/proposal';
 import {
   createOurLabel,
@@ -256,14 +257,40 @@ function isTagged(labels: readonly string[], settings: ProjectSettings): boolean
   return has(settings.tags) && !has(settings.excludedTags);
 }
 
+/** What GitHub can show of a code repo that leaves it showing no one's role on the repo. */
+const HIDDEN: readonly (DelistedShowing | null)[] = ['private', 'gone', 'blocked'];
+
+/**
+ * The sync's reason, when it delisted the project because GitHub showed its
+ * code repo private, gone, or blocked, so GitHub shows no one their role on
+ * it. The project's public page is gone, so saying so tells a caller only
+ * what anyone can see. Null otherwise.
+ */
+async function hiddenCodeRepo(repo: string): Promise<string | null> {
+  const project = await getProject(env.DB, repo);
+  if (project === null) return null;
+  const delisted = await readDelisting(env.DB, project);
+  if (delisted?.repo?.toLowerCase() !== project.repo.toLowerCase() || !HIDDEN.includes(delisted.showed)) return null;
+  return delisted.reason;
+}
+
 /**
  * Answers with the project's status and activity. With `refresh`, it first
  * reads an approved project's tagged issues from GitHub with the service
  * token, at most once every 10 minutes for the project. Only the repo's
  * admins and maintainers get this far, so no one else can spend the token.
+ * A caller refused because GitHub no longer shows the code repo hears that
+ * the sync delisted the project, and why.
  */
 export async function projectStatus(caller: Caller, input: ToolInput<'project_status'>, now: number): Promise<Answer> {
-  await requirePermission(caller, 'manage_project', { repo: input.repo });
+  try {
+    await requirePermission(caller, 'manage_project', { repo: input.repo });
+  } catch (error) {
+    if (!(error instanceof PermissionRefused) || error.code !== 'not_maintainer') throw error;
+    const reason = await hiddenCodeRepo(input.repo);
+    if (reason === null) throw error;
+    return refuse(error.code, `${error.message} Good First Token delisted this project: ${reason}`);
+  }
   let project = await getProject(env.DB, input.repo);
   if (project === null) return notAProject(input.repo);
   let refresh: Awaited<ReturnType<typeof refreshIssues>> | null = null;
@@ -278,23 +305,27 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
     countProjectPrs(env.DB, project.repo),
     getIssueSync(env.DB, project.repo),
   ]);
+  // The mark as it stands after any refresh, which reads the repos first.
+  const delisted = await readDelisting(env.DB, project, sync);
+  const { settings } = project;
   return answer(
     toolResult('project_status', {
       repo: project.repo,
       status: project.status,
       source: project.source,
       statusReason: project.statusReason,
-      settings: project.settings,
+      settings,
       counts: {
-        taggedIssues: issues.filter((issue) => isTagged(issue.labels, project.settings)).length,
+        // Nothing cached from a delisted project's repos shows, its count included.
+        taggedIssues: delisted === null ? issues.filter((issue) => isTagged(issue.labels, settings)).length : null,
         working,
         openPrs: prs.open,
         merged: prs.merged,
       },
       issuesReadAt: sync?.readAt == null ? null : new Date(sync.readAt).toISOString(),
       refresh,
-      // The mark as it stands after any refresh, which reads the repos first.
-      delisted: delistingOf(project, sync),
+      delisted,
+      resumableBy: resumableBy(project),
     }),
   );
 }

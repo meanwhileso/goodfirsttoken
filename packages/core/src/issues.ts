@@ -74,6 +74,12 @@ export const issueSyncSchema = z.object({
    * whatever the project's status.
    */
   delisted: trimmedText(MAX_STATUS_REASON).nullable(),
+  /**
+   * When the mark went from none to set. It stays while the mark does,
+   * whatever words later reads give it. Null without a mark, or for a mark
+   * set before the sync kept this time.
+   */
+  delistedAt: epochMs.nullable(),
   /** When the sync last read the project's code repo and issue repo, or null before it did. */
   reposReadAt: epochMs.nullable(),
 });
