@@ -415,13 +415,15 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   already reads the project's row in `issue_syncs` for when its issues were
   read, after any refresh, and hands it to `readDelisting` in
   `src/project/shown.ts`, which reads the do-not-list entries of the
-  project's two repos and calls `delistingOf`. `hasPage` reads the mark
-  through `delistingOf` too, so `project_status` reports a delisting
-  exactly when the mark takes the page away, and no second rule decides
-  it. `admin_pause_project` calls `readDelisting` the same way, once its
-  status change lands. The answer's `delisted` is `delistingSchema` in
-  `packages/core/src/tools/shared.ts`, and its line of text is
-  `delistingText` beside it, so both tools say the same.
+  project's two repos and calls `delistingOf`, which is private to that
+  file. `hasPage` reads the mark through `delistingOf` too, so
+  `project_status` reports a delisting exactly when the mark takes the page
+  away, and no second rule decides it. `readDelisting` and `hasPage` each
+  check first that the project is approved or paused, and `delistingOf`
+  reads the mark alone. `admin_pause_project` calls `readDelisting` the
+  same way, once its status change lands. The answer's `delisted` is
+  `delistingSchema` in `packages/core/src/tools/shared.ts`, and its line
+  of text is `delistingText` beside it, so both tools say the same.
 - **The repo and what GitHub showed come from the reason.**
   `issue_syncs.delisted` keeps the sync's reason, which the sync writes
   from `delistedReason` in `packages/core/src/issues.ts`, and
@@ -1867,7 +1869,7 @@ under The projects list and The project page.
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
 | `src/project/rules.ts` | A project's settings as split badges |
-| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims. `delistingOf`, why the sync delisted a project that could have a page, which `hasPage` reads the mark through, and `readDelisting`, which reads the mark and the do-not-list for it, for `project_status` and `admin_pause_project` |
+| `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims. `readDelisting`, why the sync delisted a project that could have a page, from its mark and the do-not-list, for `project_status` and `admin_pause_project`, through `delistingOf`, which `hasPage` reads the mark through too |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |

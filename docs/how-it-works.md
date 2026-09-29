@@ -1051,7 +1051,8 @@ a project is `not_found`.
   can lift that pause.
 - The sync reads no repo of a project whose repo or issue repo is on the
   do-not-list, so its mark stays, and the page stays gone while the repo
-  is on the list. The text says that in place of the page coming back.
+  is on the list. For such a project, the text says the page stays gone
+  while the repo is on the list.
 - A pending or rejected project has no page anyway, and the sync doesn't
   read its repos, so its answer shows no delisting.
 - The answer reads the mark after a refresh, which reads the repos first,

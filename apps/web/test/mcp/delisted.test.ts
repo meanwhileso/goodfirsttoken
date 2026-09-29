@@ -293,6 +293,37 @@ describe('a project the sync delisted while it was approved', () => {
     },
   );
 
+  test.each([
+    {
+      delisted: 'for its issue repo',
+      settings: ISSUES_IN_DESKTOP,
+      arrange: () => {
+        sampleRepo(DESKTOP).private = true;
+      },
+    },
+    {
+      delisted: 'for its archived code repo',
+      settings: { tags: ['help wanted'] },
+      arrange: () => {
+        sampleRepo(APP).archived = true;
+      },
+    },
+  ])(
+    'a caller with no role on a project the sync delisted $delisted is refused with not_maintainer, which names no delisting, since GitHub still shows them the code repo',
+    async ({ settings, arrange }) => {
+      await listedAndRead(settings);
+      arrange();
+      await delistingRun();
+      const donor = await connectAgent(github, 'priya');
+
+      const asked = await call(donor, 'project_status', { repo: APP });
+
+      expect(textOf(asked)).toMatch(/^Refused \(not_maintainer\): /);
+      expect(textOf(asked)).not.toContain('delisted');
+      expect(asked.structuredContent).toBeUndefined();
+    },
+  );
+
   test("a caller who isn't a maintainer of a project the sync didn't delist hears nothing of a delisting", async () => {
     await listedAndRead();
     const donor = await connectAgent(github, 'priya');
