@@ -838,7 +838,8 @@ Reopened below.
   is found by the job, or by a read of its issue, under Reopened below.
 - It stops early the way the sync does, under The budget in
   [Tagged issues](#tagged-issues), and saves what it read first. With no
-  open PR and no read due, it asks GitHub nothing.
+  open PR, no PR closed in the last 14 days, and no read due, it asks
+  GitHub nothing.
 - When GitHub refuses its query, the job stops, and the next run reads the
   PRs again.
 

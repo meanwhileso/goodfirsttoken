@@ -2415,9 +2415,11 @@ read-only service token. The rules are in
   `recordEnd`, the job's one way to record a PR's end, so it is announced,
   counted, and offered like any merge. The cost: a run makes one more query
   for each 50 PRs past a multiple of 50 in the two lists together, at one
-  point each, and the closed PRs come last, so a run that has to stop cuts
-  them first. At 50 closes a day, the 700 PRs of the 14 days take 14
-  queries, about 14 points, of the job's 100 calls.
+  point each. The closed PRs come after the open ones, so a run that has to
+  stop cuts them before any open PR, and the reads of issues due again come
+  after both, so it cuts those first, which takes thousands of PRs within
+  the job's 100 calls. At 50 closes a day, the 700 PRs of the 14 days take
+  14 queries, about 14 points, of the job's 100 calls.
 - **Reading an issue again** when a claim's PR closed without merging is
   `rereadIssue` in `src/sync/issues.ts`, which the PR job calls with its own
   `ServiceGitHub`, so its calls count in the job's run: one REST read of

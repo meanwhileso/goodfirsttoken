@@ -401,6 +401,24 @@ describe('a PR closed without merging', () => {
     expect(github.calls.map((call) => call.operation)).toEqual(state === 'open' ? ['GET /rate_limit', 'query repository'] : []);
   });
 
+  test.each([
+    ['exactly 14 days', 0, 'open'],
+    ['14 days and 1 ms', 1, 'closed'],
+  ])('a PR recorded closed %s before a run is read by that run only up to the end of the 14th day', async (_, extra, state) => {
+    const { claim, pr } = await claimWithPr();
+    github.closePullRequest(APP, pr.number, BY);
+    later();
+    await follow();
+    const closedAt = (await getPr(db, claim.id))?.closedAt;
+    expect(closedAt).toEqual(expect.any(Number));
+    github.reopenPullRequest(APP, pr.number, BY);
+    vi.setSystemTime(Number(closedAt) + 14 * DAY + extra);
+
+    await follow();
+
+    expect(await getPr(db, claim.id)).toMatchObject({ state });
+  });
+
   test("the PRs the job recorded closed ride in the same query as the open ones, with their state alone", async () => {
     const closed = await claimWithPr();
     await claimWithPr();
