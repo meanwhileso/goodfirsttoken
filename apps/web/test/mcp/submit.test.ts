@@ -241,6 +241,8 @@ function filesAt(repo: string, ref: string): Map<string, string> {
     const tree = github.state.objects[oid];
     if (tree?.type !== 'tree') throw new Error(`the fake has no tree ${oid}`);
     for (const entry of tree.entries) {
+      // A submodule's commit is in another repo.
+      if (entry.type === 'commit') continue;
       const object = github.state.objects[entry.oid];
       if (object?.type === 'blob') files.set(`${prefix}${entry.name}`, decode(object.base64));
       else walk(entry.oid, `${prefix}${entry.name}/`);
@@ -703,13 +705,14 @@ describe('when GitHub says no', () => {
 describe('workflow files', () => {
   test('a change under .github/workflows/ goes to review even in automatic mode, and so does one spelled in another case', async () => {
     await project(APP, automatic);
-    github.commitFiles(APP, { '.github/workflows/ci.yml': 'name: CI\non: [pull_request]\n' }, BY);
     const [first, second] = [await tagged(APP), await tagged(APP)];
     repoState(APP).collaborators.kenji = 'write';
     const kenji = await donor('kenji');
     const sam = await donor('sam');
-    const kenjiClaim = await claim(kenji, first);
+    // sam's start commit has no .github folder, so .GitHub is a new name there.
     const samClaim = await claim(sam, second);
+    github.commitFiles(APP, { '.github/workflows/ci.yml': 'name: CI\non: [pull_request]\n' }, BY);
+    const kenjiClaim = await claim(kenji, first);
     // The maintainers change the workflow after the claim. kenji's work
     // takes the same file, which GitHub lets a token without the workflow
     // scope commit, since main has it.
@@ -894,6 +897,73 @@ describe('what a submit commits', () => {
     };
     expect(modes('bin')).toEqual({ 'run.sh': '100755', latest: '120000' });
     expect(modes('vendor')).toEqual({ lib: '160000' });
+  });
+
+  test('a path under a symbolic link, a submodule, or a file, a folder sent as a file, and a name that differs only in case are refused', async () => {
+    await project(APP, reviewed);
+    github.commitFiles(
+      APP,
+      { 'docs-link': 'docs', 'vendor/lib': 'c'.repeat(40), 'bin/run.sh': 'echo run\n', 'notes/caf\u00e9.md': 'Notes.\n' },
+      BY,
+      { modes: { 'docs-link': '120000', 'vendor/lib': '160000' } },
+    );
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    const branch = branchOf(issue, claimId);
+
+    const tries: [Record<string, string | null>, string, string][] = [
+      [{ 'docs-link/new.md': 'x\n' }, 'file_mode', "docs-link is a symbolic link in the start commit, so docs-link/new.md can't go under it"],
+      [{ 'vendor/lib/new.txt': 'x\n' }, 'file_mode', "vendor/lib is a submodule in the start commit, so vendor/lib/new.txt can't go under it"],
+      [{ 'README.md/new.md': 'x\n' }, 'path_conflict', "README.md is a file in the start commit, so README.md/new.md can't go under it"],
+      [{ src: 'x\n' }, 'path_conflict', 'src is a folder in the start commit, and submit_work takes files'],
+      [{ src: null }, 'path_conflict', 'src is a folder in the start commit, and submit_work takes files'],
+      [{ 'bin/RUN.sh': 'echo walk\n' }, 'path_conflict', 'bin/RUN.sh differs only in case or accents from bin/run.sh in the start commit'],
+      [{ 'Bin/walk.sh': 'echo walk\n' }, 'path_conflict', 'Bin differs only in case or accents from bin in the start commit'],
+      [{ 'notes/cafe\u0301.md': 'x\n' }, 'path_conflict', 'differs only in case or accents from notes/caf\u00e9.md'],
+    ];
+    for (const [files, code, says] of tries) {
+      const refused = await submit(priya, claimId, { 'ok.txt': 'ok\n', ...files });
+      expect(refusalOf(refused), says).toBe(code);
+      expect(textOf(refused)).toContain(says);
+      expect(writes(lastCalls()).filter((w) => !w.endsWith('/forks'))).toEqual([]);
+    }
+    expect(repoState('priya/sample-app').branches[branch]).toBeUndefined();
+
+    // The same names as the branch has, and new paths in new folders, go through.
+    const taken = await submit(priya, claimId, { 'bin/run.sh': 'echo walk\n', 'docs/new/deep/a.md': 'a\n', 'notes/caf\u00e9.md': 'More.\n' });
+    expect(taken.isError).toBeFalsy();
+    expect(filesAt('priya/sample-app', branch).get('docs/new/deep/a.md')).toBe('a\n');
+  });
+
+  test('a mode GitHub gives as its digits read in decimal is caught too', async () => {
+    await project(APP, reviewed);
+    github.commitFiles(APP, { 'bin/run.sh': 'echo run\n', 'docs-link': 'docs' }, BY, {
+      modes: { 'bin/run.sh': '100755', 'docs-link': '120000' },
+    });
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    // GitHub's docs don't say how it writes a mode. Here it gives 100755, not 33261.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the writer as this
+    const entries = DonorWriter.prototype.entries;
+    const decimal = <T extends { mode: number } | null>(entry: T): T => (entry === null ? entry : { ...entry, mode: Number(entry.mode.toString(8)) });
+    vi.spyOn(DonorWriter.prototype, 'entries').mockImplementation(async function (this: DonorWriter, repo, rev, paths) {
+      const found = await entries.call(this, repo, rev, paths);
+      return new Map(
+        [...found].map(([path, facts]) => [
+          path,
+          { ...facts, entry: decimal(facts.entry), under: facts.under && { ...facts.under, entry: decimal(facts.under.entry) } },
+        ]),
+      );
+    });
+
+    const executable = await submit(priya, claimId, { 'bin/run.sh': 'echo walk\n' });
+    const linked = await submit(priya, claimId, { 'docs-link/new.md': 'x\n' });
+
+    expect([executable, linked].map(refusalOf)).toEqual(['file_mode', 'file_mode']);
+    expect(textOf(executable)).toContain('bin/run.sh is an executable file');
+    expect(textOf(linked)).toContain('docs-link is a symbolic link');
   });
 
   test('putting back a file whose mode a commit would lose is refused', async () => {

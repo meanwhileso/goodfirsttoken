@@ -32,14 +32,35 @@ export interface Entry {
   file: boolean;
   /** The size in bytes of a file or a symbolic link, as GitHub gives it. */
   byteSize: number | null;
-  /** The mode Git keeps it with, like 0o100644 for a file, 0o100755 for an executable one, or 0o40000 for a folder. */
+  /**
+   * The mode GitHub gives the entry. Its docs call it the entry's file mode,
+   * an Int, and don't say how it is written: as the number the octal mode
+   * reads as, like 33188 for 100644, or as those digits in decimal.
+   */
   mode: number;
 }
 
-/** The folder a path is in, as an expression's path: empty for the root. */
-function folderOf(path: string): string {
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? '' : path.slice(0, slash);
+/** What a path is at a commit, found by reading each folder on the way to it from the root. */
+export interface PathFacts {
+  /** What is at the path, or null for nothing. */
+  entry: Entry | null;
+  /**
+   * A part of the path, as a path, that is at the commit and isn't a folder,
+   * though the path goes on under it: a file, a symbolic link, or a
+   * submodule. Null when there is none.
+   */
+  under: { path: string; entry: Entry } | null;
+  /**
+   * Where the path isn't at the commit, a path there that differs from it,
+   * or from a folder on the way to it, only in case or in how an accent is
+   * written, as `{ path, twin }` with the part of the path that differs.
+   */
+  twin: { path: string; twin: string } | null;
+}
+
+/** A name as filesystems that ignore case and accent forms compare it. */
+function folded(name: string): string {
+  return name.normalize('NFC').toLowerCase();
 }
 
 /** An addition for createCommitOnBranch: a path and its content in base64. */
@@ -154,34 +175,51 @@ export class DonorWriter {
   }
 
   /**
-   * What each path is at a commit, with its mode, or null for nothing. Each
-   * is read from its folder's entries, which carry the modes. The paths go
-   * in as GraphQL variables, so a path never becomes part of the query.
+   * What each path is at a commit, with its mode. Each folder on the way to
+   * a path is read, one level at a time from the root, and a level only
+   * reads the folders the level above has, so the reads follow the repo's
+   * own folders, whatever the paths. The folders go in as GraphQL
+   * variables, so a path never becomes part of the query.
    */
-  async entries(repo: string, rev: string, paths: readonly string[]): Promise<Map<string, Entry | null>> {
-    const folders = [...new Set(paths.map(folderOf))];
+  async entries(repo: string, rev: string, paths: readonly string[]): Promise<Map<string, PathFacts>> {
+    const partsOf = paths.map((path) => path.split('/'));
+    // Each folder read, by path, with its entries by name.
     const listed = new Map<string, Map<string, Entry>>();
-    for (let start = 0; start < folders.length; start += ENTRY_CHUNK) {
-      const chunk = folders.slice(start, start + ENTRY_CHUNK);
-      const answers = await this.objects<FolderAnswer>(
-        repo,
-        chunk.map((folder) => `${rev}:${folder}`),
-        '... on Tree { entries { name type mode oid size } }',
-      );
-      chunk.forEach((folder, i) => {
-        const entries = answers[i]?.entries ?? [];
-        listed.set(
-          folder,
-          new Map(
-            entries.map((entry) => [
-              entry.name,
-              { oid: entry.oid, file: entry.type !== 'tree', byteSize: entry.type === 'blob' ? entry.size : null, mode: entry.mode },
-            ]),
-          ),
+    for (let depth = 0; ; depth++) {
+      const wanted = new Set<string>();
+      for (const parts of partsOf) {
+        if (depth >= parts.length) continue;
+        if (depth > 0) {
+          const parent = listed.get(parts.slice(0, depth - 1).join('/'));
+          const entry = parent?.get(parts[depth - 1] ?? '');
+          if (entry === undefined || entry.file) continue;
+        }
+        wanted.add(parts.slice(0, depth).join('/'));
+      }
+      if (wanted.size === 0) break;
+      const folders = [...wanted];
+      for (let start = 0; start < folders.length; start += ENTRY_CHUNK) {
+        const chunk = folders.slice(start, start + ENTRY_CHUNK);
+        const answers = await this.objects<FolderAnswer>(
+          repo,
+          chunk.map((folder) => `${rev}:${folder}`),
+          '... on Tree { entries { name type mode oid size } }',
         );
-      });
+        chunk.forEach((folder, i) => {
+          const entries = answers[i]?.entries ?? [];
+          listed.set(
+            folder,
+            new Map(
+              entries.map((entry) => [
+                entry.name,
+                { oid: entry.oid, file: entry.type !== 'tree', byteSize: entry.type === 'blob' ? entry.size : null, mode: entry.mode },
+              ]),
+            ),
+          );
+        });
+      }
     }
-    return new Map(paths.map((path) => [path, listed.get(folderOf(path))?.get(path.slice(path.lastIndexOf('/') + 1)) ?? null]));
+    return new Map(paths.map((path, i) => [path, factsOf(listed, partsOf[i] ?? [])]));
   }
 
   /** The text of each file at a commit, or null for one GitHub gave no whole text for. */
@@ -358,6 +396,24 @@ export class DonorWriter {
       throw refusedBy(error, `to open the PR in ${repo}`);
     }
   }
+}
+
+/** What a path is, from the folders read on the way to it. */
+function factsOf(listed: ReadonlyMap<string, ReadonlyMap<string, Entry>>, parts: readonly string[]): PathFacts {
+  for (let i = 0; i < parts.length; i++) {
+    const folder = parts.slice(0, i).join('/');
+    const here = parts.slice(0, i + 1).join('/');
+    const name = parts[i] ?? '';
+    const listing = listed.get(folder) ?? new Map<string, Entry>();
+    const entry = listing.get(name);
+    if (entry === undefined) {
+      const twin = [...listing.keys()].find((other) => folded(other) === folded(name));
+      return { entry: null, under: null, twin: twin === undefined ? null : { path: here, twin: folder === '' ? twin : `${folder}/${twin}` } };
+    }
+    if (i === parts.length - 1) return { entry, under: null, twin: null };
+    if (entry.file) return { entry: null, under: { path: here, entry }, twin: null };
+  }
+  return { entry: null, under: null, twin: null };
 }
 
 function prRef(repo: string, pull: { number?: unknown; html_url?: unknown }): PrRef {

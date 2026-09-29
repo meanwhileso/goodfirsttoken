@@ -486,6 +486,7 @@ export const submitWork = defineTool({
     'issue_not_eligible',
     'no_changes',
     'file_mode',
+    'path_conflict',
     'fork_not_ready',
     'branch_moved',
     'github_refused',

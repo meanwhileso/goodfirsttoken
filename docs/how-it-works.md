@@ -1785,6 +1785,15 @@ never reaches the tool.
   too, and so is putting one back. A file sent with the text it has
   changes nothing, so it goes through. The donor changes such a file with
   Git themselves.
+- Every folder on the way to a path is read too. A path under a symbolic
+  link or a submodule is refused with `file_mode`, since the commit would
+  turn the link or the submodule into a folder. A path under a file is
+  refused with `path_conflict`, and so is a path that is a folder, sent
+  with text or deleted, and a new path that differs from one the branch
+  has, or from a folder on the way to it, only in case or in how an accent
+  is written, like `bin/RUN.sh` beside `bin/run.sh`. macOS and Windows
+  take the two as one name, which breaks a checkout there. Each refusal
+  names the path, and nothing is committed.
 - The commit is one call to GitHub's GraphQL `createCommitOnBranch` with
   the donor's token. GitHub makes the donor its author, commits it as
   GitHub, and signs it. Its first line is the title the agent gave, or else
@@ -2061,7 +2070,8 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`,
 `not_vouched`, `pr_closed`, `description_required`, `no_changes`,
-`file_mode`, `fork_not_ready`, `branch_moved`, and `github_refused`.
+`file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, and
+`github_refused`.
 
 Each maintainer's and admin's tool, and the donor's `submit_work` and
 `open_pr`, lists the refusals an agent can get from it, in its spec in
@@ -2081,7 +2091,7 @@ tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
-| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `fork_not_ready`, `branch_moved`, `github_refused` |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
@@ -2117,7 +2127,8 @@ tool say what to do with each one on its list, under
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit |
-| `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, so nothing was committed |
+| `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, or add a path under a link or a submodule, so nothing was committed |
+| `path_conflict` | A submitted path is a folder, goes under a file, or differs only in case or accents from a path the branch has, so nothing was committed |
 | `fork_not_ready` | GitHub was still making the donor's fork, so nothing was committed. The same submit works once it is done |
 | `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, or there is no branch for `onto` to name, or the files would undo the push `onto` builds on, so nothing was committed. The refusal names the head to build on, or the files |
 | `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow |

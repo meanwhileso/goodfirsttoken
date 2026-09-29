@@ -43,6 +43,7 @@ import {
   textBase64,
   type Addition,
   type Entry,
+  type PathFacts,
 } from '../donor/writes';
 import { issueRoom } from '../rooms/issue-room';
 import {
@@ -163,12 +164,17 @@ interface Change {
 /**
  * What a mode other than a plain file's makes a path. createCommitOnBranch
  * writes every file as a plain file, 100644, so a change to one of these
- * would lose what it is.
+ * would lose what it is. Each is known by the number its octal mode reads
+ * as, and by its digits read in decimal, since GitHub doesn't say which it
+ * gives.
  */
 const KEPT_MODES = new Map<number, string>([
   [0o100755, 'an executable file'],
+  [100755, 'an executable file'],
   [0o120000, 'a symbolic link'],
+  [120000, 'a symbolic link'],
   [0o160000, 'a submodule'],
+  [160000, 'a submodule'],
 ]);
 
 /** The refusal for a change to a path whose mode a commit would lose, or null. `where` is where the entry is. */
@@ -179,6 +185,38 @@ function modeRefusal(path: string, entry: Entry | null, where: string): Refusal 
     'file_mode',
     `${path} is ${kind} in ${where}, and submit_work changes only plain files, so nothing was committed. Tell the donor, who can change it with Git themselves, and submit the rest without it.`,
   );
+}
+
+/**
+ * The refusal for a path the commit can't write as a plain file, whatever
+ * its text, or null: one under a file, a symbolic link, or a submodule, a
+ * folder, or a new path that differs from one there only in case or
+ * accents. `adding` is true when the path would get text.
+ */
+function pathRefusal(path: string, facts: PathFacts | undefined, where: string, adding: boolean): Refusal | null {
+  if (facts === undefined) return null;
+  const { under, entry, twin } = facts;
+  if (under !== null && adding) {
+    const kept = KEPT_MODES.get(under.entry.mode);
+    const kind = kept === undefined || kept === 'an executable file' ? 'a file' : kept;
+    return refusal(
+      kind === 'a file' ? 'path_conflict' : 'file_mode',
+      `${under.path} is ${kind} in ${where}, so ${path} can't go under it, and nothing was committed. Send ${path} somewhere else, or leave it out.`,
+    );
+  }
+  if (entry !== null && !entry.file) {
+    return refusal(
+      'path_conflict',
+      `${path} is a folder in ${where}, and submit_work takes files, so nothing was committed. Send each file under it that changed, by its own path.`,
+    );
+  }
+  if (twin !== null && entry === null && adding) {
+    return refusal(
+      'path_conflict',
+      `${twin.path} differs only in case or accents from ${twin.twin} in ${where}, and on macOS and Windows the two are one name, which breaks a checkout there, so nothing was committed. Use ${twin.twin}, or another name.`,
+    );
+  }
+  return null;
 }
 
 /**
@@ -199,11 +237,16 @@ async function planChange(
   /** The branch before a push that `at` holds and onto built on, or null. */
   pushedOver: { repo: string; rev: string } | null = null,
 ): Promise<Change | Refusal> {
-  const entries = await writer.entries(at.repo, at.rev, [...files.map((file) => file.path), ...putBack]);
+  const facts = await writer.entries(at.repo, at.rev, [...files.map((file) => file.path), ...putBack]);
+  for (const file of files) {
+    const blocked = pathRefusal(file.path, facts.get(file.path), at.where, file.content !== null);
+    if (blocked) return blocked;
+  }
   if (pushedOver !== null) {
-    const undone = await undoingPush(writer, pushedOver, entries, files);
+    const undone = await undoingPush(writer, pushedOver, facts, files);
     if (undone.length > 0) return undoesPush(at.where, at.rev, undone);
   }
+  const entries = new Map([...facts].map(([path, found]) => [path, found.entry]));
   // A file whose text may be the one submitted: one of the same size.
   const sameSize = files.filter((file) => {
     const entry = entries.get(file.path);
@@ -224,9 +267,12 @@ async function planChange(
     const atBase = await writer.entries(base.repo, base.rev, putBack);
     for (const path of putBack) {
       const now = entries.get(path) ?? null;
-      const was = atBase.get(path) ?? null;
+      const was = atBase.get(path)?.entry ?? null;
       if (was?.oid === now?.oid) continue;
-      const kept = modeRefusal(path, now, at.where) ?? modeRefusal(path, was, base.where);
+      const kept =
+        pathRefusal(path, facts.get(path), at.where, was?.file === true) ??
+        modeRefusal(path, now, at.where) ??
+        modeRefusal(path, was, base.where);
       if (kept) return kept;
       if (was?.file === true) change.additions.push({ path, contents: await writer.blob(base.repo, was.oid) });
       else if (now?.file === true) change.deletions.push(path);
@@ -244,14 +290,14 @@ async function planChange(
 async function undoingPush(
   writer: DonorWriter,
   before: { repo: string; rev: string },
-  now: Map<string, Entry | null>,
+  now: Map<string, PathFacts>,
   files: readonly { path: string; content: string | null }[],
 ): Promise<string[]> {
   const was = await writer.entries(before.repo, before.rev, files.map((file) => file.path));
-  const pushed = files.filter((file) => (was.get(file.path)?.oid ?? null) !== (now.get(file.path)?.oid ?? null));
-  const undone = pushed.filter((file) => file.content === null && (was.get(file.path) ?? null) === null).map((file) => file.path);
+  const pushed = files.filter((file) => (was.get(file.path)?.entry?.oid ?? null) !== (now.get(file.path)?.entry?.oid ?? null));
+  const undone = pushed.filter((file) => file.content === null && (was.get(file.path)?.entry ?? null) === null).map((file) => file.path);
   const sameSize = pushed.filter((file) => {
-    const entry = was.get(file.path);
+    const entry = was.get(file.path)?.entry;
     return file.content !== null && entry?.file === true && entry.byteSize === utf8Length(file.content);
   });
   if (sameSize.length > 0) {

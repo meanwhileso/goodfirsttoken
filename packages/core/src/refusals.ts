@@ -37,8 +37,12 @@ export const refusalCodes = [
   // commit would undo their work.
   'branch_moved',
   // The submit changes an executable file, a symbolic link, or a submodule,
-  // which a commit through GitHub's API would make a plain file.
+  // or a path under a link or a submodule, which a commit through GitHub's
+  // API would make a plain file or a folder.
   'file_mode',
+  // A submitted path is a folder, goes under a file, or differs only in
+  // case or accents from a path the branch has.
+  'path_conflict',
   // GitHub refused a write the server made with the donor's token: the fork,
   // the branch, the commit, or the PR.
   'github_refused',
