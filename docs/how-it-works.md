@@ -1906,30 +1906,6 @@ the donor is blocked or the project isn't open, and then nothing about it
 is read from GitHub, or the issue fails the check `open_pr` makes on
 GitHub.
 
-**Where the spec needs to change.** These choices differ from spec section
-7, or go past it, and the spec needs a change to match them.
-
-- A change to a workflow file almost never lands. The spec sends work that
-  touches CI workflow files to the review queue. GitHub takes such a change
-  only from a token with the `workflow` scope, which Good First Token
-  doesn't ask for, unless the same file is on another branch of the repo.
-  So nearly every such submit is refused with `github_refused`, and the
-  donor makes the change on GitHub themselves.
-- `submit_work` and `open_pr` check the issue on GitHub again, and refuse
-  one that fails with `issue_not_eligible`. The spec asks for the check
-  before a PR opens, and doesn't say what happens when it fails. The review
-  queue would only hold work that `open_pr` then refuses, so the submit is
-  refused, and the donor releases the claim. The spec's rule of no
-  assignee is for claiming, and here the donor may be the assignee, since
-  maintainers often assign the person working on an issue. A claim whose
-  PR is open skips the check.
-- A submit stops at a push by someone else to the claim's branch, with
-  `branch_moved`, and goes on only with `onto`, the head the agent
-  brought its work onto. The spec says fixes go onto the same branch, and
-  doesn't say what happens to commits maintainers or reviewers add there.
-  A commit through GitHub's API sets the whole file, so without the stop a
-  submit would undo theirs.
-
 ## Crawl candidates
 
 A candidate is a repo the crawler found whose own docs welcome AI help. Nothing
