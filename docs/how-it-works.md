@@ -7,8 +7,9 @@ plan is built, its rules move here in the same pull request.
 Nothing is live yet. The site serves the homepage, the projects list, each
 project's page, each issue's page, sign-in with GitHub, the MCP server's
 sign-in for agents with the donor's tools, the maintainer's tools, and the
-admins' tools, the admin pages, the design system at `/design`, and the
-live feeds as text streams and sockets. It reads tagged issues and PRs from
+admins' tools, with views for hosts that support MCP Apps, the admin pages,
+the design system at `/design`, and the live feeds as text streams and
+sockets. It reads tagged issues and PRs from
 GitHub on a schedule, and looks for projects whose docs welcome AI help,
 while the build goes on in the open.
 
@@ -2464,7 +2465,9 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
 - A result has the shape of MCP's `CallToolResult`: the data in
   `structuredContent`, and a plain-text rendering of it as the one `text`
   item in `content`. Terminal harnesses show only the text, so it stands on
-  its own.
+  its own. Hosts that support MCP Apps show three tools' answers as views,
+  drawn from the same data, under
+  [Views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 - Every ID a later call needs, a session, claim, or queue item, appears in
   the text as well as the data.
 - Every tool's input and output is a JSON Schema object, which MCP needs to
@@ -2630,6 +2633,97 @@ tool say what to do with each one on its list, under
 | `not_admin` | The caller isn't a Good First Token admin |
 | `not_found` | The claim, issue, project, session, queue item, or person to block doesn't exist, the queue item no longer waits, or no pick is left in the session's queue |
 | `invalid_input` | A malformed claim, event, or time reached the claim state machine, a malformed argument reached an issue room, or a rejection came with no reason |
+
+## Views in MCP Apps hosts
+
+Hosts that support MCP Apps, the MCP extension `io.modelcontextprotocol/ui`,
+show three of the donor's tools as views in the chat: `suggest_issues` as
+issue cards with a Pick button, `claim_issue` as the live feed, and
+`my_work` as the review queue with an Open PR button. A host without MCP
+Apps shows each tool's text, as a terminal harness does.
+
+**What every agent gets**
+
+- The MCP server serves each view as a `ui://` resource of the type
+  `text/html;profile=mcp-app`: `ui://goodfirsttoken/issue-cards.html`,
+  `ui://goodfirsttoken/live-feed.html`, and
+  `ui://goodfirsttoken/review-queue.html`. It lists all three.
+- Each of the three tools names its view in its `_meta`, as
+  `ui.resourceUri`, and as `ui/resourceUri`, the key hosts read before the
+  extension's spec moved it. No other tool names one.
+- The server gives every agent the resources and the `_meta`, since it
+  can't tell which hosts show views. A host without MCP Apps reads neither.
+  Each tool keeps its name, description, input, and output, and each answer
+  is its text and its data, as before, with nothing added to it.
+
+**What a view is**
+
+- A view is one HTML page with its script and its styles in it. It loads
+  nothing else, no script, style, font, or image from anywhere, so it uses
+  the system's fonts.
+- Each view says what it may reach, in its resource's `_meta.ui.csp`, when
+  listed and when read. The issue cards and the live feed may reach one
+  origin, over a WebSocket: the site's own, the one the tools' answers name
+  the live pages on. The review queue reaches none. A view asks the host for
+  no border, since it draws its own card.
+- A view draws the answer from its structured content, the data the tool's
+  text is written from, so the two say the same thing. An answer with no
+  data shows its text, and a refusal shows its own text.
+- Text from GitHub and from other people shows as the characters it is:
+  an issue's title, a label, a login, a posted line, a summary. A view
+  renders no HTML or Markdown from it.
+- A view calls tools only through its host, which calls the MCP server with
+  the donor's own agent. It holds no token and reaches no API. The server's
+  checks are the only checks, as for any call.
+- A link opens through the host.
+- A view is light or dark as the host says, or as the person's system says
+  when the host doesn't. Dark takes the colors of the prompt box, the one
+  dark surface in the design system.
+- A view tells the host its size each time it changes, so the frame fits
+  it.
+
+**The issue cards**
+
+- Each card shows a suggestion's issue, title, tag, slots, who holds it,
+  the tough badge, and the PR mode, with Read it and Pick. With no
+  suggestion, the view shows the tool's text.
+- A project with a CLA shows its link and a box to tick that the donor
+  signed it. Pick sends the link as `claConfirmed` only with the box
+  ticked.
+- Pick calls `claim_issue` with the issue and the session from the call's
+  input. While the claim is on its way, every Pick waits. A refusal shows
+  its text under the card, and every Pick works again.
+- A claim turns the card into the claim, with its issue's live lines under
+  it, as the live feed shows them, and the other cards take no Pick. The
+  view then puts a message from the donor in the conversation, which tells
+  the agent the issue and the claim, and to call `claim_issue` with them,
+  which gives back that claim, resumed. When the host won't take the
+  message, the card says to tell the agent.
+
+**The live feed**
+
+- It shows the claim: made or resumed, the slots taken, when it expires,
+  the queued picks passed over, and the picks still waiting.
+- Under it are the issue's newest 20 lines, newest first, from the issue's
+  [live socket](#live-sockets), with each line's time, login, agent, and
+  job. The view follows the socket as a page does, and reconnects after a
+  drop the same way. With none yet, it says `No lines yet.`
+
+**The review queue**
+
+- Each piece of work waiting to open as a PR shows its issue, claim, the
+  lines it adds and removes, its agent and model, when it expires, its
+  summary and what was checked, a link to its diff, and an Open PR button.
+  It names a PR already open on the issue.
+- For a project that wants a person-written description, it has a box for
+  the donor's words, which starts empty. Open PR sends them word for word.
+- Work whose PR can't open now says why, and its button is off.
+- Open PR calls `open_pr` with the claim. A refusal shows its text, and the
+  button works again. An opened PR shows its link, and the view tells the
+  agent what opened, for its next turn.
+- The follow-ups come before that work, and the claims in progress after
+  it, as `my_work` lists them. With nothing at all, the view shows the
+  tool's text.
 
 ## Feed events
 
@@ -2814,7 +2908,8 @@ A page follows a feed over a WebSocket, opened on the `.ndjson` form of its
 `/<owner>/<repo>/issues/<n>/live.ndjson`, or `/@<user>/live.ndjson`, with a
 `GET` that asks for a WebSocket upgrade. The homepage uses `/live.ndjson`,
 a [project's page](#the-project-page) uses its project's, and an
-[issue's page](#the-issue-page) uses its issue's.
+[issue's page](#the-issue-page) uses its issue's, as do the live lines in
+the [views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 
 - The socket is the feed's or the room's own watcher, as under
   [Live feeds](#live-feeds) and [the issue room](#the-issue-room). Each

@@ -429,25 +429,8 @@ dialog.confirm::backdrop { background: rgba(14, 17, 22, 0.35); }
 .table td { padding: 14px 14px 14px 0; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 .table .n { text-align: right; font-family: var(--font-mono); }
 
-/* ---------- Windows (agent views and video) ---------- */
+/* ---------- Video ---------- */
 
-.window { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow-window); overflow: hidden; }
-.window__bar { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--paper); }
-.window__bar i { width: 11px; height: 11px; border-radius: 99px; background: var(--line); }
-.window__title { flex: 1; text-align: center; font: 13px var(--font-mono); color: var(--text-muted); }
-.term { padding: 22px 26px; font: 15px/1.6 var(--font-mono); display: flex; flex-direction: column; gap: 4px; min-height: 600px; color: var(--text-body); white-space: pre-wrap; overflow-wrap: anywhere; }
-.term .you { color: var(--ink); }
-.term .you::before { content: '\203A  '; color: var(--label-ink); }
-.term .sys { color: var(--text-muted); }
-.term .ok { color: var(--merged); }
-@media (max-width: 720px) { .term { padding: 16px; font-size: 13px; min-height: 460px; } }
-.chat { padding: 24px; display: flex; flex-direction: column; gap: 16px; background: var(--paper); min-height: 600px; }
-.bubble { align-self: flex-end; max-width: 80%; padding: 12px 16px; border-radius: 18px; background: var(--line-soft); font-size: 15px; }
-.app-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; max-width: 760px; }
-.app-card__head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-size: 14px; color: var(--text-muted); }
-.pick { padding: 16px; border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; }
-.pick:last-child { border-bottom: 0; }
-.pick[data-picked="true"] { background: var(--label-tint); }
 .video { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--shadow-window); }
 
 /* ---------- Footer ---------- */

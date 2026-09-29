@@ -115,7 +115,7 @@ class MemoryOAuthClient implements OAuthClientProvider {
  * its own. The site counts its sign-in limit by client address, so the run's
  * sign-ins never use up anyone else's.
  */
-function runAddress(): string {
+export function runAddress(): string {
   const [a = '0', b = '0'] = [randomBytes(2), randomBytes(2)].map((bytes) => bytes.toString('hex'));
   return `2001:db8:${a}:${b}::1`;
 }
@@ -186,7 +186,7 @@ async function approveAgent(site: string, address: string, authorizationUrl: URL
 }
 
 /** Connects a new agent for `login`: the SDK meets the 401, registers, and sends the person to approve it. */
-async function connectAgent(site: string, address: string, login: string): Promise<Client> {
+export async function connectAgent(site: string, address: string, login: string): Promise<Client> {
   const mcpUrl = new URL('/mcp', site);
   const oauth = new MemoryOAuthClient(`Good First Token skill run (${login})`);
   const transport = () =>

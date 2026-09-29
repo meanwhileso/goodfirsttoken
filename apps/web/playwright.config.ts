@@ -23,7 +23,11 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(issue|projects|admin|skills)\.spec\.ts$/ },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: /(issue|projects|admin|skills|mcp-apps-flow)\.spec\.ts$/,
+    },
     // The issue page's tests work real issue rooms, and every event they
     // make reaches the homepage's feed. The projects' tests do too, and seed
     // the sample projects, which the homepage lists. So they run once the
@@ -41,6 +45,10 @@ export default defineConfig({
     // queue, which the admin pages' tests expect to hold only what they
     // seeded. So they run after those.
     { name: 'skills', use: { ...devices['Desktop Chrome'] }, testMatch: /skills\.spec\.ts$/, dependencies: ['admin'] },
+    // A donor's agent in a host with MCP Apps claims a sample issue and
+    // opens a PR on it, which the homepage and the admin pages would show,
+    // so it runs last.
+    { name: 'apps', use: { ...devices['Desktop Chrome'] }, testMatch: /mcp-apps-flow\.spec\.ts$/, dependencies: ['skills'] },
   ],
   webServer: [
     {
