@@ -58,6 +58,7 @@ interface Actor {
 
 interface ReviewComment {
   id: string;
+  authorAssociation?: string;
   body: string;
   path: string;
   url: string;
@@ -67,6 +68,7 @@ interface ReviewComment {
 
 interface Review {
   id: string;
+  authorAssociation?: string;
   state: string;
   body: string;
   url: string;
@@ -92,9 +94,9 @@ const PULL = `fragment Pull on PullRequest {
   author { __typename login }
   reviews(last: ${String(REVIEWS_READ)}, states: [COMMENTED, CHANGES_REQUESTED, APPROVED]) {
     nodes {
-      id state body url submittedAt
+      id state body url submittedAt authorAssociation
       author { __typename login }
-      comments(first: ${String(COMMENTS_READ)}) { nodes { id body path url createdAt author { __typename login } } }
+      comments(first: ${String(COMMENTS_READ)}) { nodes { id body path url createdAt authorAssociation author { __typename login } } }
     }
   }
 }`;
@@ -126,15 +128,24 @@ function outcomeOf(pull: PullState, now: number): { state: PrState; at: number }
 }
 
 /**
- * The login of a reviewer: someone other than the PR's author, who is the
- * donor, and not a GitHub App's bot. Good First Token posts on GitHub only
- * as the donor, with the donor's token, so leaving out the PR's author
- * leaves out its posts too. Null for anyone else, and for an account
- * GitHub no longer has.
+ * How GitHub says a maintainer relates to the repo: its owner, a member of
+ * the organization that owns it, or a collaborator.
+ * https://docs.github.com/en/graphql/reference/enums#commentauthorassociation
  */
-function reviewerOf(author: Actor | null | undefined, prAuthor: string): string | null {
+const MAINTAINERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+/**
+ * The login of a maintainer who reviewed: someone GitHub names the repo's
+ * owner, a member of the organization that owns it, or a collaborator, and
+ * who is neither the PR's author, who is the donor, nor a GitHub App's bot.
+ * Good First Token posts on GitHub only as the donor, with the donor's
+ * token, so leaving out the PR's author leaves out its posts too. Null for
+ * anyone else, and for an account GitHub no longer has.
+ */
+function reviewerOf(author: Actor | null | undefined, association: string | undefined, prAuthor: string): string | null {
   const login = author?.login;
   if (typeof login !== 'string' || author?.__typename === 'Bot' || /\[bot\]$/i.test(login)) return null;
+  if (association === undefined || !MAINTAINERS.has(association)) return null;
   return login.toLowerCase() === prAuthor.toLowerCase() ? null : login;
 }
 
@@ -159,7 +170,7 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
   };
   for (const review of pull.reviews?.nodes ?? []) {
     if (review === null || !['COMMENTED', 'CHANGES_REQUESTED', 'APPROVED'].includes(review.state)) continue;
-    const reviewer = reviewerOf(review.author, prAuthor);
+    const reviewer = reviewerOf(review.author, review.authorAssociation, prAuthor);
     if (reviewer !== null && review.state !== 'APPROVED') {
       add({
         commentId: review.id,
@@ -172,7 +183,7 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
     }
     for (const comment of review.comments?.nodes ?? []) {
       if (comment === null) continue;
-      const commenter = reviewerOf(comment.author, prAuthor);
+      const commenter = reviewerOf(comment.author, comment.authorAssociation, prAuthor);
       if (commenter === null) continue;
       add({
         commentId: comment.id,

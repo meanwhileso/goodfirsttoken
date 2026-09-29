@@ -24,7 +24,7 @@
 
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
 import { base64ToBytes, blobText, bytesToBase64, entryMode, lookupPath, type GitPerson, type Oid } from './git.ts';
-import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
+import { authorAssociation, avatarUrl, nodeId, type Ctx } from './shapes.ts';
 import { own } from './own.ts';
 import {
   FakeError,
@@ -46,6 +46,7 @@ import {
   type LabelRecord,
   type PullData,
   type RepoRecord,
+  reviewVisible,
   type ReviewRecord,
 } from './state.ts';
 
@@ -78,6 +79,17 @@ const schema = buildSchema(/* GraphQL */ `
     OPEN
     CLOSED
     MERGED
+  }
+
+  enum CommentAuthorAssociation {
+    COLLABORATOR
+    CONTRIBUTOR
+    FIRST_TIMER
+    FIRST_TIME_CONTRIBUTOR
+    MANNEQUIN
+    MEMBER
+    NONE
+    OWNER
   }
 
   enum PullRequestReviewState {
@@ -237,6 +249,7 @@ const schema = buildSchema(/* GraphQL */ `
     id: ID!
     databaseId: Int
     author: Actor
+    authorAssociation: CommentAuthorAssociation!
     body: String!
     state: PullRequestReviewState!
     url: URI!
@@ -255,6 +268,7 @@ const schema = buildSchema(/* GraphQL */ `
     id: ID!
     databaseId: Int
     author: Actor
+    authorAssociation: CommentAuthorAssociation!
     body: String!
     path: String!
     url: URI!
@@ -637,10 +651,12 @@ function pullRequestNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull
     baseRefName: issue.pull.base.ref,
     repository: () => repositoryNode(ctx, repo),
     author: () => actorNode(ctx, issue.user),
-    // Oldest first, as GitHub gives them. A pending review is its author's
-    // alone, and the fake keeps none.
+    // Oldest first, as GitHub gives them. A pending review shows only to
+    // its author.
     reviews: (args: PageArgs & { states?: string[] | null }) => {
-      const reviews = issue.pull.reviews.filter((review) => args.states == null || args.states.includes(review.state));
+      const reviews = issue.pull.reviews.filter(
+        (review) => reviewVisible(review, ctx.viewer) && (args.states == null || args.states.includes(review.state)),
+      );
       return pageOf(
         reviews.map((review) => reviewNode(ctx, repo, issue, review)),
         args,
@@ -657,10 +673,11 @@ function reviewNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull: Pul
     id: nodeId('PRR', review.id),
     databaseId: review.id,
     author: () => actorNode(ctx, review.user),
+    authorAssociation: authorAssociation(ctx.state, repo, review.user),
     body: review.body,
     state: review.state,
     url: `${pullUrl}#pullrequestreview-${String(review.id)}`,
-    createdAt: review.submittedAt,
+    createdAt: review.submittedAt ?? issue.updatedAt,
     submittedAt: review.submittedAt,
     comments: (args: PageArgs) =>
       pageOf(
@@ -671,6 +688,7 @@ function reviewNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull: Pul
             id: nodeId('PRRC', comment.id),
             databaseId: comment.id,
             author: () => actorNode(ctx, comment.user),
+            authorAssociation: authorAssociation(ctx.state, repo, comment.user),
             body: comment.body,
             path: comment.path,
             url: `${pullUrl}#discussion_r${String(comment.id)}`,

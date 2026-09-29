@@ -33,6 +33,9 @@ export interface Account {
   type: 'User' | 'Organization' | 'Bot';
   name: string;
   createdAt: string;
+  // An organization's members, by login. GitHub names them MEMBER on the
+  // organization's repos. State saved before the fake kept them has none.
+  members?: string[];
 }
 
 export interface LabelRecord {
@@ -55,14 +58,17 @@ export interface TimelineEvent {
   commitId?: Oid;
 }
 
-export type ReviewState = 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED';
+// A PENDING review is one its author hasn't submitted, which only they see.
+// A DISMISSED one was submitted, then dismissed by a maintainer.
+export type ReviewState = 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'PENDING' | 'DISMISSED';
 
 export interface ReviewRecord {
   id: number;
   user: string;
   state: ReviewState;
   body: string;
-  submittedAt: string;
+  // Null while the review is pending.
+  submittedAt: string | null;
   commitId: Oid;
 }
 
@@ -805,14 +811,29 @@ export interface ReviewInput {
   comments?: { path: string; line: number; body: string }[];
 }
 
+// Whether `viewer` sees the review: everyone sees a submitted one, and
+// only its author a pending one.
+export function reviewVisible(review: ReviewRecord, viewer: string | null): boolean {
+  return review.state !== 'PENDING' || (viewer !== null && key(viewer) === key(review.user));
+}
+
+// A maintainer dismisses a submitted review. It stays on the PR, marked
+// dismissed, with its comments.
+export function dismissReview(repo: RepoRecord, number: number, reviewId: number) {
+  const review = getPull(repo, number).pull.reviews.find((r) => r.id === reviewId);
+  if (!review || review.state === 'PENDING') throw new Error(`#${String(number)} has no submitted review ${String(reviewId)}`);
+  review.state = 'DISMISSED';
+}
+
 export function addReview(state: FakeState, repo: RepoRecord, number: number, input: ReviewInput, now: string) {
   const { pull } = getPull(repo, number);
+  if (input.state === 'DISMISSED') throw new Error('A review is dismissed after it is submitted, with dismissReview.');
   const review: ReviewRecord = {
     id: newId(state),
     user: getAccount(state, input.login).login,
     state: input.state,
     body: input.body,
-    submittedAt: now,
+    submittedAt: input.state === 'PENDING' ? null : now,
     commitId: pull.head.sha,
   };
   pull.reviews.push(review);

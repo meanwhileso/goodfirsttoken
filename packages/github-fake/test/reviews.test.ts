@@ -152,3 +152,58 @@ test('a connection takes first or last, and refuses both at once, as GitHub does
     { message: 'Passing both `first` and `last` to paginate the `reviews` connection is not supported.' },
   ]);
 });
+
+test("each review and comment says how its author relates to the repo, as GitHub's authorAssociation does", async () => {
+  const org = fake.state.accounts.meanwhileso;
+  if (!org) throw new Error('no meanwhileso');
+  org.members = ['lena'];
+  const comments = [{ path: 'README.md', line: 1, body: 'A note.' }];
+  for (const login of ['lena', 'kenji', 'ines', 'sam']) {
+    fake.reviewPullRequest(REPO, 958, { login, state: 'COMMENTED', body: `From ${login}.`, comments });
+  }
+
+  const reply = await graphql<{
+    repository: { pullRequest: { reviews: { nodes: { authorAssociation: string; comments: { nodes: { authorAssociation: string }[] } }[] } } };
+  }>(
+    fake,
+    token,
+    'query { repository(owner: "meanwhileso", name: "goodfirsttoken") { pullRequest(number: 958) { reviews(first: 10) { nodes { authorAssociation comments(first: 1) { nodes { authorAssociation } } } } } } }',
+  );
+  const reviews = await rest<{ author_association: string }[]>(fake, 'GET', `${UPSTREAM}/pulls/958/reviews`);
+
+  // A member of the organization that owns the repo, a collaborator, someone
+  // whose PR merged there, and someone with none of those.
+  const expected = ['MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'NONE'];
+  const nodes = reply.body.data?.repository.pullRequest.reviews.nodes ?? [];
+  expect(nodes.map((n) => n.authorAssociation)).toEqual(expected);
+  expect(nodes.map((n) => n.comments.nodes[0]?.authorAssociation)).toEqual(expected);
+  expect(reviews.body.map((r) => r.author_association)).toEqual(expected);
+});
+
+test('a pending review and its comments show only to its author, and a dismissed one shows to everyone as dismissed', async () => {
+  const comments = [{ path: 'README.md', line: 1, body: 'Draft note.' }];
+  fake.reviewPullRequest(REPO, 958, { login: 'octo-maintainer', state: 'PENDING', body: 'Not sent yet.', comments });
+  const dismissed = fake.reviewPullRequest(REPO, 958, { login: 'kenji', state: 'CHANGES_REQUESTED', body: 'Undo this.', comments });
+  fake.dismissReview(REPO, 958, dismissed);
+  const read = async (as: string) => {
+    const asToken = fake.tokenFor(as);
+    const reply = await graphql<{ repository: { pullRequest: { reviews: { nodes: { state: string; body: string; submittedAt: string | null }[] } } } }>(
+      fake,
+      asToken,
+      'query { repository(owner: "meanwhileso", name: "goodfirsttoken") { pullRequest(number: 958) { reviews(first: 10) { nodes { state body submittedAt } } } } }',
+    );
+    const lineComments = await rest<{ body: string }[]>(fake, 'GET', `${UPSTREAM}/pulls/958/comments`, { token: asToken });
+    return { reviews: reply.body.data?.repository.pullRequest.reviews.nodes ?? [], comments: lineComments.body.map((c) => c.body) };
+  };
+
+  const byAuthor = await read('octo-maintainer');
+  const byOthers = await read('sam');
+
+  expect(byAuthor.reviews).toMatchObject([
+    { state: 'PENDING', body: 'Not sent yet.', submittedAt: null },
+    { state: 'DISMISSED', body: 'Undo this.' },
+  ]);
+  expect(byAuthor.comments).toEqual(['Draft note.', 'Draft note.']);
+  expect(byOthers.reviews).toMatchObject([{ state: 'DISMISSED', body: 'Undo this.' }]);
+  expect(byOthers.comments).toEqual(['Draft note.']);
+});

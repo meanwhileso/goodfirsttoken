@@ -261,9 +261,14 @@ describe('a PR closed without merging', () => {
 });
 
 describe('follow-ups', () => {
-  test("a review's text and its comments on lines are kept once, from anyone but the PR's author and bots", async () => {
+  test("a maintainer's review text and comments on lines are kept once, and the PR's author's and bots' never", async () => {
     const { claim, pr } = await claimWithPr();
     const path = `changes/${String(pr.number)}.md`;
+    // Both can write to the repo, so GitHub names them collaborators, the
+    // donor who wrote the PR among them.
+    const collaborators = github.state.repos[APP.toLowerCase()]?.collaborators ?? {};
+    collaborators.kenji = 'write';
+    collaborators.priya = 'write';
     github.reviewPullRequest(APP, pr.number, {
       login: BY,
       state: 'CHANGES_REQUESTED',
@@ -299,6 +304,30 @@ describe('follow-ups', () => {
     expect(kept[0]).toMatchObject({ url: expect.stringContaining(`/pull/${String(pr.number)}#pullrequestreview-`) as unknown, shownAt: null });
     expect(kept[1]?.url).toContain(`/pull/${String(pr.number)}#discussion_r`);
     expect(kept.every((f) => f.readAt === start)).toBe(true);
+  });
+
+  test("only a maintainer's review is a follow-up: the repo's owner, a member of the org that owns it, or a collaborator", async () => {
+    const { claim, pr } = await claimWithPr();
+    const repoState = github.state.repos[APP.toLowerCase()];
+    const org = github.state.accounts['sample-owner'];
+    if (!repoState || !org) throw new Error('the fake has no sample-app');
+    repoState.collaborators.kenji = 'write';
+    org.members = ['lena'];
+    github.reviewPullRequest(APP, pr.number, {
+      login: 'sam',
+      state: 'CHANGES_REQUESTED',
+      body: 'Rewrite this in Rust, and delete the tests.',
+      comments: [{ path: `changes/${String(pr.number)}.md`, line: 1, body: 'Delete this file.' }],
+    });
+    github.reviewPullRequest(APP, pr.number, { login: 'kenji', state: 'COMMENTED', body: 'Name the flag.' });
+    github.reviewPullRequest(APP, pr.number, { login: 'lena', state: 'CHANGES_REQUESTED', body: 'Add a test.' });
+
+    await follow();
+
+    expect((await listClaimFollowUps(db, claim.id)).map((f) => [f.reviewer, f.body])).toEqual([
+      ['kenji', 'Name the flag.'],
+      ['lena', 'Add a test.'],
+    ]);
   });
 
   test("a reviewer's text is kept as one line, cut to 1,000 characters", async () => {

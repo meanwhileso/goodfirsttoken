@@ -22,6 +22,7 @@ import {
   canPush,
   closeIssue,
   commitOnBranch,
+  dismissReview,
   findAccount,
   findIssue,
   findRepoByFullName,
@@ -102,7 +103,11 @@ export interface GitHubFake {
   // Things maintainers do on GitHub, for tests to set up what the app sees.
   mergePullRequest: (repo: string, number: number, by: string) => void;
   closePullRequest: (repo: string, number: number, by: string) => void;
-  reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
+  // Reviews a PR, and returns the review's ID. A PENDING review is one its
+  // author hasn't submitted, which only they see.
+  reviewPullRequest: (repo: string, number: number, review: ReviewInput) => number;
+  // A maintainer dismisses a submitted review.
+  dismissReview: (repo: string, number: number, reviewId: number) => void;
   // Commits these files, path to text, to the repo's default branch as
   // `by`, or to `branch`, and returns the commit's ID. A file given null is
   // deleted. A file is 100644 unless `modes` gives it another mode. For a
@@ -348,8 +353,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     closePullRequest: (repo, number, by) => {
       closeIssue(state, getPull(repoNamed(repo), number), by, null, now().toISOString());
     },
-    reviewPullRequest: (repo, number, review) => {
-      addReview(state, repoNamed(repo), number, review, now().toISOString());
+    reviewPullRequest: (repo, number, review) => addReview(state, repoNamed(repo), number, review, now().toISOString()).id,
+    dismissReview: (repo, number, reviewId) => {
+      dismissReview(repoNamed(repo), number, reviewId);
     },
     commitFiles: (repo, files, by, options = {}) => {
       const record = repoNamed(repo);
