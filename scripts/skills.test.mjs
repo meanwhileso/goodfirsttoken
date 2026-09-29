@@ -356,3 +356,76 @@ test('plugins.json must list exactly the two plugins', async () => {
   await setPlugins(extra, { ...PLUGIN_SETTINGS, 'goodfirsttoken-extra': { version: '0.1.0', description: 'Extra.' } });
   await assert.rejects(build(extra), /must list exactly these plugins/);
 });
+
+async function addPart(root, name, text) {
+  await mkdir(path.join(root, 'skill-src/shared'), { recursive: true });
+  await writeFile(path.join(root, 'skill-src/shared', `${name}.md`), text);
+}
+
+test('a shared part is written into each skill that includes it, in both plugins, with the server URL filled in', async () => {
+  const body = (name) => `# ${name}\n\n{{include connect}}\nThen ${name}.\n`;
+  const root = await makeSources({ give: skillSource('goodfirsttoken', body('give')), admin: skillSource('goodfirsttoken-admin', body('admin')) });
+  await addPart(root, 'connect', '- Codex: add {{MCP_URL}}.\n');
+  await buildAndWrite(root, { mcpUrl: LOCAL_URL });
+  for (const [file, name] of [
+    ['skills/goodfirsttoken-give/SKILL.md', 'give'],
+    ['plugins/goodfirsttoken/skills/give/SKILL.md', 'give'],
+    ['plugins/goodfirsttoken-admin/skills/admin/SKILL.md', 'admin'],
+  ]) {
+    assert.ok((await read(root, file)).endsWith(`# ${name}\n\n- Codex: add ${LOCAL_URL}.\nThen ${name}.\n`), file);
+  }
+});
+
+test('changing a shared part changes every skill that includes it, so the check asks for a higher version', async () => {
+  const root = await makeSources({ give: skillSource('goodfirsttoken', '{{include connect}}\n'), admin: skillSource('goodfirsttoken-admin') });
+  await addPart(root, 'connect', 'Add the server.\n');
+  git(root, 'init', '-q');
+  await buildAndWrite(root);
+  commitAll(root);
+  await addPart(root, 'connect', 'Add the server, then start a new session.\n');
+  assert.ok((await checkAgainstHead(root)).includes('skills/goodfirsttoken-give/SKILL.md is not what the build writes.'));
+  await buildAndWrite(root);
+  assert.deepEqual(await checkAgainstHead(root), [
+    'plugins/goodfirsttoken/ changed since HEAD, so its version in skill-src/plugins.json must be higher than 0.1.0.',
+  ]);
+});
+
+test('an include of a missing part, a part that includes another, or an include inside a line fails the build', async () => {
+  const missing = await makeSources({ give: skillSource('goodfirsttoken', '{{include nowhere}}\n') });
+  await assert.rejects(build(missing), /skill-src\/give\.md includes nowhere, but skill-src\/shared\/nowhere\.md is missing/);
+
+  const nested = await makeSources({ give: skillSource('goodfirsttoken', '{{include outer}}\n') });
+  await addPart(nested, 'outer', '{{include inner}}\n');
+  await addPart(nested, 'inner', 'Inner.\n');
+  await assert.rejects(build(nested), /skill-src\/shared\/outer\.md includes another part/);
+
+  const inline = await makeSources({ give: skillSource('goodfirsttoken', 'See {{include connect}} here.\n') });
+  await addPart(inline, 'connect', 'Connect.\n');
+  await assert.rejects(build(inline), /skill-src\/give\.md has an include inside other text: "See {{include connect}} here\."\. Put/);
+});
+
+test("an include whose name isn't a part's name fails the build, and says so", async () => {
+  for (const name of ['../../secret', 'Connect']) {
+    const root = await makeSources({ give: skillSource('goodfirsttoken', `{{include ${name}}}\n`) });
+    await addPart(root, 'connect', 'Connect.\n');
+    await assert.rejects(build(root), (error) => {
+      assert.equal(
+        error.message,
+        `skill-src/give.md includes "${name}", which isn't a part's name. A part's name uses lowercase letters, digits, and hyphens, like connect for skill-src/shared/connect.md.`,
+      );
+      return true;
+    });
+  }
+});
+
+test('an include on a line of its own is read with a space after it, or on the last line with no line break', async () => {
+  const spaced = await makeSources({ give: skillSource('goodfirsttoken', '# give\n\n{{include connect}} \nThen give.\n') });
+  await addPart(spaced, 'connect', 'Connect.\n');
+  await buildAndWrite(spaced);
+  assert.ok((await read(spaced, 'skills/goodfirsttoken-give/SKILL.md')).endsWith('# give\n\nConnect.\nThen give.\n'));
+
+  const last = await makeSources({ give: skillSource('goodfirsttoken', '# give\n\n{{include connect}}') });
+  await addPart(last, 'connect', 'Connect.\n');
+  await buildAndWrite(last);
+  assert.ok((await read(last, 'skills/goodfirsttoken-give/SKILL.md')).endsWith('# give\n\nConnect.\n'));
+});
