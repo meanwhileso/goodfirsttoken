@@ -405,11 +405,10 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   the queue, a repo's requests withdrawn by someone other than their asker
   since the latest one an admin closed as `removed`, in one query: the
   first five withdrawn, with both logins joined from `people`, and a count
-  of the rest from `COUNT(*) OVER ()`. `removalReason` in core drops the
-  characters a person can't see, on top of folding the ones that could
-  break a line. A `451` from GitHub is a `PermissionRefused` in
-  `requirePermission`, as a `404` is, so every maintainer's tool refuses a
-  repo GitHub blocked with `not_maintainer`.
+  of the rest from `COUNT(*) OVER ()`. `removalReason` in core folds the
+  reason, under One fold for untrusted text. A `451` from GitHub is a
+  `PermissionRefused` in `requirePermission`, as a `404` is, so every
+  maintainer's tool refuses a repo GitHub blocked with `not_maintainer`.
 - **Resuming reads the status history,** newest first, for the change
   before the pause. The project's row holds only its current status. A
   status change keeps who made it and no role, so whether a pause was an
@@ -605,17 +604,30 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   yet. A PR another session marked between the two is left out of the
   answer, which is made again without it. `shareOnXUrl` in `packages/core`
   builds the link for a merged one, with the submission's agent.
-  `foldUntrusted`, below, folds a reviewer's text by `UNSAFE_CHARACTER`
-  and `HIDDEN_CHARACTER` in `characters.ts`, the sets `removalReason`
-  folds by, and `cutGraphemes` cuts it after, the rule the name an
-  agent's client gives itself is cut by too.
+  `foldUntrusted`, below, folds a reviewer's text, and `cutGraphemes`
+  cuts it after, the rule the name an agent's client gives itself is cut
+  by too.
 - **One fold for untrusted text.** `foldLine` in `packages/core/src/characters.ts`
-  is the fold, and `foldUntrusted` is it with a cut. A reviewer's text,
-  an issue's title, and a posted update all use it. It is one pattern
-  whose choices are each one character, so it reads the text once, with
-  no going back. `updateText` refuses text longer than four times its
-  limit with an `abort` check before the fold runs. `foldIssueTitle` in
-  `issues.ts` folds a title to 256 graphemes. `taggedIssueSchema` runs it
+  is the fold, by `UNSAFE_CHARACTER` and `HIDDEN_CHARACTER` there. It is
+  one pattern whose choices are each one character, so it takes time in
+  proportion to the text's length. A run of millions of hidden characters
+  can still overflow the pattern engine's stack, so every caller caps the
+  text first. `foldUntrusted` is the fold with a cut, for text GitHub
+  gives, whose own limits cap it: a reviewer's text and an issue's title.
+  `untrustedLine` is the fold as a schema, for text a tool is given: an
+  `abort` check refuses text longer than four times the limit before the
+  fold runs, and the limit counts what the fold leaves. A posted update,
+  a job name, a release reason, and a removal's reason use it. A removal's
+  reason used to keep a run of plain spaces and other widths of space as
+  they were. It folds them to one space now, like every other text.
+  `feedEventSchema` and the claim's `releaseReason` check a stored job
+  and reason the way they were checked before the fold, so an event or a
+  claim stored earlier still reads. `keptRemovalReason` folds a stored
+  request's reason each time it is read, for the queue, and doesn't
+  refuse one that folds to nothing, like a reason of only ideographic
+  spaces the fold before kept. `askRemoval` checks a new reason with
+  `removalReason` before it saves one. `foldIssueTitle` in `issues.ts` folds
+  a title to its limit. `taggedIssueSchema` runs it
   with `overwrite`, so `saveIssues` stores a folded title and every read
   through the schema, `toIssue` and `listWaitingIssues`, folds a title
   stored before. No migration clears old titles: SQL can't run the fold,
@@ -624,6 +636,18 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `src/donor/github.ts` folds the title GitHub gives the donor's token.
   The donor tools' answers take a title only through `issueTitle`, which
   refuses one that isn't folded, the way `followUpText` does.
+  `cutGraphemes` gives back text no longer than its cap in UTF-16 units
+  without counting graphemes, since a text has at least as many units as
+  graphemes, so cutting a title that fits costs next to nothing.
+  Three other folds stay, for text that isn't untrusted words shown to
+  an agent. `foldLines` in `primitives.ts`, behind `oneLine`, folds only
+  tabs and line breaks in a submit's title and a model name, the donor's
+  own text, which goes to GitHub as they wrote it. The stream formatter
+  in `src/feed/format.ts` folds the characters that could break a line in
+  every event it writes, events stored before the fold among them, so
+  each is one line whatever it holds. `clientNameOf` in
+  `src/mcp/connections.ts` folds the name an agent's client gives itself,
+  which only people read, on the consent page and on `/me`.
 - **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
   reads the claim from the claims table, checks `work_claim`, the block,
   and the project with `projectClosedRefusal`, whose do-not-list check is

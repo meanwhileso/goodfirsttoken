@@ -1301,15 +1301,21 @@ removes the repo, or a maintainer of the repo withdraws it.
   shows them the repo as public again. A project the sync delisted because
   its repo is archived can be asked for as it is, since GitHub still shows
   the repo and the caller's role.
-- The reason is the maintainer's own words, up to 500 characters, always
-  on one line, and only what a person can see. Each run of characters that
-  could break a line or change what a terminal shows, with the plain spaces
-  around it, becomes one space: control characters, tabs and line breaks
-  among them, Unicode line and paragraph separators, and marks that reorder
-  text. Every character a person doesn't see goes: format characters, like
-  a zero-width space, a word joiner, or Unicode tag characters, private-use
-  characters, unassigned ones, and ones Unicode says to ignore when they
-  can't be shown, like a variation selector or a Hangul filler. Only admins
+- The reason is the maintainer's own words, always on one line, and only
+  what a person can see. Each run of spaces of any width and of characters
+  that could break a line or change what a terminal shows becomes one
+  space: control characters, tabs and line breaks among them, Unicode line
+  and paragraph separators, and marks that reorder text. Every character a
+  person doesn't see goes: format characters, like a zero-width space, a
+  word joiner, or Unicode tag characters, private-use characters,
+  unassigned ones, ones Unicode says to ignore when they can't be shown,
+  like a variation selector or a Hangul filler, and lone surrogates. A
+  lone surrogate is half of a character with no other half next to it,
+  which JSON can carry. Two halves with a hidden character between them
+  would join into one character, like a tag, once what is between them
+  goes, so each half goes with it. The ends are trimmed. The reason's
+  limit under [Limits](#limits) counts what is left, and a reason longer
+  than four times it is refused before it folds. Only admins
   read it, in `admin_queue`, as a JSON string, so no quote mark in it can end
   the quote early, and on the [admin pages](#the-admin-pages). Both show it
   as the maintainer's words. It reaches no public page, so nothing redacts
@@ -1608,7 +1614,7 @@ sync reads from GitHub.
   next sync.
 - The title is untrusted repo text. It is folded the way a reviewer's text
   is under [PRs](#prs): one line, with only what a person can see, and cut
-  to 256 graphemes, the most characters GitHub takes in a title. The fold
+  to its limit under [Limits](#limits), whole graphemes only. The fold
   runs when a copy is saved and again each time one is read, so a title
   kept before titles were folded reads folded too. The donor's tools fold
   a title they read from GitHub with the donor's token the same way, and
@@ -2986,14 +2992,15 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   `https` link of the project's CLA that the donor confirmed they signed,
   as the refusal gave it.
 - A release needs a public reason.
-- A posted update is one line, with only what a person can see, folded the
-  way a reviewer's text is under [PRs](#prs): every character a person
-  doesn't see goes, and each run of spaces, tabs, line breaks, and other
-  characters that could break a line becomes one space. Text longer than
-  800 characters, four times the limit, is refused before it folds, so
-  checking a post takes a short time whatever a request carries. The fold
-  reads the text once. `post_update` takes an optional job, for a line a
-  subagent posts.
+- A posted update, a subagent's job name, and a release reason each reach
+  the public feeds, so each is one line, with only what a person can see,
+  folded the way a reviewer's text is under [PRs](#prs). Each limit under
+  [Limits](#limits) counts the folded text, and text longer than four
+  times it is refused before it folds, so checking one takes a short time
+  whatever a request carries. Text that folds to nothing is refused.
+  `post_update` takes an optional job, for a line a subagent posts. A feed
+  event or a claim stored before these were folded keeps its job or reason
+  as it was given, and the streams still show it on one line.
 - Submitted files are paths inside the repo: no leading slash, no
   backslashes, no control characters, no characters that change the
   direction text shows in (U+202A to U+202E and U+2066 to U+2069), no
@@ -3902,17 +3909,18 @@ Each limit the schemas enforce, other than those under project settings:
 | PR description the donor writes | 60,000 characters, leaving room for the closing line and the disclosure | Us |
 | PR title, and a submit's title | 256 characters | GitHub |
 | Posted update | 200 characters once folded, and 800 before | Us |
-| An issue's title | 256 graphemes, folded to one line | GitHub |
+| An issue's title | 256 graphemes once folded, cut to fit | GitHub takes 256 characters. The cut by graphemes is ours |
 | Feed event text | 500 characters | Us |
-| Subagent job name | 40 characters | Us |
-| Release reason | 200 characters | Us |
+| Subagent job name | 40 characters once folded, and 160 before | Us |
+| Release reason | 200 characters once folded, and 800 before | Us |
 | Files per submit | 1 to 300 | Us |
 | Path of a submitted file | 4,096 characters | Us |
 | A submitted file | 1 MiB (1,048,576 bytes) of UTF-8 | Us, at the size GitHub recommends |
 | The files of one submit | 2 MiB (2,097,152 bytes) of UTF-8 | Us, under the MCP server's 4 MiB request |
 | Submit summary, and what was checked | 1,000 characters each | Us |
 | Policy quote | 2,000 characters | Us |
-| Pause, reject, block, and do-not-list reasons, and a reason to be removed | 500 characters | Us |
+| Pause, reject, block, and do-not-list reasons | 500 characters | Us |
+| A reason to be removed | 500 characters once folded, and 2,000 before | Us |
 | Interests | 20 per list, 50 characters each | Us |
 | A reviewer's text in a follow-up | 1,000 graphemes, folded to one line | Us |
 | A comment's file path in a follow-up | 4,096 graphemes, folded to one line | Us |
