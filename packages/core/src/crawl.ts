@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { count, epochMs, githubId, id, labelName, repoName, trimmedText } from './primitives';
+import { count, epochMs, githubId, httpsUrl, id, labelName, repoName, trimmedText } from './primitives';
 import { policySchema, projectSettingsPatchSchema } from './projects';
 
 // The policy crawler's records (spec section 5): the repos it found for the
@@ -185,9 +185,13 @@ export type CrawlPass = z.infer<typeof crawlPassSchema>;
 /** The most repos one message in the crawl queue holds. */
 export const MAX_CRAWL_BATCH = 25;
 
-/** Repos in the crawl queue, for a consumer to read. */
+/**
+ * Repos in the crawl queue, for a consumer to read. With `reread`, they are
+ * listed projects, read again to keep their listings current.
+ */
 export const crawlMessageSchema = z.object({
   repos: z.array(repoName).min(1).max(MAX_CRAWL_BATCH),
+  reread: z.literal(true).optional(),
 });
 export type CrawlMessage = z.infer<typeof crawlMessageSchema>;
 
@@ -204,3 +208,96 @@ export const doNotListEntrySchema = z.object({
   addedAt: epochMs,
 });
 export type DoNotListEntry = z.infer<typeof doNotListEntrySchema>;
+
+/**
+ * What the crawler's rules read in a repo's docs, as a version and a hash:
+ * the tier, the words of the quote, of each sentence that names AI with its
+ * paragraph, and of the conditions the settings follow. The repo's text
+ * isn't kept, only the hash.
+ */
+export const policyFingerprintSchema = z
+  .string({ error: 'must be a policy fingerprint' })
+  .regex(/^v[1-9][0-9]{0,3}:[0-9a-f]{64}$/, 'must be a policy fingerprint');
+export type PolicyFingerprint = z.infer<typeof policyFingerprintSchema>;
+
+/** The line in a repo's docs the crawler's rules read as a ban, with a link to its file. */
+export const banLineSchema = z.object({
+  /** The file's path in the repo. */
+  path: trimmedText(MAX_SOURCE_LINE),
+  /** The line, cut to MAX_SOURCE_LINE characters, as the file has it, or null when it is blank. */
+  line: trimmedText(MAX_SOURCE_LINE).nullable(),
+  /** The file on github.com, on the repo's default branch. */
+  url: httpsUrl,
+});
+export type BanLine = z.infer<typeof banLineSchema>;
+
+/**
+ * Why the crawler last paused a listed project on its own, for the admins:
+ * a ban its docs now read as, with the line and the sentences that name AI,
+ * or pull requests limited to collaborators, which the pause's reason says.
+ */
+export const crawlerPauseSchema = z.object({
+  /** When the pause was made, which is when the project's status changed. */
+  pausedAt: epochMs,
+  /** The line read as a ban, or null when the pause is for the repo's pull request settings. */
+  ban: banLineSchema.nullable(),
+  aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES).default([]),
+  moreAiSentences: count.default(0),
+});
+export type CrawlerPause = z.infer<typeof crawlerPauseSchema>;
+
+/** Where the crawler stands with a listed project it reads again each week. */
+export const policyReadSchema = z.object({
+  project: repoName,
+  /** When the crawler's cron job last put it in the crawl queue. */
+  queuedAt: epochMs,
+  /** What the rules read in its docs the last time the crawler read them whole, or null before. */
+  fingerprint: policyFingerprintSchema.nullable(),
+  /** Whether the rules read a ban in its docs then, or null before. */
+  banned: z.boolean().nullable(),
+  /** The crawler's last pause of the project, or null. */
+  pause: crawlerPauseSchema.nullable(),
+});
+export type PolicyRead = z.infer<typeof policyReadSchema>;
+
+/**
+ * A listed project whose policy, as the crawler's rules read it, changed
+ * since the crawler last read it, waiting for an admin or decided by one.
+ */
+export const policyChangeSchema = z
+  .object({
+    id,
+    repo: repoName,
+    foundAt: epochMs,
+    /** The repo's facts, as the crawler read them. */
+    facts: repoFactsSchema,
+    /**
+     * The policy text that welcomes agent work now, with its link and tier,
+     * or null when the rules read none.
+     */
+    policy: policySchema.nullable(),
+    /** The line behind each setting the docs give now, and any canary. */
+    sources: z.array(candidateSourceSchema).default([]),
+    aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES).default([]),
+    moreAiSentences: count.default(0),
+    status: candidateStatusSchema,
+    decidedBy: githubId.nullable(),
+    decidedAt: epochMs.nullable(),
+    /** Why the admin kept the listing as it was. */
+    reason: trimmedText(MAX_CRAWL_REASON).nullable(),
+  })
+  .superRefine((change, ctx) => {
+    const problem = (field: string, message: string) => {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    };
+    const waiting = change.status === 'waiting';
+    for (const field of ['decidedBy', 'decidedAt'] as const) {
+      if (waiting && change[field] !== null) problem(field, 'must be null while the change waits');
+      if (!waiting && change[field] === null) problem(field, `is required once it is ${change.status}`);
+    }
+    if (change.status === 'rejected' && change.reason === null) problem('reason', 'is required to reject');
+    if (change.status !== 'rejected' && change.reason !== null) {
+      problem('reason', 'must be null unless the change was rejected');
+    }
+  });
+export type PolicyChange = z.infer<typeof policyChangeSchema>;

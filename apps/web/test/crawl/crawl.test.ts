@@ -8,7 +8,6 @@ import {
   addCandidate,
   addSeed,
   addToDoNotList,
-  decideCandidate,
   getSeed,
   latestCrawlPass,
   listCandidates,
@@ -321,9 +320,9 @@ describe('what the crawler skips', () => {
     expect(await everyFind()).not.toContain(COLLABORATORS);
   });
 
-  test("a repo that's a project already, or that the crawler proposed before, is read no further, whatever the admin decided", async () => {
+  test("a repo that's a project already, or whose find waits in the admin queue, is read no further", async () => {
     await registeredProject({ tags: ['help wanted'] }, INVITES);
-    const found = await addCandidate(
+    await addCandidate(
       db,
       {
         repo: CONDITIONS,
@@ -334,13 +333,12 @@ describe('what the crawler skips', () => {
       },
       start - HOUR,
     );
-    await decideCandidate(db, found?.id ?? '', { status: 'rejected', decidedBy: admin.githubId, reason: 'Not now.' }, start - MINUTE);
     const requests = recordRequests();
 
     const { run } = await consume([{ repos: [INVITES, CONDITIONS, NO_AUTONOMY] }]);
 
     expect(run?.skipped).toMatchObject({ project: 1, proposed: 1 });
-    expect(await listCandidates(db, 'waiting')).toMatchObject([{ repo: NO_AUTONOMY }]);
+    expect((await listCandidates(db, 'waiting')).map((c) => c.repo).sort()).toEqual([NO_AUTONOMY, CONDITIONS]);
     expect(requests.filter((request) => request.includes('invites-agents') || request.includes('with-conditions'))).toEqual([]);
   });
 });
@@ -450,16 +448,23 @@ describe('the search', () => {
     expect(resumed.pass?.finishedAt).not.toBeNull();
   });
 
-  test('a pass that is done stays done', async () => {
-    await fill();
+  test('a pass that is done stays done for a month from when it started, and the next pass reads the pool again then', async () => {
+    const first = await fill();
     const queued = sent.length;
-    later(HOUR);
+    later(30 * 24 * HOUR - MINUTE);
+    const soon = await fill();
+    later(MINUTE);
+    // Pushed within the 30 days before the new pass, so its search finds it.
+    github.commitFiles(CONDITIONS, { 'CHANGELOG.md': 'A change.\n' }, 'sample-maintainer');
 
-    const again = await fill();
+    const month = await fill();
 
     expect(queued).toBeGreaterThan(0);
-    expect(again.searches).toBe(0);
-    expect(sent).toHaveLength(queued);
+    expect(soon.searches).toBe(0);
+    expect(month.searches).toBeGreaterThan(0);
+    expect(month.pass).toMatchObject({ startedAt: start + 30 * 24 * HOUR, finishedAt: expect.any(Number) as unknown });
+    expect(month.pass?.startedAt).not.toBe(first.pass?.startedAt);
+    expect(sent.slice(queued).flatMap((m) => m.repos)).toContain(CONDITIONS);
   });
 });
 
