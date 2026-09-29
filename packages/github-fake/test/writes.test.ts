@@ -436,6 +436,26 @@ test('a comparison lists the files a branch changed since a commit, with lines a
   expect(unknown.status).toBe(404);
 });
 
+test('a comparison lists a file moved with the same text as renamed, with its old name, and commitFiles deletes a file given null', async () => {
+  const before = await head('meanwhileso/goodfirsttoken', 'main');
+  const after = fake.commitFiles(
+    'meanwhileso/goodfirsttoken',
+    { 'README.md': null, 'docs/README.md': '# Good First Token\n\nSpend your spare tokens on open source.\n', 'package.json': null },
+    'octo-maintainer',
+  );
+
+  const compared = await rest<{ files: { filename: string; status: string; previous_filename?: string }[] }>(
+    fake,
+    'GET',
+    `${UPSTREAM}/compare/${before}...${after}`,
+  );
+
+  expect(compared.body.files.map(({ filename, status, previous_filename }) => [filename, status, previous_filename])).toEqual([
+    ['docs/README.md', 'renamed', 'README.md'],
+    ['package.json', 'removed', undefined],
+  ]);
+});
+
 test("a blob's content comes back in base64", async () => {
   const text = '# Good First Token\n\nSpend your spare tokens on open source.\n';
   const readme = await rest<{ sha: string }>(fake, 'GET', `${UPSTREAM}/contents/README.md`);

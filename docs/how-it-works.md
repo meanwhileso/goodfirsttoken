@@ -1754,8 +1754,11 @@ never reaches the tool.
   changed, since the last submit's commit or the start commit before the
   first, that comes back with the text it had before the push, or comes
   back deleted when the push added it, is refused with `branch_moved`,
-  naming the paths, and nothing is committed. Left out, such a path stays
-  as the push left it. New text for it is the agent's own change.
+  naming the paths, and nothing is committed. So is a path the push
+  deleted, or moved away in a rename, that comes back with any text, which
+  would undo the delete or leave the file in both places. Left out, such a
+  path stays as the push left it. New text for a path the push changed and
+  kept is the agent's own change.
 - The files are read against the claim's base: its start commit, or the
   head the latest submit with `onto` named. So after `onto`, every file
   changed from that head is sent, on that submit and the later ones.

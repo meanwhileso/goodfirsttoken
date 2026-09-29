@@ -358,7 +358,9 @@ export function timelineEventShape(ctx: Ctx, repo: RepoRecord, event: TimelineEv
 /** A file that differs between two commits, with its lines added and removed. */
 export interface FileDiff {
   path: string;
-  status: 'added' | 'removed' | 'modified';
+  status: 'added' | 'removed' | 'modified' | 'renamed';
+  /** For a file renamed, its path at `from`. */
+  previousPath?: string;
   /** The blob at `to`, or at `from` for a file removed. */
   sha: Oid;
   additions: number;
@@ -375,10 +377,26 @@ export function diffFiles(ctx: Ctx, from: Oid, to: Oid): FileDiff[] {
   const lines = (oid: Oid | undefined) =>
     oid ? (blobText(readObject(store, oid, 'blob')) ?? '').split('\n').filter(Boolean) : [];
   const files: FileDiff[] = [];
+  // A file removed from one path and added at another with the same blob is
+  // one file renamed, as GitHub lists it. GitHub also finds renames with a
+  // changed text, which the fake doesn't.
+  const removed = [...before].filter(([path]) => !after.has(path));
+  const renamedFrom = new Map<string, string>();
+  for (const [path, oid] of after) {
+    if (before.has(path)) continue;
+    const match = removed.find(([old, was]) => was === oid && ![...renamedFrom.values()].includes(old));
+    if (match) renamedFrom.set(path, match[0]);
+  }
+  const moved = new Set(renamedFrom.values());
   for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
     const was = before.get(path);
     const is = after.get(path);
-    if (was === is) continue;
+    if (was === is || moved.has(path)) continue;
+    const previousPath = renamedFrom.get(path);
+    if (previousPath !== undefined) {
+      files.push({ path, status: 'renamed', previousPath, sha: is ?? '', additions: 0, deletions: 0 });
+      continue;
+    }
     const old = lines(was);
     const next = lines(is);
     files.push({
@@ -643,6 +661,7 @@ export function compareShape(ctx: Ctx, repo: RepoRecord, base: Oid, head: Oid) {
     files: diffFiles(ctx, since, head).map((file) => ({
       sha: file.sha,
       filename: file.path,
+      ...(file.previousPath === undefined ? {} : { previous_filename: file.previousPath }),
       status: file.status,
       additions: file.additions,
       deletions: file.deletions,

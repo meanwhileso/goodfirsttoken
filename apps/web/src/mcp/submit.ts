@@ -244,7 +244,7 @@ async function planChange(
   }
   if (pushedOver !== null) {
     const undone = await undoingPush(writer, pushedOver, facts, files);
-    if (undone.length > 0) return undoesPush(at.where, at.rev, undone);
+    if (undone.reverted.length + undone.restored.length > 0) return undoesPush(at.where, at.rev, undone);
   }
   const entries = new Map([...facts].map(([path, found]) => [path, found.entry]));
   // A file whose text may be the one submitted: one of the same size.
@@ -281,40 +281,61 @@ async function planChange(
   return change;
 }
 
+/** What a submit would undo of a push, by path, in the order the paths were sent. */
+interface Undone {
+  /** Paths the push changed that go back to how they were before it: sent with their text from then, or deleted when the push added them. */
+  reverted: string[];
+  /** Paths the push deleted, or moved away as in a rename, that come back with any text. */
+  restored: string[];
+}
+
 /**
- * The submitted paths a push changed that go back to how they were before
- * it: sent with their text from then, or deleted when the push added them.
- * A commit of them would undo the push. `before` is the branch before the
- * push, and `now` what each path is at the head the push left.
+ * The submitted paths a commit would undo a push with. `before` is the
+ * branch before the push, and `now` what each path is at the head the push
+ * left. A path there before and gone now was deleted or moved by the push,
+ * whatever the comparison calls it.
  */
 async function undoingPush(
   writer: DonorWriter,
   before: { repo: string; rev: string },
   now: Map<string, PathFacts>,
   files: readonly { path: string; content: string | null }[],
-): Promise<string[]> {
+): Promise<Undone> {
   const was = await writer.entries(before.repo, before.rev, files.map((file) => file.path));
   const pushed = files.filter((file) => (was.get(file.path)?.entry?.oid ?? null) !== (now.get(file.path)?.entry?.oid ?? null));
-  const undone = pushed.filter((file) => file.content === null && (was.get(file.path)?.entry ?? null) === null).map((file) => file.path);
+  const gone = (path: string) => (was.get(path)?.entry ?? null) !== null && (now.get(path)?.entry ?? null) === null;
+  const restored = new Set(pushed.filter((file) => file.content !== null && gone(file.path)).map((file) => file.path));
+  const reverted = new Set(
+    pushed.filter((file) => file.content === null && (was.get(file.path)?.entry ?? null) === null).map((file) => file.path),
+  );
   const sameSize = pushed.filter((file) => {
     const entry = was.get(file.path)?.entry;
-    return file.content !== null && entry?.file === true && entry.byteSize === utf8Length(file.content);
+    return file.content !== null && !restored.has(file.path) && entry?.file === true && entry.byteSize === utf8Length(file.content);
   });
   if (sameSize.length > 0) {
     const texts = await writer.texts(before.repo, before.rev, sameSize.map((file) => file.path));
-    for (const file of sameSize) if (texts.get(file.path) === file.content) undone.push(file.path);
+    for (const file of sameSize) if (texts.get(file.path) === file.content) reverted.add(file.path);
   }
-  // In the order they were sent.
-  return files.map((file) => file.path).filter((path) => undone.includes(path));
+  const paths = files.map((file) => file.path);
+  return { reverted: paths.filter((path) => reverted.has(path)), restored: paths.filter((path) => restored.has(path)) };
+}
+
+/** Paths as a list in words: `a`, `a and b`, or `a, b and c`. */
+function named(paths: readonly string[]): string {
+  return paths.length === 1 ? paths.join('') : `${paths.slice(0, -1).join(', ')} and ${paths.slice(-1).join('')}`;
 }
 
 /** `where` is the branch, as `owner/repo:branch`, and `head` the head the push left. */
-function undoesPush(where: string, head: string, paths: readonly string[]): Refusal {
-  const one = paths.length === 1;
-  const named = one ? paths.join('') : `${paths.slice(0, -1).join(', ')} and ${paths.slice(-1).join('')}`;
+function undoesPush(where: string, head: string, { reverted, restored }: Undone): Refusal {
+  const it = (paths: readonly string[]) => (paths.length === 1 ? 'it' : 'them');
+  const clauses = [
+    reverted.length > 0 && `${named(reverted)} would go back to how ${reverted.length === 1 ? 'it was' : 'they were'} before the push`,
+    restored.length > 0 && `${named(restored)} would come back, though the push deleted or moved ${it(restored)}`,
+  ].filter((clause) => clause !== false);
+  const again = reverted.length > 0 ? `, or send new text for ${named(reverted)}` : '';
   return refusal(
     'branch_moved',
-    `${named} would go back to how ${one ? 'it was' : 'they were'} before someone pushed to ${where}, whose head is ${head}, which undoes that push, so nothing was committed. Leave ${one ? 'it' : 'them'} out, so the push's change stays, or send new text.`,
+    `Someone pushed to ${where}, whose head is ${head}, and this submit would undo it: ${clauses.join(', and ')}. Nothing was committed. Leave ${it([...reverted, ...restored])} out, so the push's change stays${again}.`,
   );
 }
 

@@ -2254,8 +2254,8 @@ and Playwright run it as a local HTTP server.
   with its endpoint, the token it carried, the login that token belongs to,
   and the status. The local server lists them at `/_fake/calls`.
 - **Tests change it the way people change GitHub.** Besides merging,
-  closing, and reviewing PRs and committing files, to any branch and with
-  any mode, a test can open, label, assign, and close issues, open a PR
+  closing, and reviewing PRs and committing and deleting files, to any
+  branch and with any mode, a test can open, label, assign, and close issues, open a PR
   from a branch or a fork, click Update branch on a PR, and spend part of
   a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
@@ -2302,7 +2302,9 @@ and Playwright run it as a local HTTP server.
     The fake asks for it to delete one too, which the docs don't say.
   - A comparison counts a line as added when the old text lacks it, and as
     removed when the new text lacks it, which is close to what GitHub
-    counts for small changes.
+    counts for small changes. It lists a file as `renamed`, with its
+    `previous_filename`, only when the file moved with its text as it was.
+    GitHub also finds a rename with changed text.
   - An archived repo accepts writes.
   - A folder's contents over REST, and a comparison, leave a submodule
     out. GitHub lists one in a folder with the type `submodule`.

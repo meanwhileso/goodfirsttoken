@@ -103,12 +103,12 @@ export interface GitHubFake {
   closePullRequest: (repo: string, number: number, by: string) => void;
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
   // Commits these files, path to text, to the repo's default branch as
-  // `by`, or to `branch`, and returns the commit's ID. A file is 100644
-  // unless `modes` gives it another mode. For a submodule, 160000, its
-  // text is the ID of the commit it names.
+  // `by`, or to `branch`, and returns the commit's ID. A file given null is
+  // deleted. A file is 100644 unless `modes` gives it another mode. For a
+  // submodule, 160000, its text is the ID of the commit it names.
   commitFiles: (
     repo: string,
-    files: Record<string, string>,
+    files: Record<string, string | null>,
     by: string,
     options?: { branch?: string; modes?: Record<string, FileMode> },
   ) => string;
@@ -351,12 +351,15 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     },
     commitFiles: (repo, files, by, options = {}) => {
       const record = repoNamed(repo);
-      const additions = Object.entries(files).map(([path, contents]) => ({ path, contents, mode: own(options.modes ?? {}, path) }));
+      const additions = Object.entries(files).flatMap(([path, contents]) =>
+        contents === null ? [] : [{ path, contents, mode: own(options.modes ?? {}, path) }],
+      );
+      const deletions = Object.entries(files).flatMap(([path, contents]) => (contents === null ? [path] : []));
       return commitOnBranch(
         state,
         record,
         options.branch ?? record.defaultBranch,
-        { additions, deletions: [], headline: 'Update files', login: by },
+        { additions, deletions, headline: 'Update files', login: by },
         now().toISOString(),
       );
     },

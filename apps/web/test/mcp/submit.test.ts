@@ -1144,11 +1144,11 @@ describe("someone else's push to the claim's branch", () => {
 
     for (const refused of [same, deleted, both]) expect(refusalOf(refused)).toBe('branch_moved');
     expect(textOf(same)).toContain(
-      `a.txt would go back to how it was before someone pushed to ${FORK}:${branch}, whose head is ${added}, which undoes that push, so nothing was committed. Leave it out, so the push's change stays, or send new text.`,
+      `Someone pushed to ${FORK}:${branch}, whose head is ${added}, and this submit would undo it: a.txt would go back to how it was before the push. Nothing was committed. Leave it out, so the push's change stays, or send new text for a.txt.`,
     );
     expect(textOf(same)).not.toContain('z.txt');
-    expect(textOf(deleted)).toContain('NOTES.md would go back to how it was');
-    expect(textOf(both)).toContain('a.txt and NOTES.md would go back to how they were');
+    expect(textOf(deleted)).toContain('NOTES.md would go back to how it was before the push');
+    expect(textOf(both)).toContain('a.txt and NOTES.md would go back to how they were before the push');
     expect(writes(sameCalls)).toEqual([]);
     expect(repoState(FORK).branches[branch]).toBe(added);
     expect(filesAt(FORK, branch).get('a.txt')).toBe('one, as the reviewer suggested\n');
@@ -1165,6 +1165,35 @@ describe("someone else's push to the claim's branch", () => {
     expect(kept.get('b.txt')).toBe('b\n');
     expect(changed.isError).toBeFalsy();
     expect(filesAt(FORK, branch).get('a.txt')).toBe('one, and more\n');
+  });
+
+  test('onto that brings back a file the push deleted, or moved away in a rename, is refused with any text, naming the file', async () => {
+    const { priya, claimId, branch } = await openedClaim();
+    // A reviewer renames a.txt, with its text as it is, and deletes z.txt.
+    const renamed = github.commitFiles(FORK, { 'a.txt': null, 's.txt': 'one\n' }, 'kenji', { branch });
+    const deleted = github.commitFiles(FORK, { 'z.txt': null }, 'kenji', { branch });
+
+    const edited = await submit(priya, claimId, { 'a.txt': 'one, edited\n' }, { onto: deleted });
+    const both = await submit(priya, claimId, { 'a.txt': 'one\n', 'z.txt': 'z, again\n', 'b.txt': 'b\n' }, { onto: deleted });
+    const bothCalls = lastCalls();
+
+    expect(renamed).not.toBe(deleted);
+    expect([edited, both].map(refusalOf)).toEqual(['branch_moved', 'branch_moved']);
+    expect(textOf(edited)).toContain(
+      `Someone pushed to ${FORK}:${branch}, whose head is ${deleted}, and this submit would undo it: a.txt would come back, though the push deleted or moved it. Nothing was committed. Leave it out, so the push's change stays.`,
+    );
+    expect(textOf(both)).toContain('a.txt and z.txt would come back, though the push deleted or moved them');
+    // a.txt came with its old text, and is named once, as a file come back.
+    expect(textOf(both)).not.toContain('would go back');
+    expect(textOf(both)).not.toContain('b.txt');
+    expect(writes(bothCalls)).toEqual([]);
+    expect([...filesAt(FORK, branch).keys()].filter((path) => path.endsWith('.txt')).sort()).toEqual(['s.txt']);
+
+    // A third text on the file the push moved is the agent's own change.
+    const moved = await submit(priya, claimId, { 's.txt': 'one, moved and edited\n' }, { onto: deleted });
+    expect(moved.isError).toBeFalsy();
+    expect(filesAt(FORK, branch).get('s.txt')).toBe('one, moved and edited\n');
+    expect(filesAt(FORK, branch).has('a.txt')).toBe(false);
   });
 
   test("after an Update branch merge, the lines and the diff are the PR's own, with none of main's changes", async () => {
