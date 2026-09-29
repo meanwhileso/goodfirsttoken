@@ -1,5 +1,5 @@
 /* Layout for /sign-in and /me. The components they use are styled in
-   components.css. */
+   components.css. The form fields on /me are the page's own. */
 
 .account { padding-block: 56px 96px; }
 .account__title { font: var(--display-lg); letter-spacing: var(--display-lg-tracking); overflow-wrap: anywhere; }
@@ -11,3 +11,46 @@
 .account__agents { list-style: none; padding: 0; margin: 0; max-width: 34em; }
 .account__agent { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .account__agent form { margin-top: 0; }
+
+/* /me: the review queue on a rail, with the person's agents, interests, and
+   sign-out beside it. */
+.account--me form { margin-top: 0; }
+.account__notice {
+  margin-top: 32px; padding: 14px 16px; border-radius: var(--r-md); background: var(--label-tint); color: var(--text-body);
+  font-size: 15px; max-width: 44em; overflow-wrap: anywhere;
+}
+.account__split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 64px; align-items: start; margin-top: 56px; }
+.account__rail { min-width: 0; }
+.account__aside { display: flex; flex-direction: column; min-width: 0; }
+.account__aside > .account__section:first-child { margin-top: 0; }
+@container page (max-width: 960px) {
+  .account__split { grid-template-columns: minmax(0, 1fr); gap: 56px; }
+}
+.account__empty { color: var(--text-muted); font-size: 15px; }
+.account__interests { --gap: 6px; }
+.account__edit summary { cursor: pointer; color: var(--label-ink); width: max-content; }
+.account__form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+
+/* One piece of work in the review queue. */
+.queue-item { display: flex; flex-direction: column; gap: 12px; padding-block: 28px; border-top: 1px solid var(--line-soft); }
+.queue-item:first-child { padding-top: 0; border-top: 0; }
+.queue-item__head {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; overflow-wrap: anywhere;
+}
+.queue-item__title { font-size: 17px; font-weight: 600; color: var(--ink); }
+.queue-item__checks { overflow-wrap: anywhere; }
+.queue-item .quote { font-size: 16px; overflow-wrap: anywhere; }
+.queue-item__warning { color: var(--attention); font-size: 15px; overflow-wrap: anywhere; }
+.queue-item__form { display: flex; flex-direction: column; gap: 14px; }
+
+/* Form fields. */
+.account-field { display: flex; flex-direction: column; gap: 6px; max-width: 44em; }
+.account-field label { font: 500 13px/1.4 var(--font-mono); }
+.account-input, .account-textarea {
+  width: 100%; font: 15px/1.5 var(--font-sans); padding: 10px 14px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.account-input { height: 44px; }
+.account-input--mono { font-family: var(--font-mono); font-size: 14px; }
+.account-textarea { min-height: 160px; resize: vertical; }
+.account-input:focus, .account-textarea:focus { outline: none; border-color: var(--label); box-shadow: var(--focus); }
