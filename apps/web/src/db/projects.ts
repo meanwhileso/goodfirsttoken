@@ -920,3 +920,52 @@ export async function reopenRegistration(
   }
   throw new Error(`${repo} changed ${String(SAVE_ATTEMPTS)} times during one save.`);
 }
+
+/** A project Good First Token paused on its own, with the ID of the status change that paused it. */
+export interface SelfPausedProject {
+  project: ProjectRecord;
+  /** The project's latest status change, which paused it. */
+  changeId: number;
+}
+
+/** A pause that names no one, made by Good First Token on its own. */
+const SELF_PAUSED = "p.status = 'paused' AND p.status_changed_by IS NULL";
+
+/**
+ * Every project Good First Token paused on its own, the sync's pauses and
+ * the policy crawler's, the one paused longest ago first, each with the ID
+ * of the status change that paused it. A new status change gives it a new
+ * ID, so an ID names one pause.
+ */
+export async function listSelfPausedProjects(db: D1Database): Promise<SelfPausedProject[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.*, s.settings,
+         (SELECT MAX(c.id) FROM project_status_changes c WHERE c.repo = p.repo) AS change_id
+       FROM projects p
+       JOIN project_settings s ON s.repo = p.repo AND s.version = p.settings_version
+       WHERE ${SELF_PAUSED}
+       ORDER BY p.status_changed_at, p.repo`,
+    )
+    .all<ProjectRow & { change_id: number }>();
+  return results.map((row) => ({ project: toProject(row), changeId: mustParse(count, row.change_id, 'changeId') }));
+}
+
+/**
+ * The project Good First Token paused on its own whose latest status change
+ * is `changeId`, or null when there is none: no such change, a project that
+ * isn't paused that way, or one whose status changed since.
+ */
+export async function getSelfPausedProject(db: D1Database, changeId: number): Promise<SelfPausedProject | null> {
+  const change = mustParse(count, changeId, 'changeId');
+  const row = await db
+    .prepare(
+      `${SELECT_PROJECT}
+       WHERE ${SELF_PAUSED}
+         AND p.repo = (SELECT repo FROM project_status_changes WHERE id = ?1)
+         AND ?1 = (SELECT MAX(c.id) FROM project_status_changes c WHERE c.repo = p.repo)`,
+    )
+    .bind(change)
+    .first<ProjectRow>();
+  return row === null ? null : { project: toProject(row), changeId: change };
+}
