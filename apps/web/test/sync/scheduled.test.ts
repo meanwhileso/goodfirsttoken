@@ -75,19 +75,25 @@ async function runCron(cron: string, bindings: Env = env): Promise<void> {
 test('every cron trigger in wrangler.jsonc runs one job, and each job has a cron', async () => {
   const claimId = await workToFind();
   const ran: string[][] = [];
+  // The crawler's search fills a stand-in for the crawl queue, so no
+  // consumer reads what it finds while the other jobs run.
+  const queued: unknown[] = [];
+  const bindings = { ...env, CRAWL_QUEUE: { sendBatch: (messages: unknown[]) => void queued.push(...messages) } } as unknown as Env;
 
   for (const cron of crons) {
     const synced = (await listIssues(db, repo)).length > 0;
     const followed = (await getPr(db, claimId))?.state !== 'open';
-    await runCron(cron);
+    const crawled = queued.length > 0;
+    await runCron(cron, bindings);
     const jobs: string[] = [];
     if (!synced && (await listIssues(db, repo)).length > 0) jobs.push('sync');
     if (!followed && (await getPr(db, claimId))?.state !== 'open') jobs.push('prs');
+    if (!crawled && queued.length > 0) jobs.push('crawl');
     ran.push(jobs);
   }
 
   expect(ran.map((jobs) => jobs.length)).toEqual(crons.map(() => 1));
-  expect(ran.flat().sort()).toEqual(['prs', 'sync']);
+  expect(ran.flat().sort()).toEqual(['crawl', 'prs', 'sync']);
 });
 
 test('with no service token, no job reads GitHub, and the log names the secret', async () => {

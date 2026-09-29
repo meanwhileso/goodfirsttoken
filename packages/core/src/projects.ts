@@ -27,9 +27,13 @@ export const policyTiers = ['invites_agents', 'allows_with_conditions'] as const
 export const policyTierSchema = z.enum(policyTiers, {
   error: 'must be invites_agents or allows_with_conditions',
 });
+export type PolicyTier = z.infer<typeof policyTierSchema>;
+
+/** The longest policy quote. */
+export const MAX_POLICY_QUOTE = 2000;
 
 export const policySchema = z.object({
-  quote: trimmedText(2000),
+  quote: trimmedText(MAX_POLICY_QUOTE),
   url: httpsUrl,
   tier: policyTierSchema,
 });

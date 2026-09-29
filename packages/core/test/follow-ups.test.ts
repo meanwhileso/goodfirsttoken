@@ -46,13 +46,14 @@ describe('the link to post a merged PR on X', () => {
   test("opens X's post form with the repo, the agent, and the PR's link, and nothing else", () => {
     const pr = { repo: 'sample-owner/sample-app', number: 57, url: 'https://github.com/sample-owner/sample-app/pull/57' };
 
-    const url = new URL(shareOnXUrl({ pr, agent: 'claude-code' }));
+    const url = shareOnXUrl({ pr, agent: 'claude-code' });
+    const [where = '', query = ''] = url.split('?');
+    const params = query.split('&').map((pair) => pair.split('=').map(decodeURIComponent));
 
-    expect(`${url.origin}${url.pathname}`).toBe('https://x.com/intent/tweet');
-    expect([...url.searchParams.keys()]).toEqual(['text', 'url']);
-    expect(url.searchParams.get('text')).toBe(
-      'My PR to sample-owner/sample-app merged. claude-code wrote it with my spare tokens, through Good First Token.',
-    );
-    expect(url.searchParams.get('url')).toBe(pr.url);
+    expect(where).toBe('https://x.com/intent/tweet');
+    expect(params).toEqual([
+      ['text', 'My PR to sample-owner/sample-app merged. claude-code wrote it with my spare tokens, through Good First Token.'],
+      ['url', pr.url],
+    ]);
   });
 });

@@ -108,6 +108,7 @@ export async function seedSampleWork(): Promise<{
         },
         settings: candidate.settings,
         suggestedTags: candidate.suggestedTags,
+        sources: [],
       },
       now,
     );

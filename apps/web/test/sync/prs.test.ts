@@ -231,9 +231,9 @@ describe('a PR closed without merging', () => {
   });
 
   test.each([
-    ['closed', (n: number) => github.closeIssue(APP, n, BY)],
-    ['untagged', (n: number) => github.unlabelIssue(APP, n, 'help wanted', BY)],
-    ['assigned', (n: number) => github.assignIssue(APP, n, 'kenji', BY)],
+    ['closed', (n: number) => { github.closeIssue(APP, n, BY); }],
+    ['untagged', (n: number) => { github.unlabelIssue(APP, n, 'help wanted', BY); }],
+    ['assigned', (n: number) => { github.assignIssue(APP, n, 'kenji', BY); }],
   ])('on an issue %s since, its copy is dropped, and the issue takes no claims', async (_, change) => {
     const { issue, claim } = await closedAfterSync();
     change(issue);

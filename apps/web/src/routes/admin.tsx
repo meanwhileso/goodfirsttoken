@@ -135,6 +135,64 @@ function ReasonField({ label, placeholder }: { label: string; placeholder: strin
   );
 }
 
+const SOURCE_LABELS: Record<QueueItem['sources'][number]['about'], string> = {
+  excludedTags: 'excluded tags',
+  whoCanClaim: 'who can claim',
+  disclosure: 'disclosure',
+  personWrittenDescription: 'person-written PR description',
+  claUrl: 'CLA',
+  prMode: 'PR mode',
+  tags: 'tags, the label the docs keep agents to',
+  labelMissing: "no tags, since the docs keep agents to a label the repo doesn't have, or keeps for people",
+  canary: 'a canary for agents that read the file. No setting comes from it',
+};
+
+/** The line in the repo's files behind each suggested setting, and any canary, as the files have them. */
+function Sources({ item }: { item: QueueItem }) {
+  if (item.sources.length === 0) return null;
+  return (
+    <Block label="the lines behind them, from the repo's files">
+      {item.sources.map((source) => (
+        <div
+          key={`${source.about} ${source.path} ${source.line ?? ''}`}
+          className="stack"
+          style={{ '--gap': '6px' } as CSSProperties}
+        >
+          <span className="mono small muted">
+            {SOURCE_LABELS[source.about]} · {source.path}
+          </span>
+          {source.line !== null && <Quote>{source.line}</Quote>}
+        </div>
+      ))}
+    </Block>
+  );
+}
+
+/**
+ * Every sentence in the repo's docs that names AI, with the rest of its
+ * paragraph, as the files have them, for the admin to read before a verdict.
+ */
+function AiSentences({ item }: { item: QueueItem }) {
+  if (item.aiSentences.length === 0 && item.moreAiSentences === 0) return null;
+  return (
+    <Block label="every sentence in its docs that names AI, with the rest of its paragraph. Read them before you decide">
+      {item.aiSentences.map((sentence, i) => (
+        <div key={`${String(i)} ${sentence.path}`} className="stack" style={{ '--gap': '6px' } as CSSProperties}>
+          <span className="mono small muted">{sentence.path}</span>
+          {sentence.cutBefore && <span className="mono small muted">The paragraph starts earlier in the file.</span>}
+          <Quote>{sentence.text}</Quote>
+          {sentence.cutAfter && <span className="mono small muted">The paragraph goes on in the file.</span>}
+        </div>
+      ))}
+      {item.moreAiSentences > 0 && (
+        <span className="mono small muted">
+          {item.moreAiSentences.toLocaleString('en-US')} more in the files. Read them there.
+        </span>
+      )}
+    </Block>
+  );
+}
+
 function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
@@ -168,6 +226,8 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         </SplitBadges>
         <SettingsBadges settings={item.settings} />
       </Block>
+      <Sources item={item} />
+      <AiSentences item={item} />
       {item.suggestedTags.length > 0 && (
         <Block label="labels that could mean ready for help">
           <div className="admin-item__labels">

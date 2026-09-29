@@ -1,3 +1,4 @@
+import type { D1Migration } from 'cloudflare:test';
 import { newClaim, type ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, test } from 'vitest';

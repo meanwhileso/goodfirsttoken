@@ -7,6 +7,7 @@ import {
   adminPauseProject,
   adminQueue,
   adminRemoveProject,
+  adminSeedRepo,
   type Outcome,
 } from '../admin/actions';
 import type { Caller } from '../auth/permissions';
@@ -15,7 +16,14 @@ import type { Caller } from '../auth/permissions';
 // src/admin/actions.ts, which checks the caller's permission first, and
 // answers with the tool's result or its refusal.
 
-type AdminTool = 'admin_queue' | 'admin_decide' | 'admin_add_project' | 'admin_block_donor' | 'admin_pause_project' | 'admin_remove_project';
+type AdminTool =
+  | 'admin_queue'
+  | 'admin_decide'
+  | 'admin_add_project'
+  | 'admin_block_donor'
+  | 'admin_pause_project'
+  | 'admin_remove_project'
+  | 'admin_seed_repo';
 
 function answer<N extends AdminTool>(name: N, outcome: Outcome<N>): CallToolResult {
   return outcome.ok ? { ...toolResult(name, outcome.value) } : { ...toolRefusal(outcome.refusal) };
@@ -35,4 +43,6 @@ export const adminTools = {
     answer('admin_pause_project', await adminPauseProject(caller, input, now)),
   admin_remove_project: async (caller: Caller, input: ToolInput<'admin_remove_project'>, now: number) =>
     answer('admin_remove_project', await adminRemoveProject(caller, input, now)),
+  admin_seed_repo: async (caller: Caller, input: ToolInput<'admin_seed_repo'>, now: number) =>
+    answer('admin_seed_repo', await adminSeedRepo(caller, input, now)),
 };

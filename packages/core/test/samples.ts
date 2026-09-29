@@ -276,6 +276,15 @@ export const samples: Samples = {
           },
           suggestedTags: [{ name: 'ready for help', openIssues: 8 }],
           onDoNotList: false,
+          sources: [
+            { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' },
+            { about: 'whoCanClaim', path: 'VOUCHED.td', line: null },
+          ],
+          aiSentences: [
+            { path: 'CONTRIBUTING.md', text: 'Agent pull requests are welcome once a person has read the diff.' },
+            { path: 'CONTRIBUTING.md', text: 'Mark AI help with an Assisted-by: trailer.', cutBefore: false, cutAfter: true },
+          ],
+          moreAiSentences: 3,
         },
         {
           id: 'reg_7',
@@ -289,6 +298,9 @@ export const samples: Samples = {
           policy: null,
           suggestedTags: [],
           onDoNotList: true,
+          sources: [],
+          aiSentences: [],
+          moreAiSentences: 0,
         },
       ],
     },
@@ -297,7 +309,12 @@ export const samples: Samples = {
       'cand_1',
       '1,200 stars',
       'Agent pull requests are welcome once a person has read the diff.',
-      'ready for help (8 open)',
+      '"ready for help" (8 open)',
+      '> Sign the CLA at https://cla.example.org/sample-app.',
+      'the repo has the file "VOUCHED.td"',
+      '> Mark AI help with an Assisted-by: trailer.',
+      'The paragraph goes on in the file.',
+      '3 more sentences in the files name AI. Read them there.',
       'reg_7',
       'from @octo-maintainer',
       'GitHub showed no public repo named sample-owner/sample-harbor when asked.',
@@ -323,5 +340,9 @@ export const samples: Samples = {
   admin_remove_project: {
     output: { repo, status: 'rejected' },
     mentions: ['Removed', repo, 'do-not-list'],
+  },
+  admin_seed_repo: {
+    output: { repo, added: true, leftAlone: null },
+    mentions: ['Added', repo, 'seed list'],
   },
 };
