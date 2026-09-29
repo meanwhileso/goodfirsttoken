@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { readPolicy, suggestSettings, type PolicyFile, type PolicyFileKind } from '../../src/crawl/rules';
+import { readPolicy, safeForm, sentencesOf, suggestSettings, type PolicyFile, type PolicyFileKind } from '../../src/crawl/rules';
 import { MAX_DOC_BYTES } from '../../src/projects/docs';
 
 // The policy crawler's rules, called directly on made-up files. Every line of
@@ -130,13 +130,57 @@ const BAN_CORPUS: { review: string; cases: [PolicyFileKind, string][] }[] = [
       ['aiPolicy', 'Please do not commit code to any branch.'],
     ],
   },
+  {
+    review: 'review 4, at forms 6, 9, and 11 as the fourth round left them',
+    cases: [
+      ['contributing', 'We only ask that you tell us you wrote it without AI.'],
+      ['contributing', 'On AI tools: we only ask that you tell us you wrote every line yourself.'],
+      ['contributing', 'We only ask that you mention in the pull request that it was written without AI.'],
+      ['contributing', 'We only ask that you keep Copilot away from this repo.'],
+      ['contributing', "You don't need to ask, just skip the AI."],
+      ['contributing', 'Coding agents must not push to the main branch or any other branch.'],
+      ['contributing', 'Coding agents must not open pull requests against main or any other branch.'],
+      ['contributing', 'AI agents must not push to our branches.'],
+      ['contributing', 'Coding agents must not open pull requests against the branches of this repository.'],
+      ['contributing', "Copilot suggestions are fine. If it isn't your own code, please take it elsewhere."],
+    ],
+  },
 ];
 
 describe('the regression corpus of ban wordings', () => {
   const all = BAN_CORPUS.flatMap(({ review, cases }) => cases.map(([kind, text]) => [review, kind, text] as const));
 
-  test('holds every wording the reviews found, 76 in all', () => {
-    expect(all).toHaveLength(76);
+  test('holds every wording the reviews found, 86 in all', () => {
+    expect(all).toHaveLength(86);
+  });
+
+  test('has no sentence that says no and is one of the forms known to say no to something else', () => {
+    // Every form is a whole sentence with closed slots, so a ban is safe
+    // only if all of one of its sentences is a form. One sentence is: a
+    // checkbox that says no AI was used, whose ban is the sentence after it.
+    const forms = all.flatMap(([, , text]) => sentencesOf(text).map((sentence) => [sentence.text, safeForm(sentence.text, sentence.choice)] as const));
+    expect(forms.length).toBeGreaterThan(all.length);
+    expect(forms.filter(([, form]) => form !== null)).toEqual([['- [ ] No AI tools were used.', 1]]);
+    expect(tierWith(file('prTemplate', '- [ ] No AI tools were used.'))).toBe('allows_with_conditions');
+    expect(tierWith(file('prTemplate', 'AI-written code is off-limits here.'))).toBe('bans_or_restricts');
+  });
+
+  test("has each form's own example read as that form, so the check above can find one", () => {
+    const examples: [string, number, boolean?][] = [
+      ['- [ ] I did not use AI', 1, true],
+      ['Do not use AI on issues labeled "good first issue".', 2],
+      ['Agents must not open PRs without a person.', 3],
+      ['Never open a PR without running the tests.', 4],
+      ["Don't submit code you don't understand.", 5],
+      ['We only ask that you disclose it.', 6],
+      ["Don't delete this section.", 7],
+      ["Don't submit AI-assisted code without disclosing it.", 8],
+      ['Agents should not push to main.', 9],
+      ['Do not use AI to write commit messages without reading them.', 10],
+      ['If an agent cannot run the tests, say so in the pull request.', 11],
+      ['Agents may only work on issues labeled `agent ready`.', 12],
+    ];
+    expect(examples.map(([text, , choice]) => safeForm(text, choice))).toEqual(examples.map(([, form]) => form));
   });
 
   test.each(all)('%s, in the %s file: %j', (_review, kind, text) => {
@@ -152,8 +196,9 @@ describe('the regression corpus of ban wordings', () => {
 /**
  * Made-up welcoming AI policies, written the way real ones read, many with
  * ordinary rules for how to work. The second review's ten come first. The
- * rules read every one as a welcome but the two in KNOWN_FALSE_BANS, which
- * name AI and say no to something else: 2 of 38.
+ * rules read every one as a welcome but the four in KNOWN_FALSE_BANS, which
+ * name AI and say no to something else in a sentence that is no form: 4 of
+ * 38.
  */
 const WELCOMING: [PolicyFileKind, string][] = [
   ['aiPolicy', '# AI policy\n\nAgents may open pull requests on their own.\n\nDisclose it with an Assisted-by: trailer. Keep each PR to one change.\n'],
@@ -187,15 +232,16 @@ const WELCOMING: [PolicyFileKind, string][] = [
   ['aiPolicy', '# AI policy\n\nAgents may open pull requests on their own. Do not modify files under `vendor/`.\n'],
   ['contributing', '# Contributing\n\nCoding agents are welcome. Please do not tag maintainers directly; we read every pull request.\n'],
   ['aiPolicy', '# AI policy\n\nYou may use AI. Please do not paste output you have not read into issues.\n'],
-  ['contributing', '# Contributing\n\nAgents may open pull requests here, and they do not need to sign anything first.\n'],
   ['contributing', '# Contributing\n\nWe welcome pull requests from coding agents. If an agent cannot run the tests, say so in the pull request.\n'],
   ['contributing', '# Contributing\n\nCoding agents may open pull requests. Please do not open pull requests for issues someone else already claimed.\n'],
   ['aiPolicy', '# AI policy\n\nAgents may only work on issues labeled `agent ready`.\n'],
-  ['aiPolicy', '# AI policy\n\nAI help is welcome. We will not merge a PR that fails CI, whoever wrote it.\n'],
 ];
 const KNOWN_FALSE_BANS: [PolicyFileKind, string][] = [
   ['aiPolicy', '# AI policy\n\nAI assistance is welcome. Nothing changes about how we review pull requests.\n'],
   ['aiPolicy', '# AI policy\n\nAI-assisted work is welcome. We will not ask how you wrote it.\n'],
+  // Since the forms became whole sentences: each is a form with words added.
+  ['contributing', '# Contributing\n\nAgents may open pull requests here, and they do not need to sign anything first.\n'],
+  ['aiPolicy', '# AI policy\n\nAI help is welcome. We will not merge a PR that fails CI, whoever wrote it.\n'],
 ];
 
 /**
@@ -221,19 +267,19 @@ const HELD_OUT: [PolicyFileKind, string][] = [
 
 describe('the held-out welcoming policies', () => {
   // A measurement, with no rule behind it. It records what the rules read
-  // today, so a change to the rate shows here. 8 of 12 read as a ban: about
-  // two in three. In six, a rule for how to work takes its AI naming from
-  // somewhere else: four from their AI policy file and its heading, one of
-  // them from the sentence before it too, one from a heading, and one from
-  // the sentence before it alone. Two name AI themselves and say no to
-  // something else.
-  test('the rules read 8 of the 12 as a ban', () => {
+  // today, so a change to the rate shows here. 9 of 12 read as a ban, up
+  // from 8 before the forms became whole sentences: three in four. In seven,
+  // a rule for how to work takes its AI naming from somewhere else: five
+  // from their AI policy file and its heading, two of them from the
+  // sentence before it too, one from a heading, and one from the sentence
+  // before it alone. Two name AI themselves and say no to something else.
+  test('the rules read 9 of the 12 as a ban', () => {
     const tiers = HELD_OUT.map(([kind, text]) => readPolicy([file(kind, text)]).tier);
 
-    expect(tiers.filter((tier) => tier === 'bans_or_restricts')).toHaveLength(8);
+    expect(tiers.filter((tier) => tier === 'bans_or_restricts')).toHaveLength(9);
     expect(tiers).toEqual([
       'bans_or_restricts',
-      'invites_agents',
+      'bans_or_restricts',
       'bans_or_restricts',
       'bans_or_restricts',
       'bans_or_restricts',
@@ -249,9 +295,9 @@ describe('the held-out welcoming policies', () => {
 });
 
 describe('the welcoming corpus', () => {
-  test('has 38 policies written alongside the rules, and the rules read 2 of them as a ban', () => {
+  test('has 38 policies written alongside the rules, and the rules read 4 of them as a ban', () => {
     expect(WELCOMING.length + KNOWN_FALSE_BANS.length).toBe(38);
-    expect(KNOWN_FALSE_BANS).toHaveLength(2);
+    expect(KNOWN_FALSE_BANS).toHaveLength(4);
   });
 
   test.each(WELCOMING)('in the %s file, %j is a welcome', (kind, text) => {
@@ -487,7 +533,7 @@ describe('the forms known to say no to something else, each one tested both ways
 });
 
 describe('the forms added in the third round, each tested both ways', () => {
-  test('9. a whole rule for how to work, with nothing about AI, is no ban, unless the words after it name AI or say no', () => {
+  test('9. a whole rule for how to work, with nothing about AI, is no ban, and a word more makes it one', () => {
     for (const sentence of [
       'Do not include secrets or tokens in a PR.',
       'Agents should not push to main.',
@@ -505,6 +551,8 @@ describe('the forms added in the third round, each tested both ways', () => {
       'Do not include secrets or AI-generated code in a PR.',
       'Agents should not push to main, and AI-written code is not merged.',
       'We will not merge a PR that fails CI or was written by a model.',
+      'Agents should not push to main today.',
+      'Do not include secrets or tokens in a PR, or code from Copilot.',
     ]) {
       expect(readPolicy([contributing(`AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
     }
@@ -520,7 +568,7 @@ describe('the forms added in the third round, each tested both ways', () => {
     expect(readPolicy([contributing('AI help is fine. Do not use AI, with or without reading the output.')]).tier).toBe('bans_or_restricts');
   });
 
-  test('11. a condition that opens a sentence is taken out, and the rest is read again', () => {
+  test('11. a condition that asks to be told is no ban, and one that asks more is', () => {
     expect(readPolicy([contributing('Agents may open pull requests. If an agent cannot run the tests, say so in the pull request.')]).tier).toBe(
       'invites_agents',
     );
@@ -529,21 +577,22 @@ describe('the forms added in the third round, each tested both ways', () => {
     );
   });
 
-  test('12. a label that scopes where agents work is no ban, unless the sentence scopes something else', () => {
+  test('12. a label that scopes where agents work is no ban, and a word more makes it one', () => {
     expect(readPolicy([file('aiPolicy', 'Agents may only work on issues labeled `agent ready`.')]).tier).toBe('invites_agents');
     expect(readPolicy([file('aiPolicy', 'Agents may open pull requests. They may only read issues labeled `agent ready`.')]).tier).toBe(
       'bans_or_restricts',
     );
+    expect(readPolicy([file('aiPolicy', 'Agents may only work on issues labeled `agent ready`, and only in docs.')]).tier).toBe('bans_or_restricts');
   });
 
-  test('reminders and requests: "you don\'t need to ask first" and "we only ask that you" are no ban, unless the rest says no', () => {
+  test('reminders and requests: "you don\'t need to ask first" and "we only ask that you" are no ban, and a word more makes them one', () => {
     expect(readPolicy([contributing("AI help is fine. You don't need to ask first.")]).tier).toBe('allows_with_conditions');
     expect(readPolicy([contributing('AI help is fine. We only ask that you disclose it.')]).tier).toBe('allows_with_conditions');
     expect(readPolicy([contributing("AI help is fine. You don't need to ask: AI is not welcome.")]).tier).toBe('bans_or_restricts');
     expect(readPolicy([contributing('AI help is fine. We only ask that you do not use it for code.')]).tier).toBe('bans_or_restricts');
   });
 
-  test('9. a rule about one branch is no ban, and a rule about any, every, or all branches is judged like any other sentence', () => {
+  test('9. a rule about one branch, named, is no ban, and a rule about any, every, all, our, or other branches is one', () => {
     for (const sentence of [
       'Agents should not push to the `release` branch.',
       'Do not open pull requests against the main branch.',
@@ -556,17 +605,22 @@ describe('the forms added in the third round, each tested both ways', () => {
       'Do not open pull requests against every branch.',
       'Do not commit code to all branches.',
       'Agents must not open pull requests on each branch.',
+      'AI agents must not push to our branches.',
+      'Do not push to main or any other branch.',
+      'Do not open pull requests against the branches of this repository.',
     ]) {
       expect(readPolicy([file('aiPolicy', `AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
     }
   });
 
-  test('11. a condition that names AI or says who writes the work stays in, and the sentence is judged with it', () => {
+  test('11. a condition that names AI or says who writes the work is no form, and is judged like any other sentence', () => {
     for (const sentence of [
       "If you can't do it without Copilot, please find another project.",
       "If you didn't write the code yourself, please take it elsewhere.",
       'If you cannot work without a model, this is the wrong place.',
       'If you did not write it by hand, open no pull request.',
+      "If it isn't your own code, please take it elsewhere.",
+      'If you cannot run the tests, say so and use no AI.',
     ]) {
       expect(readPolicy([file('aiPolicy', `AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
     }
@@ -575,19 +629,24 @@ describe('the forms added in the third round, each tested both ways', () => {
     );
   });
 
-  test('6. "we only ask that you" and "you don\'t need to ask" stay in when the rest says who writes the work or leaves something out, unless it asks only to be told', () => {
+  test('6. "we only ask that you" and "you don\'t need to ask" are no ban only as a whole sentence that asks to be told, to test, or nothing', () => {
     for (const sentence of [
       'We only ask that you write every line by hand.',
       'We only ask that you leave the machine out of it.',
       'We only want people who write their own code.',
       "You don't need to ask: every line here is written by a person.",
+      'We only ask that you tell us which model wrote it.',
+      'We only ask that you tell us you wrote it without AI.',
+      'We only ask that you keep Copilot away from this repo.',
+      "You don't need to ask, just skip the AI.",
+      'We only ask that you disclose it, and use no LLM.',
     ]) {
       expect(readPolicy([file('aiPolicy', `AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
     }
     for (const sentence of [
       'We only ask that you disclose AI use.',
       'We only ask that you mention which tools you used.',
-      'We only ask that you tell us which model wrote it.',
+      'We only ask that you test your change.',
       "You don't need to ask before using Copilot.",
     ]) {
       expect(readPolicy([contributing(`AI help is fine. ${sentence}`)]).tier, sentence).toBe('allows_with_conditions');
@@ -897,25 +956,35 @@ describe('the sentences that name AI, for the admin', () => {
     expect(reading.aiSentences.map(({ text, cutBefore, cutAfter }) => [text, cutBefore, cutAfter])).toEqual([[long, false, false]]);
   });
 
-  test('cut a paragraph longer than 1,000 characters around the sentence, from a sentence before it, and say where', () => {
+  test('cut a paragraph longer than 1,000 characters to 1,000 centered on the words that name AI, between words, and say where', () => {
     const filler = (n: number) => Array.from({ length: n }, (_, i) => `Step ${String(i)} of the build runs here.`);
-    const before = filler(40);
-    const after = filler(40);
-    const paragraph = [...before, 'AI help is fine.', 'Code from a machine gets closed.', ...after].join(' ');
+    const paragraph = [...filler(40), 'AI help is fine.', 'Code from a machine gets closed.', ...filler(40)].join(' ');
 
     const reading = readPolicy([contributing(paragraph)]);
 
     expect(reading.aiSentences).toHaveLength(1);
     const [kept] = reading.aiSentences;
     expect(kept).toMatchObject({ cutBefore: true, cutAfter: true });
-    expect(kept?.text.length).toBeLessThanOrEqual(1000);
-    // It starts at a sentence at most 300 characters before, and holds the one after.
-    expect(kept?.text).toMatch(/^Step \d+ of the build runs here\. /);
-    const lead = kept?.text.indexOf('AI help is fine.') ?? -1;
-    expect(lead).toBeGreaterThan(0);
-    expect(lead).toBeLessThanOrEqual(300);
-    expect(kept?.text).toContain('AI help is fine. Code from a machine gets closed.');
-    expect(paragraph).toContain(kept?.text ?? 'nothing kept');
+    const text = kept?.text ?? '';
+    expect(text.length).toBeLessThanOrEqual(1000);
+    expect(text.length).toBeGreaterThan(940);
+    // About as much before the words that name AI as after them.
+    const lead = text.indexOf('AI help is fine.');
+    expect(lead).toBeGreaterThan(440);
+    expect(lead).toBeLessThanOrEqual(500);
+    expect(text).toContain('AI help is fine. Code from a machine gets closed.');
+    // Each cut falls between words.
+    expect(paragraph).toContain(` ${text} `);
+  });
+
+  test('center a long sentence that names AI near its end on its AI words', () => {
+    const long = `${'Please read the build guide, the style guide, the release notes, and the docs, '.repeat(25)}and keep Copilot away from this repo.`;
+    expect(long.length).toBeGreaterThan(2000);
+
+    const [kept] = readPolicy([contributing(long)]).aiSentences;
+
+    expect(kept).toMatchObject({ cutBefore: true, cutAfter: false });
+    expect(kept?.text).toContain('and keep Copilot away from this repo.');
   });
 
   test('keep a paragraph that starts with the sentence uncut at the start', () => {
@@ -925,6 +994,14 @@ describe('the sentences that name AI, for the admin', () => {
 
     expect(kept).toMatchObject({ cutBefore: false, cutAfter: true });
     expect(kept?.text.startsWith('AI help is fine. Step 0')).toBe(true);
+    // The cut at the end falls between words, wherever the words fall.
+    for (let pad = 0; pad < 9; pad++) {
+      const words = `AI help is fine. ${'x'.repeat(pad)} ${'abcdefgh '.repeat(200)}`.trim();
+      const [cut] = readPolicy([contributing(words)]).aiSentences;
+      const text = cut?.text ?? '';
+      expect(words.startsWith(text), String(pad)).toBe(true);
+      expect(words[text.length], String(pad)).toBe(' ');
+    }
   });
 
   test('keep a second sentence in a long paragraph that the first passage left out, and not one it holds', () => {
@@ -933,9 +1010,10 @@ describe('the sentences that name AI, for the admin', () => {
 
     const reading = readPolicy([contributing(paragraph)]);
 
-    expect(reading.aiSentences.map(({ text }) => text.slice(0, 23))).toEqual(['AI help is fine. Step 0', expect.stringMatching(/^Step \d+ of the build/) as unknown]);
-    expect(reading.aiSentences[0]?.text).toContain('Claude may help.');
-    expect(reading.aiSentences[1]?.text).toContain('Copilot may help too.');
+    expect(reading.aiSentences.map(({ text, cutBefore }) => [text.includes('Claude may help.'), text.includes('Copilot may help too.'), cutBefore])).toEqual([
+      [true, false, false],
+      [false, true, true],
+    ]);
     expect(reading.moreAiSentences).toBe(0);
   });
 

@@ -2116,17 +2116,27 @@ admin queue as crawl candidates. The rules are in
   sentence after one that names AI, so `readPolicy` keeps each sentence
   that names AI, that the rules read for a ban, or that bans AI with no AI
   word, with the rest of its paragraph as the file has it. A paragraph
-  longer than `MAX_AI_PASSAGE`, 1,000 characters, is cut around the
-  sentence, from the first sentence at most 300 characters before it, and
-  `cutBefore` and `cutAfter` say where. A sentence inside the last passage
+  longer than `MAX_AI_PASSAGE`, 1,000 characters, is cut to that length
+  centered on the sentence's first word that names AI, so a long sentence
+  that names AI near its end still shows it, and `cutBefore` and
+  `cutAfter` say where. A sentence inside the last passage
   kept from its file is not kept again. It keeps the first `MAX_AI_SENTENCES`, 60, and counts
   the rest. A find stores them in `crawl_candidates.ai_sentences` and
   `more_ai_sentences`, and `admin_queue`, the admin page, and the admin
   skill show them before a verdict, marked as the repo's words, with each
   cut said in our own words. The rules' tests hold a corpus of every ban
-  wording four reviews found, 76, all read as bans, 38 made-up welcoming
-  policies written alongside the rules, of which the rules read 2 as bans,
-  and 12 held out from the rules, of which they read 8 as bans.
+  wording five reviews found, 86, all read as bans, 38 made-up welcoming
+  policies written alongside the rules, of which the rules read 4 as bans,
+  and 12 held out from the rules, of which they read 9 as bans.
+- **The safe forms are whole sentences.** `judge` in `src/crawl/rules.ts`
+  reads a sentence that names AI and says no as a ban unless all of it,
+  but for a list mark in front, matches one of the forms: fixed words with
+  slots that each take a closed set of words, a label in quotes, or a
+  path. Reviews found bans that rode along with a form that took a phrase
+  out of a sentence and read the rest, so no form does that now. A test
+  checks each form's example, and that no sentence that says no in the ban
+  corpus is a form. The cost is more welcoming sentences read as bans,
+  where a form has words added.
 - **The rules' speed.** Every pattern runs on one sentence, with a few
   words of slack at most, and a sentence's end is one mark before a space,
   so no pattern tries a start again after it fails. Each file's lines are

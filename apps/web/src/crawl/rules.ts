@@ -21,9 +21,9 @@ import { findClaLink, findPersonWritten, findTrailer, keptForPeople, meansReady,
 //
 // The rules err toward a ban. A sentence that names AI, or sits under a
 // heading or in a file that does, and has any word that says no, limits, or
-// refuses, is a ban, unless it has one of the few forms below known to say
-// no to something else. A missed welcome costs a find. A missed ban would put
-// a repo that said no in front of an admin.
+// refuses, is a ban, unless the whole sentence is one of the few forms below
+// known to say no to something else. A missed welcome costs a find. A missed
+// ban would put a repo that said no in front of an admin.
 //
 // Plain rules can't know every way to say no. So the reading also keeps
 // every sentence that names AI, for the admin to read before a repo is
@@ -167,169 +167,193 @@ function bansWithoutNaming(text: string): boolean {
 
 // ---------------------------------------------------------------------------
 // The forms known to say no to something else. Each is tested both ways.
+//
+// Each form is a whole sentence: fixed words with a few slots, and each slot
+// takes one of a closed set of words, a label in quotes, or a path. No form
+// takes out part of a sentence and reads the rest, so a ban can't ride along
+// with a form's words. A sentence that names AI and says no is a ban unless
+// all of it, but for a list mark in front, is one of these.
 
-// 1. A checkbox a contributor ticks, like "- [ ] I did not use AI", is their
-//    choice, unless it asks them to confirm or promise, or refuses outright.
-//    Only the item's first sentence is the choice.
+// A list item's mark, a checkbox, an issue form's option, a heading's marks,
+// a quote's mark, or an HTML comment's marks, around a sentence.
+const MARKS_BEFORE = /^(?:<!--\s*)?(?:-\s+label:\s*|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]?\]\s*)?|#{1,6}\s+|>\s*)?/;
+const MARKS_AFTER = /\s*-->$/;
+
+/** The sentence without the marks around it. */
+function bare(text: string): string {
+  return text.replace(MARKS_BEFORE, '').replace(MARKS_AFTER, '');
+}
+
+// The slots, each a closed set.
+const END = String.raw`[.!]?$`;
+const PLEASE = String.raw`(?:please\s+)?`;
+const DONT = String.raw`(?:do not|don't|dont|never)`;
+const PRODUCT = String.raw`(?:GitHub Copilot|Copilot|ChatGPT|Claude(?: Code)?|Codex|Gemini|Cursor)`;
+const AI_THING = String.raw`(?:AI|LLMs?|AI tools?|AI assistants?|coding assistants?|an? (?:AI|LLM|agent|coding agent|AI tool|coding assistant|assistant)|agents?|coding agents?|${PRODUCT})`;
+const AGENT_SUBJECT = String.raw`(?:(?:AI|coding|LLM)[- ])?(?:agents?|bots?|assistants?)`;
+// "Using AI is fine, but" or "as long as you" before a form that asks for care.
+const FINE_THEN = String.raw`(?:(?:using\s+)?${AI_THING}(?:\s+(?:help|use|assistance))?\s+(?:is|are)\s+(?:fine|welcome|okay|ok|allowed),?\s+(?:but|as long as|so long as|provided)\s+(?:you\s+)?)?`;
+
+// 1. A checkbox a contributor ticks, like "- [ ] I did not use AI", in its
+//    first sentence: they didn't use AI, or AI wasn't used.
 const CHECKBOX = /^\s*(?:(?:[-*+]|\d+[.)])\s+\[[ xX]?\]|-\s+label:)/;
-const PLEDGE = /\b(?:confirm|certify|agree|attest|declare|promise|affirm|understand|acknowledge|accept|will|shall|must)\b|\bam aware\b|\bhave read\b/i;
+const FOR_THIS = String.raw`(?:\s+(?:to write|to make|for|in|on)\s+(?:this|it|this PR|this pull request|this issue|this change|the code|this code))?`;
+const CHOICES = [
+  new RegExp(String.raw`^(?:I|we)\s+(?:did not|didn't|have not|haven't|do not|don't)\s+(?:use|used)\s+(?:any\s+)?${AI_THING}${FOR_THIS}${END}`, 'i'),
+  new RegExp(String.raw`^no\s+${AI_THING}\s+(?:was|were)\s+used${FOR_THIS}${END}`, 'i'),
+  new RegExp(String.raw`^${AI_THING}\s+(?:was|were)\s+not\s+used${FOR_THIS}${END}`, 'i'),
+];
 
-// 2. A negative that keeps AI off issues with a label named in quotes or
-//    backticks: the whole sentence has to be one of these.
+// 2. Keeping AI off issues with one label, named in quotes or backticks. The
+//    label becomes an excluded tag.
 const AI_NAME = String.raw`(?:AI|LLMs?|agents?|coding agents?|AI agents?|AI assistants?|AI tools?)`;
 const LABEL = String.raw`["\x60]([^"\x60]{1,50})["\x60]`;
 const LABEL_SCOPES = [
-  new RegExp(String.raw`^(?:please\s+)?(?:do not|don't|dont|never)\s+use\s+(?:any\s+)?${AI_NAME}(?:\s+tools?)?\s+(?:on|for)\s+(?:issues?\s+)?(?:labell?ed|tagged|with the label)\s+${LABEL}(?:\s+issues?)?[.!]?$`, 'i'),
-  new RegExp(String.raw`^(?:please\s+)?(?:do not|don't|dont|never)\s+use\s+(?:any\s+)?${AI_NAME}(?:\s+tools?)?\s+(?:on|for)\s+${LABEL}\s+issues?[.!]?$`, 'i'),
-  new RegExp(String.raw`^${AI_NAME}(?:\s+tools?)?\s+(?:may|must|should|can)\s*not\s+be\s+used\s+(?:on|for)\s+(?:issues?\s+)?(?:labell?ed|tagged|with the label)\s+${LABEL}(?:\s+issues?)?[.!]?$`, 'i'),
+  new RegExp(String.raw`^${PLEASE}${DONT}\s+use\s+(?:any\s+)?${AI_NAME}(?:\s+tools?)?\s+(?:on|for)\s+(?:issues?\s+)?(?:labell?ed|tagged|with the label)\s+${LABEL}(?:\s+issues?)?${END}`, 'i'),
+  new RegExp(String.raw`^${PLEASE}${DONT}\s+use\s+(?:any\s+)?${AI_NAME}(?:\s+tools?)?\s+(?:on|for)\s+${LABEL}\s+issues?${END}`, 'i'),
+  new RegExp(String.raw`^${AI_NAME}(?:\s+tools?)?\s+(?:may|must|should|can)\s*not\s+be\s+used\s+(?:on|for)\s+(?:issues?\s+)?(?:labell?ed|tagged|with the label)\s+${LABEL}(?:\s+issues?)?${END}`, 'i'),
 ];
 
-// 3. A whole sentence that keeps agents from working on their own, like
-//    "Autonomous agents may not open pull requests" or "Agents must not open
-//    PRs without a person". A word more makes it a ban.
-const AGENT_SUBJECT = String.raw`(?:(?:AI|coding|LLM)[- ])?(?:agents?|bots?|assistants?)`;
+// 3. Keeping agents from working on their own, like "Autonomous agents may
+//    not open pull requests" or "Agents must not open PRs without a person".
 const WORK = String.raw`(?:open|submit|create|send|file|make|merge|push)\s+(?:(?:a|any)\s+)?(?:PRs?|pull requests?|changes|commits?|patch(?:es)?)`;
 const AUTONOMY_TAIL = String.raw`(?:on (?:its|their|your) own|autonomously|unsupervised|unattended|without (?:a |any )?(?:human review|human|person|people|review|supervision|oversight))`;
 const AUTONOMY_FORMS = [
-  new RegExp(String.raw`^(?:${AGENT_SUBJECT}|you)\s+(?:may|must|should|can|will)\s*(?:not|never)\s+(?:${WORK}|work|operate|run|contribute)\s+${AUTONOMY_TAIL}[.!]?$`, 'i'),
-  new RegExp(String.raw`^(?:autonomous|unsupervised|unattended|fully[- ]automated)\s+${AGENT_SUBJECT}\s+(?:may|must|should|can|will)\s*(?:not|never)\s+${WORK}[.!]?$`, 'i'),
-  new RegExp(String.raw`^(?:please\s+)?(?:do not|don't|dont|never)\s+${WORK}\s+${AUTONOMY_TAIL}[.!]?$`, 'i'),
+  new RegExp(String.raw`^(?:${AGENT_SUBJECT}|you)\s+(?:may|must|should|can|will)\s*(?:not|never)\s+(?:${WORK}|work|operate|run|contribute)\s+${AUTONOMY_TAIL}${END}`, 'i'),
+  new RegExp(String.raw`^(?:autonomous|unsupervised|unattended|fully[- ]automated)\s+${AGENT_SUBJECT}\s+(?:may|must|should|can|will)\s*(?:not|never)\s+${WORK}${END}`, 'i'),
+  new RegExp(String.raw`^${PLEASE}${DONT}\s+${WORK}\s+${AUTONOMY_TAIL}${END}`, 'i'),
 ];
 
-// 4. Opening a pull request only once it's ready, like "Never open a PR
-//    without running the tests". The rest of the sentence names no AI, has
-//    no negative, and says nothing of who wrote the work.
-const PR_PREP =
-  /^(?:please\s+)?(?:do not|don't|dont|never)\s+(?:open|submit|create|send|file)\s+(?:a\s+|any\s+|your\s+)?(?:PR|PRs|pull requests?|patch(?:es)?)\s+(?:before|without|until)\s+(?:you\s+(?:have\s+)?)?(?:running|run|passing|checking|testing|reading|updating|adding|discussing|opening|filing|signing)\b/i;
-const AUTHORSHIP = /\b(?:generat\w*|written|writ\w*|authored|made|created|produced|models?|tools?|bots?|assistants?|automat\w*|hand|yourself|humans?|persons?|people)\b/i;
-
-// 9. A whole sentence that is a rule for how to work, with nothing about AI:
-//    secrets, branches, where a pull request goes, how many are open, whose
-//    issue it is, folders, whom to tag, build output, and a pull request
-//    that fails its checks. A subject may come first, like "Agents should
-//    not push to main", and a few plain words after. A branch is one
-//    branch: "any branch", "every branch", or "all branches" keeps the
-//    reader off them all, so it is judged like any other sentence.
-const NEG = String.raw`(?:please\s+)?(?:do not|don't|dont|never|must not|mustn't|should not|shouldn't|may not|cannot|can't|will not|won't|(?:are|is) not (?:allowed|permitted) to)`;
-const WORD = String.raw`[\w./\x60'"-]+`;
-const ONE_BRANCH = String.raw`(?:the\s+|a\s+)?(?:(?!(?:any|every|all|each)\b)${WORD}\s+)?`;
-const PROCESS_SUBJECT = String.raw`(?:(?:please|${AGENT_SUBJECT}|you|we|contributors|they|maintainers)\s+)?`;
-const PROCESS_RULES = [
-  String.raw`${NEG}\s+(?:include|commit|share|post|paste|expose|leak|add|put|push|upload|check in)\s+(?:any\s+|your\s+)?(?:secrets?|tokens?|credentials?|passwords?|API keys?|private keys?|keys|personal (?:data|information))(?:\s+or\s+(?:secrets?|tokens?|credentials?|passwords?|API keys?|private keys?|keys))?`,
-  String.raw`${NEG}\s+(?:force[- ])?(?:push|commit|merge)\s+(?:(?:directly|anything|changes|code)\s+)?(?:to|into|on|onto)\s+${ONE_BRANCH}(?:main|master|trunk|branch(?:es)?)`,
-  String.raw`${NEG}\s+(?:open|submit|send|create|file|target)\s+(?:a\s+|any\s+|your\s+)?(?:PRs?|pull requests?)\s+(?:against|to|into|on|at)\s+${ONE_BRANCH}(?:branch(?:es)?|main|master)`,
-  String.raw`${NEG}\s+(?:open|submit|have|keep|send)\s+more than\s+(?:one|two|three|four|five|\d+)\s+(?:open\s+)?(?:PRs?|pull requests?|issues)`,
-  String.raw`${NEG}\s+(?:open|submit|send)\s+(?:a\s+|any\s+)?(?:PRs?|pull requests?)\s+(?:for|on)\s+(?:an?\s+|the\s+)?(?:issues?|tickets?)\s+(?:that|which|someone|another|already|assigned|claimed)`,
-  String.raw`${NEG}\s+(?:edit|modify|change|touch)\s+(?:any\s+|the\s+)?(?:files?|anything|code)\s+(?:in|under|inside)\s+(?:the\s+)?(?:[\w.\x60-]*\/[\w./\x60-]*|${WORD}\s+(?:folder|directory))`,
-  String.raw`${NEG}\s+(?:ping|tag|mention|@-?mention|email|DM|message)\s+(?:the\s+|individual\s+)?(?:maintainers?|reviewers?|us|team members?)`,
-  String.raw`${NEG}\s+(?:commit|edit|modify|check in)\s+(?:the\s+|any\s+)?(?:generated|build|compiled|vendored|minified)\s+(?:build\s+)?(?:files?|output|artifacts?|assets?|bundles?|lockfiles?)`,
-  String.raw`${NEG}\s+(?:merge|accept|review)\s+(?:a\s+|any\s+|your\s+)?(?:PRs?|pull requests?|changes|patch(?:es)?)\s+(?:that|which|until|unless|if|with|without)\s+(?:fails?|breaks?|lacks?|has no|have no|tests?|passing|passes|CI|a test|failing)`,
-].map((rule) => new RegExp(String.raw`^${PROCESS_SUBJECT}${rule}((?:[\s,;:]+[^\s,.!?;:]+){0,8})[.!]?$`, 'i'));
-
-// What "we only ask that you" may go on to ask for: to be told, which says no
-// to nothing.
-const TELL_US = /^\s*(?:disclose|mention|say|tell|note|label|mark|flag|list|credit)\b/i;
-// "Leave AI tools out of it", with up to three words between.
-const LEAVE_OUT = /\bleave\s+(?:[\w'-]+\s+){0,3}?out\b/i;
-
-/**
- * A safe phrase, and when it stays in so the sentence is judged with it:
- * when the phrase itself says `keptFor`, or when the sentence without the
- * form's phrases says `restKeeps`, unless the words right after the phrase
- * match `unlessNext`.
- */
-interface SafePhrase {
-  name: string;
+/** A whole-sentence form, what it means, and its number in docs/how-it-works.md. */
+interface SafeForm {
+  form: number;
   pattern: RegExp;
-  owns?: RegExp;
   means?: 'personInLoop';
-  keptFor?: (phrase: string) => boolean;
-  restKeeps?: (rest: string) => boolean;
-  unlessNext?: RegExp;
 }
 
-// Phrases taken out before the rest of the sentence is looked at again. Each
-// holds a negative that says no to something else, and none is taken out
-// when the words it spans hold another, beyond the words it `owns`. A form
-// marked as ending the sentence holds only there.
-const SAFE_PHRASES: SafePhrase[] = [
-  // 5. Code you don't understand, haven't read, or haven't tested: a person in the loop.
-  {
-    name: 'understanding',
-    pattern:
-      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:submit|open|send|contribute|push|commit|post|paste)\s+(?:(?:any|large|big|long|whole)\s+)*(?:blocks? of\s+)?(?:code|changes|work|anything|output|text|a PR|PRs|pull requests|a pull request|a change)\s+(?:that\s+)?you\s+(?:do not|don't|dont|can't|cannot|could not|couldn't|have not|haven't|did not|didn't)\s+(?:fully\s+|yet\s+)?(?:understand|explain|stand behind|vouch for|review|reviewed|read|tested|test|run|checked|check)\b/gi,
-    owns: /\byou\s+(?:do not|don't|dont|can't|cannot|could not|couldn't|have not|haven't|did not|didn't)\b/gi,
-    means: 'personInLoop',
-  },
-  // 6. Reminders: "don't forget to", "no need to", "you don't need to ask
-  //    first", and "we only ask that you". The last two stay in when the
-  //    rest of the sentence says who writes the work or leaves something
-  //    out, as in "We only ask that you write the code yourself", unless
-  //    what is asked is only to be told. A name for AI in the rest keeps
-  //    nothing in, since "You don't need to ask before using Copilot" says
-  //    no to nothing, and any other word that says no is read anyway.
-  {
-    name: 'reminder',
-    pattern: /\b(?:do not|don't|dont|never)\s+(?:forget|hesitate|be afraid)\s+to\b|\bno need to\b|\bno problem\b/gi,
-  },
-  {
-    name: 'only ask',
-    pattern:
-      /\b(?:do not|don't|dont|does not|doesn't)\s+need\s+to\s+(?:ask|wait|check|tell|mention|sign|get|request|open an issue)\b|\b(?:we|I)\s+only\s+(?:ask|request|need|want)\s+(?:that\s+)?(?:you|contributors|agents|people)\b/gi,
-    restKeeps: (rest) => AUTHORSHIP.test(rest) || LEAVE_OUT.test(rest),
-    unlessNext: TELL_US,
-  },
-  // 7. Keeping a template whole: "don't delete this section".
-  {
-    name: 'template',
-    pattern:
-      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:delete|remove|edit|change|modify|skip)\s+(?:this|the|these|any of the|any)\s+(?:section|template|line|lines|heading|headings|checklist|checkbox(?:es)?|box(?:es)?|comment|comments|questions?)\b/gi,
-    owns: /\b(?:delete|remove)\b/gi,
-  },
-  // 8. Disclosure, ending the sentence: "don't submit AI-assisted code
-  //    without disclosing it", "undisclosed AI use is not allowed". A few
-  //    plain words between, with no comma, "and", "or", or "with".
-  {
-    name: 'disclosure',
-    pattern:
-      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:submit|open|send|use|contribute|post)\s+(?:(?!with\b|or\b|and\b)[\w'-]+\s+){0,5}?without\s+(?:first\s+)?(?:disclosing|disclosure|saying so|mentioning|noting|telling us|marking|labell?ing)(?:\s+(?:it|that|this|so|them))?(?=[.!]?$)|\bundisclosed\s+(?:(?!and\b|or\b)[\w'-]+\s+){0,3}?(?:is|are)\s+not\s+(?:allowed|accepted|permitted|welcome|ok|okay)(?=[.!]?$)/gi,
-  },
-  // 10. Review, ending the sentence: "Do not use AI to write commit messages
-  //     without reading them." A person in the loop.
-  {
-    name: 'review',
-    pattern:
-      /\b(?:please\s+)?(?:do not|don't|dont|never)\s+(?:use|submit|open|send|post|paste|commit)\s+(?:(?!with\b|or\b|and\b)[\w'-]+\s+){0,6}?without\s+(?:first\s+)?(?:reading|reviewing|checking|testing|understanding|editing|verifying|running)(?:\s+(?:it|them|the output|the result|each line|every line|the code|the changes))?(?:\s+yourself)?(?=[.!]?$)/gi,
-    means: 'personInLoop',
-  },
-  // 11. A condition that opens the sentence: "If an agent cannot run the
-  //     tests, say so in the pull request." The rest is read again. A
-  //     condition that names AI or says who writes the work stays in, as in
-  //     "If you didn't write the code yourself, take it elsewhere."
-  {
-    name: 'condition',
-    pattern:
-      /^if\s+(?:you|an?\s+agent|the\s+agent|your\s+agent|it|they)\s+(?:cannot|can't|can not|could not|couldn't|does not|doesn't|do not|don't|did not|didn't|is not|isn't|are not|aren't)\s+(?:(?!and\b|or\b)[\w'-]+\s+){0,8}?[\w'-]+,\s*/gi,
-    keptFor: (phrase) => namesAiItself(phrase) || AUTHORSHIP.test(phrase),
-  },
+const form = (number: number, source: string, means?: 'personInLoop'): SafeForm => ({
+  form: number,
+  pattern: new RegExp(`^${source}${END}`, 'i'),
+  ...(means ? { means } : {}),
+});
+
+// Rules for how to work, in form 9: who may come first, the words that say
+// no, a branch, a path, and the secrets.
+const WHO = String.raw`${PLEASE}(?:(?:${AGENT_SUBJECT}|you|we|contributors|they|maintainers)\s+)?`;
+const MUST_NOT = String.raw`(?:do not|don't|dont|never|must not|mustn't|must never|should not|shouldn't|should never|may not|cannot|can't|will not|won't|(?:are|is) not (?:allowed|permitted) to)`;
+const BRANCH = String.raw`(?:the\s+)?(?:(?:protected|shared|upstream|release|default)\s+branch(?:es)?|[\x60"']?(?:main|master|trunk|develop|dev|release|stable|production|gh-pages)[\x60"']?(?:\s+branch)?)`;
+const PATH = String.raw`(?:\x60[^\x60\s]{1,60}\x60|[\w.-]{0,40}\/[\w./-]{0,40})`;
+const SECRET = String.raw`(?:secrets?|tokens?|credentials?|passwords?|API keys?|private keys?|keys|personal (?:data|information))`;
+const PR = String.raw`(?:PRs?|pull requests?)`;
+
+const SAFE_FORMS: SafeForm[] = [
+  // 4. Opening a pull request only once it's ready: "Never open a PR without
+  //    running the tests."
+  form(
+    4,
+    String.raw`${PLEASE}${DONT}\s+(?:open|submit|create|send|file)\s+(?:a\s+|any\s+|your\s+)?(?:${PR}|patch(?:es)?)\s+(?:before|without|until)\s+(?:you\s+(?:have\s+)?)?(?:running|run|passing|pass|checking|testing|reading|read|updating|updated|adding|added|discussing|opening|opened|filing|filed|signing|signed)\s+(?:(?:the|a|an|our|your)\s+)?(?:tests?|test suite|linter|lint|CI|checks|build|contributing guide|CONTRIBUTING(?:\.md)?|docs|documentation|changelog|CHANGELOG(?:\.md)?|issue|CLA|style guide|code of conduct)(?:\s+(?:first|locally))?`,
+  ),
+  // 5. "Don't submit code you don't understand": a person in the loop.
+  form(
+    5,
+    String.raw`${FINE_THEN}${PLEASE}${DONT}\s+(?:submit|open|send|contribute|push|commit|post|paste)\s+(?:(?:any|large|big|long|whole)\s+)?(?:blocks? of\s+)?(?:code|changes|work|anything|output|text|a PR|PRs|pull requests|a pull request|a change)\s+(?:that\s+)?you\s+(?:do not|don't|dont|can't|cannot|could not|couldn't|have not|haven't|did not|didn't)\s+(?:fully\s+|yet\s+)?(?:understand|explain|stand behind|vouch for|review|reviewed|read|tested|test|run|checked|check)(?:\s+(?:yourself|fully|line by line))?(?:\s+(?:into|in)\s+(?:issues|pull requests|a pull request|the PR|comments))?`,
+    'personInLoop',
+  ),
+  // 6. A reminder or a request: "Don't forget to disclose AI help", "There
+  //    is no need to mention it", "You don't need to ask first", "We only
+  //    ask that you disclose it."
+  form(
+    6,
+    String.raw`${PLEASE}${DONT}\s+(?:forget|hesitate|be afraid)\s+to\s+(?:ask(?:\s+(?:questions|for help|us))?(?:\s+about\s+${AI_THING})?|(?:disclose|mention|note)\s+(?:it|that|AI help|AI use|which tools you used)|say so|tell us|reach out|open an issue)`,
+  ),
+  form(6, String.raw`(?:there is\s+|there's\s+)?no need to\s+(?:ask|mention|disclose|label|mark|note|say so|tell us|sign anything)(?:\s+(?:it|them|this|that|first))?`),
+  form(6, String.raw`no problem`),
+  form(
+    6,
+    String.raw`(?:you|agents|they|contributors)\s+(?:do not|don't|dont|does not|doesn't)\s+need\s+to\s+(?:ask|wait|check with us|tell us|sign anything|get permission|ask permission|request access|open an issue)(?:\s+(?:first|before\s+(?:using|you use|opening)\s+(?:it|them|a pull request|a PR|${AI_THING})))?`,
+  ),
+  form(
+    6,
+    String.raw`(?:we|I)\s+only\s+ask\s+that\s+(?:you|contributors|agents)\s+(?:disclose|mention|note|label|mark|flag)\s+(?:it|them|this|that|AI use|AI help|(?:the|which)\s+(?:tools?|models?)\s+you\s+used)(?:\s+in\s+the\s+(?:PR|pull request)(?:\s+description)?)?`,
+  ),
+  form(6, String.raw`(?:we|I)\s+only\s+ask\s+that\s+you\s+(?:test|review|read|check)\s+(?:it|them|your changes?|your code|your work)(?:\s+first)?`),
+  // 7. Keeping a template whole: "Don't delete this section."
+  form(
+    7,
+    String.raw`${PLEASE}${DONT}\s+(?:delete|remove|edit|change|modify|skip)\s+(?:this|the|these|any of the|any)\s+(?:section|template|line|lines|heading|headings|checklist|checkbox(?:es)?|box(?:es)?|comment|comments|questions?)(?:\s+(?:below|above|of the template|in this template))?`,
+  ),
+  // 8. A rule to disclose: "Don't submit AI-assisted code without disclosing
+  //    it", "Undisclosed AI use is not allowed."
+  form(
+    8,
+    String.raw`${FINE_THEN}${PLEASE}${DONT}\s+(?:submit|open|send|use|contribute|post)\s+(?:${AI_THING}|(?:AI|LLM|agent)[- ](?:assisted|generated|written|made)\s+(?:code|changes|work|pull requests|PRs|contributions|patches|commits)|(?:AI|LLM)\s+(?:output|help|code|changes)|(?:code|changes|work|pull requests|PRs|contributions|anything)\s+(?:written|made|generated)\s+(?:with|by)\s+${AI_THING})\s+without\s+(?:first\s+)?(?:disclosing|disclosure|saying so|mentioning|noting|telling us|marking|labell?ing)(?:\s+(?:it|that|this|so|them))?`,
+  ),
+  form(
+    8,
+    String.raw`undisclosed\s+(?:AI|LLM|agent)(?:[- ](?:assisted|generated|written))?(?:\s+(?:use|usage|help|code|contributions|changes|pull requests|PRs|work))?\s+(?:is|are)\s+not\s+(?:allowed|accepted|permitted|welcome|ok|okay)`,
+  ),
+  // 9. A rule for how to work, with nothing about AI: secrets, a branch,
+  //    where a pull request goes, how many are open, whose issue it is, a
+  //    folder, whom to tag, build output, and a pull request that fails.
+  form(
+    9,
+    String.raw`${WHO}${MUST_NOT}\s+(?:include|commit|share|post|paste|expose|leak|add|put|push|upload|check in)\s+(?:any\s+|your\s+)?${SECRET}(?:\s+or\s+${SECRET})?(?:\s+(?:in|into|to)\s+(?:a|any|your|the)\s+(?:PRs?|pull requests?|commits?|issues?|repo|repository))?`,
+  ),
+  form(9, String.raw`${WHO}${MUST_NOT}\s+(?:force[- ])?(?:push|commit|merge)\s+(?:(?:directly|changes|code|commits)\s+)?(?:to|into|on|onto)\s+${BRANCH}(?:\s+directly)?`),
+  form(9, String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|send|create|file|target)\s+(?:a\s+|any\s+|your\s+)?${PR}\s+(?:against|to|into|on|at)\s+${BRANCH}`),
+  form(
+    9,
+    String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|have|keep|send)\s+more than\s+(?:one|two|three|four|five|\d{1,2})\s+(?:open\s+)?(?:${PR}|issues)(?:\s+(?:at a time|at once|open|per issue|per day|per week))?`,
+  ),
+  form(
+    9,
+    String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|send)\s+(?:a\s+|any\s+)?${PR}\s+(?:for|on)\s+(?:an?\s+|the\s+)?(?:issues?|tickets?)\s+(?:that\s+)?(?:someone else|somebody else|another (?:person|contributor))\s+(?:has\s+|is\s+)?(?:already\s+)?(?:claimed|working on|assigned to|took)`,
+  ),
+  form(9, String.raw`${WHO}${MUST_NOT}\s+(?:edit|modify|change|touch)\s+(?:any\s+|the\s+)?(?:files?|anything|code)\s+(?:in|under|inside)\s+(?:the\s+)?${PATH}(?:\s+(?:folder|directory))?`),
+  form(
+    9,
+    String.raw`${WHO}${MUST_NOT}\s+(?:ping|tag|mention|@-?mention|email|DM|message)\s+(?:the\s+|individual\s+)?(?:maintainers?|reviewers?|us|team members?)(?:\s+(?:directly|individually))?`,
+  ),
+  form(
+    9,
+    String.raw`${WHO}${MUST_NOT}\s+(?:commit|edit|modify|check in)\s+(?:the\s+|any\s+)?(?:generated|build|compiled|vendored|minified)\s+(?:build\s+)?(?:files?|output|artifacts?|assets?|bundles?|lockfiles?)`,
+  ),
+  form(
+    9,
+    String.raw`${WHO}${MUST_NOT}\s+(?:merge|accept|review)\s+(?:a\s+|any\s+|your\s+)?(?:${PR}|changes|patch(?:es)?)\s+(?:that|which)\s+(?:fails?|breaks?)\s+(?:CI|the build|the tests|tests|its checks|checks|lint)`,
+  ),
+  // 10. A rule to read what AI wrote: "Do not use AI to write commit
+  //     messages without reading them." A person in the loop.
+  form(
+    10,
+    String.raw`${FINE_THEN}${PLEASE}${DONT}\s+(?:use|paste|submit|commit|post|send)\s+(?:${AI_THING}|it|them|(?:AI|its|their|the)\s+output|AI-generated code|generated code)(?:\s+to\s+(?:write|draft|generate)\s+(?:commit messages|code|tests|docs|documentation|comments|PR descriptions|pull request descriptions|issues|changes))?\s+without\s+(?:first\s+)?(?:reading|reviewing|checking|testing|understanding|verifying|running)(?:\s+(?:it|them|the output|the result|each line|every line|the code|the changes))?(?:\s+yourself)?`,
+    'personInLoop',
+  ),
+  // 11. A condition: "If an agent cannot run the tests, say so in the pull
+  //     request."
+  form(
+    11,
+    String.raw`if\s+(?:you|an?\s+agent|the\s+agent|your\s+agent)\s+(?:cannot|can't|can not|could not|couldn't)\s+(?:run|reproduce|build|test|fix|finish)\s+(?:the tests|the test suite|the build|it|the bug|the issue|the project|the change)(?:\s+locally)?,\s+${PLEASE}(?:say so|mention it|note it|tell us|explain why|ask for help|leave a comment)(?:\s+in\s+the\s+(?:pull request|PR|issue|PR description|pull request description))?`,
+  ),
   // 12. A label that scopes where agents work: "Agents may only work on
   //     issues labeled `agent ready`."
-  {
-    name: 'label only',
-    pattern:
-      /\bonly\s+(?:work\s+)?(?:on|for|with)\s+(?:(?:open|the)\s+)?(?:issues?|tickets?)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with the label)\s+["`][^"`]{1,50}["`]/gi,
-  },
+  form(
+    12,
+    String.raw`(?:${AGENT_SUBJECT}|AI tools?|you)\s+(?:may|should|can|must)\s+only\s+(?:work\s+on|pick\s+up|take|claim|open\s+pull\s+requests\s+for|be\s+used\s+(?:on|for))\s+(?:open\s+)?(?:issues|tickets)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with\s+the\s+label)\s+["\x60][^"\x60]{1,50}["\x60]`,
+  ),
 ];
 
-/** Whether the sentence is a whole rule for how to work, as in form 9, with a few plain words after it. */
-function processRule(text: string): boolean {
-  for (const rule of PROCESS_RULES) {
-    const match = rule.exec(text);
-    if (match === null) continue;
-    const after = match[1] ?? '';
-    if (!NEGATIVE.test(after) && !namesAiItself(after) && !AUTHORSHIP.test(after)) return true;
-  }
-  return false;
+/**
+ * The number of the form a whole sentence is, or null. `choice` says the
+ * sentence is the first of a checkbox a contributor ticks. Exported for the
+ * tests, which check that no ban in their corpus is one.
+ */
+export function safeForm(sentence: string, choice = false): number | null {
+  const text = bare(sentence);
+  if (choice && CHOICES.some((pattern) => pattern.test(text))) return 1;
+  if (LABEL_SCOPES.some((pattern) => pattern.test(text))) return 2;
+  if (AUTONOMY_FORMS.some((pattern) => pattern.test(text))) return 3;
+  return SAFE_FORMS.find(({ pattern }) => pattern.test(text))?.form ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +568,11 @@ function scan(text: string): { paragraphs: { start: number; end: number }[]; sen
   return { paragraphs, sentences };
 }
 
+/** A text's sentences as the rules read them, and whether each is a checkbox's first. Exported for the tests. */
+export function sentencesOf(text: string): { text: string; choice: boolean }[] {
+  return scan(text).sentences.map((sentence) => ({ text: sentence.text, choice: sentence.choice }));
+}
+
 /**
  * The exact text to quote for a sentence: its paragraph, and the paragraph
  * after it too when its own is a Markdown heading. When that is longer than
@@ -560,9 +589,6 @@ function quoteOf(text: string, paragraphs: readonly { start: number; end: number
   return quote.length <= MAX_POLICY_QUOTE ? quote : alone();
 }
 
-/** How far before a sentence that names AI its passage starts, at most, in a paragraph too long to keep whole. */
-const PASSAGE_LEAD = 300;
-
 /** Where a passage is in its file, and whether its paragraph goes on before or after it. */
 interface Passage {
   start: number;
@@ -571,23 +597,41 @@ interface Passage {
   cutAfter: boolean;
 }
 
-/**
- * The passage around the sentence at `index`: its whole paragraph, or when
- * that is longer than MAX_AI_PASSAGE characters, the part of it that starts
- * at the first sentence within PASSAGE_LEAD characters before this one.
- */
-function passageOf(paragraph: { start: number; end: number }, sentences: readonly Sentence[], index: number): Passage {
-  if (paragraph.end - paragraph.start <= MAX_AI_PASSAGE) return { ...paragraph, cutBefore: false, cutAfter: false };
-  const sentence = sentences[index];
-  let first = index;
-  for (;;) {
-    const before = sentences[first - 1];
-    if (!sentence || before?.paragraph !== sentence.paragraph || sentence.start - before.start > PASSAGE_LEAD) break;
-    first -= 1;
+// The words a passage centers on: those that name AI, or ban it with no
+// name for it. A sentence with none of them centers on its start.
+const CENTER_ON = [AI_ACRONYM, AI_COMPOUND, AI_WORDS, AI_PRODUCTS, CURSOR, AGENT_WORDS, GENERATED_WORK, HUMAN_ONLY, AI_FREE];
+/** How far a cut moves to fall between words. */
+const WORD_SLACK = 30;
+
+/** Where in the file the first word of a sentence that names AI is, or where the sentence starts. */
+function centerOf(text: string, sentence: Sentence): number {
+  const own = text.slice(sentence.start, sentence.end);
+  let at = own.length;
+  for (const pattern of CENTER_ON) {
+    const match = pattern.exec(own);
+    if (match !== null && match.index < at) at = match.index;
   }
-  const opens = sentences[first - 1]?.paragraph !== sentence?.paragraph;
-  const start = opens ? paragraph.start : (sentences[first]?.start ?? paragraph.start);
-  const end = Math.min(paragraph.end, start + MAX_AI_PASSAGE);
+  return sentence.start + (at === own.length ? 0 : at);
+}
+
+/**
+ * The passage around a sentence: its whole paragraph, or when that is longer
+ * than MAX_AI_PASSAGE characters, MAX_AI_PASSAGE characters of it centered
+ * on the words that name AI, each cut moved to fall between words.
+ */
+function passageOf(text: string, paragraph: { start: number; end: number }, center: number): Passage {
+  if (paragraph.end - paragraph.start <= MAX_AI_PASSAGE) return { ...paragraph, cutBefore: false, cutAfter: false };
+  let start = Math.max(paragraph.start, Math.min(center - MAX_AI_PASSAGE / 2, paragraph.end - MAX_AI_PASSAGE));
+  if (start > paragraph.start) {
+    const space = text.slice(start, Math.min(start + WORD_SLACK, center)).search(/\s/);
+    if (space !== -1) start += space + 1;
+  }
+  let end = Math.min(paragraph.end, start + MAX_AI_PASSAGE);
+  if (end < paragraph.end) {
+    const from = Math.max(end - WORD_SLACK, center + 1);
+    const space = text.slice(from, end).search(/\s\S*$/);
+    if (space !== -1) end = from + space;
+  }
   return { start, end, cutBefore: start > paragraph.start, cutAfter: end < paragraph.end };
 }
 
@@ -623,63 +667,25 @@ function quotedNames(text: string): string[] {
   return [...text.matchAll(QUOTED)].map((m) => (m[1] ?? '').trim()).filter((name) => name !== '');
 }
 
-/** How many characters after a safe phrase `unlessNext` reads. */
-const AFTER_SPAN = 40;
-
-/** The sentence with every safe phrase taken out, unless the words a phrase spans hold another negative. */
-function withoutSafePhrases(text: string): { rest: string; personInLoop: boolean } {
-  let rest = text;
-  let personInLoop = false;
-  for (const { pattern, owns, means, keptFor, restKeeps, unlessNext } of SAFE_PHRASES) {
-    // What the sentence without this form's phrases says, read once, when a phrase asks.
-    let restSaid: boolean | undefined;
-    rest = rest.replace(pattern, (phrase: string, ...args: unknown[]) => {
-      // The phrase's negative is its first, and the words it owns. Another one inside it stays.
-      const own = owns === undefined ? phrase : phrase.replace(owns, ' ');
-      const first = NEGATIVE.exec(own);
-      if (first !== null && NEGATIVE.test(own.slice(first.index + first[0].length))) return phrase;
-      if (keptFor?.(phrase)) return phrase;
-      if (restKeeps) {
-        // The patterns have no groups, so the arguments after the phrase are where it starts and the whole text.
-        const [at, whole] = args as [number, string];
-        const next = whole.slice(at + phrase.length, at + phrase.length + AFTER_SPAN);
-        if (!(unlessNext?.test(next) ?? false)) {
-          restSaid ??= restKeeps(whole.replace(pattern, ' '));
-          if (restSaid) return phrase;
-        }
-      }
-      if (means === 'personInLoop') personInLoop = true;
-      return ' ';
-    });
-  }
-  return { rest, personInLoop };
-}
-
 /** What one sentence says, when it says no. */
 type Judgement = { ban: true } | { ban: false; noAutonomy?: true; personInLoop?: true; reserved?: string[] };
 
 /**
- * Whether a sentence that names AI, or talks about contributing in a file
- * written for agents, says no, and what it means when a safe form holds the
- * negative.
+ * What a sentence that names AI, or talks about contributing in a file
+ * written for agents, and says no, means: a ban, unless the whole sentence
+ * is one of the forms.
  */
-function judge(sentence: Sentence, forAgents: boolean): Judgement {
-  const text = sentence.text;
-  if (sentence.choice && !PLEDGE.test(text) && !REFUSAL.test(text)) return { ban: false };
+function judge(sentence: Sentence): Judgement {
+  const text = bare(sentence.text);
+  if (sentence.choice && CHOICES.some((pattern) => pattern.test(text))) return { ban: false };
   for (const scope of LABEL_SCOPES) {
     const match = scope.exec(text);
     if (match?.[1] !== undefined) return { ban: false, reserved: [match[1].trim()] };
   }
-  if (AUTONOMY_FORMS.some((form) => form.test(text))) return { ban: false, noAutonomy: true };
-  const prep = PR_PREP.exec(text);
-  if (prep) {
-    const rest = text.slice(prep.index + prep[0].length);
-    if (!NEGATIVE.test(rest) && !namesAi(rest, forAgents) && !namesAiItself(rest) && !AUTHORSHIP.test(rest)) return { ban: false };
-  }
-  if (processRule(text)) return { ban: false };
-  const { rest, personInLoop } = withoutSafePhrases(text);
-  if (NEGATIVE.test(rest)) return { ban: true };
-  return personInLoop ? { ban: false, personInLoop: true } : { ban: false };
+  if (AUTONOMY_FORMS.some((pattern) => pattern.test(text))) return { ban: false, noAutonomy: true };
+  const safe = SAFE_FORMS.find(({ pattern }) => pattern.test(text));
+  if (safe === undefined) return { ban: true };
+  return safe.means === 'personInLoop' ? { ban: false, personInLoop: true } : { ban: false };
 }
 
 function words(text: string): number {
@@ -728,7 +734,7 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
     let listCarry = false;
     // The last passage kept from this file.
     let kept: Passage | null = null;
-    for (const [index, sentence] of sentences.entries()) {
+    for (const sentence of sentences) {
       const text = sentence.text;
       const source = lineAt(sentence.start);
       if (sentence.paragraph !== paragraph) {
@@ -751,7 +757,7 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
       const covered = kept !== null && sentence.start >= kept.start && sentence.end <= kept.end;
       if (!covered && (topic || bansWithoutNaming(text) || namesAiItself(text) || AGENT_WORDS.test(text))) {
         if (aiSentences.length < MAX_AI_SENTENCES) {
-          const passage = passageOf(paragraphs[sentence.paragraph] ?? sentence, sentences, index);
+          const passage = passageOf(file.text, paragraphs[sentence.paragraph] ?? sentence, centerOf(file.text, sentence));
           kept = passage;
           const whole = file.text.slice(passage.start, passage.end).trim();
           const key = `${file.path}\n${whole}`;
@@ -764,7 +770,7 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
 
       if (refusesPullRequests(text) || bansWithoutNaming(text)) ban ??= source;
       if (topic && NEGATIVE.test(text)) {
-        const judged = judge(sentence, forAgents);
+        const judged = judge(sentence);
         if (judged.ban) ban ??= source;
         else {
           if (judged.noAutonomy) noAutonomy ??= source;
