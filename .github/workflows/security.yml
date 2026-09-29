@@ -41,10 +41,16 @@ jobs:
             semgrep scan --config p/typescript --config p/react --config p/github-actions \
             --metrics=off --quiet --sarif --output /out/semgrep.sarif
           # Semgrep marks a finding under a nosemgrep comment as suppressed,
-          # and code scanning files it as an alert all the same. The comment
-          # and its reason are in the diff that adds it, so it stays out.
-          jq '.runs[].results |= ((. // []) | map(select((.suppressions // []) == [])))' \
-            "$RUNNER_TEMP/semgrep.sarif" > "$RUNNER_TEMP/semgrep-kept.sarif"
+          # and code scanning files it as an alert all the same. A suppressed
+          # finding of a rule below error level stays out, since the comment
+          # is in the diff that adds it. One at error level still goes up, so
+          # the ruleset's "Alerts: Errors" still needs a maintainer to dismiss it.
+          jq '.runs[] |= (
+                ([(.tool.driver.rules // [])[] | select(.defaultConfiguration.level == "error") | .id]) as $errors
+                | .results |= ((. // []) | map(select(
+                    ((.suppressions // []) == []) or (.level == "error") or (.ruleId as $id | $errors | index($id) != null)
+                  )))
+              )' "$RUNNER_TEMP/semgrep.sarif" > "$RUNNER_TEMP/semgrep-kept.sarif"
       - name: Upload to code scanning
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:

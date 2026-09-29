@@ -3057,9 +3057,12 @@ pull request's checkout. Reviewers watch for changes to any of them.
 
 Semgrep marks a finding under a `nosemgrep` comment as suppressed in its
 SARIF, and code scanning files it as an alert all the same. So both `semgrep`
-jobs leave suppressed findings out of what they upload, and the comment, with
-its reason, in the diff that adds it is the whole record. A `nosemgrep`
-comment is a dismissal, which is one more reason reviewers watch for them.
+jobs leave out a suppressed finding of a rule below error level, and the
+comment, with whatever reason it gives, in the diff that adds it is the
+record. Its alert, if it had one, closes as fixed. A suppressed finding at
+error level still goes up, so the ruleset's "Alerts: Errors" still needs a
+maintainer to dismiss it. A bare `nosemgrep` with no rule ID covers every
+rule on its line, which is one more reason reviewers watch for them.
 
 `.github/workflows/security-main.yml` runs Semgrep, CodeQL, zizmor, and
 OSV-Scanner on `main` on every push, every Monday at 05:23 UTC, and by hand
