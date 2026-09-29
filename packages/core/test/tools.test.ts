@@ -301,6 +301,24 @@ describe('what each result says', () => {
     expect(text).toMatch(/Excluded tags +"kept for people"/);
   });
 
+  test('a crawler find says which label its tag comes from, and why it has no tags when the repo lacks the label', () => {
+    const [candidate] = samples.admin_queue.output.items;
+    if (candidate === undefined) throw new Error('missing sample');
+    const line = 'Agents may only work on issues labeled `agent ready`.';
+    const render = (about: 'tags' | 'labelMissing') =>
+      textOf(toolResult('admin_queue', { items: [{ ...candidate, sources: [{ about, path: 'CONTRIBUTING.md', line }] }] })).split('\n');
+
+    for (const [about, says] of [
+      ['tags', 'Tags, the label the docs keep agents to, from "CONTRIBUTING.md":'],
+      ['labelMissing', `No tags, since the docs keep agents to a label the repo doesn't have, from "CONTRIBUTING.md":`],
+    ] as const) {
+      const out = render(about);
+      const at = out.findIndex((l) => l.trim() === says);
+      expect(at, about).toBeGreaterThan(-1);
+      expect(out[at + 1], about).toMatch(/^ +> Agents may only work on issues labeled `agent ready`\.$/);
+    }
+  });
+
   test("a registration's settings show label names as the maintainer chose them", () => {
     const registration = samples.admin_queue.output.items[1];
     if (registration === undefined) throw new Error('missing sample');

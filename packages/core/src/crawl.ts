@@ -35,6 +35,10 @@ export const candidateSourceAbouts = [
   'personWrittenDescription',
   'claUrl',
   'prMode',
+  /** A line that keeps agents to issues with one label, which is the suggested tag. */
+  'tags',
+  /** A line that keeps agents to issues with a label the repo doesn't have, so no tag is suggested. */
+  'labelMissing',
   /** A line in AGENTS.md or CLAUDE.md that asks an agent reading it to prove it did. Nothing follows from it. */
   'canary',
 ] as const;

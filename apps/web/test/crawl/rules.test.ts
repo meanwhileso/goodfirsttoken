@@ -1160,6 +1160,34 @@ describe('suggested settings', () => {
     ]);
   });
 
+  test('docs that keep agents to one label make it the only tag, as the repo spells it, with its open issues and the line that keeps them', () => {
+    const only = 'Agents may only work on issues labeled `Agent Ready`.';
+    const files = [contributing(`Coding agents may open pull requests here.\n\n${only}`)];
+    const repoLabels = [
+      { name: 'help wanted', openIssues: 7 },
+      { name: 'agent ready', openIssues: 2 },
+    ];
+
+    const reading = readPolicy(files);
+    const { settings, suggestedTags, sources } = suggestSettings(reading, files, repoLabels, null);
+
+    expect(reading.tier).toBe('invites_agents');
+    expect(settings).toEqual({ prMode: 'automatic', tags: ['agent ready'] });
+    expect(suggestedTags).toEqual([{ name: 'agent ready', openIssues: 2 }]);
+    expect(sources).toEqual([{ about: 'tags', path: 'CONTRIBUTING.md', line: only }]);
+  });
+
+  test('docs that keep agents to a label the repo does not have suggest no tags, and say why', () => {
+    const only = 'Agents may only work on issues labeled `agent ready`.';
+    const files = [contributing(`Coding agents may open pull requests here.\n\n${only}`)];
+
+    const { settings, suggestedTags, sources } = suggestSettings(readPolicy(files), files, [{ name: 'help wanted', openIssues: 7 }], null);
+
+    expect(settings).toEqual({ prMode: 'automatic' });
+    expect(suggestedTags).toEqual([]);
+    expect(sources).toEqual([{ about: 'labelMissing', path: 'CONTRIBUTING.md', line: only }]);
+  });
+
   test('with no label that means ready for help, no tags are suggested, and the admin picks them', () => {
     const files = [contributing('AI help is fine.')];
 

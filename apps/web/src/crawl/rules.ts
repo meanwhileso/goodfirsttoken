@@ -78,6 +78,8 @@ export interface PolicyReading {
   canary: SourceLine | null;
   /** Label names the docs keep away from AI or keep for people, as they spell them, each once, with its first line. */
   reserved: { name: string; source: SourceLine }[];
+  /** Label names the docs keep agents to, in form 12, as they spell them, each once, with its first line. */
+  onlyLabels: { name: string; source: SourceLine }[];
   /**
    * The first MAX_AI_SENTENCES sentences in the files that name AI, or that
    * the rules read for a ban, each with the rest of its paragraph as the
@@ -236,10 +238,11 @@ const AUTONOMY_FORMS = [
 interface SafeForm {
   form: number;
   pattern: RegExp;
-  means?: 'personInLoop';
+  /** A person in the loop, or the one label agents are kept to, captured first. */
+  means?: 'personInLoop' | 'onlyLabel';
 }
 
-const form = (number: number, source: string, means?: 'personInLoop'): SafeForm => ({
+const form = (number: number, source: string, means?: 'personInLoop' | 'onlyLabel'): SafeForm => ({
   form: number,
   pattern: new RegExp(`^${source}${END}`, 'i'),
   ...(means ? { means } : {}),
@@ -351,10 +354,11 @@ const SAFE_FORMS: SafeForm[] = [
     String.raw`if\s+(?:you|an?\s+agent|the\s+agent|your\s+agent)\s+(?:cannot|can't|can not|could not|couldn't)\s+(?:run|reproduce|build|test|fix|finish)\s+(?:the tests|the test suite|the build|it|the bug|the issue|the project|the change)(?:\s+locally)?,\s+${PLEASE}(?:say so|mention it|note it|tell us|explain why|ask for help|leave a comment)(?:\s+in\s+the\s+(?:pull request|PR|issue|PR description|pull request description))?`,
   ),
   // 12. A label that scopes where agents work: "Agents may only work on
-  //     issues labeled `agent ready`."
+  //     issues labeled `agent ready`." Its label is the only tag suggested.
   form(
     12,
-    String.raw`(?:${AGENT_SUBJECT}|AI tools?|you)\s+(?:may|should|can|must)\s+only\s+(?:work\s+on|pick\s+up|take|claim|open\s+pull\s+requests\s+for|be\s+used\s+(?:on|for))\s+(?:open\s+)?(?:issues|tickets)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with\s+the\s+label)\s+["\x60][^"\x60]{1,50}["\x60]`,
+    String.raw`(?:${AGENT_SUBJECT}|AI tools?|you)\s+(?:may|should|can|must)\s+only\s+(?:work\s+on|pick\s+up|take|claim|open\s+pull\s+requests\s+for|be\s+used\s+(?:on|for))\s+(?:open\s+)?(?:issues|tickets)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with\s+the\s+label)\s+${LABEL}`,
+    'onlyLabel',
   ),
 ];
 
@@ -683,7 +687,7 @@ function quotedNames(text: string): string[] {
 }
 
 /** What one sentence says, when it says no. */
-type Judgement = { ban: true } | { ban: false; noAutonomy?: true; personInLoop?: true; reserved?: string[] };
+type Judgement = { ban: true } | { ban: false; noAutonomy?: true; personInLoop?: true; reserved?: string[]; onlyLabel?: string };
 
 /**
  * What a sentence that names AI, or talks about contributing in a file
@@ -698,9 +702,13 @@ function judge(sentence: Sentence): Judgement {
     if (match?.[1] !== undefined) return { ban: false, reserved: [match[1].trim()] };
   }
   if (AUTONOMY_FORMS.some((pattern) => pattern.test(text))) return { ban: false, noAutonomy: true };
-  const safe = SAFE_FORMS.find(({ pattern }) => pattern.test(text));
-  if (safe === undefined) return { ban: true };
-  return safe.means === 'personInLoop' ? { ban: false, personInLoop: true } : { ban: false };
+  for (const { pattern, means } of SAFE_FORMS) {
+    const match = pattern.exec(text);
+    if (match === null) continue;
+    if (means === 'onlyLabel' && match[1] !== undefined) return { ban: false, onlyLabel: match[1].trim() };
+    return means === 'personInLoop' ? { ban: false, personInLoop: true } : { ban: false };
+  }
+  return { ban: true };
 }
 
 function words(text: string): number {
@@ -733,6 +741,7 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
     const key = name.toLowerCase();
     if (!reserved.has(key)) reserved.set(key, { name, source });
   };
+  const onlyLabels = new Map<string, { name: string; source: SourceLine }>();
   const aiSentences: PolicyReading['aiSentences'] = [];
   const seenPassages = new Set<string>();
   let moreAiSentences = 0;
@@ -791,6 +800,9 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
           if (judged.noAutonomy) noAutonomy ??= source;
           if (judged.personInLoop) personInLoop ??= source;
           for (const name of judged.reserved ?? []) keep(name, source);
+          if (judged.onlyLabel !== undefined && !onlyLabels.has(judged.onlyLabel.toLowerCase())) {
+            onlyLabels.set(judged.onlyLabel.toLowerCase(), { name: judged.onlyLabel, source });
+          }
         }
       }
       if (FOR_PEOPLE.test(text)) for (const name of quotedNames(text)) keep(name, source);
@@ -826,6 +838,7 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
     personWritten: written === null ? null : written.source,
     canary,
     reserved: [...reserved.values()],
+    onlyLabels: [...onlyLabels.values()],
     aiSentences,
     moreAiSentences,
   };
@@ -893,11 +906,20 @@ export function suggestSettings(
   const open = labels.filter((label) => !reservedNames.has(lower(label.name)));
   const sentence = reading.welcome?.sentence ?? '';
   const named = namedLabels(sentence, open);
-  const tags = unique([...named, ...open.filter((label) => meansReady(label.name))]).slice(0, MAX_TAGS);
-  const suggested = unique([...named, ...open.filter((label) => meansReady(label.name) || keptForPeople(label.name))]).slice(
+  let tags = unique([...named, ...open.filter((label) => meansReady(label.name))]).slice(0, MAX_TAGS);
+  let suggested = unique([...named, ...open.filter((label) => meansReady(label.name) || keptForPeople(label.name))]).slice(
     0,
     MAX_TAGS,
   );
+  // Docs that keep agents to issues with one label, in form 12, make that
+  // label the only tag, when the repo has it, and no tag when it doesn't.
+  if (reading.onlyLabels.length > 0) {
+    const byName = new Map(open.map((label) => [lower(label.name), label]));
+    const kept = reading.onlyLabels.flatMap(({ name }) => byName.get(lower(name)) ?? []);
+    tags = unique(kept).slice(0, MAX_TAGS);
+    suggested = tags;
+    for (const only of reading.onlyLabels) sources.push(source(byName.has(lower(only.name)) ? 'tags' : 'labelMissing', only.source));
+  }
 
   const settings: ProjectSettingsPatch = {
     prMode: reading.tier === 'invites_agents' ? 'automatic' : 'reviewed',

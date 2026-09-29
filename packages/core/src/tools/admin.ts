@@ -116,6 +116,8 @@ const SOURCE_ABOUT: Record<CandidateSource['about'], string> = {
   personWrittenDescription: 'Person-written PR description',
   claUrl: 'CLA',
   prMode: 'PR mode',
+  tags: 'Tags, the label the docs keep agents to',
+  labelMissing: "No tags, since the docs keep agents to a label the repo doesn't have",
   canary: 'A canary. It asks an agent that reads the file to show it did, and no setting comes from it',
 };
 
