@@ -103,6 +103,14 @@ test('the first https link on a line about the CLA is the CLA link', () => {
   expect(reasons).toContainEqual({ setting: 'claUrl', reason: 'CONTRIBUTING.md links it' });
 });
 
+test.each([
+  ['There is no CLA to sign. Chat with us at https://chat.example.org/join.'],
+  ["You don't need to sign a CLA. The docs are at https://docs.example.org/start."],
+  ['Our CLA lives at https://cla.example.org/sample-app for reference.'],
+])('a CLA line that says there is none, or never says to sign it, sets no CLA: %j', (line) => {
+  expect(proposeSettings(['help wanted'], docs({ contributing: line })).settings).not.toHaveProperty('claUrl');
+});
+
 test('a CLA line with no https link sets no CLA', () => {
   expect(proposeSettings(['help wanted'], docs({ contributing: 'No CLA is needed.' })).settings).not.toHaveProperty('claUrl');
 });
@@ -126,8 +134,8 @@ test('four files at the size limit, each one long line with no period, are read 
     const full = `${phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length)).slice(0, -2)}${mark}`;
     const half = `${phrase.repeat(Math.floor(MAX_DOC_BYTES / phrase.length / 2)).slice(0, -2)}${mark}`;
     const start = `https://cla.example.org/${mark}`;
-    const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nCLA '.length - start.length - 1)}x`;
-    const template = `${half}\nCLA ${link}`;
+    const link = `${start}${'.'.repeat(MAX_DOC_BYTES - half.length - '\nSign the CLA '.length - start.length - 1)}x`;
+    const template = `${half}\nSign the CLA ${link}`;
     return { link, docs: docs({ contributing: full, aiPolicy: full, agents: full, prTemplate: template }) };
   };
   const reads = [0, 1, 2, 3, 4].map(filesFor);

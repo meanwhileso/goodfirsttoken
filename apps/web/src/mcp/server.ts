@@ -10,6 +10,7 @@ import * as donor from './donor';
 import { pauseProject, projectStatus, registerProject, requestRemoval, updateProject } from './maintainer';
 import { MCP_PATH } from './paths';
 import type { AgentProps } from './provider';
+import { openPr, submitWork } from './submit';
 
 // The MCP server at /mcp, over streamable HTTP. The OAuth provider checks the
 // access token first and hands this handler the grant's props: who the
@@ -94,6 +95,10 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
   server.registerTool('release_claim', specOf(tools.release_claim), (input) =>
     run(() => donor.releaseClaim(caller, input)),
   );
+  server.registerTool('submit_work', specOf(tools.submit_work), (input) =>
+    run(() => submitWork(caller, input, Date.now())),
+  );
+  server.registerTool('open_pr', specOf(tools.open_pr), (input) => run(() => openPr(caller, input, Date.now())));
   server.registerTool('my_work', specOf(tools.my_work), () => run(() => donor.myWork(caller, origin, Date.now())));
   // The maintainer's tools. Each asks GitHub for the caller's permission on
   // the repo, with their own token, on every call.
@@ -132,6 +137,9 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
     );
     server.registerTool('admin_remove_project', specOf(tools.admin_remove_project), (input) =>
       run(() => adminTools.admin_remove_project(caller, input, Date.now())),
+    );
+    server.registerTool('admin_seed_repo', specOf(tools.admin_seed_repo), (input) =>
+      run(() => adminTools.admin_seed_repo(caller, input, Date.now())),
     );
   }
   return server;

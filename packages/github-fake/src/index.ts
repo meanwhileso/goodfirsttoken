@@ -34,14 +34,17 @@ import {
   openIssue,
   openPull,
   roleOf,
+  updatePullBranch,
   type FakeState,
   type IssueRecord,
   type RepoRecord,
   type ReviewInput,
 } from './state.ts';
 import { handleWeb, revokeOverTheCap } from './web.ts';
+import type { FileMode } from './git.ts';
 
 export type { FakeState, ReviewInput } from './state.ts';
+export type { FileMode } from './git.ts';
 export type { RateResource } from './rate-limit.ts';
 export type { SampleData } from './sample-data.ts';
 
@@ -58,7 +61,14 @@ export interface GitHubFakeOptions {
   now?: () => Date;
   // Start from saved state in place of the sample data.
   state?: FakeState;
+  // How long GitHub takes to make a fork's git data, which it does in the
+  // background. DEFAULT_FORK_DELAY_MS unless given.
+  forkDelayMs?: number;
 }
+
+// GitHub makes a fork in the background, so a new fork's git data isn't
+// there for a moment. The fake takes this long.
+export const DEFAULT_FORK_DELAY_MS = 1000;
 
 export interface RecordedCall {
   method: string;
@@ -80,6 +90,8 @@ export interface GitHubFake {
   readonly state: FakeState;
   // Every call so far, oldest first.
   readonly calls: RecordedCall[];
+  // How long a new fork's git data takes. A test can change it.
+  forkDelayMs: number;
   // Answers a request the way GitHub would. It has fetch's signature.
   fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   // A new OAuth token for a sample person, like one from the token endpoint.
@@ -90,8 +102,19 @@ export interface GitHubFake {
   mergePullRequest: (repo: string, number: number, by: string) => void;
   closePullRequest: (repo: string, number: number, by: string) => void;
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => void;
-  // Commits these files, path to text, to the repo's default branch as `by`.
-  commitFiles: (repo: string, files: Record<string, string>, by: string) => void;
+  // Commits these files, path to text, to the repo's default branch as
+  // `by`, or to `branch`, and returns the commit's ID. A file given null is
+  // deleted. A file is 100644 unless `modes` gives it another mode. For a
+  // submodule, 160000, its text is the ID of the commit it names.
+  commitFiles: (
+    repo: string,
+    files: Record<string, string | null>,
+    by: string,
+    options?: { branch?: string; modes?: Record<string, FileMode> },
+  ) => string;
+  // Clicks Update branch on a PR as `by`: the base branch merges into the
+  // PR's branch. Returns the merge commit's ID.
+  updatePullRequestBranch: (repo: string, number: number, by: string) => string;
   // Opens an issue as `by`, with the labels given, and returns its number.
   openIssue: (repo: string, issue: { title: string; body?: string; labels?: string[]; by: string }) => number;
   labelIssue: (repo: string, number: number, label: string, by: string) => void;
@@ -164,6 +187,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
   const now = options.now ?? (() => new Date());
   const sample = options.sampleData ?? defaultSampleData;
   let state = options.state ?? buildState(sample, now());
+  let forkDelayMs = options.forkDelayMs ?? DEFAULT_FORK_DELAY_MS;
   const calls: RecordedCall[] = [];
 
   const mintToken = (login: string, scopes: string[], clientId: string | null) => {
@@ -199,7 +223,8 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     } catch {
       return done(errorResponse(400, 'Problems parsing JSON', REST_DOCS), operation);
     }
-    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [] };
+    const at = now();
+    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [], now: at.toISOString() };
     const app = appCredentialsFrom(request.headers.get('authorization'));
     let name = operation;
     if (graphql) {
@@ -246,8 +271,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       if (graphql) return answer(json({ errors: [{ type: 'RATE_LIMITED', message }] }), name);
       return answer(errorResponse(403, message, RATE_LIMIT_DOCS), name);
     }
-    if (graphql) return answer(json(await runGraphQL(ctx, body, now().toISOString())), name);
-    const rest = handleRest({ ctx, method: request.method, url, body, app, now: now().toISOString() }, path);
+    if (graphql) return answer(json(await runGraphQL(ctx, body, ctx.now)), name);
+    const forkReadyAt = new Date(at.getTime() + forkDelayMs).toISOString();
+    const rest = handleRest({ ctx, method: request.method, url, body, app, now: ctx.now, forkReadyAt }, path);
     return answer(rest.response, rest.operation);
   }
 
@@ -299,6 +325,12 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       return state;
     },
     calls,
+    get forkDelayMs() {
+      return forkDelayMs;
+    },
+    set forkDelayMs(ms: number) {
+      forkDelayMs = ms;
+    },
     fetch,
     tokenFor: (login, scopes = ['public_repo']) => {
       if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization. Tokens belong to people.`);
@@ -317,17 +349,21 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     reviewPullRequest: (repo, number, review) => {
       addReview(state, repoNamed(repo), number, review, now().toISOString());
     },
-    commitFiles: (repo, files, by) => {
+    commitFiles: (repo, files, by, options = {}) => {
       const record = repoNamed(repo);
-      const additions = Object.entries(files).map(([path, contents]) => ({ path, contents }));
-      commitOnBranch(
+      const additions = Object.entries(files).flatMap(([path, contents]) =>
+        contents === null ? [] : [{ path, contents, mode: own(options.modes ?? {}, path) }],
+      );
+      const deletions = Object.entries(files).flatMap(([path, contents]) => (contents === null ? [path] : []));
+      return commitOnBranch(
         state,
         record,
-        record.defaultBranch,
-        { additions, deletions: [], headline: 'Update files', login: by },
+        options.branch ?? record.defaultBranch,
+        { additions, deletions, headline: 'Update files', login: by },
         now().toISOString(),
       );
     },
+    updatePullRequestBranch: (repo, number, by) => updatePullBranch(state, repoNamed(repo), number, by, now().toISOString()),
     openIssue: (repo, issue) =>
       openIssue(
         state,

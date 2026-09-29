@@ -58,7 +58,7 @@ Claims, live updates, feeds, submitting work, and following PRs.
 | [#13](https://github.com/meanwhileso/goodfirsttoken/issues/13) | Build the issue room: claims, updates, and live watchers | #5 | [#50](https://github.com/meanwhileso/goodfirsttoken/pull/50) |
 | [#14](https://github.com/meanwhileso/goodfirsttoken/issues/14) | Fan events out to repo, user, and homepage feeds, with text streams | #13 | [#53](https://github.com/meanwhileso/goodfirsttoken/pull/53) |
 | [#15](https://github.com/meanwhileso/goodfirsttoken/issues/15) | Add the donor tools for sessions, suggestions, and claims | #9, #12, #13 | [#63](https://github.com/meanwhileso/goodfirsttoken/pull/63) |
-| [#16](https://github.com/meanwhileso/goodfirsttoken/issues/16) | Submit work: branch or fork, a signed commit, and the PR | #15 | |
+| [#16](https://github.com/meanwhileso/goodfirsttoken/issues/16) | Submit work: branch or fork, a signed commit, and the PR | #15 | [#74](https://github.com/meanwhileso/goodfirsttoken/pull/74) |
 | [#17](https://github.com/meanwhileso/goodfirsttoken/issues/17) | Follow PRs to the end and bring review comments back | #16 | |
 
 ## M5 Skills and harnesses
@@ -95,8 +95,10 @@ Finding projects whose own docs welcome AI, and keeping listings current.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 | |
+| [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 | [#69](https://github.com/meanwhileso/goodfirsttoken/pull/69) |
 | [#31](https://github.com/meanwhileso/goodfirsttoken/issues/31) | Re-crawl listed projects and pause on negative signals | #30 | |
+| [#76](https://github.com/meanwhileso/goodfirsttoken/issues/76) | Catch the policy wordings the crawler misses | #30 | |
+| [#77](https://github.com/meanwhileso/goodfirsttoken/issues/77) | Read fewer welcoming policies as bans | #76 | |
 
 ## M8 Launch readiness
 
@@ -156,6 +158,8 @@ flowchart TD
   n65["#65 Delist paused private repos"]:::m6
   n30["#30 Policy crawler"]:::m7
   n31["#31 Re-crawls"]:::m7
+  n76["#76 Missed ban wordings"]:::m7
+  n77["#77 Fewer false bans"]:::m7
   n32["#32 Deploy workflow"]:::m8
   n33["#33 Static host"]:::m8
   n34["#34 Security review"]:::m8
@@ -214,10 +218,12 @@ flowchart TD
   n27 --> n28
   n28 --> n34
   n30 --> n31
+  n30 --> n76
   n31 --> n34
+  n76 --> n77
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30 done
 ```
 
 ## Maintainer steps

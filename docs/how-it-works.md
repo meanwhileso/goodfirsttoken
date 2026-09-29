@@ -8,8 +8,9 @@ Nothing is live yet. The site serves the homepage, the projects list, each
 project's page, each issue's page, sign-in with GitHub, the MCP server's
 sign-in for agents with the donor's tools, the maintainer's tools, and the
 admins' tools, the admin pages, the design system at `/design`, and the
-live feeds as text streams and sockets, and reads tagged issues and PRs
-from GitHub on a schedule, while the build goes on in the open.
+live feeds as text streams and sockets. It reads tagged issues and PRs from
+GitHub on a schedule, and looks for projects whose docs welcome AI help,
+while the build goes on in the open.
 
 ## Health check
 
@@ -353,12 +354,13 @@ permission, resource)`. It returns, or refuses with a
 `manage_project`, and resuming a pause an admin made calls it with
 `pause_any_project`. The admins' tools and the admin pages call it with
 the admin permissions below before they read or write anything.
-`post_update` and `release_claim` call it with `work_claim`. The other
-tools and pages that need it arrive with the issues that build them.
+`post_update`, `release_claim`, `submit_work`, and `open_pr` call it with
+`work_claim`. The other tools and pages that need it arrive with the issues
+that build them.
 
 | Permission | Allows | Who holds it | Refusal |
 |---|---|---|---|
-| `review_projects` | Seeing the admin queue, approving or rejecting what waits in it, and removing a project at its maintainers' request | Admins | `not_admin` |
+| `review_projects` | Seeing the admin queue, approving or rejecting what waits in it, removing a project at its maintainers' request, and adding a repo to the crawler's seed list | Admins | `not_admin` |
 | `list_from_policy` | Listing a project from its written policy, or editing any such listing | Admins | `not_admin` |
 | `block_donors` | Blocking a donor, or lifting a block | Admins | `not_admin` |
 | `pause_any_project` | Pausing any project, or resuming one that an admin or Good First Token paused | Admins | `not_admin` |
@@ -517,8 +519,8 @@ changes only there. The room runs the claims' timers, takes the claimants'
 updates, streams events to the people watching, sends each event on to the
 [live feeds](#live-feeds), and saves each claim to the
 [claims table](#claims). The donor's tools, under
-[The donor's tools](#the-donors-tools), make claims, post to them, and
-release them through it.
+[The donor's tools](#the-donors-tools), make claims, post to them, submit
+their work, open their PRs, and release them through it.
 
 **Claiming**
 
@@ -906,8 +908,8 @@ table, and each takes its value from the first file that gives one:
 - **Tags** are the repo's labels that mean ready for outside help, compared
   without case: `help wanted`, `contributor friendly`,
   `contribution welcome`, `goodfirsttoken`, and any label starting with
-  `.contrib/`, up to 20, the most a project can have. The plan's crawler
-  also counts `good first issue`, but the plan names it as a label projects
+  `.contrib/`, up to 20, the most a project can have. The crawler also
+  shows admins `good first issue`, but the plan names it as a label projects
   keep for people, so the proposal leaves it out. With none of them, the
   tag is `goodfirsttoken`, which is created if the maintainer keeps it.
 - **Disclosure** uses the trailer a file names for AI help, `Assisted-by` or
@@ -918,10 +920,17 @@ table, and each takes its value from the first file that gives one:
   description or pull request description with `yourself`, `by hand`, or
   `in your own words` after it in the same sentence.
 - **CLA** is the first https link on a line that says `CLA` or
-  `Contributor License Agreement`, without the punctuation that ends the
-  sentence around it.
+  `Contributor License Agreement`, and that it must be signed, with sign,
+  signed, require, must, or need to, without the punctuation that ends the
+  sentence around it. A line with no, not, never, none, without, or n't
+  gives none, whatever link it has, so "There is no CLA to sign" sets no
+  CLA.
 - Every other setting keeps its default. So the proposal's PR mode is always
   `reviewed`, and the maintainer chooses `automatic` if they want it.
+
+The [policy crawler](#the-policy-crawler) finds these four files the same
+way, and suggests tags, disclosure, the person-written PR description, and
+the CLA by the same rules.
 
 **Saving.** With settings, it checks them as a whole, and saves the project
 as `pending`, registered by the caller at that time. The settings they left
@@ -1162,10 +1171,12 @@ removes the repo, or a maintainer of the repo withdraws it.
 ## The admin queue
 
 Good First Token's admins approve and reject what waits for them, list
-projects from their written AI policies, pause projects, block donors, and
-remove projects at their maintainers' request, from their agent with six
-tools listed only for admins, or from the [admin pages](#the-admin-pages).
-Both go through the same actions, so the rules below hold for both.
+projects from their written AI policies, pause projects, block donors,
+remove projects at their maintainers' request, and add repos to the
+crawler's seed list, from their agent with seven tools listed only for
+admins, or from the [admin pages](#the-admin-pages). Both go through the
+same actions, so the rules below hold for both. The pages have no form for
+pausing, removing, or the seed list yet.
 
 - Every action first checks the caller's admin permission, under
   [Permissions](#permissions), before it reads or writes anything. Anyone
@@ -1187,9 +1198,15 @@ registration's or a crawler find's.
   full. Its ID names the status change that made it pending, so once its
   status changes, the ID names nothing, and a decision on it is `not_found`.
 - A **crawler find** is a waiting [candidate](#crawl-candidates), with its
-  policy quote, link, and tier, the settings the crawler suggests, and the
-  labels that could mean ready for help. Nothing makes one yet but the
-  sample data. The crawler (#30) will.
+  policy quote, link, and tier, the settings the crawler suggests, the
+  labels that could mean ready for help, the line behind each suggestion,
+  and every sentence in the repo's docs that names AI, the first 60 of
+  them, each with the rest of its paragraph. The crawler's rules can miss a
+  ban worded in a way they don't know, as in "AI tools are fine for
+  questions. Any code from a machine gets closed right away.", so the admin
+  reads those paragraphs before a verdict. The
+  [policy crawler](#the-policy-crawler) makes them, and so does the sample
+  data.
 - A **request to be removed** is a maintainer's request, under
   [Asking to be removed](#asking-to-be-removed), with who asked, when,
   their reason, as a JSON string, and the repo's project, with its status
@@ -1307,6 +1324,19 @@ how they asked, and only admins see it.
   the repo off the list, and rejecting it leaves it on.
 - The events on its issues leave the live feeds, as
   [Live feeds](#live-feeds) says.
+
+**The seed list.** `admin_seed_repo` adds a repo to the crawler's seed
+list, for the [policy crawler](#the-policy-crawler) to read whatever its
+stars or last push.
+
+- A repo is on the list once, whatever the case of its name, and keeps the
+  admin who added it and when. Adding it again changes nothing, and the
+  answer says so.
+- A repo on the do-not-list is refused with `repo_not_eligible`.
+- A repo that is a project already, whatever its status, or that the
+  crawler put in the admin queue before, isn't added, since the crawler
+  reads it no further. The answer says which, and that nothing changed.
+- It asks GitHub nothing. The crawler reads the repo when it queues it.
 
 **Checking a request to be removed.** `admin_remove_project` doesn't check
 who asked. `request_removal` does: it saves a request only from an admin or
@@ -1490,17 +1520,21 @@ too, with the same reason.
 
 **The budget.** GitHub gives the service token's account 5,000 REST calls
 and 5,000 GraphQL points an hour, whichever of its tokens makes them, and the
-scheduled jobs and a maintainer's refresh share them. A run first asks
+scheduled jobs, a maintainer's refresh, and the
+[policy crawler](#the-policy-crawler) share them. It also gives 30 searches
+a minute, which only the crawler makes. A run first asks
 GitHub what is left, which costs nothing, then reads what GitHub says is
 left after every call, and before each call it stops when less is left than
 its job leaves for the others. Each job also caps the calls one run makes,
 the first question included.
 
-| Job | Stops while less than this share of the hour's limit is left | Most calls in one run |
+| Job | Stops while less than this share of the limit is left | Most calls in one run |
 |---|---|---|
-| The sync | A fifth | 1,000 |
-| The PR job | A tenth | 100 |
-| A maintainer's refresh | Half | 60 |
+| The sync | A fifth of the hour's | 1,000 |
+| The PR job | A tenth of the hour's | 100 |
+| A maintainer's refresh | Half of the hour's | 60 |
+| The crawler's search | A tenth of the minute's searches | 20 |
+| The crawler's queue, each run of up to 5 batches | Three fifths of the hour's | 60 |
 
 - The sync's reads of repos alone, before its passes, start no new project
   once they have made 100 of its calls in a run, so the passes always get
@@ -1532,11 +1566,12 @@ the first question included.
 
 ## The donor's tools
 
-A donor's agent spends their tokens through seven tools: `start_session`,
+A donor's agent spends their tokens through nine tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
-`release_claim`, and `my_work`. Each acts as the caller alone, and reads
-GitHub with the caller's own token. The service token reads nothing for
-them. `submit_work` and `open_pr` come with #16.
+`submit_work`, `release_claim`, `my_work`, and `open_pr`. Each acts as the
+caller alone, and reads and writes GitHub with the caller's own token, for
+their own claim only. The service token reads nothing for them, and no
+maintainer's token or other donor's ever does their work.
 
 **Sessions**
 
@@ -1564,9 +1599,9 @@ them. `submit_work` and `open_pr` come with #16.
   `reason` says why, with the reason GitHub gave for a delisted project,
   and tells the agent to release it with `release_claim`. A claim on a
   delisted project is titled by its issue alone, like `owner/repo#n`,
-  since nothing cached from the repo shows. Its
-  follow-ups, and its work waiting to open as a PR, are empty lists until
-  #17 and #16 fill them.
+  since nothing cached from the repo shows. It also lists the donor's work
+  waiting to open as a PR, under The review queue below. Its follow-ups are
+  an empty list until #17 fills it.
 - A session belongs to the donor who started it. Another donor who names it
   finds no session, and is refused with `not_found`.
 
@@ -1778,15 +1813,231 @@ since it started.
 - Both work on a claim whose project is on the do-not-list, or one the
   sync delisted, so the donor can say they are stopping and let it go.
 
+**Submitting.** `submit_work` takes the claim, every file changed from the
+claim's start commit, each with its full new text or null to delete it, a
+summary, what the agent checked, the agent and model, a title if the agent
+gives one, and a token estimate if the harness has one. The files follow the
+rules under Inputs in [MCP tools](#mcp-tools), and a submit that breaks them
+never reaches the tool.
+
+- Before anything goes to GitHub, it refuses a claim the claims table
+  doesn't have with `not_found`, someone else's claim with
+  `not_claim_owner`, by the `work_claim` permission, and a blocked donor
+  with `donor_blocked`. It refuses a claim whose project isn't approved, is
+  paused, or is on the do-not-list with `project_not_open`, as claiming
+  does, and one the sync delisted, approved or paused, with the reason the
+  sync gave, as `my_work` gives it. It refuses a claim its room holds as
+  released or expired with
+  `claim_released` or `claim_expired`, and a claim whose PR the PRs table
+  shows merged or closed with `pr_closed`. None of these makes a call to
+  GitHub.
+- Then, before anything is written, it reads the issue on GitHub with the
+  donor's token and checks it as claiming does: GitHub shows it, it is an
+  open issue, it carries one of the project's tags and none of its excluded
+  tags, and it has no assignee other than the donor. An issue that fails is
+  refused with `issue_not_eligible`, nothing is written, and the claim stays
+  as it was, for the donor to release. A claim whose PR is open skips this
+  check. Its PR is the maintainers' to take or close, and they often
+  relabel an issue, or assign it, once a PR is on it.
+- A claim has one branch, `goodfirsttoken/issue-<number>-<claim ID>`. It
+  holds the claim's ID, so no other claim's branch has its name, and every
+  submit of the claim uses it.
+- The first submit puts the branch in the code repo when the donor can push
+  there, and in the donor's fork when they can't, each by their own
+  permission. GitHub says, with the donor's token, whether they have write,
+  maintain, or admin on the repo. For a fork, GitHub gives back the one the
+  donor has, or starts making one. Later submits use the branch where the
+  first put it.
+- The branch starts at the claim's start commit, however far the default
+  branch has moved, so the files apply to the tree the agent worked on.
+  Nothing is merged or rebased. GitHub shows the PR's change from where the
+  branch started, and any conflict with the default branch.
+- GitHub makes a new fork in the background, and answers 409 to its git
+  data until it is done. The server reads the branch again after half a
+  second, a second, and two seconds. When the fork still isn't ready, the
+  submit is refused with `fork_not_ready`, nothing is committed, and the
+  agent calls again with the same files. The fork stays.
+- A submit never writes over a commit the claim's submits didn't make.
+  Before it commits, the branch's head must be the commit the claim's
+  last submit made, or the start commit before the first. When someone
+  pushed to the branch since, as a maintainer can to an open PR's branch,
+  a reviewer can by committing a suggestion, and anyone can by clicking
+  Update branch, the submit is refused with `branch_moved`, naming the
+  head, and nothing is committed, so that work stays. The agent fetches
+  the branch, brings its work onto that head, and submits again with
+  `onto` set to it. `onto` must be the branch's head. A submit with `onto`
+  when the branch is at another head, or when there is no branch yet, as
+  on a first submit, is refused with `branch_moved`, and no branch is made
+  and nothing is committed. So a branch only ever starts at the start
+  commit.
+- A submit with `onto` can't undo the push it builds on. A path the push
+  changed, since the last submit's commit or the start commit before the
+  first, that comes back with the text it had before the push, or comes
+  back deleted when the push added it, is refused with `branch_moved`,
+  naming the paths, and nothing is committed. So is a path the push
+  deleted, or moved away in a rename, that comes back with any text, which
+  would undo the delete or leave the file in both places. Left out, such a
+  path stays as the push left it. New text for a path the push changed and
+  kept is the agent's own change. This check runs on the submit with
+  `onto` only. A later submit that sends a path the push deleted adds it
+  back, since from that head on the file is the agent's to send or leave
+  out.
+- The files are read against the claim's base: its start commit, or the
+  head the latest submit with `onto` named. So after `onto`, every file
+  changed from that head is sent, on that submit and the later ones.
+- After the commit, the branch holds each file as submitted. A file the
+  branch already holds with that text, and a deletion of a path where the
+  branch has no file, change nothing and are left out. A file an earlier
+  submit of the claim sent, and this one leaves out, goes back to how it
+  was at the base: deleted when it wasn't there, or its content from then
+  put back, whatever its bytes. When that leaves nothing to change, the
+  submit is refused with `no_changes`. A first submit then makes no
+  branch.
+- One exception to both: a commit at the head whose one parent is where
+  the branch should be, which GitHub names the donor the author of, and
+  which already holds the files, is one an earlier call made and didn't
+  record, as when it died after the commit. The submit records that
+  commit, and makes none. When the room recorded that first submit before
+  the call died, it isn't recorded twice. A later submit that died between
+  the room and the database is recorded twice, with its token estimate
+  added twice, since the room keeps no record of each submit's commit. So
+  are two submits of the same files at once: the second finds the first
+  one's commit on the branch, takes it as its own, and records it again.
+- A submit that would change an executable file, a symbolic link, or a
+  submodule is refused with `file_mode`, naming the path, and nothing is
+  committed. `createCommitOnBranch` writes every file it adds as a plain
+  file, mode 100644, so an executable would lose its mode, and a link or a
+  submodule would become a plain file. Each path's mode is read from its
+  folder in the branch's tree, or in the start commit while there is no
+  branch: 100755, 120000, and 160000 are refused. Deleting one is refused
+  too, and so is putting one back. A file sent with the text it has
+  changes nothing, so it goes through. The donor changes such a file with
+  Git themselves.
+- Every folder on the way to a path is read too. A path under a symbolic
+  link or a submodule is refused with `file_mode`, since the commit would
+  turn the link or the submodule into a folder. A path under a file is
+  refused with `path_conflict`, and so is a path that is a folder, sent
+  with text or deleted, and a new path that differs from one the branch
+  has, or from a folder on the way to it, only in case or in how an accent
+  is written, like `bin/RUN.sh` beside `bin/run.sh`. macOS and Windows
+  take the two as one name, which breaks a checkout there. Each refusal
+  names the path, and nothing is committed.
+- The commit is one call to GitHub's GraphQL `createCommitOnBranch` with
+  the donor's token. GitHub makes the donor its author, commits it as
+  GitHub, and signs it. Its first line is the title the agent gave, or else
+  the issue's title on GitHub. Then comes the summary, then the project's
+  disclosure trailer, when it has one, naming the agent and the model, like
+  `Assisted-by: claude-code (claude-opus-5-5)`.
+- When GitHub says the branch moved between the read and the commit, or
+  made the branch meanwhile, the branch is read again, up to three tries,
+  and then the submit is refused with `github_refused`. A push by someone
+  else stops it with `branch_moved`, and a commit another call of the same
+  claim made with these files is taken as above.
+- When GitHub refuses the fork, the branch, or the commit, the submit is
+  refused with `github_refused` and GitHub's reason, and the claim stays as
+  it was. A change to a file under `.github/workflows/` is one such
+  refusal: GitHub takes it only from a token with the `workflow` scope,
+  which Good First Token doesn't ask for, unless the same file, at the same
+  path with the same content, is on another branch of the repo. The
+  refusal then tells the agent to leave that change out, and the donor to
+  make it on GitHub themselves. A branch made before a refused commit
+  stays, at the start commit.
+- Once the commit lands, the claim's room records the submit, as under
+  [Claims](#claims) and [The issue room](#the-issue-room), with a
+  `submitted` event. A room that refuses it, as for a claim that expired
+  meanwhile, refuses the submit, and the commit stays on the branch.
+- Then the server counts the lines the branch adds and removes, as
+  GitHub's comparison gives them, from where the branch parts from the
+  code repo's default branch as it is then. That is the PR's own change:
+  the start commit until main is merged into the branch, as by Update
+  branch, and main's head after. The answer's diff runs from the same
+  place. Then it checks GitHub again,
+  with the donor's token, for an open PR linked to the issue by the sync's
+  rule under [Tagged issues](#tagged-issues). The PRs the room knows of
+  count too, and the claim's own PR doesn't.
+- A claim whose PR is open takes the commit onto that PR's branch, and no
+  second PR opens.
+- Otherwise the PR opens by itself when the project's PR mode is
+  `automatic`, no other PR is open on the issue, no path the branch
+  changes is under `.github/workflows/`, compared without case, and every
+  path it changes could be checked for that, the project doesn't want a
+  person-written description, and the donor has fewer open PRs in the
+  project than it allows. When one of these doesn't hold, the work goes to
+  the donor's review queue, with a reason: `pr_exists`, `workflow_files`,
+  `too_many_files`, `comparison_unread`, `reviewed_mode`,
+  `person_written_description`, or `open_pr_cap`, the first that applies
+  in that order. When GitHub refuses a PR that was to open by itself, the
+  work goes there with `pr_refused`.
+- The paths the branch changes are the submitted ones and the ones
+  GitHub's comparison lists, a renamed file's old name with its new one.
+  So a workflow file someone else pushed to the branch, which `onto` then
+  built on, counts too, and so does one a push moved out of
+  `.github/workflows/`. Until the claim's base is a head someone else
+  pushed, the branch holds only the claim's submits, and the submitted
+  paths are all it changes. After, the comparison is the one list of the
+  rest. GitHub lists at most 300 files, so when it lists 300 the work goes
+  to review with `too_many_files`, and when GitHub gives no comparison,
+  with `comparison_unread`.
+- The summary, what was checked, the model, and a title the agent gave go
+  into the commit, the PR, and the database with their keys and tokens
+  replaced, as a posted line's are under [The issue room](#the-issue-room).
+  The files, and a description the donor wrote, go as they are.
+
+**Opening the PR.** `open_pr` opens the PR for work in the donor's review
+queue.
+
+- It refuses what `submit_work` refuses before anything goes to GitHub. It
+  also refuses a claim with no work submitted with `not_submitted`, one
+  whose PR is open with `pr_already_opened`, a donor at the project's
+  open-PR cap with `open_pr_cap`, and, for a project that wants a
+  person-written description, a call with none with
+  `description_required`.
+- Before it opens, it checks the issue on GitHub as `submit_work` does, and
+  refuses one that fails with `issue_not_eligible`. The work stays on its
+  branch.
+- It checks GitHub for another PR on the issue first, and names one in its
+  answer. The donor decided a second PR helps, so it opens all the same.
+- The PR opens with the donor's token, from the claim's branch, in the code
+  repo or as `<donor>:<branch>` from their fork, into the code repo's
+  default branch, with maintainers allowed to push to it. Its title is the
+  latest submit's. Its description is the summary and what the agent
+  checked, or a description the donor wrote in their place. Then comes a
+  line that closes the issue, `Closes #<number>`, with the issue's repo too
+  when the project keeps its issues in another repo. Then the project's
+  disclosure text for the PR body, word for word, when it has one.
+- The claim's room records the PR, with a `pr_opened` event, and the issue
+  takes no new claims. The PRs table records it as open, and the PR job
+  follows it until it merges or closes.
+- When GitHub says a PR from the branch is already open, as after a call
+  that didn't hear back, that PR is the one recorded.
+- When GitHub refuses, `open_pr` refuses with `github_refused` and GitHub's
+  reason, and the work stays in the queue.
+
+**The review queue.** `my_work` lists the donor's claims awaiting review,
+as each claim's room holds it now, with its latest submit: the diff on
+GitHub and the lines added and removed, both from where the branch parts
+from the default branch as it was at that submit, the agent and model,
+the summary and what was checked, why it waits, when it expires, whether
+the project wants a person-written description, and an open PR on the issue
+from anyone, from the room or, read with the donor's token, from GitHub.
+When GitHub refuses that read, the room's PRs are the ones named.
+One whose PR can't open now is marked `openable: false` with the reason:
+the donor is blocked or the project isn't open, and then nothing about it
+is read from GitHub, or the issue fails the check `open_pr` makes on
+GitHub.
+
 ## Crawl candidates
 
-A candidate is a repo the crawler found whose own docs welcome AI help. Nothing
-crawls yet.
+A candidate is a repo the crawler found whose own docs welcome AI help. The
+[policy crawler](#the-policy-crawler) makes them.
 
 - A candidate has the repo's stars, when it was made, its last push, and
   when its owner's account was made. It has the policy quote, link, and tier,
-  the settings the crawler's rules suggest, and labels that could mean ready
-  for help, with their open issue counts.
+  the settings the crawler's rules suggest, labels that could mean ready
+  for help, with their open issue counts, the line in the repo's files
+  behind each suggestion, and any canary, as the files have them, and the
+  first 60 sentences in the repo's docs that name AI, with how many more
+  there are.
 - Suggested settings can leave out any setting, tags included. The admin
   picks the tags.
 - A repo on the do-not-list never enters the admin queue.
@@ -1816,26 +2067,485 @@ approving a maintainer's registration of it takes it off, under
   work there through it. A project is on the list, for the donor's tools,
   when its repo or its issue repo has an entry of its own, as for the
   homepage. None of its issues is suggested or takes a new claim, and a
-  claim on it isn't offered to resume and can't be resumed. The donor can
-  still post to that claim and release it, and `my_work` lists it with a
-  note to release it, under [The donor's tools](#the-donors-tools).
+  claim on it isn't offered to resume and can't be resumed. It takes no
+  submit and no PR, and nothing goes to GitHub for it. The donor can still
+  post to that claim and release it, and `my_work` lists it with a note to
+  release it, under [The donor's tools](#the-donors-tools).
+
+## The policy crawler
+
+The crawler looks for popular projects whose own docs welcome AI help, and
+puts each one in the admin queue as a [candidate](#crawl-candidates). It
+never lists a project. An admin does, under
+[The admin queue](#the-admin-queue).
+
+**What the rules can't do.** The crawler sorts a repo with plain rules over
+its text, and plain rules can miss a ban worded in a way they don't know.
+Six reviews found new wordings in turn. The rules catch every one of
+them now, and the tests keep them as a corpus, but a repo can still say no
+in words the rules have never seen. So the crawler keeps every sentence in
+the repo's docs that names AI, with the rest of its paragraph, and the
+admin reads them before a verdict. Nothing is listed without an admin.
+The rules err the other way too: on welcoming docs they had never seen,
+they read about three in four as a ban, under How often the rules are
+wrong, below. It reads public data only, with the
+service token, under [Calls to GitHub](#calls-to-github). With no service
+token it reads nothing, and the log names the secret.
+
+**Which repos it reads.** Once an hour, at 52 minutes past, a scheduled run
+puts repos in the crawl queue, 10 to a batch.
+
+- First the seeds admins added that it hasn't handled yet, under The seed
+  list in [The admin queue](#the-admin-queue), whatever their stars or last
+  push. It records what it did with each: queued it, or left it alone, and
+  why.
+- Then the public repos GitHub's search finds with at least 1,000 stars and
+  a push in the 30 days before the pass started, and not archived. Search
+  leaves out forks, as it does by default.
+- It leaves out a repo on the do-not-list, a repo that is a project
+  already, whatever its status, and a repo it put in the admin queue
+  before, whatever the admin decided. Names compare without case.
+- Search serves at most 1,000 repos for one query, so a pass reads the pool
+  in bands of star counts, fewest stars first. The first band is every repo
+  with 1,000 stars or more, which counts the whole pool.
+- When search counts more than 1,000 repos in a band, the band is split
+  before anything in it is queued. A band with no upper end gets one, at
+  the width the pass is using, which starts at 10 star counts. A band with
+  an upper end becomes half as wide, down to one star count, which gives
+  the first 1,000.
+- Each band starts where the one before it ended, just as wide. After a
+  band with fewer than 250 repos in it, the next is twice as wide, and
+  first tries the rest of the pool with no upper end. The pass is done when
+  a band with no upper end is read whole.
+- A run stops before a search when less than a tenth of the minute's
+  searches is left, or after 20 calls, the first question to GitHub
+  included. The next run picks up where it stopped.
+- A search GitHub says ran out of time, with `incomplete_results`, stops
+  the run. The pass stays where it was, and the next run asks again.
+- A pass that is done stays done, so nothing reads the pool a second time
+  yet, and a seed added later is still read.
+- A repo whose stars change while a pass reads the pool can land in two
+  bands, or in none. Search gives repos with the same stars in no set
+  order, so a band read over several pages can give one of them twice, or
+  skip it.
+- Two runs at once, as when one outlasts the hour, can queue the same seed
+  or page twice. A repo read twice is put in the admin queue once.
+
+**What it reads in each repo.** The crawl queue's consumer reads each batch
+from the repo's default branch. It lists the folders, then reads every
+file at the commit the branch was on, so a push while it reads is left for
+the next crawl. It reads:
+
+- every file with a name a proposal reads, in each folder a proposal looks
+  in, under [Registering a project](#registering-a-project). A proposal
+  takes the first it finds, and the crawler reads them all,
+- every other text file in the root, `.github/`, or `docs/` with an AI word
+  among the parts of its name, split at dots, dashes, and underscores:
+  `ai`, `llm`, `llms`, or `genai`, like `AI_USAGE.md`, `LLM_POLICY.md`, or
+  `GENAI-CONTRIBUTIONS.md`. It reads them as AI policy files,
+- `CLAUDE.md` in the root, found without case,
+- the pull request templates in a `PULL_REQUEST_TEMPLATE` folder in the
+  root, `docs/`, or `.github/`, ending `.md`, `.markdown`, or `.txt`. In
+  `.github/` it reads each such folder, and each issue template folder,
+  whatever the case of its name,
+- each agent skill, a `SKILL.md` in a folder under `.claude/skills/` or
+  `skills/`,
+- the issue templates in `.github/ISSUE_TEMPLATE/` ending `.md`,
+  `.markdown`, `.yml`, or `.yaml`, `config.yml` too, since its contact
+  links carry text the repo writes, and
+- whether it has a vouch file, `VOUCHED.td` in the root or `.github/`,
+  without reading it.
+
+**A repo it can't read whole gets no verdict.** Any file it skips could be
+the one that bans AI, so the repo stays out of the admin queue, and the log
+names it and says why. That is when:
+
+- a file it would read is over 100 KB, or is a symbolic link,
+- a folder it lists is a symbolic link or a file, or a pull request
+  template folder in the root or `docs/` has its name in another case than
+  `PULL_REQUEST_TEMPLATE`,
+- it has more than 10 pull request templates in a folder, more than 10
+  issue templates, more than 10 skills in a skills folder, or more than 10
+  files named for AI in a folder,
+- GitHub gives no text for a listed file at that commit, as for a file
+  that is binary, gone, or cut short, or gives text with a NUL character,
+  as UTF-16 text has, or
+- GitHub listed a folder from another commit than the one it named, as
+  when a push lands while it answers.
+
+It follows no path through a folder that is a symbolic link, like skills
+under a linked `.claude/`. A repo GitHub shows archived or private, or
+doesn't show at all, is read no further. The consumer checks the
+do-not-list, the projects, and the crawler's earlier finds again before it
+reads a batch, and a repo on any of them is read no further. It checks once
+more before it puts a repo in the admin queue, under the name GitHub gives
+the repo now, since a repo can be renamed.
+
+**How it sorts them.** Plain rules over the text, with no model, in the
+order the files are read: the AI policy files, CONTRIBUTING, `AGENTS.md`,
+`CLAUDE.md`, the PR templates, the skills, then the issue templates. The
+rules err toward a ban. A missed welcome costs a find, and a missed ban
+would put a repo that said no in front of an admin.
+
+- Before it matches, it takes out Markdown's emphasis and strike marks,
+  `*`, `~`, and `_` at the edge of a word, and the HTML tags `strong`, `em`,
+  `b`, `i`, `u`, `s`, `del`, `ins`, `mark`, and `strike`. It straightens
+  curly quotes and folds runs of space. The quote keeps the file's own
+  text.
+- A sentence ends at a period, question mark, or exclamation mark followed
+  by a space, at a blank line, or where a list item, a heading, a quote, or
+  a table row starts. It runs on over a line that is only wrapped.
+- **A sentence names AI** when it has `AI` in capitals or `A.I.`, `ai-`
+  before a word like generated, assisted, written, tools, or agents in any
+  case, `LLM`, `language model`, `artificial intelligence`, `genAI`,
+  `generative`, `neural network`, `chatbot`, `vibe-coded`, `Cursor` with its
+  capital, `agent`, or a product like ChatGPT, GPT-4, OpenAI, Copilot,
+  Claude, Codex, Gemini, Llama, Mistral, DeepSeek, Devin, Aider, or
+  Windsurf.
+  - It names AI too when it sits under a heading that does, until a heading
+    of the same level or higher, and anywhere in an AI policy file. A
+    heading that names AI carries to its own section and no further. Tried
+    on sections that follow an AI section in welcoming docs, carrying it
+    further turned 4 of 4 into bans and caught no ban the other rules miss.
+  - It names AI when any sentence before it in its paragraph does, and it
+    has 4 words or fewer, like "No thanks.", or points back with it, its,
+    that, them, these, those, they, or such.
+  - A sentence that names AI and ends with a colon carries to the list
+    after it, until a paragraph that isn't a list item.
+  - A bot, or a machine-generated file, names no AI, so "stale PRs are
+    closed by a bot" and "Don't edit machine-generated files" are no ban.
+  - `AGENTS.md`, `CLAUDE.md`, and the skills talk to agents. There, words
+    for work AI made name AI, like AI-generated, Claude-written, or
+    vibe-coded, and so does any other AI word, or an agent, in a sentence
+    that refuses: prohibited, forbidden, banned, not allowed, not welcome,
+    not wanted, off limits, or the like. Headings count for nothing there.
+    So "AI coding assistants are not allowed to modify this repository" is
+    a ban, and a rule for how an agent works, like "Claude should not use
+    emojis" or "Agents should not push to main", is no ban.
+- **A sentence says no** when it has a word that says no, limits, or
+  refuses, in any of its forms: not, n't, cannot, no, never, none, nor,
+  neither, nobody, nothing, unable, unwilling, refuse, reject, ban,
+  prohibit, forbid, disallow, decline, deny, avoid, refrain, discourage,
+  stop, only, except, unless, restrict, limit, unwelcome, unacceptable,
+  intolerable, close, closed, delete, remove, revert, lock, blocked,
+  ignore, spam, slop, against, instead, rather, or zero tolerance, or a
+  phrase that keeps something out with no such word: off limits, off the
+  table, at the door, keep it out, or hard no.
+- **A sentence bans AI** when it names AI and says no, whatever it says no
+  to, unless the whole sentence is one of the forms below. So "AI tools help you avoid
+  typos" is a ban. In `AGENTS.md`, `CLAUDE.md`, and the skills, a sentence
+  that says no and talks about contributing bans AI too: one with
+  contribute, accept, open or submit a pull request, pull requests from or
+  by, or write code for this.
+- **Some bans need no word that names AI**, anywhere:
+  - generated code, pull requests, contributions, patches, issues, or the
+    like, or work generated by a tool, a model, or a machine, in a
+    sentence that refuses it, like "Generated code will not be merged",
+  - work that only a person may write: 100% human-written, human-written
+    only, only hand-written, written entirely by a person, or must be
+    written by a human, unless the sentence is about a description,
+    message, title, or summary, which is the person-written PR description,
+  - and AI-free, LLM-free, or GenAI-free.
+- **These forms say no to something else**, and are no ban. Each is a
+  whole sentence: fixed words with a few slots, and each slot takes one of
+  a closed set of words, a label in quotes or backticks, or a path. A list
+  item's mark, a checkbox, a heading's marks, a quote's mark, or an HTML
+  comment's marks around the sentence don't count. No form takes out part
+  of a sentence and reads the rest, so a ban can't ride along with a form's
+  words, and a word more than a form holds makes the sentence a ban. The
+  tests check each form both ways, and check that no sentence that says no
+  in the 93 ban wordings the reviews found is a form.
+  1. The first sentence of a checkbox a contributor ticks, a Markdown task
+     list item or an issue form's option, when it says I or we did not,
+     didn't, have not, or don't use AI, no AI was used, or AI was not used,
+     with AI, an LLM, AI tools, an agent, or a named product like Copilot,
+     and at most "to write this", "for this PR", or the like after it. Like
+     "I did not use AI". A second sentence in the item is read like any
+     other.
+  2. Keeping AI off issues with one label, named in quotes or backticks,
+     like "Don't use AI on issues labeled `good first issue`." The label
+     becomes an excluded tag.
+  3. Keeping agents from working on their own, in one of three shapes:
+     agents, or you, may, must, should, can, or will not or never open pull
+     requests, work, or contribute on their own, autonomously,
+     unsupervised, unattended, or without a person, a human, review,
+     supervision, or oversight, like "Agents must not open PRs without a
+     person". Or autonomous, unsupervised, unattended, or fully automated
+     agents may not open pull requests. Or "Do not open pull requests on
+     your own".
+  4. Opening a pull request only once it's ready: do not, don't, or never
+     open, submit, create, send, or file a pull request or a patch before,
+     without, or until running, passing, checking, reading, updating,
+     adding, opening, filing, or signing the tests, the test suite, the
+     linter, CI, the checks, the build, the contributing guide, the docs,
+     the changelog, an issue, the CLA, the style guide, or the code of
+     conduct, then first or locally at most. Like "Never open a PR without
+     running the tests".
+  5. "Don't submit code you don't understand", "Please don't paste large
+     blocks of code you haven't read", and the like: don't submit, open,
+     send, push, commit, post, or paste code, changes, work, output, text,
+     or a pull request, that you don't, can't, haven't, or didn't
+     understand, explain, stand behind, review, read, test, or check, then
+     yourself or into issues at most. It asks for a person in the loop.
+  6. A reminder or a request, in one of these: don't forget, hesitate, or
+     be afraid to ask, disclose it, mention it, say so, tell us, reach out,
+     or open an issue. There is no need to ask, mention, disclose, label,
+     say so, or sign anything, then it, them, or first at most. No problem.
+     You, agents, or they don't need to ask, wait, check with us, get
+     permission, or open an issue, then first, or before using it, them, AI,
+     or a named product, at most. We only ask that you disclose, mention,
+     note, label, or mark it, them, AI use, or which tools you used, then in
+     the pull request at most. We only ask that you test, review, read, or
+     check it or your change. So "We only ask that you disclose AI use" is
+     no ban, and "We only ask that you tell us you wrote it without AI" is
+     one.
+  7. Keeping a template whole: don't delete, remove, edit, change, modify,
+     or skip this section, template, line, heading, checklist, checkbox,
+     comment, or question, then below or above at most.
+  8. A rule to disclose: don't submit, open, send, use, contribute, or post
+     AI, AI-assisted or AI-generated code, changes, or pull requests, AI
+     output, or work made with AI, without disclosing, mentioning, noting,
+     telling us, or labeling it. Or undisclosed AI use, help, code, or
+     contributions is or are not allowed, accepted, or welcome. So "Do not
+     submit AI-generated code, with or without disclosing it" is a ban.
+  9. A rule for how to work, with nothing about AI. An agent, you, we,
+     contributors, or they may come first, then must not, should not, may
+     not, do not, never, will not, or are not allowed to, then one of:
+     include, commit, share, post, paste, or push secrets, tokens,
+     credentials, passwords, API keys, or personal data, in a pull request
+     at most. Push, commit, or merge to one branch named main, master,
+     trunk, develop, release, stable, production, or gh-pages, or the
+     protected, shared, upstream, release, or default branches. Open a pull
+     request against a side branch: release, stable, production, or
+     gh-pages. Every pull request goes to the default branch, main, master,
+     trunk, develop, or a protected or upstream branch, so keeping pull
+     requests off one of those keeps them out, and is a ban. Open or keep
+     more than one, two, or another number from 1 up of pull requests or
+     issues, at a time at most. Open a pull request for an issue someone
+     else claimed or is working on. Edit, modify, change, or touch files
+     under one path with a letter, digit, underscore, or hyphen in it, like
+     `vendor/`, so `/` and `./`, the whole repo, are no path. Ping, tag,
+     mention, email, or message the maintainers, reviewers, or us,
+     directly at most. Commit or edit build, compiled, vendored, or
+     minified files, output, or bundles. Generated files are left out,
+     since generated work can be what AI made. Merge, accept, or review a
+     pull request that fails or breaks CI, the build, the tests, or the
+     checks. So "Agents should not push to main" and "Coding agents must
+     not open pull requests against the release branch" are no ban, and
+     "Coding agents must not open pull requests against the default
+     branch", "Agents must not push to our branches", "Do not push to main
+     or any other branch", and "Do not modify any file in this repository"
+     are bans.
+  10. A rule to read what AI wrote: don't use, paste, submit, commit, post,
+      or send AI, a named product, AI output, generated code, it, or them,
+      to write commit messages, code, tests, docs, or the like at most,
+      without reading, reviewing, checking, testing, understanding,
+      verifying, or running it, them, the output, each line, or the code,
+      then yourself at most. Like "Do not use AI to write commit messages
+      without reading them". It asks for a person in the loop.
+  11. A condition that asks to be told: if you or an agent cannot run,
+      reproduce, build, test, fix, or finish the tests, the build, it, the
+      bug, the issue, or the change, locally at most, then say so, mention
+      it, note it, tell us, explain why, ask for help, or leave a comment,
+      in the pull request or the issue at most. Like "If an agent cannot
+      run the tests, say so in the pull request". So "If it isn't your own
+      code, please take it elsewhere" is a ban.
+  12. A label that scopes where agents work: agents, AI tools, or you may,
+      should, can, or must only work on, pick up, take, claim, open pull
+      requests for, or be used on issues labeled a label in quotes or
+      backticks. Like "Agents may only work on issues labeled
+      `agent ready`". Its label is the only tag the find suggests.
+
+  Forms 5, 8, and 10 may follow "Using AI is fine, but" or "AI help is
+  welcome, as long as you", with AI, AI tools, AI help, or a named product,
+  and fine, welcome, okay, or allowed. Nothing else may come before any
+  form.
+- **How often the rules are wrong, on made-up docs.** The tests hold every
+  ban wording six reviews found, 93 in all, and the rules read every one
+  as a ban. They also hold 38 made-up welcoming policies, written the way
+  real ones read, with ordinary rules for how to work, and the rules read
+  4 of them as a ban: "Nothing changes about how we review pull requests",
+  "We will not ask how you wrote it", "Agents may open pull requests here,
+  and they do not need to sign anything first", and "We will not merge a
+  PR that fails CI, whoever wrote it". The last two read as bans since the
+  forms became whole sentences, each a form with words added. Those 38
+  were written alongside the rules, so they say little about docs the
+  rules have never seen. A review wrote 12 more welcoming policies that no
+  rule was written or changed to fit, and the rules read 9 of them as a
+  ban, about three in four, up from 8 before the forms became whole
+  sentences. The tests keep them as a measurement. In seven, an ordinary
+  rule for how to work, like "Never commit a `.env` file", takes its AI
+  naming from its AI policy file, from a heading that names AI, or from a
+  sentence before it that it points back to. Two name AI themselves and
+  say no to something else. A welcoming repo read as a ban is a find the
+  admin never sees. A ban read as a welcome would put a repo that said no
+  in front of an admin, which is worse.
+- **A sentence refuses outside pull requests** when it says the project
+  doesn't accept, take, merge, review, consider, want, or welcome pull
+  requests, PRs, patches, or contributions, isn't accepting, taking, or
+  interested in them, has no pull requests, that pull requests are not
+  accepted or won't be, or that it is closed to contributions, or when it
+  says do not open or submit a pull request. The words right after that can
+  narrow it: without, that, which, unless, if, until, before, except, with,
+  on your own, on issues, or for or to anything but the project or a time
+  like now, and a few more. So "Don't open PRs without tests" refuses no
+  one, and "We don't take pull requests for this project" is a ban.
+- **A sentence invites agents** when it says agents may, can, or are
+  welcome, invited, encouraged, free, or allowed to open, submit, send,
+  make, create, file, contribute, or work, only or not, that agent pull requests or
+  contributions, or pull requests from agents, are welcome, that agents
+  are welcome, or that the project welcomes pull requests from agents, or
+  welcomes agents.
+- **A sentence allows AI help** when it says AI help, assistance, tools, or
+  use is fine, welcome, allowed, accepted, okay, permitted, or encouraged,
+  that AI-assisted or AI-generated work is, that AI is, that using AI is,
+  that you may, can, or are welcome to use AI or a tool it names, like
+  Claude Code, Codex, Copilot, ChatGPT, Cursor, or Gemini, that the project
+  welcomes, accepts, allows, or encourages AI-assisted work, or that it
+  welcomes, accepts, or is happy to take contributions or pull requests
+  made or written with AI or one of those tools.
+- **A person in the loop** is a sentence that says a person, a human, or
+  you must, should, need to, or have to review, understand, explain, stand
+  behind, or take responsibility, or that says human in the loop, or human
+  review is required.
+
+The tiers:
+
+| Tier | When | Reaches the admin queue |
+|---|---|---|
+| Bans or restricts | A sentence anywhere bans AI, with or without a word that names it, or refuses outside pull requests, like "This project does not accept pull requests." Whatever else the docs say | Never |
+| Invites agents | A sentence invites agents, and nothing keeps agents from working on their own, asks for a person in the loop, or asks for a person-written PR description | Yes |
+| Allows with conditions | A sentence invites agents with one of those conditions, or a sentence allows AI help | Yes |
+| No policy | None of these, whether the docs mention AI or not | Never |
+
+**What it suggests.** A repo in either of the two listed tiers is checked
+the way an admin's listing checks it, over REST: it has to be public, not
+archived, and take pull requests from anyone. One that has pull requests
+turned off, lets only collaborators open them, or that GitHub says nothing
+about on either, is left out. The crawler then reads its labels, the first
+1,000, each with how many open issues carry it, and puts it in the admin
+queue with:
+
+- The quote: the paragraph with the first sentence that invites agents, or
+  else the first that allows AI help, as the file has it. A paragraph that
+  is a Markdown heading alone brings the paragraph after it. When the quote
+  would run over 2,000 characters, it is the sentence alone, cut there.
+- The link: the file on github.com, on the repo's default branch.
+- The facts: its stars, when it was made, its last push, and when its
+  owner's account was made, as GitHub gave them to the crawler.
+- The suggested settings:
+  - PR mode `automatic` for invites agents, and `reviewed` otherwise.
+  - The disclosure trailer, the person-written PR description, and the
+    CLA, by the rules a proposal uses. The CLA link comes only from a line
+    that says a CLA must be signed.
+  - Who can claim `vouched` when it has a vouch file.
+  - Excluded tags: the repo's labels the docs keep AI off, or name in
+    quotes or backticks in a sentence that keeps them for people, as in
+    "reserved for people new to the project".
+  - Tags: the repo's labels the inviting or allowing sentence names after
+    labeled, label, or tagged, or in quotes or backticks, then the labels a
+    proposal takes as ready for outside help, up to 20, none of them
+    excluded. With none, it suggests no tags, and the admin picks them.
+    When the docs keep agents to issues with one label, in form 12, that
+    label is the only tag, as the repo spells it, since any other would
+    send agents to issues the repo keeps them from. That holds for such a
+    sentence in `AGENTS.md`, `CLAUDE.md`, or a skill too, though it names
+    no AI there. When the repo has no label by that name, or keeps it for
+    people, it suggests no tags.
+  - No notes for agents. Nothing from a repo's files goes in a setting
+    but a label name, a trailer name, and a CLA link.
+- The suggested tags: the labels the sentence names, and the labels that
+  mean ready for outside help, `good first issue` included, each with its
+  open issue count, up to 20, none of them excluded. With a label from
+  form 12, that label alone, with its open issue count, or none when the
+  repo doesn't have it, or keeps it for people.
+- The lines behind them: for each suggestion the docs gave, the line of the
+  file it came from, as the file has it, up to 500 characters, for the
+  admin to check. That covers the excluded tags, the disclosure trailer,
+  the person-written description, the CLA, a condition that made PR mode
+  `reviewed`, and the line that keeps agents to one label, which says
+  either that its label is the tag or that the repo doesn't have it, or
+  keeps it for people, so the admin sees why there are no tags. Who can claim names the vouch
+  file.
+- A canary, when `AGENTS.md` or `CLAUDE.md` has one, with its line: a
+  sentence that says if or when you are an AI, an LLM, a language model,
+  an agent, an assistant, or a bot, then asks it to include, add, put,
+  mention, say, write, start, end, begin, use, append, prefix, or sign
+  something. No setting comes from it. An admin who wants agents told
+  about it writes the note.
+- The sentences that name AI: every sentence in the files it read that
+  names AI, that the rules read as about AI, like every sentence of an AI
+  policy file, that talks about contributing in a file for agents, or that
+  bans AI with no word that names it, each with the rest of its paragraph,
+  as the file has it. A paragraph up to 1,000
+  characters is kept whole. A longer one is cut to 1,000 characters
+  centered on the sentence's first word that names AI, or on its start
+  when it has none, with each cut moved to fall between words, and the
+  find says where it was cut: before, after, or both. A sentence in a paragraph already kept is not kept again, and the
+  same paragraph twice in a file is kept once. It keeps the first 60, in
+  the order the files are read, and counts the sentences after them that
+  are in no paragraph kept. The admin reads them before a verdict, under
+  [The admin queue](#the-admin-queue).
+
+`admin_queue` marks each line of a quote, a source line, and a paragraph
+with a sentence that names AI with `> `, as the repo's words for the
+admin's agent to read as data, and puts each label name the repo gave in
+quotes. Where a paragraph was cut, a line of its own, with no `> `, says
+that the paragraph starts earlier or goes on in the file. A line ends at
+any character a reader might break a line at: a line feed, a carriage
+return, a vertical tab, a form feed, a file, group, or record separator,
+a next-line character, or a line or paragraph separator.
+
+**The queue.** The consumer takes up to 5 batches at a time, one run at a
+time, and first asks GitHub what is left of the budget.
+
+- It stops before a call when less than three fifths of the hour's limit is
+  left, or after 60 calls in one run of up to 5 batches.
+- When the budget or GitHub's rate limit stopped it, or its 60 calls ran
+  out, the repos each batch hasn't finished go back to the queue in a new
+  batch, and the old batch is done, so the wait takes none of its tries. They come back when the
+  budget starts over, at least a minute and at most an hour later, or 15
+  minutes later when GitHub didn't say when, or at once after 60 calls.
+- When GitHub failed or refused the token, the batch it was on, and each
+  one after it, go back as they are, after 30 seconds, and twice as long on
+  each later try up to an hour.
+- A repo GitHub answers with an error of its own, of any kind but not
+  found, like one whose access GitHub blocked, goes back alone after 30
+  seconds, and the rest of its batch is read. A batch of that repo alone
+  goes back later on each try, so a lasting error takes it to the
+  dead-letter queue and holds no other repo back. An error GitHub gives
+  for no one repo sends the whole batch back.
+- The finds a batch made before it stopped stay in the admin queue, and
+  when their repos come back, they are read no further.
+- A malformed batch goes back at once. A batch goes to the dead-letter
+  queue after 90 retries.
+- With no service token, it reads nothing, and asks for each batch again in
+  an hour.
+- Each run logs one line: the batches it read, the repos, what it left out
+  and why, how many repos fell in each tier, the repos it put in the admin
+  queue, the repos it sent back alone, its calls, what is left of the
+  budget, and why it stopped. A repo it gave no verdict, a repo GitHub
+  failed on, and a find it couldn't write each get a line that names it.
+  It names no other repo it left out. The search's run logs one line too:
+  the seeds and repos it queued, its searches, where the pass stands, how
+  many repos the pool has, and why it stopped.
 
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves eighteen of them so far,
-with the inputs, outputs, and descriptions defined here: the donor's seven,
-under [The donor's tools](#the-donors-tools), the maintainer's five, under
+a description for agents. The MCP server serves all twenty-one, with the
+inputs, outputs, and descriptions defined here: the donor's nine, under
+[The donor's tools](#the-donors-tools), the maintainer's five, under
 [Registering a project](#registering-a-project),
 [Managing a project](#managing-a-project), and
-[Asking to be removed](#asking-to-be-removed), and the admins' six, under
+[Asking to be removed](#asking-to-be-removed), and the admins' seven, under
 [The admin queue](#the-admin-queue).
 
 | Who | Tools |
 |---|---|
 | Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `set_interests` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project`, `request_removal` |
-| Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project` |
+| Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project`, `admin_seed_repo` |
 
 **Results**
 
@@ -1881,10 +2591,41 @@ under [The donor's tools](#the-donors-tools), the maintainer's five, under
 - A release needs a public reason.
 - A posted update is one line. Tabs and line breaks fold into single spaces.
   `post_update` takes an optional job, for a line a subagent posts.
-- Submitted files are paths inside the repo: no leading slash, no empty, `.`,
-  `..`, or `.git` parts, and no backslashes. No two paths in a submit can be
-  the same, differ only in case, or be a file and a path under it. A file's
-  content is its full new text, or null to delete it.
+- Submitted files are paths inside the repo: no leading slash, no
+  backslashes, no control characters, no characters that change the
+  direction text shows in (U+202A to U+202E and U+2066 to U+2069), no
+  empty, `.`, or `..` parts, and no part that ends in a dot or a space,
+  which Windows drops. A path is at most 20 folders deep.
+- No part names Git's own folder, by the rules Git checks a tree with
+  before it writes one out, `is_ntfs_dotgit` and `is_hfs_dotgit`: `.git`,
+  or `git~1`, its short name on Windows, in any case, once the characters
+  HFS+ leaves out of a name are gone, like U+200C and U+FEFF, and up to a
+  colon, which starts an NTFS stream, and any dots and spaces before it.
+  So `.git:foo/config`, `GIT~1 /config`, and a `.git` with U+200C in it
+  are all refused.
+- No two paths in a submit can be the same, differ only in case or in how
+  an accent is written, as é in one character or as e and a combining
+  accent, or be a file and a path under it. Paths are compared in Unicode
+  NFC form, lowercased.
+- A submitted file's content is its full new text, taken as sent, spaces
+  and line endings included, or null to delete the file. An empty text is
+  an empty file. Only text is taken: a text with a NUL character, which Git
+  counts as binary, or with half a surrogate pair, which UTF-8 can't hold,
+  is refused. A submit can delete a binary file, or write text over it,
+  and never writes one.
+- A file holds at most 1 MiB of UTF-8, the largest file GitHub recommends,
+  and the files of one submit hold at most 2 MiB in all, counted in bytes.
+  A deletion counts nothing. The MCP server takes a request body of at most
+  4 MiB, and JSON carries a quote, a backslash, or a line break in two
+  bytes and another control character in six, with the paths and the notes
+  in the same body. So a submit near the caps can still be refused by the
+  MCP server, with an error in place of a tool result.
+- A submit lists 1 to 300 files. `submit_work` takes a title, one line,
+  and `onto`, a full commit SHA, and `open_pr` a description the donor
+  wrote.
+- The title, at most 256 characters, and the model name, at most 100, fold
+  their tabs and line breaks into single spaces. Before that, each is
+  refused when it is longer than four times its limit.
 - `register_project` with no settings returns a proposal and saves nothing.
 - `project_status` takes `refresh`, false unless set, to read the tagged
   issues from GitHub first.
@@ -1906,12 +2647,15 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 `not_admin`, `not_found`, `repo_not_eligible`, `already_registered`,
 `invalid_settings`, `project_not_open`, and `invalid_input`. The donor's
 tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
-`project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`, and
-`not_vouched`.
+`project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`,
+`not_vouched`, `pr_closed`, `description_required`, `no_changes`,
+`file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, and
+`github_refused`.
 
-Each maintainer's and admin's tool lists the refusals an agent can get from
-it, in its spec in `packages/core`, and answers an agent with no other. The
-skills that use a tool say what to do with each one on its list, under
+Each maintainer's and admin's tool, and the donor's `submit_work` and
+`open_pr`, lists the refusals an agent can get from it, in its spec in
+`packages/core`, and answers an agent with no other. The skills that use a
+tool say what to do with each one on its list, under
 [Skills and plugins](#skills-and-plugins).
 
 | Tool | An agent can be refused with |
@@ -1927,12 +2671,18 @@ skills that use a tool say what to do with each one on its list, under
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused` |
+| `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
   so any other agent's call gets the MCP SDK's error
   `Tool <name> not found`. The admins' actions still check the permission
   themselves, and the admin pages get `not_admin` from them.
+- No agent gets `pr_closed` from `open_pr`. A claim with a PR is refused
+  with `pr_already_opened` before its PR's state is read. A PR that
+  `submit_work` was to open by itself, and GitHub didn't, sends the work to
+  the review queue with no refusal.
 - An agent gets `invalid_input` from `admin_decide` only for the ID of a
   request to be removed that waits. A rejection with no reason never
   reaches it: its input schema refuses one first, with an error that starts
@@ -1946,8 +2696,8 @@ skills that use a tool say what to do with each one on its list, under
 | `pr_already_opened` | Opening a PR for, or releasing, a claim that already has a PR |
 | `not_submitted` | Opening a PR before the work was submitted |
 | `pr_closed` | The claim's PR merged or closed, so the claim takes no more updates or fixes |
-| `project_not_open` | The project isn't approved, or is paused. Pausing a project that isn't approved gets it too |
-| `issue_not_eligible` | The issue is closed, has no project tag, has an excluded tag, has an assignee, or is a pull request |
+| `project_not_open` | The project isn't approved, or is paused, or, for the donor's tools, is on the do-not-list, was delisted by the sync, or has no public repo GitHub shows them. Pausing a project that isn't approved gets it too |
+| `issue_not_eligible` | GitHub shows no such issue, or it is closed, has no project tag, has an excluded tag, has an assignee, or is a pull request. For submitting and opening a PR, the donor may be its assignee |
 | `pr_exists` | A PR is open on the issue, so it takes no new claims |
 | `issue_full` | Every slot on the issue is taken |
 | `donor_blocked` | An admin blocked the donor |
@@ -1957,8 +2707,14 @@ skills that use a tool say what to do with each one on its list, under
 | `budget_spent` | The session's budget of issues or time is spent |
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
+| `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit |
+| `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, or add a path under a link or a submodule, so nothing was committed |
+| `path_conflict` | A submitted path is a folder, goes under a file, or differs only in case or accents from a path the branch has, so nothing was committed |
+| `fork_not_ready` | GitHub was still making the donor's fork, so nothing was committed. The same submit works once it is done |
+| `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, or there is no branch for `onto` to name, or the files would undo the push `onto` builds on, so nothing was committed. The refusal names the head to build on, or the files |
+| `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo, as GitHub says, or GitHub doesn't show them the repo or blocked access to it |
-| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting |
+| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy or the crawler's seed list, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting |
 | `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |
 | `listed_from_policy` | Changing the settings of a listing made from a policy with `update_project`, which takes `register_project` first |
 | `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
@@ -2588,13 +3344,17 @@ Each limit the schemas enforce, other than those under project settings:
 | What | Limit | Set by |
 |---|---|---|
 | PR description | 65,536 characters | GitHub |
+| PR description the donor writes | 60,000 characters, leaving room for the closing line and the disclosure | Us |
+| PR title, and a submit's title | 256 characters | GitHub |
 | Posted update | 200 characters | Us |
 | Feed event text | 500 characters | Us |
 | Subagent job name | 40 characters | Us |
 | Release reason | 200 characters | Us |
 | Files per submit | 1 to 300 | Us |
 | Path of a submitted file | 4,096 characters | Us |
-| Submit summary, and what was checked | 2,000 characters each | Us |
+| A submitted file | 1 MiB (1,048,576 bytes) of UTF-8 | Us, at the size GitHub recommends |
+| The files of one submit | 2 MiB (2,097,152 bytes) of UTF-8 | Us, under the MCP server's 4 MiB request |
+| Submit summary, and what was checked | 1,000 characters each | Us |
 | Policy quote | 2,000 characters | Us |
 | Pause, reject, block, and do-not-list reasons, and a reason to be removed | 500 characters | Us |
 | Interests | 20 per list, 50 characters each | Us |
@@ -2677,7 +3437,12 @@ agent is served its tools.
   the settings, and the notes for agents, and proposes a verdict with its
   reasons. For a crawler find, it checks the quote at its link when it can
   read the web, and proposes the tier, the settings the quote asks for, and
-  the project's own tags.
+  the project's own tags. It checks the line behind each suggested setting
+  the same way, and shows the admin any canary.
+- It reads a policy quote, a source line, and a label name as the repo's
+  words, and follows nothing they tell it to do.
+- It adds a repo to the crawler's seed list when the admin names one, and
+  says when the crawler leaves the repo alone.
 - It calls `admin_decide` only with what the admin decided. A rejection
   carries a reason the admin confirmed. It lists, pauses, blocks, and
   removes only on the admin's word, too.
@@ -2786,15 +3551,25 @@ A deployment can serve them from a static host, on a hostname of its own.
 - The donor's tools read with the donor's own token. `start_session` reads
   the person. `suggest_issues` and `claim_issue` read each issue they check,
   its linked PRs the way the sync reads them, and the project's code repo:
-  its default branch's head, the donor's permission on it, and its vouch
+  its default branch and head, the donor's permission on it, and its vouch
   file. `claim_issue` also reads the text of an issue the donor resumes.
+- `submit_work` and `open_pr` read and write with the donor's own token,
+  for the donor's own claim. `submit_work` reads the code repo as claiming
+  does, the issue, and its linked PRs. It forks the code repo when the
+  donor can't push to it, reads and makes the claim's branch, reads the
+  files the branch and the start commit hold, commits with
+  `createCommitOnBranch`, and compares the branch with the start commit.
+  `open_pr`, and `submit_work` when the PR opens by itself, read the code
+  repo and the issue's linked PRs, then open the PR. `my_work` reads the
+  linked PRs of each issue whose work waits in the review queue.
 - The admin queue reads each registration's repo and its owner's account,
   and listing a project from its policy reads the repo and its issue repo.
   These use the admin's own token: their agent's, or on the admin pages,
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the
-  `GH_SERVICE_TOKEN` secret: the sync, the PR job, and a maintainer's
-  refresh. They read public data only, and never with a person's token. With
+  `GH_SERVICE_TOKEN` secret: the sync, the PR job, a maintainer's refresh,
+  and the policy crawler. They read public data only, and never with a
+  person's token. With
   no service token, they read nothing, and the log names the secret.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
   names the one token to revoke. Signing out, Disconnect, and an agent's

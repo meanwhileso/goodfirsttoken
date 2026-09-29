@@ -155,6 +155,7 @@ export const samples: Samples = {
       state: 'pr_opened',
       commit: { sha, url: `https://github.com/priya/goodfirsttoken/commit/${sha}` },
       branch: { repo: 'priya/goodfirsttoken', name: 'gft-918', url: 'https://github.com/priya/goodfirsttoken/tree/gft-918' },
+      diffUrl: `https://github.com/priya/goodfirsttoken/compare/${sha}...gft-918`,
       pr,
       reviewReason: null,
     },
@@ -185,6 +186,8 @@ export const samples: Samples = {
           prOnIssue: { ...pr, number: 960, url: `https://github.com/${repo}/pull/960` },
           expiresAt: later,
           personWrittenDescription: true,
+          openable: true,
+          reason: null,
         },
       ],
       working: [{ ...claim, resumable: true, reason: null }],
@@ -202,7 +205,7 @@ export const samples: Samples = {
     ],
   },
   open_pr: {
-    output: { claimId: 'c_2', issue, state: 'pr_opened', pr },
+    output: { claimId: 'c_2', issue, state: 'pr_opened', pr, prOnIssue: null },
     mentions: ['PR #957', pr.url],
   },
   set_interests: {
@@ -271,6 +274,15 @@ export const samples: Samples = {
           },
           suggestedTags: [{ name: 'ready for help', openIssues: 8 }],
           onDoNotList: false,
+          sources: [
+            { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sample-app.' },
+            { about: 'whoCanClaim', path: 'VOUCHED.td', line: null },
+          ],
+          aiSentences: [
+            { path: 'CONTRIBUTING.md', text: 'Agent pull requests are welcome once a person has read the diff.' },
+            { path: 'CONTRIBUTING.md', text: 'Mark AI help with an Assisted-by: trailer.', cutBefore: false, cutAfter: true },
+          ],
+          moreAiSentences: 3,
         },
         {
           id: 'reg_7',
@@ -284,6 +296,9 @@ export const samples: Samples = {
           policy: null,
           suggestedTags: [],
           onDoNotList: true,
+          sources: [],
+          aiSentences: [],
+          moreAiSentences: 0,
         },
         {
           id: 'rem_Fq9Lw2Xr7Tb4Mz6Kp1Vd',
@@ -297,6 +312,9 @@ export const samples: Samples = {
           policy: null,
           suggestedTags: [],
           onDoNotList: false,
+          sources: [],
+          aiSentences: [],
+          moreAiSentences: 0,
           removal: {
             reason: 'We review every pull request by hand now.',
             project: { status: 'approved', source: 'policy' },
@@ -309,7 +327,12 @@ export const samples: Samples = {
       'cand_1',
       '1,200 stars',
       'Agent pull requests are welcome once a person has read the diff.',
-      'ready for help (8 open)',
+      '"ready for help" (8 open)',
+      '> Sign the CLA at https://cla.example.org/sample-app.',
+      'the repo has the file "VOUCHED.td"',
+      '> Mark AI help with an Assisted-by: trailer.',
+      'The paragraph goes on in the file.',
+      '3 more sentences in the files name AI. Read them there.',
       'reg_7',
       'from @octo-maintainer',
       'GitHub showed no public repo named sample-owner/sample-harbor when asked.',
@@ -340,5 +363,9 @@ export const samples: Samples = {
   admin_remove_project: {
     output: { repo, status: 'rejected' },
     mentions: ['Removed', repo, 'do-not-list'],
+  },
+  admin_seed_repo: {
+    output: { repo, added: true, leftAlone: null },
+    mentions: ['Added', repo, 'seed list'],
   },
 };

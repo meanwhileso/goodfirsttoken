@@ -7,6 +7,7 @@ import {
   adminPauseProject,
   adminQueue,
   adminRemoveProject,
+  adminSeedRepo,
 } from './admin';
 import {
   claimIssue,
@@ -44,6 +45,7 @@ export const tools = {
   admin_block_donor: adminBlockDonor,
   admin_pause_project: adminPauseProject,
   admin_remove_project: adminRemoveProject,
+  admin_seed_repo: adminSeedRepo,
 } as const;
 
 export type Tools = typeof tools;
@@ -99,7 +101,7 @@ export function toolRefusal(refusal: Refusal): ToolRefusal {
 export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
 export { doNotListNote, removalProjectNote, removalWaitsNote, removalWithdrawnNote } from './admin';
-export { reviewReasons } from './donor';
+export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
 export type { Suggestion } from './donor';
 export { claimStateLabel } from './shared';
 export type { ClaimSummary, FollowUp } from './shared';

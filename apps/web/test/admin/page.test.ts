@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { loadAdminPage } from '../../src/admin/page';
 import {
+  addCandidate,
   addToDoNotList,
   askRemoval,
   closeRemoval,
@@ -114,6 +115,43 @@ describe('who sees /admin', () => {
         ['/users/sample-owner', 'sample-admin'],
       ]),
     );
+  });
+
+  test("an admin sees a crawler find's sentences that name AI, each with the rest of its paragraph, and where a paragraph was cut", async () => {
+    const now = Date.now();
+    await addCandidate(
+      env.DB,
+      {
+        repo: BUNDLER,
+        facts: { stars: 12000, createdAt: now - 6 * 365 * 86_400_000, pushedAt: now - 7_200_000, ownerCreatedAt: now - 9 * 365 * 86_400_000 },
+        policy: {
+          quote: 'AI tools are fine for questions.',
+          url: `https://github.com/${BUNDLER}/blob/main/CONTRIBUTING.md`,
+          tier: 'allows_with_conditions',
+        },
+        settings: {},
+        suggestedTags: [],
+        aiSentences: [
+          { path: 'CONTRIBUTING.md', text: 'AI tools are fine for questions. Any code from a machine gets closed right away.', cutBefore: false, cutAfter: false },
+          { path: 'docs/AI.md', text: 'Step 9 runs here. Claude may help.', cutBefore: true, cutAfter: true },
+        ],
+        moreAiSentences: 2,
+      },
+      now,
+    );
+    const browser = await signedIn('sample-admin');
+
+    const html = await (await browser.fetch('/admin')).text();
+
+    expect(html).toContain('every sentence in its docs that names AI, with the rest of its paragraph. Read them before you decide');
+    expect(html).toContain('AI tools are fine for questions. Any code from a machine gets closed right away.');
+    expect(html).toContain('Step 9 runs here. Claude may help.');
+    // Only the cut paragraph says so, once each way.
+    expect(html.split('The paragraph starts earlier in the file.')).toHaveLength(2);
+    expect(html.split('The paragraph goes on in the file.')).toHaveLength(2);
+    expect(html.indexOf('The paragraph starts earlier in the file.')).toBeLessThan(html.indexOf('Step 9 runs here.'));
+    expect(html.indexOf('The paragraph goes on in the file.')).toBeGreaterThan(html.indexOf('Claude may help.'));
+    expect(html).toContain(' more in the files. Read them there.');
   });
 
   test("the page's server function gives someone who isn't an admin nothing, and asks GitHub nothing", async () => {

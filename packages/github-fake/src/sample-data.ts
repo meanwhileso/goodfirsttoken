@@ -13,6 +13,8 @@
 // Times are written as how long ago they happened, like '2h' or '9y', so the
 // data stays recent whenever it is loaded.
 
+import { policyOrgs, policyRepos } from './policy-samples.ts';
+
 export type Ago = `${number}${'m' | 'h' | 'd' | 'y'}`;
 
 export type SampleRole = 'admin' | 'maintain' | 'write' | 'triage' | 'read';
@@ -482,4 +484,11 @@ export const repos: SampleRepo[] = [
   },
 ];
 
-export const sampleData: SampleData = { people, orgs, repos, oauthApps: [localOAuthApp] };
+// The policy crawler's made-up repos live in policy-samples.ts, under
+// sample-policies.
+export const sampleData: SampleData = {
+  people,
+  orgs: [...orgs, ...policyOrgs],
+  repos: [...repos, ...policyRepos],
+  oauthApps: [localOAuthApp],
+};

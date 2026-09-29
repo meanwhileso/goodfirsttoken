@@ -112,8 +112,9 @@ a new client secret, and keep it for `OAUTH_CLIENT_SECRET`, one of
 
 ### The token for reading GitHub
 
-The Worker reads each project's tagged issues and follows each claim's PR on
-a schedule, as no one in particular. It reads public data only, with a token
+The Worker reads each project's tagged issues, follows each claim's PR, and
+looks for projects whose docs welcome AI help on a schedule, as no one in
+particular. It reads public data only, with a token
 of its own, `GH_SERVICE_TOKEN`, one of
 [the Worker's secrets](#the-workers-secrets).
 
@@ -170,7 +171,7 @@ variables. In a private repo, either works.
 | Name | Needed | What it is |
 |---|---|---|
 | `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID. |
-| `WORKER_NAME` | Yes | The environment's Worker name from step 2. The D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed`, its dead-letter queue `<WORKER_NAME>-feed-dlq`, and `<WORKER_NAME>-crawl`. |
+| `WORKER_NAME` | Yes | The environment's Worker name from step 2. The D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed`, its dead-letter queue `<WORKER_NAME>-feed-dlq`, `<WORKER_NAME>-crawl`, and its dead-letter queue `<WORKER_NAME>-crawl-dlq`. |
 | `DB_ID` | No | The ID of a D1 database to use. When it's empty, the deploy uses `<WORKER_NAME>-db`, and creates it if it's missing. |
 | `OAUTH_KV_ID` | No | The ID of a KV namespace for the grants agents hold when they connect to the MCP server. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
 | `SIGN_IN_LIMITER_NAMESPACE_ID` | Yes | A whole number you pick for the rate limiter on sign-in, like `1001`. It names the limiter within your Cloudflare account, and there is nothing to create. If staging and production share an account, give them different numbers. |
@@ -205,7 +206,7 @@ one is missing.
 |---|---|---|
 | `OAUTH_CLIENT_SECRET` | Environment secret | The client secret of this environment's GitHub OAuth app from step 3. |
 | `AUTH_SECRET` | Environment secret | A random value of at least 32 characters, like the output of `openssl rand -base64 32`, different for each environment. It signs the sign-in cookies and encrypts the GitHub tokens the site stores, the site's own and each connected agent's. Changing it signs everyone out, and makes every stored token unreadable, so neither signing out, signing in again, nor Disconnect can revoke it. Connected agents keep working. Those tokens stay valid at GitHub until each person revokes the app in their GitHub settings, or GitHub revokes them after a year unused. So change it only when you have to. |
-| `GH_SERVICE_TOKEN` | Environment secret | The token for reading GitHub from [step 3](#the-token-for-reading-github). The tagged-issue sync and the PR job read public data with it. |
+| `GH_SERVICE_TOKEN` | Environment secret | The token for reading GitHub from [step 3](#the-token-for-reading-github). The tagged-issue sync, the PR job, and the policy crawler read public data with it. |
 
 ### On switches
 

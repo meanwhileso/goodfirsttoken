@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, and the scheduled jobs that read GitHub. The rest of the site and other queue consumers join it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the MCP server at `/mcp` with its sign-in for agents, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -36,9 +36,12 @@ The repo is a pnpm workspace.
   `src/feed/streams.ts`, which also takes a page's live socket there, and
   the form on `/oauth/authorize` to `src/mcp/authorize.ts`. It hands every
   other one to TanStack Start, setting the status a page names, as the page
-  on `/oauth/authorize` and an issue page do. Its `queue` handler is the feed queue's
-  consumer, and its `scheduled` handler runs the job for each cron trigger,
-  from `src/sync/`. The Durable Object classes are exported from it.
+  on `/oauth/authorize` and an issue page do. Its `queue` handler hands a
+  batch from the crawl queue, `crawl` locally and `<WORKER_NAME>-crawl`
+  deployed, to the crawler's consumer, and every other batch to the feed
+  queue's consumer. Its `scheduled` handler runs the job for each cron
+  trigger, from `src/sync/`. The Durable Object classes are exported from
+  it.
 - **Routes live in `src/routes/`,** one file per route. Page routes export a
   component. HTTP endpoints like `/healthz` use `server.handlers`. The
   TanStack Router plugin writes `src/routeTree.gen.ts` on every dev run and
@@ -81,10 +84,14 @@ The repo is a pnpm workspace.
 - **What registering a project reads from GitHub, and the proposal's rules,
   live in `src/projects/`,** described under
   [The maintainer's tools](#the-maintainers-tools), with the rules for who
-  may change a project's status.
-- **What the donor's tools check and read, and how they order
-  suggestions, live in `src/donor/`,** described under
+  may change a project's status. The files a repo's docs are read from, in
+  `docs.ts`, and the rules for what they say, in `rules.ts`, are shared
+  with the policy crawler.
+- **What the donor's tools check, read, and write on GitHub, and how they
+  order suggestions, live in `src/donor/`,** described under
   [The donor's tools](#the-donors-tools).
+- **The policy crawler lives in `src/crawl/`,** described under
+  [The policy crawler](#the-policy-crawler).
 - **The admin's actions and the admin pages live in `src/admin/`,**
   described under [The admin's tools and pages](#the-admins-tools-and-pages).
 
@@ -173,6 +180,7 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 | `src/mcp/provider.ts` | Sets up the OAuth provider, which answers the OAuth routes and checks the token on `/mcp`, with the props each grant carries and the callbacks that check registrations and token requests |
 | `src/mcp/server.ts` | The MCP server behind `/mcp`: the rate limit, the check that the agent is still connected, and the tools it serves, each run as the caller, the admin's to admins only |
 | `src/mcp/donor.ts` | The donor's tools, under [The donor's tools](#the-donors-tools) |
+| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and the review queue `my_work` lists, under [The donor's tools](#the-donors-tools) |
 | `src/mcp/maintainer.ts` | The maintainer's tools, under [The maintainer's tools](#the-maintainers-tools) |
 | `src/mcp/admin.ts` | The admin's tools, under [The admin's tools and pages](#the-admins-tools-and-pages) |
 | `src/mcp/authorize.ts` | An agent's sign-in: the rule for redirect URIs, the checks behind the page, the answer to its form, and GitHub's return |
@@ -316,6 +324,8 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 |---|---|
 | `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, `pause_project`, and `request_removal`. `project_status` with `refresh` runs the sync for its project, under [The sync](#the-sync) |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
+| `src/projects/docs.ts` | The files a repo's docs are read from, where each is looked for, and the size limit, for the proposal and the policy crawler alike |
+| `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
 | `src/projects/status.ts` | Who can lift a pause, and the status a resume puts back, for the maintainer's tools and the admin's alike |
 
@@ -407,9 +417,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | File | What it does |
 |---|---|
 | `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
+| `src/mcp/submit.ts` | `submit_work` and `open_pr`, and the review queue that `my_work` lists |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
-| `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike |
+| `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
+| `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR |
+| `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, and the words of the commit and the PR |
 | `src/donor/vouch.ts` | The vouch file's format |
 | `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
 
@@ -424,7 +437,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   an issue carries on GitHub now with `judgeLabels` in `src/db/issues.ts`,
   which runs `CARRIES_A_TAG` over them in D1. The do-not-list and the
   sync's mark come into it only through `ASKING_FOR_HELP`, the homepage's
-  check.
+  check. Its first half, `checkIssueFacts`, reads the issue's own facts,
+  and `submit_work`, `open_pr`, and the review queue in `my_work` run it
+  again, with the donor let through as the issue's assignee.
 - **One place for the donor's rules.** `src/donor/rules.ts` checks the
   rules spec section 6 sets for the donor. `suggest_issues` and
   `claim_issue` both call it, and each returns a refusal or nothing.
@@ -525,6 +540,96 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `claim`. The list of waiting issues reads every
   approved project's cached issues, through `projects_by_status` and the
   key of `tagged_issues`. Nothing caches any of it yet.
+- **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
+  reads the claim from the claims table, checks `work_claim`, the block,
+  and the project with `projectClosedRefusal`, whose do-not-list check is
+  `doNotListedProjects`, the one `claim_issue` uses, and asks the claim's
+  room whether the claim can take the event now. Only then is a
+  `DonorWriter` made with the donor's token, so a refusal makes no call to
+  GitHub.
+- **Push access** is the repo's `viewerPermission` from `readRepoFacts`,
+  the query a claim makes, which also gives the default branch's name for
+  the PR. A linked PR is read with `linkedPrs` in `src/donor/github.ts`,
+  which `checkIssueOnGitHub` uses too: the sync's `closingReferences` and
+  `crossReferences`, with the donor's token.
+- **The fork** is `POST /repos/{owner}/{repo}/forks` with
+  `default_branch_only`, which GitHub answers with the fork the donor has,
+  whatever its name, or a new one. The branch is `POST .../git/refs` at the
+  start commit. A fork can point at it, since a fork network shares its
+  objects on GitHub. GitHub answers 409 for a repo it is still making, and
+  the server waits 0.5, 1, and 2 seconds between reads with `setTimeout`,
+  so a submit to a new fork can take about 4 seconds more. A Worker's wait
+  uses no CPU time.
+- **Working out the change.** The folders on the way to each path are
+  read at the branch head, or at the base while there is no branch, a
+  level at a time from the root, with one GraphQL query for each 100
+  folders of a level, `object(expression:)`, and the folders as
+  variables: each entry's name, type, mode, blob ID, and size. A level
+  reads only the folders the level above has, so the reads follow the
+  repo's own folders, and nothing is read past the first folder a path
+  makes new. A path five folders deep costs six queries, one after
+  another, and a path is at most 20 folders deep, so no submit costs more
+  than 21 levels. Tree entries are the one place GitHub gives a file's
+  mode. A folder's entries come back whole, so a path in a folder of
+  thousands of files reads all their names, which the case check uses
+  too. A file whose new text has the same size in UTF-8 as the one there
+  is read in full in a second query and compared. A change to an entry
+  whose mode is 100755, 120000, or 160000 is refused with `file_mode`
+  before anything is written.
+- **Putting back.** A path to put back is read at the base, the start
+  commit in the code repo or the head an `onto` named in the branch's
+  repo, compared with the branch by blob ID, and its bytes read with
+  `GET .../git/blobs/{sha}`, so a binary file goes back as it was.
+  `submissions.paths` keeps the paths the latest submit sent, for the
+  next, and `submissions.base` the base.
+- **Modes.** GitHub's docs call `TreeEntry.mode` the entry's file mode, an
+  `Int`, and don't say how it is written. The fake gives the number the
+  octal mode reads as, 33188 for 100644, and the check also takes the
+  digits read in decimal, 100755, 120000, and 160000, so either is caught.
+  Neither is checked against GitHub.
+- **The branch's head** is read with `GET .../git/ref/heads/{branch}`, and
+  compared with `submissions.commit_sha`, or the start commit before a
+  first submit, or `onto`. A head that differs is read with one GraphQL
+  query for its parents and its author's login, `commitFacts`. Only a
+  commit with one parent, the expected head, and the donor as its author
+  can be a submit that died after its commit. `onto` with no branch is
+  refused before `createBranch`, which only ever takes the base: the start
+  commit, or a head an earlier `onto` checked against the branch. A submit
+  with `onto` past someone's push also reads the submitted paths at the
+  commit before the push, and the text of the ones the push changed, to
+  find a file that would go back to how it was.
+- **The workflow rule** reads the paths from the same comparison that
+  counts the lines, each file's `filename` and a rename's
+  `previous_filename`, beside the submitted ones. Once the claim's base is
+  a head someone else pushed, a comparison GitHub doesn't give, or one of
+  300 files, which may leave one out, sends the work to review.
+- **The commit** is `createCommitOnBranch` with `expectedHeadOid` set to the
+  head the change was worked out from, and each file's text in base64.
+  GitHub's `STALE_DATA` means the branch moved, and the branch is read
+  again, up to three tries.
+- **Recording.** The room records the submit after the commit lands. Then
+  the lines come from `GET .../compare/{main}...{commit}` in the repo the
+  branch is in, where `{main}` is the head of the code repo's default
+  branch that `readRepoFacts` read, which a fork's network has. A
+  three-dot comparison runs from the merge base, so it counts the PR's own
+  change. `submissions.diff_from` keeps that head for the review queue's
+  diff. The comparison lists up to 300 files, and `saveSubmission` writes
+  the row. A PR goes to the room with `openPr`, then to `prs` with
+  `addPr`. A call that dies after its commit leaves the commit on the
+  branch unrecorded. The same submit again finds the donor's own commit on
+  the expected head, holding the files, and records it. When the claim's
+  room has a first submit and `submissions` has no row, the room already
+  recorded it, and it isn't recorded there again. Two calls at once with
+  the same files take the one commit by the same rule, and the room
+  records both, since it keeps no commit to tell them apart. A PR, likewise,
+  is found by `GET .../pulls?head=`, since GitHub answers a PR already open
+  from the branch with a 422 whose message names no reason.
+- **What a submit costs.** A first submit to a fork of files two folders
+  deep makes about 14 calls to GitHub: the repo, the issue, the fork, the
+  branch, a GraphQL read of each folder level on the way to the files and
+  one of their text, the new branch, the commit, the comparison, the
+  issue's closing references and timeline, and the PR. Each path put back
+  adds a blob read.
 
 ### The admin's tools and pages
 
@@ -532,7 +637,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
 
 | File | What it does |
 |---|---|
-| `src/admin/actions.ts` | The admin's actions: the queue, deciding, listing from a policy, blocking, pausing, and removing |
+| `src/admin/actions.ts` | The admin's actions: the queue, deciding, listing from a policy, blocking, pausing, removing, and the crawler's seed list |
 | `src/mcp/admin.ts` | The admin's MCP tools, each an action's answer as a tool result |
 | `src/admin/page.ts` | What `/admin` reads, and the answer to its forms |
 | `src/admin/data.ts` | `getAdminPage`, the server function the route's loader calls |
@@ -675,11 +780,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   `validation.ts` the check that names the field in every problem.
 - **Each MCP tool is a spec** in `src/tools/`, one file each for donors,
   maintainers, and admins: who sees it, a description for agents, input and
-  output schemas, and a function that renders the output as text. A
-  maintainer's or admin's tool also lists, in `refusals`, every refusal code
-  an agent can get from it. The skills are checked against those lists, under
-  [Skills and plugins](#skills-and-plugins). The donor's tools can add
-  theirs when their skills name them.
+  output schemas, and a function that renders the output as text. Each
+  maintainer's and admin's tool, and the donor's `submit_work` and
+  `open_pr`, also lists, in `refusals`, every refusal code an agent can get
+  from it. The skills are checked against those lists, under
+  [Skills and plugins](#skills-and-plugins). The donor's other tools can
+  add theirs when their skills name them.
   `src/tools/index.ts` lists them all, and its `toolResult` and
   `toolRefusal` build MCP results without depending on the MCP SDK.
 - **The claim state machine never reads the clock.** Its caller passes the
@@ -872,7 +978,7 @@ that leaves their settings empty gives them empty strings, and
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
-| `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, and the scheduled jobs |
+| `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, the scheduled jobs, and the crawler |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
 | `TOKEN_LIMITER` | Rate limiter: 600 requests to `/oauth/token` a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
@@ -880,10 +986,10 @@ that leaves their settings empty gives them empty strings, and
 | `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer. The Worker also consumes the queue, with `feed-dlq` as its dead-letter queue | Now, by the issue room and `src/feed/queue.ts` |
-| `CRAWL_QUEUE` | Queue producer | #30 |
+| `CRAWL_QUEUE` | Queue producer. The Worker also consumes the queue, one batch at a time, with `crawl-dlq` as its dead-letter queue | Now, by the crawler's search and `src/crawl/queue.ts` |
 
 The cron triggers are in `wrangler.jsonc` too, under `triggers`, and
-[The sync](#the-sync) lists them. The static host's R2 bucket is not a
+[The sync](#the-sync) lists them, the crawler's included. The static host's R2 bucket is not a
 binding, since the Worker never reads it.
 [The static host](#the-static-host) covers it.
 
@@ -899,12 +1005,13 @@ Worker's name, so no setting names them.
 
 D1, bound as `DB`, holds the structured records that search and the
 leaderboard read: people, projects with their settings and status changes,
-the tagged-issue cache, claims, PRs, donor sessions, blocks, the
-do-not-list, requests to be removed, and crawl candidates. GitHub is the
-source of truth for issues and PRs, and the issue room is for claims, so
-those tables are caches and mirrors. None of these tables holds a GitHub token. The rules these records
-follow are in [how-it-works.md](how-it-works.md#people), under
-People through Crawl candidates.
+the tagged-issue cache, claims, their submitted work, PRs, donor sessions,
+blocks, the do-not-list, requests to be removed, crawl candidates, and
+the crawler's seed list and passes. GitHub is the source of truth for
+issues and PRs, and the issue room is for claims, so those tables are
+caches and mirrors. None of these tables holds a GitHub token. The rules
+these records follow are in [how-it-works.md](how-it-works.md#people),
+under People through Crawl candidates.
 
 It also holds Better Auth's four tables for signing in, described under
 [Better Auth's tables](#better-auths-tables). The one GitHub token they store,
@@ -932,11 +1039,14 @@ in `people`.
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, and when it opened, merged, and closed | `claim_id` |
+| `submissions` | Claim's submitted work: the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
-| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, status, and the admin's decision | `id` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
+| `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
+| `crawl_passes` | Pass of the crawler's search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 
 Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns the
@@ -956,7 +1066,7 @@ that break the rules, so it returns the problems for the caller to show.
   are, which a week's range on the leaderboard needs, and SQLite has no time
   type. ISO 8601 stays the form on the wire, in tool results and feed events.
 - **Lists and small objects are JSON text:** settings, interests, labels,
-  budgets, suggested settings, and suggested tags. A PR is three columns,
+  budgets, suggested settings, suggested tags, and a find's source lines. A PR is three columns,
   repo, number, and link, so it can be found by number. So is a policy.
 - **Every repo and login column uses `COLLATE NOCASE`,** which gives the
   case rules in how-it-works.md. An index on such a column compares the same
@@ -992,7 +1102,32 @@ that break the rules, so it returns the problems for the caller to show.
   sync's delisting and hid the page, so the migration marks each project
   paused that way with its pause's reason. The sync's next read of its
   repos keeps the mark or takes it off.
-- **Migration `0007_removal_requests.sql`** makes `removal_requests`. A
+- **Migration `0007_submissions.sql`** makes `submissions`, one row per
+  claim, which each submit writes over, with a foreign key to the claim.
+  `base` is the commit the files are read against, the start commit or a
+  head named with `onto`. `diff_from` is the default branch's head at the
+  latest submit, which the lines and the diff run from. `paths` is a JSON
+  list. The lines added and
+  removed are null when GitHub didn't say. The review reason is null for
+  work whose PR was to open by itself. `my_work` reads the rows of a
+  donor's claims awaiting review by key.
+- **The crawler's tables** came with migration `0008_crawl.sql`: the seed
+  list in `crawl_seeds`, owned by `src/db/seeds.ts`, the passes in
+  `crawl_passes`, owned by `src/db/crawls.ts`, the index
+  `crawl_candidates_by_repo`, and `crawl_candidates.sources`, JSON text
+  that a find stored before it reads as an empty list, and
+  `crawl_candidates.ai_sentences` and `more_ai_sentences`, the sentences
+  that name AI with their paragraphs, which a find stored before has none
+  of. A kept paragraph stored without `cutBefore` or `cutAfter` reads as
+  uncut. `crawl_passes.open`
+  is 1 or 0. A seed's `handled_at` and `outcome` are null until the cron
+  job handles it, and set together. A pass keeps
+  where it stands in its own row, and moves on only with a compare-and-set
+  on the band and page it read, so two runs never both move it.
+  `crawlerSkips` in `src/db/candidates.ts` asks the do-not-list, the
+  projects, and the crawl candidates about any number of repos in one
+  query.
+- **Migration `0009_removal_requests.sql`** makes `removal_requests`. A
   closed request stays, so the table keeps who asked for each removal. A
   request's repo has no foreign key, since a repo that isn't a project can
   be asked for.
@@ -1001,8 +1136,11 @@ that break the rules, so it returns the problems for the caller to show.
 
 The spec says everything the site shows is public GitHub data or the public
 live feed. It says crawl results stay in the deployment's database, and only
-listed projects and their policy quotes are public, so `crawl_candidates`
-stays private, a rejection's reason included. The reason an admin gives for
+listed projects and their policy quotes are public, so `crawl_candidates`,
+`crawl_seeds`, and `crawl_passes` stay private, a rejection's reason
+included. The crawler keeps no verdict on a repo it doesn't propose. Its log
+names the repos it proposed, a repo it couldn't read whole or GitHub failed
+on, with no verdict on it, and a find it couldn't write. The reason an admin gives for
 rejecting a registration reaches the maintainer's agent, and so does the
 reason a removed project is rejected with. The note an admin keeps with a
 do-not-list entry reaches no one else. A maintainer's reason for asking to
@@ -1012,6 +1150,11 @@ These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
 `donor_sessions.queue`, `cla_confirmations`, `donor_blocks.reason`,
 `do_not_list.reason`, and `removal_requests.reason`.
+
+A submission's branch and commit are public on GitHub once they land. Its
+title, summary, and notes on what was checked go into the PR when it opens,
+with keys and tokens replaced before they are stored. Until then only the
+donor's `my_work` shows them.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -1109,6 +1252,7 @@ pruning after a sync, with no index of its own.
 | `donor_sessions_by_person` | A donor's last session, for what merged since |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
+| `crawl_candidates_by_repo` | Whether the crawler proposed a repo before, whatever the admin decided, which it asks for every repo it reads |
 | `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal`, a removal, and the check before a listing or an approval |
 | `removal_requests_queue` | The admin queue's requests to be removed, oldest first |
 | `removal_requests_by_repo` | A repo's requests to be removed that someone other than their asker withdrew, for a registration or crawler find in the queue, and one person's last request for a repo, for `request_removal` to say who withdrew it |
@@ -1793,15 +1937,16 @@ read-only service token. The rules are in
 
 | File | What it does |
 |---|---|
-| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run |
+| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
 | `src/sync/prs.ts` | The PR job |
 | `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
 | `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, which run holds it, and whether the sync delisted it, with the projects a run checks |
 
-- **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync and
-  `7,37 * * * *` for the PR job, so the two never start in the same
-  minute. The Worker's `scheduled` handler in `src/server.ts` hands the cron
+- **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync,
+  `7,37 * * * *` for the PR job, and `52 * * * *` for the policy crawler's
+  search, under [The policy crawler](#the-policy-crawler), so no two start
+  in the same minute. The Worker's `scheduled` handler in `src/server.ts` hands the cron
   to `runScheduled`, which runs its job, and logs an error for a cron no job
   answers. The deploy copies the triggers as they are.
 - **The service token** is the `GH_SERVICE_TOKEN` secret, a token that reads
@@ -1987,7 +2132,10 @@ measured on real GitHub yet. The run logs are how to measure it.
   with `CROSS_REFERENCED_EVENT`, could read the same events for 25 issues in
   the query that reads their closing references, with each PR's state read
   as it is. That would cut a pass to about one call for every 25 issues. The
-  sync reads the REST timeline today.
+  sync reads the REST timeline today. A run's timelines share its cap of
+  1,000 calls with its first question to GitHub and its checks of the repos
+  of the projects it reads no issues for, up to about 101 calls together,
+  so about 900 go to the passes.
 - **Together.** A PR with a closing keyword in its description is found both
   ways, since the keyword is a mention too. A PR linked by hand that never
   mentions the issue is found only as a closing reference. A PR that only
@@ -2018,6 +2166,220 @@ measured on real GitHub yet. The run logs are how to measure it.
     it.
   - Whether the source always carries `repository`. The sync falls back to
     `repository_url`.
+
+## The policy crawler
+
+The crawler finds repos whose docs welcome AI help, and puts them in the
+admin queue as crawl candidates. The rules are in
+[how-it-works.md](how-it-works.md#the-policy-crawler).
+
+| File | What it does |
+|---|---|
+| `src/crawl/search.ts` | The cron job: queues the seeds, then reads the pool with GitHub's search in bands of star counts, and keeps where the pass stands |
+| `src/crawl/queue.ts` | The crawl queue's consumer: reads each batch, sorts each repo, and writes the finds |
+| `src/crawl/reads.ts` | What the consumer reads from GitHub: each repo's facts and folders, its files, its labels, and its pull request settings |
+| `src/crawl/rules.ts` | The tiers and the suggestions, as pure functions of the files and labels |
+| `src/db/seeds.ts` | The `crawl_seeds` table, the seed list |
+| `src/db/crawls.ts` | The `crawl_passes` table, where each pass of the search stands |
+
+- **A cron fills a queue, and the queue's consumer reads.** The cron job,
+  at 52 minutes past each hour, makes only searches, and the consumer only
+  GraphQL and REST reads, so each spends a budget of its own. Each has its
+  own `ServiceGitHub`, with its allowance in `ALLOWANCES` in
+  `src/sync/scheduled.ts`. A batch holds 10 repos, which keeps its GraphQL
+  queries small. The consumer's `max_concurrency` of 1 keeps it to one
+  batch at a time, since GitHub asks a client not to make concurrent
+  requests for one user.
+- **Why these shares and caps.** The crawl is the job that can wait
+  longest, so its consumer leaves the most for the others: it stops while
+  less than three fifths of an hourly budget is left, 500 above where a
+  maintainer's refresh stops. Its cap of 60 calls covers a run of 5
+  batches, about 3 queries each and 2 calls for each find, with room left.
+  The search's cap of 20 calls a run keeps each run under GitHub's 30
+  searches a minute, and so sets the pace of the whole crawl: at most 1,900
+  repos an hour, whose reads cost about 570 GraphQL points. Its share of a
+  tenth only keeps it from running the minute's searches to the end, since
+  no other job searches.
+- **Bands of stars.** Search serves the first 1,000 results of a query, so
+  each band is small enough to serve whole, and its pages come with
+  `sort=stars&order=asc`, so they don't overlap while no repo's stars
+  change. The pass's first search is the band with no upper end from 1,000
+  stars, whose `total_count` is the size of the pool, kept in
+  `crawl_passes.pool`. The push date is set when the pass starts.
+- **What a batch reads.** One GraphQL query for all its repos: each one's
+  `nameWithOwner`, whether it is archived or private, its stars, when it
+  was made and last pushed, its default branch and the commit it points
+  to, its owner's `createdAt` through `... on User` and
+  `... on Organization`, and the listings of its root, `.github/`, `docs/`,
+  `PULL_REQUEST_TEMPLATE/`, `docs/PULL_REQUEST_TEMPLATE/`,
+  `.claude/skills/`, and `skills/`, each entry with its `mode` and `size`.
+  The listings of `.github/` and the skills folders go one level deeper,
+  for the template folders and each skill. Then one query for each 50
+  files and folder checks, about two for a batch of 10, each an
+  `object(expression:)` alias with `<commit>:<path>` as a
+  variable, so every file is read at the commit the first query named. It
+  asks for each file's `text`, `isBinary`, and `isTruncated`, and for each
+  listed folder's `oid` at that commit, to check that the first query
+  listed that commit. The folders and names come from
+  `src/projects/docs.ts`, which a proposal uses too. Beyond them it reads
+  each text file in the root, `.github/`, and `docs/` with `ai`, `llm`,
+  `llms`, or `genai` among the parts of its name, as an AI policy file,
+  and `config.yml` among the issue templates. Only a repo in a
+  listed tier costs more: `GET /repos/{owner}/{repo}`, since GitHub's
+  GraphQL doesn't give who can open pull requests, checked with the
+  `whyNotEligible` an admin's listing uses, then its labels, 100 to a
+  query, each with `issues(states: [OPEN]) { totalCount }`.
+- **No verdict on what it can't read.** `readRepos` and `readFiles` say
+  why a repo can't be read whole: a file over the size limit, a symbolic
+  link by its mode, `0o120000`, more templates, skills, or files named for
+  AI than it reads, no text or a NUL character, or a folder whose `oid`
+  differs at the commit.
+  The consumer counts such a repo as `unreadable_docs`, logs why, and
+  gives it no tier. A symbolic link in a folder the crawler doesn't list,
+  like a linked `.claude/`, isn't seen, so a skill behind one is not read.
+- **Errors, repo by repo.** GitHub puts each error at the path of the
+  alias it came from, like `r3`. A `NOT_FOUND` at a repo's own alias means
+  GitHub doesn't show it, and it is left out as not public. Any other error
+  at a repo's alias, in the listing, the files, or the labels, fails that
+  repo alone, which goes back to the queue by itself, since the file GitHub
+  didn't give could be the one that bans AI. An error at no repo's alias
+  fails the batch.
+- **Retries.** A budget stop, a rate limit, or the run's 60 calls running
+  out send the repos a batch hasn't finished back with `send({ repos },
+  { delaySeconds })` on `CRAWL_QUEUE`, and acknowledge the batch, so the
+  wait uses none of its tries. A stop for the budget carries when the
+  budget starts over, from GitHub's `x-ratelimit-reset` or `retry-after`,
+  in `SyncStopped.resetAt`, and the wait runs to then. A repo GitHub failed
+  on is sent back alone. A batch of one repo that fails, any other stop,
+  and any other error ask for the batch again with `retry({ delaySeconds
+  })`, which takes a try. Each wait is an hour at most, and `max_retries`
+  is 90, so the last retry comes inside the 4 days a queue keeps a message
+  by default, as for the feed. When sending back fails, the batch is asked
+  for again. `crawlerSkips` leaves out the finds a batch wrote before it
+  stopped, before any read, so a repo that comes back after it was proposed
+  costs no reads.
+- **Only candidates.** The consumer writes with `addCandidate` alone, whose
+  insert checks the do-not-list in the same statement. Nothing in
+  `src/crawl/` writes a project.
+- **The link** is on `https://github.com`, as the sample data's are,
+  whatever `GH_WEB_URL` says, since the policy schema takes https links
+  only and the GitHub fake serves plain http locally. The branch and each
+  part of the path are URL-encoded.
+- **Every sentence that names AI goes to the admin, with its paragraph.**
+  Plain rules can miss a ban worded in a way they don't know, even in the
+  sentence after one that names AI, so `readPolicy` keeps each sentence
+  that names AI, that the rules read for a ban, or that bans AI with no AI
+  word, with the rest of its paragraph as the file has it. A paragraph
+  longer than `MAX_AI_PASSAGE`, 1,000 characters, is cut to that length
+  centered on the sentence's first word that names AI, so a long sentence
+  that names AI near its end still shows it, and `cutBefore` and
+  `cutAfter` say where. A sentence inside the last passage
+  kept from its file is not kept again. It keeps the first `MAX_AI_SENTENCES`, 60, and counts
+  the rest. A find stores them in `crawl_candidates.ai_sentences` and
+  `more_ai_sentences`, and `admin_queue`, the admin page, and the admin
+  skill show them before a verdict, marked as the repo's words, with each
+  cut said in our own words. The rules' tests hold a corpus of every ban
+  wording six reviews found, 93, all read as bans, 38 made-up welcoming
+  policies written alongside the rules, of which the rules read 4 as bans,
+  and 12 held out from the rules, of which they read 9 as bans.
+- **The safe forms are whole sentences.** `judge` in `src/crawl/rules.ts`
+  reads a sentence that names AI and says no as a ban unless all of it,
+  but for a list mark in front, matches one of the forms: fixed words with
+  slots that each take a closed set of words, a label in quotes, or a
+  path. Reviews found bans that rode along with a form that took a phrase
+  out of a sentence and read the rest, so no form does that now. A test
+  checks each form's example, and that no sentence that says no in the ban
+  corpus is a form. The cost is more welcoming sentences read as bans,
+  where a form has words added.
+- **The rules' speed.** Every pattern runs on one sentence, with a few
+  words of slack at most, and a sentence's end is one mark before a space,
+  so no pattern tries a start again after it fails. Each file's lines are
+  found once, each heading is read once, and the label names are looked
+  for in the first 2,000 characters of the welcome. A label kept for
+  people is kept once, whatever the number of sentences that name it. So
+  the time a file takes grows with its length alone. A test reads a file at the size limit
+  for each run of space and mark and each phrase a pattern starts with, as
+  an AI policy, an `AGENTS.md`, and a PR template, and each takes well
+  under a second.
+- **Repo text reaches settings only as a label name, a trailer name, or a
+  CLA link.** The canary, the line behind each suggestion, and the
+  sentences that name AI go in `crawl_candidates.sources` and
+  `ai_sentences`, shown to the admin as the repo's words, and no setting
+  holds them. `admin_queue` marks each line of a quote, a source line, or
+  a paragraph with a sentence that names AI with `> `, and puts label
+  names in quotes, so
+  no line of a repo's text can pass for a line of the result. It breaks a
+  line at a vertical tab, a form feed, and the file, group, and record
+  separators too, as some readers do.
+- **The queue's name.** The Worker tells a crawl batch by its queue's name:
+  `crawl`, or one ending `-crawl`, as the deploy's `<WORKER_NAME>-crawl`
+  does.
+- **Workers' limits.** A run of the consumer makes at most 60 calls to
+  GitHub, and a few D1 queries for each batch and each find. It hasn't been
+  tried on the Workers Free plan, whose 50 subrequests a run of 5 batches
+  can pass.
+
+### Open question 8: the crawl's budget
+
+[Open question 8](specs/v1.md#open-questions) asks for the GitHub API
+budget for a monthly crawl, and how many repos clear the 1,000-star and
+30-day bar. This is what the build spends and how it counts, from GitHub's
+docs and the GitHub fake. Neither number is measured on GitHub yet.
+
+- **How many repos.** The first search of each pass counts them: public
+  repos with at least 1,000 stars, a push in the last 30 days, not archived,
+  and not forks. The count is kept in `crawl_passes.pool`, and every run's
+  log line gives it, so staging's first pass answers the question.
+- **What GitHub gives the service token's account.** 5,000 REST calls and
+  5,000 GraphQL points an hour, and 30 searches a minute. A GraphQL query
+  costs at least a point. One that asks for many connections costs more:
+  GitHub adds up the requests each connection needs at its `first` or
+  `last`, and divides by 100.
+- **What a crawl costs, for every 10,000 repos in the pool.**
+  - Search: 100 pages of 100 repos, plus a few searches for each band that
+    has to be split, and one for each band that tries the rest of the pool
+    with no upper end.
+  - GraphQL: 1,000 batches, each one query for its facts and folders and
+    about two for its files and the checks on its folders, none asking for
+    a connection, so about 3,000 points. A test counts 3 queries for a
+    batch of 10 of the GitHub fake's sample repos, beyond each find's own.
+  - Each repo whose docs welcome AI help: one REST call, and a GraphQL query
+    for each 100 of its labels, which asks for 100 labels and a count on
+    each, about a point.
+- **Per run and per day.**
+  - The search runs once an hour, with at most 20 calls, the free first
+    question included: at most 19 searches, 1,900 repos, and 190 batches an
+    hour, and 456 searches and 45,600 repos a day. It stops before a search
+    when fewer than 3 of the minute's 30 are left.
+  - The consumer reads a batch soon after it is queued, and spends about 3
+    points for each batch of 10 repos: about 570 points in an hour of
+    searches at most, and about 13,700 in a day, plus 2 calls for each find.
+  - So a pass takes about an hour for each 1,900 repos in the pool, and a
+    pool of 10,000 about 6 hourly runs.
+- **How it shares the hour with the other jobs.** Each job stops at its own
+  share of what is left, so the jobs that matter most get the last of it.
+
+  | Job | Spends mostly | Stops while less than this is left |
+  |---|---|---|
+  | The PR job | GraphQL | 500 of 5,000 |
+  | The sync | REST | 1,000 of 5,000 |
+  | A maintainer's refresh | REST | 2,500 of 5,000 |
+  | The crawler's consumer | GraphQL | 3,000 of 5,000 |
+  | The crawler's search | Search | 3 of 30 a minute |
+
+  The consumer spends only the top 2,000 of either hourly budget, and about
+  570 GraphQL points an hour at most, since the search queues at most 1,900
+  repos an hour. A maintainer's refresh always has 500 more than the crawl
+  leaves. The sync spends mostly REST, on timelines and on its checks of
+  the repos of the projects it reads no issues for, up to about 101 calls a
+  run with its first question, about 400 an hour, all inside its own cap.
+  The crawl spends mostly GraphQL, so they seldom draw on the same budget.
+- **A monthly crawl.** A pass reads the pool once, and reading it again
+  each month is the re-crawl's job (#31). At these rates a pass spends
+  about 3,000 GraphQL points for each 10,000 repos, well under a tenth of a
+  percent of the 3.6 million points in a 30-day month, and takes about an
+  hour of runs for each 1,900 repos. The search's cap on calls sets how
+  long a pass takes, and GitHub's budget has room to spare.
 
 ## Sample data in development
 
@@ -2088,8 +2450,8 @@ Each secret the Worker reads goes by name under `secrets.required` in
 `wrangler.jsonc`, and the deploy puts it. There are three.
 `OAUTH_CLIENT_SECRET` and `AUTH_SECRET` are for sign-in, and `AUTH_SECRET`
 also encrypts the copy of each connected agent's GitHub token.
-`GH_SERVICE_TOKEN` is the read-only token the scheduled jobs read GitHub
-with, under [The sync](#the-sync). The OAuth library needs no secret of its
+`GH_SERVICE_TOKEN` is the read-only token the scheduled jobs and the policy
+crawler read GitHub with, under [The sync](#the-sync). The OAuth library needs no secret of its
 own. GitHub reserves names that start with `GITHUB_` for its own variables
 and secrets, so no variable or secret of the Worker can start with it.
 
@@ -2173,8 +2535,10 @@ and Playwright run it as a local HTTP server.
 - **What it covers.** REST: the authenticated user and users, repos with the
   caller's `permissions`, labels listed or one by name, issues and their
   timelines, issue and repo search, file contents, forks, branches and refs,
-  pull requests, reviews, and review comments. GraphQL: `repository`, `viewer`, file reads with
-  `object(expression:)` across many repos in one query, an issue with the
+  git blobs, comparisons of two commits, pull requests, reviews, and review
+  comments. GraphQL: `repository`, `viewer`, file reads with
+  `object(expression:)` across many repos in one query, a repo's labels
+  with the open issues that carry each, an issue with the
   open PRs that close it, through `closedByPullRequestsReferences`, a pull
   request's state, and `createCommitOnBranch`. GitHub's primary rate limits:
   each person's REST, GraphQL, and search budgets, whichever of their tokens
@@ -2190,13 +2554,28 @@ and Playwright run it as a local HTTP server.
   with its endpoint, the token it carried, the login that token belongs to,
   and the status. The local server lists them at `/_fake/calls`.
 - **Tests change it the way people change GitHub.** Besides merging,
-  closing, and reviewing PRs and committing files, a test can open, label,
-  assign, and close issues, open a PR from a branch or a fork, and spend
-  part of a person's rate limit, as their other clients would.
+  closing, and reviewing PRs and committing and deleting files, to any
+  branch and with any mode, a test can open, label, assign, and close issues, open a PR
+  from a branch or a fork, click Update branch on a PR, and spend part of
+  a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
   access. A fork belongs to whoever's token made it, and forking again
-  returns the same fork. `createCommitOnBranch` refuses a stale expected
-  head, makes the caller the author, and GitHub signs the commit. A PR that
+  returns the same fork. GitHub makes a new fork in the background, so for
+  `forkDelayMs` after it is made, a second unless the fake was made with
+  another or a test sets it, its git data answers 409
+  `Git Repository is empty.`, GraphQL reads its refs and objects as null,
+  and no PR can come from it. `createCommitOnBranch` refuses a stale
+  expected head, makes the caller the author, and GitHub signs the commit.
+  It refuses a change to a file under `.github/workflows/` from a token
+  without the `workflow` scope, unless another branch of the repo has the
+  same file, with the same path and content. It writes every file it adds
+  as mode 100644, whatever the file was. A tree keeps each file's mode:
+  100644, 100755 for an executable file, 120000 for a symbolic link, and
+  160000 for a submodule, whose commit is in another repo, so
+  `object(expression:)` finds nothing at its path. A commit to an open PR's
+  branch moves the PR's head, as a push does. Update branch merges the
+  base branch into the PR's branch, in a merge commit by whoever clicked
+  it. A PR that
   mentions an issue adds a `cross-referenced` event to that issue's
   timeline, and merging it closes the issues it says it closes. A PR's head
   must be the base repo or a fork of it. Search serves the first 1,000
@@ -2207,11 +2586,30 @@ and Playwright run it as a local HTTP server.
   `public_repo`.
 - **Where it differs.** Tests that depend on any of these need the fake
   changed first.
-  - Forks are ready at once. GitHub makes them in the background.
-  - OAuth scopes are recorded and sent back in `x-oauth-scopes`. Only a
-    private repo checks them, for `repo`. A token with no scopes can fork
-    and commit to a public one.
+  - A new fork is ready after `forkDelayMs`. GitHub takes as long as its
+    background job does. What GitHub's GraphQL answers for a fork not ready
+    yet isn't checked on GitHub.
+  - Some answers go past what GitHub's docs say, from what GitHub is known
+    to send: the 409 and its message `Git Repository is empty.` for a fork
+    GitHub is still making, the message of the workflow refusal and its
+    GraphQL type `FORBIDDEN`, and the type `STALE_DATA` for a commit whose
+    expected head is stale. The app reads only `STALE_DATA` and the 409,
+    and passes the other messages on to the agent.
+  - OAuth scopes are recorded and sent back in `x-oauth-scopes`. A private
+    repo checks them, for `repo`, and a workflow file, for `workflow`. A
+    token with no scopes can fork and commit to a public one. GitHub's docs
+    say the `workflow` scope is needed to add or change a workflow file.
+    The fake asks for it to delete one too, which the docs don't say.
+  - A comparison counts a line as added when the old text lacks it, and as
+    removed when the new text lacks it, which is close to what GitHub
+    counts for small changes. It lists a file as `renamed`, with its
+    `previous_filename`, only when the file moved with its text as it was.
+    GitHub also finds a rename with changed text.
   - An archived repo accepts writes.
+  - A folder's contents over REST, and a comparison, leave a submodule
+    out. GitHub lists one in a folder with the type `submodule`.
+  - Update branch merges with no check for conflicts, and has no REST
+    route.
   - `maintainer_can_modify` is kept and sent back, and the base repo's
     maintainers still can't push to the PR's branch.
   - Issue search refuses a query that names neither `is:issue` nor
@@ -2250,7 +2648,10 @@ and Playwright run it as a local HTTP server.
   which the fake serves like any file. It is the one place later issues add
   to. Every account and repo in it is made up, under `sample-owner`, except
   this project's own repo. That repo's sample issues and PRs are numbered
-  from 900 up, clear of its real ones.
+  from 900 up, clear of its real ones. `src/policy-samples.ts` adds the
+  policy crawler's repos under `sample-policies`, also made up: one for
+  each tier, each condition, and each reason the crawler leaves a repo out,
+  with policy text written for the tests.
 - **Local sign-in.** The fake's authorize page lists the sample people. Pick
   one, and the app gets that person's token through the same OAuth flow it
   uses with GitHub. The app's dev sign-in posts the same form for you, with
@@ -2363,13 +2764,20 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   check what it holds. They live in `apps/web/test/mcp/`. The donor's tools'
   tests give each test's issues numbers of their own, as the sync tests do,
   since rooms keep their storage across a file, and stub `Math.random` to
-  fix the random order. The vouch file's format and the random order are
-  also tested alone, in `apps/web/test/donor/`. The admin's tools are
-  tested there too, and their actions are also called directly, with a spy
-  on D1 and `fetch`, to show each checks the permission before it reads
-  anything. A tool that refuses with a code its spec doesn't list fails the
-  test that called it, and `skills.test.ts` checks the skills against the
-  tools, as under [What the skills name](#what-the-skills-name).
+  fix the random order. The vouch file's format, the random order, and the
+  rules of submitted work are also tested alone, in `apps/web/test/donor/`.
+  The admin's tools are tested in `apps/web/test/mcp/` too, and their
+  actions are also called directly, with a spy on D1 and `fetch`, to show
+  each checks the permission before it reads anything. A tool that refuses
+  with a code its spec doesn't list fails the test that called it, and
+  `skills.test.ts` checks the skills against the tools, as under
+  [What the skills name](#what-the-skills-name). `submit.test.ts` holds the
+  permission-isolation suite for `submit_work`, `open_pr`, and `my_work`:
+  after each test, it checks that every GitHub call each of those tool
+  calls made ran with the token of the donor whose claim it was, who also
+  made the call. The fake's state shows where each branch, commit, and PR
+  went, and who authored it. Its forks are ready at once, except in the
+  test of a fork GitHub is still making.
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
@@ -2429,6 +2837,19 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   Worker. The test of what migration `0006_delisting.sql` marks runs the
   migration's own `INSERT` again, from `TEST_MIGRATIONS`, on rows made
   before it.
+- **Crawler tests** are in `apps/web/test/crawl/`. The rules' tests call
+  them directly on made-up files, for every tier and condition. The rest
+  run the search against the GitHub fake with a stand-in for the crawl
+  queue that records each batch, then hand the batches to the consumer the
+  way Queues does, with a stand-in for `CRAWL_QUEUE` that records what the
+  consumer sends back, with D1 as it runs deployed, and read the admin
+  queue. They use the fake's made-up `sample-policies` repos, commit
+  made-up files to them, and add made-up repos to its state to fill bands
+  of stars. A stand-in for `fetch` records every request, so a test shows
+  which repos the crawler read, or changes GitHub's answer, to stand in for
+  a symbolic link, a binary file, a push while the crawler reads, or an
+  error GitHub gives for one repo. They set the clock with a fake `Date`,
+  as the sync's tests do, to let a budget start over.
 - **Issue page tests** load the page's data from real rooms, fetch the page
   through the Worker, and read an issue's live socket with the page's own
   fold, in `apps/web/test/issue/`. They set the clock with Vitest's fake

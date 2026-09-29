@@ -51,6 +51,8 @@ test("a tools/list answers with the donor's tools and the maintainer's tools, ea
     'claim_issue',
     'post_update',
     'release_claim',
+    'submit_work',
+    'open_pr',
     'my_work',
     'register_project',
     'update_project',
@@ -61,6 +63,10 @@ test("a tools/list answers with the donor's tools and the maintainer's tools, ea
   expect(tool('start_session')?.inputSchema).toMatchObject({ required: ['agent', 'budget'] });
   expect(tool('start_session')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['sessionId', 'login']) as string[] });
   expect(tool('claim_issue')?.inputSchema).toMatchObject({ required: ['sessionId'] });
+  expect(tool('submit_work')?.inputSchema).toMatchObject({
+    required: ['claimId', 'files', 'summary', 'checks', 'agent', 'model'],
+  });
+  expect(tool('open_pr')?.inputSchema).toMatchObject({ required: ['claimId'] });
   expect(tool('register_project')?.inputSchema).toMatchObject({ required: ['repo'] });
   expect(tool('update_project')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['changed', 'createdLabels']) as string[] });
   expect(tool('pause_project')?.description).toContain('resume it with paused: false');

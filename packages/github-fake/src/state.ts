@@ -6,12 +6,16 @@
 // test can read or change any part of it.
 
 import {
+  blobOid,
   isAncestor,
+  listEntries,
   listFiles,
   readObject,
   writeBlob,
   writeCommit,
   writeTree,
+  type FileEntry,
+  type FileMode,
   type GitPerson,
   type ObjectStore,
   type Oid,
@@ -125,6 +129,10 @@ export interface RepoRecord {
   hasPullRequests: boolean;
   pullRequestCreationPolicy: 'all' | 'collaborators_only';
   forkOf: string | null;
+  // GitHub makes a fork in the background. Until this time, the fork's git
+  // data isn't there yet. State saved before the fake kept it has none, and
+  // a repo with none is ready.
+  gitReadyAt?: string | null;
   collaborators: Record<string, Role>;
   branches: Record<string, Oid>;
   labels: LabelRecord[];
@@ -180,9 +188,11 @@ export interface ValidationError {
   message?: string;
 }
 
-// A refusal, in terms both the REST and GraphQL layers can report.
+// A refusal, in terms both the REST and GraphQL layers can report. `empty`
+// is a repo whose git data isn't there yet, like a fork GitHub is still
+// making.
 export class FakeError extends Error {
-  kind: 'not_found' | 'forbidden' | 'invalid' | 'stale';
+  kind: 'not_found' | 'forbidden' | 'invalid' | 'stale' | 'empty';
   errors: ValidationError[];
 
   constructor(kind: FakeError['kind'], message: string, errors: ValidationError[] = []) {
@@ -262,6 +272,18 @@ export function requirePush(repo: RepoRecord, login: string | null): void {
   if (!canPush(roleOf(repo, login))) throw new FakeError('not_found', 'Not Found');
 }
 
+// Whether the repo's git data is there at `now`. A fork isn't at first.
+// https://docs.github.com/en/rest/repos/forks#create-a-fork
+export function gitReady(repo: RepoRecord, now: string): boolean {
+  return repo.gitReadyAt == null || Date.parse(repo.gitReadyAt) <= Date.parse(now);
+}
+
+// GitHub answers 409 to the git data of a repo it is still making.
+// https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database
+export function requireGit(repo: RepoRecord, now: string): void {
+  if (!gitReady(repo, now)) throw new FakeError('empty', 'Git Repository is empty.');
+}
+
 // GitHub keeps a person's email private behind a noreply address.
 export function gitPerson(state: FakeState, login: string, date: string): GitPerson {
   const account = getAccount(state, login);
@@ -298,12 +320,13 @@ export function forkOf(state: FakeState, repo: RepoRecord, login: string): RepoR
 }
 
 // Forks a repo into the person's account. A person who already has a fork
-// of the repo gets that fork back, as on GitHub.
+// of the repo gets that fork back, as on GitHub. A new fork's git data is
+// ready at `readyAt`, and at once without it.
 export function forkRepo(
   state: FakeState,
   parent: RepoRecord,
   login: string,
-  options: { name?: string; defaultBranchOnly?: boolean },
+  options: { name?: string; defaultBranchOnly?: boolean; readyAt?: string },
   now: string,
 ): RepoRecord {
   const existing = forkOf(state, parent, login);
@@ -327,6 +350,7 @@ export function forkRepo(
     hasPullRequests: true,
     pullRequestCreationPolicy: 'all',
     forkOf: fullName(parent),
+    gitReadyAt: options.readyAt ?? null,
     collaborators: {},
     branches,
     labels: [],
@@ -338,8 +362,42 @@ export function forkRepo(
 }
 
 export interface FileChanges {
-  additions: { path: string; contents: string | Uint8Array }[];
+  // createCommitOnBranch writes every addition as a 100644 file. Only the
+  // fake's own helpers give a mode, and for a submodule, its commit's ID
+  // as the contents.
+  additions: { path: string; contents: string | Uint8Array; mode?: FileMode }[];
   deletions: string[];
+}
+
+// Where GitHub Actions reads workflow files.
+const WORKFLOWS = '.github/workflows/';
+
+// GitHub lets a token without the workflow scope add or change a file under
+// .github/workflows/ only when another branch of the repo has the same file,
+// with the same path and content. The fake also refuses a deletion there
+// without the scope, which GitHub's docs don't say either way. Returns
+// GitHub's refusal for the first path it refuses, or null.
+// https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps#available-scopes
+export function workflowRefusal(
+  state: FakeState,
+  repo: RepoRecord,
+  branch: string,
+  change: FileChanges,
+  scopes: readonly string[],
+): string | null {
+  if (scopes.includes('workflow')) return null;
+  const onOtherBranches = Object.entries(repo.branches)
+    .filter(([name]) => name !== branch)
+    .map(([, oid]) => listFiles(state.objects, readObject(state.objects, oid, 'commit').tree));
+  const refused = (path: string) =>
+    `refusing to allow an OAuth App to create or update workflow \`${path}\` without \`workflow\` scope`;
+  for (const { path, contents } of change.additions) {
+    if (!path.startsWith(WORKFLOWS)) continue;
+    const oid = blobOid(contents);
+    if (!onOtherBranches.some((files) => files.get(path) === oid)) return refused(path);
+  }
+  const deleted = change.deletions.find((path) => path.startsWith(WORKFLOWS));
+  return deleted === undefined ? null : refused(deleted);
 }
 
 // Adds a commit to a branch as the person, the way createCommitOnBranch
@@ -361,7 +419,7 @@ export function commitOnBranch(
       `Expected branch to point to "${change.expectedHeadOid}" but it did not. Pull and try again.`,
     );
   }
-  const files = listFiles(state.objects, readObject(state.objects, head, 'commit').tree);
+  const files = listEntries(state.objects, readObject(state.objects, head, 'commit').tree);
   for (const path of change.deletions) {
     if (!files.delete(path)) {
       throw new FakeError(
@@ -370,7 +428,10 @@ export function commitOnBranch(
       );
     }
   }
-  for (const { path, contents } of change.additions) files.set(path, writeBlob(state.objects, contents));
+  for (const { path, contents, mode = '100644' } of change.additions) {
+    const oid = mode === '160000' ? String(contents) : writeBlob(state.objects, contents);
+    files.set(path, { oid, mode });
+  }
   const message = change.body ? `${change.headline}\n\n${change.body}` : change.headline;
   const oid = writeCommit(state.objects, {
     tree: writeTree(state.objects, files),
@@ -380,9 +441,58 @@ export function commitOnBranch(
     committer: webFlow(now),
     signedByGitHub: true,
   });
+  moveBranch(state, repo, branch, oid, now);
+  return oid;
+}
+
+// Points a branch at a new commit, as a push does. An open PR from the
+// branch takes the commit.
+function moveBranch(state: FakeState, repo: RepoRecord, branch: string, oid: Oid, now: string): void {
   repo.branches[branch] = oid;
   repo.pushedAt = now;
   repo.updatedAt = now;
+  for (const base of Object.values(state.repos)) {
+    for (const issue of Object.values(base.issues)) {
+      const pull = issue.pull;
+      if (issue.state !== 'open' || pull === null || pull.head.ref !== branch) continue;
+      if (pull.head.repo !== null && key(pull.head.repo) === key(fullName(repo))) pull.head.sha = oid;
+    }
+  }
+}
+
+// The files of `into` with the changes `from` made since the two parted.
+function mergedFiles(store: ObjectStore, into: Oid, from: Oid): Map<string, FileEntry> {
+  const files = listEntries(store, readObject(store, into, 'commit').tree);
+  const since = mergeBase(store, into, from);
+  const before = since ? listEntries(store, readObject(store, since, 'commit').tree) : new Map<string, FileEntry>();
+  const after = listEntries(store, readObject(store, from, 'commit').tree);
+  for (const path of before.keys()) if (!after.has(path)) files.delete(path);
+  for (const [path, file] of after) {
+    const was = before.get(path);
+    if (was?.oid !== file.oid || was.mode !== file.mode) files.set(path, file);
+  }
+  return files;
+}
+
+// GitHub's Update branch on a PR: the base branch merges into the PR's
+// branch in a merge commit that the person makes and GitHub signs.
+// https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch
+export function updatePullBranch(state: FakeState, repo: RepoRecord, number: number, login: string, now: string): Oid {
+  const issue = getPull(repo, number);
+  const { pull } = issue;
+  const baseHead = own(repo.branches, pull.base.ref);
+  const head = pull.head.repo === null ? null : findRepoByFullName(state, pull.head.repo);
+  if (baseHead === undefined || head === null) throw new FakeError('invalid', 'The branch could not be updated');
+  const store = state.objects;
+  const oid = writeCommit(store, {
+    tree: writeTree(store, mergedFiles(store, pull.head.sha, baseHead)),
+    parents: [pull.head.sha, baseHead],
+    message: `Merge branch '${pull.base.ref}' into ${pull.head.ref}`,
+    author: gitPerson(state, login, now),
+    committer: webFlow(now),
+    signedByGitHub: true,
+  });
+  moveBranch(state, head, pull.head.ref, oid, now);
   return oid;
 }
 
@@ -528,7 +638,8 @@ export function openPull(state: FakeState, base: RepoRecord, input: OpenPullInpu
   if (input.headRepo && (!headRepo || networkRoot(state, headRepo) !== networkRoot(state, base))) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head_repo' }]);
   }
-  const headSha = headRepo ? own(headRepo.branches, branch) : undefined;
+  // A fork GitHub is still making has no branches to open a PR from yet.
+  const headSha = headRepo && gitReady(headRepo, now) ? own(headRepo.branches, branch) : undefined;
   if (!headRepo || headSha === undefined) {
     throw invalid([{ resource: 'PullRequest', code: 'invalid', field: 'head' }]);
   }
@@ -647,14 +758,8 @@ export function mergePull(state: FakeState, repo: RepoRecord, number: number, lo
   const baseHead = repo.branches[pull.base.ref];
   if (baseHead === undefined) throw new FakeError('invalid', 'Base branch was deleted');
   const store = state.objects;
-  const files = listFiles(store, readObject(store, baseHead, 'commit').tree);
-  const since = mergeBase(store, baseHead, pull.head.sha);
-  const before = since ? listFiles(store, readObject(store, since, 'commit').tree) : new Map<string, Oid>();
-  const after = listFiles(store, readObject(store, pull.head.sha, 'commit').tree);
-  for (const path of before.keys()) if (!after.has(path)) files.delete(path);
-  for (const [path, oid] of after) if (before.get(path) !== oid) files.set(path, oid);
   const oid = writeCommit(store, {
-    tree: writeTree(store, files),
+    tree: writeTree(store, mergedFiles(store, baseHead, pull.head.sha)),
     parents: [baseHead, pull.head.sha],
     message: `Merge pull request #${String(number)} from ${pull.head.owner}/${pull.head.ref}\n\n${issue.title}`,
     author: gitPerson(state, login, now),
