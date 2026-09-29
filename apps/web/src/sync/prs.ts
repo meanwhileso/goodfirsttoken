@@ -5,7 +5,7 @@ import {
   type PrRecord,
   type PrState,
 } from '@goodfirsttoken/core';
-import { getClaim, listOpenPrs, saveFollowUps, setPrState, type NewFollowUp } from '../db';
+import { getClaim, listOpenPrs, listRereadsDue, rereadDone, saveFollowUps, setPrState, type NewFollowUp } from '../db';
 import { GitHubError } from '../github';
 import { issueRoom, type IssueRoom } from '../rooms/issue-room';
 import { SyncStopped, type ServiceGitHub, type StopReason } from './github';
@@ -35,6 +35,8 @@ export interface PrRun {
   closed: number;
   /** Reviews and review comments read for the first time. */
   followUps: number;
+  /** Issues of PRs closed without merging that were read again, this run's and earlier runs'. */
+  reread: number;
   calls: number;
   stopped: StopReason | null;
 }
@@ -203,14 +205,16 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
  * or the run has to stop. It first asks GitHub what is left of the budget.
  * An open PR's new reviews and review comments are kept as follow-ups. A
  * PR whose room didn't hear it merged or closed stays open in the table, so
- * the next run tries again. A refusal from GitHub stops the run, which ends
+ * the next run tries again. Then it reads again the issue of each PR that
+ * closed without merging and waits for it, this run's and those an earlier
+ * run couldn't read. A refusal from GitHub stops the run, which ends
  * without an error.
  */
 export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
-  const run: PrRun = { checked: 0, merged: 0, closed: 0, followUps: 0, calls: 0, stopped: null };
-  const open = await listOpenPrs(deps.db);
+  const run: PrRun = { checked: 0, merged: 0, closed: 0, followUps: 0, reread: 0, calls: 0, stopped: null };
+  const [open, due] = await Promise.all([listOpenPrs(deps.db), listRereadsDue(deps.db)]);
   try {
-    if (open.length > 0) await deps.github.checkGitHub();
+    if (open.length > 0 || due.length > 0) await deps.github.checkGitHub();
     for (let start = 0; start < open.length; start += BATCH) {
       const batch = open.slice(start, start + BATCH);
       const pulls = await readStates(deps.github, batch);
@@ -236,14 +240,18 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
           console.warn(`The room for ${claim.issue} didn't hear that its PR closed. The next run tries again.`, error);
           continue;
         }
+        // A PR recorded closed without merging has its issue due to be read again.
         await setPrState(deps.db, record.claimId, outcome.state, outcome.at);
-        if (outcome.state === 'merged') {
-          run.merged += 1;
-        } else {
-          run.closed += 1;
-          await rereadIssue(deps, claim.issue);
-        }
+        if (outcome.state === 'merged') run.merged += 1;
+        else run.closed += 1;
       }
+    }
+    // A read that can't run now, as when another run holds the project,
+    // stays due for the next run.
+    for (const { claimId, issue } of await listRereadsDue(deps.db)) {
+      if (!(await rereadIssue(deps, issue))) continue;
+      await rereadDone(deps.db, claimId);
+      run.reread += 1;
     }
   } catch (error) {
     if (error instanceof SyncStopped) {
@@ -258,7 +266,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
   }
   run.calls = deps.github.calls;
   console.log(
-    `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, new follow-ups: ${String(run.followUps)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, issues read again: ${String(run.reread)}, new follow-ups: ${String(run.followUps)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

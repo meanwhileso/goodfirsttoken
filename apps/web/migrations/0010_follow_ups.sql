@@ -27,6 +27,13 @@ CREATE TABLE follow_ups (
 -- or null before that. A PR is offered once.
 ALTER TABLE prs ADD COLUMN offered_at INTEGER;
 
+-- 1 while the issue of a PR that closed without merging waits for the PR
+-- job to read it again, and 0 otherwise. A read that can't run now waits
+-- for the job's next run.
+ALTER TABLE prs ADD COLUMN reread_due INTEGER NOT NULL DEFAULT 0;
+-- The issues that wait to be read again, oldest close first.
+CREATE INDEX prs_reread_due ON prs (closed_at) WHERE reread_due = 1;
+
 -- A PR that merged before a session its donor started since had that
 -- session as its next, and no link to offer then. It counts as offered, so
 -- the first session after this change offers only the PRs that merged

@@ -616,31 +616,41 @@ export async function syncProject(deps: SyncDeps, project: ProjectRecord, run?: 
  * shows the issue open, tagged, with no excluded tag and no assignee. Any
  * other answer about the issue drops the copy, as the pass's end would. The
  * PR job calls it when a claim's PR on the issue closed without merging,
- * so an issue still open and tagged takes claims again at once. A project
- * another run holds is left to that run, and GitHub refusing a read about
- * one project leaves its copy to the next pass. Throws SyncStopped when the
- * run has to stop.
+ * so an issue still open and tagged takes claims again at once.
+ *
+ * True once every copy that asks for help was read again, or GitHub said
+ * the issue is gone, which leaves the copy to the next pass. False when
+ * one waits: another run holds its project, or GitHub refused the read. The
+ * PR job then tries again on its next run. Throws SyncStopped when the run
+ * has to stop, as when it made all its calls or the budget ran out.
  */
-export async function rereadIssue(deps: SyncDeps, issue: string): Promise<void> {
+export async function rereadIssue(deps: SyncDeps, issue: string): Promise<boolean> {
   const copies = await listIssueCopies(deps.db, issue);
-  if (copies.length === 0) return;
+  if (copies.length === 0) return true;
   const repos = copies.map((copy) => copy.project);
   const [stopped, delisted] = await Promise.all([doNotListedProjects(deps.db, repos), delistedProjects(deps.db, repos)]);
+  let landed = true;
   for (const copy of copies) {
     const project = await getProject(deps.db, copy.project);
     if (project?.status !== 'approved') continue;
     if (stopped.has(lower(project.repo)) || delisted.has(lower(project.repo))) continue;
     const until = deps.now() + HOLD_MS;
-    if (!(await holdProject(deps.db, project.repo, deps.now(), until))) continue;
+    if (!(await holdProject(deps.db, project.repo, deps.now(), until))) {
+      landed = false;
+      continue;
+    }
     try {
       await rereadCopy(deps, project, copy);
     } catch (error) {
+      if (error instanceof GitHubError && (error.status === 404 || error.status === 410)) continue;
       if (!(error instanceof GitHubError) && !(error instanceof ProjectProblem)) throw error;
-      console.warn(`${copy.issue} was not read again for ${project.repo}. The next pass reads it. ${error.message}`);
+      console.warn(`${copy.issue} was not read again for ${project.repo}. The PR job's next run tries again. ${error.message}`);
+      landed = false;
     } finally {
       await releaseProject(deps.db, project.repo, until);
     }
   }
+  return landed;
 }
 
 async function rereadCopy(deps: SyncDeps, project: ProjectRecord, copy: TaggedIssue): Promise<void> {
@@ -658,6 +668,7 @@ async function rereadCopy(deps: SyncDeps, project: ProjectRecord, copy: TaggedIs
     await dropMissing(deps, project.repo, [copy]);
     return;
   }
+  // An issue GitHub no longer has is missing from its closing references.
   const closes = (await closingReferences(deps.github, issueRepo, [number])).get(number);
   if (closes === undefined) return;
   const projectRepos = new Set([lower(project.repo), lower(issueRepo)]);

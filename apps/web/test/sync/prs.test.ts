@@ -2,7 +2,7 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import type { ClaimRecord, PrRef } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { addPr, getIssue, getPr, listClaimFollowUps, listWaitingIssues } from '../../src/db';
+import { addPr, getIssue, getPr, holdProject, listClaimFollowUps, listWaitingIssues, releaseProject } from '../../src/db';
 import { issueRoom, type IssueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
@@ -245,6 +245,47 @@ describe('a PR closed without merging', () => {
     expect(await getIssue(db, APP, ref(issue))).toBeNull();
     expect(await getPr(db, claim.id)).toMatchObject({ state: 'closed' });
     expect((await room(issue).history()).at(-1)).toMatchObject({ kind: 'pr_closed' });
+  });
+
+  const HOLD = 15 * MINUTE;
+  test.each([
+    [
+      'another run holds its project',
+      () => {
+        const until = Date.now() + HOLD;
+        return holdProject(db, APP, Date.now(), until).then(() => () => releaseProject(db, APP, until));
+      },
+      () => follow(),
+    ],
+    ['the run made all the calls it may', () => Promise.resolve(() => Promise.resolve()), () => follow(jobDeps(github, { leave: 0.1, maxCalls: 2 }))],
+    [
+      'the REST budget is spent',
+      () => {
+        github.spendRateLimit(SERVICE_LOGIN, 'core', 4600);
+        // The budget starts over an hour later.
+        return Promise.resolve(() => {
+          later(61 * MINUTE);
+          return Promise.resolve();
+        });
+      },
+      () => follow(),
+    ],
+  ])('a re-read that waits because %s is made by the next run, and then the issue takes claims', async (_, stop, first) => {
+    const { issue, claim, pr } = await closedAfterSync();
+    const resume = await stop();
+
+    await first();
+    const waited = await getIssue(db, APP, ref(issue));
+    await resume();
+    later();
+    await follow();
+
+    expect(waited?.linkedPr).toEqual(pr);
+    expect(await getPr(db, claim.id)).toMatchObject({ state: 'closed' });
+    expect(await getIssue(db, APP, ref(issue))).toMatchObject({ linkedPr: null });
+    expect((await listWaitingIssues(db, Date.now())).map((entry) => entry.copy.issue)).toContain(ref(issue));
+    // The room announced the close once, whatever the re-read did.
+    expect((await room(issue).history()).filter((e) => e.kind === 'pr_closed')).toHaveLength(1);
   });
 
   test('a PR that merged leaves its issue to the next sync, and the job reads nothing more', async () => {

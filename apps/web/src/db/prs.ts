@@ -124,8 +124,9 @@ export async function getPr(db: D1Database, claimId: string): Promise<PrRecord |
  * Records the state GitHub shows for a claim's PR at `at`. Its times change
  * only when its state does, and a merged PR stays merged. Reopening a closed
  * PR clears its close time. GitHub's clock and ours can differ, so a time
- * before the PR opened counts as the time it opened. Null when the claim has
- * no PR.
+ * before the PR opened counts as the time it opened. A PR recorded closed
+ * without merging has its issue due to be read again, until rereadDone
+ * says it was. Null when the claim has no PR.
  */
 export async function setPrState(
   db: D1Database,
@@ -150,7 +151,10 @@ export async function setPrState(
   );
   // Only from the state just read, so a change that landed since then wins.
   const row = await db
-    .prepare('UPDATE prs SET state = ?, merged_at = ?, closed_at = ? WHERE claim_id = ? AND state = ? RETURNING *')
+    .prepare(
+      `UPDATE prs SET state = ?1, merged_at = ?2, closed_at = ?3, reread_due = CASE WHEN ?1 = 'closed' THEN 1 ELSE 0 END
+       WHERE claim_id = ?4 AND state = ?5 RETURNING *`,
+    )
     .bind(updated.state, updated.mergedAt, updated.closedAt, current.claimId, current.state)
     .first<PrRow>();
   return row === null ? getPr(db, current.claimId) : toPr(row);
@@ -171,6 +175,28 @@ export async function isOpenClaimPr(db: D1Database, pr: PrRef, issue: string): P
     .bind(mustParse(repoName, pr.repo, 'pr.repo'), pr.number, repo, number)
     .first<{ found: number }>();
   return row !== null;
+}
+
+/**
+ * The claims whose PR closed without merging, and whose issue waits to be
+ * read again, oldest close first, with the issue.
+ */
+export async function listRereadsDue(db: D1Database): Promise<{ claimId: string; issue: string }[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.claim_id, c.issue_repo, c.issue_number FROM prs p JOIN claims c ON c.id = p.claim_id
+       WHERE p.reread_due = 1 ORDER BY p.closed_at, p.claim_id`,
+    )
+    .all<{ claim_id: string; issue_repo: string; issue_number: number }>();
+  return results.map((row) => ({
+    claimId: mustParse(id, row.claim_id, 'claimId'),
+    issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+  }));
+}
+
+/** Records that the issue of the claim's closed PR was read again. */
+export async function rereadDone(db: D1Database, claimId: string): Promise<void> {
+  await db.prepare('UPDATE prs SET reread_due = 0 WHERE claim_id = ?').bind(mustParse(id, claimId, 'claimId')).run();
 }
 
 /** Every PR still open, oldest first, for the job that follows them. */
