@@ -376,6 +376,9 @@ const DONOR_CONTRACT: Record<string, string[]> = {
   'keep secrets out of everything public': [
     "Keep local paths, environment contents, tokens, and secrets out of every update, summary, check note, release reason, and file you submit, and out of the PR's title.",
   ],
+  'submit only files read at the start commit': [
+    "Submit only files you read at the start commit. When you can't clone the repo and check out that commit, tell the donor and release the claim.",
+  ],
   'release with a public reason when stuck': ['call `release_claim` with a short public reason'],
   "never post the donor's special instructions": ["Follow the donor's special instructions. They stay in the harness. Never post them."],
 };
