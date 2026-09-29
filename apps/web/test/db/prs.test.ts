@@ -1,7 +1,20 @@
 import { newClaim, type ClaimRecord } from '@goodfirsttoken/core';
+import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { addPr, countProjectPrs, getPr, listOpenPrs, saveClaim, setPrState } from '../../src/db';
-import { DAY, db, emptyDatabase, HOUR, priya, refusal, repo, sha, signIn, t0 } from './helpers';
+import {
+  addPr,
+  addToDoNotList,
+  blockDonor,
+  countProjectPrs,
+  createSession,
+  getPr,
+  listOpenPrs,
+  saveClaim,
+  setPrState,
+  takeMergedToOffer,
+  unblockDonor,
+} from '../../src/db';
+import { admin, DAY, db, emptyDatabase, HOUR, kenji, priya, refusal, repo, sha, signIn, t0, takeOffDoNotList } from './helpers';
 
 function prRef(number: number) {
   return { repo, number, url: `https://github.com/${repo}/pull/${String(number)}` };
@@ -140,5 +153,57 @@ describe('PRs', () => {
 
   test('a claim with no PR has no state to set', async () => {
     expect(await setPrState(db, 'c_1', 'merged', t0 + DAY)).toBeNull();
+  });
+});
+
+describe('merged PRs offered to share', () => {
+  beforeEach(async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 + 2 * HOUR });
+    await addPr(db, { claimId: 'c_2', pr: prRef(58), openedAt: t0 + 2 * HOUR });
+  });
+
+  test('a merged PR is offered to its donor once, and an open or closed one never', async () => {
+    await setPrState(db, 'c_1', 'merged', t0 + DAY);
+    await saveClaim(db, openedClaim('c_3', 59), 1);
+    await addPr(db, { claimId: 'c_3', pr: prRef(59), openedAt: t0 + 2 * HOUR });
+    await setPrState(db, 'c_3', 'closed', t0 + DAY);
+
+    const first = await takeMergedToOffer(db, priya.githubId, t0 + 2 * DAY);
+    const again = await takeMergedToOffer(db, priya.githubId, t0 + 3 * DAY);
+
+    expect(first).toEqual([
+      { claimId: 'c_1', issue: `${repo}#17`, pr: prRef(57), agent: 'claude-code', title: null, mergedAt: t0 + DAY },
+    ]);
+    expect(again).toEqual([]);
+    expect(await takeMergedToOffer(db, kenji.githubId, t0 + 2 * DAY)).toEqual([]);
+  });
+
+  test("a blocked donor's merged PR, and one the do-not-list names, is not offered, and waits until neither holds", async () => {
+    await signIn(admin);
+    await setPrState(db, 'c_1', 'merged', t0 + DAY);
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, t0 + DAY);
+    const whileBlocked = await takeMergedToOffer(db, priya.githubId, t0 + 2 * DAY);
+    await unblockDonor(db, priya.githubId);
+    await addToDoNotList(db, { repo, reason: null, addedBy: admin.githubId }, t0 + 2 * DAY);
+    const whileListed = await takeMergedToOffer(db, priya.githubId, t0 + 3 * DAY);
+    await takeOffDoNotList(repo);
+
+    expect([whileBlocked, whileListed]).toEqual([[], []]);
+    expect(await takeMergedToOffer(db, priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_1' }]);
+  });
+
+  test('the migration that brought the offer counts a PR that merged before its donor started a session as offered', async () => {
+    await setPrState(db, 'c_1', 'merged', t0 + DAY);
+    await setPrState(db, 'c_2', 'merged', t0 + 3 * DAY);
+    await createSession(db, { githubId: priya.githubId, agent: 'claude-code', budget: { kind: 'until_limit' } }, t0 + 2 * DAY);
+    const { TEST_MIGRATIONS } = env as Env & { TEST_MIGRATIONS: D1Migration[] };
+    const migration = TEST_MIGRATIONS.find((m) => m.name === '0010_follow_ups.sql');
+    // The table and the column are there already, so only the rows it writes run again.
+    const writes = migration?.queries.filter((query) => /^\s*UPDATE\b/i.test(query)) ?? [];
+
+    for (const query of writes) await db.prepare(query).run();
+
+    expect(writes).toHaveLength(1);
+    expect(await takeMergedToOffer(db, priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_2' }]);
   });
 });

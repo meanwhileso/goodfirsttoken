@@ -26,9 +26,11 @@ import { own } from './own.ts';
 export type Role = 'admin' | 'maintain' | 'write' | 'triage' | 'read';
 
 export interface Account {
+  // A bot's login ends in [bot], as GitHub's REST API gives it, like
+  // github-actions[bot].
   login: string;
   id: number;
-  type: 'User' | 'Organization';
+  type: 'User' | 'Organization' | 'Bot';
   name: string;
   createdAt: string;
 }
@@ -555,6 +557,21 @@ export function labelIssue(state: FakeState, repo: RepoRecord, issue: IssueRecor
     actor: getAccount(state, login).login,
     createdAt: now,
     label: { name: label.name, color: label.color },
+  });
+}
+
+export function unlabelIssue(state: FakeState, repo: RepoRecord, issue: IssueRecord, name: string, login: string, now: string) {
+  const found = issue.labels.find((l) => key(l) === key(name));
+  if (found === undefined) return;
+  const label = repo.labels.find((l) => key(l.name) === key(found));
+  issue.labels = issue.labels.filter((l) => key(l) !== key(found));
+  issue.updatedAt = now;
+  issue.timeline.push({
+    id: newId(state),
+    event: 'unlabeled',
+    actor: getAccount(state, login).login,
+    createdAt: now,
+    label: { name: found, color: label?.color ?? 'ededed' },
   });
 }
 

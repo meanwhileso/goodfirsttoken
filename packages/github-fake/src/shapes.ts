@@ -55,7 +55,7 @@ export function userShape(ctx: Ctx, login: string) {
   return {
     login: name,
     id,
-    node_id: nodeId(account?.type === 'Organization' ? 'O' : 'U', id),
+    node_id: nodeId(account?.type === 'Organization' ? 'O' : account?.type === 'Bot' ? 'BOT' : 'U', id),
     avatar_url: avatarUrl(ctx, id),
     gravatar_id: '',
     url: api,

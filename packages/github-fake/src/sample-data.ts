@@ -90,6 +90,9 @@ export interface SampleOAuthApp {
 export interface SampleData {
   people: SampleAccount[];
   orgs: SampleAccount[];
+  // Accounts of GitHub Apps, which review and comment as bots. Each login
+  // ends in [bot].
+  bots?: SampleAccount[];
   repos: SampleRepo[];
   oauthApps: SampleOAuthApp[];
 }
@@ -124,6 +127,9 @@ export const orgs: SampleAccount[] = [
   { login: 'meanwhileso', id: 2001, name: 'Meanwhile', created: '1y' },
   { login: 'sample-owner', id: 2002, name: 'Sample Owner', created: '9y' },
 ];
+
+// A GitHub App that comments on PRs, the way CI and review bots do.
+export const bots: SampleAccount[] = [{ login: 'sample-ci[bot]', id: 3001, name: 'sample-ci', created: '2y' }];
 
 // The OAuth app the fake knows. Local sign-in uses its client ID and secret.
 export const localOAuthApp: SampleOAuthApp = {
@@ -482,4 +488,4 @@ export const repos: SampleRepo[] = [
   },
 ];
 
-export const sampleData: SampleData = { people, orgs, repos, oauthApps: [localOAuthApp] };
+export const sampleData: SampleData = { people, orgs, bots, repos, oauthApps: [localOAuthApp] };

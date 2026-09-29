@@ -40,7 +40,11 @@ const followUp = {
   pr,
   reviewer: 'octo-maintainer',
   comment: 'Can the formatter skip events with an empty text field?',
+  path: 'apps/web/src/feed/format.ts',
   commentUrl: `${pr.url}#discussion_r1`,
+  writtenAt: at,
+  branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-912-c_0' },
+  base: sha,
 };
 
 const counts = { taggedIssues: 3, working: 2, openPrs: 1, merged: 14 };
@@ -54,13 +58,14 @@ export const samples: Samples = {
       interests: { languages: ['typescript'], kinds: ['tests'] },
       followUps: [followUp],
       unfinishedClaims: [{ ...claim, state: 'paused' }],
-      mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/post?text=merged' }],
+      mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/tweet?text=merged' }],
     },
     mentions: [
       '@priya',
       '3 issues',
       'typescript',
-      '@octo-maintainer asked for changes',
+      '@octo-maintainer on apps/web/src/feed/format.ts',
+      '> Can the formatter skip events with an empty text field?',
       'paused',
       'Share it',
       'Offer the follow-ups and paused claims first',
@@ -193,7 +198,8 @@ export const samples: Samples = {
       working: [{ ...claim, resumable: true, reason: null }],
     },
     mentions: [
-      'asked for changes',
+      '> Can the formatter skip events with an empty text field?',
+      'Fixes go on priya/goodfirsttoken:goodfirsttoken/issue-912-c_0',
       '+23 -4',
       'codex (gpt-5.5-codex)',
       'waiting because a PR is already open on the issue',

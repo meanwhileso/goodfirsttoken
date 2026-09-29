@@ -15,6 +15,10 @@
 // https://docs.github.com/en/graphql/reference/commits#mutation-createcommitonbranch
 // https://docs.github.com/en/graphql/reference/issues#object-issue
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
+// https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreview
+// https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreviewcomment
+// https://docs.github.com/en/graphql/reference/users#interface-actor
+// https://docs.github.com/en/graphql/reference/users#object-bot
 
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
 import { base64ToBytes, blobText, bytesToBase64, entryMode, lookupPath, type GitPerson, type Oid } from './git.ts';
@@ -38,6 +42,7 @@ import {
   type IssueRecord,
   type PullData,
   type RepoRecord,
+  type ReviewRecord,
 } from './state.ts';
 
 const schema = buildSchema(/* GraphQL */ `
@@ -71,6 +76,14 @@ const schema = buildSchema(/* GraphQL */ `
     MERGED
   }
 
+  enum PullRequestReviewState {
+    PENDING
+    COMMENTED
+    APPROVED
+    CHANGES_REQUESTED
+    DISMISSED
+  }
+
   type PageInfo {
     hasNextPage: Boolean!
     hasPreviousPage: Boolean!
@@ -89,7 +102,13 @@ const schema = buildSchema(/* GraphQL */ `
     avatarUrl(size: Int): URI!
   }
 
-  type User implements Node & RepositoryOwner {
+  interface Actor {
+    login: String!
+    url: URI!
+    avatarUrl(size: Int): URI!
+  }
+
+  type User implements Node & RepositoryOwner & Actor {
     id: ID!
     databaseId: Int
     login: String!
@@ -99,11 +118,20 @@ const schema = buildSchema(/* GraphQL */ `
     createdAt: DateTime!
   }
 
-  type Organization implements Node & RepositoryOwner {
+  type Organization implements Node & RepositoryOwner & Actor {
     id: ID!
     databaseId: Int
     login: String!
     name: String
+    url: URI!
+    avatarUrl(size: Int): URI!
+    createdAt: DateTime!
+  }
+
+  type Bot implements Node & Actor {
+    id: ID!
+    databaseId: Int
+    login: String!
     url: URI!
     avatarUrl(size: Int): URI!
     createdAt: DateTime!
@@ -167,6 +195,48 @@ const schema = buildSchema(/* GraphQL */ `
     createdAt: DateTime!
     baseRefName: String!
     repository: Repository!
+    author: Actor
+    reviews(
+      after: String
+      before: String
+      first: Int
+      last: Int
+      states: [PullRequestReviewState!]
+    ): PullRequestReviewConnection
+  }
+
+  type PullRequestReview implements Node {
+    id: ID!
+    databaseId: Int
+    author: Actor
+    body: String!
+    state: PullRequestReviewState!
+    url: URI!
+    createdAt: DateTime!
+    submittedAt: DateTime
+    comments(after: String, before: String, first: Int, last: Int): PullRequestReviewCommentConnection!
+  }
+
+  type PullRequestReviewConnection {
+    totalCount: Int!
+    nodes: [PullRequestReview]
+    pageInfo: PageInfo!
+  }
+
+  type PullRequestReviewComment implements Node {
+    id: ID!
+    databaseId: Int
+    author: Actor
+    body: String!
+    path: String!
+    url: URI!
+    createdAt: DateTime!
+  }
+
+  type PullRequestReviewCommentConnection {
+    totalCount: Int!
+    nodes: [PullRequestReviewComment]
+    pageInfo: PageInfo!
   }
 
   type PullRequestConnection {
@@ -344,6 +414,24 @@ function ownerNode(ctx: Ctx, login: string) {
   };
 }
 
+// Who wrote a review or a comment: a person, an organization, or a GitHub
+// App's bot, whose login GraphQL gives without the [bot] that REST adds. An
+// account GitHub no longer has is null.
+function actorNode(ctx: Ctx, login: string) {
+  const account = findAccount(ctx.state, login);
+  if (account?.type !== 'Bot') return ownerNode(ctx, login);
+  const name = account.login.replace(/\[bot\]$/, '');
+  return {
+    __typename: 'Bot',
+    id: nodeId('BOT', account.id),
+    databaseId: account.id,
+    login: name,
+    url: `${ctx.webUrl}/apps/${name}`,
+    avatarUrl: () => avatarUrl(ctx, account.id),
+    createdAt: account.createdAt,
+  };
+}
+
 const PERMISSION = { admin: 'ADMIN', maintain: 'MAINTAIN', write: 'WRITE', triage: 'TRIAGE', read: 'READ' };
 
 function repositoryNode(ctx: Ctx, repo: RepoRecord) {
@@ -391,19 +479,26 @@ function repositoryNode(ctx: Ctx, repo: RepoRecord) {
   };
 }
 
-// GitHub asks for first or last on every connection, at most 100.
+// GitHub asks for first or last on every connection, at most 100. last
+// gives the last items, still oldest first.
 function pageOf<T>(items: T[], args: { first?: number | null; last?: number | null; after?: string | null; before?: string | null }, field: string) {
-  if (args.last != null || args.before != null) {
-    throw fail('UNPROCESSABLE', `The GitHub fake pages ${field} with first and after only.`);
+  if (args.before != null) {
+    throw fail('UNPROCESSABLE', `The GitHub fake pages ${field} with first, last, and after only.`);
   }
-  if (args.first == null) {
+  if (args.first != null && args.last != null) {
+    throw fail('UNPROCESSABLE', `Passing both \`first\` and \`last\` to paginate the \`${field}\` connection is not supported.`);
+  }
+  const count = args.first ?? args.last;
+  if (count == null) {
     throw fail('MISSING_PAGINATION_BOUNDARIES', `You must provide a \`first\` or \`last\` value to properly paginate the \`${field}\` connection.`);
   }
-  if (args.first < 0 || args.first > 100) {
-    throw fail('EXCESSIVE_PAGINATION', `Requesting ${String(args.first)} records on the \`${field}\` connection exceeds the \`first\` limit of 100 records.`);
+  const bound = args.first != null ? 'first' : 'last';
+  if (count < 0 || count > 100) {
+    throw fail('EXCESSIVE_PAGINATION', `Requesting ${String(count)} records on the \`${field}\` connection exceeds the \`${bound}\` limit of 100 records.`);
   }
-  const start = args.after == null ? 0 : Number(new TextDecoder().decode(base64ToBytes(args.after)).replace(/^cursor:/, ''));
-  const page = items.slice(start, start + args.first);
+  const after = args.after == null ? 0 : Number(new TextDecoder().decode(base64ToBytes(args.after)).replace(/^cursor:/, ''));
+  const start = args.first != null ? after : Math.max(after, items.length - count);
+  const page = items.slice(start, start + count);
   const cursor = (index: number) => bytesToBase64(new TextEncoder().encode(`cursor:${String(index)}`));
   return {
     totalCount: items.length,
@@ -470,6 +565,51 @@ function pullRequestNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull
     createdAt: issue.createdAt,
     baseRefName: issue.pull.base.ref,
     repository: () => repositoryNode(ctx, repo),
+    author: () => actorNode(ctx, issue.user),
+    // Oldest first, as GitHub gives them. A pending review is its author's
+    // alone, and the fake keeps none.
+    reviews: (args: PageArgs & { states?: string[] | null }) => {
+      const reviews = issue.pull.reviews.filter((review) => args.states == null || args.states.includes(review.state));
+      return pageOf(
+        reviews.map((review) => reviewNode(ctx, repo, issue as IssueRecord & { pull: PullData }, review)),
+        args,
+        'reviews',
+      );
+    },
+  };
+}
+
+type PageArgs = { first?: number | null; last?: number | null; after?: string | null; before?: string | null };
+
+function reviewNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull: PullData }, review: ReviewRecord) {
+  const pullUrl = `${ctx.webUrl}/${fullName(repo)}/pull/${String(issue.number)}`;
+  return {
+    __typename: 'PullRequestReview',
+    id: nodeId('PRR', review.id),
+    databaseId: review.id,
+    author: () => actorNode(ctx, review.user),
+    body: review.body,
+    state: review.state,
+    url: `${pullUrl}#pullrequestreview-${String(review.id)}`,
+    createdAt: review.submittedAt,
+    submittedAt: review.submittedAt,
+    comments: (args: PageArgs) =>
+      pageOf(
+        issue.pull.reviewComments
+          .filter((comment) => comment.reviewId === review.id)
+          .map((comment) => ({
+            __typename: 'PullRequestReviewComment',
+            id: nodeId('PRRC', comment.id),
+            databaseId: comment.id,
+            author: () => actorNode(ctx, comment.user),
+            body: comment.body,
+            path: comment.path,
+            url: `${pullUrl}#discussion_r${String(comment.id)}`,
+            createdAt: comment.createdAt,
+          })),
+        args,
+        'comments',
+      ),
   };
 }
 

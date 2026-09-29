@@ -178,6 +178,22 @@ test('a test can open, label, assign, and close an issue, and the issue lists an
   expect(timeline.body.map((e) => e.event)).toEqual(['labeled', 'labeled', 'assigned', 'closed']);
 });
 
+test('a test can take a label off an issue, and the issue lists and timeline follow', async () => {
+  const number = fake.openIssue(REPO, { title: 'Sort the wall by time', labels: ['goodfirsttoken', 'ready'], by: 'octo-maintainer' });
+  const tagged = () => rest<{ number: number }[]>(fake, 'GET', `/repos/${REPO}/issues?labels=goodfirsttoken&assignee=none`);
+
+  const before = await tagged();
+  fake.unlabelIssue(REPO, number, 'GoodFirstToken', 'octo-maintainer');
+  const after = await tagged();
+  const issue = await rest<{ labels: { name: string }[] }>(fake, 'GET', `/repos/${REPO}/issues/${String(number)}`);
+  const timeline = await rest<{ event: string; label?: { name: string } }[]>(fake, 'GET', `/repos/${REPO}/issues/${String(number)}/timeline`);
+
+  expect(before.body.map((i) => i.number)).toContain(number);
+  expect(after.body.map((i) => i.number)).not.toContain(number);
+  expect(issue.body.labels.map((l) => l.name)).toEqual(['ready']);
+  expect(timeline.body.at(-1)).toMatchObject({ event: 'unlabeled', label: { name: 'goodfirsttoken' } });
+});
+
 test('a PR a test opens comes from a branch for someone with push access, and from a fork for anyone else', async () => {
   const fromBranch = fake.openPullRequest(REPO, { title: 'Branch work', body: 'Closes #921', by: 'kenji' });
   const fromFork = fake.openPullRequest(REPO, { title: 'Fork work', body: 'Closes #921', by: 'sam' });

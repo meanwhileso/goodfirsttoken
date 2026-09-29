@@ -2,12 +2,15 @@ import {
   budgetLeft,
   claimDeadlines,
   holdsSlot,
+  MAX_FOLLOW_UPS,
   nextClaimState,
+  shareOnXUrl,
   toolRefusal,
   toolResult,
   type ClaimRecord,
   type ClaimState,
   type ClaimSummary,
+  type FollowUp,
   type Interests,
   type ProjectRecord,
   type Refusal,
@@ -35,10 +38,13 @@ import {
   getSession,
   listClaimsOn,
   listPersonClaims,
+  listWaitingFollowUps,
   listWaitingIssues,
+  markFollowUpsShown,
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
+  takeMergedToOffer,
   takeSessionIssue,
   type ClaimWithPr,
   type WaitingIssue,
@@ -213,12 +219,54 @@ export async function startSession(
       login: person.login,
       budget: session.budget,
       interests: person.interests,
-      // Maintainers' requests for changes arrive with the PR follow-ups (#17).
-      followUps: [],
+      followUps: await followUpsFor(caller.githubId, now),
       unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
-      mergedPrs: [],
+      mergedPrs: await mergedToShare(caller.githubId, now),
     }),
   );
+}
+
+/**
+ * What reviewers wrote on the donor's open PRs that no submit answered yet,
+ * oldest first, as start_session and my_work list them, each marked shown
+ * from now. A submit to the claim answers the ones shown before it. Only a
+ * follow-up submit_work could take a fix for shows: its PR open, its
+ * project asking for help, and the donor not blocked.
+ */
+async function followUpsFor(person: number, now: number): Promise<FollowUp[]> {
+  const waiting = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
+  const titles = new Map<string, string>();
+  for (const { project, issue } of waiting) {
+    if (!titles.has(lower(issue))) titles.set(lower(issue), (await getIssue(env.DB, project, issue))?.title ?? issue);
+  }
+  await markFollowUpsShown(
+    env.DB,
+    waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
+    now,
+  );
+  return waiting.map(({ record, issue, pr, branch, base }) => ({
+    claimId: record.claimId,
+    issue,
+    title: titles.get(lower(issue)) ?? issue,
+    pr,
+    reviewer: record.reviewer,
+    comment: record.body,
+    path: record.path,
+    commentUrl: record.url,
+    writtenAt: new Date(record.writtenAt).toISOString(),
+    branch,
+    base,
+  }));
+}
+
+/**
+ * The donor's PRs that merged since a session last offered them, each with
+ * a pre-filled X post link, taken so no later session offers them again.
+ * Nothing is posted for the donor.
+ */
+async function mergedToShare(person: number, now: number) {
+  const merged = await takeMergedToOffer(env.DB, person, now);
+  return merged.map(({ issue, title, pr, agent }) => ({ issue, title: title ?? issue, pr, shareUrl: shareOnXUrl({ pr, agent }) }));
 }
 
 /** The donor's unfinished claims that can go on, for start_session to offer. */
@@ -256,8 +304,7 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
   );
   return answer(
     toolResult('my_work', {
-      // Follow-ups arrive with #17.
-      followUps: [],
+      followUps: await followUpsFor(caller.githubId, now),
       readyToOpen: await readyToOpen(caller, origin, now),
       working,
     }),

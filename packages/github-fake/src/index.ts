@@ -34,6 +34,7 @@ import {
   openIssue,
   openPull,
   roleOf,
+  unlabelIssue,
   updatePullBranch,
   type FakeState,
   type IssueRecord,
@@ -118,6 +119,7 @@ export interface GitHubFake {
   // Opens an issue as `by`, with the labels given, and returns its number.
   openIssue: (repo: string, issue: { title: string; body?: string; labels?: string[]; by: string }) => number;
   labelIssue: (repo: string, number: number, label: string, by: string) => void;
+  unlabelIssue: (repo: string, number: number, label: string, by: string) => void;
   assignIssue: (repo: string, number: number, assignee: string, by: string) => void;
   closeIssue: (repo: string, number: number, by: string) => void;
   // Opens a PR as `by`, from a branch in the repo when they can push there
@@ -333,7 +335,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     },
     fetch,
     tokenFor: (login, scopes = ['public_repo']) => {
-      if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization. Tokens belong to people.`);
+      if (getAccount(state, login).type !== 'User') throw new Error(`${login} is an organization or a bot. Tokens belong to people.`);
       return mintToken(login, scopes, null);
     },
     reset: () => {
@@ -373,6 +375,9 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       ).number,
     labelIssue: (repo, number, label, by) => {
       labelIssue(state, repoNamed(repo), issueNamed(repo, number), label, by, now().toISOString());
+    },
+    unlabelIssue: (repo, number, label, by) => {
+      unlabelIssue(state, repoNamed(repo), issueNamed(repo, number), label, by, now().toISOString());
     },
     assignIssue: (repo, number, assignee, by) => {
       assignIssue(state, issueNamed(repo, number), assignee, by, now().toISOString());
