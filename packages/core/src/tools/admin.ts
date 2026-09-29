@@ -79,14 +79,13 @@ const queueItemSchema = z.object({
    */
   removalWaits: z.boolean().default(false),
   /**
-   * For a registration or a crawler find, when no request to remove the repo
-   * waits, and its last one was withdrawn by someone other than the one who
-   * asked: who asked, who withdrew it, and when. Null otherwise.
+   * For a registration or a crawler find, each request to remove the repo
+   * that someone other than its asker withdrew since the repo was last
+   * removed: who asked, who withdrew it, and when, the first withdrawn first.
    */
-  removalWithdrawn: z
-    .object({ requestedBy: githubLogin, withdrawnBy: githubLogin, withdrawnAt: isoTime })
-    .nullable()
-    .default(null),
+  removalsWithdrawn: z
+    .array(z.object({ requestedBy: githubLogin, withdrawnBy: githubLogin, withdrawnAt: isoTime }))
+    .default([]),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -167,7 +166,7 @@ function renderQueueItem(item: QueueItem): string {
         : `GitHub showed no public repo named ${item.repo} when asked.`,
     item.onDoNotList && doNotListNote(item.kind),
     item.removalWaits && item.kind !== 'removal' && removalWaitsNote(item.kind),
-    item.removalWithdrawn && item.kind !== 'removal' && removalWithdrawnNote(item.removalWithdrawn),
+    item.kind !== 'removal' && item.removalsWithdrawn.map(removalWithdrawnNote).join('\n'),
     item.removal && describeRemoval(item.repo, item.removal),
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&

@@ -32,7 +32,6 @@ import {
   getRemoval,
   getWaitingCandidate,
   getWaitingRemoval,
-  lastRemoval,
   leaveDoNotListWhenApproved,
   listCandidates,
   listPendingProjects,
@@ -41,6 +40,7 @@ import {
   setProjectStatusFrom,
   statusHistory,
   unblockDonor,
+  withdrawnByOthers,
 } from '../db';
 import { GitHubError } from '../github';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
@@ -113,21 +113,26 @@ async function factsFromGitHub(token: string | null, repo: string): Promise<Fact
 
 /**
  * What a registration or crawler find says of the repo's requests to be
- * removed: whether one waits, and, when none does, who asked and who
- * withdrew the last one, when someone other than its asker withdrew it.
+ * removed: whether one waits, and each one that someone other than its asker
+ * withdrew since the repo was last removed, with who asked, who withdrew it,
+ * and when. Every such withdrawal counts, so asking and withdrawing a request
+ * of one's own afterwards hides none.
  */
-async function removalsOf(repo: string): Promise<Pick<QueueItem, 'removalWaits' | 'removalWithdrawn'>> {
-  const [waiting, last] = await Promise.all([getWaitingRemoval(env.DB, repo), lastRemoval(env.DB, repo)]);
-  if (waiting !== null) return { removalWaits: true, removalWithdrawn: null };
-  if (last?.status !== 'withdrawn' || last.closedBy === null || last.closedAt === null || last.closedBy === last.requestedBy) {
-    return { removalWaits: false, removalWithdrawn: null };
-  }
-  const [asker, withdrawer] = await Promise.all([getPerson(env.DB, last.requestedBy), getPerson(env.DB, last.closedBy)]);
-  if (asker === null || withdrawer === null) throw new Error(`${repo}'s request to be removed names someone who isn't recorded.`);
-  return {
-    removalWaits: false,
-    removalWithdrawn: { requestedBy: asker.login, withdrawnBy: withdrawer.login, withdrawnAt: iso(last.closedAt) },
-  };
+async function removalsOf(repo: string): Promise<Pick<QueueItem, 'removalWaits' | 'removalsWithdrawn'>> {
+  const [waiting, withdrawn] = await Promise.all([getWaitingRemoval(env.DB, repo), withdrawnByOthers(env.DB, repo)]);
+  const removalsWithdrawn = await Promise.all(
+    withdrawn.map(async (request) => {
+      const [asker, withdrawer] = await Promise.all([
+        getPerson(env.DB, request.requestedBy),
+        request.closedBy === null ? null : getPerson(env.DB, request.closedBy),
+      ]);
+      if (asker === null || withdrawer === null || request.closedAt === null) {
+        throw new Error(`${repo}'s request to be removed names someone who isn't recorded.`);
+      }
+      return { requestedBy: asker.login, withdrawnBy: withdrawer.login, withdrawnAt: iso(request.closedAt) };
+    }),
+  );
+  return { removalWaits: waiting !== null, removalsWithdrawn };
 }
 
 async function registrationItem(token: string | null, project: ProjectRecord, changeId: number): Promise<QueueItem> {

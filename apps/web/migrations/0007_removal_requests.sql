@@ -21,6 +21,6 @@ CREATE TABLE removal_requests (
 CREATE UNIQUE INDEX removal_requests_waiting ON removal_requests (repo) WHERE status = 'waiting';
 -- The admin queue's requests, oldest first.
 CREATE INDEX removal_requests_queue ON removal_requests (requested_at) WHERE status = 'waiting';
--- A repo's last request, and a maintainer's last request for a repo, to say
--- who withdrew it.
+-- A repo's requests, to find the ones withdrawn by someone other than their
+-- asker, and a maintainer's last request for a repo, to tell them.
 CREATE INDEX removal_requests_by_repo ON removal_requests (repo, requested_at);

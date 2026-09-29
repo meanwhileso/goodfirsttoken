@@ -261,7 +261,7 @@ describe('admin_queue', () => {
           onDoNotList: false,
           removal: null,
           removalWaits: false,
-          removalWithdrawn: null,
+          removalsWithdrawn: [],
         },
       ],
     });

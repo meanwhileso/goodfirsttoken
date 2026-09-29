@@ -386,10 +386,12 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   one that waits. A withdrawal is `closeRemoval`, whose update applies only
   to a waiting request, so a withdrawal and an admin's removal at the same
   moment close it once. Who withdrew a request is its `closed_by`, beside
-  its `requested_by`, and `lastRemoval` reads a repo's last request, or one
-  person's, to say when someone else withdrew it. `removalReason` in core
-  drops the characters a person can't see, on top of folding the ones
-  that could break a line. A `451` from GitHub is a `PermissionRefused` in
+  its `requested_by`. `lastRemovalBy` reads one person's last request for a
+  repo, for `request_removal` to tell them, and `withdrawnByOthers` reads a
+  repo's requests withdrawn by someone other than their asker since the
+  latest one an admin closed as `removed`, for the queue. `removalReason`
+  in core drops the characters a person can't see, on top of folding the
+  ones that could break a line. A `451` from GitHub is a `PermissionRefused` in
   `requirePermission`, as a `404` is, so every maintainer's tool refuses a
   repo GitHub blocked with `not_maintainer`.
 - **Resuming reads the status history,** newest first, for the change
@@ -1109,7 +1111,7 @@ pruning after a sync, with no index of its own.
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
 | `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal`, a removal, and the check before a listing or an approval |
 | `removal_requests_queue` | The admin queue's requests to be removed, oldest first |
-| `removal_requests_by_repo` | A repo's last request to be removed, for a registration or crawler find in the queue, and a maintainer's last request for a repo, for `request_removal` to say who withdrew it |
+| `removal_requests_by_repo` | A repo's requests to be removed that someone other than their asker withdrew, for a registration or crawler find in the queue, and one person's last request for a repo, for `request_removal` to say who withdrew it |
 | `session_by_user` | A person's sessions, which signing out ends |
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
 | `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |

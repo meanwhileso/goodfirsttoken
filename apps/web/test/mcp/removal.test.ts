@@ -662,7 +662,7 @@ describe('a request withdrawn by someone other than the one who asked', () => {
     expect(item).toMatchObject({
       kind: 'registration',
       removalWaits: false,
-      removalWithdrawn: { requestedBy: 'kenji', withdrawnBy: 'octo-maintainer' },
+      removalsWithdrawn: [{ requestedBy: 'kenji', withdrawnBy: 'octo-maintainer' }],
     });
     expect(text).toContain('@kenji asked to remove this repo, and @octo-maintainer withdrew the request on ');
     expect(await storedRequests()).toEqual([{ repo: HARBOR, status: 'withdrawn', requested_by: 1002, closed_by: 1008 }]);
@@ -682,7 +682,7 @@ describe('a request withdrawn by someone other than the one who asked', () => {
     expect(item).toMatchObject({
       id: find.id,
       removalWaits: false,
-      removalWithdrawn: { requestedBy: 'sample-maintainer', withdrawnBy: 'kenji' },
+      removalsWithdrawn: [{ requestedBy: 'sample-maintainer', withdrawnBy: 'kenji' }],
     });
   });
 
@@ -706,6 +706,67 @@ describe('a request withdrawn by someone other than the one who asked', () => {
     expect(third.structuredContent).toMatchObject({ changed: false, lastWithdrawn: null });
   });
 
+  test("stays on the registration after the one who withdrew it asks and withdraws a request of their own", async () => {
+    const { registrant, admin } = await registeredAgainWithRequest();
+    await call(registrant, 'request_removal', { repo: HARBOR, withdraw: true });
+    await call(registrant, 'request_removal', { repo: HARBOR, reason: 'Placeholder.' });
+    await call(registrant, 'request_removal', { repo: HARBOR, withdraw: true });
+
+    const [item] = await queue(admin, 'registration');
+    const text = textOf(await call(admin, 'admin_queue', { kind: 'registration' }));
+
+    expect(item).toMatchObject({
+      removalWaits: false,
+      removalsWithdrawn: [{ requestedBy: 'kenji', withdrawnBy: 'octo-maintainer' }],
+    });
+    expect(text).toContain('@kenji asked to remove this repo, and @octo-maintainer withdrew the request on ');
+    expect(await storedRequests()).toMatchObject([
+      { requested_by: 1002, closed_by: 1008 },
+      { requested_by: 1008, closed_by: 1008 },
+    ]);
+  });
+
+  test('lists each such withdrawal since the repo was last removed, and none from before', async () => {
+    const { registrant, admin, asker } = await registeredAgainWithRequest();
+    await call(registrant, 'request_removal', { repo: HARBOR, withdraw: true });
+    // kenji asks again, and this time the admin removes the repo.
+    await call(asker, 'request_removal', { repo: HARBOR, reason: 'Keep us off, please.' });
+    await call(admin, 'admin_remove_project', { repo: HARBOR });
+    await call(registrant, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
+    const before = (await queue(admin, 'registration'))[0];
+    await call(asker, 'request_removal', { repo: HARBOR, reason: 'Still off, please.' });
+    await call(registrant, 'request_removal', { repo: HARBOR, withdraw: true });
+    await call(asker, 'request_removal', { repo: HARBOR, reason: 'Off, please.' });
+    const other = await connectAgent(github, 'sample-maintainer');
+    sampleRepo(HARBOR).collaborators['sample-maintainer'] = 'maintain';
+    await call(other, 'request_removal', { repo: HARBOR, withdraw: true });
+
+    const after = (await queue(admin, 'registration'))[0];
+
+    expect(before).toMatchObject({ removalsWithdrawn: [] });
+    expect(after).toMatchObject({
+      removalsWithdrawn: [
+        { requestedBy: 'kenji', withdrawnBy: 'octo-maintainer' },
+        { requestedBy: 'kenji', withdrawnBy: 'sample-maintainer' },
+      ],
+    });
+  });
+
+  test("tells no one but the one who asked who withdrew their request", async () => {
+    const { registrant, asker } = await registeredAgainWithRequest();
+    await call(registrant, 'request_removal', { repo: HARBOR, withdraw: true });
+    const third = await connectAgent(github, 'sample-maintainer');
+    sampleRepo(HARBOR).collaborators['sample-maintainer'] = 'maintain';
+
+    const byWithdrawer = await call(registrant, 'request_removal', { repo: HARBOR, withdraw: true });
+    const byThird = await call(third, 'request_removal', { repo: HARBOR, withdraw: true });
+    const byAsker = await call(asker, 'request_removal', { repo: HARBOR, withdraw: true });
+
+    expect(byWithdrawer.structuredContent).toMatchObject({ lastWithdrawn: null });
+    expect(byThird.structuredContent).toMatchObject({ lastWithdrawn: null });
+    expect(byAsker.structuredContent).toMatchObject({ lastWithdrawn: { by: 'octo-maintainer' } });
+  });
+
   test('a request its own asker withdrew says nothing more, in the queue or to them', async () => {
     const maintainer = await connectAgent(github, 'octo-maintainer');
     await call(maintainer, 'register_project', { repo: HARBOR, settings: { tags: ['help wanted'] } });
@@ -716,7 +777,7 @@ describe('a request withdrawn by someone other than the one who asked', () => {
     const [item] = await queue(admin);
     const again = await call(maintainer, 'request_removal', { repo: HARBOR, reason: REASON });
 
-    expect(item).toMatchObject({ kind: 'registration', removalWithdrawn: null });
+    expect(item).toMatchObject({ kind: 'registration', removalsWithdrawn: [] });
     expect(again.structuredContent).toMatchObject({ lastWithdrawn: null });
   });
 });

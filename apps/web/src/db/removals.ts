@@ -102,24 +102,36 @@ export async function listWaitingRemovals(db: D1Database): Promise<RemovalReques
 }
 
 /**
- * The repo's last request, compared without case, waiting or closed, or
- * null when none was made. With `requestedBy`, the last one that person made.
+ * The last request `requestedBy` made for the repo, compared without case,
+ * waiting or closed, or null when they made none.
  */
-export async function lastRemoval(db: D1Database, repo: string, requestedBy?: number): Promise<RemovalRequest | null> {
-  const name = mustParse(repoName, repo, 'repo');
-  const row =
-    requestedBy === undefined
-      ? await db
-          .prepare('SELECT * FROM removal_requests WHERE repo = ? ORDER BY requested_at DESC, id DESC LIMIT 1')
-          .bind(name)
-          .first<RequestRow>()
-      : await db
-          .prepare(
-            'SELECT * FROM removal_requests WHERE repo = ? AND requested_by = ? ORDER BY requested_at DESC, id DESC LIMIT 1',
-          )
-          .bind(name, mustParse(githubId, requestedBy, 'requestedBy'))
-          .first<RequestRow>();
+export async function lastRemovalBy(db: D1Database, repo: string, requestedBy: number): Promise<RemovalRequest | null> {
+  const row = await db
+    .prepare(
+      'SELECT * FROM removal_requests WHERE repo = ? AND requested_by = ? ORDER BY requested_at DESC, id DESC LIMIT 1',
+    )
+    .bind(mustParse(repoName, repo, 'repo'), mustParse(githubId, requestedBy, 'requestedBy'))
+    .first<RequestRow>();
   return row === null ? null : toRequest(row);
+}
+
+/**
+ * The repo's requests, compared without case, that someone other than their
+ * asker withdrew since an admin last removed the repo on a request, the
+ * first withdrawn first. With no such removal, every one.
+ */
+export async function withdrawnByOthers(db: D1Database, repo: string): Promise<RemovalRequest[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM removal_requests
+       WHERE repo = ?1 AND status = 'withdrawn' AND closed_by != requested_by
+         AND requested_at >= COALESCE(
+           (SELECT MAX(closed_at) FROM removal_requests WHERE repo = ?1 AND status = 'removed'), 0)
+       ORDER BY closed_at, id`,
+    )
+    .bind(mustParse(repoName, repo, 'repo'))
+    .all<RequestRow>();
+  return results.map(toRequest);
 }
 
 /** The request with this ID, waiting or closed, or null. */

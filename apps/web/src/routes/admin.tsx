@@ -149,14 +149,21 @@ function DoNotListNote({ item }: { item: QueueItem }) {
 
 /**
  * On a registration or crawler find, a request to remove the same repo that
- * waits, which blocks approving it, or the last one, when someone other than
- * its asker withdrew it.
+ * waits, which blocks approving it, and each one that someone other than its
+ * asker withdrew since the repo was last removed.
  */
 function RemovalWaitsNote({ item }: { item: QueueItem }) {
   if (item.kind === 'removal') return null;
-  if (item.removalWaits === true) return <p className="admin-item__warning">{removalWaitsNote(item.kind)}</p>;
-  const withdrawn = item.removalWithdrawn ?? null;
-  return withdrawn === null ? null : <p className="admin-item__warning">{removalWithdrawnNote(withdrawn)}</p>;
+  return (
+    <>
+      {item.removalWaits === true && <p className="admin-item__warning">{removalWaitsNote(item.kind)}</p>}
+      {(item.removalsWithdrawn ?? []).map((withdrawn) => (
+        <p key={`${withdrawn.requestedBy} ${withdrawn.withdrawnAt}`} className="admin-item__warning">
+          {removalWithdrawnNote(withdrawn)}
+        </p>
+      ))}
+    </>
+  );
 }
 
 function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {

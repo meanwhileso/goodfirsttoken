@@ -1140,10 +1140,15 @@ removes the repo, or a maintainer of the repo withdraws it.
   who left the repo. It closes as `withdrawn`, with who withdrew it and when,
   beside who asked, and leaves the queue. With none waiting, nothing
   changes, and the answer says so.
-- A request withdrawn by someone other than its asker shows. While no
-  request waits, a registration or crawler find of the repo in the queue
-  says who asked, who withdrew it, and when. The asker's next call to
-  `request_removal` says who withdrew their last request, and when.
+- A request withdrawn by someone other than its asker shows, in two
+  places. A registration or crawler find of the repo in the queue lists
+  each one withdrawn that way since an admin last removed the repo on a
+  request, with who asked, who withdrew it, and when, so asking and
+  withdrawing a request of one's own afterwards hides none. And each call
+  the asker makes to `request_removal` says who withdrew their last request,
+  and when, until they make a new request. It shows nowhere else: while no
+  registration or crawler find of the repo waits, there is nothing for an
+  admin to approve, and no admin sees it.
 - A closed request is kept, as the record of who asked, and only a waiting
   one closes, so a closed one keeps who closed it. Nothing else closes one.
   An admin can't decline one: the plan puts a repo on the do-not-list when
@@ -1194,9 +1199,10 @@ registration's or a crawler find's.
   the repo with `admin_remove_project`. A closed request's ID, like any ID
   that names nothing waiting, is `not_found`.
 - A registration or a crawler find says when a request to remove the same
-  repo waits, since it can't be approved while that waits. When none
-  waits, and someone other than its asker withdrew the last one, it says
-  who asked, who withdrew it, and when, for the admin to weigh before
+  repo waits, since it can't be approved while that waits. It also lists
+  each request to remove the repo that someone other than its asker
+  withdrew, under [Asking to be removed](#asking-to-be-removed), with who
+  asked, who withdrew it, and when, for the admin to weigh before
   approving.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
@@ -1338,8 +1344,9 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   when, and their reason, quoted as theirs, and its button removes the
   repo, as `admin_remove_project` does with no note, which closes the
   request. A registration or a crawler find whose repo has a request to be
-  removed waiting says so, and so does one whose last request someone
-  other than its asker withdrew. A registration's form takes a reason.
+  removed waiting says so, and lists each request someone other than its
+  asker withdrew, as the queue does. A registration's form takes a
+  reason.
   Rejecting or skipping needs the reason, and the form refuses to send
   without one. Approving doesn't.
 - Every form posts to `/admin`. It has to come from the site itself, by its

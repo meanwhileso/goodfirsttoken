@@ -28,7 +28,7 @@ import {
   getPerson,
   getProject,
   getWaitingRemoval,
-  lastRemoval,
+  lastRemovalBy,
   listIssues,
   reopenRegistration,
   setProjectStatusFrom,
@@ -416,9 +416,10 @@ export async function requestRemoval(
   const project = await getProject(env.DB, input.repo);
   const repo = project?.repo ?? found.full_name;
   const onDoNotList = (await getDoNotListEntry(env.DB, repo)) !== null;
-  // Someone else may have withdrawn the caller's last request. They hear of it
-  // once, since the call they make next is their last request after that.
-  const lastWithdrawn = await withdrawnByAnother(await lastRemoval(env.DB, repo, caller.githubId));
+  // Someone else may have withdrawn the caller's last request for the repo.
+  // Each call they make says so, until they make a new request, which is
+  // then their last.
+  const lastWithdrawn = await withdrawnByAnother(await lastRemovalBy(env.DB, repo, caller.githubId));
 
   if (input.withdraw) {
     const withdrawn = await closeRemoval(env.DB, repo, { status: 'withdrawn', by: caller.githubId }, now);

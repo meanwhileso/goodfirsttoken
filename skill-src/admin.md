@@ -118,9 +118,9 @@ holds up.
   removed, and that request waits too. The find can't be listed while it
   waits. Handle the request first, as in Remove at the maintainers'
   request.
-- With `removalWithdrawn` set, someone other than the one who asked to
-  remove the repo withdrew that request. Tell the admin who asked and who
-  withdrew it, and weigh that before proposing to list it.
+- `removalsWithdrawn` lists each request to remove the repo that someone
+  other than its asker withdrew. Tell the admin who asked and who withdrew
+  each, and weigh that before proposing to list it.
 
 ### Checks for a registration
 
@@ -149,13 +149,13 @@ the server checked. The settings are theirs.
   person sent both or two did. The registration can't be approved while
   the request waits. Say so. Removing the repo, as in Remove at the
   maintainers' request, rejects the registration too.
-- With `removalWithdrawn` set, someone asked to remove the repo, and
-  someone else withdrew the request: `requestedBy` asked, and `withdrawnBy`
-  withdrew it, on `withdrawnAt`. Tell the admin who asked and who withdrew
-  it, and weigh that before proposing to approve. When the one who withdrew
-  it also registered the repo, one maintainer took back another's request
-  to stay off. Propose to wait, or ask the one who asked, when the admin
-  can reach them.
+- `removalsWithdrawn` lists each request to remove the repo that someone
+  other than its asker withdrew since the repo was last removed: in each,
+  `requestedBy` asked, and `withdrawnBy` withdrew it, on `withdrawnAt`.
+  Tell the admin who asked and who withdrew each, and weigh that before
+  proposing to approve. When the one who withdrew it also registered the
+  repo, one maintainer took back another's request to stay off. Propose to
+  wait, or ask the one who asked, when the admin can reach them.
 
 ### Deciding
 
