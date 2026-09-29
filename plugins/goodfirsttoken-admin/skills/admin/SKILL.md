@@ -183,13 +183,14 @@ the server checked. The settings are theirs.
   the request waits. Say so. Removing the repo, as in Remove at the
   maintainers' request, rejects the registration too.
 - `removalsWithdrawn` lists the first five requests to remove the repo
-  that someone other than their asker withdrew since the repo was last
-  removed: in each, `requestedBy` asked, and `withdrawnBy` withdrew it, on
-  `withdrawnAt`. `moreRemovalsWithdrawn` counts the rest. Tell the admin
-  who asked and who withdrew each, and how many more there are, and weigh
-  that before proposing to approve. When the one who withdrew it also registered the
-  repo, one maintainer took back another's request to stay off. Propose to
-  wait, or ask the one who asked, when the admin can reach them.
+  that someone other than their asker withdrew since an admin last removed
+  the repo on a request: in each, `requestedBy` asked, and `withdrawnBy`
+  withdrew it, on `withdrawnAt`. `moreRemovalsWithdrawn` counts the rest.
+  Tell the admin who asked and who withdrew each, and how many more there
+  are, and weigh that before proposing to approve. When the one who
+  withdrew it also registered the repo, one maintainer took back another's
+  request to stay off. Propose to wait, or ask the one who asked, when the
+  admin can reach them.
 
 ### Deciding
 

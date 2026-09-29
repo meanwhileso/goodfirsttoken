@@ -1178,7 +1178,8 @@ remove projects at their maintainers' request, and add repos to the
 crawler's seed list, from their agent with seven tools listed only for
 admins, or from the [admin pages](#the-admin-pages). Both go through the
 same actions, so the rules below hold for both. The pages have no form for
-pausing, removing, or the seed list yet.
+pausing or the seed list yet, and remove a repo only from a request to be
+removed.
 
 - Every action first checks the caller's admin permission, under
   [Permissions](#permissions), before it reads or writes anything. Anyone
