@@ -14,7 +14,11 @@ onlyBuiltDependencies:
 # Both miniflare versions, the Workers test pool's and the one wrangler and
 # the Vite plugin use, pin undici 7.29.0, with GHSA-3wwx-pv8p-q78v. This
 # moves that one pin to the fixed 7.29.1. It does nothing once miniflare
-# pins a fixed undici. Remove it then.
+# pins a fixed undici. Remove it then. wrangler, the Vite plugin, and the
+# test pool also bundle their own copy of undici 7.29.0 into their built
+# code, which no override reaches, until they upgrade. All of these run in
+# local development, the tests, and the deploy job. The Worker loads none
+# of them.
 overrides:
   miniflare@5.20260815.0-alpha>sharp: 0.35.4
   undici@7.29.0: 7.29.1
