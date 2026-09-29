@@ -63,6 +63,8 @@ const CHANGED = 'Agents may open pull requests on their own, on issues labeled `
 const THIS_VERSION = new RegExp(`^v${String(FINGERPRINT_VERSION)}:[0-9a-f]{64}$`);
 /** A fingerprint of another version, as a read kept before a change to the rules. */
 const OTHER_VERSION = `v${String(FINGERPRINT_VERSION + 1)}:${'0'.repeat(64)}`;
+/** A time the sync kept, like when it delisted a project. */
+const A_TIME = expect.any(String) as unknown;
 /** Docs that welcome AI help, which the rules misread as a ban. */
 const MISREAD = '# AI policy\n\nUsing AI tools is fine. Never commit a `.env` file.\n';
 const MISREAD_LISTED: Policy = {
@@ -342,7 +344,7 @@ describe('a listing whose policy changes', () => {
 
     const decided = await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
 
-    expect(decided.structuredContent).toEqual({ repo: INVITES, kind: 'policy_change', status: 'approved', decision: 'approve' });
+    expect(decided.structuredContent).toEqual({ repo: INVITES, kind: 'policy_change', status: 'approved', decision: 'approve', delisted: null });
     expect(await getProject(db, INVITES)).toMatchObject({
       status: 'approved',
       policy: { quote: CHANGED, tier: 'invites_agents' },
@@ -549,9 +551,11 @@ describe('a listing whose policy changes', () => {
 
     const { item, text } = await onlyItem(admin, 'policy_change', INVITES);
 
-    const delisted = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
+    const reason = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
+    const delisted = { repo: INVITES, showed: 'gone', reason, delistedAt: A_TIME, checkedAt: A_TIME, onDoNotList: false };
     expect(item).toMatchObject({ policy: null, sources: [], aiSentences: [], change: { listed: null, delisted } });
-    expect(text).toContain(delisted);
+    expect(text).toContain(`: ${reason}`);
+    expect(text).toContain('Nothing read from its repo shows here.');
     expect(text).not.toContain('Agents may open pull requests');
   });
 
@@ -629,7 +633,7 @@ describe('a ban', () => {
     const next = await week();
 
     expect(textOf(lift)).toMatch(/^Refused \(not_admin\)/);
-    expect(resumed.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'approved', decision: 'approve' });
+    expect(resumed.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'approved', decision: 'approve', delisted: null });
     expect(next.run?.reread.paused).toEqual([]);
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', statusChangedBy: ADMIN.githubId });
     expect(itemsOf(await call(admin, 'admin_queue', { kind: 'pause' }))).toEqual([]);
@@ -646,7 +650,7 @@ describe('a ban', () => {
     const kept = await call(admin, 'admin_decide', { id: item.id, decision: 'reject', reason: 'Its AI policy bans AI help now.' });
     const again = await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
 
-    expect(kept.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'paused', decision: 'reject' });
+    expect(kept.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'paused', decision: 'reject', delisted: null });
     expect(await getProject(db, INVITES)).toMatchObject({
       status: 'paused',
       statusChangedBy: ADMIN.githubId,
@@ -676,7 +680,7 @@ describe('a ban', () => {
     expect(text).toContain(`It took over a pause @${MAINTAINER.login} made on`);
     expect(text).toContain('with their reason, in their own words, as a JSON string: "Taking a break."');
     const decided = await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
-    expect(decided.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'paused', decision: 'approve' });
+    expect(decided.structuredContent).toEqual({ repo: INVITES, kind: 'pause', status: 'paused', decision: 'approve', delisted: null });
     expect(await getProject(db, INVITES)).toMatchObject({
       status: 'paused',
       statusChangedBy: MAINTAINER.githubId,
@@ -812,11 +816,18 @@ describe('a ban', () => {
 
     const { item, text } = await onlyItem(admin, 'pause', INVITES);
 
-    const delisted = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
+    const reason = `GitHub shows no public repo named ${INVITES}. It went private or was deleted.`;
+    const delisted = { repo: INVITES, showed: 'gone', reason, delistedAt: A_TIME, checkedAt: A_TIME, onDoNotList: false };
     expect(item).toMatchObject({ pause: { reason: BAN_REASON, delisted, ban: null }, aiSentences: [], moreAiSentences: 0, policy: null });
-    expect(text).toContain(delisted);
+    expect(text).toContain(`: ${reason}`);
+    expect(text).toContain('Nothing read from its repo shows here.');
     expect(text).not.toContain(BAN);
     expect(text).not.toContain(QUOTE);
+    // Deciding it says the project is delisted, as admin_pause_project does, since a resume doesn't bring its page back.
+    const decided = await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
+    expect(decided.structuredContent).toMatchObject({ kind: 'pause', status: 'approved', delisted });
+    expect(textOf(decided)).toContain(`: ${reason}`);
+    expect(textOf(decided)).toContain('A resume doesn\'t bring it back.');
   });
 
   test("a registered project whose docs come to ban AI is paused too, though a ban its docs had at the first read stays the maintainers' call", async () => {
@@ -953,8 +964,15 @@ describe('an archived repo', () => {
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: reason });
     const admin = await connectAgent(github, ADMIN.login);
     const { item, text } = await onlyItem(admin, 'pause', INVITES);
-    expect(item.pause).toEqual({ reason, delisted: reason, ban: null, tookOver: null });
-    expect(text).toContain(`The sync delisted it, so it has no page, and nothing read from its repo shows here: ${reason}`);
+    expect(item.pause).toEqual({
+      reason,
+      delisted: { repo: INVITES, showed: 'archived', reason, delistedAt: A_TIME, checkedAt: A_TIME, onDoNotList: false },
+      ban: null,
+      tookOver: null,
+    });
+    expect(text).toContain(`: ${reason} The sync last checked the repos on`);
+    expect(text).toContain('The project has no page, and agents get no claims on it, whatever its status.');
+    expect(text).toContain('Nothing read from its repo shows here.');
     // Delisted, it isn't queued for a weekly read again.
     clock += WEEK;
     await fill();

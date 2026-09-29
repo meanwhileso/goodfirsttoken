@@ -55,6 +55,7 @@ import {
   withdrawnByOthers,
 } from '../db';
 import { GitHubError } from '../github';
+import { readDelisting } from '../project/shown';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type Standing } from '../projects/repo';
 import { adminResume, pauseTakenOver, resumableBy } from '../projects/status';
 
@@ -253,7 +254,7 @@ async function pauseItem({ project, changeId }: SelfPausedProject): Promise<Queu
     getDoNotListEntry(env.DB, project.repo),
     statusHistory(env.DB, project.repo),
   ]);
-  const delisted = sync?.delisted ?? null;
+  const delisted = await readDelisting(env.DB, project, sync);
   // What the crawler kept belongs to this pause only when it made this one,
   // and shows only while GitHub shows the repo.
   const crawler = delisted === null && read?.pause?.pausedAt === project.statusChangedAt ? read.pause : null;
@@ -297,7 +298,7 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
   ]);
   if (project === null) throw new Error(`The policy change ${change.id} is for ${change.repo}, which isn't a project.`);
   // While the sync has the project delisted, nothing read from its repo shows.
-  const delisted = sync?.delisted ?? null;
+  const delisted = await readDelisting(env.DB, project, sync);
   const shown = delisted === null;
   return {
     id: change.id,
@@ -570,7 +571,8 @@ async function decidePause(
         : adminResume(await statusHistory(env.DB, paused.project.repo), caller.githubId);
     const decided = await setProjectStatusFrom(env.DB, paused.project, change, now);
     if (decided === null) continue;
-    return { ok: true, value: { repo: decided.repo, kind: 'pause', status: decided.status, decision: input.decision } };
+    const delisted = await readDelisting(env.DB, decided);
+    return { ok: true, value: { repo: decided.repo, kind: 'pause', status: decided.status, decision: input.decision, delisted } };
   }
   throw new Error(`${input.id} kept changing while it was decided.`);
 }
@@ -675,6 +677,17 @@ function notOpen(project: ProjectRecord): { ok: false; refusal: Refusal } {
 }
 
 /**
+ * The answer to an admin's pause or resume: the project's status now, whether
+ * the call changed it, whether a resume put back a pause Good First Token's
+ * took over, and why the sync delisted it, when it did, since a resume
+ * doesn't bring back the page of a project the sync delisted.
+ */
+async function pauseAnswer(project: ProjectRecord, changed: boolean, restored = false): Promise<Outcome<'admin_pause_project'>> {
+  const delisted = await readDelisting(env.DB, project);
+  return { ok: true, value: { repo: project.repo, status: project.status, changed, restored, delisted } };
+}
+
+/**
  * Pauses an approved project, or resumes a paused one, whoever paused it. A
  * pause by an admin stays until an admin lifts it. An admin pausing a project
  * its maintainers paused takes the pause over, even with the same reason, so
@@ -692,23 +705,22 @@ export async function adminPauseProject(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     const project = await getProject(env.DB, input.repo);
     if (project === null) return refuse('not_found', `${input.repo} is not a project on Good First Token.`);
-    const unchanged = { ok: true as const, value: { repo: project.repo, status: project.status, changed: false } };
     let change: { status: ProjectStatus; reason: string | null; changedBy: number | null; restored: boolean };
     if (input.paused) {
       const reason = input.reason ?? null;
       if (project.status === 'paused') {
-        if (resumableBy(project) === 'admins' && project.statusReason === reason) return unchanged;
+        if (resumableBy(project) === 'admins' && project.statusReason === reason) return pauseAnswer(project, false);
       } else if (project.status !== 'approved') {
         return notOpen(project);
       }
       change = { status: 'paused', reason, changedBy: caller.githubId, restored: false };
     } else {
-      if (project.status !== 'paused') return unchanged;
+      if (project.status !== 'paused') return pauseAnswer(project, false);
       change = adminResume(await statusHistory(env.DB, project.repo), caller.githubId);
     }
     const { restored, ...next } = change;
     const updated = await setProjectStatusFrom(env.DB, project, next, now);
-    if (updated !== null) return { ok: true, value: { repo: updated.repo, status: updated.status, changed: true, restored } };
+    if (updated !== null) return pauseAnswer(updated, true, restored);
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
 }

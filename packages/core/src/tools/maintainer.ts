@@ -11,6 +11,7 @@ import {
   type ProjectStatus,
 } from '../projects';
 import { removalReason } from '../removals';
+import { delistingSchema, delistingText } from './shared';
 import { defineTool } from './spec';
 import { lines, plural, renderSettings, when } from './text';
 
@@ -159,7 +160,7 @@ export const updateProject = defineTool({
 
 export const projectStatus = defineTool({
   audience: 'maintainer',
-  description: `Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused. The tagged issues are counted as the last sync read them from GitHub. Set refresh to read an approved project's tagged issues from GitHub first, at most once every ${String(ISSUE_REFRESH_INTERVAL_MS / 60_000)} minutes, and not while a scheduled sync is reading them.`,
+  description: `Show a project's status, how it got in, its settings, and its activity, with the admin's reason when it was rejected or paused. When Good First Token's sync delisted the project, because GitHub showed its repo or issue repo private, archived, blocked, or gone, it says which repo, what GitHub showed, when, and what brings the page back. The tagged issues are counted as the last sync read them from GitHub, and not while the project is delisted. Set refresh to read an approved project's tagged issues from GitHub first, at most once every ${String(ISSUE_REFRESH_INTERVAL_MS / 60_000)} minutes, and not while a scheduled sync is reading them.`,
   refusals: ['not_maintainer', 'not_found'],
   input: z.object({
     repo: repoName,
@@ -176,7 +177,12 @@ export const projectStatus = defineTool({
     statusReason: z.string().nullable(),
     settings: projectSettingsSchema,
     counts: z.object({
-      taggedIssues: count,
+      /**
+       * The cached tagged issues that carry one of its tags and none of its
+       * excluded tags. Null while the sync has it delisted, since nothing
+       * cached from its repos shows then.
+       */
+      taggedIssues: count.nullable(),
       working: count,
       openPrs: count,
       merged: count,
@@ -185,6 +191,17 @@ export const projectStatus = defineTool({
     issuesReadAt: isoTime.nullable(),
     /** What asking to read the tagged issues again did, or null when the call didn't ask. */
     refresh: z.enum(refreshOutcomes).nullable(),
+    /**
+     * Why the sync delisted an approved or paused project, so it has no page
+     * and takes no claims, or null when it didn't.
+     */
+    delisted: delistingSchema.nullable().default(null),
+    /**
+     * Who can resume a paused project: its maintainers, or only Good First
+     * Token's admins, for a pause an admin or Good First Token made. Null
+     * when the project isn't paused.
+     */
+    resumableBy: z.enum(resumers).nullable().default(null),
   }),
   text: (out) =>
     lines(
@@ -192,9 +209,14 @@ export const projectStatus = defineTool({
         out.source === 'registered' ? 'Registered by its maintainers.' : 'Listed from its AI policy.'
       }`,
       out.statusReason !== null && `Reason: ${out.statusReason}`,
+      out.resumableBy !== null &&
+        (out.resumableBy === 'admins' ? "Only Good First Token's admins can resume it." : 'Its maintainers can resume it.'),
+      out.delisted !== null && delistingText(out.delisted),
       out.refresh !== null && refreshText(out.refresh),
       [
-        plural(out.counts.taggedIssues, 'tagged issue'),
+        out.counts.taggedIssues === null
+          ? 'tagged issues not shown while it is delisted'
+          : plural(out.counts.taggedIssues, 'tagged issue'),
         `${out.counts.working.toLocaleString('en-US')} working now`,
         plural(out.counts.openPrs, 'open PR'),
         `${out.counts.merged.toLocaleString('en-US')} merged`,

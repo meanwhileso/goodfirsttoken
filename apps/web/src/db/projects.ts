@@ -72,7 +72,7 @@ interface SettingsRow {
   changed_at: number;
 }
 
-const delistedReason = issueSyncSchema.shape.delisted.unwrap();
+const delistedMark = issueSyncSchema.shape.delisted.unwrap();
 
 const SELECT_PROJECT = `
   SELECT p.*, s.settings FROM projects p
@@ -378,7 +378,7 @@ export async function delistedProjects(db: D1Database, repos: Iterable<string>):
     )
     .bind(JSON.stringify(names))
     .all<{ repo: string; delisted: string }>();
-  return new Map(results.map((row) => [row.repo.toLowerCase(), mustParse(delistedReason, row.delisted, 'delisted')]));
+  return new Map(results.map((row) => [row.repo.toLowerCase(), mustParse(delistedMark, row.delisted, 'delisted')]));
 }
 
 /** Every project whose tagged issues live in `issueRepo`, whatever its status. */
