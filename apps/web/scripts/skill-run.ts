@@ -115,7 +115,7 @@ class MemoryOAuthClient implements OAuthClientProvider {
  * its own. The site counts its sign-in limit by client address, so the run's
  * sign-ins never use up anyone else's.
  */
-function runAddress(): string {
+export function runAddress(): string {
   const [a = '0', b = '0'] = [randomBytes(2), randomBytes(2)].map((bytes) => bytes.toString('hex'));
   return `2001:db8:${a}:${b}::1`;
 }
@@ -185,13 +185,11 @@ async function approveAgent(site: string, address: string, authorizationUrl: URL
   return location(await browse(callback), callback.toString());
 }
 
-/** Connects a new agent for `login`: the SDK meets the 401, registers, and sends the person to approve it. */
-async function connectAgent(site: string, address: string, login: string): Promise<Client> {
+/** Signs a new agent in for `login`: the SDK meets the 401, registers, and sends the person to approve it. */
+async function signIn(site: string, address: string, login: string, name: string): Promise<MemoryOAuthClient> {
   const mcpUrl = new URL('/mcp', site);
-  const oauth = new MemoryOAuthClient(`Good First Token skill run (${login})`);
-  const transport = () =>
-    new StreamableHTTPClientTransport(mcpUrl, { authProvider: oauth, fetch: fromAddress(address) });
-  const first = transport();
+  const oauth = new MemoryOAuthClient(name);
+  const first = new StreamableHTTPClientTransport(mcpUrl, { authProvider: oauth, fetch: fromAddress(address) });
   try {
     await new Client({ name: 'goodfirsttoken-skill-run', version: '0.0.0' }).connect(first);
     throw new Error(`${mcpUrl.toString()} took an agent with no sign-in.`);
@@ -202,9 +200,22 @@ async function connectAgent(site: string, address: string, login: string): Promi
   const back = await approveAgent(site, address, oauth.authorizationUrl, login);
   if (!back.searchParams.has('code')) throw new Error(`The site sent @${login} back to the agent with no code: ${back.toString()}`);
   await first.finishAuth(back.searchParams);
+  return oauth;
+}
+
+/** Connects a new agent for `login`, signed in as a harness signs in. */
+export async function connectAgent(site: string, address: string, login: string): Promise<Client> {
+  const oauth = await signIn(site, address, login, `Good First Token skill run (${login})`);
   const client = new Client({ name: 'goodfirsttoken-skill-run', version: '0.0.0' });
-  await client.connect(transport());
+  await client.connect(new StreamableHTTPClientTransport(new URL('/mcp', site), { authProvider: oauth, fetch: fromAddress(address) }));
   return client;
+}
+
+/** Signs a new agent in for `login`, named `name` on the page that approves it, and returns its access token. */
+export async function agentToken(site: string, address: string, login: string, name: string): Promise<string> {
+  const token = (await signIn(site, address, login, name)).saved?.access_token;
+  if (token === undefined) throw new Error(`The site gave @${login}'s agent no access token.`);
+  return token;
 }
 
 /** A tool's answer as text, the way a terminal harness shows it. */
