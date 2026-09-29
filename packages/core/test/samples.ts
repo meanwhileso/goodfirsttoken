@@ -249,7 +249,7 @@ export const samples: Samples = {
     mentions: ['Paused', 'paused: false'],
   },
   request_removal: {
-    output: { repo, requestedBy: 'octo-maintainer', requestedAt: at, changed: true },
+    output: { repo, waiting: true, onDoNotList: false, requestedBy: 'octo-maintainer', requestedAt: at, changed: true },
     mentions: [`Asked Good First Token's admins to remove ${repo}.`, 'waits for an admin', 'pause_project'],
   },
   admin_queue: {
@@ -316,7 +316,7 @@ export const samples: Samples = {
       'on the do-not-list',
       'rem_Fq9Lw2Xr7Tb4Mz6Kp1Vd',
       'from @sample-maintainer',
-      'their reason, in their own words: "We review every pull request by hand now."',
+      'their reason, in their own words, as a JSON string: "We review every pull request by hand now."',
       'Its project is approved, listed from its AI policy.',
       'admin_remove_project',
     ],

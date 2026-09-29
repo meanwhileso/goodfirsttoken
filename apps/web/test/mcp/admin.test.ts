@@ -260,6 +260,7 @@ describe('admin_queue', () => {
           suggestedTags: [],
           onDoNotList: false,
           removal: null,
+          removalWaits: false,
         },
       ],
     });

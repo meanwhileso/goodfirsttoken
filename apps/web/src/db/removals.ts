@@ -1,8 +1,17 @@
-import { githubId, mustParse, removalRequestSchema, repoName, type RemovalRequest } from '@goodfirsttoken/core';
+import {
+  githubId,
+  id,
+  mustParse,
+  removalRequestSchema,
+  removalStatusSchema,
+  repoName,
+  type RemovalRequest,
+} from '@goodfirsttoken/core';
 import { checkTime, newId } from './shared';
 
 // The removal_requests table: maintainers' requests to have a repo removed,
-// waiting for an admin, or closed when an admin removed the repo.
+// waiting for an admin, or closed when an admin removed the repo or a
+// maintainer of it withdrew the request.
 
 interface RequestRow {
   id: string;
@@ -92,19 +101,40 @@ export async function listWaitingRemovals(db: D1Database): Promise<RemovalReques
   return results.map(toRequest);
 }
 
+/** The request with this ID, waiting or closed, or null. */
+export async function getRemoval(db: D1Database, requestId: string): Promise<RemovalRequest | null> {
+  const row = await db
+    .prepare('SELECT * FROM removal_requests WHERE id = ?')
+    .bind(mustParse(id, requestId, 'requestId'))
+    .first<RequestRow>();
+  return row === null ? null : toRequest(row);
+}
+
 /**
- * Closes the repo's waiting request, compared without case, as removed by
- * the admin `by` at `now`. The closed request stays, as the record of who
- * asked. Returns it, or null when none waited.
+ * Closes the repo's waiting request, compared without case, at `now`:
+ * `removed` by the admin who removed the repo, or `withdrawn` by the
+ * maintainer who took it back. Only a waiting request closes, so a closed one
+ * keeps who closed it and when. The closed request stays, as the record of
+ * who asked. Returns it, or null when none waited.
  */
-export async function closeRemoval(db: D1Database, repo: string, by: number, now: number): Promise<RemovalRequest | null> {
+export async function closeRemoval(
+  db: D1Database,
+  repo: string,
+  close: { status: 'removed' | 'withdrawn'; by: number },
+  now: number,
+): Promise<RemovalRequest | null> {
   const row = await db
     .prepare(
-      `UPDATE removal_requests SET status = 'removed', closed_by = ?, closed_at = ?
+      `UPDATE removal_requests SET status = ?, closed_by = ?, closed_at = ?
        WHERE repo = ? AND status = 'waiting'
        RETURNING *`,
     )
-    .bind(mustParse(githubId, by, 'by'), checkTime(now), mustParse(repoName, repo, 'repo'))
+    .bind(
+      mustParse(removalStatusSchema, close.status, 'status'),
+      mustParse(githubId, close.by, 'by'),
+      checkTime(now),
+      mustParse(repoName, repo, 'repo'),
+    )
     .first<RequestRow>();
   return row === null ? null : toRequest(row);
 }

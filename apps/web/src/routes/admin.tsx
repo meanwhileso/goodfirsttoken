@@ -1,4 +1,4 @@
-import { doNotListNote, productName, removalProjectNote, type ToolOutputInput } from '@goodfirsttoken/core';
+import { doNotListNote, productName, removalProjectNote, removalWaitsNote, type ToolOutputInput } from '@goodfirsttoken/core';
 import { createFileRoute, Link, notFound, redirect } from '@tanstack/react-router';
 import { useId, type CSSProperties, type ReactNode } from 'react';
 import { getAdminPage, type AdminPage, type PolicyListing } from '../admin/data';
@@ -140,6 +140,13 @@ function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
 
+/** On a registration or crawler find, a request to remove the same repo that waits, which blocks approving it. */
+function RemovalWaitsNote({ item }: { item: QueueItem }) {
+  return item.removalWaits === true && item.kind !== 'removal' ? (
+    <p className="admin-item__warning">{removalWaitsNote(item.kind)}</p>
+  ) : null;
+}
+
 function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
   const titleId = useId();
   const tagsId = useId();
@@ -182,6 +189,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         </Block>
       )}
       <DoNotListNote item={item} />
+      <RemovalWaitsNote item={item} />
       <form method="post" action={ADMIN_PATH}>
         <input type="hidden" name="action" value="decide" />
         <input type="hidden" name="id" value={item.id} />
@@ -225,6 +233,7 @@ function Registration({ item, now, signInAgain }: { item: QueueItem; now: number
       </div>
       <Facts item={item} now={now} signInAgain={signInAgain} />
       <DoNotListNote item={item} />
+      <RemovalWaitsNote item={item} />
       <Block label="settings they chose">
         <SettingsBadges settings={item.settings} />
       </Block>

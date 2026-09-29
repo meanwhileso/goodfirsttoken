@@ -1076,7 +1076,7 @@ a project is `not_found`.
 An admin or maintainer of a repo on GitHub asks Good First Token's admins
 to remove it, from their agent, with `request_removal` and a reason. The
 request waits in the [admin queue](#the-admin-queue) until an admin
-removes the repo.
+removes the repo, or a maintainer of the repo withdraws it.
 
 - The call asks GitHub for the caller's role on the repo, with their own
   token, under [Permissions](#permissions), and needs nothing more of the
@@ -1093,28 +1093,54 @@ removes the repo.
   shows them the repo as public again. A project the sync delisted because
   its repo is archived can be asked for as it is, since GitHub still shows
   the repo and the caller's role.
-- The reason is the maintainer's own words: up to 500 characters, with
-  tabs and line breaks folded into single spaces, so it is one line. Only
-  admins read it, in `admin_queue` and on the [admin pages](#the-admin-pages),
-  and both quote it as the maintainer's. It reaches no public page, so
-  nothing redacts it.
+- The reason is the maintainer's own words, up to 500 characters, always
+  on one line. Each run of characters that could break a line or change
+  what a terminal shows, with the plain spaces around it, becomes one
+  space: control characters, tabs and line breaks among them, Unicode line
+  and paragraph separators, and marks that reorder text. Only admins read
+  it, in `admin_queue`, as a JSON string, so no quote mark in it can end
+  the quote early, and on the [admin pages](#the-admin-pages). Both show it
+  as the maintainer's words. It reaches no public page, so nothing redacts
+  it.
 - A repo has one request waiting at a time, whatever the case of its
   name. While one waits, another, from the same maintainer or another,
   changes nothing. Its answer names who asked and when, and says nothing
   changed. The first request keeps its reason.
-- A request is saved under the name of the repo's project, when it is one,
-  since a project keeps the name it was added with. Otherwise it is saved
-  under the name GitHub gives.
+- A project is found by the name it was listed under, since a project
+  keeps the name it was added with. So a request names the project the way
+  `project_status` does, and is saved under that name. A repo renamed on
+  GitHub since, asked for by its new name, is no project by that name, and
+  the queue says no project has that name.
+- A repo on the do-not-list was removed before, so asking makes no
+  request. The answer says so, and nothing changes. The one exception is a
+  repo whose registration waits for an admin, still on the list, under
+  [Registering a project](#registering-a-project): approving it would take
+  the repo off, so asking makes a request, which stops that approval.
+- While a request waits, no admin can list the repo from its policy, with
+  `admin_add_project` or by approving a crawler find, or approve a
+  registration of it. Each is refused with `repo_not_eligible`, and the
+  queue marks the registration or the find. A listing checks for a waiting
+  request in the same statement as its write, as it checks the
+  do-not-list, so a request that lands while an admin lists the repo keeps
+  it unlisted. An approval of a registration checks when it decides.
 - A request pauses nothing and changes no status, so an approved project
   takes new claims until an admin removes it. The maintain skill offers to
   pause it with `pause_project` meanwhile. The plan doesn't ask a request
   to stop work, and a maintainer can pause already.
 - An admin who removes the repo with `admin_remove_project`, from their
-  agent or the admin pages, closes its waiting request, with who removed it
-  and when. A closed request is kept, as the record of who asked. Nothing
-  else closes one, and an admin can't decline one: the plan puts a repo on
-  the do-not-list when its maintainers ask, and GitHub vouched for the one
-  who asked. A request an admin skips keeps waiting.
+  agent or the admin pages, closes its waiting request, as `removed`, with
+  who removed it and when.
+- A maintainer of the repo, the one who asked or another, withdraws a
+  waiting request with `request_removal` and `withdraw: true`, under the
+  same check of their role on GitHub. It closes as `withdrawn`, with who
+  withdrew it and when, and leaves the queue. With none waiting, nothing
+  changes, and the answer says so.
+- A closed request is kept, as the record of who asked, and only a waiting
+  one closes, so a closed one keeps who closed it. Nothing else closes one.
+  An admin can't decline one: the plan puts a repo on the do-not-list when
+  its maintainers ask, and GitHub vouched for the one who asked, so the
+  request isn't an admin's to overrule. A request an admin skips keeps
+  waiting.
 - When the repo leaves the do-not-list later, as when an admin approves a
   maintainer's registration of it, a closed request stays closed. Its
   maintainers can ask again.
@@ -1152,10 +1178,14 @@ registration's or a crawler find's.
   sample data. The crawler (#30) will.
 - A **request to be removed** is a maintainer's request, under
   [Asking to be removed](#asking-to-be-removed), with who asked, when,
-  their reason, quoted as theirs, and the repo's project, with its status
-  and how it got in, or none. Its ID names the request. `admin_decide`
-  doesn't decide one. It refuses the ID with `not_found`, and says to
-  remove the repo with `admin_remove_project`.
+  their reason, as a JSON string, and the repo's project, with its status
+  and how it got in, or that no project has the repo's name. Its ID names
+  the request. `admin_decide` doesn't decide one. While it waits,
+  `admin_decide` refuses its ID with `invalid_input`, and says to remove
+  the repo with `admin_remove_project`. A closed request's ID, like any ID
+  that names nothing waiting, is `not_found`.
+- A registration or a crawler find says when a request to remove the same
+  repo waits, since it can't be approved while that waits.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
   request to be removed they are read from GitHub when the queue is read,
@@ -1235,14 +1265,19 @@ repo whose maintainers asked to be removed. An optional note says where and
 how they asked, and only admins see it.
 
 - The repo goes on the [do-not-list](#crawl-candidates) first.
-- A maintainer's request to remove it that waits in the queue is closed,
-  under [Asking to be removed](#asking-to-be-removed).
+- With no note from the admin, the note names who asked with
+  `request_removal`, and when, from the request that waits.
 - Its project, when it has one, is `rejected`, with the reason
   `Removed at its maintainers' request.`, which its maintainers read with
   `project_status`. The rejection puts the repo back on the list in the
   same write, in case an approval took it off while the removal ran.
 - A crawler find for it waiting in the queue is rejected with the same
   reason.
+- Then a maintainer's request to remove it that waits in the queue is
+  closed, under [Asking to be removed](#asking-to-be-removed). It closes
+  last, once the project's rejection landed, so a removal that fails
+  partway leaves the request waiting, and removing the repo again closes
+  it.
 - Nothing lists it again unless a maintainer registers it and an admin
   approves that: the crawler can't add it, and an admin can't list it from
   its policy. A maintainer can register it, under
@@ -1287,8 +1322,9 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   its policy and tags. Listing a repo that is listed already changes those
   and keeps its other settings. A request to be removed shows who asked,
   when, and their reason, quoted as theirs, and its button removes the
-  repo, as `admin_remove_project` does, which closes the request. A
-  registration's form takes a reason.
+  repo, as `admin_remove_project` does with no note, which closes the
+  request. A registration or a crawler find whose repo has a request to be
+  removed waiting says so. A registration's form takes a reason.
   Rejecting or skipping needs the reason, and the form refuses to send
   without one. Approving doesn't.
 - Every form posts to `/admin`. It has to come from the site itself, by its
@@ -1830,7 +1866,8 @@ under [The donor's tools](#the-donors-tools), the maintainer's five, under
 - `register_project` with no settings returns a proposal and saves nothing.
 - `project_status` takes `refresh`, false unless set, to read the tagged
   issues from GitHub first.
-- `request_removal` takes the repo and a reason, which is needed.
+- `request_removal` takes the repo and a reason, which asking needs, or
+  `withdraw: true` to withdraw the request that waits.
 - Rejecting a queue item needs a reason, and so does an admin pause. An admin
   approving a crawler find can confirm or change its policy tier, and sends
   only the settings they change from the crawler's suggestion.
@@ -1863,7 +1900,7 @@ skills that use a tool say what to do with each one on its list, under
 | `pause_project` | `not_maintainer`, `not_found`, `project_not_open`, `not_admin`, `repo_not_eligible` |
 | `request_removal` | `not_maintainer` |
 | `admin_queue` | None |
-| `admin_decide` | `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered` |
+| `admin_decide` | `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered`, `invalid_input` |
 | `admin_add_project` | `repo_not_eligible`, `already_registered`, `invalid_settings` |
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
@@ -1874,8 +1911,9 @@ skills that use a tool say what to do with each one on its list, under
   so any other agent's call gets the MCP SDK's error
   `Tool <name> not found`. The admins' actions still check the permission
   themselves, and the admin pages get `not_admin` from them.
-- No agent gets `invalid_input` from `admin_decide`. Its input schema
-  refuses a rejection with no reason first, with an error that starts
+- An agent gets `invalid_input` from `admin_decide` only for the ID of a
+  request to be removed that waits. A rejection with no reason never
+  reaches it: its input schema refuses one first, with an error that starts
   `Input validation error` and names `reason`. The admin pages check the
   same schema.
 
@@ -1898,14 +1936,14 @@ skills that use a tool say what to do with each one on its list, under
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo, as GitHub says, or GitHub doesn't show them the repo or blocked access to it |
-| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list |
+| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting |
 | `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |
 | `listed_from_policy` | Changing the settings of a listing made from a policy with `update_project`, which takes `register_project` first |
 | `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
 | `invalid_settings` | Settings failed their checks, or came with the approval of a registration, which keeps its maintainer's |
 | `not_admin` | The caller isn't a Good First Token admin |
-| `not_found` | The claim, issue, project, session, queue item, or person to block doesn't exist, the queue item no longer waits or is a request to be removed, which `admin_decide` doesn't decide, or no pick is left in the session's queue |
-| `invalid_input` | A malformed claim, event, or time reached the claim state machine, a malformed argument reached an issue room, or a rejection came with no reason |
+| `not_found` | The claim, issue, project, session, queue item, or person to block doesn't exist, the queue item no longer waits, or no pick is left in the session's queue |
+| `invalid_input` | A malformed claim, event, or time reached the claim state machine, a malformed argument reached an issue room, a rejection came with no reason, or `admin_decide` got the ID of a request to be removed |
 
 ## Feed events
 
@@ -2603,9 +2641,11 @@ skills are written.
   It pauses and resumes with `pause_project`, and asks `project_status` to
   read the tagged issues again after the maintainer tags some.
 - It asks Good First Token's admins to remove a repo with
-  `request_removal`, with the maintainer's reason, under
+  `request_removal`, with the maintainer's reason and the name
+  `project_status` gives, under
   [Asking to be removed](#asking-to-be-removed), and offers to pause an
-  approved project while the request waits.
+  approved project while the request waits. It withdraws a request with
+  `withdraw: true`.
 
 **admin** works with one of Good First Token's admins, and only an admin's
 agent is served its tools.

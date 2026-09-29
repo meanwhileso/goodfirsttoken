@@ -383,7 +383,9 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   `src/db/removals.ts`. Its insert does nothing while a request for the
   repo waits, through the partial unique index `removal_requests_waiting`,
   so two requests at the same moment leave one, and the tool then reads the
-  one that waits. A `451` from GitHub is a `PermissionRefused` in
+  one that waits. A withdrawal is `closeRemoval`, whose update applies only
+  to a waiting request, so a withdrawal and an admin's removal at the same
+  moment close it once. A `451` from GitHub is a `PermissionRefused` in
   `requirePermission`, as a `404` is, so every maintainer's tool refuses a
   repo GitHub blocked with `not_maintainer`.
 - **Resuming reads the status history,** newest first, for the change
@@ -543,7 +545,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   the SDK refuses to call.
 - **Queue IDs.** A crawler find's ID is its candidate ID, and a request to
   be removed has its request's ID, `rem_` and 20 characters, which
-  `admin_decide` refuses by its prefix. A registration's
+  `admin_decide` knows by its prefix and reads with `getRemoval`, to refuse
+  a waiting one with `invalid_input` and anything else as `not_found`. A
+  registration's
   is `reg_` and the ID of its latest row in `project_status_changes`, which
   `listPendingProjects` reads with each pending project, so the queue needs
   no table of its own, and `getPendingProject` finds the project only while
@@ -553,8 +557,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   and `GET /users/{owner}`, in `readStanding` in `src/projects/repo.ts`.
   Every item's are read at once, so the queue costs two GitHub calls for
   each registration and each request, on every read of the queue. Only a
-  `404` for the repo gives `factsMissing: 'not_public'`. Any other failure, the owner's `404`
-  included, gives `no_answer`, logged with `console.warn`, in
+  `404` for the repo gives `factsMissing: 'not_public'`. Any other failure,
+  the owner's `404` included, gives `no_answer`, logged with `console.warn`, in
   `factsFromGitHub`. A `401` goes on up, so an agent's connection ends,
   and the page reads the queue again with no token and says to sign in
   again.
@@ -572,11 +576,19 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   check it too: `createProject`'s insert and `relistFromPolicy`'s
   statements carry `NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)`,
   so the check and the write are one step. A removal adds the entry on its
-  own, before anything else, then closes the repo's waiting request to be
-  removed with `closeRemoval`, and its rejection runs `doNotListWhenRejected` in the same
-  batch, through `setProjectStatusFrom`'s `alongside`, which adds the entry
-  again only when that rejection landed. So an approval that took the
-  repo off the list between them can't leave a removed project off it.
+  own, before anything else, and its rejection runs `doNotListWhenRejected`
+  in the same batch, through `setProjectStatusFrom`'s `alongside`, which
+  adds the entry again only when that rejection landed. So an approval that
+  took the repo off the list between them can't leave a removed project off
+  it. The removal closes the repo's waiting request to be removed with
+  `closeRemoval` last, once the rejection landed, so one that throws
+  partway leaves the request in the queue.
+- **So is a waiting request to be removed.** The same statements carry
+  `NOT EXISTS (SELECT 1 FROM removal_requests WHERE repo = ?1 AND status = 'waiting')`,
+  and the listing reads for a waiting request where it reads the list. The
+  approval of a registration reads for one before its compare-and-set, with
+  no check in the write, so a request that lands at that moment still waits
+  in the queue for an admin.
 - **Blocked donors** come from `listBlocks`, one query that joins
   `donor_blocks` to `people` for each login.
 - **Forms, with no script.** The page's forms post to `/admin`, which the
@@ -648,7 +660,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   settings, and each saved version of the settings, `claims.ts` the claim
   state machine and the stored claim, `prs.ts` a claim's PR, `issues.ts` a
   cached tagged issue, `people.ts` people, their interests, and blocks,
-  `sessions.ts` donor sessions and budgets, `removals.ts` maintainers'
+  `sessions.ts` donor sessions and budgets, `characters.ts` the characters
+  that could break a line or change what a terminal shows, `removals.ts`
+  maintainers'
   requests to be removed, `crawl.ts` crawl candidates and
   the do-not-list, `feed.ts` feed events, `refusals.ts` the refusal codes,
   `secrets.ts` the check that replaces keys and tokens in posted text, and
@@ -1089,7 +1103,7 @@ pruning after a sync, with no index of its own.
 | `donor_sessions_by_person` | A donor's last session, for what merged since |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
-| `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal` and a removal |
+| `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal`, a removal, and the check before a listing or an approval |
 | `removal_requests_queue` | The admin queue's requests to be removed, oldest first |
 | `session_by_user` | A person's sessions, which signing out ends |
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |

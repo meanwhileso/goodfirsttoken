@@ -313,8 +313,9 @@ describe("the admin page's forms", () => {
 describe("maintainers' requests to be removed on /admin", () => {
   const reason = 'We review every pull request by hand now, so please take us off.';
 
-  test("an admin sees who asked, when, and their reason, and removing the repo closes the request", async () => {
-    await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1008 }, Date.now() - 3 * 60 * 60 * 1000);
+  test("an admin sees who asked, when, and their reason, and removing the repo closes the request, with who asked in the do-not-list's note", async () => {
+    const askedAt = Date.now() - 3 * 60 * 60 * 1000;
+    await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1008 }, askedAt);
     const browser = await signedIn('sample-admin');
 
     const page = await (await browser.fetch('/admin')).text();
@@ -328,7 +329,22 @@ describe("maintainers' requests to be removed on /admin", () => {
     expect(answer).toContain('No requests to be removed.');
     expect(await getWaitingRemoval(env.DB, HARBOR)).toBeNull();
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'rejected', statusReason: "Removed at its maintainers' request." });
-    expect(await getDoNotListEntry(env.DB, HARBOR)).toMatchObject({ addedBy: 1010 });
+    expect(await getDoNotListEntry(env.DB, HARBOR)).toMatchObject({
+      addedBy: 1010,
+      reason: `Asked by @octo-maintainer with request_removal on ${new Date(askedAt).toISOString()}.`,
+    });
+  });
+
+  test('a registration of a repo whose request to be removed waits says so, and its approval changes nothing', async () => {
+    await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1008 }, Date.now());
+    const browser = await signedIn('sample-admin');
+
+    const page = await (await browser.fetch('/admin')).text();
+    const answer = await back(browser, await browser.post('/admin', { action: 'decide', id: harborId(page), decision: 'approve' }));
+
+    expect(page).toContain('A request to be removed waits for this repo too, so it can&#x27;t be approved while that waits.');
+    expect(answer).toContain(`A maintainer of ${HARBOR} asked to have it removed, and that request waits in the admin queue.`);
+    expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'pending' });
   });
 
   test("someone who isn't an admin sees no request, and their form removes nothing", async () => {

@@ -7,6 +7,7 @@ import {
   type ProjectSettings,
   type ProjectStatus,
   type Refusal,
+  type RemovalRequest,
   type RefusalCode,
   type ToolInput,
   type ToolRefusal,
@@ -18,12 +19,15 @@ import { PermissionRefused, requirePermission, type Caller, type ManagedRepo } f
 import {
   askRemoval,
   changeSettings,
+  closeRemoval,
   countProjectPrs,
   countWorkingClaims,
   createProject,
+  getDoNotListEntry,
   getIssueSync,
   getPerson,
   getProject,
+  getWaitingRemoval,
   listIssues,
   reopenRegistration,
   setProjectStatusFrom,
@@ -350,14 +354,41 @@ export async function pauseProject(caller: Caller, input: ToolInput<'pause_proje
   throw new Error(`${input.repo} kept changing status while it was paused or resumed.`);
 }
 
+/** Who asked for a request, by their login now. */
+async function askerOf(request: RemovalRequest): Promise<string> {
+  const person = await getPerson(env.DB, request.requestedBy);
+  if (person === null) throw new Error(`${request.repo}'s request to be removed names someone who isn't recorded.`);
+  return person.login;
+}
+
+function removalAnswer(
+  repo: string,
+  request: RemovalRequest | null,
+  asker: string | null,
+  state: { waiting: boolean; onDoNotList: boolean; changed: boolean },
+): Answer {
+  return answer(
+    toolResult('request_removal', {
+      repo,
+      ...state,
+      requestedBy: asker,
+      requestedAt: request === null ? null : new Date(request.requestedAt).toISOString(),
+    }),
+  );
+}
+
 /**
- * Asks Good First Token's admins to remove a repo. The caller must be an
- * admin or maintainer of it on GitHub, asked with their own token, and
- * nothing else about the repo counts: a project in any status, a listing
- * made from its policy, a repo whose pull requests are limited to
- * collaborators or that is archived, and a repo that isn't on Good First
- * Token at all can each be asked for. The request waits in the admin queue
- * until an admin removes the repo. It pauses nothing.
+ * Asks Good First Token's admins to remove a repo, or withdraws the request
+ * that waits for it. The caller must be an admin or maintainer of it on
+ * GitHub, asked with their own token, for either, and nothing else about the
+ * repo counts: a project in any status, a listing made from its policy, a
+ * repo whose pull requests are limited to collaborators or that is
+ * archived, and a repo that isn't on Good First Token at all can each be
+ * asked for. The request waits in the admin queue until an admin removes the
+ * repo, or a maintainer of it withdraws it. It pauses nothing. A repo on the
+ * do-not-list was removed already, so asking makes no request, unless a
+ * registration of it waits, which an admin's approval would take off the
+ * list.
  */
 export async function requestRemoval(
   caller: Caller,
@@ -369,19 +400,21 @@ export async function requestRemoval(
   // name, and the admin removes the project by it. Otherwise GitHub's.
   const project = await getProject(env.DB, input.repo);
   const repo = project?.repo ?? found.full_name;
-  const { request, created } = await askRemoval(
-    env.DB,
-    { repo, reason: input.reason, requestedBy: caller.githubId },
-    now,
-  );
-  const asker = created ? caller.login : (await getPerson(env.DB, request.requestedBy))?.login;
-  if (asker === undefined) throw new Error(`${repo}'s request to be removed names someone who isn't recorded.`);
-  return answer(
-    toolResult('request_removal', {
-      repo: request.repo,
-      requestedBy: asker,
-      requestedAt: new Date(request.requestedAt).toISOString(),
-      changed: created,
-    }),
-  );
+  const onDoNotList = (await getDoNotListEntry(env.DB, repo)) !== null;
+
+  if (input.withdraw) {
+    const withdrawn = await closeRemoval(env.DB, repo, { status: 'withdrawn', by: caller.githubId }, now);
+    const asker = withdrawn === null ? null : await askerOf(withdrawn);
+    return removalAnswer(repo, withdrawn, asker, { waiting: false, onDoNotList, changed: withdrawn !== null });
+  }
+
+  if (onDoNotList && project?.status !== 'pending') {
+    const waiting = await getWaitingRemoval(env.DB, repo);
+    const asker = waiting === null ? null : await askerOf(waiting);
+    return removalAnswer(repo, waiting, asker, { waiting: waiting !== null, onDoNotList, changed: false });
+  }
+  const reason = input.reason ?? '';
+  const { request, created } = await askRemoval(env.DB, { repo, reason, requestedBy: caller.githubId }, now);
+  const asker = created ? caller.login : await askerOf(request);
+  return removalAnswer(request.repo, request, asker, { waiting: true, onDoNotList, changed: created });
 }

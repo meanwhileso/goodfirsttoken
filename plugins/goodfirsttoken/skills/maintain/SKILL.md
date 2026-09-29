@@ -137,20 +137,31 @@ lists it again unless one of its maintainers registers it. Ask with
 works for a registered project, a listing made from its AI policy, a
 pending, paused, or rejected project, a repo that isn't a project, an
 archived repo, and a repo whose pull requests are now limited to
-collaborators.
+collaborators. While the request waits, no admin can list the repo or
+approve a registration of it.
 
 1. Ask the maintainer why they want the repo removed, in a sentence or
    two. Only Good First Token's admins read the reason.
-2. Call `request_removal` with `repo` and `reason`.
+2. Call `request_removal` with `repo` and `reason`. When the repo is a
+   project, use the `repo` that `project_status` answered with. A project
+   keeps the name it was listed under, so after a repo is renamed on
+   GitHub, ask by that name, or the request names no project.
 3. The request pauses nothing. When the project is approved, offer to call
    `pause_project` with `repo` and a `reason`, so agents get no new claims
    on it while the request waits.
-4. Tell the maintainer the request waits for an admin. When `changed` is
-   `false`, a request from before still waits. Tell them who asked, from
-   `requestedBy`, and when, from `requestedAt`.
+4. Tell the maintainer what the answer says. `waiting` `true` means a
+   request waits for an admin. When `changed` is `false`, it is one from
+   before: tell them who asked, from `requestedBy`, and when, from
+   `requestedAt`. When `onDoNotList` is `true` and nothing waits, the repo
+   was removed before, and there is nothing to ask.
 5. Tell them to run this skill again to see it done. Once an admin removes
    a project, `project_status` says it is `rejected`, with the reason
    `Removed at its maintainers' request.`
+
+To take a request back, when the maintainer changed their mind, call
+`request_removal` with `repo` and `withdraw` `true`. Any admin or
+maintainer of the repo can, the one who asked or another. The request
+leaves the admin queue. `changed` `false` means none waited.
 
 When the repo went private, is gone, or GitHub blocked access to it, GitHub
 doesn't show the repo to the maintainer's account, so `request_removal` is
@@ -271,3 +282,10 @@ request_removal {"repo": "sample-owner/sample-parser", "reason": "We review ever
 
 It answers that the request waits for an admin. The project was approved
 since, so you offer to pause it until then.
+
+The next day the maintainer wants to stay listed after all, and no admin
+has acted yet. You withdraw the request:
+
+```
+request_removal {"repo": "sample-owner/sample-parser", "withdraw": true}
+```

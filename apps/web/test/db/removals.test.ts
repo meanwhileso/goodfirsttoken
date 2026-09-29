@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { askRemoval, closeRemoval, getWaitingRemoval, listWaitingRemovals } from '../../src/db';
+import { askRemoval, closeRemoval, getRemoval, getWaitingRemoval, listWaitingRemovals } from '../../src/db';
 import { admin, coMaintainer, DAY, db, emptyDatabase, HOUR, maintainer, refusal, repo, signIn, t0 } from './helpers';
 
 // The removal_requests table: maintainers' requests to have a repo removed.
@@ -47,17 +47,34 @@ describe('requests to be removed', () => {
   test('closing a request keeps it, with the admin who removed the repo and when, and the repo can be asked for again', async () => {
     const { request } = await askRemoval(db, { repo, reason, requestedBy: maintainer.githubId }, t0);
 
-    const closed = await closeRemoval(db, 'Sample-Owner/Sample-App', admin.githubId, t0 + DAY);
+    const closed = await closeRemoval(db, 'Sample-Owner/Sample-App', { status: 'removed', by: admin.githubId }, t0 + DAY);
     const again = await askRemoval(db, { repo, reason: 'Still no.', requestedBy: coMaintainer.githubId }, t0 + 30 * DAY);
 
     expect(closed).toEqual({ ...request, status: 'removed', closedBy: admin.githubId, closedAt: t0 + DAY });
+    expect(await getRemoval(db, request.id)).toEqual(closed);
     expect(again).toMatchObject({ created: true, request: { status: 'waiting', requestedBy: coMaintainer.githubId } });
     expect(again.request.id).not.toBe(request.id);
     expect(await listWaitingRemovals(db)).toEqual([again.request]);
   });
 
-  test('closing a repo with no request waiting closes nothing', async () => {
-    expect(await closeRemoval(db, repo, admin.githubId, t0)).toBeNull();
+  test('a withdrawn request is kept, with the maintainer who withdrew it and when, and leaves the queue', async () => {
+    const { request } = await askRemoval(db, { repo, reason, requestedBy: maintainer.githubId }, t0);
+
+    const withdrawn = await closeRemoval(db, repo, { status: 'withdrawn', by: coMaintainer.githubId }, t0 + HOUR);
+
+    expect(withdrawn).toEqual({ ...request, status: 'withdrawn', closedBy: coMaintainer.githubId, closedAt: t0 + HOUR });
+    expect(await listWaitingRemovals(db)).toEqual([]);
+  });
+
+  test('closing a repo with no request waiting closes nothing, and a closed request keeps who closed it and when', async () => {
+    const { request } = await askRemoval(db, { repo, reason, requestedBy: maintainer.githubId }, t0);
+    const closed = await closeRemoval(db, repo, { status: 'removed', by: admin.githubId }, t0 + DAY);
+
+    const again = await closeRemoval(db, repo, { status: 'withdrawn', by: coMaintainer.githubId }, t0 + 2 * DAY);
+
+    expect(again).toBeNull();
+    expect(await getRemoval(db, request.id)).toEqual(closed);
+    expect(await getRemoval(db, 'rem_missing')).toBeNull();
   });
 
   test('the queue lists waiting requests oldest first', async () => {

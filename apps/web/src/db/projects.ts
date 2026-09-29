@@ -28,6 +28,7 @@ import {
   type TaggedIssue,
 } from '@goodfirsttoken/core';
 import { getDoNotListEntry } from './do-not-list';
+import { getWaitingRemoval } from './removals';
 import { checkTime, fromJson, joinIssue } from './shared';
 import { ASKING_FOR_HELP, DELISTED, ON_THE_DO_NOT_LIST, slotsTaken, takesClaims, waiting } from './waiting';
 
@@ -123,10 +124,11 @@ export interface NewProject {
  * Saves a new project, the first version of its settings, and its first
  * status, all made by `addedBy` at `now`. Null when the repo is already a
  * project, in any case, since GitHub ignores case in repo names, and when a
- * project listed from its policy would be for a repo on the do-not-list,
- * checked in the same statement as the insert. A maintainer's registration
- * of a repo on the list is saved, and the repo stays on it until an admin
- * approves the registration.
+ * project listed from its policy would be for a repo on the do-not-list, or
+ * one whose maintainers' request to be removed waits, checked in the same
+ * statement as the insert. A maintainer's registration of a repo on the list
+ * is saved, and the repo stays on it until an admin approves the
+ * registration.
  */
 export async function createProject(
   db: D1Database,
@@ -156,7 +158,7 @@ export async function createProject(
         `INSERT INTO projects (repo, issue_repo, status, status_reason, status_changed_by, status_changed_at,
            source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version)
          SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1
-         WHERE ?6 = 'registered' OR NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)
+         WHERE ?6 = 'registered' OR (${NOT_ON_DO_NOT_LIST} AND ${NO_REMOVAL_WAITING})
          ON CONFLICT DO NOTHING`,
       )
       .bind(
@@ -173,7 +175,8 @@ export async function createProject(
         record.addedAt,
       ),
     // A project that already existed has its first settings. A listing the
-    // do-not-list kept out has no row, so these add nothing for it.
+    // do-not-list or a waiting request kept out has no row, so these add
+    // nothing for it.
     db
       .prepare(
         `INSERT INTO project_settings (repo, version, settings, changed_by, changed_at)
@@ -749,6 +752,9 @@ export async function listPolicyListings(db: D1Database): Promise<ProjectRecord[
 /** A do-not-list entry for the repo keeps it out of a listing, checked in the same statement as a write. */
 const NOT_ON_DO_NOT_LIST = 'NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)';
 
+/** So does its maintainers' request to be removed, while it waits. */
+const NO_REMOVAL_WAITING = "NOT EXISTS (SELECT 1 FROM removal_requests WHERE repo = ?1 AND status = 'waiting')";
+
 export type Relisting = { ok: true; project: ProjectRecord; changed: SettingKey[] } | { ok: false; problems: FieldProblem[] };
 
 /**
@@ -757,8 +763,9 @@ export type Relisting = { ok: true; project: ProjectRecord; changed: SettingKey[
  * the listing's, saved as a new version by `by` at `now`. Settings left out
  * keep their value. Its status, who added it, and when stay. A change that
  * changes no setting saves no new version. Null when the repo isn't a
- * project listed from its policy when it saves, or is on the do-not-list,
- * checked in the same statements as the writes.
+ * project listed from its policy when it saves, is on the do-not-list, or
+ * has its maintainers' request to be removed waiting, checked in the same
+ * statements as the writes.
  */
 export async function relistFromPolicy(
   db: D1Database,
@@ -773,6 +780,7 @@ export async function relistFromPolicy(
   for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
     const current = await getProject(db, repo);
     if (current?.source !== 'policy' || (await getDoNotListEntry(db, current.repo)) !== null) return null;
+    if ((await getWaitingRemoval(db, current.repo)) !== null) return null;
     const result = updateProjectSettings(current.settings, listing.settings);
     if (!result.ok) return result;
     const next = result.value;
@@ -784,10 +792,11 @@ export async function relistFromPolicy(
       'project',
     );
     // Both statements check that the project is still the listing read,
-    // with no other save since, and that the repo isn't on the do-not-list,
-    // and the batch runs as one transaction. The update runs last, since it
+    // with no other save since, that the repo isn't on the do-not-list, and
+    // that no request to remove it waits, and the batch runs as one
+    // transaction. The update runs last, since it
     // changes what they check.
-    const still = `repo = ?1 AND source = 'policy' AND settings_version = ?2 AND ${NOT_ON_DO_NOT_LIST}`;
+    const still = `repo = ?1 AND source = 'policy' AND settings_version = ?2 AND ${NOT_ON_DO_NOT_LIST} AND ${NO_REMOVAL_WAITING}`;
     const read = [current.repo, current.settingsVersion];
     const statements: D1PreparedStatement[] = [];
     if (changed.length > 0) {
