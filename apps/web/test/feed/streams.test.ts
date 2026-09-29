@@ -161,24 +161,35 @@ describe('a text stream', () => {
     await ndjson.cancel();
   });
 
-  test('turns the marks that reorder text into spaces, and shows a text of nothing but controls as an empty text', async () => {
+  test('turns the marks that reorder text into spaces, and shows a job of nothing but controls as an empty column', async () => {
+    // A post is folded before it is stored, so the marks come in a job name
+    // and a release reason, which the streams fold themselves.
     const priyas = await claim(priya);
     const stream = await readStream(paths().issue);
+    const reason = 'left\u200eright\u200fand\u061cmore\u2067then\u2069done';
+
+    await post(priyas, 'tests pass', '\u200e\u0007\u061c');
+    await issueRoom(env.ISSUE_ROOM, issue).release({ claimId: priyas.id, githubId: priya.githubId, reason });
+
+    expect(fields(await stream.line('tests pass'))).toMatchObject({ kind: 'update', job: '', text: 'tests pass' });
+    expect(fields(await stream.line('released: left')).text).toBe('released: left right and more then done');
+    const ndjson = await readStream(paths().issue.replace('.txt', '.ndjson'));
+    const json = await ndjson.line('released: left');
+    for (const mark of ['\u200e', '\u200f', '\u061c']) expect(json).not.toContain(mark);
+    expect((JSON.parse(json) as FeedEvent).text).toBe(`released: ${reason}`);
+    await Promise.all([stream.cancel(), ndjson.cancel()]);
+  });
+
+  test('stores a post folded, with the marks that reorder text made spaces, and refuses one of nothing but controls', async () => {
+    const priyas = await claim(priya);
 
     await post(priyas, 'left\u200eright\u200fand\u061cmore\u2067then\u2069done');
-    nextPostTime();
-    await post(priyas, '\u200e\u0007\u061c');
+    const empty = await issueRoom(env.ISSUE_ROOM, issue).postUpdate({ claimId: priyas.id, githubId: priya.githubId, text: '\u200e\u0007\u061c' });
 
-    expect(fields(await stream.line('left')).text).toBe('left right and more then done');
-    await vi.waitFor(() => {
-      expect(stream.lines).toHaveLength(3);
-    });
-    expect(fields(stream.lines[2] ?? '')).toMatchObject({ kind: 'update', text: '' });
+    expect(empty).toMatchObject({ ok: false, refusal: { code: 'invalid_input' } });
     const ndjson = await readStream(paths().issue.replace('.txt', '.ndjson'));
-    const json = await ndjson.line('left');
-    for (const mark of ['\u200e', '\u200f', '\u061c']) expect(json).not.toContain(mark);
-    expect((JSON.parse(json) as FeedEvent).text).toBe('left\u200eright\u200fand\u061cmore\u2067then\u2069done');
-    await Promise.all([stream.cancel(), ndjson.cancel()]);
+    expect((JSON.parse(await ndjson.line('left')) as FeedEvent).text).toBe('left right and more then done');
+    await ndjson.cancel();
   });
 
   test('shows a key or token in a post only as [redacted], in the streams and in what the feeds store', async () => {

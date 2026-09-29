@@ -603,10 +603,25 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   yet. A PR another session marked between the two is left out of the
   answer, which is made again without it. `shareOnXUrl` in `packages/core`
   builds the link for a merged one, with the submission's agent.
-  `foldUntrusted` there folds a reviewer's text by `UNSAFE_CHARACTER` and
-  `HIDDEN_CHARACTER` in `characters.ts`, the sets `removalReason` folds
-  by, and `cutGraphemes` cuts it after, the rule the name an agent's
-  client gives itself is cut by too.
+  `foldUntrusted`, below, folds a reviewer's text by `UNSAFE_CHARACTER`
+  and `HIDDEN_CHARACTER` in `characters.ts`, the sets `removalReason`
+  folds by, and `cutGraphemes` cuts it after, the rule the name an
+  agent's client gives itself is cut by too.
+- **One fold for untrusted text.** `foldLine` in `packages/core/src/characters.ts`
+  is the fold, and `foldUntrusted` is it with a cut. A reviewer's text,
+  an issue's title, and a posted update all use it. It is one pattern
+  whose choices are each one character, so it reads the text once, with
+  no going back. `updateText` refuses text longer than four times its
+  limit with an `abort` check before the fold runs. `foldIssueTitle` in
+  `issues.ts` folds a title to 256 graphemes. `taggedIssueSchema` runs it
+  with `overwrite`, so `saveIssues` stores a folded title and every read
+  through the schema, `toIssue` and `listWaitingIssues`, folds a title
+  stored before. No migration clears old titles: SQL can't run the fold,
+  and a cleared title would show nothing until a pass read the issue
+  again, which can take several runs. `readIssue` in
+  `src/donor/github.ts` folds the title GitHub gives the donor's token.
+  The donor tools' answers take a title only through `issueTitle`, which
+  refuses one that isn't folded, the way `followUpText` does.
 - **A submit checks before it writes.** `workOn` in `src/mcp/submit.ts`
   reads the claim from the claims table, checks `work_claim`, the block,
   and the project with `projectClosedRefusal`, whose do-not-list check is

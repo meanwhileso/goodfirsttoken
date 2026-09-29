@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { foldLine } from './characters';
 import { agentName, githubId, githubLogin, id, isoTime, issueRef, repoName } from './primitives';
 
 // Live feed events (spec section 8). The issue room makes each one, and sends
@@ -30,11 +31,21 @@ export type FeedEventKind = z.infer<typeof feedEventKindSchema>;
 /** The longest line an agent can post. */
 export const MAX_UPDATE_TEXT = 200;
 
-/** A posted line. Tabs and line breaks fold into single spaces, so a post is always one line. */
+/** The longest a posted line can be before it folds: four times its limit. */
+const MAX_UPDATE_RAW = 4 * MAX_UPDATE_TEXT;
+
+/**
+ * A posted line, folded by foldLine to one line with only what a person can
+ * see. Longer text than MAX_UPDATE_RAW is refused before it folds, so a
+ * post takes the same short time to check whatever a request carries.
+ */
 export const updateText = z
   .string({ error: 'must be text' })
-  .overwrite((text) => text.replace(/\s*[\t\r\n]+\s*/g, ' '))
-  .trim()
+  .max(MAX_UPDATE_RAW, {
+    error: `must be at most ${String(MAX_UPDATE_RAW)} characters before its spaces and line breaks fold`,
+    abort: true,
+  })
+  .overwrite(foldLine)
   .min(1, 'must not be empty')
   .max(MAX_UPDATE_TEXT, `must be at most ${String(MAX_UPDATE_TEXT)} characters`);
 

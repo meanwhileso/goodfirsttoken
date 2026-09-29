@@ -1602,6 +1602,15 @@ sync reads from GitHub.
   there is one, with the ways the sync found it, and when the sync read it.
   Every label is kept, so a change to a project's tags can apply before the
   next sync.
+- The title is untrusted repo text. It is folded the way a reviewer's text
+  is under [PRs](#prs): one line, with only what a person can see, and cut
+  to 256 graphemes, the most characters GitHub takes in a title. The fold
+  runs when a copy is saved and again each time one is read, so a title
+  kept before titles were folded reads folded too. The donor's tools fold
+  a title they read from GitHub with the donor's token the same way, and
+  a PR's title they show in its place. So a title can't add a line to a
+  tool's text, or words only an agent reads, and every page and tool
+  shows it the same.
 - Each project has its own copy of an issue, so two projects that keep issues
   in the same repo each keep theirs. The project must exist.
 - Issues saved together all save, or none of them do, so one bad issue saves
@@ -2890,8 +2899,14 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   `https` link of the project's CLA that the donor confirmed they signed,
   as the refusal gave it.
 - A release needs a public reason.
-- A posted update is one line. Tabs and line breaks fold into single spaces.
-  `post_update` takes an optional job, for a line a subagent posts.
+- A posted update is one line, with only what a person can see, folded the
+  way a reviewer's text is under [PRs](#prs): every character a person
+  doesn't see goes, and each run of spaces, tabs, line breaks, and other
+  characters that could break a line becomes one space. Text longer than
+  800 characters, four times the limit, is refused before it folds, so
+  checking a post takes a short time whatever a request carries. The fold
+  reads the text once. `post_update` takes an optional job, for a line a
+  subagent posts.
 - Submitted files are paths inside the repo: no leading slash, no
   backslashes, no control characters, no characters that change the
   direction text shows in (U+202A to U+202E and U+2066 to U+2069), no
@@ -3773,7 +3788,8 @@ Each limit the schemas enforce, other than those under project settings:
 | PR description | 65,536 characters | GitHub |
 | PR description the donor writes | 60,000 characters, leaving room for the closing line and the disclosure | Us |
 | PR title, and a submit's title | 256 characters | GitHub |
-| Posted update | 200 characters | Us |
+| Posted update | 200 characters once folded, and 800 before | Us |
+| An issue's title | 256 graphemes, folded to one line | GitHub |
 | Feed event text | 500 characters | Us |
 | Subagent job name | 40 characters | Us |
 | Release reason | 200 characters | Us |

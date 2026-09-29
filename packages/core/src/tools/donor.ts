@@ -17,6 +17,7 @@ import {
   trimmedText,
   webUrl,
 } from '../primitives';
+import { issueTitle } from '../issues';
 import { interestsSchema, type Interests } from '../people';
 import { prModes, projectSettingsSchema } from '../projects';
 import { refusalCodeSchema } from '../refusals';
@@ -67,7 +68,7 @@ function describeInterests(interests: Interests): string {
 /** A claim's PR that merged, or closed without merging, since a session last offered it, offered once. */
 const endedPrSchema = z.object({
   issue: issueRef,
-  title: z.string(),
+  title: issueTitle,
   pr: prRefSchema,
   outcome: z.enum(['merged', 'closed']),
   /** For a merged PR, a pre-filled X post link, or null. Nothing is ever posted for the donor. */
