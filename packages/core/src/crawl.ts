@@ -37,7 +37,7 @@ export const candidateSourceAbouts = [
   'prMode',
   /** A line that keeps agents to issues with one label, which is the suggested tag. */
   'tags',
-  /** A line that keeps agents to issues with a label the repo doesn't have, so no tag is suggested. */
+  /** A line that keeps agents to issues with a label the repo doesn't have, or keeps for people, so no tag comes from it. */
   'labelMissing',
   /** A line in AGENTS.md or CLAUDE.md that asks an agent reading it to prove it did. Nothing follows from it. */
   'canary',

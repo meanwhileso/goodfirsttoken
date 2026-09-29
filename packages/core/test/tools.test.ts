@@ -338,7 +338,7 @@ describe('what each result says', () => {
 
     for (const [about, says] of [
       ['tags', 'Tags, the label the docs keep agents to, from "CONTRIBUTING.md":'],
-      ['labelMissing', `No tags, since the docs keep agents to a label the repo doesn't have, from "CONTRIBUTING.md":`],
+      ['labelMissing', `No tags, since the docs keep agents to a label the repo doesn't have, or keeps for people, from "CONTRIBUTING.md":`],
     ] as const) {
       const out = render(about);
       const at = out.findIndex((l) => l.trim() === says);

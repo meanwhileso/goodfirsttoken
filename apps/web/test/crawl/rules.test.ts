@@ -1177,6 +1177,40 @@ describe('suggested settings', () => {
     expect(sources).toEqual([{ about: 'tags', path: 'CONTRIBUTING.md', line: only }]);
   });
 
+  test('a file for agents that keeps agents to one label makes it the only tag too', () => {
+    const only = 'Agents may only work on issues labeled `agent ready`.';
+    for (const kind of ['agents', 'claude'] as const) {
+      const files = [contributing('Coding agents may open pull requests here.'), file(kind, `# Working here\n\n${only}\n`)];
+      const repoLabels = [
+        { name: 'help wanted', openIssues: 7 },
+        { name: 'agent ready', openIssues: 2 },
+      ];
+
+      const reading = readPolicy(files);
+      const { settings, suggestedTags, sources } = suggestSettings(reading, files, repoLabels, null);
+
+      expect(reading.tier, kind).toBe('invites_agents');
+      expect(settings.tags, kind).toEqual(['agent ready']);
+      expect(suggestedTags, kind).toEqual([{ name: 'agent ready', openIssues: 2 }]);
+      expect(sources, kind).toEqual([{ about: 'tags', path: files[1]?.path, line: only }]);
+    }
+  });
+
+  test('docs that keep agents to a label they also keep for people suggest no tags, and say why', () => {
+    const only = 'Agents may only work on issues labeled `agent ready`.';
+    const people = 'Issues labeled `agent ready` are reserved for people new to the project.';
+    const files = [contributing(`Coding agents may open pull requests here.\n\n${people}`), file('agents', only)];
+
+    const { settings, suggestedTags, sources } = suggestSettings(readPolicy(files), files, [{ name: 'agent ready', openIssues: 2 }], null);
+
+    expect(settings).toEqual({ prMode: 'automatic', excludedTags: ['agent ready'] });
+    expect(suggestedTags).toEqual([]);
+    expect(sources).toEqual([
+      { about: 'labelMissing', path: 'AGENTS.md', line: only },
+      { about: 'excludedTags', path: 'CONTRIBUTING.md', line: people },
+    ]);
+  });
+
   test('docs that keep agents to a label the repo does not have suggest no tags, and say why', () => {
     const only = 'Agents may only work on issues labeled `agent ready`.';
     const files = [contributing(`Coding agents may open pull requests here.\n\n${only}`)];

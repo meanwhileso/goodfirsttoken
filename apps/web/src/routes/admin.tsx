@@ -143,7 +143,7 @@ const SOURCE_LABELS: Record<QueueItem['sources'][number]['about'], string> = {
   claUrl: 'CLA',
   prMode: 'PR mode',
   tags: 'tags, the label the docs keep agents to',
-  labelMissing: "no tags, since the docs keep agents to a label the repo doesn't have",
+  labelMissing: "no tags, since the docs keep agents to a label the repo doesn't have, or keeps for people",
   canary: 'a canary for agents that read the file. No setting comes from it',
 };
 

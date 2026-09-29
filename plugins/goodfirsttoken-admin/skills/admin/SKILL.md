@@ -133,10 +133,12 @@ holds up.
   labels listed with their open issue counts. The admin picks. A find with
   no such label can still be listed, and it shows no issues until some are
   tagged.
-- When a line in `sources` is about `tags`, the docs keep agents to issues
-  with that one label, so propose it as the only tag. When one is about
-  `labelMissing`, the docs keep agents to a label the repo doesn't have, so
-  propose no tags, and tell the admin agents would find no issues until the
+- When lines in `sources` are about `tags` or `labelMissing`, the docs keep
+  agents to issues with the labels those lines name. Propose as `tags` only
+  the labels named in the `tags` lines, which the repo has. A
+  `labelMissing` line names a label the repo doesn't have, or keeps for
+  people: tell the admin about it, and when no line is about `tags`,
+  propose no tags and tell the admin agents would find no issues until the
   repo adds that label.
 - On the do-not-list, its maintainers asked to be removed, and only they
   can list it again, by registering it. Propose to reject it.

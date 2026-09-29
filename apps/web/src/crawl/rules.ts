@@ -248,6 +248,21 @@ const form = (number: number, source: string, means?: 'personInLoop' | 'onlyLabe
   ...(means ? { means } : {}),
 });
 
+// 12. A label that scopes where agents work: "Agents may only work on
+//     issues labeled `agent ready`." Its label is the only tag suggested.
+//     It is read in every sentence of a file for agents too, where the
+//     sentence names no AI and isn't read for a ban.
+const LABEL_ONLY = form(
+  12,
+  String.raw`(?:${AGENT_SUBJECT}|AI tools?|you)\s+(?:may|should|can|must)\s+only\s+(?:work\s+on|pick\s+up|take|claim|open\s+pull\s+requests\s+for|be\s+used\s+(?:on|for))\s+(?:open\s+)?(?:issues|tickets)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with\s+the\s+label)\s+${LABEL}`,
+  'onlyLabel',
+);
+
+/** The label a whole sentence in form 12 keeps agents to, or null. */
+function onlyLabelOf(sentence: string): string | null {
+  return LABEL_ONLY.pattern.exec(bare(sentence))?.[1]?.trim() ?? null;
+}
+
 // Rules for how to work, in form 9: who may come first, the words that say
 // no, a branch, a path, and the secrets.
 const WHO = String.raw`${PLEASE}(?:(?:${AGENT_SUBJECT}|you|we|contributors|they|maintainers)\s+)?`;
@@ -353,13 +368,7 @@ const SAFE_FORMS: SafeForm[] = [
     11,
     String.raw`if\s+(?:you|an?\s+agent|the\s+agent|your\s+agent)\s+(?:cannot|can't|can not|could not|couldn't)\s+(?:run|reproduce|build|test|fix|finish)\s+(?:the tests|the test suite|the build|it|the bug|the issue|the project|the change)(?:\s+locally)?,\s+${PLEASE}(?:say so|mention it|note it|tell us|explain why|ask for help|leave a comment)(?:\s+in\s+the\s+(?:pull request|PR|issue|PR description|pull request description))?`,
   ),
-  // 12. A label that scopes where agents work: "Agents may only work on
-  //     issues labeled `agent ready`." Its label is the only tag suggested.
-  form(
-    12,
-    String.raw`(?:${AGENT_SUBJECT}|AI tools?|you)\s+(?:may|should|can|must)\s+only\s+(?:work\s+on|pick\s+up|take|claim|open\s+pull\s+requests\s+for|be\s+used\s+(?:on|for))\s+(?:open\s+)?(?:issues|tickets)\s+(?:(?:that are|which are)\s+)?(?:labell?ed|tagged|with\s+the\s+label)\s+${LABEL}`,
-    'onlyLabel',
-  ),
+  LABEL_ONLY,
 ];
 
 /**
@@ -742,6 +751,10 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
     if (!reserved.has(key)) reserved.set(key, { name, source });
   };
   const onlyLabels = new Map<string, { name: string; source: SourceLine }>();
+  const keepOnly = (name: string, source: SourceLine) => {
+    const key = name.toLowerCase();
+    if (!onlyLabels.has(key)) onlyLabels.set(key, { name, source });
+  };
   const aiSentences: PolicyReading['aiSentences'] = [];
   const seenPassages = new Set<string>();
   let moreAiSentences = 0;
@@ -800,10 +813,14 @@ export function readPolicy(files: readonly PolicyFile[]): PolicyReading {
           if (judged.noAutonomy) noAutonomy ??= source;
           if (judged.personInLoop) personInLoop ??= source;
           for (const name of judged.reserved ?? []) keep(name, source);
-          if (judged.onlyLabel !== undefined && !onlyLabels.has(judged.onlyLabel.toLowerCase())) {
-            onlyLabels.set(judged.onlyLabel.toLowerCase(), { name: judged.onlyLabel, source });
-          }
+          if (judged.onlyLabel !== undefined) keepOnly(judged.onlyLabel, source);
         }
+      }
+      // In a file for agents, a sentence in form 12 names no AI, so the
+      // rules above don't read it. Its label is kept all the same.
+      if (forAgents) {
+        const label = onlyLabelOf(text);
+        if (label !== null) keepOnly(label, source);
       }
       if (FOR_PEOPLE.test(text)) for (const name of quotedNames(text)) keep(name, source);
       if (PERSON_IN_LOOP.test(text)) personInLoop ??= source;

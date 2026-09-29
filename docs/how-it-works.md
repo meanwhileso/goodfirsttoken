@@ -2361,22 +2361,24 @@ queue with:
     excluded. With none, it suggests no tags, and the admin picks them.
     When the docs keep agents to issues with one label, in form 12, that
     label is the only tag, as the repo spells it, since any other would
-    send agents to issues the repo keeps them from. When the repo has no
-    label by that name, it suggests no tags.
+    send agents to issues the repo keeps them from. That holds for such a
+    sentence in `AGENTS.md`, `CLAUDE.md`, or a skill too, though it names
+    no AI there. When the repo has no label by that name, or keeps it for
+    people, it suggests no tags.
   - No notes for agents. Nothing from a repo's files goes in a setting
     but a label name, a trailer name, and a CLA link.
 - The suggested tags: the labels the sentence names, and the labels that
   mean ready for outside help, `good first issue` included, each with its
   open issue count, up to 20, none of them excluded. With a label from
   form 12, that label alone, with its open issue count, or none when the
-  repo has no such label.
+  repo doesn't have it, or keeps it for people.
 - The lines behind them: for each suggestion the docs gave, the line of the
   file it came from, as the file has it, up to 500 characters, for the
   admin to check. That covers the excluded tags, the disclosure trailer,
   the person-written description, the CLA, a condition that made PR mode
   `reviewed`, and the line that keeps agents to one label, which says
-  either that its label is the tag or that the repo has no such label, so
-  the admin sees why there are no tags. Who can claim names the vouch
+  either that its label is the tag or that the repo doesn't have it, or
+  keeps it for people, so the admin sees why there are no tags. Who can claim names the vouch
   file.
 - A canary, when `AGENTS.md` or `CLAUDE.md` has one, with its line: a
   sentence that says if or when you are an AI, an LLM, a language model,
