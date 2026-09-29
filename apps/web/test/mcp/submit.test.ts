@@ -537,6 +537,26 @@ describe('automatic and reviewed', () => {
     expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'open' });
   });
 
+  test("the review queue's diff and lines run from where the branch parts from main, however far main moved", async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    const main = github.commitFiles(APP, { 'CHANGELOG.md': 'One.\nTwo.\n' }, BY);
+
+    await submit(priya, claimId, { 'a.txt': 'a\n' });
+    const queued = await call(priya, 'my_work');
+
+    expect(queued.structuredContent?.readyToOpen).toEqual([
+      expect.objectContaining({
+        claimId,
+        diffUrl: `${github.webUrl}/priya/sample-app/compare/${main}...${branchOf(issue, claimId)}`,
+        additions: 1,
+        deletions: 0,
+      }),
+    ]);
+  });
+
   test('a project that wants a person-written description waits for the donor to write it, and the PR carries their words', async () => {
     await project(APP, { ...automatic, personWrittenDescription: true });
     const issue = await tagged(APP);
@@ -944,7 +964,8 @@ describe('what a submit commits', () => {
     const issue = await tagged(APP);
     const priya = await donor('priya');
     const { claimId } = await claim(priya, issue);
-    // GitHub's docs don't say how it writes a mode. Here it gives 100755, not 33261.
+    // GitHub's docs don't say how it writes a mode. Here it gives the
+    // digits read in decimal, 100755 for an executable file.
     // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the writer as this
     const entries = DonorWriter.prototype.entries;
     const decimal = <T extends { mode: number } | null>(entry: T): T => (entry === null ? entry : { ...entry, mode: Number(entry.mode.toString(8)) });
@@ -1144,6 +1165,18 @@ describe("someone else's push to the claim's branch", () => {
     expect(kept.get('b.txt')).toBe('b\n');
     expect(changed.isError).toBeFalsy();
     expect(filesAt(FORK, branch).get('a.txt')).toBe('one, and more\n');
+  });
+
+  test("after an Update branch merge, the lines and the diff are the PR's own, with none of main's changes", async () => {
+    const { priya, claimId, branch, number } = await openedClaim();
+    const main = github.commitFiles(APP, { 'CHANGELOG.md': 'One.\nTwo.\nThree.\n' }, BY);
+    const merged = github.updatePullRequestBranch(APP, number, BY);
+
+    const result = await submit(priya, claimId, { 'a.txt': 'two\n' }, { onto: merged });
+
+    // a.txt and z.txt, one line each. CHANGELOG.md came from main.
+    expect(result.structuredContent).toMatchObject({ diffUrl: `${github.webUrl}/${FORK}/compare/${main}...${branch}` });
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({ diffFrom: main, additions: 2, deletions: 0 });
   });
 
   test('a submit onto a head the branch has moved past is stopped too, naming the head it is at now', async () => {

@@ -1774,7 +1774,9 @@ never reaches the tool.
   commit, and makes none. When the room recorded that first submit before
   the call died, it isn't recorded twice. A later submit that died between
   the room and the database is recorded twice, with its token estimate
-  added twice, since the room keeps no record of each submit's commit.
+  added twice, since the room keeps no record of each submit's commit. So
+  are two submits of the same files at once: the second finds the first
+  one's commit on the branch, takes it as its own, and records it again.
 - A submit that would change an executable file, a symbolic link, or a
   submodule is refused with `file_mode`, naming the path, and nothing is
   committed. `createCommitOnBranch` writes every file it adds as a plain
@@ -1818,8 +1820,12 @@ never reaches the tool.
   [Claims](#claims) and [The issue room](#the-issue-room), with a
   `submitted` event. A room that refuses it, as for a claim that expired
   meanwhile, refuses the submit, and the commit stays on the branch.
-- Then the server counts the lines the branch adds and removes from the
-  start commit, as GitHub's comparison gives them, and checks GitHub again,
+- Then the server counts the lines the branch adds and removes, as
+  GitHub's comparison gives them, from where the branch parts from the
+  code repo's default branch as it is then. That is the PR's own change:
+  the start commit until main is merged into the branch, as by Update
+  branch, and main's head after. The answer's diff runs from the same
+  place. Then it checks GitHub again,
   with the donor's token, for an open PR linked to the issue by the sync's
   rule under [Tagged issues](#tagged-issues). The PRs the room knows of
   count too, and the claim's own PR doesn't.
@@ -1876,8 +1882,9 @@ queue.
   reason, and the work stays in the queue.
 
 **The review queue.** `my_work` lists the donor's claims awaiting review,
-as each claim's room holds it now, with its latest submit: the diff from the
-start commit on GitHub, the lines added and removed, the agent and model,
+as each claim's room holds it now, with its latest submit: the diff on
+GitHub and the lines added and removed, both from where the branch parts
+from the default branch as it was at that submit, the agent and model,
 the summary and what was checked, why it waits, when it expires, whether
 the project wants a person-written description, and an open PR on the issue
 from anyone, from the room or, read with the donor's token, from GitHub.

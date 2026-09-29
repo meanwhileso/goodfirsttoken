@@ -30,6 +30,7 @@ function submission(claimId: string, rest: Partial<SubmissionRecord> = {}): Subm
     branch: `goodfirsttoken/issue-12-${claimId}`,
     commit: 'a'.repeat(40),
     base: sha,
+    diffFrom: sha,
     paths: ['src/rewrite.ts'],
     title: 'Keep the trailing slash in rewrites',
     summary: 'Keeps the slash.',
@@ -57,6 +58,7 @@ describe('submissions', () => {
     const later = submission('c_1', {
       commit: 'b'.repeat(40),
       base: 'c'.repeat(40),
+      diffFrom: 'd'.repeat(40),
       paths: ['src/a.ts'],
       additions: null,
       deletions: null,

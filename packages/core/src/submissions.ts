@@ -62,6 +62,12 @@ export const submissionRecordSchema = z.object({
    * else pushed to it.
    */
   base: commitSha,
+  /**
+   * The head of the code repo's default branch when the latest submit was
+   * made. The lines and the diff are measured from where the branch parts
+   * from it, as the PR's own change is.
+   */
+  diffFrom: commitSha,
   /** The paths the latest submit sent, which the branch changes from `base`. */
   paths: z.array(z.string().min(1)).max(300),
   title: prTitle,
@@ -71,7 +77,7 @@ export const submissionRecordSchema = z.object({
   checks: trimmedText(MAX_SUBMIT_NOTES),
   agent: agentName,
   model: modelName,
-  /** Lines added and removed from the start commit, as GitHub counts them, or null when it didn't say. */
+  /** Lines added and removed from `diffFrom`, as GitHub counts them, or null when it didn't say. */
   additions: count.nullable(),
   deletions: count.nullable(),
   /** Why the work waits for the donor, or null when its PR was to open by itself. */

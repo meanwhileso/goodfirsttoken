@@ -580,7 +580,10 @@ export async function submitWork(
       message: `${recorded.refusal.message} The commit ${committed.sha.slice(0, 7)} is on ${target}:${branch} all the same.`,
     });
   }
-  const lines = await writer.lineCounts(target, claim.startCommit, committed.sha);
+  // The PR's own change: from where the branch parts from the default
+  // branch, so main's changes an Update branch merged in don't count.
+  const diffFrom = facts.head ?? claim.startCommit;
+  const lines = await writer.lineCounts(target, diffFrom, committed.sha);
   const prs = await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name]);
   const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
   const reason =
@@ -604,6 +607,7 @@ export async function submitWork(
     branch,
     commit: committed.sha,
     base,
+    diffFrom,
     paths: input.files.map((file) => file.path),
     title,
     summary,
@@ -616,7 +620,7 @@ export async function submitWork(
     submittedAt: now,
   });
 
-  const urls = branchUrls(target, branch, claim.startCommit);
+  const urls = branchUrls(target, branch, diffFrom);
   const result = (state: ClaimRecord['state'], pr: PrRef | null, why: ReviewReason | null) =>
     answer(
       toolResult('submit_work', {
@@ -738,7 +742,7 @@ export async function readyToOpen(caller: Caller, origin: string, now: number): 
       title: copy?.title ?? submission.title,
       url: gitHubIssueUrl(claim.issue),
       liveUrl: liveUrl(origin, claim.issue),
-      diffUrl: branchUrls(submission.repo, submission.branch, claim.startCommit).diff,
+      diffUrl: branchUrls(submission.repo, submission.branch, submission.diffFrom).diff,
       additions: submission.additions,
       deletions: submission.deletions,
       agent: submission.agent,

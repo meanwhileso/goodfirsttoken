@@ -575,16 +575,22 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   GitHub's `STALE_DATA` means the branch moved, and the branch is read
   again, up to three tries.
 - **Recording.** The room records the submit after the commit lands. Then
-  the lines come from `GET .../compare/{start}...{commit}` in the repo the
-  branch is in, which lists up to 300 files, and `saveSubmission` writes
+  the lines come from `GET .../compare/{main}...{commit}` in the repo the
+  branch is in, where `{main}` is the head of the code repo's default
+  branch that `readRepoFacts` read, which a fork's network has. A
+  three-dot comparison runs from the merge base, so it counts the PR's own
+  change. `submissions.diff_from` keeps that head for the review queue's
+  diff. The comparison lists up to 300 files, and `saveSubmission` writes
   the row. A PR goes to the room with `openPr`, then to `prs` with
-  `addPr`. A call that dies after its commit leaves the commit
-  on the branch unrecorded. The same submit again finds the donor's own
-  commit on the expected head, holding the files, and records it. When the
-  claim's room has a first submit and `submissions` has no row, the room
-  already recorded it, and it isn't recorded there again. Its PR, likewise, is found by `GET .../pulls?head=`, since
-  GitHub answers a PR already open from the branch with a 422 whose message
-  names no reason.
+  `addPr`. A call that dies after its commit leaves the commit on the
+  branch unrecorded. The same submit again finds the donor's own commit on
+  the expected head, holding the files, and records it. When the claim's
+  room has a first submit and `submissions` has no row, the room already
+  recorded it, and it isn't recorded there again. Two calls at once with
+  the same files take the one commit by the same rule, and the room
+  records both, since it keeps no commit to tell them apart. A PR, likewise,
+  is found by `GET .../pulls?head=`, since GitHub answers a PR already open
+  from the branch with a 422 whose message names no reason.
 - **What a submit costs.** A first submit to a fork of files two folders
   deep makes about 14 calls to GitHub: the repo, the issue, the fork, the
   branch, a GraphQL read of each folder level on the way to the files and
@@ -1046,7 +1052,9 @@ that break the rules, so it returns the problems for the caller to show.
 - **Migration `0007_submissions.sql`** makes `submissions`, one row per
   claim, which each submit writes over, with a foreign key to the claim.
   `base` is the commit the files are read against, the start commit or a
-  head named with `onto`. `paths` is a JSON list. The lines added and
+  head named with `onto`. `diff_from` is the default branch's head at the
+  latest submit, which the lines and the diff run from. `paths` is a JSON
+  list. The lines added and
   removed are null when GitHub didn't say. The review reason is null for
   work whose PR was to open by itself. `my_work` reads the rows of a
   donor's claims awaiting review by key.

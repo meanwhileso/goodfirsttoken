@@ -5,6 +5,8 @@
 -- where the branch is, the project's code repo or the donor's fork, as
 -- GitHub named it. base is the commit the submits' files are read against:
 -- the claim's start commit, or a head of the branch someone else pushed.
+-- diff_from is the code repo's default branch head at the latest submit,
+-- and additions and deletions count from where the branch parts from it.
 -- paths is a JSON list of the paths the latest submit sent, so the next
 -- submit can put back a file it leaves out. summary and checks
 -- are the agent's, with keys and tokens replaced. review_reason is why the
@@ -15,6 +17,7 @@ CREATE TABLE submissions (
   branch TEXT NOT NULL,
   commit_sha TEXT NOT NULL,
   base TEXT NOT NULL,
+  diff_from TEXT NOT NULL,
   paths TEXT NOT NULL,
   title TEXT NOT NULL,
   summary TEXT NOT NULL,
