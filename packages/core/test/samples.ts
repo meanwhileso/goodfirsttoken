@@ -155,6 +155,7 @@ export const samples: Samples = {
       state: 'pr_opened',
       commit: { sha, url: `https://github.com/priya/goodfirsttoken/commit/${sha}` },
       branch: { repo: 'priya/goodfirsttoken', name: 'gft-918', url: 'https://github.com/priya/goodfirsttoken/tree/gft-918' },
+      diffUrl: `https://github.com/priya/goodfirsttoken/compare/${sha}...gft-918`,
       pr,
       reviewReason: null,
     },
@@ -185,6 +186,8 @@ export const samples: Samples = {
           prOnIssue: { ...pr, number: 960, url: `https://github.com/${repo}/pull/960` },
           expiresAt: later,
           personWrittenDescription: true,
+          openable: true,
+          reason: null,
         },
       ],
       working: [{ ...claim, resumable: true, reason: null }],
@@ -202,7 +205,7 @@ export const samples: Samples = {
     ],
   },
   open_pr: {
-    output: { claimId: 'c_2', issue, state: 'pr_opened', pr },
+    output: { claimId: 'c_2', issue, state: 'pr_opened', pr, prOnIssue: null },
     mentions: ['PR #957', pr.url],
   },
   set_interests: {

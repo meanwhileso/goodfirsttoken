@@ -17,7 +17,7 @@
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 
 import { GraphQLError, Kind, buildSchema, getOperationAST, graphql, parse, type DocumentNode } from 'graphql';
-import { base64ToBytes, blobText, bytesToBase64, lookupPath, type GitPerson, type Oid } from './git.ts';
+import { base64ToBytes, blobText, bytesToBase64, entryMode, lookupPath, type GitPerson, type Oid } from './git.ts';
 import { avatarUrl, nodeId, type Ctx } from './shapes.ts';
 import { own } from './own.ts';
 import {
@@ -31,7 +31,10 @@ import {
   findRepo,
   findRepoByFullName,
   fullName,
+  gitReady,
+  requireGit,
   roleOf,
+  workflowRefusal,
   type IssueRecord,
   type PullData,
   type RepoRecord,
@@ -365,10 +368,14 @@ function repositoryNode(ctx: Ctx, repo: RepoRecord) {
       const role = roleOf(repo, ctx.viewer);
       return role ? PERMISSION[role] : null;
     },
-    defaultBranchRef: () => refNode(ctx, repo, repo.defaultBranch),
-    ref: ({ qualifiedName }: { qualifiedName: string }) => refNode(ctx, repo, qualifiedName.replace(/^refs\/heads\//, '')),
-    object: ({ expression, oid }: { expression?: string; oid?: string }) =>
-      oid !== undefined ? objectNode(ctx, repo, resolveRev(ctx, repo, oid), '') : objectAt(ctx, repo, expression ?? ''),
+    // A fork GitHub is still making has no git data to read yet.
+    defaultBranchRef: () => (gitReady(repo, ctx.now) ? refNode(ctx, repo, repo.defaultBranch) : null),
+    ref: ({ qualifiedName }: { qualifiedName: string }) =>
+      gitReady(repo, ctx.now) ? refNode(ctx, repo, qualifiedName.replace(/^refs\/heads\//, '')) : null,
+    object: ({ expression, oid }: { expression?: string; oid?: string }) => {
+      if (!gitReady(repo, ctx.now)) return null;
+      return oid !== undefined ? objectNode(ctx, repo, resolveRev(ctx, repo, oid), '') : objectAt(ctx, repo, expression ?? '');
+    },
     // A number that belongs to a PR is no issue, and one that belongs to an
     // issue is no PR, as on GitHub.
     issue: ({ number }: { number: number }) => {
@@ -545,7 +552,7 @@ function objectNode(ctx: Ctx, repo: RepoRecord, oid: Oid | null, path: string): 
             name: entry.name,
             path: entryPath,
             type: entry.type,
-            mode: entry.type === 'blob' ? 0o100644 : 0o40000,
+            mode: parseInt(entryMode(entry), 8),
             oid: entry.oid,
             size: target?.type === 'blob' ? target.size : 0,
             object: () => objectNode(ctx, repo, entry.oid, entryPath),
@@ -622,7 +629,13 @@ interface CreateCommitInput {
   message: { headline: string; body?: string };
 }
 
-const KIND_TYPE = { not_found: 'NOT_FOUND', forbidden: 'FORBIDDEN', invalid: 'UNPROCESSABLE', stale: 'STALE_DATA' };
+const KIND_TYPE = {
+  not_found: 'NOT_FOUND',
+  forbidden: 'FORBIDDEN',
+  invalid: 'UNPROCESSABLE',
+  stale: 'STALE_DATA',
+  empty: 'UNPROCESSABLE',
+};
 
 function rootValue(ctx: Ctx, now: string) {
   return {
@@ -634,24 +647,31 @@ function rootValue(ctx: Ctx, now: string) {
     },
     viewer: () => ownerNode(ctx, ctx.viewer ?? ''),
     // Appends a commit to the branch as the person whose token made the
-    // call. GitHub commits and signs it.
+    // call. GitHub commits and signs it. A change to a workflow file needs
+    // the workflow scope, unless another branch has the same file.
     createCommitOnBranch: ({ input }: { input: CreateCommitInput }) => {
       const { repo, name } = committableBranch(ctx, input.branch);
       const login = ctx.viewer ?? '';
       if (!canPush(roleOf(repo, login))) {
         throw fail('FORBIDDEN', `${login} does not have the correct permissions to execute \`CreateCommitOnBranch\``);
       }
+      const change = {
+        additions: (input.fileChanges?.additions ?? []).map((a) => ({
+          path: a.path,
+          contents: base64ToBytes(a.contents),
+        })),
+        deletions: (input.fileChanges?.deletions ?? []).map((d) => d.path),
+      };
       try {
+        requireGit(repo, now);
+        const refused = workflowRefusal(ctx.state, repo, name, change, ctx.scopes);
+        if (refused !== null) throw new FakeError('forbidden', refused);
         const oid = commitOnBranch(
           ctx.state,
           repo,
           name,
           {
-            additions: (input.fileChanges?.additions ?? []).map((a) => ({
-              path: a.path,
-              contents: base64ToBytes(a.contents),
-            })),
-            deletions: (input.fileChanges?.deletions ?? []).map((d) => d.path),
+            ...change,
             headline: input.message.headline,
             body: input.message.body ?? null,
             login,

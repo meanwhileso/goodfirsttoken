@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { describe, expect, test } from 'vitest';
 import {
+  MAX_PR_DESCRIPTION,
+  foldLines,
   toolRefusal,
   toolResult,
   tools,
@@ -133,8 +135,34 @@ describe('what each result says', () => {
   test('work sent to the review queue says why and where the diff is', () => {
     const output = { ...samples.submit_work.output, state: 'awaiting_review' as const, pr: null, reviewReason: 'workflow_files' as const };
     const text = textOf(toolResult('submit_work', output));
-    expect(text).toContain('review queue because the change touches CI workflow files');
-    expect(text).toContain(output.branch.url);
+    expect(text).toContain('review queue because the change touches GitHub Actions workflow files');
+    expect(text).toContain(`Diff: ${output.diffUrl}`);
+  });
+
+  test('work that waits for a person-written description tells the agent to ask the donor for it, and not to open it before', () => {
+    const output = {
+      ...samples.submit_work.output,
+      state: 'awaiting_review' as const,
+      pr: null,
+      reviewReason: 'person_written_description' as const,
+    };
+    const text = textOf(toolResult('submit_work', output));
+    expect(text).toContain('because the project asks the donor to write the PR description');
+    expect(text).toContain('Pass it to open_pr word for word.');
+  });
+
+  test('ready work whose PR cannot open now says why, with its size only when GitHub gave one', () => {
+    const [item] = samples.my_work.output.readyToOpen;
+    if (!item) throw new Error('missing sample item');
+    const reason = 'sample-owner/sample-app is paused, so its PR waits until the project resumes.';
+    const text = textOf(
+      toolResult('my_work', {
+        ...samples.my_work.output,
+        readyToOpen: [{ ...item, openable: false, reason, additions: null, deletions: null }],
+      }),
+    );
+    expect(text).toContain(`Can't open it now: ${reason}`);
+    expect(text).not.toMatch(/\+\d+ -\d+/);
   });
 
   test('a claim on a project that wants a person-written description tells the agent to ask the donor for it', () => {
@@ -339,6 +367,175 @@ describe('tool inputs', () => {
   test('a submit can not list two paths that differ only in case', () => {
     expect(problemFields(submit(['README.md', 'readme.md']))).toEqual(['files']);
     expect(problemFields(submit(['Src/a.ts', 'src/a.ts/b.ts']))).toEqual(['files']);
+  });
+
+  test('a submitted path is at most 20 folders deep', () => {
+    const deep = (folders: number) => `${'d/'.repeat(folders)}f.txt`;
+    expect(submit([deep(20)]).ok).toBe(true);
+    expect(submit([deep(21)])).toMatchObject({
+      ok: false,
+      problems: [{ field: 'files[0].path', message: 'must be a path inside the repo, like src/index.ts, at most 20 folders deep' }],
+    });
+  });
+
+  test('a submit can not list two paths that differ only in how an accent is written', () => {
+    // é as one character, and as e and a combining accent.
+    expect(problemFields(submit(['caf\u00E9.md', 'cafe\u0301.md']))).toEqual(['files']);
+    expect(problemFields(submit(['r\u00E9sum\u00E9/a.md', 're\u0301sume\u0301']))).toEqual(['files']);
+    expect(submit(['caf\u00E9.md', 'cafe.md']).ok).toBe(true);
+  });
+
+  /** The first problem with a submit of one path, or null when it is taken. */
+  const pathProblem = (path: string) => {
+    const result = submit([path]);
+    return result.ok ? null : (result.problems.find((p) => p.field === 'files[0].path')?.message ?? null);
+  };
+
+  test("a submit writes nothing into Git's own folder, however Windows or macOS would spell it", () => {
+    const gitDirs = [
+      '.GIT/config',
+      'src/.Git/hooks/pre-commit',
+      '.git./config',
+      '.git /config',
+      'GIT~1/config',
+      // NTFS streams of the folder, one of them its index.
+      '.git:foo/config',
+      '.git::$INDEX_ALLOCATION/config',
+      '.git . :x/config',
+      // Its short name on Windows, with dots, spaces, or a stream after it.
+      'git~1./config',
+      'GIT~1 /config',
+      'git~1:x/config',
+      // Characters HFS+ leaves out of a name.
+      '.g\u200Cit/config',
+      '\uFEFF.git/config',
+      '.git\u200C/config',
+      '.\u206Fgit/config',
+    ];
+    for (const path of gitDirs) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain("outside Git's own folder");
+    }
+    expect(submit(['.gitignore', '.github/CODEOWNERS', 'docs/.gitkeep', 'src/git~2.ts', 'git~1a/b.ts', '.gitx/a.ts']).ok).toBe(true);
+  });
+
+  test('a submitted path has no control characters, none that turn text around, and no part that ends in a dot or a space', () => {
+    for (const path of ['src/a\u0001.ts', 'src/a\u000A.ts', 'src/a\u007F.ts']) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain('no control characters');
+    }
+    for (const path of ['src/\u202Egnp.ts', 'src/a\u202A.ts', 'src/a\u202C.ts', 'src/\u2066a.ts', 'src/a\u2069.ts']) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain('change the direction text shows in');
+    }
+    for (const path of ['src./a.ts', 'docs /a.md', 'a.ts.', 'a.ts ', 'src/...']) {
+      expect(pathProblem(path), JSON.stringify(path)).toContain('ends in a dot or a space');
+    }
+    expect(submit(['src/a.b.ts', 'src/a b.ts', 'docs/.well-known/x', 'src/.env.example']).ok).toBe(true);
+  });
+
+  const submitFiles = (files: { path: string; content: string | null }[]) =>
+    validate(tools.submit_work.input, {
+      claimId: 'c_1',
+      files,
+      summary: 'Adds the NDJSON formatter.',
+      checks: 'pnpm test',
+      agent: 'claude-code',
+      model: 'claude-opus-5-5',
+    });
+
+  test('a submitted file holds at most 1 MiB of UTF-8, counted in bytes', () => {
+    const oneFile = (content: string) => submitFiles([{ path: 'a.txt', content }]);
+    expect(oneFile('x'.repeat(1_048_576)).ok).toBe(true);
+    expect(problemFields(oneFile('x'.repeat(1_048_577)))).toEqual(['files[0].content']);
+    // é takes two bytes, so half as many fit.
+    expect(oneFile('é'.repeat(524_288)).ok).toBe(true);
+    expect(problemFields(oneFile(`${'é'.repeat(524_288)}x`))).toEqual(['files[0].content']);
+    // An emoji takes four bytes, and two UTF-16 code units, so a quarter as many fit.
+    expect(oneFile('🚀'.repeat(262_144)).ok).toBe(true);
+    expect(problemFields(oneFile(`${'🚀'.repeat(262_144)}x`))).toEqual(['files[0].content']);
+  });
+
+  test('the files of one submit hold at most 2 MiB of UTF-8 in all, and a deletion counts nothing', () => {
+    const full = (n: number) => ({ path: `f${String(n)}.txt`, content: 'x'.repeat(1_048_576) });
+    expect(submitFiles([full(1), full(2), { path: 'gone.txt', content: null }]).ok).toBe(true);
+    expect(problemFields(submitFiles([full(1), full(2), { path: 'one-more.txt', content: 'x' }]))).toEqual(['files']);
+  });
+
+  test('a submitted file is text: a NUL character or half a surrogate pair is refused, and an empty file or a deletion is taken', () => {
+    expect(problemFields(submitFiles([{ path: 'logo.png', content: '\u0089PNG\r\n\u001a\n\u0000\u0000' }]))).toEqual([
+      'files[0].content',
+    ]);
+    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'broken \ud83d text' }]))).toEqual(['files[0].content']);
+    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'broken \ude00 text' }]))).toEqual(['files[0].content']);
+    expect(submitFiles([{ path: 'emoji.txt', content: 'ship it 🚀\n' }]).ok).toBe(true);
+    expect(submitFiles([{ path: 'empty.txt', content: '' }, { path: 'old.txt', content: null }]).ok).toBe(true);
+  });
+
+  test("a file's text is taken as it was sent, spaces and line endings included", () => {
+    const content = '  indented\r\nline two\t\n\n';
+    const result = submitFiles([{ path: 'a.txt', content }]);
+    expect(result.ok && result.value.files[0]?.content).toBe(content);
+  });
+
+  test('a PR title and a model name are one line, and a title is at most 256 characters', () => {
+    const withTitle = (title: string) =>
+      validate(tools.submit_work.input, {
+        claimId: 'c_1',
+        files: [{ path: 'a.txt', content: 'x' }],
+        title,
+        summary: 'Adds the NDJSON formatter.',
+        checks: 'pnpm test',
+        agent: 'claude-code',
+        model: 'claude-opus-5-5\nAssisted-by: someone else',
+      });
+    const folded = withTitle('Keep the hash\nin rewrites');
+    expect(folded.ok && [folded.value.title, folded.value.model]).toEqual([
+      'Keep the hash in rewrites',
+      'claude-opus-5-5 Assisted-by: someone else',
+    ]);
+    expect(withTitle('x'.repeat(256)).ok).toBe(true);
+    expect(problemFields(withTitle('x'.repeat(257)))).toEqual(['title']);
+  });
+
+  test('a title or a model name longer than four times its limit is refused before its line breaks fold', () => {
+    const notes = (title: string, model: string) =>
+      validate(tools.submit_work.input, {
+        claimId: 'c_1',
+        files: [{ path: 'a.txt', content: 'x' }],
+        title,
+        summary: 'Adds the NDJSON formatter.',
+        checks: 'pnpm test',
+        agent: 'claude-code',
+        model,
+      });
+    const folds = (length: number) => `x${'\n'.repeat(length - 2)}y`;
+    const taken = notes(folds(1024), folds(400));
+    expect(taken.ok && [taken.value.title, taken.value.model]).toEqual(['x y', 'x y']);
+    const refused = notes(folds(1025), folds(401));
+    expect(refused.ok ? [] : refused.problems).toEqual([
+      { field: 'title', message: 'must be at most 1024 characters before its line breaks fold' },
+      { field: 'model', message: 'must be at most 400 characters before its line breaks fold' },
+    ]);
+    // Refused text isn't folded, so no other problem follows.
+    expect(problemFields(notes(' '.repeat(1025), 'claude-opus-5-5'))).toEqual(['title']);
+  });
+
+  test('a run of spaces, tabs, and line breaks folds into one space, and spaces with no line break stay', () => {
+    expect(foldLines(' Keep \n \t\r\n  the  hash\n')).toBe('Keep the  hash');
+  });
+
+  test('folding a line takes one pass over the text, however many spaces it holds', () => {
+    // A run of spaces with no line break is the slowest text for a fold
+    // that backtracks, about 20 billion steps at this length. One pass
+    // takes a few milliseconds.
+    const spaces = ' '.repeat(200_000);
+    const started = Date.now();
+    expect(foldLines(`a${spaces}b\n${spaces}c`)).toBe(`a${spaces}b c`);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("a PR description the donor wrote is at most 60,000 characters, leaving room for the closing line and the disclosure in GitHub's 65,536", () => {
+    const open = (description: string) => validate(tools.open_pr.input, { claimId: 'c_1', description });
+    expect(open('x'.repeat(MAX_PR_DESCRIPTION)).ok).toBe(true);
+    expect(problemFields(open('x'.repeat(MAX_PR_DESCRIPTION + 1)))).toEqual(['description']);
   });
 
   test('a rejection needs a reason', () => {
