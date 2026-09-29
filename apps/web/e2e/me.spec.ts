@@ -26,7 +26,17 @@ test.describe.configure({ mode: 'serial' });
 let agent: Client;
 const claims = new Map<string, string>();
 
+// The site counts sign-ins by client address, and the other specs' browser
+// sign-ins all come from one, some within the same minute as these. So this
+// file's come from an address of its own. Only the sign-in carries it: a
+// header on every request would make the browser ask the static host first
+// for each font, which it refuses.
+const ADDRESS = runAddress();
+
 async function devSignIn(page: Page, login: string) {
+  await page.route(`${SITE}/auth/dev/sign-in`, (route) =>
+    route.continue({ headers: { ...route.request().headers(), 'cf-connecting-ip': ADDRESS } }),
+  );
   await page.goto('/');
   await page.evaluate((person) => {
     const form = document.createElement('form');
@@ -165,9 +175,13 @@ test('Open PR on /me opens the PR on GitHub as the donor, with the token from he
     token: string | null;
     login: string | null;
   }[];
-  const opened = calls.filter((c) => c.operation === 'POST /repos/{owner}/{repo}/pulls' && c.url.includes('/sample-desktop/'));
+  // The fake's log is the whole run's, so it holds other tests' PRs too,
+  // like the one mcp-apps-flow.spec.ts opens as lena. This test's is priya's.
+  const opened = calls.filter(
+    (c) => c.operation === 'POST /repos/{owner}/{repo}/pulls' && c.url.includes('/sample-desktop/') && c.login === 'priya',
+  );
   const committed = calls.filter((c) => c.operation.startsWith('mutation createCommitOnBranch') && c.login === 'priya');
-  expect(opened.map((c) => c.login)).toEqual(['priya']);
+  expect(opened).toHaveLength(1);
   expect(committed.length).toBeGreaterThan(0);
   expect(committed.map((c) => c.token)).not.toContain(opened[0]?.token);
 });

@@ -51,8 +51,7 @@ export default defineConfig({
     { name: 'apps', use: { ...devices['Desktop Chrome'] }, testMatch: /mcp-apps-flow\.spec\.ts$/, dependencies: ['skills'] },
     // /me's tests have a donor's agent claim sample issues, and open PRs on
     // them from /me, which the homepage, the project pages, and the issue
-    // pages would show. So they run after the rest, and after apps, which
-    // opens PRs on the same sample repos.
+    // pages would show. So they run after the rest.
     { name: 'me', use: { ...devices['Desktop Chrome'] }, testMatch: /\/me\.spec\.ts$/, dependencies: ['apps'] },
   ],
   webServer: [

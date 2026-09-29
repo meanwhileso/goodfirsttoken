@@ -3294,9 +3294,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   `me.spec.ts` connects a sample donor's agent with the MCP client SDK,
   through `scripts/skill-run.ts`, which claims and submits work on two
   sample issues. Then it opens their PRs from `/me`, and disconnects the
-  agent there. The other pages would show those PRs, and
-  `mcp-apps-flow.spec.ts` opens PRs on the same sample repos, so it runs
-  last, in the `me` project, which depends on `apps`.
+  agent there. The other pages would show those PRs, so it runs last, in
+  the `me` project, which depends on `apps`. `mcp-apps-flow.spec.ts` leaves
+  out the issue `me.spec.ts` claims, so neither finds the other's PR on it.
 - **The preview's own data.** `vite.config.ts` and
   `scripts/migrate-local.mjs` keep the local D1, Durable Objects, KV, and
   queues in `apps/web/.wrangler/state`, or in `LOCAL_STATE_DIR` when it is
