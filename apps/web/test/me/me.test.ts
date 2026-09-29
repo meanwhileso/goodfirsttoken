@@ -1,4 +1,4 @@
-import type { ProjectSettingsInput } from '@goodfirsttoken/core';
+import { REVIEW_WINDOW_MS, type ProjectSettingsInput } from '@goodfirsttoken/core';
 import type { FakeState, GitHubFake } from '@goodfirsttoken/github-fake';
 import { symmetricDecrypt } from 'better-auth/crypto';
 import { env } from 'cloudflare:workers';
@@ -190,6 +190,12 @@ describe('the review queue on /me', () => {
     expect(page).not.toContain('<img src=x');
   });
 
+  test('says how long work waits for its PR, as long as core keeps it in the queue', async () => {
+    const page = await (await (await site('lena')).fetch('/me')).text();
+
+    expect(page).toContain(`for ${String(REVIEW_WINDOW_MS / 86_400_000)} days after its first submit.`);
+  });
+
   test('with no work waiting, it says so', async () => {
     const page = await (await (await site('lena')).fetch('/me')).text();
 
@@ -285,6 +291,45 @@ describe('Open PR on /me', () => {
 
     expect(answer.status).toBe(303);
     expect(location(answer).pathname).toBe('/sign-in');
+    expect(pulls()).toEqual([]);
+    expect(await stateOf(issue, claimId)).toBe('awaiting_review');
+  });
+
+  test("when GitHub answers with a server error, the page says no PR opened and to try again, and the work stays in the queue", async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const claimId = await submitted(priya, issue);
+    const browser = await site('priya');
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url.startsWith(github.apiUrl)) {
+        return Promise.resolve(Response.json({ message: 'Server Error' }, { status: 502 }));
+      }
+      return github.fetch(request);
+    });
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId)));
+
+    expect(shown(answer)).toContain("No PR opened. GitHub didn&#x27;t answer. Try again in a minute.");
+    expect(pulls()).toEqual([]);
+    expect(await stateOf(issue, claimId)).toBe('awaiting_review');
+  });
+
+  test("when the donor's GitHub rate limit is spent, the page says no PR opened and to try again", async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const claimId = await submitted(priya, issue);
+    const browser = await site('priya');
+    const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+    github.state.rateLimits = {
+      priya: { core: { limit: 5000, used: 5000, resetAt }, graphql: { limit: 5000, used: 5000, resetAt } },
+    };
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId)));
+
+    expect(shown(answer)).toContain("No PR opened. GitHub didn&#x27;t answer. Try again in a minute.");
     expect(pulls()).toEqual([]);
     expect(await stateOf(issue, claimId)).toBe('awaiting_review');
   });

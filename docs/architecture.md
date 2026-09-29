@@ -831,7 +831,9 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   tools run the same code with the agent's grant.
 - **A claim that isn't theirs** throws `PermissionRefused` from `ownClaim`,
   as it does for the tool, before a `DonorWriter` exists, so nothing reads
-  GitHub. The form's answer turns it into the page's notice.
+  GitHub. The form's answer turns it into the page's notice, and a
+  `GitHubError` that escapes `openPrAs` too, so a rate limit or a GitHub
+  that doesn't answer gives a notice and no `500`.
 - **The server function** runs `loadMePage`, which reads the session first
   and answers `signed_out` with nothing read. It reads the agents, the
   queue, the person, and the notice at once. `readQueue` catches a failure
@@ -853,6 +855,11 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   page, and for `/me` only to the person, it was made for. The notice's
   dismiss link is a router link, so it reads the page's data again through
   the server function.
+- **Numbers from core.** The review window on `/me`, and each default and
+  range on `/maintainers`, render from core's exports, `REVIEW_WINDOW_MS`,
+  `defaultDisclosure`, and the `DEFAULT_`, `MIN_`, and `MAX_` settings
+  constants the settings schema uses, so the pages can't drift from the
+  rules.
 - **No migration.** The page reads and writes what the tools already do.
 
 ### The views for MCP Apps hosts

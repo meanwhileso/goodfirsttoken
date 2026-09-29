@@ -1,4 +1,4 @@
-import { MAX_PR_DESCRIPTION, productName, type Interests, type ReviewReason } from '@goodfirsttoken/core';
+import { MAX_PR_DESCRIPTION, productName, REVIEW_WINDOW_MS, type Interests, type ReviewReason } from '@goodfirsttoken/core';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { Fragment, useId, type ReactNode } from 'react';
 import { noticeParams } from '../auth/notice-params';
@@ -207,7 +207,7 @@ function ReadyToOpen({ queue, now }: { queue: Queue; now: number }) {
         </ul>
       )}
       <p className="mono small faint account__note">
-        Work your agent submits waits here until you open its PR, for 7 days after its first submit.
+        {`Work your agent submits waits here until you open its PR, for ${String(REVIEW_WINDOW_MS / DAY)} days after its first submit.`}
       </p>
     </RailSection>
   );

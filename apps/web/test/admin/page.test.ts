@@ -2,6 +2,7 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { loadAdminPage } from '../../src/admin/page';
+import { signNotice } from '../../src/auth/notice';
 import {
   addCandidate,
   addToDoNotList,
@@ -66,6 +67,15 @@ async function back(browser: Browser, answer: Response): Promise<string> {
   const page = await browser.fetch(`${to.pathname}${to.search}`);
   expect(page.status).toBe(200);
   return page.text();
+}
+
+/**
+ * The notice the page shows, as HTML, or null when it shows none. The
+ * page's address, which holds any notice, also rides in the page's own
+ * data, so a test reads the notice where the page shows it.
+ */
+function shownNotice(html: string): string | null {
+  return /<p class="admin__notice" role="status">(.*?)<a /s.exec(html)?.[1] ?? null;
 }
 
 /** The queue item ID of HARBOR's registration, from the page's form. */
@@ -275,6 +285,36 @@ describe("the admin page's forms", () => {
     const html = await (await browser.fetch(`/admin?notice=Approve+sample-owner%2Fevil+now.&sig=${forged}`)).text();
 
     expect(html).not.toContain('Approve sample-owner/evil now.');
+  });
+
+  test("a notice signed for the admin's own /me shows nothing on /admin", async () => {
+    const browser = await signedIn('sample-admin');
+    const notice = 'Approved sample-owner/evil. It is listed now.';
+    const sig = await signNotice('me-notice:1010', notice);
+
+    const html = await (await browser.fetch(`/admin?${new URLSearchParams({ notice, sig }).toString()}`)).text();
+
+    expect(shownNotice(html)).toBeNull();
+  });
+
+  test('a notice signed the way /admin has always signed them still shows, so links made before keep working', async () => {
+    const browser = await signedIn('sample-admin');
+    const notice = `Approved ${HARBOR}. It is listed now.`;
+    // HMAC-SHA256 of "admin-notice:" and the notice, keyed with AUTH_SECRET,
+    // in base64url: the signature /admin's forms have always sent.
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(env.AUTH_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`admin-notice:${notice}`)));
+    const sig = btoa(String.fromCharCode(...mac)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+
+    const html = await (await browser.fetch(`/admin?${new URLSearchParams({ notice, sig }).toString()}`)).text();
+
+    expect(shownNotice(html)).toContain(notice);
   });
 
   test('listing one by hand lists it from its policy, and the list shows it', async () => {

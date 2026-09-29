@@ -34,9 +34,13 @@ const claims = new Map<string, string>();
 const ADDRESS = runAddress();
 
 async function devSignIn(page: Page, login: string) {
-  await page.route(`${SITE}/auth/dev/sign-in`, (route) =>
-    route.continue({ headers: { ...route.request().headers(), 'cf-connecting-ip': ADDRESS } }),
-  );
+  // The sign-ins this route gave the file's own address, so the test knows
+  // the sign-in didn't come from the address the other specs share.
+  let routed = 0;
+  await page.route(`${SITE}/auth/dev/sign-in`, (route) => {
+    if (route.request().method() === 'POST') routed++;
+    return route.continue({ headers: { ...route.request().headers(), 'cf-connecting-ip': ADDRESS } });
+  });
   await page.goto('/');
   await page.evaluate((person) => {
     const form = document.createElement('form');
@@ -50,6 +54,7 @@ async function devSignIn(page: Page, login: string) {
     form.submit();
   }, login);
   await page.waitForURL((url) => url.pathname === '/me');
+  expect(routed, 'the sign-in went through the route that gives it its own address').toBe(1);
 }
 
 async function scrollsSideways(page: Page): Promise<boolean> {

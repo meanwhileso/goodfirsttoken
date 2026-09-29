@@ -148,8 +148,11 @@ async function openPrForm(caller: Caller, form: FormData, now: number): Promise<
   } catch (error) {
     // Someone else's claim is refused before anything is read or written.
     if (error instanceof PermissionRefused) return `No PR opened. ${error.message}`;
-    if (error instanceof GitHubError && error.status === 401) return `No PR opened. ${SIGN_IN_AGAIN}`;
-    throw error;
+    if (!(error instanceof GitHubError)) throw error;
+    if (error.status === 401) return `No PR opened. ${SIGN_IN_AGAIN}`;
+    // A spent rate limit, or GitHub down, as the queue's read says it.
+    console.error(`Open PR on /me didn't reach GitHub: ${failureReason(error)}`);
+    return "No PR opened. GitHub didn't answer. Try again in a minute.";
   }
   return opened.ok ? openedText(opened.value) : `No PR opened. ${refusalText(opened.refusal)}`;
 }

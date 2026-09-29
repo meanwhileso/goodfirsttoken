@@ -1,4 +1,15 @@
-import { productName } from '@goodfirsttoken/core';
+import {
+  DEFAULT_CLAIMS_PER_ISSUE,
+  DEFAULT_OPEN_PRS_PER_DONOR,
+  DEFAULT_PR_MODE,
+  DEFAULT_WHO_CAN_CLAIM,
+  defaultDisclosure,
+  MAX_CLAIMS_PER_ISSUE,
+  MAX_OPEN_PRS_PER_DONOR,
+  MIN_CLAIMS_PER_ISSUE,
+  MIN_OPEN_PRS_PER_DONOR,
+  productName,
+} from '@goodfirsttoken/core';
 import { createFileRoute } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { SiteNav } from '../auth/SiteNav';
@@ -9,14 +20,15 @@ import { REPO_URL } from '../components/Nav';
 import { OpenIn } from '../components/OpenIn';
 import { Prompt } from '../components/Prompt';
 import { Rail, RailHead, RailSection } from '../components/Rail';
-import { SplitBadge } from '../components/SplitBadge';
+import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import maintainersCss from '../styles/maintainers-page.css?url';
 
 // The page for maintainers (brand/brief-website.md), which replaced
 // prototype/maintainers.html: how to register a repo from their own agent,
 // the rules they set there, how to take over a listing made from their AI
 // policy, and how to ask to be removed. It reads nothing, and is public.
-// Each sentence says what docs/how-it-works.md says the tools do.
+// Each sentence says what docs/how-it-works.md says the tools do, and each
+// default and range comes from core, which applies them.
 export const Route = createFileRoute('/maintainers')({
   head: () => ({
     meta: [
@@ -63,16 +75,49 @@ function Install() {
   );
 }
 
-function Rule({ name, rule, value, strict, children }: { name: string; rule: string; value: string; strict?: boolean; children: ReactNode }) {
+interface Badge {
+  rule: string;
+  value: string;
+  strict?: boolean;
+}
+
+/** A rule a maintainer sets, with a badge for each part of its default. */
+function Rule({ name, badges, children }: { name: string; badges: Badge[]; children: ReactNode }) {
   return (
     <li className="maintainers-rule">
       <span className="maintainers-rule__name">{name}</span>
       <span className="maintainers-rule__text">{children}</span>
-      <span className="maintainers-rule__badge">
-        <SplitBadge rule={rule} value={value} strict={strict} />
-      </span>
+      <SplitBadges>
+        {badges.map((badge) => (
+          <SplitBadge key={badge.value} rule={badge.rule} value={badge.value} strict={badge.strict} />
+        ))}
+      </SplitBadges>
     </li>
   );
+}
+
+const { trailer, prBody } = defaultDisclosure;
+
+/** The default disclosure as badges, the way a project page draws a project's. */
+const disclosureBadges: Badge[] = [
+  ...(trailer === null ? [] : [{ rule: 'disclose', value: trailer }]),
+  ...(prBody === null ? [] : [{ rule: 'disclose', value: 'in the PR body' }]),
+];
+
+/** The default disclosure in words, with the PR body's line as it goes into the PR. */
+function DefaultDisclosure() {
+  return (
+    <>
+      By default, {trailer !== null && <>the <span className="mono">{trailer}</span> trailer</>}
+      {trailer !== null && prBody !== null && ', and '}
+      {prBody !== null && <>the line <q>{prBody}</q> in the PR body</>}.
+    </>
+  );
+}
+
+/** The whole numbers a setting takes, as "1 to 10". */
+function range(min: number, max: number): string {
+  return `${String(min)} to ${String(max)}`;
 }
 
 function Maintainers() {
@@ -142,36 +187,36 @@ function Maintainers() {
               <Marker as="h2">your rules</Marker>
             </RailHead>
             <ul className="maintainers-rules">
-              <Rule name="Which issues" rule="tags" value="required" strict>
+              <Rule name="Which issues" badges={[{ rule: 'tags', value: 'required', strict: true }]}>
                 Agents work only open issues that carry one of your labels and none of your excluded ones, with no
                 assignee. Pick our <span className="mono">goodfirsttoken</span> label, and it is created with your
                 GitHub account when the repo lacks it.
               </Rule>
-              <Rule name="Slots" rule="slots" value="3">
-                Up to 3 people can hold an issue at once, a number you set from 1 to 10. Once an open PR is linked to
-                the issue, it takes no new claims.
+              <Rule name="Slots" badges={[{ rule: 'slots', value: String(DEFAULT_CLAIMS_PER_ISSUE) }]}>
+                {`Up to ${String(DEFAULT_CLAIMS_PER_ISSUE)} people can hold an issue at once, a number you set from ${range(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE)}.`}{' '}
+                Once an open PR is linked to the issue, it takes no new claims.
               </Rule>
-              <Rule name="PR mode" rule="PRs" value="reviewed" strict>
-                In <span className="mono">reviewed</span>, the default, the person whose agent did the work reads the
+              <Rule name="PR mode" badges={[{ rule: 'PRs', value: DEFAULT_PR_MODE, strict: DEFAULT_PR_MODE === 'reviewed' }]}>
+                In <span className="mono">reviewed</span>, the person whose agent did the work reads the
                 diff and opens the PR. In <span className="mono">automatic</span>, the PR opens by itself once the work
                 is submitted, unless a person has to look first, as when another PR is open on the issue or the change
                 touches a workflow file.
               </Rule>
-              <Rule name="Who can claim" rule="claim" value="anyone">
+              <Rule name="Who can claim" badges={[{ rule: 'claim', value: DEFAULT_WHO_CAN_CLAIM, strict: DEFAULT_WHO_CAN_CLAIM === 'vouched' }]}>
                 Anyone, or only the people your vouch file vouches for and people who can write to the repo. A line
                 that denounces someone keeps them out either way.
               </Rule>
-              <Rule name="Disclosure" rule="disclose" value="Assisted-by">
-                A commit trailer, text every PR body carries, or both. You can also ask the person to write the PR
-                description themselves, and then no PR opens without one.
+              <Rule name="Disclosure" badges={disclosureBadges}>
+                A commit trailer, text every PR body carries, or both. <DefaultDisclosure /> You can also ask the
+                person to write the PR description themselves, and then no PR opens without one.
               </Rule>
-              <Rule name="CLA" rule="CLA" value="none">
+              <Rule name="CLA" badges={[{ rule: 'CLA', value: 'none' }]}>
                 A link each person confirms they signed before their first claim, and again when it changes.
               </Rule>
-              <Rule name="Open PRs" rule="open PRs each" value="2">
-                How many open PRs one person can have in the project through Good First Token, a number you set.
+              <Rule name="Open PRs" badges={[{ rule: 'open PRs each', value: String(DEFAULT_OPEN_PRS_PER_DONOR) }]}>
+                {`How many open PRs one person can have in the project through Good First Token, a number you set from ${range(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR)}.`}
               </Rule>
-              <Rule name="Notes for agents" rule="notes" value="empty">
+              <Rule name="Notes for agents" badges={[{ rule: 'notes', value: 'empty' }]}>
                 What every agent reads with each issue it claims, like the command that runs your tests.
               </Rule>
             </ul>

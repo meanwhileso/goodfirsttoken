@@ -2370,6 +2370,11 @@ sign-in on the site. The PR is theirs, as when their agent opens it.
   changes.
 - The page's notice names the PR it opened, or says why none opened, in
   the words of `open_pr`'s refusal.
+- When GitHub no longer takes the token from the person's sign-in on the
+  site, the notice says to sign out and in again. When GitHub answers with
+  another error, as when the person's rate limit is spent or GitHub is
+  down, it says GitHub didn't answer and to try again in a minute. Either
+  way no PR opens, and the work stays in the queue.
 
 **A description the donor writes.** For a project that wants a
 person-written PR description, the item has a field for it, which starts
@@ -2378,20 +2383,22 @@ empty. It never holds the agent's summary.
 - The browser won't send it empty. One sent blank, or with spaces alone,
   counts as none, which `open_pr` refuses with `description_required`, and
   the page says to write it.
-- Written, it is checked with `open_pr`'s own input schema: at most 60,000
-  characters once the spaces at its ends are trimmed. It goes into the PR
-  as the donor wrote it, in place of the agent's summary. A browser sends
-  each line break in a form as CR LF, and it goes to the PR as LF, like the
-  rest of the description.
+- Written, it is checked with `open_pr`'s own input schema, under Opening
+  the PR in [The donor's tools](#the-donors-tools), to the length in
+  [Limits](#limits) once the spaces at its ends are trimmed. It goes into
+  the PR as the donor wrote it, in place of the agent's summary. A browser
+  sends each line break in a form as CR LF, and it goes to the PR as LF,
+  like the rest of the description.
 - When no PR opens, the page doesn't keep the words, and the field starts
   empty again.
 
-**Interests** show as the lists `set_interests` saves, and a form changes
-them, with the items in each list separated by commas. The form is checked
-with `set_interests`' own input schema, 20 items to a list and 50
-characters to an item, and saved the same way, so the person's agent reads
-the same interests from `start_session`. A form that breaks the schema saves
-nothing, and says why.
+**Interests** show as the lists `set_interests` saves, under Sessions in
+[The donor's tools](#the-donors-tools), and a form changes them, with the
+items in each list separated by commas. The form is checked with
+`set_interests`' own input schema, to the lengths in [Limits](#limits), and
+saved the same way, so the person's agent reads the same interests from
+`start_session`. A form that breaks the schema saves nothing, and says
+why.
 
 **Forms.** The Open PR and interests forms post to `/me`. Disconnect and
 sign-out post under `/auth`, under [Signing in](#signing-in).
