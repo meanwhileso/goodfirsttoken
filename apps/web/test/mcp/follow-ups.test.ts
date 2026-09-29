@@ -3,7 +3,18 @@ import type { FakeState, GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { adminRemoveProject } from '../../src/admin/actions';
-import { createProject, getIssue, getPr, listClaimFollowUps, saveIssues, savePerson, setDelisted } from '../../src/db';
+import {
+  blockDonor,
+  createProject,
+  getIssue,
+  getPr,
+  listClaimFollowUps,
+  saveIssues,
+  savePerson,
+  setDelisted,
+  setProjectStatus,
+  unblockDonor,
+} from '../../src/db';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
@@ -314,6 +325,42 @@ describe('follow-ups', () => {
     expect(claimed.structuredContent).toMatchObject({ claim: { issue }, resumed: false });
     expect(await getIssue(env.DB, APP, issue)).toMatchObject({ linkedPr: null });
     expect((await issueRoom(env.ISSUE_ROOM, issue).history()).map((e) => e.kind)).toContain('pr_closed');
+  });
+
+  test.each([
+    [
+      'the donor is blocked',
+      async () => {
+        await savePerson(env.DB, admin, Date.now());
+        await blockDonor(env.DB, { githubId: 1001, reason: null, blockedBy: admin.githubId }, Date.now());
+        return async () => {
+          await unblockDonor(env.DB, 1001);
+        };
+      },
+    ],
+    [
+      'the project is paused',
+      async () => {
+        await setProjectStatus(env.DB, APP, { status: 'paused', reason: 'Taking a break.', changedBy: maintainer.githubId }, Date.now());
+        return async () => {
+          await setProjectStatus(env.DB, APP, { status: 'approved', reason: null, changedBy: maintainer.githubId }, Date.now());
+        };
+      },
+    ],
+  ])('while %s, submit_work takes no fix, so no follow-up shows, and each shows again after', async (_, stop) => {
+    await project();
+    const priya = await donor('priya');
+    const { pr } = await openedPr(priya);
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'Please add a test.' });
+    await runPrJob();
+    const resume = await stop();
+
+    const stopped = await call(priya, 'my_work');
+    await resume();
+    const resumed = await call(priya, 'my_work');
+
+    expect(stopped.structuredContent).toMatchObject({ followUps: [], moreFollowUps: 0 });
+    expect(resumed.structuredContent?.followUps).toEqual([expect.objectContaining({ comment: 'Please add a test.' })]);
   });
 
   test('at most 20 follow-ups list at once, taken in turn from each PR, so one PR with many hides no other, and the rest are counted', async () => {

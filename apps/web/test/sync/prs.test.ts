@@ -2,13 +2,25 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import type { ClaimRecord, PrRef } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { addPr, getIssue, getPr, holdProject, listClaimFollowUps, listWaitingIssues, releaseProject } from '../../src/db';
+import {
+  addPr,
+  addToDoNotList,
+  getIssue,
+  getPr,
+  holdProject,
+  listClaimFollowUps,
+  listRereadsDue,
+  listWaitingIssues,
+  releaseProject,
+  setDelisted,
+  setProjectStatus,
+} from '../../src/db';
 import { issueRoom, type IssueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
 import { ALLOWANCES } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
-import { db, emptyDatabase, kenji, maintainer, priya, registeredProject, sha, signIn } from '../db/helpers';
+import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, sha, signIn } from '../db/helpers';
 import { callsTo, freshNumbers, jobDeps, SERVICE_LOGIN } from './helpers';
 
 // The PR job, which follows each claim's PR on GitHub until it merges or
@@ -288,6 +300,32 @@ describe('a PR closed without merging', () => {
     expect((await room(issue).history()).filter((e) => e.kind === 'pr_closed')).toHaveLength(1);
   });
 
+  test.each([
+    [
+      'paused',
+      () =>
+        setProjectStatus(db, APP, { status: 'paused', reason: 'Taking a break.', changedBy: maintainer.githubId }, Date.now()).then(
+          () => undefined,
+        ),
+    ],
+    ['on the do-not-list', () => addToDoNotList(db, { repo: APP, reason: null, addedBy: admin.githubId }, Date.now()).then(() => undefined)],
+    ['delisted by the sync', () => setDelisted(db, APP, `${APP} is archived on GitHub.`, Date.now())],
+  ])("a project %s isn't asking for help, so its copy isn't read again, and nothing waits", async (_, stop) => {
+    const { issue, pr, claim } = await closedAfterSync();
+    await signIn(admin);
+    await stop();
+
+    await follow();
+    const readsFirst = callsTo(github, 'GET /repos/{owner}/{repo}/issues/{issue_number}').length;
+    later();
+    await follow();
+
+    expect(readsFirst).toBe(0);
+    expect(callsTo(github, 'GET /repos/{owner}/{repo}/issues/{issue_number}')).toEqual([]);
+    expect(await getIssue(db, APP, ref(issue))).toMatchObject({ linkedPr: pr });
+    expect(await listRereadsDue(db)).not.toContainEqual(expect.objectContaining({ claimId: claim.id }));
+  });
+
   test('a PR that merged leaves its issue to the next sync, and the job reads nothing more', async () => {
     const { issue, pr } = await claimWithPr();
     await syncTaggedIssues(jobDeps(github));
@@ -383,6 +421,24 @@ describe('follow-ups', () => {
     expect(kept?.body).not.toMatch(/[\r\n]/);
     expect(kept?.body.length).toBeLessThanOrEqual(1000);
     expect(kept?.body.endsWith('...')).toBe(true);
+  });
+
+  test('a dismissed review is no follow-up, nor are its comments, and a pending one, which only its author sees, is none', async () => {
+    const { claim, pr } = await claimWithPr();
+    const path = `changes/${String(pr.number)}.md`;
+    const dismissed = github.reviewPullRequest(APP, pr.number, {
+      login: BY,
+      state: 'CHANGES_REQUESTED',
+      body: 'Revert all of it.',
+      comments: [{ path, line: 1, body: 'Revert this line.' }],
+    });
+    github.dismissReview(APP, pr.number, dismissed);
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'PENDING', body: 'Still drafting.', comments: [{ path, line: 1, body: 'Draft.' }] });
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'One small thing.' });
+
+    await follow();
+
+    expect((await listClaimFollowUps(db, claim.id)).map((f) => f.body)).toEqual(['One small thing.']);
   });
 
   test('a PR that merged has its reviews left unread', async () => {
