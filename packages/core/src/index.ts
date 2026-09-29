@@ -2,6 +2,7 @@
 
 export const productName = 'Good First Token';
 
+export * from './characters';
 export * from './claims';
 export * from './crawl';
 export * from './feed';
@@ -12,6 +13,7 @@ export * from './primitives';
 export * from './projects';
 export * from './prs';
 export * from './refusals';
+export * from './removals';
 export * from './secrets';
 export * from './sessions';
 export * from './submissions';

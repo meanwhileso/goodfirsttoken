@@ -271,6 +271,10 @@ export const samples: Samples = {
     output: { repo, status: 'paused', changed: true, resumableBy: 'maintainers' },
     mentions: ['Paused', 'paused: false'],
   },
+  request_removal: {
+    output: { repo, waiting: true, onDoNotList: false, requestedBy: 'octo-maintainer', requestedAt: at, changed: true },
+    mentions: [`Asked Good First Token's admins to remove ${repo}.`, 'waits for an admin', 'pause_project'],
+  },
   admin_queue: {
     output: {
       items: [
@@ -316,6 +320,26 @@ export const samples: Samples = {
           aiSentences: [],
           moreAiSentences: 0,
         },
+        {
+          id: 'rem_Fq9Lw2Xr7Tb4Mz6Kp1Vd',
+          kind: 'removal',
+          repo: 'sample-owner/sample-tools',
+          requestedBy: 'sample-maintainer',
+          requestedAt: later,
+          facts: { stars: 310, createdAt: at, pushedAt: at, ownerCreatedAt: at },
+          factsMissing: null,
+          settings: {},
+          policy: null,
+          suggestedTags: [],
+          onDoNotList: false,
+          sources: [],
+          aiSentences: [],
+          moreAiSentences: 0,
+          removal: {
+            reason: 'We review every pull request by hand now.',
+            project: { status: 'approved', source: 'policy' },
+          },
+        },
       ],
     },
     mentions: [
@@ -333,6 +357,11 @@ export const samples: Samples = {
       'from @octo-maintainer',
       'GitHub showed no public repo named sample-owner/sample-harbor when asked.',
       'on the do-not-list',
+      'rem_Fq9Lw2Xr7Tb4Mz6Kp1Vd',
+      'from @sample-maintainer',
+      'their reason, in their own words, as a JSON string: "We review every pull request by hand now."',
+      'Its project is approved, listed from its AI policy.',
+      'admin_remove_project',
     ],
   },
   admin_decide: {

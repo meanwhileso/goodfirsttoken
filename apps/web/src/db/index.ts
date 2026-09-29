@@ -13,6 +13,7 @@ export * from './issues';
 export * from './people';
 export * from './projects';
 export * from './prs';
+export * from './removals';
 export * from './seeds';
 export * from './sessions';
 export * from './submissions';

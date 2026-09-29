@@ -20,6 +20,7 @@ import {
   adminBlockDonor,
   adminDecide,
   adminQueue,
+  adminRemoveProject,
   type Outcome,
 } from './actions';
 
@@ -51,6 +52,8 @@ export interface AdminPage {
   now: number;
   candidates: QueueItem[];
   registrations: QueueItem[];
+  /** Maintainers' requests to be removed, waiting for an admin. */
+  removals: QueueItem[];
   listings: PolicyListing[];
   blocked: BlockedDonor[];
   /** What the last form did, when the page came back from one. */
@@ -109,8 +112,8 @@ async function adminOf(request: Request): Promise<{ caller: Caller; setCookies: 
 }
 
 /**
- * What /admin shows: the admin queue, the projects listed from a policy, and
- * the blocked donors. Anyone who isn't signed in is sent to sign in, and
+ * What /admin shows: the admin queue, with maintainers' requests to be
+ * removed, the projects listed from a policy, and the blocked donors. Anyone who isn't signed in is sent to sign in, and
  * anyone else who isn't an admin gets a 404 with nothing read.
  */
 export async function loadAdminPage(
@@ -142,6 +145,7 @@ export async function loadAdminPage(
         now: Date.now(),
         candidates: items.filter((item) => item.kind === 'candidate'),
         registrations: items.filter((item) => item.kind === 'registration'),
+        removals: items.filter((item) => item.kind === 'removal'),
         listings,
         blocked,
         notice,
@@ -243,6 +247,11 @@ async function runForm(caller: Caller, form: FormData, now: number): Promise<str
     return said(await adminAddProject(caller, input.value, now), (out) =>
       out.updated ? `Updated the listing of ${out.repo}.` : `Listed ${out.repo} from its AI policy.`,
     );
+  }
+  if (action === 'remove') {
+    const input = validate(tools.admin_remove_project.input, { repo: field(form, 'repo') });
+    if (!input.ok) return nothingChanged(input.problems);
+    return said(await adminRemoveProject(caller, input.value, now), (out) => `Removed ${out.repo} at its maintainers' request.`);
   }
   if (action === 'block' || action === 'unblock') {
     const input = validate(tools.admin_block_donor.input, {
