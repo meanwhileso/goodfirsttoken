@@ -1778,7 +1778,7 @@ never lists a project. An admin does, under
 
 **What the rules can't do.** The crawler sorts a repo with plain rules over
 its text, and plain rules can miss a ban worded in a way they don't know.
-Five reviews found new wordings in turn. The rules catch every one of
+Six reviews found new wordings in turn. The rules catch every one of
 them now, and the tests keep them as a corpus, but a repo can still say no
 in words the rules have never seen. So the crawler keeps every sentence in
 the repo's docs that names AI, with the rest of its paragraph, and the
@@ -1951,7 +1951,7 @@ would put a repo that said no in front of an admin.
   of a sentence and reads the rest, so a ban can't ride along with a form's
   words, and a word more than a form holds makes the sentence a ban. The
   tests check each form both ways, and check that no sentence that says no
-  in the 86 ban wordings the reviews found is a form.
+  in the 93 ban wordings the reviews found is a form.
   1. The first sentence of a checkbox a contributor ticks, a Markdown task
      list item or an issue form's option, when it says I or we did not,
      didn't, have not, or don't use AI, no AI was used, or AI was not used,
@@ -2013,17 +2013,26 @@ would put a repo that said no in front of an admin.
      at most. Push, commit, or merge to one branch named main, master,
      trunk, develop, release, stable, production, or gh-pages, or the
      protected, shared, upstream, release, or default branches. Open a pull
-     request against one of those. Open or keep more than a number of pull
-     requests or issues, at a time at most. Open a pull request for an
-     issue someone else claimed or is working on. Edit, modify, change, or
-     touch files under one path, like `vendor/`. Ping, tag, mention, email,
-     or message the maintainers, reviewers, or us, directly at most. Commit
-     or edit generated, build, compiled, vendored, or minified files,
-     output, or bundles. Merge, accept, or review a pull request that fails
-     or breaks CI, the build, the tests, or the checks. So "Agents should
-     not push to main" is no ban, and "Agents must not push to our
-     branches", "Do not push to main or any other branch", and "Do not
-     modify any file in this repository" are bans.
+     request against a side branch: release, stable, production, or
+     gh-pages. Every pull request goes to the default branch, main, master,
+     trunk, develop, or a protected or upstream branch, so keeping pull
+     requests off one of those keeps them out, and is a ban. Open or keep
+     more than one, two, or another number from 1 up of pull requests or
+     issues, at a time at most. Open a pull request for an issue someone
+     else claimed or is working on. Edit, modify, change, or touch files
+     under one path with a letter, digit, underscore, or hyphen in it, like
+     `vendor/`, so `/` and `./`, the whole repo, are no path. Ping, tag,
+     mention, email, or message the maintainers, reviewers, or us,
+     directly at most. Commit or edit build, compiled, vendored, or
+     minified files, output, or bundles. Generated files are left out,
+     since generated work can be what AI made. Merge, accept, or review a
+     pull request that fails or breaks CI, the build, the tests, or the
+     checks. So "Agents should not push to main" and "Coding agents must
+     not open pull requests against the release branch" are no ban, and
+     "Coding agents must not open pull requests against the default
+     branch", "Agents must not push to our branches", "Do not push to main
+     or any other branch", and "Do not modify any file in this repository"
+     are bans.
   10. A rule to read what AI wrote: don't use, paste, submit, commit, post,
       or send AI, a named product, AI output, generated code, it, or them,
       to write commit messages, code, tests, docs, or the like at most,
@@ -2049,7 +2058,7 @@ would put a repo that said no in front of an admin.
   and fine, welcome, okay, or allowed. Nothing else may come before any
   form.
 - **How often the rules are wrong, on made-up docs.** The tests hold every
-  ban wording five reviews found, 86 in all, and the rules read every one
+  ban wording six reviews found, 93 in all, and the rules read every one
   as a ban. They also hold 38 made-up welcoming policies, written the way
   real ones read, with ordinary rules for how to work, and the rules read
   4 of them as a ban: "Nothing changes about how we review pull requests",

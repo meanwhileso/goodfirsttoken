@@ -250,7 +250,14 @@ const form = (number: number, source: string, means?: 'personInLoop'): SafeForm 
 const WHO = String.raw`${PLEASE}(?:(?:${AGENT_SUBJECT}|you|we|contributors|they|maintainers)\s+)?`;
 const MUST_NOT = String.raw`(?:do not|don't|dont|never|must not|mustn't|must never|should not|shouldn't|should never|may not|cannot|can't|will not|won't|(?:are|is) not (?:allowed|permitted) to)`;
 const BRANCH = String.raw`(?:the\s+)?(?:(?:protected|shared|upstream|release|default)\s+branch(?:es)?|[\x60"']?(?:main|master|trunk|develop|dev|release|stable|production|gh-pages)[\x60"']?(?:\s+branch)?)`;
-const PATH = String.raw`(?:\x60[^\x60\s]{1,60}\x60|[\w.-]{0,40}\/[\w./-]{0,40})`;
+// A branch a pull request may be kept from. Every pull request goes to the
+// default branch, main, master, trunk, develop, or a protected or upstream
+// one, so keeping a pull request from one of those keeps it out.
+const SIDE_BRANCH = String.raw`(?:the\s+)?(?:release\s+branch(?:es)?|[\x60"']?(?:release|stable|production|gh-pages)[\x60"']?(?:\s+branch)?)`;
+// A path, with at least one letter, digit, underscore, or hyphen in it, so
+// "/" and "./", the whole repo, are no path.
+const NAMED = String.raw`(?=[./]*[\w-])`;
+const PATH = String.raw`(?:\x60${NAMED}[^\x60\s]{1,60}\x60|${NAMED}[\w.-]{0,40}\/[\w./-]{0,40})`;
 const SECRET = String.raw`(?:secrets?|tokens?|credentials?|passwords?|API keys?|private keys?|keys|personal (?:data|information))`;
 const PR = String.raw`(?:PRs?|pull requests?)`;
 
@@ -308,10 +315,10 @@ const SAFE_FORMS: SafeForm[] = [
     String.raw`${WHO}${MUST_NOT}\s+(?:include|commit|share|post|paste|expose|leak|add|put|push|upload|check in)\s+(?:any\s+|your\s+)?${SECRET}(?:\s+or\s+${SECRET})?(?:\s+(?:in|into|to)\s+(?:a|any|your|the)\s+(?:PRs?|pull requests?|commits?|issues?|repo|repository))?`,
   ),
   form(9, String.raw`${WHO}${MUST_NOT}\s+(?:force[- ])?(?:push|commit|merge)\s+(?:(?:directly|changes|code|commits)\s+)?(?:to|into|on|onto)\s+${BRANCH}(?:\s+directly)?`),
-  form(9, String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|send|create|file|target)\s+(?:a\s+|any\s+|your\s+)?${PR}\s+(?:against|to|into|on|at)\s+${BRANCH}`),
+  form(9, String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|send|create|file|target)\s+(?:a\s+|any\s+|your\s+)?${PR}\s+(?:against|to|into|on|at)\s+${SIDE_BRANCH}`),
   form(
     9,
-    String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|have|keep|send)\s+more than\s+(?:one|two|three|four|five|\d{1,2})\s+(?:open\s+)?(?:${PR}|issues)(?:\s+(?:at a time|at once|open|per issue|per day|per week))?`,
+    String.raw`${WHO}${MUST_NOT}\s+(?:open|submit|have|keep|send)\s+more than\s+(?:one|two|three|four|five|[1-9]\d?)\s+(?:open\s+)?(?:${PR}|issues)(?:\s+(?:at a time|at once|open|per issue|per day|per week))?`,
   ),
   form(
     9,
@@ -324,7 +331,7 @@ const SAFE_FORMS: SafeForm[] = [
   ),
   form(
     9,
-    String.raw`${WHO}${MUST_NOT}\s+(?:commit|edit|modify|check in)\s+(?:the\s+|any\s+)?(?:generated|build|compiled|vendored|minified)\s+(?:build\s+)?(?:files?|output|artifacts?|assets?|bundles?|lockfiles?)`,
+    String.raw`${WHO}${MUST_NOT}\s+(?:commit|edit|modify|check in)\s+(?:the\s+|any\s+)?(?:build|compiled|vendored|minified)\s+(?:build\s+)?(?:files?|output|artifacts?|assets?|bundles?|lockfiles?)`,
   ),
   form(
     9,

@@ -145,13 +145,25 @@ const BAN_CORPUS: { review: string; cases: [PolicyFileKind, string][] }[] = [
       ['contributing', "Copilot suggestions are fine. If it isn't your own code, please take it elsewhere."],
     ],
   },
+  {
+    review: "review 5, at form 9's slots",
+    cases: [
+      ['contributing', 'Coding agents must not open pull requests against the default branch.'],
+      ['contributing', 'AI agents are not allowed to open pull requests to the default branch.'],
+      ['agents', 'Do not open pull requests against the default branch.'],
+      ['contributing', 'Coding agents must not modify any files under `/`.'],
+      ['contributing', 'AI agents must not edit any files in ./'],
+      ['contributing', 'Coding agents must not open more than 0 pull requests.'],
+      ['aiPolicy', 'Please do not commit generated files.'],
+    ],
+  },
 ];
 
 describe('the regression corpus of ban wordings', () => {
   const all = BAN_CORPUS.flatMap(({ review, cases }) => cases.map(([kind, text]) => [review, kind, text] as const));
 
-  test('holds every wording the reviews found, 86 in all', () => {
-    expect(all).toHaveLength(86);
+  test('holds every wording the reviews found, 93 in all', () => {
+    expect(all).toHaveLength(93);
   });
 
   test('has no sentence that says no and is one of the forms known to say no to something else', () => {
@@ -547,11 +559,13 @@ describe('the forms added in the third round, each tested both ways', () => {
       'Never open more than one PR at a time.',
       'Do not open pull requests for issues someone else already claimed.',
       'Do not modify files under `vendor/`.',
-      'Please do not tag maintainers directly; we read every pull request.',
-      'Do not commit generated build output.',
+      'Do not edit files in ./docs/api.',
+      'Please do not tag maintainers directly.',
+      'Do not commit build output.',
       'We will not merge a PR that fails CI.',
     ]) {
-      expect(readPolicy([contributing(`AI help is fine. ${sentence}`)]).tier, sentence).toBe('allows_with_conditions');
+      expect(safeForm(sentence), sentence).toBe(9);
+      expect(readPolicy([file('aiPolicy', `AI help is fine. ${sentence}`)]).tier, sentence).toBe('allows_with_conditions');
     }
     for (const sentence of [
       'Do not include secrets or AI-generated code in a PR.',
@@ -561,6 +575,21 @@ describe('the forms added in the third round, each tested both ways', () => {
       'Do not include secrets or tokens in a PR, or code from Copilot.',
     ]) {
       expect(readPolicy([contributing(`AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
+    }
+    // Slots that would hold the whole repo, no pull request at all, or work
+    // AI made, and a form with a clause after it.
+    for (const sentence of [
+      'Please do not tag maintainers directly; we read every pull request.',
+      'Coding agents must not modify any files under `/`.',
+      'AI agents must not edit any files in ./',
+      'Do not touch any files under `../`.',
+      'Coding agents must not open more than 0 pull requests.',
+      'Please do not commit generated files.',
+      'Contributors must not commit generated output.',
+      'Do not commit generated build output.',
+    ]) {
+      expect(safeForm(sentence), sentence).toBeNull();
+      expect(readPolicy([file('aiPolicy', `AI help is fine. ${sentence}`)]).tier, sentence).toBe('bans_or_restricts');
     }
     const anyFile = file('aiPolicy', 'Agents may open pull requests. Do not modify any file in this repository.');
     expect(readPolicy([anyFile]).tier).toBe('bans_or_restricts');
@@ -598,15 +627,29 @@ describe('the forms added in the third round, each tested both ways', () => {
     expect(readPolicy([contributing('AI help is fine. We only ask that you do not use it for code.')]).tier).toBe('bans_or_restricts');
   });
 
-  test('9. a rule about one branch, named, is no ban, and a rule about any, every, all, our, or other branches is one', () => {
+  test('9. a push kept off one branch, named, and a pull request kept off a side branch are no ban, and any, every, all, our, or other branches are', () => {
     for (const sentence of [
       'Agents should not push to the `release` branch.',
-      'Do not open pull requests against the main branch.',
       'Do not commit code to master.',
+      'AI agents must not push to the default branch.',
+      'Do not merge into main directly.',
+      'Coding agents must not open pull requests against the release branch.',
+      'Do not open a PR against `gh-pages`.',
     ]) {
+      expect(safeForm(sentence), sentence).toBe(9);
       expect(readPolicy([file('aiPolicy', `AI help is fine. ${sentence}`)]).tier, sentence).toBe('allows_with_conditions');
     }
+    // Beside an invitation, a pull request kept off a side branch still invites agents.
+    const release = readPolicy([contributing('Coding agents may open pull requests here.'), file('contributing', 'Coding agents must not open pull requests against the release branch.', 'docs/CONTRIBUTING.md')]);
+    expect(release.tier).toBe('invites_agents');
     for (const sentence of [
+      // Every pull request goes to one of these, so keeping pull requests off it keeps them out.
+      'Coding agents must not open pull requests against the default branch.',
+      'Do not open pull requests against the main branch.',
+      'Coding agents must not open pull requests against main.',
+      'Do not open a PR to master.',
+      'Do not open pull requests against the protected branches.',
+      'Do not open pull requests against develop.',
       'Agents should not push to any branch.',
       'Do not open pull requests against every branch.',
       'Do not commit code to all branches.',

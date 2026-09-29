@@ -2125,7 +2125,7 @@ admin queue as crawl candidates. The rules are in
   `more_ai_sentences`, and `admin_queue`, the admin page, and the admin
   skill show them before a verdict, marked as the repo's words, with each
   cut said in our own words. The rules' tests hold a corpus of every ban
-  wording five reviews found, 86, all read as bans, 38 made-up welcoming
+  wording six reviews found, 93, all read as bans, 38 made-up welcoming
   policies written alongside the rules, of which the rules read 4 as bans,
   and 12 held out from the rules, of which they read 9 as bans.
 - **The safe forms are whole sentences.** `judge` in `src/crawl/rules.ts`
