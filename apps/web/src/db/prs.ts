@@ -431,32 +431,34 @@ export async function listMergedPrs(
   };
 }
 
-/** A donor's merged PR, offered once to share. */
-export interface MergedToShare {
+/** A donor's PR that merged or closed without merging, offered once. */
+export interface EndedToOffer {
   claimId: string;
   issue: string;
   pr: PrRef;
+  outcome: 'merged' | 'closed';
+  /** The agent the claim's latest submit named, or the claim's when it has none. */
   agent: string;
   /** The title of the claim's latest submit, which its PR opened with, or null when it has none. */
   title: string | null;
-  mergedAt: number;
+  closedAt: number;
 }
 
 /**
- * The donor's PRs that merged and that no session offered yet, oldest merge
- * first, marked offered at `now` in the same statement, so each is offered
- * once, however many sessions start at the same moment. Left out, and left
- * unoffered, as for listMergedPrs: a blocked donor's, and one the
- * do-not-list names. So is one on a project the sync delisted, since
- * nothing cached from its repos goes out.
+ * The donor's PRs that merged or closed without merging and that no
+ * session offered yet, oldest end first, marked offered at `now` in the
+ * same statement, so each is offered once, however many sessions start at
+ * the same moment. Left out, and left unoffered, as for listMergedPrs: a
+ * blocked donor's, and one the do-not-list names. So is one on a project
+ * the sync delisted, since nothing cached from its repos goes out.
  */
-export async function takeMergedToOffer(db: D1Database, person: number, now: number): Promise<MergedToShare[]> {
+export async function takeEndedToOffer(db: D1Database, person: number, now: number): Promise<EndedToOffer[]> {
   const { results: taken } = await db
     .prepare(
       `UPDATE prs SET offered_at = ?2
-       WHERE state = 'merged' AND offered_at IS NULL AND claim_id IN (
+       WHERE state IN ('merged', 'closed') AND offered_at IS NULL AND claim_id IN (
          SELECT c.id FROM claims c JOIN prs p ON p.claim_id = c.id
-         WHERE c.github_id = ?1 AND p.state = 'merged' AND ${SHOWN}
+         WHERE c.github_id = ?1 AND p.state IN ('merged', 'closed') AND ${SHOWN}
            AND NOT EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = c.project AND u.delisted IS NOT NULL))
        RETURNING claim_id`,
     )
@@ -465,12 +467,13 @@ export async function takeMergedToOffer(db: D1Database, person: number, now: num
   if (taken.length === 0) return [];
   const { results } = await db
     .prepare(
-      `SELECT p.claim_id, p.repo, p.number, p.url, p.merged_at, c.issue_repo, c.issue_number, c.agent, sub.title
+      `SELECT p.claim_id, p.repo, p.number, p.url, p.state, p.closed_at, c.issue_repo, c.issue_number,
+         COALESCE(sub.agent, c.agent) AS agent, sub.title
        FROM json_each(?) j
        JOIN prs p ON p.claim_id = j.value
        JOIN claims c ON c.id = p.claim_id
        LEFT JOIN submissions sub ON sub.claim_id = p.claim_id
-       ORDER BY p.merged_at, p.claim_id`,
+       ORDER BY p.closed_at, p.claim_id`,
     )
     .bind(JSON.stringify(taken.map((row) => row.claim_id)))
     .all<{
@@ -478,7 +481,8 @@ export async function takeMergedToOffer(db: D1Database, person: number, now: num
       repo: string;
       number: number;
       url: string;
-      merged_at: number;
+      state: string;
+      closed_at: number;
       issue_repo: string;
       issue_number: number;
       agent: string;
@@ -488,8 +492,9 @@ export async function takeMergedToOffer(db: D1Database, person: number, now: num
     claimId: mustParse(id, row.claim_id, 'claimId'),
     issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
     pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
+    outcome: row.state === 'merged' ? 'merged' : 'closed',
     agent: mustParse(agentName, row.agent, 'agent'),
     title: row.title,
-    mergedAt: checkTime(row.merged_at, 'mergedAt'),
+    closedAt: checkTime(row.closed_at, 'closedAt'),
   }));
 }

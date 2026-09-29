@@ -64,19 +64,31 @@ function describeInterests(interests: Interests): string {
   return parts.length > 0 ? parts.join(' · ') : 'none';
 }
 
-/** A claim's PR that merged since the donor's last session, offered once. */
-const mergedPrSchema = z.object({
+/** A claim's PR that merged, or closed without merging, since a session last offered it, offered once. */
+const endedPrSchema = z.object({
   issue: issueRef,
   title: z.string(),
   pr: prRefSchema,
-  /** A pre-filled X post link. Nothing is ever posted for the donor. */
-  shareUrl: webUrl,
+  outcome: z.enum(['merged', 'closed']),
+  /** For a merged PR, a pre-filled X post link, or null. Nothing is ever posted for the donor. */
+  shareUrl: webUrl.nullable(),
 });
+type EndedPr = z.infer<typeof endedPrSchema>;
+
+function renderEndedPr(ended: EndedPr): string {
+  return ended.outcome === 'merged'
+    ? lines(`${ended.issue}  ${ended.title}`, `PR #${String(ended.pr.number)} merged: ${ended.pr.url}`, ended.shareUrl && `Share it: ${ended.shareUrl}`)
+    : lines(
+        `${ended.issue}  ${ended.title}`,
+        `PR #${String(ended.pr.number)} closed without merging: ${ended.pr.url}`,
+        `While ${ended.issue} is open and tagged, it takes claims again, so the donor can try again with claim_issue.`,
+      );
+}
 
 export const startSession = defineTool({
   audience: 'donor',
   description:
-    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from reviewers on the donor's open PRs, unfinished claims, and PRs merged since the last session, each with a link the donor can use to post it on X. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers on the donor's open PRs, unfinished claims, and PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
   input: z.object({
     agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
     budget: budgetSchema,
@@ -95,8 +107,8 @@ export const startSession = defineTool({
     readInPart: z.array(readInPartSchema),
     /** Active and paused claims from earlier sessions. */
     unfinishedClaims: z.array(claimSummarySchema),
-    /** The donor's PRs that merged since a session last offered them, each offered once. */
-    mergedPrs: z.array(mergedPrSchema),
+    /** The donor's PRs that merged, or closed without merging, since a session last offered them, each offered once. */
+    endedPrs: z.array(endedPrSchema),
   }),
   text: (out) =>
     lines(
@@ -108,13 +120,10 @@ export const startSession = defineTool({
       out.readInPart.length > 0 && renderReadInPart(out.readInPart),
       out.unfinishedClaims.length > 0 &&
         `Unfinished claims (${String(out.unfinishedClaims.length)}):\n${indent(numbered(out.unfinishedClaims, renderClaimSummary), 2)}`,
-      out.mergedPrs.length > 0 &&
-        `Merged since the last session (${String(out.mergedPrs.length)}):\n${indent(
-          numbered(out.mergedPrs, (m) =>
-            lines(`${m.issue}  ${m.title}`, `PR #${String(m.pr.number)} merged: ${m.pr.url}`, `Share it: ${m.shareUrl}`),
-          ),
-          2,
-        )}\nTell the donor, and give them each link to post on X if they want to. Post nothing for them.`,
+      out.endedPrs.length > 0 &&
+        `Merged or closed since the last session (${String(out.endedPrs.length)}):\n${indent(numbered(out.endedPrs, renderEndedPr), 2)}`,
+      out.endedPrs.some((ended) => ended.shareUrl !== null) &&
+        'Tell the donor, and give them each link to post on X if they want to. Post nothing for them.',
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
         'Offer the follow-ups and paused claims first, then the other unfinished claims, before new issues.',
       out.unfinishedClaims.length > 0 && 'Resume a claim with claim_issue and its issue.',

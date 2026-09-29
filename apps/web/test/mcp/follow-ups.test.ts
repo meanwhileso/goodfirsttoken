@@ -151,11 +151,11 @@ function repoState(name: string): RepoRecord {
  * priya claims a tagged issue in the automatic project, and submits, which
  * opens her PR from her fork.
  */
-async function openedPr(priya: Donor) {
+async function openedPr(priya: Donor, extra: Record<string, unknown> = {}) {
   const issue = await tagged();
   const claimed = await call(priya, 'claim_issue', { sessionId: priya.sessionId, issue });
   const { claim, clone } = claimed.structuredContent as { claim: { claimId: string }; clone: { commit: string } };
-  const submitted = await submit(priya, claim.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
+  const submitted = await submit(priya, claim.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, extra);
   const { pr, branch } = submitted.structuredContent as { pr: { repo: string; number: number; url: string }; branch: { name: string } };
   return { issue, claimId: claim.claimId, start: clone.commit, pr, branch: branch.name };
 }
@@ -293,13 +293,21 @@ describe('follow-ups', () => {
 
     const run = await runPrJob();
     const next = await startSession(priya);
+    const again = await startSession(priya);
     const fix = await submit(priya, claimId, { 'src/rewrite.test.ts': 'test("slash", () => {});\n' });
     const claimed = await call(kenji, 'claim_issue', { sessionId: kenji.sessionId, issue });
 
     expect(linked).toEqual(pr);
     expect(refusalOf(refusedFirst)).toBe('pr_exists');
     expect(run).toMatchObject({ closed: 1, stopped: null });
-    expect(next.structuredContent).toMatchObject({ followUps: [], mergedPrs: [] });
+    // The donor hears of it once, with no link to share.
+    expect(next.structuredContent).toMatchObject({
+      followUps: [],
+      endedPrs: [{ issue, title: 'Keep the trailing slash in rewrites', pr, outcome: 'closed', shareUrl: null }],
+    });
+    expect(textOf(next)).toContain(`PR #${String(pr.number)} closed without merging: ${pr.url}`);
+    expect(textOf(next)).not.toContain('Share it');
+    expect(again.structuredContent).toMatchObject({ endedPrs: [] });
     expect(refusalOf(fix)).toBe('pr_closed');
     expect(textOf(fix)).toContain('closed without merging');
     expect(claimed.isError).toBeFalsy();
@@ -374,7 +382,7 @@ describe('a merged PR', () => {
   test('the next session offers a link to post it on X, once, and nothing is posted', async () => {
     await project();
     const priya = await donor('priya');
-    const { issue, claimId, pr } = await openedPr(priya);
+    const { issue, claimId, pr } = await openedPr(priya, { agent: 'codex' });
     github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'One nit.' });
     github.mergePullRequest(APP, pr.number, BY);
 
@@ -386,15 +394,22 @@ describe('a merged PR', () => {
     expect(run).toMatchObject({ merged: 1 });
     expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'merged' });
     expect(first.structuredContent?.followUps).toEqual([]);
-    expect(first.structuredContent?.mergedPrs).toEqual([
-      { issue, title: 'Keep the trailing slash in rewrites', pr, shareUrl: expect.stringMatching(/^https:\/\/x\.com\/intent\/tweet\?/) as unknown },
+    expect(first.structuredContent?.endedPrs).toEqual([
+      {
+        issue,
+        title: 'Keep the trailing slash in rewrites',
+        pr,
+        outcome: 'merged',
+        shareUrl: expect.stringMatching(/^https:\/\/x\.com\/intent\/tweet\?/) as unknown,
+      },
     ]);
-    const share = new URL(String((first.structuredContent?.mergedPrs as { shareUrl: string }[])[0]?.shareUrl));
-    expect(share.searchParams.get('text')).toBe(`My PR to ${APP} merged. claude-code wrote it with my spare tokens, through Good First Token.`);
+    const share = new URL(String((first.structuredContent?.endedPrs as { shareUrl: string }[])[0]?.shareUrl));
+    // The agent the work was submitted with, whatever the session's harness.
+    expect(share.searchParams.get('text')).toBe(`My PR to ${APP} merged. codex wrote it with my spare tokens, through Good First Token.`);
     expect(share.searchParams.get('url')).toBe(pr.url);
     expect(textOf(first)).toContain(`Share it: ${share.toString()}`);
     expect(textOf(first)).toContain('Post nothing for them.');
-    expect(second.structuredContent?.mergedPrs).toEqual([]);
+    expect(second.structuredContent?.endedPrs).toEqual([]);
     expect(refusalOf(late)).toBe('pr_closed');
     expect(textOf(late)).toContain('merged, so the claim takes no more work');
     // The Worker fetched nothing but GitHub, so nothing was posted anywhere.
@@ -417,7 +432,7 @@ describe('a merged PR', () => {
     const next = await startSession(priya);
     const work = await call(priya, 'my_work');
 
-    expect(next.structuredContent).toMatchObject({ followUps: [], mergedPrs: [] });
+    expect(next.structuredContent).toMatchObject({ followUps: [], endedPrs: [] });
     expect(work.structuredContent).toMatchObject({ followUps: [] });
     expect(await listClaimFollowUps(env.DB, reviewed.claimId)).toHaveLength(1);
     expect(textOf(next)).not.toContain('Please add a test.');

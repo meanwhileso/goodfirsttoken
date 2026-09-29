@@ -45,7 +45,7 @@ import {
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
-  takeMergedToOffer,
+  takeEndedToOffer,
   takeSessionIssue,
   type ClaimWithPr,
   type WaitingIssue,
@@ -223,7 +223,7 @@ export async function startSession(
       ...(await followUpsFor(caller.githubId, now)),
       readInPart: await listReadInPart(env.DB, caller.githubId),
       unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
-      mergedPrs: await mergedToShare(caller.githubId, now),
+      endedPrs: await endedToOffer(caller.githubId, now),
     }),
   );
 }
@@ -263,13 +263,19 @@ async function followUpsFor(person: number, now: number): Promise<{ followUps: F
 }
 
 /**
- * The donor's PRs that merged since a session last offered them, each with
- * a pre-filled X post link, taken so no later session offers them again.
- * Nothing is posted for the donor.
+ * The donor's PRs that merged or closed without merging since a session
+ * last offered them, taken so no later session offers them again. A merged
+ * one comes with a pre-filled X post link. Nothing is posted for the donor.
  */
-async function mergedToShare(person: number, now: number) {
-  const merged = await takeMergedToOffer(env.DB, person, now);
-  return merged.map(({ issue, title, pr, agent }) => ({ issue, title: title ?? issue, pr, shareUrl: shareOnXUrl({ pr, agent }) }));
+async function endedToOffer(person: number, now: number) {
+  const ended = await takeEndedToOffer(env.DB, person, now);
+  return ended.map(({ issue, title, pr, outcome, agent }) => ({
+    issue,
+    title: title ?? issue,
+    pr,
+    outcome,
+    shareUrl: outcome === 'merged' ? shareOnXUrl({ pr, agent }) : null,
+  }));
 }
 
 /** The donor's unfinished claims that can go on, for start_session to offer. */

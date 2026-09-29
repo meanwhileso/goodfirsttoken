@@ -62,7 +62,10 @@ export const samples: Samples = {
       moreFollowUps: 2,
       readInPart: [readInPart],
       unfinishedClaims: [{ ...claim, state: 'paused' }],
-      mergedPrs: [{ issue, title, pr, shareUrl: 'https://x.com/intent/tweet?text=merged' }],
+      endedPrs: [
+        { issue, title, pr, outcome: 'merged', shareUrl: 'https://x.com/intent/tweet?text=merged' },
+        { issue: `${repo}#912`, title, pr: { ...pr, number: 958, url: `https://github.com/${repo}/pull/958` }, outcome: 'closed', shareUrl: null },
+      ],
     },
     mentions: [
       '@priya',
@@ -73,6 +76,8 @@ export const samples: Samples = {
       'paused',
       '2 more follow-ups wait.',
       'Share it',
+      `PR #958 closed without merging: https://github.com/${repo}/pull/958`,
+      'it takes claims again, so the donor can try again with claim_issue.',
       'Offer the follow-ups and paused claims first',
       "Good First Token read 10 of the PR's 12 reviews and left out 3 comments on lines. Read the rest on GitHub",
       'Resume a claim with claim_issue and its issue.',

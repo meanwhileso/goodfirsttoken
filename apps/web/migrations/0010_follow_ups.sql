@@ -23,8 +23,9 @@ CREATE TABLE follow_ups (
   PRIMARY KEY (claim_id, comment_id)
 ) STRICT;
 
--- When a session first offered the donor a link to share their merged PR,
--- or null before that. A PR is offered once.
+-- When a session first told the donor their PR merged, with a link to
+-- share it, or closed without merging, or null before that. A PR is
+-- offered once.
 ALTER TABLE prs ADD COLUMN offered_at INTEGER;
 
 -- What the PR job's latest read of an open PR covered: how many reviews
@@ -42,11 +43,10 @@ ALTER TABLE prs ADD COLUMN reread_due INTEGER NOT NULL DEFAULT 0;
 -- The issues that wait to be read again, oldest close first.
 CREATE INDEX prs_reread_due ON prs (closed_at) WHERE reread_due = 1;
 
--- A PR that merged before a session its donor started since had that
--- session as its next, and no link to offer then. It counts as offered, so
--- the first session after this change offers only the PRs that merged
--- since the donor's last session.
-UPDATE prs SET offered_at = merged_at
-  WHERE state = 'merged'
-    AND merged_at < (SELECT MAX(s.started_at) FROM donor_sessions s JOIN claims c ON c.github_id = s.github_id
+-- Old outcomes aren't offered: a PR that merged or closed before its
+-- donor's latest session started counts as offered, so the first session
+-- after this change offers only what ended since.
+UPDATE prs SET offered_at = closed_at
+  WHERE state IN ('merged', 'closed')
+    AND closed_at < (SELECT MAX(s.started_at) FROM donor_sessions s JOIN claims c ON c.github_id = s.github_id
       WHERE c.id = prs.claim_id);
