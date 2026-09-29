@@ -183,6 +183,12 @@ describe('the regression corpus of ban wordings', () => {
     expect(examples.map(([text, , choice]) => safeForm(text, choice))).toEqual(examples.map(([, form]) => form));
   });
 
+  test('reads a form inside an HTML comment as that form, whichever way the comment closes', () => {
+    expect(safeForm("<!-- Don't delete this section. -->")).toBe(7);
+    expect(safeForm("<!-- Don't delete this section. --!>")).toBe(7);
+    expect(safeForm("<!-- Don't delete this section, and don't use AI. --!>")).toBeNull();
+  });
+
   test.each(all)('%s, in the %s file: %j', (_review, kind, text) => {
     for (const other of ['AI help is fine for questions.', 'Coding agents may open pull requests here.']) {
       const reading = readPolicy([contributing(other), file(kind, text)]);

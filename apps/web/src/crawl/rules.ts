@@ -175,13 +175,21 @@ function bansWithoutNaming(text: string): boolean {
 // all of it, but for a list mark in front, is one of these.
 
 // A list item's mark, a checkbox, an issue form's option, a heading's marks,
-// a quote's mark, or an HTML comment's marks, around a sentence.
-const MARKS_BEFORE = /^(?:<!--\s*)?(?:-\s+label:\s*|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]?\]\s*)?|#{1,6}\s+|>\s*)?/;
-const MARKS_AFTER = /\s*-->$/;
+// or a quote's mark, before a sentence. An HTML comment's marks around it are
+// taken off by plain string checks in bare, which know both ways a comment
+// can close.
+const MARKS_BEFORE = /^(?:-\s+label:\s*|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]?\]\s*)?|#{1,6}\s+|>\s*)?/;
+const COMMENT_OPEN = '<!--';
+const COMMENT_CLOSES = ['-->', '--!>'];
 
 /** The sentence without the marks around it. */
 function bare(text: string): string {
-  return text.replace(MARKS_BEFORE, '').replace(MARKS_AFTER, '');
+  let rest = text;
+  if (rest.startsWith(COMMENT_OPEN)) rest = rest.slice(COMMENT_OPEN.length).trimStart();
+  rest = rest.replace(MARKS_BEFORE, '');
+  const end = rest.trimEnd();
+  const close = COMMENT_CLOSES.find((mark) => end.endsWith(mark));
+  return close === undefined ? rest : end.slice(0, -close.length).trimEnd();
 }
 
 // The slots, each a closed set.
