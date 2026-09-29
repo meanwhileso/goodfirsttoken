@@ -548,6 +548,8 @@ async function readCopy(
   return {
     issue: ref,
     project: project.repo,
+    // As GitHub gives it. The tagged-issue schema folds it to one line when
+    // saveIssues checks the copy, and again each time a copy is read.
     title: issue.title,
     labels: issue.labels,
     linkedPr,

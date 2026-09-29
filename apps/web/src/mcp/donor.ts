@@ -1,6 +1,7 @@
 import {
   budgetLeft,
   claimDeadlines,
+  foldIssueTitle,
   holdsSlot,
   MAX_FOLLOW_UPS,
   nextClaimState,
@@ -292,7 +293,8 @@ async function followUpsFor(
 function endedPrOf({ issue, title, pr, outcome, agent }: EndedToOffer) {
   return {
     issue,
-    title: title ?? issue,
+    // The PR's title, which can be the issue's own, folded as every title a tool shows is.
+    title: title === null ? issue : foldIssueTitle(title),
     pr,
     outcome,
     shareUrl: outcome === 'merged' ? shareOnXUrl({ pr, agent }) : null,

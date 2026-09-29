@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { untrustedLine } from './characters';
 import { agentName, githubId, githubLogin, id, isoTime, issueRef, repoName } from './primitives';
 
 // Live feed events (spec section 8). The issue room makes each one, and sends
@@ -30,23 +31,21 @@ export type FeedEventKind = z.infer<typeof feedEventKindSchema>;
 /** The longest line an agent can post. */
 export const MAX_UPDATE_TEXT = 200;
 
-/** A posted line. Tabs and line breaks fold into single spaces, so a post is always one line. */
-export const updateText = z
-  .string({ error: 'must be text' })
-  .overwrite((text) => text.replace(/\s*[\t\r\n]+\s*/g, ' '))
-  .trim()
-  .min(1, 'must not be empty')
-  .max(MAX_UPDATE_TEXT, `must be at most ${String(MAX_UPDATE_TEXT)} characters`);
+/**
+ * A posted line, folded by foldLine to one line with only what a person can
+ * see, and refused when it is longer than four times its limit before it
+ * folds.
+ */
+export const updateText = untrustedLine(MAX_UPDATE_TEXT);
 
 /** The longest name of a subagent's job. */
 export const MAX_JOB_NAME = 40;
 
-/** A subagent's job, like `tests`, shown with the lines it posts. */
-export const jobName = z
-  .string({ error: 'must be a short name for the job, like tests' })
-  .trim()
-  .min(1, 'must not be empty')
-  .max(MAX_JOB_NAME, `must be at most ${String(MAX_JOB_NAME)} characters`);
+/**
+ * A subagent's job, like `tests`, shown with the lines it posts. It reaches
+ * the public feeds, so it folds the way a posted line does.
+ */
+export const jobName = untrustedLine(MAX_JOB_NAME, 'must be a short name for the job, like tests');
 
 export const feedEventSchema = z.object({
   /** Unique across the whole site, so a feed can drop an event it already has. */
@@ -59,8 +58,13 @@ export const feedEventSchema = z.object({
   /** The claim the event belongs to. */
   claim: id,
   kind: feedEventKindSchema,
-  /** For a subagent's line, its job. Null for the main agent and for state changes. */
-  job: jobName.nullable(),
+  /**
+   * For a subagent's line, its job. Null for the main agent and for state
+   * changes. A post folds it by jobName, and an event stored before jobs
+   * were folded keeps its job as it was given, so it is checked the way it
+   * was then.
+   */
+  job: z.string().trim().min(1).max(MAX_JOB_NAME).nullable(),
   /** One line. Server lines, like a release with its reason, can run longer than a post. */
   text: z.string().min(1).max(500),
 });
