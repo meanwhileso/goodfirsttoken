@@ -10,5 +10,11 @@ onlyBuiltDependencies:
 # The Workers test pool pins miniflare 5.20260815.0-alpha, which pins sharp
 # 0.35.2, with GHSA-rgj7-g3m4-5g8c. This moves that one pin to the fixed
 # 0.35.4. It does nothing once the pool's miniflare changes. Remove it then.
+#
+# Both miniflare versions, the Workers test pool's and the one wrangler and
+# the Vite plugin use, pin undici 7.29.0, with GHSA-3wwx-pv8p-q78v. This
+# moves that one pin to the fixed 7.29.1. It does nothing once miniflare
+# pins a fixed undici. Remove it then.
 overrides:
   miniflare@5.20260815.0-alpha>sharp: 0.35.4
+  undici@7.29.0: 7.29.1
