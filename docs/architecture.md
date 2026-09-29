@@ -2197,6 +2197,12 @@ and Playwright run it as a local HTTP server.
   - A new fork is ready after `forkDelayMs`. GitHub takes as long as its
     background job does. What GitHub's GraphQL answers for a fork not ready
     yet isn't checked on GitHub.
+  - Some answers go past what GitHub's docs say, from what GitHub is known
+    to send: the 409 and its message `Git Repository is empty.` for a fork
+    GitHub is still making, the message of the workflow refusal and its
+    GraphQL type `FORBIDDEN`, and the type `STALE_DATA` for a commit whose
+    expected head is stale. The app reads only `STALE_DATA` and the 409,
+    and passes the other messages on to the agent.
   - OAuth scopes are recorded and sent back in `x-oauth-scopes`. A private
     repo checks them, for `repo`, and a workflow file, for `workflow`. A
     token with no scopes can fork and commit to a public one. GitHub's docs

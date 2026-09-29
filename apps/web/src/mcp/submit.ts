@@ -1,7 +1,9 @@
 import {
+  MAX_PR_TITLE,
   claimDeadlines,
   holdsSlot,
   nextClaimState,
+  prTitle,
   toolResult,
   utf8Length,
   type ClaimEvent,
@@ -406,7 +408,10 @@ export async function submitWork(
   }
   const earlier = await getSubmission(env.DB, claim.id);
   const branch = earlier?.branch ?? branchFor(claim);
-  const title = redacted(input.title ?? issue?.title ?? (await getIssue(env.DB, project.repo, claim.issue))?.title ?? claim.issue, 256);
+  // The issue's title takes the agent's rules for one, so a line break in
+  // it can't start a line of the commit message.
+  const titled = prTitle.safeParse(input.title ?? issue?.title ?? (await getIssue(env.DB, project.repo, claim.issue))?.title);
+  const title = redacted(titled.success ? titled.data : claim.issue, MAX_PR_TITLE);
   const summary = redacted(input.summary);
   const checks = redacted(input.checks);
   const model = redacted(input.model, 100);

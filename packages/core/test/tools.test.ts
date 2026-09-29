@@ -1,9 +1,7 @@
 import { z } from 'zod';
 import { describe, expect, test } from 'vitest';
 import {
-  MAX_FILE_BYTES,
   MAX_PR_DESCRIPTION,
-  MAX_SUBMIT_BYTES,
   foldLines,
   toolRefusal,
   toolResult,
@@ -435,18 +433,19 @@ describe('tool inputs', () => {
     });
 
   test('a submitted file holds at most 1 MiB of UTF-8, counted in bytes', () => {
-    expect(submitFiles([{ path: 'a.txt', content: 'x'.repeat(MAX_FILE_BYTES) }]).ok).toBe(true);
-    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'x'.repeat(MAX_FILE_BYTES + 1) }]))).toEqual(['files[0].content']);
+    const oneFile = (content: string) => submitFiles([{ path: 'a.txt', content }]);
+    expect(oneFile('x'.repeat(1_048_576)).ok).toBe(true);
+    expect(problemFields(oneFile('x'.repeat(1_048_577)))).toEqual(['files[0].content']);
     // é takes two bytes, so half as many fit.
-    expect(submitFiles([{ path: 'a.txt', content: 'é'.repeat(MAX_FILE_BYTES / 2) }]).ok).toBe(true);
-    expect(problemFields(submitFiles([{ path: 'a.txt', content: `${'é'.repeat(MAX_FILE_BYTES / 2)}x` }]))).toEqual([
-      'files[0].content',
-    ]);
+    expect(oneFile('é'.repeat(524_288)).ok).toBe(true);
+    expect(problemFields(oneFile(`${'é'.repeat(524_288)}x`))).toEqual(['files[0].content']);
+    // An emoji takes four bytes, and two UTF-16 code units, so a quarter as many fit.
+    expect(oneFile('🚀'.repeat(262_144)).ok).toBe(true);
+    expect(problemFields(oneFile(`${'🚀'.repeat(262_144)}x`))).toEqual(['files[0].content']);
   });
 
   test('the files of one submit hold at most 2 MiB of UTF-8 in all, and a deletion counts nothing', () => {
-    const full = (n: number) => ({ path: `f${String(n)}.txt`, content: 'x'.repeat(MAX_FILE_BYTES) });
-    expect(MAX_SUBMIT_BYTES).toBe(2 * MAX_FILE_BYTES);
+    const full = (n: number) => ({ path: `f${String(n)}.txt`, content: 'x'.repeat(1_048_576) });
     expect(submitFiles([full(1), full(2), { path: 'gone.txt', content: null }]).ok).toBe(true);
     expect(problemFields(submitFiles([full(1), full(2), { path: 'one-more.txt', content: 'x' }]))).toEqual(['files']);
   });

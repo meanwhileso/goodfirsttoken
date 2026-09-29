@@ -30,9 +30,10 @@ import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 // setting, issue, and file here is made up.
 //
 // The permission-isolation check is the afterEach below: every GitHub call
-// that submit_work, open_pr, or my_work made ran with the token of the donor
-// whose claim it is, from their own agent. A maintainer's token, another
-// donor's, and the service token never do a donor's work.
+// that submit_work, open_pr, or my_work made ran with the very GitHub token
+// the fake gave the calling donor's own agent when it connected, for their
+// own claim. A maintainer's token, another donor's, another token of the
+// same donor, and the service token never do a donor's work.
 
 const APP = 'sample-owner/sample-app';
 const TOOLS = 'sample-owner/sample-tools';
@@ -78,6 +79,8 @@ beforeEach(async () => {
 interface PathCall {
   tool: string;
   caller: string;
+  /** The GitHub token the fake gave the caller's agent when it connected. */
+  token: string;
   /** The claimant's login, or null for a claim the table doesn't have. my_work is for the caller. */
   owner: string | null;
   calls: RecordedCall[];
@@ -95,11 +98,11 @@ afterEach(({ task }) => {
   const calls = github.calls.filter((c) => c.url.startsWith(github.apiUrl));
   const notAnAgent = calls.filter((c) => c.token === null || github.state.tokens[c.token]?.clientId !== OAUTH_APP.clientId);
   expect(notAnAgent.map((c) => `${c.operation} as ${c.login ?? 'no one'}`), task.name).toEqual([]);
-  // Each call on the submit and PR paths ran as the donor whose claim it is,
-  // who is also the one who called.
-  const crossed = pathCalls.flatMap(({ tool, caller, owner, calls: made }) =>
+  // Each call on the submit and PR paths ran with the token of the caller's
+  // own agent, and the caller is the donor whose claim it is.
+  const crossed = pathCalls.flatMap(({ tool, caller, token, owner, calls: made }) =>
     made
-      .filter((c) => c.login === null || c.login !== owner || c.login !== caller)
+      .filter((c) => c.token !== token || owner !== caller)
       .map((c) => `${tool} by @${caller} for @${owner ?? 'no one'}'s claim: ${c.operation} as @${c.login ?? 'no one'}`),
   );
   expect(crossed, task.name).toEqual([]);
@@ -116,6 +119,8 @@ interface Donor {
   agent: ConnectedAgent;
   login: Login;
   sessionId: string;
+  /** The GitHub token the fake gave this agent when it connected. */
+  token: string;
 }
 
 /** Calls a tool as the donor. A call on the submit and PR paths is kept for the isolation check. */
@@ -128,6 +133,7 @@ async function call(donor: Donor, name: string, args: Record<string, unknown> = 
     pathCalls.push({
       tool: name,
       caller: donor.login,
+      token: donor.token,
       owner,
       calls: github.calls.slice(before).filter((c) => c.url.startsWith(github.apiUrl)),
     });
@@ -151,12 +157,16 @@ function refusalOf(result: Result): string | null {
 
 /** An agent signed in as `login`, with a session. */
 async function donor(login: Login): Promise<Donor> {
+  const before = new Set(Object.keys(github.state.tokens));
   const agent = await connectAgent(github, login);
+  const given = Object.keys(github.state.tokens).filter((token) => !before.has(token));
+  const [token] = given;
+  if (given.length !== 1 || token === undefined) throw new Error(`${login}'s agent got ${String(given.length)} GitHub tokens`);
   const started = (await agent.client.callTool({
     name: 'start_session',
     arguments: { agent: 'claude-code', budget: { kind: 'until_limit' } },
   })) as Result;
-  return { agent, login, sessionId: String(started.structuredContent?.sessionId) };
+  return { agent, login, sessionId: String(started.structuredContent?.sessionId), token };
 }
 
 /** A project added by sample-maintainer, approved unless another status is given. */
@@ -903,6 +913,21 @@ describe('what a submit commits', () => {
 
     expect(refusalOf(refused)).toBe('file_mode');
     expect(textOf(refused)).toContain(`tool.sh is an executable file in priya/sample-app:${branch}`);
+  });
+
+  test("an issue's title with a line break in it is one line of the commit, so it can't add a trailer", async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    issueState(issue).title = 'Keep the slash\nCo-authored-by: Sam <sam@example.com>';
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+
+    await submit(priya, claimId, { 'a.txt': 'a\n' });
+
+    const message = commitAt(repoState('priya/sample-app').branches[branchOf(issue, claimId)]).message;
+    expect(message.split('\n')[0]).toBe('Keep the slash Co-authored-by: Sam <sam@example.com>');
+    expect(message.split('\n').filter((line) => line.startsWith('Co-authored-by'))).toEqual([]);
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({ title: 'Keep the slash Co-authored-by: Sam <sam@example.com>' });
   });
 
   test("keys and tokens in the agent's notes are replaced in the commit, the PR, and the review queue", async () => {

@@ -1961,11 +1961,15 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
   and line endings included, or null to delete the file. An empty text is
   an empty file. Only text is taken: a text with a NUL character, which Git
   counts as binary, or with half a surrogate pair, which UTF-8 can't hold,
-  is refused. A submit can only delete a binary file.
+  is refused. A submit can delete a binary file, or write text over it,
+  and never writes one.
 - A file holds at most 1 MiB of UTF-8, the largest file GitHub recommends,
   and the files of one submit hold at most 2 MiB in all, counted in bytes.
-  The MCP server takes a request of at most 4 MiB, and JSON can take twice
-  the bytes of the text it carries. A deletion counts nothing.
+  A deletion counts nothing. The MCP server takes a request body of at most
+  4 MiB, and JSON carries a quote, a backslash, or a line break in two
+  bytes and another control character in six, with the paths and the notes
+  in the same body. So a submit near the caps can still be refused by the
+  MCP server, with an error in place of a tool result.
 - A submit lists 1 to 300 files. `submit_work` takes a title, one line,
   and `onto`, a full commit SHA, and `open_pr` a description the donor
   wrote.

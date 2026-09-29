@@ -303,9 +303,12 @@ export const MAX_FILE_BYTES = 1_048_576;
 
 /**
  * The most the files of one submit can hold together: 2 MiB of UTF-8. The
- * MCP server takes a request of at most 4 MiB, and JSON can take twice the
- * bytes of the text it carries. GitHub's createCommitOnBranch takes it with
- * room to spare.
+ * MCP server takes a request body of at most 4 MiB. JSON carries most text
+ * byte for byte, a quote, a backslash, or a line break in two bytes, and
+ * another control character in six, as \u0001. The paths, up to 300 of up
+ * to 4,096 characters, and the notes go in the same body. So a submit near
+ * this cap can still be over the MCP server's limit, which refuses it before
+ * it reaches the tool.
  */
 export const MAX_SUBMIT_BYTES = 2_097_152;
 
