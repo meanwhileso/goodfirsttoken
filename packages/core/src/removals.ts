@@ -11,10 +11,18 @@ import { epochMs, githubId, id, repoName } from './primitives';
 export const MAX_REMOVAL_REASON = 500;
 
 /**
- * The text as one line: each run of characters that could break a line or
- * change what a terminal shows, with the plain spaces around it, becomes one
- * space, and a run at either end goes. One pass over the text, so a long
- * text takes time in proportion to its length.
+ * A character a person reading the text doesn't see, which an agent reading
+ * it could: a format character, like a zero-width space, a word joiner, or a
+ * Unicode tag character, a private-use character, or an unassigned one.
+ */
+const HIDDEN_CHARACTER = /[\p{Cf}\p{Co}\p{Cn}]/u;
+
+/**
+ * The text as one line, with only what a person can see: each run of
+ * characters that could break a line or change what a terminal shows, with
+ * the plain spaces around it, becomes one space, and a run at either end
+ * goes. Every hidden character goes. One pass over the text, so a long text
+ * takes time in proportion to its length.
  */
 function oneLine(text: string): string {
   const parts: string[] = [];
@@ -23,6 +31,8 @@ function oneLine(text: string): string {
   for (const char of text) {
     if (UNSAFE_CHARACTER.test(char)) {
       gap = true;
+    } else if (HIDDEN_CHARACTER.test(char)) {
+      continue;
     } else if (char === ' ') {
       spaces += 1;
     } else {

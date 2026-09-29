@@ -28,6 +28,7 @@ import {
   getPerson,
   getProject,
   getWaitingRemoval,
+  lastRemoval,
   listIssues,
   reopenRegistration,
   setProjectStatusFrom,
@@ -361,11 +362,25 @@ async function askerOf(request: RemovalRequest): Promise<string> {
   return person.login;
 }
 
+/** Who withdrew a request, when it was someone other than the one who asked, and when. */
+async function withdrawnByAnother(request: RemovalRequest | null): Promise<{ by: string; at: string } | null> {
+  if (request?.status !== 'withdrawn' || request.closedBy === null || request.closedAt === null) return null;
+  if (request.closedBy === request.requestedBy) return null;
+  const withdrawer = await getPerson(env.DB, request.closedBy);
+  if (withdrawer === null) throw new Error(`${request.repo}'s request to be removed names someone who isn't recorded.`);
+  return { by: withdrawer.login, at: new Date(request.closedAt).toISOString() };
+}
+
 function removalAnswer(
   repo: string,
   request: RemovalRequest | null,
   asker: string | null,
-  state: { waiting: boolean; onDoNotList: boolean; changed: boolean },
+  state: {
+    waiting: boolean;
+    onDoNotList: boolean;
+    changed: boolean;
+    lastWithdrawn: { by: string; at: string } | null;
+  },
 ): Answer {
   return answer(
     toolResult('request_removal', {
@@ -401,20 +416,23 @@ export async function requestRemoval(
   const project = await getProject(env.DB, input.repo);
   const repo = project?.repo ?? found.full_name;
   const onDoNotList = (await getDoNotListEntry(env.DB, repo)) !== null;
+  // Someone else may have withdrawn the caller's last request. They hear of it
+  // once, since the call they make next is their last request after that.
+  const lastWithdrawn = await withdrawnByAnother(await lastRemoval(env.DB, repo, caller.githubId));
 
   if (input.withdraw) {
     const withdrawn = await closeRemoval(env.DB, repo, { status: 'withdrawn', by: caller.githubId }, now);
     const asker = withdrawn === null ? null : await askerOf(withdrawn);
-    return removalAnswer(repo, withdrawn, asker, { waiting: false, onDoNotList, changed: withdrawn !== null });
+    return removalAnswer(repo, withdrawn, asker, { waiting: false, onDoNotList, changed: withdrawn !== null, lastWithdrawn });
   }
 
   if (onDoNotList && project?.status !== 'pending') {
     const waiting = await getWaitingRemoval(env.DB, repo);
     const asker = waiting === null ? null : await askerOf(waiting);
-    return removalAnswer(repo, waiting, asker, { waiting: waiting !== null, onDoNotList, changed: false });
+    return removalAnswer(repo, waiting, asker, { waiting: waiting !== null, onDoNotList, changed: false, lastWithdrawn });
   }
   const reason = input.reason ?? '';
   const { request, created } = await askRemoval(env.DB, { repo, reason, requestedBy: caller.githubId }, now);
   const asker = created ? caller.login : await askerOf(request);
-  return removalAnswer(request.repo, request, asker, { waiting: true, onDoNotList, changed: created });
+  return removalAnswer(request.repo, request, asker, { waiting: true, onDoNotList, changed: created, lastWithdrawn });
 }

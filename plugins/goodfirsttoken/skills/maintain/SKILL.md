@@ -153,7 +153,9 @@ approve a registration of it.
    request waits for an admin. When `changed` is `false`, it is one from
    before: tell them who asked, from `requestedBy`, and when, from
    `requestedAt`. When `onDoNotList` is `true` and nothing waits, the repo
-   was removed before, and there is nothing to ask.
+   was removed before, and there is nothing to ask. When `lastWithdrawn`
+   is set, someone else withdrew the maintainer's last request: tell them
+   who, and when.
 5. Tell them to run this skill again to see it done. Once an admin removes
    a project, `project_status` says it is `rejected`, with the reason
    `Removed at its maintainers' request.`
@@ -161,7 +163,9 @@ approve a registration of it.
 To take a request back, when the maintainer changed their mind, call
 `request_removal` with `repo` and `withdraw` `true`. Any admin or
 maintainer of the repo can, the one who asked or another. The request
-leaves the admin queue. `changed` `false` means none waited.
+leaves the admin queue. Withdrawing someone else's request shows: the
+admins see who asked and who withdrew it, and so does the one who asked.
+`changed` `false` means none waited.
 
 When the repo went private, is gone, or GitHub blocked access to it, GitHub
 doesn't show the repo to the maintainer's account, so `request_removal` is

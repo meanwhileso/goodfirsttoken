@@ -1,4 +1,11 @@
-import { doNotListNote, productName, removalProjectNote, removalWaitsNote, type ToolOutputInput } from '@goodfirsttoken/core';
+import {
+  doNotListNote,
+  productName,
+  removalProjectNote,
+  removalWaitsNote,
+  removalWithdrawnNote,
+  type ToolOutputInput,
+} from '@goodfirsttoken/core';
 import { createFileRoute, Link, notFound, redirect } from '@tanstack/react-router';
 import { useId, type CSSProperties, type ReactNode } from 'react';
 import { getAdminPage, type AdminPage, type PolicyListing } from '../admin/data';
@@ -140,11 +147,16 @@ function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
 
-/** On a registration or crawler find, a request to remove the same repo that waits, which blocks approving it. */
+/**
+ * On a registration or crawler find, a request to remove the same repo that
+ * waits, which blocks approving it, or the last one, when someone other than
+ * its asker withdrew it.
+ */
 function RemovalWaitsNote({ item }: { item: QueueItem }) {
-  return item.removalWaits === true && item.kind !== 'removal' ? (
-    <p className="admin-item__warning">{removalWaitsNote(item.kind)}</p>
-  ) : null;
+  if (item.kind === 'removal') return null;
+  if (item.removalWaits === true) return <p className="admin-item__warning">{removalWaitsNote(item.kind)}</p>;
+  const withdrawn = item.removalWithdrawn ?? null;
+  return withdrawn === null ? null : <p className="admin-item__warning">{removalWithdrawnNote(withdrawn)}</p>;
 }
 
 function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {

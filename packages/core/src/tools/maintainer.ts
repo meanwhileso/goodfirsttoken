@@ -251,7 +251,16 @@ function removalText(out: {
   requestedBy: string | null;
   requestedAt: string | null;
   changed: boolean;
+  lastWithdrawn: { by: string; at: string } | null;
 }): string {
+  return lines(
+    removalOutcome(out),
+    out.lastWithdrawn !== null &&
+      `@${out.lastWithdrawn.by} withdrew your last request to remove ${out.repo}, on ${when(out.lastWithdrawn.at)}.`,
+  );
+}
+
+function removalOutcome(out: Parameters<typeof removalText>[0]): string {
   const who = out.requestedBy === null ? 'A maintainer' : `@${out.requestedBy}`;
   const on = out.requestedAt === null ? '' : ` on ${when(out.requestedAt)}`;
   if (out.waiting) {
@@ -270,7 +279,7 @@ function removalText(out: {
 export const requestRemoval = defineTool({
   audience: 'maintainer',
   description:
-    "Ask Good First Token's admins to remove a repo you maintain, with your reason, which only they read, or withdraw a request that waits with withdraw: true. It works for a public repo you are an admin or maintainer of on GitHub, whether or not it is a project: registered, listed from its AI policy, pending, approved, paused, or rejected. Name a project as project_status names it. The request waits for an admin, who removes the repo: it goes on the do-not-list, its project is rejected, and nothing lists it again unless one of its maintainers registers it. While it waits, no admin can list the repo or approve a registration of it. While one request waits, another changes nothing. A repo on the do-not-list already needs no request. The request pauses nothing: pause an approved project with pause_project to stop new claims now.",
+    "Ask Good First Token's admins to remove a repo you maintain, with your reason, which only they read, or withdraw a request that waits with withdraw: true. It works for a public repo you are an admin or maintainer of on GitHub, whether or not it is a project: registered, listed from its AI policy, pending, approved, paused, or rejected. Name a project as project_status names it. The request waits for an admin, who removes the repo: it goes on the do-not-list, its project is rejected, and nothing lists it again unless one of its maintainers registers it. While it waits, no admin can list the repo or approve a registration of it. While one request waits, another changes nothing. Any maintainer of the repo can withdraw it, and when someone else withdrew your last request, the answer says who and when. A repo on the do-not-list already needs no request, unless a registration of it waits, since approving that would take it off the list: then the request is made. The request pauses nothing: pause an approved project with pause_project to stop new claims now.",
   // A repo GitHub doesn't show the caller, or blocks, is refused with
   // not_maintainer by the permission check, like every maintainer's tool.
   // Asking and withdrawing take the same check.
@@ -307,6 +316,11 @@ export const requestRemoval = defineTool({
     requestedAt: isoTime.nullable(),
     /** True when this call made or withdrew a request. False when nothing changed. */
     changed: z.boolean(),
+    /**
+     * When the caller's last request for the repo, before this call, was
+     * withdrawn by someone else: who withdrew it, and when. Null otherwise.
+     */
+    lastWithdrawn: z.object({ by: githubLogin, at: isoTime }).nullable().default(null),
   }),
   text: removalText,
 });

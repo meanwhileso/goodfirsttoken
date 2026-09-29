@@ -101,6 +101,27 @@ export async function listWaitingRemovals(db: D1Database): Promise<RemovalReques
   return results.map(toRequest);
 }
 
+/**
+ * The repo's last request, compared without case, waiting or closed, or
+ * null when none was made. With `requestedBy`, the last one that person made.
+ */
+export async function lastRemoval(db: D1Database, repo: string, requestedBy?: number): Promise<RemovalRequest | null> {
+  const name = mustParse(repoName, repo, 'repo');
+  const row =
+    requestedBy === undefined
+      ? await db
+          .prepare('SELECT * FROM removal_requests WHERE repo = ? ORDER BY requested_at DESC, id DESC LIMIT 1')
+          .bind(name)
+          .first<RequestRow>()
+      : await db
+          .prepare(
+            'SELECT * FROM removal_requests WHERE repo = ? AND requested_by = ? ORDER BY requested_at DESC, id DESC LIMIT 1',
+          )
+          .bind(name, mustParse(githubId, requestedBy, 'requestedBy'))
+          .first<RequestRow>();
+  return row === null ? null : toRequest(row);
+}
+
 /** The request with this ID, waiting or closed, or null. */
 export async function getRemoval(db: D1Database, requestId: string): Promise<RemovalRequest | null> {
   const row = await db

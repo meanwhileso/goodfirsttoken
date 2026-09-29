@@ -1094,10 +1094,13 @@ removes the repo, or a maintainer of the repo withdraws it.
   its repo is archived can be asked for as it is, since GitHub still shows
   the repo and the caller's role.
 - The reason is the maintainer's own words, up to 500 characters, always
-  on one line. Each run of characters that could break a line or change
-  what a terminal shows, with the plain spaces around it, becomes one
-  space: control characters, tabs and line breaks among them, Unicode line
-  and paragraph separators, and marks that reorder text. Only admins read
+  on one line, and only what a person can see. Each run of characters that
+  could break a line or change what a terminal shows, with the plain spaces
+  around it, becomes one space: control characters, tabs and line breaks
+  among them, Unicode line and paragraph separators, and marks that reorder
+  text. Every character a person doesn't see goes: format characters, like
+  a zero-width space, a word joiner, or Unicode tag characters, private-use
+  characters, and unassigned ones. Only admins read
   it, in `admin_queue`, as a JSON string, so no quote mark in it can end
   the quote early, and on the [admin pages](#the-admin-pages). Both show it
   as the maintainer's words. It reaches no public page, so nothing redacts
@@ -1112,7 +1115,8 @@ removes the repo, or a maintainer of the repo withdraws it.
   GitHub since, asked for by its new name, is no project by that name, and
   the queue says no project has that name.
 - A repo on the do-not-list was removed before, so asking makes no
-  request. The answer says so, and nothing changes. The one exception is a
+  request. The answer says so, and nothing changes, and so does a
+  withdrawal there. The one exception is a
   repo whose registration waits for an admin, still on the list, under
   [Registering a project](#registering-a-project): approving it would take
   the repo off, so asking makes a request, which stops that approval.
@@ -1132,9 +1136,14 @@ removes the repo, or a maintainer of the repo withdraws it.
   who removed it and when.
 - A maintainer of the repo, the one who asked or another, withdraws a
   waiting request with `request_removal` and `withdraw: true`, under the
-  same check of their role on GitHub. It closes as `withdrawn`, with who
-  withdrew it and when, and leaves the queue. With none waiting, nothing
+  same check of their role on GitHub, so a request doesn't outlive an asker
+  who left the repo. It closes as `withdrawn`, with who withdrew it and when,
+  beside who asked, and leaves the queue. With none waiting, nothing
   changes, and the answer says so.
+- A request withdrawn by someone other than its asker shows. While no
+  request waits, a registration or crawler find of the repo in the queue
+  says who asked, who withdrew it, and when. The asker's next call to
+  `request_removal` says who withdrew their last request, and when.
 - A closed request is kept, as the record of who asked, and only a waiting
   one closes, so a closed one keeps who closed it. Nothing else closes one.
   An admin can't decline one: the plan puts a repo on the do-not-list when
@@ -1185,7 +1194,10 @@ registration's or a crawler find's.
   the repo with `admin_remove_project`. A closed request's ID, like any ID
   that names nothing waiting, is `not_found`.
 - A registration or a crawler find says when a request to remove the same
-  repo waits, since it can't be approved while that waits.
+  repo waits, since it can't be approved while that waits. When none
+  waits, and someone other than its asker withdrew the last one, it says
+  who asked, who withdrew it, and when, for the admin to weigh before
+  approving.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
   request to be removed they are read from GitHub when the queue is read,
@@ -1265,8 +1277,10 @@ repo whose maintainers asked to be removed. An optional note says where and
 how they asked, and only admins see it.
 
 - The repo goes on the [do-not-list](#crawl-candidates) first.
-- With no note from the admin, the note names who asked with
-  `request_removal`, and when, from the request that waits.
+- The do-not-list keeps a repo's first entry, so its note is the first
+  removal's: the admin's note, or with none, who asked with
+  `request_removal` and when, from the request that waited then. Each
+  request's own record keeps who asked, whatever the note says.
 - Its project, when it has one, is `rejected`, with the reason
   `Removed at its maintainers' request.`, which its maintainers read with
   `project_status`. The rejection puts the repo back on the list in the
@@ -1324,7 +1338,8 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   when, and their reason, quoted as theirs, and its button removes the
   repo, as `admin_remove_project` does with no note, which closes the
   request. A registration or a crawler find whose repo has a request to be
-  removed waiting says so. A registration's form takes a reason.
+  removed waiting says so, and so does one whose last request someone
+  other than its asker withdrew. A registration's form takes a reason.
   Rejecting or skipping needs the reason, and the form refuses to send
   without one. Approving doesn't.
 - Every form posts to `/admin`. It has to come from the site itself, by its

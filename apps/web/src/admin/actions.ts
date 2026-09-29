@@ -32,6 +32,7 @@ import {
   getRemoval,
   getWaitingCandidate,
   getWaitingRemoval,
+  lastRemoval,
   leaveDoNotListWhenApproved,
   listCandidates,
   listPendingProjects,
@@ -110,12 +111,31 @@ async function factsFromGitHub(token: string | null, repo: string): Promise<Fact
   }
 }
 
+/**
+ * What a registration or crawler find says of the repo's requests to be
+ * removed: whether one waits, and, when none does, who asked and who
+ * withdrew the last one, when someone other than its asker withdrew it.
+ */
+async function removalsOf(repo: string): Promise<Pick<QueueItem, 'removalWaits' | 'removalWithdrawn'>> {
+  const [waiting, last] = await Promise.all([getWaitingRemoval(env.DB, repo), lastRemoval(env.DB, repo)]);
+  if (waiting !== null) return { removalWaits: true, removalWithdrawn: null };
+  if (last?.status !== 'withdrawn' || last.closedBy === null || last.closedAt === null || last.closedBy === last.requestedBy) {
+    return { removalWaits: false, removalWithdrawn: null };
+  }
+  const [asker, withdrawer] = await Promise.all([getPerson(env.DB, last.requestedBy), getPerson(env.DB, last.closedBy)]);
+  if (asker === null || withdrawer === null) throw new Error(`${repo}'s request to be removed names someone who isn't recorded.`);
+  return {
+    removalWaits: false,
+    removalWithdrawn: { requestedBy: asker.login, withdrawnBy: withdrawer.login, withdrawnAt: iso(last.closedAt) },
+  };
+}
+
 async function registrationItem(token: string | null, project: ProjectRecord, changeId: number): Promise<QueueItem> {
-  const [maintainer, facts, doNotList, removal] = await Promise.all([
+  const [maintainer, facts, doNotList, removals] = await Promise.all([
     getPerson(env.DB, project.addedBy),
     factsFromGitHub(token, project.repo),
     getDoNotListEntry(env.DB, project.repo),
-    getWaitingRemoval(env.DB, project.repo),
+    removalsOf(project.repo),
   ]);
   if (maintainer === null) throw new Error(`${project.repo} was added by someone who isn't recorded.`);
   return {
@@ -130,7 +150,7 @@ async function registrationItem(token: string | null, project: ProjectRecord, ch
     policy: project.policy,
     suggestedTags: [],
     onDoNotList: doNotList !== null,
-    removalWaits: removal !== null,
+    ...removals,
   };
 }
 
@@ -167,9 +187,9 @@ async function removalItem(token: string | null, request: RemovalRequest): Promi
 }
 
 async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
-  const [doNotList, removal] = await Promise.all([
+  const [doNotList, removals] = await Promise.all([
     getDoNotListEntry(env.DB, candidate.repo),
-    getWaitingRemoval(env.DB, candidate.repo),
+    removalsOf(candidate.repo),
   ]);
   return {
     id: candidate.id,
@@ -183,7 +203,7 @@ async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
     policy: candidate.policy,
     suggestedTags: candidate.suggestedTags,
     onDoNotList: doNotList !== null,
-    removalWaits: removal !== null,
+    ...removals,
   };
 }
 

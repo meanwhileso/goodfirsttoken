@@ -5,6 +5,7 @@ import { loadAdminPage } from '../../src/admin/page';
 import {
   addToDoNotList,
   askRemoval,
+  closeRemoval,
   createProject,
   getBlock,
   getDoNotListEntry,
@@ -345,6 +346,17 @@ describe("maintainers' requests to be removed on /admin", () => {
     expect(page).toContain('A request to be removed waits for this repo too, so it can&#x27;t be approved while that waits.');
     expect(answer).toContain(`A maintainer of ${HARBOR} asked to have it removed, and that request waits in the admin queue.`);
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'pending' });
+  });
+
+  test('a registration whose repo had a request withdrawn by someone other than its asker says who asked and who withdrew it', async () => {
+    await savePerson(env.DB, { githubId: 1002, login: 'kenji' }, Date.now());
+    await askRemoval(env.DB, { repo: HARBOR, reason, requestedBy: 1002 }, Date.now() - 60_000);
+    await closeRemoval(env.DB, HARBOR, { status: 'withdrawn', by: 1008 }, Date.now());
+    const browser = await signedIn('sample-admin');
+
+    const page = await (await browser.fetch('/admin')).text();
+
+    expect(page).toContain('@kenji asked to remove this repo, and @octo-maintainer withdrew the request on ');
   });
 
   test("someone who isn't an admin sees no request, and their form removes nothing", async () => {

@@ -78,6 +78,15 @@ const queueItemSchema = z.object({
    * registration can't be approved, and the find can't be listed.
    */
   removalWaits: z.boolean().default(false),
+  /**
+   * For a registration or a crawler find, when no request to remove the repo
+   * waits, and its last one was withdrawn by someone other than the one who
+   * asked: who asked, who withdrew it, and when. Null otherwise.
+   */
+  removalWithdrawn: z
+    .object({ requestedBy: githubLogin, withdrawnBy: githubLogin, withdrawnAt: isoTime })
+    .nullable()
+    .default(null),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -127,6 +136,11 @@ export function removalWaitsNote(kind: QueueItem['kind']): string {
   return `A request to be removed waits for this repo too, so it ${blocked} while that waits.`;
 }
 
+/** What a registration or crawler find says when someone other than its asker withdrew the repo's last request to be removed. */
+export function removalWithdrawnNote(withdrawn: { requestedBy: string; withdrawnBy: string; withdrawnAt: string }): string {
+  return `@${withdrawn.requestedBy} asked to remove this repo, and @${withdrawn.withdrawnBy} withdrew the request on ${when(withdrawn.withdrawnAt)}.`;
+}
+
 /**
  * A request to be removed: the maintainer's reason, and what the repo is on
  * Good First Token now. The reason is one line, and shows as a JSON string,
@@ -153,6 +167,7 @@ function renderQueueItem(item: QueueItem): string {
         : `GitHub showed no public repo named ${item.repo} when asked.`,
     item.onDoNotList && doNotListNote(item.kind),
     item.removalWaits && item.kind !== 'removal' && removalWaitsNote(item.kind),
+    item.removalWithdrawn && item.kind !== 'removal' && removalWithdrawnNote(item.removalWithdrawn),
     item.removal && describeRemoval(item.repo, item.removal),
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
@@ -309,7 +324,7 @@ export const adminPauseProject = defineTool({
 export const adminRemoveProject = defineTool({
   audience: 'admin',
   description:
-    "Remove a repo at its maintainers' request. It goes on the do-not-list, its project is rejected with a reason its maintainers see, a crawler find for it waiting in the queue is rejected, and a maintainer's request to remove it that waits in the queue is closed. With no note, the note names who asked and when. Nothing lists it again unless a maintainer registers it.",
+    "Remove a repo at its maintainers' request. It goes on the do-not-list, its project is rejected with a reason its maintainers see, a crawler find for it waiting in the queue is rejected, and a maintainer's request to remove it that waits in the queue is closed. With no note, a new do-not-list entry's note names who asked and when. Nothing lists it again unless a maintainer registers it.",
   refusals: [],
   input: z.object({
     repo: repoName,
