@@ -1,3 +1,4 @@
+import { cutGraphemes } from '@goodfirsttoken/core';
 import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 import { env } from 'cloudflare:workers';
 import { failureReason, getAuth } from '../auth/auth';
@@ -37,7 +38,6 @@ interface ConnectionRow {
 /** A client names itself when it registers, so its name is cut to this length and never trusted. */
 const CLIENT_NAME_MAX = 60;
 
-const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
 /**
  * The name a client gave itself, as the site shows it: one line, at most 60
@@ -51,8 +51,7 @@ export function clientNameOf(name: string | undefined): string {
     .replace(/ {2,}/g, ' ')
     .trim();
   if (!line) return 'An unnamed agent';
-  const characters = Array.from(graphemes.segment(line), ({ segment }) => segment);
-  return characters.length > CLIENT_NAME_MAX ? `${characters.slice(0, CLIENT_NAME_MAX - 3).join('')}...` : line;
+  return cutGraphemes(line, CLIENT_NAME_MAX);
 }
 
 const encrypt = (token: string) => symmetricEncrypt({ key: authSecret(), data: token });

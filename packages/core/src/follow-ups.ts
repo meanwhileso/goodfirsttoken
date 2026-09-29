@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { epochMs, githubLogin, id, webUrl } from './primitives';
+import { cutGraphemes, epochMs, githubLogin, id, webUrl } from './primitives';
 
 // Follow-ups (spec section 7, steps 2 and 7): what a reviewer wrote on a
 // donor's open PR, which the PR job reads from GitHub and the donor's next
@@ -7,8 +7,11 @@ import { epochMs, githubLogin, id, webUrl } from './primitives';
 // text. It is folded to one line and cut before it is stored, and the tools
 // quote it as the reviewer's words.
 
-/** The longest a reviewer's words are kept and shown, in characters. */
+/** The longest a reviewer's words are kept and shown, in graphemes, what a reader counts as characters. */
 export const MAX_FOLLOW_UP_TEXT = 1000;
+
+/** The longest file path a follow-up keeps, in graphemes. */
+export const MAX_FOLLOW_UP_PATH = 4096;
 
 /** The most follow-ups start_session and my_work list at once, oldest first. */
 export const MAX_FOLLOW_UPS = 20;
@@ -22,28 +25,23 @@ export const MAX_FOLLOW_UPS = 20;
 const UNSAFE = /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}\s]+/gu;
 
 /**
- * Text from someone else, as one line of at most `max` characters: each run
+ * Text from someone else, as one line of at most `max` graphemes: each run
  * of unsafe characters and white space becomes one space, and the ends are
- * trimmed. Longer text is cut, whole characters only, and ends in `...`. So
+ * trimmed. Longer text is cut, whole graphemes only, and ends in `...`. So
  * a reviewer's comment can't add a line that reads as the server's own.
  */
 export function foldUntrusted(text: string, max: number): string {
-  const folded = text.replace(UNSAFE, ' ').trim();
-  if (folded.length <= max) return folded;
-  let cut = '';
-  for (const char of folded) {
-    if (cut.length + char.length > max - 3) break;
-    cut += char;
-  }
-  return `${cut.trimEnd()}...`;
+  return cutGraphemes(text.replace(UNSAFE, ' ').trim(), max);
 }
 
 /** A reviewer's text, as the follow-ups keep it. */
 export const followUpText = z
   .string({ error: 'must be text' })
   .min(1, 'must not be empty')
-  .max(MAX_FOLLOW_UP_TEXT, `must be at most ${String(MAX_FOLLOW_UP_TEXT)} characters`)
-  .refine((text) => foldUntrusted(text, MAX_FOLLOW_UP_TEXT) === text, 'must be one folded line');
+  .refine(
+    (text) => foldUntrusted(text, MAX_FOLLOW_UP_TEXT) === text,
+    `must be one folded line of at most ${String(MAX_FOLLOW_UP_TEXT)} graphemes`,
+  );
 
 /**
  * A reviewer's review or comment on a claim's open PR, as the PR job read
@@ -60,8 +58,7 @@ export const followUpRecordSchema = z.object({
   path: z
     .string()
     .min(1)
-    .max(4096)
-    .refine((path) => foldUntrusted(path, 4096) === path, 'must be one folded line')
+    .refine((path) => foldUntrusted(path, MAX_FOLLOW_UP_PATH) === path, 'must be one folded line')
     .nullable(),
   /** The review or comment on GitHub. */
   url: webUrl,

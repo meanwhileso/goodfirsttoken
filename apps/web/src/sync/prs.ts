@@ -1,6 +1,7 @@
 import {
   foldUntrusted,
   followUpRecordSchema,
+  MAX_FOLLOW_UP_PATH,
   MAX_FOLLOW_UP_TEXT,
   type PrRecord,
   type PrState,
@@ -57,8 +58,6 @@ const BATCH = 50;
 export const REVIEWS_READ = 10;
 /** The comments read on each of those reviews. */
 export const COMMENTS_READ = 10;
-/** The longest file path a follow-up keeps. */
-const MAX_PATH = 4096;
 
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreview
@@ -177,7 +176,7 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
     const checked = followUpRecordSchema.omit({ claimId: true, readAt: true, shownAt: true, answeredAt: true }).safeParse({
       ...followUp,
       body: foldUntrusted(followUp.body, MAX_FOLLOW_UP_TEXT),
-      path: followUp.path === null ? null : foldUntrusted(followUp.path, MAX_PATH),
+      path: followUp.path === null ? null : foldUntrusted(followUp.path, MAX_FOLLOW_UP_PATH),
     });
     if (checked.success) found.push(checked.data);
   };

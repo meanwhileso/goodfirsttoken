@@ -89,7 +89,8 @@ export function renderClaimSummary(claim: ClaimSummary): string {
 export function renderFollowUp(followUp: FollowUp): string {
   return lines(
     `${followUp.issue}  ${followUp.title}`,
-    `claim ${followUp.claimId} · PR ${followUp.pr.url} · @${followUp.reviewer} on ${followUp.path ?? 'the PR'} · ${when(followUp.writtenAt)}`,
+    // A path is repo text, so it shows as a quoted string.
+    `claim ${followUp.claimId} · PR ${followUp.pr.url} · @${followUp.reviewer} on ${followUp.path === null ? 'the PR' : `the file ${JSON.stringify(followUp.path)}`} · ${when(followUp.writtenAt)}`,
     `> ${followUp.comment}`,
     followUp.commentUrl,
     `Fixes go on ${followUp.branch.repo}:${followUp.branch.name}, sending every file changed from ${followUp.base}.`,

@@ -214,38 +214,50 @@ export async function startSession(
   if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
   const person = await savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, now);
   const session = await createSession(env.DB, { githubId: caller.githubId, agent: input.agent, budget: input.budget }, now);
-  return answer(
-    toolResult('start_session', {
-      sessionId: session.id,
-      login: person.login,
-      budget: session.budget,
-      interests: person.interests,
-      ...(await followUpsFor(caller.githubId, now)),
-      readInPart: await listReadInPart(env.DB, caller.githubId),
-      unfinishedClaims: await offeredToResume(caller.githubId, origin, now),
-      endedPrs: await endedToOffer(caller.githubId, now),
-    }),
-  );
+  const followUps = await followUpsFor(caller.githubId);
+  const readInPart = await listReadInPart(env.DB, caller.githubId);
+  const unfinishedClaims = await offeredToResume(caller.githubId, origin, now);
+  // Taking the ended PRs marks them offered, so it comes after every read.
+  const endedPrs = await endedToOffer(caller.githubId, now);
+  const result = toolResult('start_session', {
+    sessionId: session.id,
+    login: person.login,
+    budget: session.budget,
+    interests: person.interests,
+    followUps: followUps.followUps,
+    moreFollowUps: followUps.moreFollowUps,
+    readInPart,
+    unfinishedClaims,
+    endedPrs,
+  });
+  // Marked shown only once the answer is made, so an answer that fails
+  // leaves them unshown, for a submit not to answer.
+  await followUps.markShown(now);
+  return answer(result);
 }
 
 /**
- * What reviewers wrote on the donor's open PRs that no submit answered yet,
- * oldest first, as start_session and my_work list them, each marked shown
- * from now. A submit to the claim answers the ones shown before it. Only a
- * follow-up submit_work could take a fix for shows: its PR open, its
- * project asking for help, and the donor not blocked.
+ * What maintainers wrote on the donor's open PRs that no submit answered
+ * yet, as start_session and my_work list them, and how many more wait.
+ * `markShown` marks the ones listed shown, once the answer is made. A
+ * submit to the claim answers the ones shown before it. Only a follow-up
+ * submit_work could take a fix for shows: its PR open, its project asking
+ * for help, and the donor not blocked.
  */
-async function followUpsFor(person: number, now: number): Promise<{ followUps: FollowUp[]; moreFollowUps: number }> {
+async function followUpsFor(
+  person: number,
+): Promise<{ followUps: FollowUp[]; moreFollowUps: number; markShown: (now: number) => Promise<void> }> {
   const { followUps: waiting, waiting: all } = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
   const titles = new Map<string, string>();
   for (const { project, issue } of waiting) {
     if (!titles.has(lower(issue))) titles.set(lower(issue), (await getIssue(env.DB, project, issue))?.title ?? issue);
   }
-  await markFollowUpsShown(
-    env.DB,
-    waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
-    now,
-  );
+  const markShown = (now: number) =>
+    markFollowUpsShown(
+      env.DB,
+      waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
+      now,
+    );
   const followUps = waiting.map(({ record, issue, pr, branch, base }) => ({
     claimId: record.claimId,
     issue,
@@ -259,7 +271,7 @@ async function followUpsFor(person: number, now: number): Promise<{ followUps: F
     branch,
     base,
   }));
-  return { followUps, moreFollowUps: all - followUps.length };
+  return { followUps, moreFollowUps: all - followUps.length, markShown };
 }
 
 /**
@@ -311,14 +323,16 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
       return { ...summary, resumable: reason === null, reason };
     }),
   );
-  return answer(
-    toolResult('my_work', {
-      ...(await followUpsFor(caller.githubId, now)),
-      readInPart: await listReadInPart(env.DB, caller.githubId),
-      readyToOpen: await readyToOpen(caller, origin, now),
-      working,
-    }),
-  );
+  const followUps = await followUpsFor(caller.githubId);
+  const result = toolResult('my_work', {
+    followUps: followUps.followUps,
+    moreFollowUps: followUps.moreFollowUps,
+    readInPart: await listReadInPart(env.DB, caller.githubId),
+    readyToOpen: await readyToOpen(caller, origin, now),
+    working,
+  });
+  await followUps.markShown(now);
+  return answer(result);
 }
 
 /** The claim, found by its ID in the claims table, once the caller is the one who made it. */

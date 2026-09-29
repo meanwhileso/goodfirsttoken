@@ -71,7 +71,7 @@ export const samples: Samples = {
       '@priya',
       '3 issues',
       'typescript',
-      '@octo-maintainer on apps/web/src/feed/format.ts',
+      '@octo-maintainer on the file "apps/web/src/feed/format.ts"',
       '> Can the formatter skip events with an empty text field?',
       'paused',
       '2 more follow-ups wait.',
