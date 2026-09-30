@@ -135,6 +135,9 @@ describe('each card', () => {
       expect(res.headers.get('content-type'), path).toBe('image/png');
       expect(res.headers.get('set-cookie'), path).toBeNull();
       expect(pngSize(new Uint8Array(await res.arrayBuffer())), path).toEqual({ width: CARD_WIDTH, height: CARD_HEIGHT });
+      // Cached as its page is.
+      const page = await get(path.replace(/\/?card\.png$/, '') || '/');
+      expect(res.headers.get('cache-control'), path).toBe(page.headers.get('cache-control'));
     }
   });
 
