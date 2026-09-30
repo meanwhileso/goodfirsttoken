@@ -246,12 +246,15 @@ GitHub token GitHub gave that sign-in.
   getting tokens, ends the next time the person opens `/me` or connects an
   agent, or at the daily job, whichever comes first.
 - The daily job runs at 04:23 UTC, and ends such connections for everyone,
-  the way Disconnect does, so their GitHub tokens are revoked. It ends at
-  most 200 a day, the longest lapsed first, and the next day's run takes the
-  rest. So a token outlives its grant by a day or so at most, whether or not
-  its person comes back. It needs no service token, since it revokes tokens
-  as the OAuth app. When a setting sign-in needs is missing, it ends none,
-  and the log names the setting.
+  so their GitHub tokens are revoked, whether or not their people come back.
+  It revokes each token first, and ends the connection once GitHub has. When
+  GitHub fails, the connection and its token wait for the next day's run. A
+  token GitHub no longer knows counts as revoked. It takes at most 200 a
+  day, the one that last got tokens earliest first, or for one that never
+  did, the one that connected earliest, and the next day's run takes the
+  rest. It needs no service token, since it revokes tokens as the OAuth app.
+  When a setting sign-in needs is missing, it tries none, and the log names
+  the setting.
 - When a step of an agent's sign-in fails after GitHub gave the token, the
   connection is removed and the token is revoked, and the agent gets
   `server_error`.

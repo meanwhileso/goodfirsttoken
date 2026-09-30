@@ -63,8 +63,7 @@ function jobOrigin(env: Env): string {
 
 /**
  * Ends every lapsed connection, up to the day's cap. With a setting sign-in
- * needs missing, it ends none, since a connection's row would go before its
- * token could be read or revoked.
+ * needs missing, no token can be read or revoked, so it tries none.
  */
 async function endLapsed(env: Env): Promise<void> {
   try {

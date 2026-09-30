@@ -261,9 +261,12 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
     minute more for each. `endLapsedConnections` finds them for one person,
     when that person opens `/me` or connects an agent.
     `endEveryLapsedConnection` finds them for everyone, from the daily cron
-    under [The sync](#the-sync), at most `LAPSED_PER_RUN` a run, the longest
-    lapsed first. It reads the whole of `connected_agents`, which has no
-    index on `renewed_at`, once a day.
+    under [The sync](#the-sync), at most `LAPSED_PER_RUN` a run, ordered by
+    `COALESCE(renewed_at, connected_at)`. It reads the whole of
+    `connected_agents`, which has no index on `renewed_at`, once a day.
+    Unlike Disconnect, it revokes the token before it deletes the row, and
+    keeps the row when GitHub fails, since a lapsed grant can't be used and
+    can wait for the next run.
 - **The MCP TypeScript SDK 2.1.0, pinned.** `@modelcontextprotocol/server`'s
   `createMcpHandler` serves both the 2026-07-28 protocol and 2025 clients,
   with a new `McpServer` for each request, so nothing is kept between
@@ -2801,9 +2804,10 @@ read-only service token. The rules are in
   caps a run at 200 connections: at most 200 calls to GitHub, and about ten
   calls to D1 and KV for each, 2,000 subrequests in all, well inside the
   10,000 a cron invocation gets. When more lapse in a day, the next run
-  takes the rest, and `/me` ends a person's own at once. With a sign-in
-  setting missing, the job ends none, since `disconnect` deletes the row
-  before it reads the token.
+  takes the rest, and `/me` ends a person's own at once. The job revokes
+  each token before it ends the connection, and leaves the row for the next
+  run when GitHub fails, so an outage at 04:23 loses no token. With a
+  sign-in setting missing, it tries none.
 - **The service token** is the `GH_SERVICE_TOKEN` secret, a token that reads
   public data only, like a fine-grained personal access token for public
   repos with no permissions, as

@@ -440,6 +440,58 @@ test("the daily job ends everyone's connections whose grants ran out, and revoke
   expect((await startSession(kept)).structuredContent).toMatchObject({ login: 'priya' });
 });
 
+test('when GitHub fails to revoke, the daily job keeps the connection and its token for the next run, which ends both once GitHub answers', async () => {
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  const [token = ''] = appTokens(github);
+  await ageConnection('Lapsed agent', 40 * DAY);
+  let down = true;
+  const revokes: number[] = [];
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.method === 'DELETE' && new URL(request.url).pathname.endsWith('/token')) {
+      if (down) {
+        revokes.push(502);
+        return new Response('{"message":"Bad gateway"}', { status: 502, headers: { 'content-type': 'application/json' } });
+      }
+      revokes.push(200);
+    }
+    return github.fetch(request);
+  });
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+  const first = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+  const kept = await connectionNames();
+  const liveAfterFailure = (await gitHubUser(token)).status;
+  down = false;
+  const second = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+
+  expect(first).toBe(0);
+  expect(kept).toEqual(['Lapsed agent']);
+  expect(liveAfterFailure).toBe(200);
+  expect(second).toBe(1);
+  expect(await connectionNames()).toEqual([]);
+  expect((await gitHubUser(token)).status).toBe(401);
+  // One call to GitHub for the token in each run.
+  expect(revokes).toEqual([502, 200]);
+});
+
+test('a token GitHub no longer knows counts as revoked, and the daily job ends its connection', async () => {
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  await ageConnection('Lapsed agent', 40 * DAY);
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.method === 'DELETE' && new URL(request.url).pathname.endsWith('/token')) {
+      return new Response('{"message":"Not Found"}', { status: 404, headers: { 'content-type': 'application/json' } });
+    }
+    return github.fetch(request);
+  });
+
+  const ended = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+
+  expect(ended).toBe(1);
+  expect(await connectionNames()).toEqual([]);
+});
+
 test('one run of the daily job ends a set number of lapsed connections, the longest lapsed first, and the next run the rest', async () => {
   for (const name of ['Lapsed a week', 'Lapsed a day', 'Lapsed a month']) {
     await connectAgent(github, 'arjun', { oauth: new MemoryOAuthClient(name) });

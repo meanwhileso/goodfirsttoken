@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 import { failureReason, getAuth } from '../auth/auth';
 import { authSecret, oauthApp } from '../auth/settings';
 import { newId } from '../db/shared';
-import { revokeGitHubToken } from '../github';
+import { GitHubError, revokeGitHubToken } from '../github';
 import { TOKEN_PATH } from './paths';
 import { GRANT_DAYS, grantExists, oauthApi } from './provider';
 
@@ -264,11 +264,12 @@ export async function endLapsedConnections(origin: string, githubId: number, now
 
 /**
  * The daily job: ends everyone's connections whose grants ran out, as
- * endLapsedConnections does for one person, so no token outlives its grant
- * by more than a day, whether or not its person comes back. It ends at most
- * `limit` in a run, the longest lapsed first, and the next run takes the
- * rest. A connection it can't end is logged and left for the next run.
- * Returns how many it ended.
+ * endLapsedConnections does for one person, whether or not its person
+ * comes back. It revokes each token before it ends the connection, and a
+ * connection whose token GitHub didn't revoke waits for the next run. It
+ * takes at most `limit` in a run, the one that last got tokens earliest
+ * first, or for one that never did, the one that connected earliest, and the
+ * next run takes the rest. Returns how many it ended.
  */
 export async function endEveryLapsedConnection(origin: string, now: number, limit: number): Promise<number> {
   const { results } = await env.DB.prepare(
@@ -280,12 +281,41 @@ export async function endEveryLapsedConnection(origin: string, now: number, limi
   let ended = 0;
   for (const row of results) {
     try {
-      if (await disconnect(origin, row.github_id, row.id)) ended += 1;
+      if (await endLapsedConnection(origin, row.github_id, row.id)) ended += 1;
     } catch (error) {
       console.error(`A lapsed connection wasn't ended: ${failureReason(error)}`);
     }
   }
   return ended;
+}
+
+/**
+ * Ends one lapsed connection for the daily job, revoking its token first.
+ * Disconnect deletes the row first, so the agent is cut off at once, and a
+ * failed revoke is only logged. A lapsed grant can't be used, so the job can
+ * wait for GitHub: when the revoke fails, the row stays for the next run.
+ * GitHub's 404 says it no longer knows the token, which counts as revoked.
+ * Returns whether the connection ended.
+ */
+async function endLapsedConnection(origin: string, githubId: number, id: string): Promise<boolean> {
+  const row = await env.DB.prepare('SELECT github_token FROM connected_agents WHERE id = ?1 AND github_id = ?2')
+    .bind(id, githubId)
+    .first<Pick<ConnectionRow, 'github_token'>>();
+  if (row === null) return false;
+  const token = await readable(decrypt(row.github_token));
+  if (token === null) {
+    console.error("A lapsed connection's GitHub token couldn't be read, so it wasn't revoked. Did AUTH_SECRET change?");
+  } else if (!(await tokenStillHeld(origin, githubId, token, id))) {
+    try {
+      await revokeGitHubToken(oauthApp(), token);
+    } catch (error) {
+      if (!(error instanceof GitHubError && error.status === 404)) {
+        console.error(`GitHub didn't revoke a lapsed connection's token, so it waits for the next run: ${failureReason(error)}`);
+        return false;
+      }
+    }
+  }
+  return disconnect(origin, githubId, id, { revoke: false });
 }
 
 /**
