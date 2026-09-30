@@ -4568,7 +4568,9 @@ Token's admins.
   Code, Codex, OpenCode, Grok Bot, and Cursor. When the Good First Token
   tools aren't there, it says how to add the MCP server in each of them.
   The steps for all but Claude Code are one shared part, the same in every
-  skill.
+  skill. The Claude Code step that installs the `goodfirsttoken` plugin is
+  a second shared part, in every skill but admin, which installs its own
+  plugin. [`/start.md`](#setup-for-agents) gives the same two parts.
 - Each names only the tools the server serves the person it is for, and the
   fields, values, and refusals of those tools. Its Refusals section has one
   entry for each refusal the tools of its own audience can give an agent,
@@ -4696,6 +4698,60 @@ agent is served its tools.
 - When `admin_pause_project` says the sync delisted the project, it tells
   the admin which repo, what GitHub showed, and that a resume doesn't
   bring the page back.
+
+**The token estimate.** The `goodfirsttoken` plugin has a hook that
+Claude Code runs before each `submit_work` call. It fills in the call's
+`tokenEstimate` from the session's transcript.
+
+- It reads the transcript on the donor's computer, at the path Claude Code
+  gives it, and puts only the number into the call. It sends nothing else
+  anywhere, and makes no network call.
+- It counts the tokens spent on the claim since its last submit the server
+  took, since the server adds up the estimates of every submit. A submit the
+  server refused doesn't count as one. With no submit yet, it counts from
+  the `claim_issue` answer that names the claim, where the claim was made
+  or resumed.
+- With neither in the transcript, as when a session answers follow-ups on a
+  claim it didn't make, it counts from the latest submit the server took or
+  `claim_issue` answer for any claim. So one claim's tokens don't go into
+  the next. With none of those either, it counts the whole transcript.
+- Each assistant message counts once, however many transcript lines it
+  spans: its input, cache write, cache read, and output tokens. Subagents
+  keep transcripts of their own, which it doesn't read, so their tokens
+  aren't in the number. Claude Code may not have written the latest
+  messages to the transcript yet, so the message that calls `submit_work`
+  is often left out.
+- It replaces any `tokenEstimate` the agent wrote. The skills tell an agent
+  in Claude Code to leave the field out.
+- When it can't read the transcript, finds no message with usage in the
+  window, or adds up a sum too large to be a safe integer, it changes
+  nothing, and the submit goes on without an estimate.
+  It needs `node` on the computer's path, and without it the submit goes on
+  the same way.
+- The number is always called an estimate: in the tool's field, the skills,
+  `/start.md`, and the README. Other harnesses send one only when they can
+  estimate it.
+
+## Setup for agents
+
+`/start.md` tells any agent how to set itself up. It is the page the
+homepage's prompt names.
+
+- It is markdown, sent as `text/markdown; charset=utf-8`, to anyone, with
+  no cookie, with `Access-Control-Allow-Origin: *`, and cached for five
+  minutes. It is read with `GET` or `HEAD`. Anything else is `405`.
+- It says how to add the MCP server in Claude Code, Codex, OpenCode,
+  Cursor, and Grok Bot, and in any other harness. These are the steps every
+  skill gives, from the same shared parts, under
+  [Skills and plugins](#skills-and-plugins).
+- The server it names is this site's own `/mcp`: on the primary domain when
+  there is one, or on the origin the page was served from. So a staging or
+  self-hosted site names itself. The Claude Code plugin it installs connects
+  to `https://goodfirsttoken.org/mcp` unless `GOODFIRSTTOKEN_MCP_URL` names
+  another server, as its manifest says.
+- Then it says how to get the skills in each harness, how signing in goes,
+  the rules every claim follows, what `tokenEstimate` is, and which skill a
+  maintainer follows.
 
 ## The design system
 
