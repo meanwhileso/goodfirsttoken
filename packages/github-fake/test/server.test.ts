@@ -86,3 +86,36 @@ test('pnpm seed with no fake running removes the saved state, so the next start 
 
   expect(await labelNames(next)).not.toContain('gone');
 });
+
+test("the local server sends a renamed repo's redirect back to the client, which follows it itself", async () => {
+  const server = await start();
+  server.fake.renameRepo('sample-owner/sample-app', 'sample-owner/sample-app-2');
+
+  const manual = await fetch(`${server.apiUrl}/repos/sample-owner/sample-app`, {
+    headers: { 'user-agent': 'test' },
+    redirect: 'manual',
+  });
+  const followed = await fetch(`${server.apiUrl}/repos/sample-owner/sample-app`, { headers: { 'user-agent': 'test' } });
+
+  expect(manual.status).toBe(301);
+  expect(manual.headers.get('location')).toMatch(/\/repositories\/[0-9]+$/);
+  expect(followed.status).toBe(200);
+  expect(await followed.json()).toMatchObject({ full_name: 'sample-owner/sample-app-2' });
+});
+
+test('the local server sends the OAuth page back to the app with its redirect, for the browser to follow', async () => {
+  const server = await start();
+  const app = Object.values(server.fake.state.oauthApps)[0];
+  if (!app) throw new Error('the sample data has no OAuth app');
+  const form = new URLSearchParams({ client_id: app.clientId, redirect_uri: app.callbackUrl, state: 'x', login: 'priya' });
+
+  const response = await fetch(`${server.webUrl}/login/oauth/authorize`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'test' },
+    body: form,
+    redirect: 'manual',
+  });
+
+  expect(response.status).toBe(302);
+  expect(response.headers.get('location')).toMatch(new RegExp(`^${app.callbackUrl}\\?`));
+});

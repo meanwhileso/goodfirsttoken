@@ -36,6 +36,7 @@ import {
   findIssue,
   findRepo,
   findRepoByFullName,
+  movedRepo,
   fullName,
   gitReady,
   key,
@@ -870,7 +871,8 @@ function rootValue(ctx: Ctx, now: string) {
   return {
     repository: ({ owner, name }: { owner: string; name: string }) => {
       // A repo the caller can't see is not found, like one that isn't there.
-      const repo = findRepo(ctx.state, owner, name);
+      // A renamed or transferred repo's old name finds it, as REST's redirect does.
+      const repo = findRepo(ctx.state, owner, name) ?? movedRepo(ctx.state, owner, name);
       if (!repo || !canSee(repo, ctx.viewer, ctx.scopes)) throw fail('NOT_FOUND', `Could not resolve to a Repository with the name '${owner}/${name}'.`);
       return repositoryNode(ctx, repo);
     },

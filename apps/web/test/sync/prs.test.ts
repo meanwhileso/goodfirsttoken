@@ -20,8 +20,8 @@ import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
 import { ALLOWANCES } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
-import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, sha, signIn } from '../db/helpers';
-import { callsTo, freshNumbers, jobDeps, SERVICE_LOGIN } from './helpers';
+import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, sha, signIn, t0 } from '../db/helpers';
+import { callsTo, freshNumbers, jobDeps, madeBefore, SERVICE_LOGIN } from './helpers';
 
 // The PR job, which follows each claim's PR on GitHub until it merges or
 // closes, against the GitHub fake, with the issue rooms and D1 as they run
@@ -46,6 +46,8 @@ beforeEach(async () => {
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   github = startGitHub();
   freshNumbers(github, APP);
+  // Projects here are added at t0, long before the clock the fake runs on.
+  madeBefore(github, t0);
 });
 
 afterEach(() => {
