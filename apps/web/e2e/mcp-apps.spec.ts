@@ -368,7 +368,9 @@ test('a view talks to its host as the extension says: ui/initialize with its ver
     params: { protocolVersion: '2026-01-26', appInfo: { name: 'Good First Token' }, appCapabilities: { availableDisplayModes: ['inline'] } },
   });
   expect(messages[1]).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
-  expect(sent(messages, 'ui/notifications/size-changed').length).toBeGreaterThan(0);
+  // The view measures itself in the next animation frame, which can come
+  // after the page shows its content.
+  await expect.poll(async () => sent(await view.messages(), 'ui/notifications/size-changed').length).toBeGreaterThan(0);
   await expect(view.frame.locator('html')).toHaveAttribute('data-theme', 'dark');
   // Light text on a dark card, with the contrast to read it.
   const title = await contrastOf(view.frame, '.view-issue__title');
