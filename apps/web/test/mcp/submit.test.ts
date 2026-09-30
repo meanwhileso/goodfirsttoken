@@ -592,6 +592,43 @@ describe('automatic and reviewed', () => {
     expect(pull?.body).toBe(`${words}\n\nCloses #${String(numberOf(issue))}\n\n${DISCLOSURE}`);
   });
 
+  // Made up here, in the shape of a GitHub token.
+  const madeUpToken = () => ['ghp', '_', 'A1b2'.repeat(9)].join('');
+
+  /** Opens a PR for a new claim of priya's, with `description`, and gives the answer and the PR's body. */
+  async function openWith(description: string) {
+    await project(APP, { ...automatic, personWrittenDescription: true });
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId } = await claim(priya, issue);
+    await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
+    const opened = await call(priya, 'open_pr', { claimId, description });
+    const [pull] = pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branchOf(issue, claimId));
+    return { opened, body: pull?.body ?? '' };
+  }
+
+  test("a key or token in the donor's description reaches the PR only as [redacted]", async () => {
+    const token = madeUpToken();
+
+    const { opened, body } = await openWith(`I tested it with ${token} in my shell.`);
+
+    expect(opened.isError).toBeFalsy();
+    expect(body).toMatch(/^I tested it with \[redacted\] in my shell\./);
+    expect(body).not.toContain(token);
+  });
+
+  test('a description of 60,000 characters with a token inside a line longer than the stripping takes at once opens its PR with the token redacted', async () => {
+    const token = madeUpToken();
+    const filler = 'word '.repeat(5_990);
+    const words = `${filler}${token} ${filler}`.slice(0, 60_000);
+
+    const { opened, body } = await openWith(words);
+
+    expect(opened.isError).toBeFalsy();
+    expect(body).not.toContain(token);
+    expect(body).toContain(`${filler}[redacted] word`);
+  });
+
   test('a PR opened on the issue between the claim and the submit sends the work to review, which names that PR', async () => {
     await project(APP, automatic);
     const issue = await tagged(APP);

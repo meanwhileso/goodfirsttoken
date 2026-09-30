@@ -165,3 +165,56 @@ export function stripSecrets(text: string): string {
   for (const pattern of AFTER_FIRST_GROUP) out = out.replace(pattern, `$1${REDACTED}`);
   return replaceNamed(replaceNamed(out, ASSIGNMENT), FLAG);
 }
+
+const KEY_BEGINS = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/;
+const KEY_ENDS = /-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/;
+
+// One line of any length, stripped as stripSecrets strips a short one. A
+// longer line is cut at whitespace into pieces of at most MAX_STRIP_LENGTH,
+// each stripped on its own, and joined again with the same whitespace. No
+// key or token holds whitespace, so none is cut. A run with no whitespace
+// longer than MAX_STRIP_LENGTH could hide one, and can't be read in pieces,
+// so it is replaced whole.
+function stripLine(line: string): string {
+  if (line.length <= MAX_STRIP_LENGTH) return stripSecrets(line);
+  let out = '';
+  let piece = '';
+  const flush = () => {
+    out += stripSecrets(piece);
+    piece = '';
+  };
+  for (const part of line.split(/(\s+)/)) {
+    if (part.length > MAX_STRIP_LENGTH) {
+      flush();
+      out += /^\s/.test(part) ? part : REDACTED;
+      continue;
+    }
+    if (piece.length + part.length > MAX_STRIP_LENGTH) flush();
+    piece += part;
+  }
+  flush();
+  return out;
+}
+
+/**
+ * `text` of any length, like a PR description, with every key or token in it
+ * replaced with `[redacted]`, line by line, as stripSecrets strips one line.
+ * A line longer than stripSecrets takes is read in pieces cut at whitespace.
+ * A private key is replaced from its BEGIN line through its END line, or
+ * through the end of the text when it has none, since its body spans lines.
+ * Text that holds no secret comes back as it was.
+ */
+export function stripSecretsFromText(text: string): string {
+  let inKey = false;
+  return text
+    .split('\n')
+    .map((line) => {
+      if (inKey) {
+        if (KEY_ENDS.test(line)) inKey = false;
+        return REDACTED;
+      }
+      if (KEY_BEGINS.test(line) && !KEY_ENDS.test(line.slice(line.search(KEY_BEGINS)))) inKey = true;
+      return stripLine(line);
+    })
+    .join('\n');
+}

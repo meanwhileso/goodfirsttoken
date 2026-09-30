@@ -5,6 +5,7 @@ import {
   holdsSlot,
   nextClaimState,
   prTitle,
+  stripSecretsFromText,
   toolResult,
   utf8Length,
   type ClaimEvent,
@@ -720,7 +721,10 @@ export async function openPrAs(caller: Caller, input: ToolInput<'open_pr'>, now:
   if (!checked.ok) return refused(checked.refusal);
   const names = checked.issue.repo === null ? [facts.name] : [facts.name, checked.issue.repo];
   const [prOnIssue = null] = await otherPrs(writer, work, names);
-  const opened = await openFor(writer, work, facts, submission, input.description);
+  // The PR is public, so a key or token in the donor's words goes to it only
+  // as [redacted], as in the rest of the PR's body.
+  const description = input.description === undefined ? undefined : stripSecretsFromText(input.description);
+  const opened = await openFor(writer, work, facts, submission, description);
   if (isRefusal(opened)) return refused(opened);
   return { ok: true, value: { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue } };
 }

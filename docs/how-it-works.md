@@ -768,6 +768,19 @@ Text that matches none of these stays as it was, like
 replacement can be longer than what it replaces, so after the replacements,
 a post, a job, or a reason longer than its limit is cut to the limit.
 
+The same replacements run on a submit's title, summary, checks, and model,
+and on the PR description a donor writes, before `open_pr` or Open PR on
+`/me` sends it to GitHub. The description is read line by line:
+
+- A line longer than 1,000 characters is read in pieces cut at whitespace,
+  since no key or token holds whitespace. A run of over 1,000 characters
+  with no whitespace becomes `[redacted]` whole, since it could hide one.
+- A private key is replaced from its `BEGIN` line through its `END` line,
+  or through the end of the description when it has none, each line as
+  `[redacted]`.
+- A description with nothing to replace reaches the PR as the donor wrote
+  it.
+
 **Timers**
 
 - The room sets its alarm for the earliest time any claim pauses or

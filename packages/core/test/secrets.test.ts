@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { stripSecrets } from '../src/index';
+import { MAX_STRIP_LENGTH, stripSecrets, stripSecretsFromText } from '../src/index';
 
 // Every sample key and token here is made up, and built at run time, so no
 // string shaped like a real one sits in this file for the leak scan to flag.
@@ -218,5 +218,44 @@ describe('ordinary lines pass through as they were', () => {
     'client_secret: optional in the schema',
   ])('%s', (line) => {
     expect(stripSecrets(line)).toBe(line);
+  });
+});
+
+describe('text of any length, like a PR description, is stripped line by line', () => {
+  const token = `ghp_${chars(36)}`;
+
+  test('text with no secret comes back as it was, however long its lines', () => {
+    const text = `First line.\n\n${'a plain word '.repeat(400)}\n  indented\tline\n`;
+
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
+  test('a token in any line is redacted, and the other lines stay', () => {
+    const text = `Fixed it.\nRan it with ${token} set.\nDone.`;
+
+    expect(stripSecretsFromText(text)).toBe('Fixed it.\nRan it with [redacted] set.\nDone.');
+  });
+
+  test('a line longer than stripSecrets takes is cut at whitespace, so a token deep in it is redacted and nothing throws', () => {
+    const filler = 'word '.repeat(3000);
+    const text = `${filler}${token} ${filler}`;
+
+    const stripped = stripSecretsFromText(text);
+
+    expect(text.length).toBeGreaterThan(MAX_STRIP_LENGTH * 20);
+    expect(stripped).toBe(`${filler}[redacted] ${filler}`);
+  });
+
+  test('a run with no whitespace longer than stripSecrets takes is redacted whole, since it could hide a key', () => {
+    const run = chars(MAX_STRIP_LENGTH + 1);
+
+    expect(stripSecretsFromText(`before ${run} after`)).toBe('before [redacted] after');
+  });
+
+  test('a private key is redacted from its BEGIN line through its END line, and the lines after it stay', () => {
+    const end = `${'-'.repeat(5)}END RSA PRIVATE KEY${'-'.repeat(5)}`;
+    const text = `Here is the key:\n${begin('RSA PRIVATE KEY')}\n${chars(64)}\n${chars(40)}\n${end}\nThanks.`;
+
+    expect(stripSecretsFromText(text)).toBe('Here is the key:\n[redacted]\n[redacted]\n[redacted]\n[redacted]\nThanks.');
   });
 });
