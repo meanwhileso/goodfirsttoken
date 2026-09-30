@@ -21,7 +21,7 @@ import {
   type Oid,
 } from './git.ts';
 import type { RateResource, RateWindow } from './rate-limit.ts';
-import { own } from './own.ts';
+import { own, setOwn } from './own.ts';
 
 export type Role = 'admin' | 'maintain' | 'write' | 'triage' | 'read';
 
@@ -195,6 +195,10 @@ export interface FakeState {
   // `anonymous` (rate-limit.ts). State saved before the fake kept them has
   // none, and every budget starts full.
   rateLimits?: Record<string, Partial<Record<RateResource, RateWindow>>>;
+  // The old names of renamed and transferred repos, each pointing at the
+  // repo's ID, until a repo is made under that name. State saved before the
+  // fake kept them has none.
+  movedRepos?: Record<string, number>;
 }
 
 export interface ValidationError {
@@ -377,6 +381,96 @@ export function forkRepo(
   };
   state.repos[key(fullName(fork))] = fork;
   return fork;
+}
+
+export function findRepoById(state: FakeState, id: number): RepoRecord | null {
+  return Object.values(state.repos).find((repo) => repo.id === id) ?? null;
+}
+
+// The repo an old name points at, after a rename or a transfer, or null.
+// https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository
+export function movedRepo(state: FakeState, owner: string, name: string): RepoRecord | null {
+  const id = own(state.movedRepos ?? {}, key(`${owner}/${name}`));
+  return id === undefined ? null : findRepoById(state, id);
+}
+
+// Renames or transfers a repo to `to`, as `owner/name`. It keeps its ID,
+// and GitHub sends calls to the old name on to it, until someone makes a
+// repo under the old name.
+export function renameRepo(state: FakeState, repo: RepoRecord, to: string): void {
+  const [owner = '', name = ''] = to.split('/');
+  if (!findAccount(state, owner)) throw new Error(`the fake has no account ${owner}`);
+  if (findRepo(state, owner, name)) throw new Error(`the fake already has a repo ${to}`);
+  const was = fullName(repo);
+  Reflect.deleteProperty(state.repos, key(was));
+  repo.owner = getAccount(state, owner).login;
+  repo.name = name;
+  const now = fullName(repo);
+  state.repos[key(now)] = repo;
+  const moved = (state.movedRepos ??= {});
+  Reflect.deleteProperty(moved, key(now));
+  setOwn(moved, key(was), repo.id);
+  // Forks and pull requests name their repo by its full name.
+  for (const other of Object.values(state.repos)) {
+    if (other.forkOf !== null && key(other.forkOf) === key(was)) other.forkOf = now;
+    for (const issue of Object.values(other.issues)) {
+      if (issue.pull?.head.repo != null && key(issue.pull.head.repo) === key(was)) issue.pull.head.repo = now;
+    }
+  }
+}
+
+// Deletes a repo. Its old names point nowhere after.
+export function deleteRepo(state: FakeState, repo: RepoRecord): void {
+  Reflect.deleteProperty(state.repos, key(fullName(repo)));
+  for (const [name, id] of Object.entries(state.movedRepos ?? {})) {
+    if (id === repo.id) Reflect.deleteProperty(state.movedRepos ?? {}, name);
+  }
+}
+
+// Makes a new, empty, public repo, with a new ID, owned by `owner`, and
+// with a first commit on main. A name a renamed repo left behind goes to the
+// new repo, and stops pointing at the old one.
+export function createRepo(state: FakeState, to: string, now: string): RepoRecord {
+  const [owner = '', name = ''] = to.split('/');
+  const account = getAccount(state, owner);
+  if (findRepo(state, owner, name)) throw new Error(`the fake already has a repo ${to}`);
+  const first = writeCommit(state.objects, {
+    tree: writeTree(state.objects, new Map()),
+    parents: [],
+    message: 'Initial commit',
+    author: gitPerson(state, account.login, now),
+    committer: webFlow(now),
+    signedByGitHub: true,
+  });
+  const repo: RepoRecord = {
+    id: newId(state),
+    owner: account.login,
+    name,
+    description: null,
+    homepage: null,
+    language: null,
+    topics: [],
+    license: null,
+    stars: 0,
+    createdAt: now,
+    updatedAt: now,
+    pushedAt: now,
+    defaultBranch: 'main',
+    private: false,
+    archived: false,
+    hasIssues: true,
+    hasPullRequests: true,
+    pullRequestCreationPolicy: 'all',
+    forkOf: null,
+    collaborators: {},
+    branches: { main: first },
+    labels: [],
+    issues: {},
+    nextNumber: 1,
+  };
+  state.repos[key(fullName(repo))] = repo;
+  Reflect.deleteProperty(state.movedRepos ?? {}, key(fullName(repo)));
+  return repo;
 }
 
 export interface FileChanges {
