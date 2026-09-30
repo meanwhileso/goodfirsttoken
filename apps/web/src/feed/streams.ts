@@ -1,6 +1,6 @@
 import { feedEventSchema, githubLogin, id, issueRef, repoName, validate, type FeedEvent } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
-import { findPersonByLogin, getProject } from '../db';
+import { findPersonByLogin, getBlock, getProject } from '../db';
 import { findIssue } from '../issue/find';
 import { homeFeed, personFeed, repoFeed } from '../rooms/feed';
 import { issueRoom } from '../rooms/issue-room';
@@ -113,7 +113,7 @@ export function isStreamPath(request: Request): boolean {
  * claim on the issue, or the issue among the tagged issues of a project that
  * keeps its issues in that repo. So a request never makes a feed or room
  * that nothing could fill. A person's stream finds them by their login now,
- * and reads their feed by GitHub ID.
+ * and reads their feed by GitHub ID. A blocked donor has no stream.
  */
 async function sourceFor(source: Source): Promise<DurableObjectStub | Response> {
   switch (source.kind) {
@@ -132,7 +132,11 @@ async function sourceFor(source: Source): Promise<DurableObjectStub | Response> 
     }
     case 'person': {
       const person = await findPersonByLogin(env.DB, source.login);
-      if (!person) return text(404, `@${source.login} has not signed in to Good First Token.`);
+      // A blocked donor's stream is gone, as their page is, and answers the
+      // same as a login no one signed in with, so it gives away no block.
+      if (person === null || (await getBlock(env.DB, person.githubId)) !== null) {
+        return text(404, `@${source.login} has no stream on Good First Token.`);
+      }
       return personFeed(env.FEED, person.githubId);
     }
   }

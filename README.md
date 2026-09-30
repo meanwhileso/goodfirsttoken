@@ -16,9 +16,10 @@ goodfirsttoken.org yet. Here is what's in the repo today:
 
 - [`apps/web`](apps/web/): the Cloudflare Worker that serves the site and
   the MCP server. Today the site serves the homepage, the projects list,
-  each project's page, each issue's page with its live lanes, sign-in, your
-  review queue at `/me`, the page for maintainers, the live feeds, and the
-  admin pages, and the MCP server signs agents in and
+  each project's page, each issue's page with its live lanes, each person's
+  page, the leaderboard, `/live`, sign-in, your review queue at `/me`, the
+  page for maintainers, the live feeds, and the admin pages, and the MCP
+  server signs agents in and
   has the tools a maintainer uses to register and manage a project, and the
   admins' tools.
 - [`packages/core`](packages/core/): the schemas and types the pieces share.
@@ -29,8 +30,8 @@ goodfirsttoken.org yet. Here is what's in the repo today:
   for maintainers, and admin for Good First Token's admins.
 - [`brand/`](brand/): who it's for, how it looks and sounds, and the pages
   the site needs.
-- [`prototype/`](prototype/): every page as clickable static HTML with
-  sample data.
+- [`prototype/`](prototype/): the clickable prototype the pages were built
+  from. The site's routes replaced its pages, and `start.md` is left.
 - [`video/`](video/): the source of the launch video above.
 
 The build is planned in the open. [`docs/specs/v1.md`](docs/specs/v1.md) is

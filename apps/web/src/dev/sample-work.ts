@@ -19,6 +19,7 @@ export const SAMPLE_PEOPLE = {
   ines: { githubId: 1004, login: 'ines' },
   arjun: { githubId: 1005, login: 'arjun' },
   lena: { githubId: 1006, login: 'lena' },
+  rowan: { githubId: 1011, login: 'rowan' },
   octoMaintainer: { githubId: 1008, login: 'octo-maintainer' },
   sampleMaintainer: { githubId: 1009, login: 'sample-maintainer' },
   sampleAdmin: { githubId: 1010, login: 'sample-admin' },
@@ -243,3 +244,53 @@ export const SAMPLE_CLAIMS: SampleClaim[] = [
     line: 'wrote a failing test: a rewrite from /docs/ keeps its slash',
   },
 ];
+
+/**
+ * Earlier work for the leaderboard and the person pages: PRs that merged or
+ * closed without merging, across donors, agents, and projects, weeks ago
+ * and this week. The seed writes them to the database directly, with no
+ * issue room and no line, since they are done. Their issue and PR numbers
+ * are below the fake repos' own, so no PR a test opens on the fake takes
+ * one of them.
+ */
+export interface SampleHistory {
+  /** The claim's ID, which marks it as seeded. */
+  id: string;
+  person: SamplePerson;
+  agent: string;
+  project: string;
+  issue: number;
+  pr: number;
+  outcome: 'merged' | 'closed';
+  /** How many days before the seed the PR merged or closed. 0 is the moment of seeding, so this week. */
+  daysAgo: number;
+  /** Work on a project the claimant registered, so their own. */
+  ownProject?: boolean;
+  /** The tokens the harness estimated, when it gave an estimate. */
+  tokens?: number;
+}
+
+const APP = 'sample-owner/sample-app';
+const DESKTOP = 'sample-owner/sample-desktop';
+const BUNDLER = 'sample-owner/sample-bundler';
+
+export const SAMPLE_HISTORY: SampleHistory[] = [
+  { id: 'c_samplehistory01', person: SAMPLE_PEOPLE.priya, agent: 'claude-code', project: DESKTOP, issue: 1301, pr: 1302, outcome: 'merged', daysAgo: 21, tokens: 1_200_000 },
+  { id: 'c_samplehistory02', person: SAMPLE_PEOPLE.priya, agent: 'claude-code', project: BUNDLER, issue: 101, pr: 102, outcome: 'closed', daysAgo: 10, tokens: 400_000 },
+  { id: 'c_samplehistory03', person: SAMPLE_PEOPLE.priya, agent: 'claude-code', project: APP, issue: 281, pr: 282, outcome: 'closed', daysAgo: 0, tokens: 300_000 },
+  { id: 'c_samplehistory04', person: SAMPLE_PEOPLE.kenji, agent: 'codex', project: APP, issue: 283, pr: 284, outcome: 'merged', daysAgo: 35 },
+  { id: 'c_samplehistory05', person: SAMPLE_PEOPLE.kenji, agent: 'codex', project: DESKTOP, issue: 1303, pr: 1304, outcome: 'closed', daysAgo: 16 },
+  { id: 'c_samplehistory06', person: SAMPLE_PEOPLE.ines, agent: 'grok', project: DESKTOP, issue: 1305, pr: 1306, outcome: 'merged', daysAgo: 14, tokens: 250_000 },
+  { id: 'c_samplehistory07', person: SAMPLE_PEOPLE.ines, agent: 'grok', project: APP, issue: 285, pr: 286, outcome: 'closed', daysAgo: 0 },
+  { id: 'c_samplehistory08', person: SAMPLE_PEOPLE.arjun, agent: 'cursor', project: BUNDLER, issue: 103, pr: 104, outcome: 'merged', daysAgo: 28 },
+  { id: 'c_samplehistory09', person: SAMPLE_PEOPLE.arjun, agent: 'cursor', project: APP, issue: 287, pr: 288, outcome: 'merged', daysAgo: 20 },
+  // sample-maintainer registered both projects, so this is own-project work.
+  { id: 'c_samplehistory10', person: SAMPLE_PEOPLE.sampleMaintainer, agent: 'claude-code', project: APP, issue: 289, pr: 290, outcome: 'merged', daysAgo: 0, ownProject: true },
+  { id: 'c_samplehistory11', person: SAMPLE_PEOPLE.sampleMaintainer, agent: 'claude-code', project: DESKTOP, issue: 1307, pr: 1308, outcome: 'merged', daysAgo: 9, ownProject: true },
+  // rowan is blocked, so none of this shows.
+  { id: 'c_samplehistory12', person: SAMPLE_PEOPLE.rowan, agent: 'codex', project: APP, issue: 291, pr: 292, outcome: 'merged', daysAgo: 0 },
+  { id: 'c_samplehistory13', person: SAMPLE_PEOPLE.rowan, agent: 'codex', project: DESKTOP, issue: 1309, pr: 1310, outcome: 'merged', daysAgo: 0 },
+];
+
+/** The donor the sample work has sample-admin block. */
+export const SAMPLE_BLOCKED: SamplePerson = SAMPLE_PEOPLE.rowan;

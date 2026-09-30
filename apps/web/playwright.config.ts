@@ -26,7 +26,17 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: /(issue|projects|admin|skills|mcp-apps-flow|\/me)\.spec\.ts$/,
+      testIgnore: /(issue|projects|admin|skills|mcp-apps-flow|\/me|leaderboard|person|live)\.spec\.ts$/,
+    },
+    // The leaderboard, the person pages, and /live show the sample work the
+    // homepage's tests seed, and nothing else yet, so their screenshots hold
+    // still. So they run once the homepage's tests are done, and before any
+    // test makes claims or PRs of its own.
+    {
+      name: 'board',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /(leaderboard|person|live)\.spec\.ts$/,
+      dependencies: ['chromium'],
     },
     // The issue page's tests work real issue rooms, and every event they
     // make reaches the homepage's feed. The projects' tests do too, and seed
@@ -36,7 +46,7 @@ export default defineConfig({
       name: 'rooms',
       use: { ...devices['Desktop Chrome'] },
       testMatch: /(issue|projects)\.spec\.ts$/,
-      dependencies: ['chromium'],
+      dependencies: ['board'],
     },
     // The admin pages' tests list projects, which the homepage shows, so
     // they run after those, on their own.

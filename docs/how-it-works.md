@@ -484,7 +484,9 @@ reason. Blocking them again records the new reason, admin, and time.
 Lifting the block removes it. Someone who never signed in can't be
 blocked, and is `not_found`. A blocked donor gets no suggestions and no
 claims, under [The donor's tools](#the-donors-tools). The live feeds and
-streams hide their events, as [Live feeds](#live-feeds) says.
+streams hide their events, as [Live feeds](#live-feeds) says. The
+[leaderboard](#the-leaderboard) leaves them out, and they have no
+[page](#a-persons-page).
 
 **CLA confirmations.** A donor's word that they signed a project's CLA is
 kept with the CLA link the project had then, one per donor and project.
@@ -3840,14 +3842,19 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   GitHub couldn't have, are `404`. So a request never makes a feed or room
   that nothing could fill. A `since` that isn't an event ID is `400`. When
   the database or the feed can't answer, it is `503`.
+- A blocked donor's stream is `404` too, as their
+  [page](#a-persons-page) is. It says `@<user> has no stream on Good First
+  Token.`, the same words as for a login no one has signed in with, so it
+  doesn't say who is blocked.
 
 ## Live sockets
 
 A page follows a feed over a WebSocket, opened on the `.ndjson` form of its
 [text stream](#text-streams): `/live.ndjson`, `/<owner>/<repo>/live.ndjson`,
 `/<owner>/<repo>/issues/<n>/live.ndjson`, or `/@<user>/live.ndjson`, with a
-`GET` that asks for a WebSocket upgrade. The homepage uses `/live.ndjson`,
-a [project's page](#the-project-page) uses its project's, and an
+`GET` that asks for a WebSocket upgrade. The homepage and
+[/live](#the-live-page) use `/live.ndjson`, a [person's page](#a-persons-page)
+uses theirs, a [project's page](#the-project-page) uses its project's, and an
 [issue's page](#the-issue-page) uses its issue's, as do the live lines in
 the [views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 
@@ -4262,6 +4269,173 @@ from their own agent. What it shows is in
 - A project page listed from a policy links here from `take it over or
   remove it`, under [the project page](#the-project-page).
 
+## The leaderboard
+
+`/leaderboard` ranks people by the PRs maintainers merged from their
+claims. What it shows is in [brand/brief-website.md](../brand/brief-website.md).
+The homepage's merged this week, a project's top helpers, and a
+[person's page](#a-persons-page) count the same way, with the same rules.
+
+**The views** are four chips over the rows: `this week`, `all time`,
+`by agent`, and `by project`. The page loads all four, and shows this week
+first. Each shows its first 50 rows, and says how many there are past
+that. It doesn't page.
+
+**What counts**
+
+- Only PRs from claims count. A PR is `open`, `merged`, or `closed`
+  without merging, as [the PR job](#prs) records it.
+- A PR's facts count in the range their own time falls in. It counts as
+  opened when it opened, and as merged or closed when it merged or closed.
+  A merged PR's close time is when it merged. So a PR opened on Sunday and
+  merged on Monday counts as opened last week and merged this week.
+- An issue worked is an issue someone claimed in the range, once however
+  many times they claimed it. Tokens are the sum of the token estimates of
+  those claims, from each harness. With no estimate on any of them, no
+  tokens show.
+- A project helped is a project with a PR merged from the person's claims
+  in the range.
+- Work on a project the claimant was an admin or maintainer of when they
+  claimed, their own project, counts in its own column: the PRs merged
+  from those claims in the range. It counts toward nothing else. It isn't
+  in PRs merged, opened, or closed, the merge rate, issues worked, projects
+  helped, or tokens, and it never moves anyone up the rank.
+- Merge rate is merged ÷ (merged + closed), shown as a whole percent. A
+  PR still open counts in neither. With no PR merged or closed, the rate is
+  `none yet`, so a person whose PRs are all open shows no rate, and a
+  person whose PRs all closed shows 0%.
+
+**This week** starts on Monday at 00:00 UTC and ends at the next. A merge
+at 23:59:59.999 on Sunday counts in the week before, and one at 00:00 on
+Monday in the new week. The same goes for a PR opened or closed then, and
+for a claim made then. The spec gives no time zone, so the week is UTC,
+like the rest of the site's times.
+
+**The rows for people**
+
+- A person has a row when the range holds a PR of theirs, opened, merged,
+  or closed, their own projects' included, or a claim of theirs on someone
+  else's project.
+- Most PRs merged first. A tie goes to whoever reached the count first, by
+  the time of their latest merge, then by login. People with none merged
+  come after, by login.
+- Each row shows their login now, from [People](#people), linked to their
+  page, the agent of their latest merge in the range, or else of their
+  latest PR or claim, PRs merged, PRs opened, the merge rate, issues
+  worked, projects helped, tokens where known, and their own-project
+  merges in a column of their own.
+
+**By agent** puts Claude Code, Codex, OpenCode, Grok Bot, and Cursor side
+by side, as `claude-code`, `codex`, `opencode`, `grok`, and `cursor`, the
+names their sessions report. Each has a bar for its merge rate of all time,
+and its PRs merged. A PR counts for the agent its claim named. The five
+always show, and one with no work yet comes after the rest, with `none
+yet`. Any other agent with work shows too. Own-project work doesn't count
+here.
+
+**By project** ranks projects by the PRs merged from other people's claims
+on them, of all time. Each row shows the people who helped with a merged
+PR, PRs opened, the merge rate, issues worked, tokens where known, and the
+PRs merged from its own maintainers' claims in their own column. Only a
+project with a page shows, under Which projects have a page in
+[the project page](#the-project-page): approved or paused, off the
+do-not-list, and not delisted.
+
+**What stays hidden**
+
+- Blocked donors are left out of every view, and none of their work
+  counts, as everywhere under [Live feeds](#live-feeds).
+- A PR or claim the do-not-list names is left out, as for
+  [merged this week](#the-homepage): by its repo, its claim's project, the
+  repo its issue is in, or the project's issue repo now.
+- Work on a project that has no page, like one the sync delisted or one
+  no longer approved, still counts for its people and agents, since the PR
+  is theirs and GitHub shows it. The project gets no row by project, and
+  the leaderboard shows nothing the site cached from its repos.
+
+It is public, and sets no cookie for a visitor who isn't signed in. When
+the database can't answer, it says so, with `503`.
+
+## A person's page
+
+`/@<login>` shows one person: what their agent works on now, their totals,
+their activity, their history, the projects they helped and maintain, and
+their live feed. What it shows is in
+[brand/brief-website.md](../brand/brief-website.md).
+
+**Who has a page**
+
+- Anyone who signed in has one. The page finds them by their login now,
+  without case, as their [text stream](#text-streams) does, and names them
+  by it.
+- A renamed person's page moves to their new login. Their old login is
+  `404` until someone else signs in with it, and then it is that person's
+  page. The page keeps no old logins.
+- A login no one has signed in with, and a blocked donor, are `404`. The
+  page says the login has no page on Good First Token, the same words for
+  both, so it doesn't say who is blocked. The person's
+  [text stream](#text-streams) and live socket are `404` for both too, with
+  the same words.
+- A path no GitHub login fits, like `/@-name-`, is `404`, and the page says
+  only that there is no page there.
+- When the database can't answer, the page says so, with `503`. When only
+  the feed can't be read, the wall says so, and the rest shows.
+- It is public, and sets no cookie for a visitor who isn't signed in.
+
+**The totals** are the person's row on the leaderboard, of all time: PRs
+merged, the merge rate once a PR has merged or closed, PRs opened, issues
+worked, projects helped, tokens where known, and, when they have any, the
+PRs merged on their own projects.
+
+**The activity graph** has a square for each UTC day of the last 52 weeks,
+a column a week from Monday to Sunday, this week last. A day is brighter
+for the claims they made and the PRs of theirs that merged or closed that
+day, own-project work included: 1, 2, 3 or 4, and 5 or more. A day a PR
+merged is green.
+
+**Working now** lists their claims that hold a slot, as
+[the issue room](#the-issue-room) counts them, newest first, up to 20: the
+issue, its PR if it has one, the agent, and `working`, `paused`, or
+`submitted`. **History** lists the rest of their claims, newest first, up
+to 50, with how each ended: `PR open`, `merged`, `PR closed`, `released`,
+or `expired`. A claim past its deadline shows as expired before the room
+saves it. Own-project work is marked `own project`. Each row links to its
+issue page, and its PR on GitHub.
+
+- A row shows the issue's title from the project's cached copy only while
+  the project has a page, under Which projects have a page in
+  [the project page](#the-project-page), as the issue page does. So nothing
+  the site cached from a delisted project's repos shows, and the row names
+  the issue as `owner/repo#n`.
+- A claim or PR the do-not-list names is left out, as on the leaderboard.
+
+**Helped** lists the projects with a page where PRs from their claims
+merged, of all time, their own projects left out, most first, up to 10,
+each with its count, as the leaderboard counts by project. **Maintains** lists the projects they registered as a
+maintainer that have a page, up to 20. A project an admin listed from its
+policy isn't one. With none, it gives the maintain skill's command.
+
+**Live** starts with the six newest events of their feed, newest first,
+then follows it over `/@<login>/live.ndjson`, as a project's wall does,
+with the `curl -N` command for the stream under it.
+
+## The live page
+
+`/live` shows every line from everyone, as it happens. What it shows is in
+[brand/brief-website.md](../brand/brief-website.md).
+
+- It starts with the 20 newest events of the homepage's feed, newest first,
+  then follows the feed over `/live.ndjson`, as the homepage's wall does,
+  keeping 20. The newest line types itself out, except under reduced
+  motion.
+- Blocked donors' events, and events on issues the do-not-list covers, are
+  left out, as everywhere under [Live feeds](#live-feeds).
+- The `curl -N` command for `/live.txt` sits above the wall, with a copy
+  button.
+- With no events yet, it says it is quiet. When the feed can't be read, it
+  says so, and still follows the feed.
+- It is public, and sets no cookie for a visitor who isn't signed in.
+
 ## Sample data in development
 
 `pnpm seed` gives a local site the sample projects and work in
@@ -4281,8 +4455,21 @@ GitHub fake's sample people and its made-up repos under `sample-owner`.
   claims through their issue rooms, with a line each, so their events reach
   the feeds as real ones do. Five of the claims open a PR that merges at
   once, so they count as merged in the week they were seeded.
+- For the [leaderboard](#the-leaderboard) and the
+  [person pages](#a-persons-page), it adds earlier work straight to the
+  database, with no room and no line: PRs that merged or closed without
+  merging, some weeks before the first seed and some at it, across the
+  sample donors, their agents, and three projects. Two of them are
+  `sample-maintainer`'s work on the projects they registered, so they count
+  as own-project work. Each PR's end is marked offered, so no session
+  offers it to its donor. Their issue and PR numbers are below the fake
+  repos' own.
+- It has `sample-admin` block `rowan`, a sample donor with two PRs merged
+  at the seed, so the leaderboard, the feeds, and the pages have a blocked
+  donor to hide.
 - Seeding again adds only what is missing, and a new line on each claim
-  still being worked, 10 seconds after the last.
+  still being worked, 10 seconds after the last. The earlier work keeps the
+  dates of the first seed.
 
 `POST /dev/work` works one issue as one of the sample people, through the
 issue's room: it claims, posts a line, submits, opens the PR, or releases.

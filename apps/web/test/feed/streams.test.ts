@@ -409,15 +409,14 @@ describe('who a stream is for', () => {
 
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
 
-    const streams = await Promise.all(Object.values(paths()).map((path) => readStream(path)));
+    // Priya's own stream is gone, as her page is.
+    const { home, project, issue: room } = paths();
+    const streams = await Promise.all([home, project, room].map((path) => readStream(path)));
     nextPostTime();
     await post(priyas, `priya after ${tag}`);
     await post(kenjis, `kenji after ${tag}`);
-    const [home, project, room, person] = streams;
-    for (const stream of [home, project, room]) await stream?.line(`kenji after ${tag}`);
-    // Priya's own stream has no line of hers to show.
-    expect(person?.res.status).toBe(200);
-    await delivered(personFeed(env.FEED, priya.githubId), `priya after ${tag}`);
+    for (const stream of streams) await stream.line(`kenji after ${tag}`);
+    await delivered(homeFeed(env.FEED), `priya after ${tag}`);
     for (const stream of streams) {
       expect(stream.lines.filter((line) => line.includes('priya'))).toEqual([]);
       await stream.cancel();
@@ -441,6 +440,28 @@ describe('asking for a stream', () => {
     // Nothing made a room for the issue.
     const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
+  });
+
+  test("a blocked donor's stream answers the same as a login no one signed in with, so it gives away no block", async () => {
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
+    const answer = async (login: string, form: string, init?: RequestInit) => {
+      const res = await workerFetch(`http://localhost/@${login}/live.${form}`, init);
+      // An open stream never ends, so only an answer that isn't one is read.
+      const open = res.status === 200 || res.status === 101;
+      if (open) await res.body?.cancel();
+      const body = open ? 'an open stream' : (await res.text()).replaceAll(login, '<login>');
+      return { status: res.status, type: res.headers.get('content-type'), body };
+    };
+
+    for (const form of ['txt', 'ndjson']) {
+      const blocked = await answer(priya.login, form);
+      expect(blocked.status, form).toBe(404);
+      expect(blocked, form).toEqual(await answer('nobody-signed-in', form));
+    }
+    const upgrade = { headers: { Upgrade: 'websocket' } };
+    const blocked = await answer(priya.login, 'ndjson', upgrade);
+    expect(blocked.status).toBe(404);
+    expect(blocked).toEqual(await answer('nobody-signed-in', 'ndjson', upgrade));
   });
 
   test('an issue a project tagged has a stream before anyone claims it', async () => {
@@ -528,18 +549,18 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
 
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
 
-    const sockets = await Promise.all(socketPaths().map((path) => liveSocket(path)));
+    // Priya's own stream is gone, as her page is.
+    const open = socketPaths().filter((path) => !path.startsWith('/@'));
+    const sockets = await Promise.all(open.map((path) => liveSocket(path)));
     nextPostTime();
     await post(priyas, `priya after ${tag}`);
     await post(kenjis, `kenji after ${tag}`);
-    const [home, project, room, person] = sockets;
-    for (const socket of [home, project, room]) await socket?.event(`kenji after ${tag}`);
-    await delivered(personFeed(env.FEED, priya.githubId), `priya after ${tag}`);
+    for (const socket of sockets) await socket.event(`kenji after ${tag}`);
+    await delivered(homeFeed(env.FEED), `priya after ${tag}`);
     for (const socket of sockets) {
       expect(socket.events.filter((e) => e.user === 'priya')).toEqual([]);
       socket.socket.close(1000);
     }
-    expect(person?.res.status).toBe(101);
   });
 
   test('ignores what the page sends, and keeps sending events', async () => {

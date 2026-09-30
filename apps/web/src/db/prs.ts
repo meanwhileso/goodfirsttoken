@@ -14,7 +14,9 @@ import {
   type PrRef,
   type PrState,
 } from '@goodfirsttoken/core';
+import { tally, type TallyScope } from './leaderboard';
 import { checkTime, joinIssue, prFromColumns, splitIssue } from './shared';
+import { SHOWN } from './shown';
 
 // The prs table: the PR opened for each claim, followed until it merges or
 // closes.
@@ -365,52 +367,20 @@ export interface Merger {
   merged: number;
 }
 
-interface MergerRow {
-  github_id: number;
-  login: string;
-  agent: string;
-  merged: number;
-}
-
-// A merged PR the site shows, over a PR `p` and its claim `c`: not a blocked
-// donor's, and not one the do-not-list names by its repo, its claim's
-// project or issue repo, or the project's issue repo now.
-const SHOWN = `NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)
-  AND NOT EXISTS (SELECT 1 FROM do_not_list d
-    WHERE d.repo IN (c.project, c.issue_repo, p.repo)
-      OR d.repo = (SELECT issue_repo FROM projects WHERE repo = c.project))`;
-
 /**
- * The people with the most shown PRs merged that `scope` picks, most first,
- * at most `limit` of them. A PR from a claim on the claimant's own project
- * doesn't count. Ties go to whoever reached the count first, then by login.
+ * The people with the most PRs merged that `scope` covers, most first, at
+ * most `limit` of them, counted by the leaderboard's tally in
+ * ./leaderboard.ts. A PR from a claim on the claimant's own project doesn't
+ * count. Blocked donors are left out, and so are PRs the do-not-list names.
+ * Ties go to whoever reached the count first, then by login.
  */
-async function rankMergers(
-  db: D1Database,
-  scope: { sql: string; binds: (string | number)[] },
-  limit: number,
-): Promise<Merger[]> {
-  // With MAX() in the select list, SQLite takes the bare column c.agent from
-  // the row that has the latest merge. A merged PR's close time is when it
-  // merged.
-  const { results } = await db
-    .prepare(
-      `SELECT c.github_id, pe.login, c.agent, COUNT(*) AS merged, MAX(p.closed_at) AS last_merged
-       FROM prs p
-       JOIN claims c ON c.id = p.claim_id
-       JOIN people pe ON pe.github_id = c.github_id
-       WHERE p.state = 'merged' AND ${scope.sql} AND c.own_project = 0 AND ${SHOWN}
-       GROUP BY c.github_id
-       ORDER BY merged DESC, last_merged, pe.login, c.github_id
-       LIMIT ?`,
-    )
-    .bind(...scope.binds, mustParse(count, limit, 'limit'))
-    .all<MergerRow>();
-  return results.map((row) => ({
-    githubId: mustParse(githubId, row.github_id, 'githubId'),
+async function rankMergers(db: D1Database, scope: TallyScope, limit: number): Promise<Merger[]> {
+  const { rows } = await tally(db, 'person', scope, { limit, onlyMerged: true });
+  return rows.map((row) => ({
+    githubId: mustParse(githubId, Number(row.key), 'githubId'),
     login: mustParse(githubLogin, row.login, 'login'),
     agent: mustParse(agentName, row.agent, 'agent'),
-    merged: mustParse(count, row.merged, 'merged'),
+    merged: row.merged,
   }));
 }
 
@@ -426,12 +396,7 @@ export async function topMergers(
   db: D1Database,
   { from, until, limit }: { from: number; until: number; limit: number },
 ): Promise<Merger[]> {
-  // Only closed_at is indexed, so the range reads prs_by_closed.
-  return rankMergers(
-    db,
-    { sql: 'p.closed_at >= ? AND p.closed_at < ?', binds: [checkTime(from, 'from'), checkTime(until, 'until')] },
-    limit,
-  );
+  return rankMergers(db, { range: { from, until } }, limit);
 }
 
 /**
@@ -441,8 +406,7 @@ export async function topMergers(
  * blocked donors are left out, and so are PRs the do-not-list names.
  */
 export async function topHelpers(db: D1Database, project: string, limit: number): Promise<Merger[]> {
-  // The project's claims through claims_by_project, and each one's PR by key.
-  return rankMergers(db, { sql: 'c.project = ?', binds: [mustParse(repoName, project, 'project')] }, limit);
+  return rankMergers(db, { project }, limit);
 }
 
 /** A merged PR from a claim, as a project page lists it. */
