@@ -4655,7 +4655,9 @@ are B1 to B5 in the table below.
   commit, the PR body, and D1 (`src/mcp/submit.ts`, through
   `src/donor/work.ts`). The PR description a donor writes is stripped
   line by line with `stripSecretsFromText`, on `open_pr` and on `/me`
-  alike, since both go through `openPrAs`.
+  alike, since both go through `openPrAs`. Long lines are scanned with each
+  gap of spaces or tabs reduced to one space, then the original gaps are
+  restored. A wide gap can't push a secret's name out of the bounded scan.
 - Posts, jobs, reasons, and a submit's text are folded first
   (`packages/core/src/characters.ts`), and the PR description is read with
   the same hidden characters dropped, line breaks kept, so no hidden

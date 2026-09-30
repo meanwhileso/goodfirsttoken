@@ -206,6 +206,21 @@ function tailOf(parts: readonly string[]): string {
 // read in pieces, so it is replaced whole.
 function stripLine(line: string): string {
   if (line.length <= MAX_STRIP_LENGTH) return stripSecrets(line);
+  // Read horizontal whitespace as one space, then put each original gap
+  // back. Redacting a word never removes these gaps, and private keys were
+  // removed before this call. This keeps a wide gap from using up a piece
+  // or its tail and separating a secret's name from its value.
+  const gaps: string[] = [];
+  const compact = line.replace(/[ \t]+/g, (gap) => {
+    gaps.push(gap);
+    return ' ';
+  });
+  let gapAt = 0;
+  return stripLongLine(compact).replace(/ /g, () => gaps[gapAt++] ?? ' ');
+}
+
+// A long line's detection view, whose horizontal gaps each take one space.
+function stripLongLine(line: string): string {
   let out = '';
   let piece: string[] = [];
   let length = 0;

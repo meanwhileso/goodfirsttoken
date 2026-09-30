@@ -294,6 +294,24 @@ describe('text of any length, like a PR description, is stripped line by line', 
     }
   });
 
+  test('wide spaces and tabs between a secret name and its value cannot hide it at a long line cut', () => {
+    for (const gap of [199, 200, 201, 799, 800, 801, 1200]) {
+      for (const whitespace of [' ', '\t']) {
+        for (const secret of ['password:', 'Authorization: Bearer', '--password']) {
+          const prefix = 'word '.repeat(118);
+          const value = 'hunter2abc123def456ghi789';
+          const text = `${prefix}${secret}${whitespace.repeat(gap)}${value}${' end'.repeat(300)}`;
+          expect(stripSecretsFromText(text)).toBe(`${prefix}${secret}${whitespace.repeat(gap)}[redacted]${' end'.repeat(300)}`);
+        }
+      }
+    }
+  });
+
+  test('wide whitespace in a long description without a secret stays byte for byte', () => {
+    const text = `word ${' '.repeat(1200)}ordinary\t${'\t'.repeat(1200)}text${' end'.repeat(300)}`;
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
   test('a name and its value just after a token are read together wherever the cut falls', () => {
     const password = `hunter2${chars(10)}`;
     const bearer = chars(40);

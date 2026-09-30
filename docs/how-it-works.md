@@ -816,7 +816,9 @@ and on the PR description a donor writes, before `open_pr` or Open PR on
   where each line becomes `[redacted]`. With no `END`, it is replaced
   through the end of the description.
 - A line longer than 1,000 characters is read in pieces of at most 800
-  cut at whitespace, and each piece is read with the last three words of the
+  cut at whitespace. Spaces and tabs are read as one space per gap, then
+  each original gap is put back, so a wide gap can't hide a secret's value.
+  Each piece is read with the last three words of the
   one before it, so a name and its value, like `password: ...`, or
   `Authorization: Bearer` and its token, are read together wherever the cut
   falls. A run of over 800 characters with no whitespace becomes
