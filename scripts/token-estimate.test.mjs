@@ -73,8 +73,54 @@ test("a claim's first submit counts from the claim_issue answer that names the c
   assert.equal(await estimateFor(submitCall(transcript, { toolUseId: 'toolu_submit1' })), 640 + 1110);
 });
 
-test('a claim the transcript never claimed or submitted counts the whole transcript', async () => {
-  assert.equal(await estimateFor(submitCall(sample, { claimId: 'c_elsewhere', toolUseId: 'toolu_new' })), 6075);
+async function transcriptOf(entries) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'token-estimate-'));
+  const file = path.join(dir, 'transcript.jsonl');
+  await writeFile(file, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+  return file;
+}
+
+function assistant(id, input_tokens, content = [{ type: 'text', text: 'SAMPLE-REPLY-TEXT' }]) {
+  return { type: 'assistant', message: { id, role: 'assistant', content, usage: { input_tokens, output_tokens: 0 } } };
+}
+
+function toolResult(tool_use_id, text) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id, content: text }] } };
+}
+
+const submitUse = (id, claimId) => [{ type: 'tool_use', id, name: SUBMIT_TOOL, input: { claimId } }];
+
+test("a follow-up's submit counts from the last submit the server took for any claim, when its own claim has none in the transcript", async () => {
+  // One session answers follow-ups on two claims it never claimed here: 50,000 tokens on c_sampleA, then 9 on c_sampleB.
+  const transcript = await transcriptOf([
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'SAMPLE-PROMPT-TEXT' }] } },
+    assistant('msg_f1', 1000),
+    assistant('msg_f2', 50000),
+    assistant('msg_f3', 1, submitUse('toolu_fa', 'c_sampleA')),
+    toolResult('toolu_fa', 'Committed 0123456 for claim c_sampleA.'),
+    assistant('msg_f4', 7),
+    assistant('msg_f5', 2, submitUse('toolu_fb', 'c_sampleB')),
+  ]);
+
+  assert.equal(await estimateFor(submitCall(transcript, { claimId: 'c_sampleB', toolUseId: 'toolu_fb' })), 9);
+});
+
+test("a claim with no answer or submit of its own counts from the latest claim_issue answer for another claim, and a refused submit starts nothing", async () => {
+  // After claiming c_sample10: 2,050 for the refused submit and 2,250 for the one in the transcript with no answer yet.
+  assert.equal(await estimateFor(submitCall(sample, { claimId: 'c_elsewhere', toolUseId: 'toolu_new' })), 4300);
+});
+
+test('a transcript with no claim_issue answer and no submit the server took counts the whole transcript', async () => {
+  const transcript = await transcriptOf([assistant('msg_w1', 300), assistant('msg_w2', 20, submitUse('toolu_w', 'c_sample1'))]);
+  assert.equal(await estimateFor(submitCall(transcript, { toolUseId: 'toolu_w' })), 320);
+});
+
+test('a sum too large to send exactly leaves the submit without an estimate', async () => {
+  const big = Number.MAX_SAFE_INTEGER - 1;
+  const transcript = await transcriptOf([assistant('msg_b1', big), assistant('msg_b2', big)]);
+  const { code, stdout } = await runHook(JSON.stringify(submitCall(transcript)));
+  assert.equal(code, 0);
+  assert.equal(stdout, '');
 });
 
 test("the hook gives back the call's own input with only the estimate added or replaced, and no text from the transcript", async () => {

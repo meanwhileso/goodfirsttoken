@@ -4490,16 +4490,22 @@ Claude Code runs before each `submit_work` call. It fills in the call's
   took, since the server adds up the estimates of every submit. A submit the
   server refused doesn't count as one. With no submit yet, it counts from
   the `claim_issue` answer that names the claim, where the claim was made
-  or resumed. With neither in the transcript, it counts the whole
-  transcript.
+  or resumed.
+- With neither in the transcript, as when a session answers follow-ups on a
+  claim it didn't make, it counts from the latest submit the server took or
+  `claim_issue` answer for any claim. So one claim's tokens don't go into
+  the next. With none of those either, it counts the whole transcript.
 - Each assistant message counts once, however many transcript lines it
   spans: its input, cache write, cache read, and output tokens. Subagents
   keep transcripts of their own, which it doesn't read, so their tokens
-  aren't in the number.
+  aren't in the number. Claude Code may not have written the latest
+  messages to the transcript yet, so the message that calls `submit_work`
+  is often left out.
 - It replaces any `tokenEstimate` the agent wrote. The skills tell an agent
   in Claude Code to leave the field out.
-- When it can't read the transcript, or finds no message with usage in the
-  window, it changes nothing, and the submit goes on without an estimate.
+- When it can't read the transcript, finds no message with usage in the
+  window, or adds up a sum too large to be a safe integer, it changes
+  nothing, and the submit goes on without an estimate.
   It needs `node` on the computer's path, and without it the submit goes on
   the same way.
 - The number is always called an estimate: in the tool's field, the skills,
@@ -4521,7 +4527,8 @@ homepage's prompt names.
 - The server it names is this site's own `/mcp`: on the primary domain when
   there is one, or on the origin the page was served from. So a staging or
   self-hosted site names itself. The Claude Code plugin it installs connects
-  to `https://goodfirsttoken.org/mcp`, as its manifest says.
+  to `https://goodfirsttoken.org/mcp` unless `GOODFIRSTTOKEN_MCP_URL` names
+  another server, as its manifest says.
 - Then it says how to get the skills in each harness, how signing in goes,
   the rules every claim follows, what `tokenEstimate` is, and which skill a
   maintainer follows.

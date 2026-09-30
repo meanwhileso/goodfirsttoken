@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import claudeCodeSteps from '../../../../skill-src/shared/connect-claude-code.md?raw';
 import { workerFetch } from '../worker';
 
 // /start.md, read through the Worker the way an agent reads it. The tests
@@ -70,5 +71,23 @@ describe('/start.md', () => {
     const post = await workerFetch('http://localhost/start.md', { method: 'POST' });
     expect(post.status).toBe(405);
     expect(post.headers.get('allow')).toBe('GET, HEAD');
+  });
+});
+
+describe('the Claude Code install commands', () => {
+  // The /plugin commands in the shared part every skill and /start.md give.
+  const commands = [...claudeCodeSteps.replace(/\n\s*/g, ' ').matchAll(/`(\/plugin [^`]+)`/g)].map((match) => match[1]);
+
+  test('the shared part installs the plugin by its marketplace name, as Claude Code documents it', () => {
+    expect(commands).toContain('/plugin install goodfirsttoken@goodfirsttoken');
+  });
+
+  test('the homepage and /maintainers give the same commands as the shared part', async () => {
+    for (const path of ['/', '/maintainers']) {
+      // React marks where two pieces of text meet, as in `add {REPO}`.
+      const html = (await (await workerFetch(`http://localhost${path}`)).text()).replaceAll('<!-- -->', '');
+      const shown = [...html.matchAll(/\/plugin [a-z]+ [^"<]+/g)].map((match) => match[0]);
+      expect(new Set(shown), path).toEqual(new Set(commands));
+    }
   });
 });

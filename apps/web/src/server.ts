@@ -24,9 +24,9 @@ import { runScheduled } from './sync/scheduled';
 // exported from here.
 
 // The site: sign-in under /auth (src/auth/routes.ts), the live text streams,
-// like /live.txt (src/feed/streams.ts), /start.md (src/start/start.ts), the form on the page where a person
-// approves an agent (src/mcp/authorize.ts), and TanStack Start for every
-// page.
+// like /live.txt (src/feed/streams.ts), /start.md (src/start/start.ts), the
+// form on the page where a person approves an agent (src/mcp/authorize.ts),
+// and TanStack Start for every page.
 const site: ExportedHandler<Env> = {
   fetch: async (request) => {
     if (isAuthPath(request)) return handleAuthRequest(request);

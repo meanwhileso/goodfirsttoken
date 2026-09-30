@@ -34,9 +34,10 @@ The repo is a pnpm workspace.
   endpoint. Of the requests passed back, it sends every one under `/auth` to
   `src/auth/routes.ts`, every path shaped like a text stream to
   `src/feed/streams.ts`, which also takes a page's live socket there,
-  `/start.md` to `src/start/start.ts`, and the form on `/oauth/authorize` to `src/mcp/authorize.ts`. It hands every
-  other one to TanStack Start, setting the status a page names, as the page
-  on `/oauth/authorize` and an issue page do. Its `queue` handler hands a
+  `/start.md` to `src/start/start.ts`, and the form on `/oauth/authorize`
+  to `src/mcp/authorize.ts`. It hands every other one to TanStack Start,
+  setting the status a page names, as the page on `/oauth/authorize` and an
+  issue page do. Its `queue` handler hands a
   batch from the crawl queue, `crawl` locally and `<WORKER_NAME>-crawl`
   deployed, to the crawler's consumer, and every other batch to the feed
   queue's consumer. Its `scheduled` handler runs the job for each cron
@@ -1202,13 +1203,14 @@ its version did not go up.
   carry, so it has one source: the steps to add the MCP server in Codex,
   OpenCode, Cursor, Grok Bot, and any other harness, which every skill
   shows, the Claude Code step that installs the `goodfirsttoken` plugin,
-  which every skill but admin shows, and the donor's rules, steps, and refusals, which give, work, and
-  review share. A line of its own, `{{include <part>}}`, in a skill's body
-  becomes the part's text, before `{{MCP_URL}}` is filled in. A part can't
-  include another. A missing part, a name that isn't a part's, or an
-  include inside other text fails the build, and the error says which. Each copy holds the whole text, so an agent reads one file, and a
-  change to a part changes every plugin that carries it, which the version
-  rule then covers.
+  which every skill but admin shows, and the donor's rules, steps, and
+  refusals, which give, work, and review share. A line of its own,
+  `{{include <part>}}`, in a skill's body becomes the part's text, before
+  `{{MCP_URL}}` is filled in. A part can't include another. A missing part,
+  a name that isn't a part's, or an include inside other text fails the
+  build, and the error says which. Each copy holds the whole text, so an
+  agent reads one file, and a change to a part changes every plugin that
+  carries it, which the version rule then covers.
 - **The copies are committed,** because installers read them straight from
   GitHub. `skills/`, `.claude-plugin/`, and each plugin's `skills/` and
   `.claude-plugin/` folders hold only what the build writes, and the build
@@ -1430,20 +1432,24 @@ hand, so the version rule covers it. The rules are under
   lines. An assistant message streamed in parts is written once per part,
   each line with the same `message.id` and the same `usage`, so the hook
   keeps one count per ID. A tool result carries `tool_use_id` and
-  `is_error`, which a refusal from the server sets.
-- **Failing quietly.** Any error, a bad line of input, or no count prints
-  nothing and exits 0. A hook that prints nothing changes nothing, so the
+  `is_error`, which a refusal from the server sets. Claude Code's docs say
+  the transcript is written asynchronously and may lag. In a live run, the
+  message that called `submit_work` wasn't in it yet when the hook ran, so
+  its tokens weren't counted: 198,254 counted, against 232,715 with it.
+- **Failing quietly.** Any error, a bad line of input, no count, or a sum
+  too large to be a safe integer prints nothing and exits 0. The server
+  would refuse a submit with such a sum. A hook that prints nothing changes nothing, so the
   submit goes on. Claude Code treats a hook that can't start at all, as
   with no `node`, as a non-blocking error, and the call goes on too.
 - **The test** is `scripts/token-estimate.test.mjs`, which runs the hook
-  as a process against `scripts/fixtures/sample-transcript.jsonl`, a
-  made-up transcript with known sums.
+  as a process against `scripts/fixtures/sample-transcript.jsonl`, and
+  against short transcripts it writes, all made up, with known sums.
 
 ### Open questions 1, 3, and 4: the harnesses
 
 What building `/start.md` and the hook showed about
-[open questions 1, 3, and 4](specs/v1.md#open-questions). None of it was
-tried in a live harness from this repo.
+[open questions 1, 3, and 4](specs/v1.md#open-questions). Only question 3
+was tried in a live harness from this repo.
 
 - **1. A restart in Codex and OpenCode.** Codex's MCP docs add a server with
   `codex mcp add <name> --url <url>` and sign in with
@@ -1461,7 +1467,13 @@ tried in a live harness from this repo.
   `PreToolUse` hook's `updatedInput` replaces a tool's input before it
   runs, and hook input carries `transcript_path` and `tool_use_id`. The
   transcript's assistant lines carry the API's `usage`. So the plugin fills
-  `tokenEstimate`, as [The token hook](#the-token-hook) says.
+  `tokenEstimate`, as [The token hook](#the-token-hook) says. A live run in
+  Claude Code 2.1.284 confirmed it: `updatedInput` with no
+  `permissionDecision` changed the call's input, and the local database
+  stored the number. That run matched the tool's name from a server added
+  alone, `mcp__goodfirsttoken__submit_work`. The plugin's own name,
+  `mcp__plugin_goodfirsttoken_goodfirsttoken__submit_work`, is checked
+  against the docs only.
 - **4. Grok Bot.** Grok's connector docs add a custom MCP server on
   grok.com, from Connectors, New Connector, Custom, with the server's URL,
   and "complete any required authentication." They don't cover Grok Bot,

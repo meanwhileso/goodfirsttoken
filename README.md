@@ -61,7 +61,7 @@ skills yourself:
 
 | Harness | Add the MCP server | Get the skills |
 |---|---|---|
-| Claude Code | `/plugin marketplace add meanwhileso/goodfirsttoken`, then `/plugin install goodfirsttoken`. Or the server alone: `claude mcp add --transport http goodfirsttoken https://goodfirsttoken.org/mcp` | The plugin carries them |
+| Claude Code | `/plugin marketplace add meanwhileso/goodfirsttoken`, then `/plugin install goodfirsttoken@goodfirsttoken`. Or the server alone: `claude mcp add --transport http goodfirsttoken https://goodfirsttoken.org/mcp` | The plugin carries them |
 | Codex | `codex mcp add goodfirsttoken --url https://goodfirsttoken.org/mcp`, then `codex mcp login goodfirsttoken` | `npx skills add meanwhileso/goodfirsttoken` |
 | OpenCode | Add `"goodfirsttoken": {"type": "remote", "url": "https://goodfirsttoken.org/mcp"}` under `"mcp"` in `opencode.json` | `npx skills add meanwhileso/goodfirsttoken` |
 | Cursor | Add `"goodfirsttoken": {"url": "https://goodfirsttoken.org/mcp"}` under `"mcpServers"` in `~/.cursor/mcp.json` | `npx skills add meanwhileso/goodfirsttoken` |

@@ -14,7 +14,13 @@
 //   submit, whose result is an error, doesn't start a window.
 // - With no such submit, it starts after the claim_issue result that names
 //   the claim, which is where the claim was made or resumed.
-// - With neither, it is the whole transcript.
+// - With neither, it starts after the latest boundary of any claim: a
+//   submit_work the server took or a claim_issue result. A session that
+//   answers follow-ups submits with no claim_issue in it, and this keeps one
+//   claim's tokens out of the next.
+// - With no boundary at all, it is the whole transcript.
+// - A sum too large to be a safe integer gives no estimate, since the server
+//   would refuse the submit.
 // Each assistant message counts once, however many transcript lines it
 // spans: its input, cache write, cache read, and output tokens. Subagents
 // keep transcripts of their own, which the hook doesn't read.
@@ -59,10 +65,16 @@ function namesClaim(text, claimId) {
  */
 export async function estimateTokens(lines, { claimId, toolUseId }) {
   const claimCalls = new Set();
-  const submitCalls = new Set();
-  // The tokens of each assistant message since the window started, by message ID.
-  let counted = new Map();
+  // The claim ID of each submit_work call, by call ID.
+  const submitCalls = new Map();
+  // The tokens of each assistant message, by message ID: since the last
+  // boundary of this claim, and since the last boundary of any claim.
+  let own = new Map();
+  let any = new Map();
+  let ownBoundary = false;
+  let lineNumber = 0;
   for await (const line of lines) {
+    lineNumber += 1;
     let entry;
     try {
       entry = JSON.parse(line);
@@ -73,27 +85,35 @@ export async function estimateTokens(lines, { claimId, toolUseId }) {
     if (!message || !Array.isArray(message.content)) continue;
     if (entry.type === 'assistant') {
       if (message.usage && typeof message.usage === 'object') {
-        const key = typeof message.id === 'string' ? message.id : `line ${String(counted.size)}`;
-        counted.set(key, tokensIn(message.usage));
+        const key = typeof message.id === 'string' ? message.id : `line ${String(lineNumber)}`;
+        const tokens = tokensIn(message.usage);
+        own.set(key, tokens);
+        any.set(key, tokens);
       }
       for (const part of message.content) {
         if (part?.type !== 'tool_use' || typeof part.name !== 'string' || part.id === toolUseId) continue;
         if (CLAIM.test(part.name)) claimCalls.add(part.id);
-        else if (SUBMIT.test(part.name) && part.input?.claimId === claimId) submitCalls.add(part.id);
+        else if (SUBMIT.test(part.name)) submitCalls.set(part.id, part.input?.claimId);
       }
     } else if (entry.type === 'user') {
       for (const part of message.content) {
         if (part?.type !== 'tool_result' || part.is_error === true) continue;
-        const starts =
-          submitCalls.has(part.tool_use_id) || (claimCalls.has(part.tool_use_id) && namesClaim(resultText(part.content), claimId));
-        if (starts) counted = new Map();
+        const isClaim = claimCalls.has(part.tool_use_id);
+        if (!isClaim && !submitCalls.has(part.tool_use_id)) continue;
+        any = new Map();
+        const mine = isClaim ? namesClaim(resultText(part.content), claimId) : submitCalls.get(part.tool_use_id) === claimId;
+        if (mine) {
+          own = new Map();
+          ownBoundary = true;
+        }
       }
     }
   }
+  const counted = ownBoundary ? own : any;
   if (counted.size === 0) return null;
   let sum = 0;
   for (const tokens of counted.values()) sum += tokens;
-  return sum;
+  return Number.isSafeInteger(sum) ? sum : null;
 }
 
 async function readStdin() {
