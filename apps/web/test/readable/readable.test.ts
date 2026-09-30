@@ -219,11 +219,17 @@ describe('a repo whose name ends in .md or .json', () => {
 
     const page = await get('/sample-owner/notes.md');
     const markdown = await get('/sample-owner/notes.md.md');
+    const accepted = await get('/sample-owner/notes.md', asMarkdown);
+    const sitemap = await (await get('/sitemap.xml')).text();
 
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toContain('text/html');
     expect(markdown.status).toBe(200);
-    expect(await markdown.text()).toContain('# sample-owner/notes.md');
+    expect(await markdown.text()).toContain('# sample-owner/notes.md\n');
+    expect(accepted.status).toBe(200);
+    expect(accepted.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
+    expect(await accepted.text()).toContain('# sample-owner/notes.md\n');
+    expect(sitemap).toContain(`<loc>${ORIGIN}/sample-owner/notes.md</loc>`);
   });
 
   test('keeps its HTML page when it ends in .json, and only it is listed', async () => {
@@ -235,9 +241,18 @@ describe('a repo whose name ends in .md or .json', () => {
     expect(page.headers.get('content-type')).toContain('text/html');
   });
 
-  test('is 404 when neither it nor the repo without the ending is listed', async () => {
-    expect((await get('/sample-owner/notes.md')).status).toBe(404);
-    expect((await get('/sample-owner/data.json')).status).toBe(404);
+  test("is a markdown or JSON 404 when neither it nor the repo without the ending is listed, whatever the request accepts", async () => {
+    for (const init of [{}, asMarkdown, { headers: { accept: 'application/json' } }, { headers: { accept: 'text/html' } }]) {
+      const markdown = await get('/sample-owner/notes.md', init);
+      const json = await get('/sample-owner/nothing.json', init);
+
+      expect(markdown.status).toBe(404);
+      expect(markdown.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
+      expect(await markdown.text()).toContain("sample-owner/notes isn't listed on Good First Token");
+      expect(json.status).toBe(404);
+      expect(json.headers.get('content-type')).toBe('application/json; charset=utf-8');
+      expect(await json.json()).toMatchObject({ error: 'not_found' });
+    }
   });
 
   test('gives the path to the markdown of the repo without the ending when both are listed, and leaves it out of the sitemap', async () => {
@@ -257,6 +272,17 @@ describe('a repo whose name ends in .md or .json', () => {
     expect(sitemap).not.toContain(`<loc>${ORIGIN}/sample-owner/notes.md</loc>`);
     expect(sitemap).not.toContain(`<loc>${ORIGIN}/sample-owner/data.json</loc>`);
   });
+
+  test('keeps a repo whose ending is in capitals in the sitemap, since its path is its own page', async () => {
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/up');
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/Up.MD');
+
+    const page = await get('/sample-owner/Up.MD');
+    const sitemap = await (await get('/sitemap.xml')).text();
+
+    expect(page.status).toBe(200);
+    expect(sitemap).toContain(`<loc>${ORIGIN}/sample-owner/Up.MD</loc>`);
+  });
 });
 
 describe('what a page hides, its markdown hides, with the same status', () => {
@@ -275,6 +301,13 @@ describe('what a page hides, its markdown hides, with the same status', () => {
       expect(markdown.status, name).toBe(404);
       expect(await markdown.text(), name).toContain("isn't listed on Good First Token");
       expect(suffixed.status, name).toBe(404);
+      expect(await suffixed.text(), name).toContain("isn't listed on Good First Token");
+      for (const init of [asMarkdown, { headers: { accept: 'application/json' } }]) {
+        const md = await get(`/${name}.md`, init);
+        const json = await get(`/${name}.json`, init);
+        expect([md.status, md.headers.get('content-type')], name).toEqual([404, 'text/markdown; charset=utf-8']);
+        expect([json.status, json.headers.get('content-type')], name).toEqual([404, 'application/json; charset=utf-8']);
+      }
       expect(await issue.text(), name).not.toContain('A title only the page could show');
     }
   });

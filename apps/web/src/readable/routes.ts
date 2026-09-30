@@ -194,26 +194,47 @@ export const MARKDOWN_ROUTES: readonly MarkdownRoute[] = [
       return found ? { owner: found[1] ?? '', repo: found[2] ?? '' } : null;
     },
     answer: async (request, { owner = '', repo = '' }, suffixed) => {
-      const origin = siteOrigin(request);
-      const project = await loadProject(request, owner, repo);
-      if (project.state === 'not_found' && suffixed) return null;
-      if (project.state === 'ready') return markdown(200, projectMarkdown(origin, project), page(origin, `/${project.repo}`));
-      if (project.state === 'unavailable') {
-        return markdown(UNAVAILABLE, notFoundMarkdown(project.repo, "This project can't be read right now. Try again in a moment."));
-      }
-      const named = repoFromPath(owner, repo);
-      return markdown(
-        404,
-        named === null
-          ? notFoundMarkdown('Not found', 'There is no project page at this address.')
-          : notFoundMarkdown(
-              'Not on Good First Token',
-              `${named} isn't listed on Good First Token. Maintainers add theirs from their agent: ${origin}/maintainers.md`,
-            ),
-      );
+      const answer = await projectAnswer(request, owner, repo);
+      if (answer.status !== 404 || !suffixed) return answer;
+      // The path `/<owner>/<repo>.md` can be the page of the repo named with
+      // the `.md`, when that one has a page.
+      const own = await ownPage(request, owner, `${repo}.md`);
+      return own === undefined ? answer : own;
     },
   },
 ];
+
+/** A project page's markdown: the project's, a 404 when it has no page, or a 503 when it can't be read. */
+async function projectAnswer(request: Request, owner: string, repo: string): Promise<Response> {
+  const origin = siteOrigin(request);
+  const project = await loadProject(request, owner, repo);
+  if (project.state === 'ready') return markdown(200, projectMarkdown(origin, project), page(origin, `/${project.repo}`));
+  if (project.state === 'unavailable') {
+    return markdown(UNAVAILABLE, notFoundMarkdown(project.repo, "This project can't be read right now. Try again in a moment."));
+  }
+  const named = repoFromPath(owner, repo);
+  return markdown(
+    404,
+    named === null
+      ? notFoundMarkdown('Not found', 'There is no project page at this address.')
+      : notFoundMarkdown(
+          'Not on Good First Token',
+          `${named} isn't listed on Good First Token. Maintainers add theirs from their agent: ${origin}/maintainers.md`,
+        ),
+  );
+}
+
+/**
+ * When `/<owner>/<name>`, with a name that ends in `.md` or `.json`, is a
+ * project's own page: its markdown for a request that asks for markdown by
+ * Accept, and null for the rest of the site to show its HTML. Undefined
+ * when that project has no page, by the project page's rule.
+ */
+async function ownPage(request: Request, owner: string, name: string): Promise<Response | null | undefined> {
+  const found = await loadProjectFile(siteOrigin(request), owner, name);
+  if (found.state !== 'ready') return undefined;
+  return wantsMarkdown(request) ? projectAnswer(request, owner, name) : null;
+}
 
 /**
  * The route IDs of pages with no markdown version, and why. A test checks
@@ -282,13 +303,17 @@ async function projectsJson(request: Request, url: URL): Promise<Response> {
 }
 
 /**
- * The project's JSON, or null to hand the request on when the project has
- * no page, since the path can be the page of a repo whose name ends in
- * `.json`.
+ * The project's JSON. When the project has no page, the path can be the
+ * page of the repo named with the `.json`, which ownPage answers. Otherwise
+ * it is a JSON 404.
  */
 async function projectJson(request: Request, owner: string, repo: string): Promise<Response | null> {
   const result = await loadProjectFile(siteOrigin(request), owner, repo);
-  if (result.state === 'not_found') return null;
+  if (result.state === 'not_found') {
+    const own = await ownPage(request, owner, `${repo}.json`);
+    if (own !== undefined) return own;
+    return json(404, { error: 'not_found', message: 'No project with a page on Good First Token has this repo.' });
+  }
   if (result.state === 'unavailable') return json(UNAVAILABLE, { error: 'unavailable', message: "The project can't be read right now." });
   return json(200, result.file);
 }

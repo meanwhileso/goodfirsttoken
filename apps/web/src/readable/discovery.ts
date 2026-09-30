@@ -68,8 +68,9 @@ export async function sitemapXml(origin: string): Promise<string | null> {
     repos = projects
       .map((project) => project.repo)
       .filter((repo) => {
-        const bare = repo.toLowerCase().replace(/\.(md|json)$/, '');
-        return bare === repo.toLowerCase() || !listed.has(bare);
+        // The ending in lower case only, as the routes strip it.
+        const bare = repo.replace(/\.(md|json)$/, '');
+        return bare === repo || !listed.has(bare.toLowerCase());
       });
   } catch (error) {
     console.warn('The sitemap could not read the projects.', error);

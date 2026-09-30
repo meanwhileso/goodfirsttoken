@@ -2683,9 +2683,12 @@ The rules are in [how-it-works.md](how-it-works.md#readable-by-agents).
   carry no page's HTML, scripts, or cookies. A `.md` path that names no
   page, like `/start.md`, and a path whose owner belongs to the site, asked
   for with `Accept: text/markdown`, go on to the rest of the site. So does a
-  project's `.md` or `.json` path when the loader finds no project with a
-  page, since a repo's name can end in either: an answer of null from
-  `readableRoute`'s answer hands the request to TanStack Start.
+  project's `.md` or `.json` path that is the HTML page of a repo named with
+  that ending, since a repo's name can end in either. `ownPage` checks that
+  repo with the project page's rule, only when the repo without the ending
+  has no page, and an answer of null hands the request to TanStack Start.
+  TanStack answers `406` to a request that doesn't accept HTML, so a path
+  that is no page answers its markdown or JSON `404` itself.
 - **The route list.** A test walks `routeTree`, from
   `src/routeTree.gen.ts`, and fails when a route with a component is in
   neither `MARKDOWN_ROUTES` nor `NO_MARKDOWN`. It then asks for each

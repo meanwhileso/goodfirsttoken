@@ -11,10 +11,10 @@ the MCP server's sign-in for agents with the donor's tools, the maintainer's
 tools, and the admins' tools, with views for hosts that support MCP Apps,
 the admin pages, the design system at `/design`, the share cards, the live
 feeds as text streams and sockets, and each page's markdown version,
-`/llms.txt`, and the projects' settings as JSON. It reads tagged issues and PRs from GitHub on a
-schedule, looks for projects whose docs welcome AI help, and reads each
-listed project's docs again every week, while the build goes on in the
-open.
+`/llms.txt`, and the projects' settings as JSON. It reads tagged issues
+and PRs from GitHub on a schedule, looks for projects whose docs welcome AI
+help, and reads each listed project's docs again every week, while the
+build goes on in the open.
 
 ## Health check
 
@@ -4838,20 +4838,25 @@ to, as `/start.md` names its server.
   nothing.
 - A `.md` path that names no page, like `/start.md`, goes on to the rest of
   the site.
-- A repo's name can end in `.md` or `.json`. So when the project that
-  `/<owner>/<repo>.md` or `/<owner>/<repo>.json` names without the ending
-  has no page, the path goes on to the rest of the site, which shows the
-  page of the repo whose name has the ending, or `404`. Its markdown is at
-  the path plus another `.md`, like `/owner/notes.md.md`. When both repos
-  have a page, the one without the ending keeps the path for its markdown
-  and JSON, and the other's page can't be reached, so the sitemap leaves it
-  out.
+- A repo's name can end in `.md` or `.json`, so `/<owner>/<x>.md` and
+  `/<owner>/<x>.json` are read in this order:
+  - When the project `<owner>/<x>` has a page, the path is its markdown or
+    its JSON.
+  - Otherwise, when the project named with the ending, like
+    `<owner>/<x>.md`, has a page, the path is that page. A request whose
+    `Accept` asks for markdown gets its markdown, and any other gets its
+    HTML. Its markdown is also at the path plus another `.md`, like
+    `/owner/notes.md.md`.
+  - Otherwise, the path is a markdown `404` that says the repo isn't
+    listed, or a JSON `404`, whatever the request accepts.
+  - The endings count in lower case only. When both projects have a page,
+    the one with the ending can't be reached, so the sitemap leaves it out.
 - It is read with `GET` or `HEAD`. It is sent as
   `text/markdown; charset=utf-8`, with `Vary: Accept`, and a page's HTML
   says `Vary: Accept` too, so a cache keeps the two apart. A public page's
-  markdown is sent with `Access-Control-Allow-Origin: *`, and sets no cookie
-  and, like the page, no `Cache-Control`. When the page is there, a `Link` header names
-  the HTML page as canonical.
+  markdown is sent with `Access-Control-Allow-Origin: *`, and sets no
+  cookie and, like the page, no `Cache-Control`. When the page is there, a
+  `Link` header names the HTML page as canonical.
 - It shows what its page shows, from the same read of the database, the
   feeds, and the issue's room. What the page hides, it hides, with the same
   status: a project with no page, a delisted or do-not-listed project's
@@ -4902,8 +4907,8 @@ to, as `/start.md` names its server.
   the last page. An `after` that isn't a repo is `400`.
 - `/<owner>/<repo>.json` finds the repo without case. A repo with no page is
   `404`, with the same answer for a pending, rejected, delisted, or
-  do-not-listed project as for a repo that isn't a project: the path goes on
-  to the rest of the site, as for a `.md` path above.
+  do-not-listed project as for a repo that isn't a project, unless the
+  path is the page of a repo whose name ends in `.json`, as above.
 - Both are sent as `application/json; charset=utf-8`, with
   `Access-Control-Allow-Origin: *`, and no cookie. Each file is checked
   against its schema in `packages/core` before it goes out. When the
@@ -4924,14 +4929,15 @@ to, as `/start.md` names its server.
 - `/sitemap.xml` lists the homepage, `/projects`, `/leaderboard`, `/live`,
   and `/maintainers`, then each project with a page, by repo, at most 1,000.
   A repo whose name ends in `.md` or `.json` is left out while the repo
-  without the ending has a page. Issue and person pages aren't in it. When the database can't answer, it
-  is `503`.
+  without the ending has a page. Issue and person pages aren't in it. When
+  the database can't answer, it is `503`.
 - Each public page's head has its title, its description, its canonical URL
   on the primary domain, with the repo as saved and the login now, the Open
   Graph title, description, URL, type, and site name, its share card, as
   under Share cards, and a link to its markdown version.
-- A page that isn't there, `/me`, `/admin`, and `/oauth/authorize` have no
-  canonical URL, and ask search engines not to list them with `noindex`.
+- A page that isn't there is `404`, and a route's not-found page also says
+  `noindex`, with no canonical URL. `/me`, `/admin`, and `/oauth/authorize`
+  have no canonical URL, and say `noindex` too.
 
 ## The design system
 
