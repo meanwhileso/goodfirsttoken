@@ -359,7 +359,7 @@ describe('/admin, a page at a time', () => {
     expect(counts).toEqual([String(LONG - ADMIN_QUEUE_PAGE), String(LONG - 2 * ADMIN_QUEUE_PAGE), 'none']);
   });
 
-  test('an address whose page of the queue is no page shows no queue, says why, and asks GitHub nothing', async () => {
+  test('an address whose page of the queue is no page shows no queue and no section, says why, and asks GitHub nothing', async () => {
     const repos = await longQueue(3);
     const browser = new Browser();
     await signIn(browser, github, ADMIN.login);
@@ -370,5 +370,9 @@ describe('/admin, a page at a time', () => {
     expect(html).toContain('No page of the queue shows. after: must be the next value from an admin_queue answer.');
     expect(shownRepos(html, repos)).toEqual([]);
     expect(callsSince(before)).toEqual([]);
+    // Items wait, so no section may say none do.
+    for (const none of ['No requests to be removed.', 'No finds waiting.', 'No registrations waiting.', 'None on this page.']) {
+      expect(html).not.toContain(none);
+    }
   });
 });

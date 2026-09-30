@@ -603,44 +603,49 @@ function Admin() {
         <div className="admin__split">
           <div className="admin__main">
             <QueuePages page={page} />
-            <section className="stack" aria-label="asking to be removed">
-              <div className="rail__head">
-                <Marker as="h2" count={sectionCount(page, 'removal', page.removals.length)}>
-                  asking to be removed
-                </Marker>
-                <span className="mono small faint">each asked by an admin or maintainer of the repo, as GitHub said</span>
-              </div>
-              <SectionItems page={page} kind="removal" count={page.removals.length} none="No requests to be removed.">
-                {page.removals.map((item) => (
-                  <Removal key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
-                ))}
-              </SectionItems>
-            </section>
-            <section className="stack" aria-label="found by the crawler">
-              <div className="rail__head">
-                <Marker as="h2" variant="label" count={sectionCount(page, 'candidate', page.candidates.length)}>
-                  found by the crawler
-                </Marker>
-                <span className="mono small faint">their docs welcome AI</span>
-              </div>
-              <SectionItems page={page} kind="candidate" count={page.candidates.length} none="No finds waiting.">
-                {page.candidates.map((item) => (
-                  <Candidate key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
-                ))}
-              </SectionItems>
-            </section>
-            <section className="stack" aria-label="registrations">
-              <div className="rail__head">
-                <Marker as="h2" count={sectionCount(page, 'registration', page.registrations.length)}>
-                  registrations
-                </Marker>
-              </div>
-              <SectionItems page={page} kind="registration" count={page.registrations.length} none="No registrations waiting.">
-                {page.registrations.map((item) => (
-                  <Registration key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
-                ))}
-              </SectionItems>
-            </section>
+            {/* An address that names no page shows no section, since none can say what waits. */}
+            {page.badPage === null && (
+              <>
+              <section className="stack" aria-label="asking to be removed">
+                <div className="rail__head">
+                  <Marker as="h2" count={sectionCount(page, 'removal', page.removals.length)}>
+                    asking to be removed
+                  </Marker>
+                  <span className="mono small faint">each asked by an admin or maintainer of the repo, as GitHub said</span>
+                </div>
+                <SectionItems page={page} kind="removal" count={page.removals.length} none="No requests to be removed.">
+                  {page.removals.map((item) => (
+                    <Removal key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                  ))}
+                </SectionItems>
+              </section>
+              <section className="stack" aria-label="found by the crawler">
+                <div className="rail__head">
+                  <Marker as="h2" variant="label" count={sectionCount(page, 'candidate', page.candidates.length)}>
+                    found by the crawler
+                  </Marker>
+                  <span className="mono small faint">their docs welcome AI</span>
+                </div>
+                <SectionItems page={page} kind="candidate" count={page.candidates.length} none="No finds waiting.">
+                  {page.candidates.map((item) => (
+                    <Candidate key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                  ))}
+                </SectionItems>
+              </section>
+              <section className="stack" aria-label="registrations">
+                <div className="rail__head">
+                  <Marker as="h2" count={sectionCount(page, 'registration', page.registrations.length)}>
+                    registrations
+                  </Marker>
+                </div>
+                <SectionItems page={page} kind="registration" count={page.registrations.length} none="No registrations waiting.">
+                  {page.registrations.map((item) => (
+                    <Registration key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                  ))}
+                </SectionItems>
+              </section>
+              </>
+            )}
           </div>
           <aside className="admin__aside">
             <Listings listings={page.listings} />

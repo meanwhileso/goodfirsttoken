@@ -1683,8 +1683,8 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   wait only when none of its kind wait on any page. A link opens the next
   page, with its place in the address as `after`, which the server checks
   as `admin_queue` checks it.
-  An address whose `after` is no page shows no queue, says why, and links
-  the first page. After a form, the page opens at the first page.
+  An address whose `after` is no page shows no queue and none of its
+  sections, says why, and links the first page. After a form, the page opens at the first page.
 - A crawler find's form takes its tags, separated by commas, starting with
   the ones suggested, and its tier. The form to list a repo by hand takes
   its policy and tags. Listing a repo that is listed already changes those
