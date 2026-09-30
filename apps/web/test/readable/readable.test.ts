@@ -319,7 +319,7 @@ describe('text from GitHub or an agent adds nothing to the markdown', () => {
           claim: 'c_readable000000000001',
           kind: 'update',
           job: '[job](https://evil.example/job)',
-          text: text.replace('\n', ' '),
+          text: text.replaceAll('\n', ' '),
         },
         githubId: priya.githubId,
       })),
@@ -332,7 +332,7 @@ describe('text from GitHub or an agent adds nothing to the markdown', () => {
 
       // No image, HTML, table, or emphasis, and no heading, list item, or
       // quote that starts with the words of an attack.
-      expect(html, path).not.toMatch(/<img|<script|<table|<del>|<strong>|<em>|<code>code<\/code>/);
+      expect(html, path).not.toMatch(/<img|<script|<table|<del>|<strong>|<em>|<code>code<\/code>/i);
       expect(html, path).not.toMatch(/<h\d>(Heading from a title|lines)/);
       expect(html, path).not.toMatch(/<li>(a numbered item|a bullet item)/);
       expect(html, path).not.toMatch(/<blockquote>\s*<p>a quote/);
