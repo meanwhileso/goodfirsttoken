@@ -178,6 +178,29 @@ describe('each card', () => {
     expect(cards[2]).toEqual(cards[0]);
   });
 
+  test('with no primary domain, the default cards kept stay few however many hosts ask, the newest kept', async () => {
+    const vars = env as unknown as { PRIMARY_DOMAIN: string };
+    const primary = vars.PRIMARY_DOMAIN;
+    vars.PRIMARY_DOMAIN = '';
+    try {
+      const drawn = vi.spyOn(render, 'renderCard');
+      const at = (host: string) => workerFetch(`https://${host}.example/card.png`).then((res) => res.arrayBuffer());
+      for (let i = 0; i < 20; i++) await at(`host-${String(i)}`);
+      const afterMany = drawn.mock.calls.length;
+
+      await at('host-19');
+      const newest = drawn.mock.calls.length - afterMany;
+      await at('host-0');
+      const oldest = drawn.mock.calls.length - afterMany - newest;
+
+      expect(afterMany).toBe(20);
+      expect(newest).toBe(0);
+      expect(oldest).toBe(1);
+    } finally {
+      vars.PRIMARY_DOMAIN = primary;
+    }
+  });
+
   test('answers 503 when the database is down, as its page does', async () => {
     const vars = env as unknown as { DB: D1Database };
     const real = vars.DB;

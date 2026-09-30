@@ -4598,7 +4598,9 @@ address at the foot.
 - It is read with `GET` or `HEAD`. Any other method is `405`.
 - `HEAD` answers the status and headers `GET` would, and draws nothing.
 - The default card is the same for every path on the site, so each Worker
-  instance draws it once and keeps it.
+  instance draws it once and keeps it. With no primary domain, each host
+  the site is reached on draws its own, and an instance keeps the four
+  asked for most lately.
 - When the database can't answer, it is `503`, with a line of text.
 
 ## Sample data in development

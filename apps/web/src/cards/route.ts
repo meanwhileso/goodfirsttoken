@@ -47,15 +47,25 @@ async function cardFor(request: Request, pathname: string): Promise<CardResult> 
 
 // The default card's PNG for each site origin, kept for the isolate's life.
 // It is the same bytes every time, and any issue path with no merged PR
-// asks for it, so it is drawn once.
+// asks for it, so it is drawn once. With no primary domain, the origin is
+// the request's, which a wildcard route lets anyone pick, so only the few
+// asked for most lately are kept.
 const defaultPngs = new Map<string, Uint8Array<ArrayBuffer>>();
+const DEFAULT_PNGS_KEPT = 4;
 
 async function drawDefault(request: Request, card: Card): Promise<Uint8Array<ArrayBuffer>> {
   const origin = siteOrigin(request);
   let png = defaultPngs.get(origin);
-  if (!png) {
+  if (png) {
+    // Asked for again, so it moves to the newest place.
+    defaultPngs.delete(origin);
+  } else {
     png = await renderCard(card);
-    defaultPngs.set(origin, png);
+  }
+  defaultPngs.set(origin, png);
+  for (const oldest of defaultPngs.keys()) {
+    if (defaultPngs.size <= DEFAULT_PNGS_KEPT) break;
+    defaultPngs.delete(oldest);
   }
   // A copy for each answer, so no answer can change the kept bytes.
   return png.slice();
