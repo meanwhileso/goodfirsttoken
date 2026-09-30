@@ -101,13 +101,17 @@ export function toolRefusal(refusal: Refusal): ToolRefusal {
 export type { Audience, ToolSpec } from './spec';
 export { audiences } from './spec';
 export {
+  ADMIN_QUEUE_PAGE,
   doNotListNote,
   moreRemovalsWithdrawnNote,
+  queuePlaceText,
+  readQueuePlace,
   removalProjectNote,
   removalWaitsNote,
   removalWithdrawnNote,
 } from './admin';
 export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
 export type { Suggestion } from './donor';
+export type { QueuePlace } from './admin';
 export { claimStateLabel } from './shared';
 export type { ClaimSummary, Delisting, FollowUp, ReadInPart } from './shared';

@@ -817,13 +817,34 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
 - **The repo's facts** for a registration or a request to be removed come
   from two REST calls with the admin's token, `GET /repos/{owner}/{repo}`
   and `GET /users/{owner}`, in `readStanding` in `src/projects/repo.ts`.
-  Every item's are read at once, so the queue costs two GitHub calls for
-  each registration and each request, on every read of the queue. Only a
+  Every item's on the page are read at once, so a look at the queue costs
+  two GitHub calls for each registration and each request on the page, and
+  none for anything else. Only a
   `404` for the repo gives `factsMissing: 'not_public'`. Any other failure,
   the owner's `404` included, gives `no_answer`, logged with `console.warn`, in
   `factsFromGitHub`. A `401` goes on up, so an agent's connection ends,
   and the page reads the queue again with no token and says to sign in
   again.
+- **One builder for a page of the queue.** `queuePage` in
+  `src/admin/actions.ts` builds the queue for `admin_queue` and `/admin`
+  alike, from the kinds each asks for: `admin_queue` one kind or all, and
+  `/admin` the kinds it shows. It reads what waits of each kind from D1,
+  with no GitHub call, sorts it by the time each item started to wait, then
+  repo, then ID, and builds only the first `ADMIN_QUEUE_PAGE` of them, from
+  `packages/core`, after the place `after` names. Building an item is where
+  it reads GitHub, so a look reads GitHub for the page alone. It counts
+  each kind in all and after the page from the same lists, for the words
+  of each section of `/admin`.
+- **A page's place is where the last one ended.** `next` and `after` carry
+  the last item's time, repo, and ID, joined with `~`, which none of them
+  holds, as `queuePlaceText` and `readQueuePlace` in core write and read
+  them. A count to skip would move when an admin decides an item on the
+  page before, and skip as many items on the next. A place moves with
+  nothing: an item decided leaves the queue behind it, and an item added
+  starts to wait now, after every place a page gave. The input schema
+  refuses any other `after`, and `/admin` checks its `after` with the same
+  schema. The lists are read whole, by the indexes each kind's list already
+  uses, so no migration was needed.
 - **Every status change is a compare-and-set,** through
   `setProjectStatusFrom`, retried up to five times, as for the maintainer's
   pause. So a maintainer's pause or resume that lands at the same moment as
@@ -3548,7 +3569,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
-  `apps/web/test/admin/`. Server functions have no URL in the unit tests,
+  `apps/web/test/admin/`. `queue-pages.test.ts` builds a queue longer than
+  two pages, pages through it in `admin_queue` and on `/admin`, and counts
+  the GitHub calls each look makes in the fake's call log. Server functions have no URL in the unit tests,
   since the Vitest build sets no base for them, so the end-to-end tests
   call the page's own.
 - **`/me` tests** fetch `/me` and post its forms through the Worker with the

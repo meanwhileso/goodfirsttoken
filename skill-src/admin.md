@@ -63,7 +63,9 @@ The same queue is at `/admin` on the Good First Token site.
 1. Call `admin_queue`. Leave out `kind` for everything, or set it to
    `registration`, `candidate`, `removal`, `pause`, or `policy_change`.
    The item that has waited longest comes first. Each registration, crawler
-   find, pause, and policy change has an `id` for `admin_decide`.
+   find, pause, and policy change has an `id` for `admin_decide`. An answer
+   holds one page of the queue. `more` says how many more wait after it,
+   and `next` is where it ends.
 2. When nothing waits, say so and stop.
 3. For each item:
    1. Show the admin its kind, its repo, who registered it or when the
@@ -85,7 +87,10 @@ The same queue is at `/admin` on the Good First Token site.
       request to be removed, ask them to remove the repo or skip it.
    4. Do what they decided, as in Deciding below, or as in Remove at the
       maintainers' request. A skipped item keeps waiting.
-4. At the end, tell the admin which items were approved, rejected, and
+4. When `more` is above 0, call `admin_queue` again with the same `kind`
+   and `after` set to the answer's `next`, and work that page from step 3.
+   Items decided on the page before don't move the next page.
+5. At the end, tell the admin which items were approved, rejected, and
    skipped.
 
 ### Checks for a crawler find
