@@ -1426,11 +1426,11 @@ of them but a request to be removed.
 - A page starts after the last item of the page before, by when it started
   to wait. So an item decided between pages moves nothing, and no item is
   skipped. An item added between pages started to wait later than any page
-  shown, so it waits on a later page. Two kinds of item come back with a
-  new ID and the time they came back, so they can show on a page after
-  the one that showed them before: a rejected registration its maintainer
-  registers again, and a policy change the crawler replaces with a newer
-  reading. A maintainer who changes a waiting registration's settings
+  shown, so it waits on a later page. An item that waits again comes back
+  with a new ID and the time it came back, as when a maintainer registers
+  a rejected repo again or the crawler replaces a policy change with a
+  newer reading, so it can show on a page after the one that showed it
+  before. A maintainer who changes a waiting registration's settings
   leaves its ID and its place as they were.
 - An `after` that isn't a `next` an answer gave is refused as bad input.
 - Only the items on the page are read, so one look makes at most two calls
