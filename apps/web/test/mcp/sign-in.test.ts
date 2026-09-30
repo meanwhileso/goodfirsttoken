@@ -38,7 +38,6 @@ import {
   tradeCode,
   useUpTokenRequests,
 } from './helpers';
-import { limiterKey } from '../../src/auth/rate-limit';
 
 // An agent's sign-in to the MCP server: the OAuth metadata, dynamic client
 // registration, the page where the person approves the agent, GitHub, and
@@ -304,7 +303,7 @@ test('the consent page names the agent as text, says where its access goes, warn
   expect(html).toContain('>http://127.0.0.1:33418<');
   expect(html).toContain('That is an app on your computer.');
   expect(page.headers.get('x-frame-options')).toBe('DENY');
-  expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+  expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
   expect(page.headers.get('cache-control')).toBe('no-store');
 });
 
@@ -514,28 +513,97 @@ test('two agents of one person each hold their own GitHub token', async () => {
   expect(new Set(appTokens(github)).size).toBe(2);
 });
 
-test('registering an agent and opening the page to approve it count toward the sign-in limit of 20 requests a minute from each address', async () => {
+test('opening the page to approve an agent counts toward the sign-in limit of 20 requests a minute from each address, and registering agents toward a limit of 20 of its own', async () => {
   await inOneLimitWindow();
-  const fetch = agentFetch();
+  const browser = new Browser();
+  const fetch = agentFetch(browser.address);
   const clientId = await registerClient('Busy agent', REDIRECT_URI, fetch);
   const { challenge } = await pkce();
-  const answers: number[] = [];
-  for (let i = 0; i < 9; i++) answers.push((await fetch(authorizeUrl(clientId, { challenge }))).status);
-  for (let i = 0; i < 10; i++) {
+  const registrations: number[] = [];
+  for (let i = 0; i < 19; i++) {
     const registered = await fetch(`${ORIGIN}/oauth/register`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ client_name: 'Busy agent', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' }),
     });
-    answers.push(registered.status);
+    registrations.push(registered.status);
   }
+  const pages: number[] = [];
+  for (let i = 0; i < 10; i++) pages.push((await browser.fetch(authorizeUrl(clientId, { challenge }).toString())).status);
+  const signIns: number[] = [];
+  for (let i = 0; i < 10; i++) signIns.push((await browser.post('/auth/sign-in')).status);
 
-  const page = await fetch(authorizeUrl(clientId, { challenge }));
+  const page = await browser.fetch(authorizeUrl(clientId, { challenge }).toString());
+  const signIn = await browser.post('/auth/sign-in');
   const registration = await fetch(`${ORIGIN}/oauth/register`, { method: 'POST', body: '{}' });
 
-  expect(answers).toEqual([...Array<number>(9).fill(200), ...Array<number>(10).fill(201)]);
+  expect(registrations).toEqual(Array<number>(19).fill(201));
+  expect(pages).toEqual(Array<number>(10).fill(200));
+  expect(signIns).toEqual(Array<number>(10).fill(303));
   expect(page.status).toBe(429);
+  expect(signIn.status).toBe(429);
   await expectOAuthLimitError(registration);
+});
+
+test("the page to approve an agent refuses, uncounted, what the browser says another site's page asked for: a script, an image, or a frame", async () => {
+  await inOneLimitWindow();
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const browser = new Browser();
+  const url = authorizeUrl(clientId, { challenge }).toString();
+  const refused = new Set<number>();
+  for (let i = 0; i < 25; i++) {
+    for (const headers of [
+      { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+      { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'image' },
+      { 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' },
+    ]) {
+      refused.add((await browser.fetch(url, { headers })).status);
+    }
+  }
+
+  const inTab = await browser.fetch(url);
+  const fromSite = await browser.fetch(url, {
+    headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+  });
+
+  expect([...refused]).toEqual([400]);
+  expect(inTab.status).toBe(200);
+  expect(fromSite.status).toBe(200);
+});
+
+test('the page to approve an agent refuses a prefetch, uncounted, since no one opened it', async () => {
+  await inOneLimitWindow();
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const browser = new Browser();
+  const url = authorizeUrl(clientId, { challenge }).toString();
+  const refused = new Set<number>();
+  for (let i = 0; i < 25; i++) {
+    for (const purpose of ['prefetch', 'prefetch;prerender', 'prefetch;anonymous-client-ip']) {
+      refused.add((await browser.fetch(url, { headers: { 'sec-purpose': purpose, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' } })).status);
+    }
+  }
+
+  const opened = await browser.fetch(url);
+
+  expect([...refused]).toEqual([400]);
+  expect(opened.status).toBe(200);
+});
+
+test('the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it toward the sign-in limit', async () => {
+  await inOneLimitWindow();
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const address = randomAddress();
+  const url = authorizeUrl(clientId, { challenge }).toString();
+  const answers: number[] = [];
+  for (let i = 0; i < 20; i++) answers.push((await agentFetch(address)(url)).status);
+
+  const over = await agentFetch(address)(url);
+
+  expect(answers).toEqual(Array<number>(20).fill(200));
+  expect(over.status).toBe(429);
 });
 
 // The answer over a limit at /oauth/register or /oauth/token: an OAuth error
@@ -588,7 +656,7 @@ test('an agent in a web page that meets the limit at /oauth/token or /oauth/regi
     return agentFetch(address)(request);
   };
   await useUpTokenRequests(address);
-  for (let i = 0; i < 20; i++) await env.SIGN_IN_LIMITER.limit({ key: limiterKey(address) });
+  for (let i = 0; i < 20; i++) await fromPage(`${ORIGIN}/oauth/register`, { method: 'POST', body: '{}' });
 
   const token = await refreshNothing(fromPage);
   const registration = await fromPage(`${ORIGIN}/oauth/register`, { method: 'POST', body: '{}' });

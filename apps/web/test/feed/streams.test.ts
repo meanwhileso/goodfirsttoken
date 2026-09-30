@@ -7,6 +7,7 @@ import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
+import { inOneLimitWindow, randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
 import { feedEvent, fields, liveSocket, readStream, storedEvents } from './helpers';
 
@@ -563,17 +564,32 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
     }
   });
 
-  test('ignores what the page sends, and keeps sending events', async () => {
-    const priyas = await claim(priya);
-    const socket = await liveSocket(`/@${priya.login}/live.ndjson`);
+  test('is closed when the page sends anything, on a feed and on an issue room, since watchers only listen', async () => {
+    await claim(priya);
+    const feed = personFeed(env.FEED, priya.githubId);
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const onFeed = await liveSocket(`/@${priya.login}/live.ndjson`);
+    const inRoom = await liveSocket(`/${repo}/issues/${String(issueNumber)}/live.ndjson`);
+    expect(await sockets(feed)).toBe(1);
+    expect(await sockets(room)).toBe(1);
+    const closes = [onFeed, inRoom].map(
+      ({ socket }) =>
+        new Promise<number>((resolve) => {
+          socket.addEventListener('close', ({ code }) => {
+            resolve(code);
+          });
+        }),
+    );
 
-    socket.socket.send('hello');
-    socket.socket.send(JSON.stringify({ kind: 'update', text: 'not a post' }));
-    await post(priyas, `after the page spoke on #${String(issueNumber)}`);
+    onFeed.socket.send('hello');
+    inRoom.socket.send(JSON.stringify({ kind: 'update', text: 'not a post' }));
 
-    await socket.event(`after the page spoke on #${String(issueNumber)}`);
-    expect(socket.events.some((e) => e.text === 'not a post')).toBe(false);
-    socket.socket.close(1000);
+    expect(await Promise.all(closes)).toEqual([1008, 1008]);
+    await vi.waitFor(async () => {
+      expect(await sockets(feed)).toBe(0);
+      expect(await sockets(room)).toBe(0);
+    });
+    expect(inRoom.events.some((e) => e.text === 'not a post')).toBe(false);
   });
 
   test('is public: it answers with no cookie', async () => {
@@ -602,4 +618,107 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
     const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
   });
+});
+
+describe('the stream limit', () => {
+  // wrangler.jsonc gives the stream limiter 300 opens a minute for each
+  // client. The Workers runtime counts them in the tests too.
+  const LIMIT = 300;
+  const head = (address: string) =>
+    workerFetch('http://localhost/live.txt', { method: 'HEAD', headers: { 'cf-connecting-ip': address } });
+
+  test(
+    'one address opens 300 streams and live sockets a minute, and the next of either gets 429 without opening anything',
+    async () => {
+      await inOneLimitWindow(30_000);
+      const address = randomAddress();
+      const feed = homeFeed(env.FEED);
+      const before = await sockets(feed);
+      const opened = await Promise.all(Array.from({ length: 10 }, () => liveSocket('/live.ndjson', address)));
+      const heads: number[] = [];
+      for (let i = 0; i < LIMIT - 10; i++) heads.push((await head(address)).status);
+
+      const text = await readStream('/live.txt', { headers: { 'cf-connecting-ip': address } });
+      const upgrade = await workerFetch('http://localhost/live.ndjson', {
+        headers: { Upgrade: 'websocket', 'cf-connecting-ip': address },
+      });
+      const elsewhere = await readStream('/live.txt');
+
+      expect(opened.map(({ res }) => res.status)).toEqual(Array<number>(10).fill(101));
+      expect(heads).toEqual(Array<number>(LIMIT - 10).fill(200));
+      for (const over of [text.res, upgrade]) {
+        expect(over.status).toBe(429);
+        expect(over.headers.get('retry-after')).toBe('60');
+        expect(over.webSocket).toBeNull();
+      }
+      expect(elsewhere.res.status).toBe(200);
+      // Only the 10 sockets opened within the limit, and the stream from
+      // another address, reached the feed.
+      expect(await sockets(feed)).toBe(before + 11);
+      await elsewhere.cancel();
+      for (const { socket } of opened) socket.close(1000);
+    },
+    90_000,
+  );
+
+  test(
+    'an IPv6 client counts by its /64, so changing addresses within it opens no more streams',
+    async () => {
+      await inOneLimitWindow(30_000);
+      const prefix = '2001:db8:5eed:7';
+      for (let i = 0; i < LIMIT; i++) await head(randomAddress(prefix));
+
+      const sameNetwork = await head(randomAddress(prefix));
+
+      expect(sameNetwork.status).toBe(429);
+    },
+    90_000,
+  );
+});
+
+describe('the sockets one address holds', () => {
+  // A feed or room takes 100 watchers from each client address.
+  const CAP = 100;
+
+  /** Opens `count` live sockets on `path` from `address`, one after another. */
+  async function openMany(path: string, address: string, count: number) {
+    const opened = [];
+    for (let i = 0; i < count; i++) opened.push(await liveSocket(path, address));
+    return opened;
+  }
+
+  test.each([
+    ['the homepage feed', () => '/live.ndjson', () => homeFeed(env.FEED)],
+    ['an issue room', () => `/${repo}/issues/${String(issueNumber)}/live.ndjson`, () => issueRoom(env.ISSUE_ROOM, issue)],
+  ])(
+    'on %s: the 101st from one address is refused with 429, another address gets in, and closing one lets the next in',
+    async (_, path, stub) => {
+      await claim(priya);
+      const address = randomAddress();
+      const held = await openMany(path(), address, CAP);
+      const before = await sockets(stub());
+
+      const over = await workerFetch(`http://localhost${path()}`, {
+        headers: { Upgrade: 'websocket', 'cf-connecting-ip': address },
+      });
+      const text = await readStream(path().replace(/\.ndjson$/, '.txt'), { headers: { 'cf-connecting-ip': address } });
+      const elsewhere = await liveSocket(path());
+      held[0]?.socket.close(1000);
+      await vi.waitFor(async () => {
+        expect(await sockets(stub())).toBe(before);
+      });
+      const next = await liveSocket(path(), address);
+
+      expect(held.map(({ res }) => res.status)).toEqual(Array<number>(CAP).fill(101));
+      for (const refused of [over, text.res]) {
+        expect(refused.status).toBe(429);
+        expect(refused.headers.get('retry-after')).toBe('60');
+        expect(refused.webSocket).toBeNull();
+      }
+      expect(elsewhere.res.status).toBe(101);
+      expect(next.res.status).toBe(101);
+      for (const { socket } of [...held.slice(1), elsewhere, next]) socket.close(1000);
+    },
+    90_000,
+  );
 });

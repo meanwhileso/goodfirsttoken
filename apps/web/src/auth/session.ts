@@ -42,9 +42,14 @@ export function siteCaller(signedIn: SignedIn, origin: string): Caller {
 
 const SESSION_COOKIE = `${COOKIE_PREFIX}.session_token`;
 
-function hasSessionCookie(request: Request): boolean {
+/** True when the request sends a cookie whose name, then `=` and its value, starts with `start`. */
+export function sendsCookie(request: Request, start: string): boolean {
   const cookies = request.headers.get('cookie') ?? '';
-  return cookies.split(';').some((cookie) => cookie.trim().startsWith(`${SESSION_COOKIE}=`));
+  return cookies.split(';').some((cookie) => cookie.trim().startsWith(start));
+}
+
+function hasSessionCookie(request: Request): boolean {
+  return sendsCookie(request, `${SESSION_COOKIE}=`);
 }
 
 /**

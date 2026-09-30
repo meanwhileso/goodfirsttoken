@@ -34,6 +34,7 @@ import { saveClaim } from '../db/claims';
 import { newId } from '../db/shared';
 import {
   answerClose,
+  closeSender,
   hiddenFor,
   openWatcher,
   repoOfIssue,
@@ -571,7 +572,7 @@ export class IssueRoom extends DurableObject<Env> {
       return new Response('Connect with a WebSocket.\n', { status: 426, headers: { Upgrade: 'websocket' } });
     }
     const since = new URL(request.url).searchParams.get('since');
-    return openWatcher(this.ctx, this.env.DB, {
+    return openWatcher(this.ctx, this.env.DB, request, {
       history: () => this.storedAfter(since === null ? 0 : (this.placeOf(since) ?? 0)),
       last: () => this.lastPlace(),
     });
@@ -588,9 +589,9 @@ export class IssueRoom extends DurableObject<Env> {
     await this.done(now, undefined);
   }
 
-  // Watchers only listen. What they send is ignored.
-  override webSocketMessage(): void {
-    // Nothing to do.
+  // Watchers only listen. A socket that sends anything is closed.
+  override webSocketMessage(socket: WebSocket): void {
+    closeSender(socket);
   }
 
   /** Answers a watcher's close, so its socket finishes closing. */

@@ -460,7 +460,7 @@ export async function requestRemoval(
   input: ToolInput<'request_removal'>,
   now: number,
 ): Promise<Answer> {
-  const found = await requirePermission(caller, 'manage_project', { repo: input.repo });
+  const found = await requirePermission(caller, 'manage_project', { repo: input.repo, takesName: true });
   // A project keeps the name it was added with, so the request takes that
   // name, and the admin removes the project by it. Otherwise GitHub's.
   const project = await getProject(env.DB, input.repo);

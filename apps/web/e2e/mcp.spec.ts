@@ -131,7 +131,11 @@ test("the server function behind the page to approve an agent counts toward the 
   await expect(page.getByRole('button', { name: 'Continue with GitHub' })).toBeVisible();
   // Each call comes from one address of its own, so no other test shares its count.
   const address = `2001:db8:${randomBytes(2).toString('hex')}:${randomBytes(2).toString('hex')}::1`;
-  const headers = { ...call.headers(), 'cf-connecting-ip': address };
+  // The page's call says it comes from the site itself, which the server
+  // function needs. Anything else gets 400, uncounted.
+  const sent = await call.allHeaders();
+  expect(sent['sec-fetch-site']).toBe('same-origin');
+  const headers = { ...call.headers(), 'sec-fetch-site': 'same-origin', 'cf-connecting-ip': address };
   await inOneLimitWindow();
   const answers: number[] = [];
   for (let i = 0; i < 20; i++) answers.push((await request.get(call.url(), { headers })).status());

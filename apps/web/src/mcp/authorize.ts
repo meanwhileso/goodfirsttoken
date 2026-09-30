@@ -5,9 +5,11 @@ import {
   type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider';
 import { env } from 'cloudflare:workers';
-import { AUTH_BASE_PATH, failureReason, GITHUB_SCOPE } from '../auth/auth';
-import { tooManySignIns, underSignInLimit, underTokenLimit } from '../auth/rate-limit';
+import { AUTH_BASE_PATH, COOKIE_PREFIX, failureReason, GITHUB_SCOPE } from '../auth/auth';
+import { tooManySignIns, underRegisterLimit, underSignInLimit, underTokenLimit } from '../auth/rate-limit';
+import { sendsCookie } from '../auth/session';
 import { oauthApp, SignInNotSetUp, siteOrigin } from '../auth/settings';
+import { PAGE_CSP } from '../security-headers';
 import { savePerson } from '../db';
 import { exchangeGitHubCode, GitHubError, gitHubRest, gitHubUrls, revokeGitHubToken } from '../github';
 import {
@@ -45,6 +47,13 @@ import { oauthApi, type AgentProps } from './provider';
 /** Where GitHub sends the person back, under the OAuth app's callback URL. */
 export const MCP_CALLBACK_PATH = `${AUTH_BASE_PATH}/callback/mcp`;
 
+/**
+ * The start of the name of the cookie that ties a connection on its way to
+ * GitHub to the browser. The library names it with the provider's
+ * cookiePrefix (src/mcp/provider.ts), then `upstream-` and part of a hash.
+ */
+const UPSTREAM_COOKIE = `${COOKIE_PREFIX}.oauth-upstream-`;
+
 function text(status: number, body: string, headers: HeadersInit = {}): Response {
   const answer = new Headers(headers);
   answer.set('content-type', 'text/plain; charset=utf-8');
@@ -54,8 +63,10 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 
 /**
  * Counts the two OAuth requests an agent sends itself, since anyone can send
- * them. A registration stores a client in OAUTH_KV, so it counts toward the
- * sign-in limit. A request to the token endpoint tries a code or a refresh
+ * them. A registration stores a client in OAUTH_KV, so it counts toward a
+ * limit of the sign-in limit's size, kept apart from sign-ins, since any
+ * site's page can send one, and an agent in a web page registers from its
+ * own origin. A request to the token endpoint tries a code or a refresh
  * token, and one host can refresh tokens for many people's agents, so it
  * counts toward a limit of its own. The page to approve an agent counts
  * where it starts, in openConsent, and the approval and GitHub's return
@@ -65,7 +76,7 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 export async function limitAgentSignIn(request: Request): Promise<Response | null> {
   if (request.method !== 'POST') return null;
   const { pathname } = new URL(request.url);
-  if (pathname === REGISTER_PATH && !(await underSignInLimit(request))) return overOAuthLimit(request);
+  if (pathname === REGISTER_PATH && !(await underRegisterLimit(request))) return overOAuthLimit(request);
   if (pathname === TOKEN_PATH && !(await underTokenLimit(request))) return overOAuthLimit(request);
   return null;
 }
@@ -192,7 +203,7 @@ function errorPage(status: number, message: string, back: WayBack | null = null)
   const headers = new Headers({
     'cache-control': 'no-store',
     'x-frame-options': 'DENY',
-    'content-security-policy': "frame-ancestors 'none'",
+    'content-security-policy': PAGE_CSP,
   });
   if (status === 429) headers.set('retry-after', '60');
   return { page: { kind: 'error', message, back }, status, headers };
@@ -245,15 +256,39 @@ async function checkAuthorizeRequest(
   return { api, authRequest };
 }
 
+const OWN_TAB = 'Open this page in a tab of its own, from the link your agent gave you.';
+
+/**
+ * False when the browser's Sec-Fetch headers, which a page can't set, say
+ * another site's page asked for this, like an image, a frame, or a script's
+ * fetch. True for a page loaded in a tab of its own, the site's own page
+ * calling the server function behind it, and a request with no
+ * Sec-Fetch-Mode at all, from a browser that sends none. Every current
+ * browser sends them, on another site's requests too, so a page elsewhere
+ * can't take them off.
+ */
+function openedByPerson(caller: Request): boolean {
+  // A speculative prefetch looks like a tab's navigation, but no one opened
+  // it. Browsers say so in Sec-Purpose.
+  if (/prefetch/i.test(caller.headers.get('sec-purpose') ?? '')) return false;
+  const mode = caller.headers.get('sec-fetch-mode');
+  if (mode === null) return true;
+  if (caller.headers.get('sec-fetch-site') === 'same-origin') return true;
+  return mode === 'navigate' && caller.headers.get('sec-fetch-dest') === 'document';
+}
+
 /**
  * Starts the page where a person approves an agent, for the request that
- * loads it, with the query string the agent sent. It counts toward the
- * sign-in limit however it is reached, as the page or on its own. Returns the
- * page, or why there is none, with its status and the headers to send: the
- * cookie that binds the form to this browser, and the two that keep the page
- * out of frames.
+ * loads it, with the query string the agent sent. A request the browser
+ * says another site's page asked for gets 400 before it counts, so a page
+ * elsewhere can't use up someone's sign-ins by loading it in the background.
+ * What it answers counts toward the sign-in limit, as the page or
+ * on its own. Returns the page, or why there is none, with its status and the
+ * headers to send: the cookie that binds the form to this browser, and the
+ * two that keep the page out of frames.
  */
 export async function openConsent(caller: Request, search: string): Promise<ConsentOutcome> {
+  if (!openedByPerson(caller)) return errorPage(400, OWN_TAB);
   if (!(await underSignInLimit(caller))) return errorPage(429, 'Too many sign-ins from here. Try again in a minute.');
   const url = new URL(AUTHORIZE_PATH, siteOrigin(caller));
   url.search = search;
@@ -262,6 +297,9 @@ export async function openConsent(caller: Request, search: string): Promise<Cons
   const { api, authRequest } = checked;
   const client = await api.lookupClient(authRequest.clientId);
   const { handle, headers } = await api.beginConsent(authRequest);
+  // The library's policy names only frame-ancestors. The page sends the one
+  // every page gets.
+  headers.set('content-security-policy', PAGE_CSP);
   const page: Consent = {
     kind: 'consent',
     handle,
@@ -340,6 +378,11 @@ export async function answerConsent(request: Request): Promise<Response> {
  * and the token revoked, unless the site holds it for something else.
  */
 export async function finishConnecting(request: Request): Promise<Response> {
+  // A browser with no connection in progress is refused before it counts, as
+  // the site's own callback is (src/auth/routes.ts). Such a return fails
+  // anyway, and a request another site's page makes in the background never
+  // carries the SameSite=Lax cookie that ties a connection to the browser.
+  if (!sendsCookie(request, UPSTREAM_COOKIE)) return text(400, START_AGAIN);
   if (!(await underSignInLimit(request))) return tooManySignIns();
   const origin = siteOrigin(request);
   const api = oauthApi(origin);

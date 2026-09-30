@@ -12,6 +12,7 @@ import { AUTHORIZE_PATH } from './mcp/paths';
 import { mcpProvider } from './mcp/provider';
 import { handleReadable, readableRoute } from './readable/routes';
 import { redirectToPrimaryDomain } from './redirect';
+import { withSecurityHeaders } from './security-headers';
 import { handleStart, isStartPath } from './start/start';
 import { runScheduled } from './sync/scheduled';
 
@@ -59,16 +60,20 @@ function varyByAccept(response: Response): Response {
 export { Feed } from './rooms/feed';
 export { IssueRoom } from './rooms/issue-room';
 
+async function answer(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const early = redirectToPrimaryDomain(request, env) ?? (await limitAgentSignIn(request));
+  if (early) return early;
+  const origin = siteOrigin(request);
+  const revoking = await revocationToken(request);
+  const response = await mcpProvider(origin, site).fetch(request, env, ctx);
+  if (revoking !== null && response.ok) await endRevokedConnection(origin, revoking);
+  return response;
+}
+
 export default {
-  fetch: async (request, env, ctx) => {
-    const early = redirectToPrimaryDomain(request, env) ?? (await limitAgentSignIn(request));
-    if (early) return early;
-    const origin = siteOrigin(request);
-    const revoking = await revocationToken(request);
-    const response = await mcpProvider(origin, site).fetch(request, env, ctx);
-    if (revoking !== null && response.ok) await endRevokedConnection(origin, revoking);
-    return response;
-  },
+  // Pages go out with the security headers, and every https answer on the
+  // primary domain with HSTS (src/security-headers.ts).
+  fetch: async (request, env, ctx) => withSecurityHeaders(request, await answer(request, env, ctx)),
   queue: async (batch, env) => {
     if (isCrawlQueue(batch.queue)) await readCrawlBatch(batch, env);
     else await deliverFeedBatch(batch, env);

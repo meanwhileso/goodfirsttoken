@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { stripSecrets } from '../src/index';
+import { MAX_STRIP_LENGTH, stripSecrets, stripSecretsFromText } from '../src/index';
 
 // Every sample key and token here is made up, and built at run time, so no
 // string shaped like a real one sits in this file for the leak scan to flag.
@@ -218,5 +218,143 @@ describe('ordinary lines pass through as they were', () => {
     'client_secret: optional in the schema',
   ])('%s', (line) => {
     expect(stripSecrets(line)).toBe(line);
+  });
+});
+
+describe('text of any length, like a PR description, is stripped line by line', () => {
+  const token = `ghp_${chars(36)}`;
+
+  test('text with no secret comes back as it was, however long its lines', () => {
+    const text = `First line.\n\n${'a plain word '.repeat(400)}\n  indented\tline\n`;
+
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
+  test('a token in any line is redacted, and the other lines stay', () => {
+    const text = `Fixed it.\nRan it with ${token} set.\nDone.`;
+
+    expect(stripSecretsFromText(text)).toBe('Fixed it.\nRan it with [redacted] set.\nDone.');
+  });
+
+  test('a line longer than stripSecrets takes is cut at whitespace, so a token deep in it is redacted and nothing throws', () => {
+    const filler = 'word '.repeat(3000);
+    const text = `${filler}${token} ${filler}`;
+
+    const stripped = stripSecretsFromText(text);
+
+    expect(text.length).toBeGreaterThan(MAX_STRIP_LENGTH * 20);
+    expect(stripped).toBe(`${filler}[redacted] ${filler}`);
+  });
+
+  test('a run with no whitespace longer than stripSecrets takes is redacted whole, since it could hide a key', () => {
+    const run = chars(MAX_STRIP_LENGTH + 1);
+
+    expect(stripSecretsFromText(`before ${run} after`)).toBe('before [redacted] after');
+  });
+
+  test('a private key is redacted from its BEGIN line through its END line, and the lines after it stay', () => {
+    const end = `${'-'.repeat(5)}END RSA PRIVATE KEY${'-'.repeat(5)}`;
+    const text = `Here is the key:\n${begin('RSA PRIVATE KEY')}\n${chars(64)}\n${chars(40)}\n${end}\nThanks.`;
+
+    expect(stripSecretsFromText(text)).toBe('Here is the key:\n[redacted]\n[redacted]\n[redacted]\n[redacted]\nThanks.');
+  });
+
+  test('a description with no secret comes back byte for byte, line breaks as CR LF included', () => {
+    const text = `Keeps the slash.\r\n\r\n${'Checked each path by hand. '.repeat(100)}\r\n\ttabbed\r\n`;
+
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
+  // Every place a cut can fall near a secret: filler whose length moves the
+  // secret one character at a time, from well before 1,000 characters into
+  // the line to past it, so wherever the line is cut, some text puts the cut
+  // inside the secret's words.
+  const aroundTheCut = (secret: string) =>
+    Array.from({ length: 400 }, (_, shift) => `${'x'.repeat(shift + 1)} ${'word '.repeat(120)}${secret} ${'word '.repeat(300)}`);
+
+  test('a token near where a long line is cut is redacted wherever the cut falls', () => {
+    for (const text of aroundTheCut(token)) {
+      const stripped = stripSecretsFromText(text);
+      expect(stripped).not.toContain(token);
+      expect(stripped).toContain('[redacted]');
+    }
+  });
+
+  test('a name and its value, like password: and a password, are read together wherever the cut falls between them', () => {
+    const password = `hunter2${chars(10)}`;
+    for (const text of aroundTheCut(`password: ${password}`)) {
+      expect(stripSecretsFromText(text)).not.toContain(password);
+    }
+  });
+
+  test('an Authorization header and its token are read together wherever the cut falls between them', () => {
+    const bearer = chars(40);
+    for (const text of aroundTheCut(`Authorization: Bearer ${bearer}`)) {
+      expect(stripSecretsFromText(text)).not.toContain(bearer);
+    }
+  });
+
+  test('wide spaces and tabs between a secret name and its value cannot hide it at a long line cut', () => {
+    for (const gap of [199, 200, 201, 799, 800, 801, 1200]) {
+      for (const whitespace of [' ', '\t']) {
+        for (const secret of ['password:', 'Authorization: Bearer', '--password']) {
+          const prefix = 'word '.repeat(118);
+          const value = 'hunter2abc123def456ghi789';
+          const text = `${prefix}${secret}${whitespace.repeat(gap)}${value}${' end'.repeat(300)}`;
+          expect(stripSecretsFromText(text)).toBe(`${prefix}${secret}${whitespace.repeat(gap)}[redacted]${' end'.repeat(300)}`);
+        }
+      }
+    }
+  });
+
+  test('wide whitespace in a long description without a secret stays byte for byte', () => {
+    const text = `word ${' '.repeat(1200)}ordinary\t${'\t'.repeat(1200)}text${' end'.repeat(300)}`;
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
+  test('a name and its value just after a token are read together wherever the cut falls', () => {
+    const password = `hunter2${chars(10)}`;
+    const bearer = chars(40);
+    for (const text of [...aroundTheCut(`${token} password: ${password}`), ...aroundTheCut(`${token} Authorization: Bearer ${bearer}`)]) {
+      const stripped = stripSecretsFromText(text);
+      expect(stripped).not.toContain(token);
+      expect(stripped).not.toContain(password);
+      expect(stripped).not.toContain(bearer);
+    }
+  });
+
+  test('a private key flattened onto one long line, its body in chunks with spaces, is redacted from BEGIN through END', () => {
+    const end = `${'-'.repeat(5)}END RSA PRIVATE KEY${'-'.repeat(5)}`;
+    const chunks = Array.from({ length: 26 }, (_, i) => `${chars(64 - (i % 5))}${String(i)}`);
+    const text = `the key was ${begin('RSA PRIVATE KEY')} ${chunks.join(' ')} ${end} and it worked`;
+
+    const stripped = stripSecretsFromText(text);
+
+    expect(text.length).toBeGreaterThan(MAX_STRIP_LENGTH);
+    for (const chunk of chunks) expect(stripped).not.toContain(chunk);
+    expect(stripped).toBe('the key was [redacted] and it worked');
+  });
+
+  test('a token split by characters a person cannot see, like a zero-width space, is still redacted', () => {
+    const split = `${token.slice(0, 10)}\u200b${token.slice(10, 20)}\u2060${token.slice(20)}`;
+
+    const stripped = stripSecretsFromText(`Ran it with ${split} set.\nDone.`);
+
+    expect(stripped).toBe('Ran it with [redacted] set.\nDone.');
+  });
+
+  test('a line with no key or token keeps every character, even ones a person cannot see, like the joiners in an emoji', () => {
+    const text = 'Thanks from the whole \u{1F468}\u200d\u{1F469}\u200d\u{1F467} family \u2764\ufe0f\nDone.';
+
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
+  test('60,000 characters shaped like a=b=c take little time', () => {
+    const text = `${'a=b='.repeat(220)} `.repeat(70).slice(0, 60_000);
+
+    const started = Date.now();
+    stripSecretsFromText(text);
+
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });

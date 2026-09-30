@@ -12,6 +12,15 @@ import { doNotListedAmong } from '../db/do-not-list';
 // list hides what a watcher is sent from then on, the history already stored
 // included.
 
+/**
+ * The header the Worker names a watcher's client address in, as the rate
+ * limiter keys it (limiterKey), when it hands a feed or room an upgrade.
+ */
+export const WATCHER_ADDRESS_HEADER = 'x-gft-watcher-address';
+
+/** How many watchers one client address can hold on one feed or room. */
+export const WATCHERS_PER_ADDRESS = 100;
+
 /** An event as a room or a feed stores it. */
 export interface StoredEvent {
   /** Its place in the order the room or feed stored it. */
@@ -111,10 +120,24 @@ function send(socket: WebSocket, json: string): void {
   }
 }
 
+// The answer to a client address that holds as many watchers as it may.
+function tooManyWatchers(): Response {
+  return new Response('Too many live streams open from here. Close one, or try again in a minute.\n', {
+    status: 429,
+    headers: { 'content-type': 'text/plain; charset=utf-8', 'retry-after': '60' },
+  });
+}
+
 /**
  * Opens a WebSocket for a new watcher. `history(hidden)` gives the events to
  * send first, leaving out any it likes of the donors and repos it is told to
  * hide, and `last` the place of the last event stored.
+ *
+ * The upgrade names the watcher's client address in WATCHER_ADDRESS_HEADER,
+ * and its socket is tagged with it. An address that already holds
+ * WATCHERS_PER_ADDRESS sockets here gets 429, and no socket, so no one client
+ * can fill a feed that sends each event to every socket it holds. An upgrade
+ * that names no address, which only tests make, has no cap.
  *
  * What to hide is read before the socket is accepted. D1 is asked about
  * each donor and repo in the history not yet asked about, and the history
@@ -126,8 +149,12 @@ function send(socket: WebSocket, json: string): void {
 export async function openWatcher(
   ctx: DurableObjectState,
   db: D1Database,
+  request: Request,
   { history, last }: { history: (hidden: Hidden) => StoredEvent[]; last: () => number },
 ): Promise<Response> {
+  const address = request.headers.get(WATCHER_ADDRESS_HEADER);
+  const full = () => address !== null && ctx.getWebSockets(address).length >= WATCHERS_PER_ADDRESS;
+  if (full()) return tooManyWatchers();
   const known = noneHidden();
   const hidden = noneHidden();
   for (;;) {
@@ -142,8 +169,14 @@ export async function openWatcher(
       return new Response('Try again in a moment.\n', { status: 503 });
     }
     if (!learned) {
+      // Other sockets from the address may have come in during the awaits
+      // above, if the runtime lets another request run while D1 answers. The
+      // tests couldn't make that happen on purpose: upgrades sent together
+      // were each accepted in turn. So no test holds this check, and it stays
+      // for the runtime that does interleave them.
+      if (full()) return tooManyWatchers();
       const { 0: client, 1: server } = new WebSocketPair();
-      ctx.acceptWebSocket(server);
+      ctx.acceptWebSocket(server, address === null ? [] : [address]);
       for (const event of events) {
         if (shows(event, hidden)) server.send(event.json);
       }
@@ -201,6 +234,18 @@ export function answerClose(socket: WebSocket, code: number, reason: string): vo
   const answer = code === 1005 || code === 1006 ? 1000 : code;
   try {
     socket.close(answer, reason);
+  } catch {
+    // It closed already.
+  }
+}
+
+/**
+ * Closes a watcher's socket that sent a message, with 1008. Watchers only
+ * listen, and each message would wake the room or feed.
+ */
+export function closeSender(socket: WebSocket): void {
+  try {
+    socket.close(1008, 'Watchers only listen.');
   } catch {
     // It closed already.
   }

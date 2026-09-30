@@ -190,6 +190,14 @@ describe('the review queue on /me', () => {
     expect(page).not.toContain('<img src=x');
   });
 
+  test('the page is never stored, by a browser or anyone else, so it is gone after sign-out', async () => {
+    const page = await (await site('lena')).fetch('/me');
+
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(page.headers.get('cache-control')).toBe('no-store');
+  });
+
   test('says how long work waits for its PR, as long as core keeps it in the queue', async () => {
     const page = await (await (await site('lena')).fetch('/me')).text();
 
@@ -413,6 +421,22 @@ describe('the description a project asks the donor to write', () => {
     );
     expect(pull?.body).not.toContain(NOTES.summary);
     expect(await stateOf(issue, claimId)).toBe('pr_opened');
+  });
+
+  test('a key or token in the words reaches the PR only as [redacted]', async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed', personWrittenDescription: true });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const claimId = await submitted(priya, issue);
+    const browser = await site('priya');
+    // Made up here, in the shape of a GitHub token.
+    const token = ['ghp', '_', 'A1b2'.repeat(9)].join('');
+
+    await back(browser, await browser.post('/me', openPr(claimId, { description: `It works with ${token} set.` })));
+
+    const [pull] = pulls('priya');
+    expect(pull?.body).toMatch(/^It works with \[redacted\] set\./);
+    expect(pull?.body).not.toContain(token);
   });
 
   test('longer than open_pr takes is refused, and opens nothing', async () => {

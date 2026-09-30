@@ -179,6 +179,11 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
   an IPv4 address written as IPv6 read as the IPv4 address. The MCP
   server's token endpoint counts against `TOKEN_LIMITER`, keyed the same way.
   Better Auth's own limiter is off, since it counts in each isolate's memory.
+- **GitHub's return needs the state cookie before it counts.** A request to
+  `/auth/callback/github` without `__Host-gft.state` goes back to `/sign-in`
+  before the limit counts it, since Better Auth would refuse it anyway. Any
+  site's page can make a browser send a `GET` there, as an image, and a
+  request like that never carries a `SameSite=Lax` cookie.
 - **Development** is checked in `src/auth/settings.ts`: `ENVIRONMENT` and a
   loopback `http` `GH_WEB_URL` both. The dev sign-in and the stand-ins for
   the secrets depend on it.
@@ -260,8 +265,14 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   - The agent goes 30 days without a refresh, and the grant runs out in KV.
   - The last two follow from `connected_at` and `renewed_at` alone, with a
     minute more for each. `endLapsedConnections` finds them for one person,
-    when that person opens `/me` or connects an agent. No scheduled job runs
-    it for everyone yet.
+    when that person opens `/me` or connects an agent.
+    `endEveryLapsedConnection` finds them for everyone, from the daily cron
+    under [The sync](#the-sync), at most `LAPSED_PER_RUN` a run, ordered by
+    `COALESCE(renewed_at, connected_at)`. It reads the whole of
+    `connected_agents`, which has no index on `renewed_at`, once a day.
+    Unlike Disconnect, both revoke the token before they delete the row,
+    through `endLapsedConnection`, and keep the row when GitHub fails, since
+    a lapsed grant can't be used and can wait for the next try.
 - **The MCP TypeScript SDK 2.1.0, pinned.** `@modelcontextprotocol/server`'s
   `createMcpHandler` serves both the 2026-07-28 protocol and 2025 clients,
   with a new `McpServer` for each request, so nothing is kept between
@@ -283,6 +294,21 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 - **The server function has a URL of its own,** under `/_serverFn/`, which
   the client bundle names and anyone can call. So `openConsent` counts the
   sign-in limit itself, for the page and for each call there alike.
+- **What another site's page asked for isn't counted.** Another site's
+  page can make a browser load the page to approve an agent in an image or
+  a frame, which would use up the person's sign-in limit. `openConsent`
+  reads the browser's Sec-Fetch headers, which a page can't set. It answers
+  `Sec-Fetch-Mode: navigate` with `Sec-Fetch-Dest: document`, a page opened
+  in a tab, and `Sec-Fetch-Site: same-origin`, the site's own page loading
+  the data. A request with no `Sec-Fetch-Mode` is answered and counted too,
+  as from a browser too old to send it, a webview, or a proxy that drops it.
+  Every current browser sends the headers on another site's requests too,
+  so a page elsewhere can't use that. Anything else gets `400` before the
+  limit counts it.
+- **GitHub's return needs its cookie before it counts.**
+  `finishConnecting` answers `400` to a request with no
+  `__Host-gft.oauth-upstream-` cookie before the limit counts it, as the
+  site's own callback does.
 - **Redirect URIs.** The provider's `clientRegistrationCallback` refuses a
   registration with an `http` redirect URI to any host but `localhost`,
   `127.0.0.1`, or `[::1]`. The library refuses `javascript:`, `data:`, and a
@@ -309,11 +335,13 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 - **Rate limiting.** `MCP_LIMITER` counts each request to `/mcp` that has a
   valid token, by the person's GitHub ID, since agents on a shared host, like
   Grok Bot's, can share an address. An agent's sign-in counts against
-  `SIGN_IN_LIMITER`, by address: `src/server.ts` counts registration before
-  the library sees it, since each one writes a client to KV, `openConsent`
-  counts the page, and the form and GitHub's return count where they are
-  answered. So a shared host can register at most 20 clients a minute from
-  one address.
+  `SIGN_IN_LIMITER`, by address: `openConsent` counts the page, and the form
+  and GitHub's return count where they are answered. `src/server.ts` counts
+  registration before the library sees it, since each one writes a client
+  to KV, on the same limiter under the key `register:<address>`. Any site's
+  page can send a registration, since an agent in a web page does, so it
+  can't use up the address's sign-ins. A shared host can register at most 20
+  clients a minute from one address.
 - **The token endpoint has a limit of its own.** `TOKEN_LIMITER` counts each
   request to `/oauth/token`, by address, 600 a minute. A shared host
   refreshes many people's tokens from one address, and at 20 a minute some
@@ -329,7 +357,8 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
   so an agent in a web page can read the error too. Without them the
   browser hides it, and the SDK starts a new sign-in.
 - A request to `/mcp` with a token the library doesn't know gets its `401`
-  after one KV read, and no limit here counts it.
+  after one KV read, and no limit here counts it. The
+  [threat model](#threat-model) says why, under A3 and C2.
 
 ### The maintainer's tools
 
@@ -1535,6 +1564,7 @@ that leaves their settings empty gives them empty strings, and
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
 | `TOKEN_LIMITER` | Rate limiter: 600 requests to `/oauth/token` a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
+| `STREAM_LIMITER` | Rate limiter: 300 opens of a live text stream or a page's live socket a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/feed/streams.ts`, through `src/auth/rate-limit.ts` |
 | `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream and page, the scheduled jobs, and the donor's tools |
 | `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
@@ -2177,18 +2207,39 @@ streams' in [Text streams](how-it-works.md#text-streams).
   two D1 reads per batch it sends, shared by its watchers, and each stream a
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
-  hour ends it. Nothing limits how many streams a client opens.
+  hour ends it. `STREAM_LIMITER` lets each client address open 300 streams
+  and live sockets a minute, the two together. `handleStream` counts after
+  it knows the path is a stream and the method is right, and before it
+  asks D1 or a feed, so a request over the limit costs neither.
+- **What one address can hold.** A feed sends each event to every socket it
+  holds, so a client with thousands of sockets on the homepage's feed would
+  slow it for everyone. `handleStream` names the client's address, as
+  `limiterKey` keys it, in the `x-gft-watcher-address` header of the
+  upgrade it hands a feed or room, text streams and live sockets alike.
+  `openWatcher` tags each socket it accepts with that address, and answers
+  `429` when the address already holds `WATCHERS_PER_ADDRESS`, 100, there,
+  before it accepts one. `ctx.getWebSockets(tag)` counts them, so the count
+  survives hibernation.
   A live socket costs the same to open, then holds only a hibernating socket
   on the feed or room, for as long as the page is open, with no hour limit.
   Every homepage view opens one on the homepage's feed, so that one object
   sends every event to every open homepage. It also takes one `glance` per
   homepage view. Every project page view opens one on its project's feed,
   and takes one `glance`, and every issue page view opens one on its
-  issue's room. Each message a page sends on its socket wakes the feed or
-  room from hibernation, which Cloudflare bills, though the feed ignores
-  the message.
-  Nothing limits how many sockets a client opens, or how many messages it
-  sends on one, yet. #34 takes those limits.
+  issue's room. A message on a socket would wake the feed or room from
+  hibernation, which Cloudflare bills. So `webSocketMessage` closes the
+  socket that sent it, with `1008`, in the feed and in the issue room
+  (`closeSender` in `src/rooms/watchers.ts`). The site's pages never send.
+- **Why 300 a minute, and 100 held.** The cap on sockets held bounds what
+  one address costs a feed, so the rate only has to stop a loop that opens
+  and drops them fast. Each page view that shows a live feed opens one
+  socket, and a page that loses it opens it again after a second at the
+  earliest, then twice as long each time. So one person reading the site
+  opens a few a minute. An office, a campus, conference Wi-Fi, or every page
+  on one address reconnecting after a deploy opens many more, and 300 leaves
+  room for them. The browser tests, which all come from one address, opened
+  at most 35 in one minute of a whole run. A page over either limit shows
+  what it loaded and tries again, as after a drop.
 - **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
   `handleStream` sees the upgrade, finds the feed or room and checks `since`
   the same way as for a stream, and forwards the upgrade to it. The Worker
@@ -2849,11 +2900,26 @@ read-only service token. The rules are in
 | `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, which run holds it, and whether the sync delisted it, with the projects a run checks |
 
 - **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync,
-  `7,37 * * * *` for the PR job, and `52 * * * *` for the policy crawler's
-  search, under [The policy crawler](#the-policy-crawler), so no two start
+  `7,37 * * * *` for the PR job, `52 * * * *` for the policy crawler's
+  search, under [The policy crawler](#the-policy-crawler), and `23 4 * * *`
+  for ending the agents' connections whose grants ran out, so no two start
   in the same minute. The Worker's `scheduled` handler in `src/server.ts` hands the cron
   to `runScheduled`, which runs its job, and logs an error for a cron no job
   answers. The deploy copies the triggers as they are.
+- **Ending lapsed connections, once a day.** The daily job calls
+  `endEveryLapsedConnection` (`src/mcp/connections.ts`), which ends each
+  connection whose grant ran out the way Disconnect does, for everyone, as
+  [how-it-works.md](how-it-works.md#connecting-an-agent) says under
+  Connections. It needs no service token: it revokes each token as the
+  OAuth app, with `DELETE /applications/{client_id}/token`, which spends no
+  budget of the service token's. `LAPSED_PER_RUN` in `src/sync/scheduled.ts`
+  caps a run at 200 connections: at most 200 calls to GitHub, and about ten
+  calls to D1 and KV for each, 2,000 subrequests in all, well inside the
+  10,000 a cron invocation gets. When more lapse in a day, the next run
+  takes the rest, and `/me` ends a person's own at once. The job revokes
+  each token before it ends the connection, and leaves the row for the next
+  run when GitHub fails, so an outage at 04:23 loses no token. With a
+  sign-in setting missing, it tries none.
 - **The service token** is the `GH_SERVICE_TOKEN` secret, a token that reads
   public data only, like a fine-grained personal access token for public
   repos with no permissions, as
@@ -3448,6 +3514,10 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   | The crawler's consumer, crawls and weekly reads | GraphQL, and REST for weekly reads | 3,000 of 5,000 |
   | The crawler's search | Search | 3 of 30 a minute |
 
+  The daily job that ends lapsed connections, under [The sync](#the-sync),
+  spends none of this. It revokes tokens as the OAuth app, at most
+  `LAPSED_PER_RUN`, 200, a day.
+
   The consumer spends only the top 2,000 of either hourly budget, and about
   870 GraphQL points and 500 REST calls an hour at most: about 570 points
   for the 1,900 repos the search queues at most in an hour, about 150
@@ -3555,16 +3625,16 @@ Each secret the Worker reads goes by name under `secrets.required` in
 `wrangler.jsonc`, and the deploy puts it. There are three.
 `OAUTH_CLIENT_SECRET` and `AUTH_SECRET` are for sign-in, and `AUTH_SECRET`
 also encrypts the copy of each connected agent's GitHub token.
-`GH_SERVICE_TOKEN` is the read-only token the scheduled jobs and the policy
-crawler read GitHub with, under [The sync](#the-sync). The OAuth library needs no secret of its
+`GH_SERVICE_TOKEN` is the read-only token the scheduled jobs that read
+GitHub and the policy crawler use, under [The sync](#the-sync). The OAuth library needs no secret of its
 own. GitHub reserves names that start with `GITHUB_` for its own variables
 and secrets, so no variable or secret of the Worker can start with it.
 
 The rate limiters' namespace IDs are the only IDs `wrangler.jsonc` has to
 carry, since Wrangler refuses a limiter without one. Each is a placeholder
 that local development simulates, and a deploy replaces them with the
-`SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`, and
-`TOKEN_LIMITER_NAMESPACE_ID` settings.
+`SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`,
+`TOKEN_LIMITER_NAMESPACE_ID`, and `STREAM_LIMITER_NAMESPACE_ID` settings.
 
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
@@ -4153,7 +4223,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 `.github/workflows/ci.yml` runs on every pull request and on pushes to
 `main`, on GitHub-hosted runners, with a read-only token. It uses no secrets,
 so a pull request from a fork runs the same checks as one from a branch.
-Every action is pinned to a commit SHA.
+Every action is pinned to a commit SHA. gitleaks and actionlint are
+downloaded from their releases and checked against a SHA-256 the workflow
+pins, taken from each release's checksum file, so the download and its
+checksum come from different places.
 
 | Job | What it runs |
 |---|---|
@@ -4351,6 +4424,355 @@ Choices:
 - **Deploys run one at a time** in one concurrency group, which never
   cancels a deploy in progress. Deploy jobs have `id-token: write` for the
   broker and read-only contents.
+
+## Threat model
+
+What an attacker could want from Good First Token, who could try, where
+the lines between them run, and what holds each line, with the code that
+holds it. It comes from the security review before launch,
+[#34](https://github.com/meanwhileso/goodfirsttoken/issues/34). Its first
+round read identity, tokens, and permissions, then abuse, limits, dev-only
+paths, secrets, and CI. Its second read what the site sends back, and
+checked the fixes of the first. Each finding is at the end, fixed with its test, or
+kept with the reason. [SECURITY.md](../SECURITY.md) says how to report
+something new.
+
+### What we protect
+
+- **The site's GitHub token for each person,** `account.access_token`,
+  encrypted with `AUTH_SECRET`.
+- **Each agent's GitHub token,** in its grant's props in `OAUTH_KV`, wrapped
+  by the agent's own tokens, and the copy in `connected_agents.github_token`,
+  encrypted with `AUTH_SECRET`.
+- **OAuth grants and tokens.** `OAUTH_KV` holds only hashes of the agents'
+  tokens.
+- **The cookies:** `__Host-gft.session_token`, and the binding cookies
+  `__Host-gft.state` and `__Host-gft.oauth-*` that tie a sign-in in
+  progress to its browser.
+- **The secrets:** `OAUTH_CLIENT_SECRET`, `AUTH_SECRET`, and
+  `GH_SERVICE_TOKEN`, and the deploy credentials.
+- **The admin surface:** the admin tools and `/admin`.
+- **Budgets:** the service token's GitHub budget, each person's own GitHub
+  budget, D1, `OAUTH_KV`, the feeds and rooms, the homepage's feed above all,
+  since every homepage and `/live.txt` shares that one object, and both
+  queues.
+
+### Who acts
+
+- An anonymous visitor, or any program on the internet.
+- A signed-in donor.
+- A maintainer, an admin or maintainer of a repo on GitHub.
+- A Good First Token admin, by numeric ID in `ADMIN_GITHUB_IDS`.
+- A person's agent over MCP, and any MCP client, since any client can
+  register itself.
+- A hostile website, whose pages a signed-in person may have open.
+- Anyone holding a copy of D1 or `OAUTH_KV`.
+- A self-hoster or operator.
+- A pull request's author, whose code CI runs.
+
+### Where the lines run
+
+| Line | What guards it |
+|---|---|
+| The internet to the Worker | Per-address rate limits: `SIGN_IN_LIMITER`, `TOKEN_LIMITER`, and `STREAM_LIMITER` (`src/auth/rate-limit.ts`) |
+| Another site's page to the site | Origin checks on every form, `SameSite=Lax` cookies, and the Sec-Fetch check on the page to approve an agent |
+| An agent's grant to the MCP server | A valid token, a row in `connected_agents`, and `MCP_LIMITER` per person (`src/mcp/server.ts`) |
+| One person to another person's data | `requirePermission` (`src/auth/permissions.ts`), and tools that only use the caller's own token |
+| The Worker to the feeds and rooms | Read-only, hibernating sockets that close when they send, at most 100 from one address on one feed or room |
+| The repo to a deploy | `scripts/deploy-config.mjs`, which writes the deploy's config from the GitHub environment |
+| A pull request to CI | A read-only token, no secrets, and pinned actions and tools |
+
+### What holds
+
+**Web sign-in,** with Better Auth (`src/auth/auth.ts`, `src/auth/routes.ts`).
+
+- Only six routes answer under `/auth`. Everything else there is `404`.
+- `callbackURL` and `errorCallbackURL` are fixed, so there is no open
+  redirect.
+- State is checked in the database and against the `__Host-gft.state`
+  cookie, so a sign-in started in another browser signs no one in.
+- The scope is `public_repo`, and nothing else.
+- Each user's email is the placeholder `<id>@github.invalid`, and GitHub is
+  the one provider, so linking an account by email can only find the same
+  GitHub account.
+- `disableOriginCheck` is false in every environment.
+
+**Cookies.** Every one is `__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`,
+and `Path=/`, with no `Domain`. `Lax` keeps `/me` and `/admin` signed out
+when another site frames them.
+
+**Signing out** checks `Origin`, revokes the web token at GitHub, forgets
+it with a compare-and-set, ends every session, and leaves agents' tokens
+alone. A new sign-in revokes the token it replaces.
+
+**Forms from another site.** Every `POST` that changes something compares
+`Origin` exactly with the site's own and refuses a missing one:
+`/auth/sign-in`, `/auth/sign-out`, `/auth/dev/sign-in`,
+`/auth/agents/disconnect`, `POST /oauth/authorize`, `POST /me`, and
+`POST /admin`. Every server function is a `GET`. All but one change
+nothing. `loadConsent`, behind the page to approve an agent, writes a
+consent step to KV and sets its cookie, which is why it counts toward the
+sign-in limit.
+
+**Redirects.** `redirectToPrimaryDomain` (`src/redirect.ts`) goes only to
+`https://<PRIMARY_DOMAIN>`, and `backWithNotice` goes to fixed paths. The
+error page for an agent's sign-in links back to the agent only at a
+redirect URI the library already matched, and the person follows it or
+not.
+
+**An agent's sign-in,** OAuth 2.1 with `@cloudflare/workers-oauth-provider`
+(`src/mcp/provider.ts`, `src/mcp/authorize.ts`).
+
+- Registration refuses an `http` redirect URI except to `localhost`,
+  `127.0.0.1`, or `[::1]`. `localhost.evil.com`, `127.0.0.1.nip.io`, and
+  `127.1` are refused.
+- Client ID metadata documents are off, so the Worker fetches no URL a
+  client gives. Turning them on needs `global_fetch_strictly_public`.
+- PKCE is `S256` only, and every client has to use it. The implicit grant
+  is off.
+- The page to approve an agent names it as unverified, shows the scheme and
+  host its access goes to, sends the policy every page gets (`PAGE_CSP` in
+  `src/security-headers.ts`), `X-Frame-Options: DENY`, and `no-store`, and
+  never redirects on `GET`. Its error page sends the same.
+- Each step, consent and the trip to GitHub, is 256 random bits, works once
+  for 10 minutes, is encrypted in KV under its hash, and is tied to the
+  browser by a `__Host-` cookie. The GitHub leg has its own PKCE, and its
+  state is that step's handle.
+- Revoking at `/oauth/token` checks that the token is the client's own.
+  `endRevokedConnection` (`src/mcp/connections.ts`) ends a connection only
+  when its grant is gone from KV.
+
+**Tokens.**
+
+- Each call names the token it uses. A tool uses only `props.gitHubToken`,
+  or the web session's own token for `/me`.
+- The service token is used only by the scheduled jobs, the crawl queue's
+  consumer, and a maintainer's `project_status` refresh, at most once a
+  project each 10 minutes and only while half the hourly budget is left. No
+  public request reaches it, and a `401` on it stops the run.
+- A `401` from GitHub in a tool ends that connection without revoking, and
+  `/me` says to sign in again.
+- Disconnect deletes the row, then the grant, then revokes, and never
+  revokes a token the site also holds for something else.
+- No log line holds a token.
+
+**Permissions** (`src/auth/permissions.ts`).
+
+- `work_claim`: `ownClaim` runs before every claim action, over MCP and on
+  `/me` alike.
+- `manage_project`: asks GitHub with the caller's own token every time,
+  needs `admin` or `maintain`, and checks the repo's stored ID, under
+  [Repo IDs](#repo-ids). A maintainer can't lift an admin's pause.
+- Admins are matched by numeric ID only, read on every request. The admin
+  tools are listed only to admins, and each checks again. `/admin` and its
+  `POST` are `404` to anyone else before anything is read. The sample admin
+  is an admin only in development.
+- The tests catch `work_claim` passing everyone, the admin check passing
+  everyone, and Disconnect without its Origin check.
+
+**Rate limits and budgets.**
+
+- Sign-in on the site, the dev sign-in, and GitHub's return count toward
+  `SIGN_IN_LIMITER`, 20 a minute from each address. So do the page to
+  approve an agent, its form, and GitHub's return from an agent's sign-in.
+  Registrations count on the same limiter under a key of their own.
+  Requests another site's page makes in the background, like images,
+  frames, scripts, and fetches, don't count, as under A1 below. A page
+  another site opens in a tab of its own does.
+- `/oauth/token` counts toward `TOKEN_LIMITER`, 600 a minute from each
+  address. Every `429` there is an OAuth error in JSON, with CORS.
+- `/mcp` with a valid token counts toward `MCP_LIMITER`, 120 a minute for
+  each person.
+- Opening a text stream or a live socket counts toward `STREAM_LIMITER`,
+  300 a minute from each address, each address holds at most 100 on one
+  feed or room, and a socket that sends is closed.
+- The address is an IPv4 address or an IPv6 /64, with IPv4 written as IPv6
+  folded to IPv4 (`limiterKey`).
+- Every job that reads GitHub has a cap in `ALLOWANCES`
+  (`src/sync/scheduled.ts`), and the daily job that ends lapsed connections
+  has `LAPSED_PER_RUN`. One look at the admin queue makes at most 40 calls,
+  with the admin's own token. A person's token is spent only by their own
+  requests.
+- A stream or socket for something that doesn't exist costs a few D1 reads
+  and a `404`, and never makes a feed or room (`src/feed/streams.ts`).
+- Crawl queue messages come only from cron and admin actions. Feed queue
+  messages come only from issue rooms, which only signed-in, limited claims
+  fill.
+
+**Dev-only paths can't run in a deploy.**
+
+- `isDevelopment()` (`src/auth/settings.ts`) needs `ENVIRONMENT` to be
+  `development` and a loopback `http` `GH_WEB_URL`.
+- `scripts/deploy-config.mjs` sets `ENVIRONMENT` to `staging` or
+  `production` and refuses a `GH_WEB_URL` that isn't `https`. The deploy's
+  smoke test reads the environment from `/healthz` (`scripts/deploy.mjs`).
+- `/dev/seed` and `/dev/work` need a loopback hostname (`src/dev/gate.ts`),
+  and the seed refuses a foreign `Origin`. The dev sign-in is `404` outside
+  development. The stand-in secrets apply only in development with both
+  secrets unset, and the sample admin only in development.
+- The dev routes ship in the bundle and are closed at run time. A
+  self-hoster's plain `wrangler deploy` with the local config comes up as
+  development, and the loopback checks still keep every dev route closed.
+- The GitHub fake is a dev dependency that nothing in `src/` imports.
+- Tests: `test/auth/development.test.ts`, `test/home/home.test.ts`, and
+  `test/issue/issue.test.ts`.
+
+**Secrets and config.**
+
+- `wrangler.jsonc` holds local names and placeholder IDs only.
+- `scripts/deploy-config.mjs` refuses deployment keys, IDs, and unknown keys
+  in the local config, writes the git-ignored `wrangler.deploy.json` with
+  `O_NOFOLLOW` and mode `0600`, and masks every deployment value in logs.
+- `.dev.vars.example` holds no secret. `.gitleaks.toml` adds rules for
+  32-hex IDs and UUIDs, and CI scans the full history.
+
+**CI and deploys.**
+
+- Every action is pinned to a commit SHA, the Semgrep image by digest, and
+  each tool a job downloads by a SHA-256 the workflow pins.
+- No workflow runs on `pull_request_target`, `workflow_run`, or
+  `issue_comment`, and no `run:` step reads `${{ github.event.* }}`.
+- Pull request workflows run with `contents: read` and
+  `persist-credentials: false`.
+- `deploy.yml` starts with `permissions: {}`, runs only on `main` behind the
+  `DEPLOY_*` variables, and never cancels a deploy in progress.
+  `deploy-environment.yml` installs with `--ignore-scripts` and builds
+  before it fetches the Cloudflare credential. Secrets reach Wrangler on
+  stdin only.
+
+### The output side
+
+What the site sends back: pages, streams, the Markdown and JSON forms,
+share cards, the views in MCP Apps hosts, and tools' answers. Its findings
+are B1 to B5 in the table below.
+
+**Keys and tokens in public text** (`stripSecrets` in
+`packages/core/src/secrets.ts`).
+
+- Posted lines and job names, and release reasons, are stripped in the
+  issue room before they are stored (`src/rooms/issue-room.ts`).
+- A submit's title, summary, checks, and model are stripped before the
+  commit, the PR body, and D1 (`src/mcp/submit.ts`, through
+  `src/donor/work.ts`). The PR description a donor writes is stripped
+  line by line with `stripSecretsFromText`, on `open_pr` and on `/me`
+  alike, since both go through `openPrAs`. Long lines are scanned with each
+  gap of spaces or tabs reduced to one space, then the original gaps are
+  restored. A wide gap can't push a secret's name out of the bounded scan.
+- Posts, jobs, reasons, and a submit's text are folded first
+  (`packages/core/src/characters.ts`), and the PR description is read with
+  the same hidden characters dropped, line breaks kept, so no hidden
+  character can split a token. A line with nothing to replace keeps them.
+  Everything downstream reads the stored, stripped events.
+
+**Pages.**
+
+- Nothing in `apps/web/src` or `packages` uses `dangerouslySetInnerHTML`,
+  `innerHTML`, `insertAdjacentHTML`, `document.write`, or `eval`. Hostile
+  titles, labels, and notes, like `</script>`, `<img onerror>`, and U+2028,
+  come out escaped in the HTML and in the hydration data.
+- Links a person sets are https only (`httpsUrl` in
+  `packages/core/src/primitives.ts`), and PR links are the `webUrl`
+  GitHub gives. Label colors are checked as six hex digits
+  (`src/components/Chip.tsx`).
+- The client checks every socket event against its schema
+  (`src/feed/useLiveFeed.ts`).
+- Every page carries the headers under
+  [Pages' headers](how-it-works.md#pages-headers) in how-it-works
+  (`src/security-headers.ts`), and every https answer on the primary domain
+  carries HSTS. `/me` and `/admin` are `no-store`.
+
+**The views in MCP Apps hosts** (`src/mcp/views/`, `src/mcp/apps.ts`).
+
+- `h()` makes text nodes only and refuses `on*` attributes (`dom.ts`).
+- `webLink` allows https, or http on this computer (`dom.ts`).
+- The bridge takes messages only from `window.parent` (`bridge.ts`).
+- Each view's CSP allows only the site's own `wss` origin, with empty
+  `resourceDomains`, and `viewHtml` escapes `</script` and `</style`.
+
+**Streams** (`src/feed/streams.ts`, `src/feed/format.ts`).
+
+- They are `text/plain` or NDJSON, with `nosniff`, `no-store,
+  no-transform`, `Access-Control-Allow-Origin: *`, and no cookie.
+- `textLine` and `ndjsonLine` fold or escape unsafe characters, U+2028
+  included. Blocked donors' events and do-not-list repos are left out
+  (`src/rooms/watchers.ts`).
+
+**Markdown and JSON forms** (`src/readable/`). Each has its content type
+and `nosniff`, and `Access-Control-Allow-Origin: *` on public answers only
+(`routes.ts`). `text()` escapes, and `destination()` allows http and https
+only (`markdown.ts`). The schemas are strict
+(`packages/core/src/open-data.ts`), and `hasPage` gates each answer
+(`data.ts`).
+
+**Share cards** (`src/cards/`).
+
+- A card carries only a checked login, repo, agent, and number.
+- The person card checks the block, the project card `hasPage`, and the
+  issue card what the issue page would show (`load.ts`, and
+  `latestMergedOnIssue`).
+- `HEAD` draws nothing, and each isolate draws the default card once for
+  its origin.
+- What stays: drawing a card takes 25 to 73 ms of CPU, about $1 a million
+  on Workers Paid. A day of 1,000 requests a second for real cards costs
+  about $83. The cost grows with the requests, so it multiplies nothing.
+
+**Errors.** With `people`, `projects`, `claims`, or `prs` renamed, 18 URLs
+across pages, the Markdown and JSON forms, the sitemap, cards, and streams
+answered a plain `503` or `404`, with nothing from D1 in them. A tool's own failure
+answers a plain sentence, and the log keeps the error (`asCaller` in
+`src/mcp/server.ts`).
+
+**CORS.** `/mcp` reflects the `Origin`, without credentials, and takes
+bearer tokens only.
+
+Notes, with nothing to fix now:
+
+- A maintainer's own text, like agent notes and pause and removal reasons,
+  is their configuration, and isn't stripped.
+- Public pages send no `Cache-Control` and no `Vary: Cookie`. That is safe
+  while Cloudflare stores no Worker answers. Turning on Cache Everything,
+  or the Cache API for pages, needs both first.
+- The static host sends no `nosniff`. It serves only the site's own build
+  output.
+- A page sets a cookie only to refresh a signed-in viewer's session.
+
+### Findings
+
+| # | Finding | Outcome |
+|---|---|---|
+| A1 | A page on another site could use up a person's sign-in limit, with requests the browser sends for it in the background: registrations, the page to approve an agent in an image or frame, and GitHub's return to either callback | Fixed. GitHub's return to a browser with no sign-in in progress is refused before it counts, at both callbacks. The page to approve an agent answers `400`, uncounted, to what the browser's Sec-Fetch headers say another site's page asked for, and counts a page opened in a tab, the site's own call, and a request with no Sec-Fetch headers. Registrations count under a key of their own. Tests: in `test/auth/rate-limit.test.ts`, "registrations another site's page sends don't count toward sign-in", "the page to approve an agent, loaded as another site's image or frame, is refused before it counts", and "GitHub's return with no sign-in in progress in this browser is refused before it counts". In `test/mcp/sign-in.test.ts`, "the page to approve an agent refuses, uncounted, what the browser says another site's page asked for", "the page to approve an agent refuses a prefetch, uncounted", and "the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it". Kept: a page another site opens in a tab of its own, like a popup, still counts, since agents in web pages open the page to approve them that way. So does an image in a browser that sends no Sec-Fetch headers. Browsers send Sec-Fetch headers only to secure origins, so over plain http, before Always Use HTTPS is on, another page's image counts too |
+| A2 | An agent's GitHub token outlived its grant until its person came back to `/me` or connected an agent | Fixed for agents. A daily job ends every lapsed connection, for everyone, revoking each token before it ends the connection, and keeping the connection for the next run when GitHub fails. Opening `/me` or connecting an agent does the same for one person. Tests: in `test/mcp/disconnect.test.ts`, "the daily job ends everyone's connections whose grants ran out" and "one run of the daily job ends a set number of lapsed connections, the one that last got tokens earliest first", "when GitHub fails to revoke, the daily job keeps the connection", "when GitHub fails to revoke, opening /me keeps the lapsed connection", and "the daily job never revokes a lapsed connection's token while the site's sign-in or another agent holds the same token". `test/sync/scheduled.test.ts` checks its cron |
+| A2 | A web session that expires leaves its GitHub token stored and working at GitHub until the person's next sign-in | Kept. The site holds one token for each person, and all their sessions use it. Revoking it when one session expires would sign out their other browsers. The token is encrypted with `AUTH_SECRET`, and the next sign-in revokes it. `test/auth/sign-out.test.ts` holds this rule |
+| A3, C2 | A request to `/mcp` with a token the library doesn't know costs one KV read before its `401`, and no limit counts it | Kept. A limit by address would hurt hosted agents that share addresses, which is why `MCP_LIMITER` counts by person. The cost is one KV read on top of the request itself, and a token of the wrong shape costs none. An operator can add a Cloudflare WAF rate-limiting rule on `/mcp` answers with status `401`, as [self-hosting.md](self-hosting.md#limiting-unknown-tokens-at-mcp) says. The same holds for the KV write each registration makes, kept 90 days, from many IPv6 /64s |
+| A4 | The MACs on `/me` and `/admin` notices use `AUTH_SECRET` as it is, the key Better Auth uses | Kept. Each MAC starts with a purpose of its own, which can't make a session cookie, and a session needs a row in D1 too. Deriving a key of its own is hardening for later |
+| A5 | `request_removal` checked `manage_project` without the name GitHub gives, so a name GitHub sends on to another repo could file a request under a stored project's name | Fixed. It checks the name GitHub gives too. Test: in `test/mcp/repo-ids.test.ts`, "can’t have its removal asked for by an old name GitHub sends on to it" |
+| C1 | Nothing limited opening text streams and live sockets, and a socket could send messages that woke the feed or room each time | Fixed. `STREAM_LIMITER` counts every open and upgrade, 300 a minute from each address, each address holds at most 100 sockets on one feed or room, and a watcher that sends is closed with `1008`. Tests: in `test/feed/streams.test.ts`, "one address opens 300 streams and live sockets a minute", "an IPv6 client counts by its /64", "the 101st from one address is refused with 429" on the homepage feed and on an issue room, and "is closed when the page sends anything, on a feed and on an issue room" |
+| C3 | CI checked gitleaks and actionlint against a checksum file from the same release as the download | Fixed. `ci.yml` pins each SHA-256, taken from the release's checksum file and checked against a download of the tarball. It has no test |
+| C4 | Limits by address are coarse. One client behind a shared address, like CGNAT, can use up the sign-ins of the others there, and Cloudflare's limiter counts each location apart, and roughly. An IPv6 /64 is usually a whole network, like a home, an office, or a Wi-Fi network, so counting by /64 shares a limit much as NAT does on IPv4 | Kept. It is the trade that limits by address make, and the limits are generous for one person |
+| B1 | An error thrown inside an MCP tool reached the agent word for word, like `D1_ERROR: no such table` | Fixed. `asCaller` logs it and answers a plain sentence as an error. Test: in `test/mcp/tools.test.ts`, "an error inside a tool is logged, and the agent gets a plain answer that says nothing of the database" |
+| B2 | Pages sent no security headers, and nothing moved a browser to https | Fixed. Every page carries nosniff, a referrer policy, framing headers, a CSP of `frame-ancestors`, `base-uri`, and `object-src`, and a permissions policy, each where the page set none, and the primary domain sends HSTS. `form-action` and `script-src` stay out, as how-it-works says. self-hosting.md asks for Always Use HTTPS. Tests: `test/security-headers.test.ts` |
+| B3 | The signed-in `/me` and `/admin` had no `Cache-Control`, so a shared computer's back button could show them after sign-out | Fixed. Both send `no-store`. Tests: in `test/me/me.test.ts`, "the page is never stored", and in `test/admin/page.test.ts`, "the page an admin sees is never stored" |
+| B4 | A card was drawn on `HEAD`, and any made-up issue path drew the default card again | Fixed. `HEAD` draws nothing, and each isolate keeps the default card for its origin. Tests: in `test/cards/cards.test.ts`, "on HEAD answers its headers without drawing the card" and "the default card is drawn once and kept". The rest of a card's cost stays, as above |
+| B5 | The PR description a donor writes went to GitHub unstripped, on `open_pr` and on `/me` | Fixed. `stripSecretsFromText` strips it line by line. Tests: in `test/mcp/submit.test.ts`, "a key or token in the donor's description reaches the PR only as [redacted]" and "a description of 60,000 characters with a token inside a line longer than the stripping takes at once", in `test/me/me.test.ts`, "a key or token in the words reaches the PR only as [redacted]", and in `packages/core/test/secrets.test.ts` |
+| S1 | The daily job deleted a lapsed connection before it revoked the token, so a GitHub failure at 04:23 left the token live with nothing to retry | Fixed. The job revokes first, counts a `404` as done, and keeps the row when GitHub fails. Tests: in `test/mcp/disconnect.test.ts`, "when GitHub fails to revoke, the daily job keeps the connection and its token for the next run" and "a token GitHub no longer knows counts as revoked" |
+| S3 | One address could hold thousands of sockets on the homepage's feed, which walks every socket on each event | Fixed. Each address holds at most 100 on a feed or room. Test: in `test/feed/streams.test.ts`, "the 101st from one address is refused with 429" |
+| S4 | 60 opens a minute was low enough for an office or a reconnect wave from one address to meet | Fixed. 300 a minute, with S3 bounding what an address holds |
+
+Notes the review made, with nothing to fix now:
+
+- `findPersonByLogin` matches a login case-sensitively and takes the newest
+  row, so an admin's block by a stale login could reach a person who took
+  the login later. The admin sees the login in the answer.
+- A browser that sends no Sec-Fetch headers, like Safari before 16.4, gets
+  no protection from the check on the page to approve an agent, so another
+  site's page could still use up its sign-ins. Every current browser sends
+  them.
+- `openInTab` in `scripts/skill-run.ts`, which the skills' steps and the
+  browser tests use to open the page to approve an agent, has no timeout.
+- A run of over 800 characters with no whitespace, in a line of a PR
+  description longer than 1,000, is redacted whole.
+- The framing headers apply under `pnpm dev` too, so an editor's preview in
+  a frame can't show the dev site.
 
 ## Choices
 

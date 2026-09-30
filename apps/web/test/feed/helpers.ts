@@ -1,6 +1,7 @@
 import type { FeedEvent } from '@goodfirsttoken/core';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, vi } from 'vitest';
+import { randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
 
 // Shared setup for the feed tests. Every person, repo, and line here is made
@@ -33,9 +34,15 @@ export async function watchSocket(stub: { fetch: (url: string, init: RequestInit
   return collect(res);
 }
 
-/** Opens a live socket through the Worker on a stream's URL, as a page does, and collects every event it is sent. */
-export async function liveSocket(path: string) {
-  const res = await workerFetch(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } });
+/**
+ * Opens a live socket through the Worker on a stream's URL, as a page does,
+ * and collects every event it is sent. It comes from `address`, or from an
+ * address of its own, so the stream limit counts it alone.
+ */
+export async function liveSocket(path: string, address = randomAddress()) {
+  const res = await workerFetch(`http://localhost${path}`, {
+    headers: { Upgrade: 'websocket', 'cf-connecting-ip': address },
+  });
   return { res, ...collect(res) };
 }
 
@@ -100,10 +107,18 @@ export async function storedEvents(stub: DurableObjectStub): Promise<FeedEvent[]
 
 /**
  * Reads a stream from the Worker line by line, as `curl -N` would. Takes a
- * path, or a response already made.
+ * path, or a response already made. A request with no cf-connecting-ip comes
+ * from an address of its own, so the stream limit counts it alone.
  */
-export async function readStream(path: string | Response, init?: RequestInit) {
-  const res = typeof path === 'string' ? await workerFetch(`http://localhost${path}`, init) : path;
+export async function readStream(path: string | Response, init: RequestInit = {}) {
+  let res: Response;
+  if (typeof path === 'string') {
+    const headers = new Headers(init.headers);
+    if (!headers.has('cf-connecting-ip')) headers.set('cf-connecting-ip', randomAddress());
+    res = await workerFetch(`http://localhost${path}`, { ...init, headers });
+  } else {
+    res = path;
+  }
   const lines: string[] = [];
   let ended = false;
   let reader: ReadableStreamDefaultReader<string> | null = null;

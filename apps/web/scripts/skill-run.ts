@@ -39,6 +39,8 @@ import {
   type OAuthTokens,
 } from '@modelcontextprotocol/client';
 import { randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual, parseArgs } from 'node:util';
 
@@ -137,6 +139,36 @@ function fromAddress(address: string) {
   };
 }
 
+/**
+ * Opens a page the way a browser opens it in a tab of its own: a GET with the
+ * Sec-Fetch headers a browser sends for that, which the page to approve an
+ * agent needs. Node's fetch always sends Sec-Fetch-Mode: cors, so this uses
+ * node:http. It follows no redirect.
+ */
+function openInTab(url: URL, headers: Record<string, string>): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const sent = send(
+      url,
+      { method: 'GET', headers: { ...headers, 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } },
+      (answer) => {
+        const chunks: Buffer[] = [];
+        answer.on('data', (chunk: Buffer) => chunks.push(chunk));
+        answer.on('error', reject);
+        answer.on('end', () => {
+          const received = new Headers();
+          for (const [name, value] of Object.entries(answer.headers)) {
+            for (const one of Array.isArray(value) ? value : value === undefined ? [] : [value]) received.append(name, one);
+          }
+          resolve(new Response(Buffer.concat(chunks), { status: answer.statusCode ?? 500, headers: received }));
+        });
+      },
+    );
+    sent.on('error', reject);
+    sent.end();
+  });
+}
+
 /** Where a redirect points. */
 function location(response: Response, from: string): URL {
   const to = response.headers.get('location');
@@ -154,10 +186,7 @@ function location(response: Response, from: string): URL {
 async function approveAgent(site: string, address: string, authorizationUrl: URL, login: string): Promise<URL> {
   const cookies = new Map<string, string>();
   const onSite = fromAddress(address);
-  const browse = async (url: URL, init: RequestInit = {}) => {
-    const headers = new Headers(init.headers);
-    if (cookies.size > 0) headers.set('cookie', [...cookies].map(([name, value]) => `${name}=${value}`).join('; '));
-    const response = await onSite(url, { ...init, headers, redirect: 'manual' });
+  const keep = (response: Response) => {
     for (const header of response.headers.getSetCookie()) {
       const [pair = ''] = header.split(';');
       const eq = pair.indexOf('=');
@@ -165,8 +194,15 @@ async function approveAgent(site: string, address: string, authorizationUrl: URL
     }
     return response;
   };
+  const cookieHeader = (): Record<string, string> =>
+    cookies.size > 0 ? { cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join('; ') } : {};
+  const browse = async (url: URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    for (const [name, value] of Object.entries(cookieHeader())) headers.set(name, value);
+    return keep(await onSite(url, { ...init, headers, redirect: 'manual' }));
+  };
 
-  const page = await browse(authorizationUrl);
+  const page = keep(await openInTab(authorizationUrl, { ...cookieHeader(), 'cf-connecting-ip': address }));
   const handle = /<input type="hidden" name="handle" value="([^"]+)"/.exec(await page.text())?.[1];
   if (page.status !== 200 || handle === undefined) {
     throw new Error(`The page to approve an agent answered ${String(page.status)} with no form to approve it.`);

@@ -1,13 +1,17 @@
 import { ISSUE_REFRESH_INTERVAL_MS, type ProjectRecord, type ToolOutput } from '@goodfirsttoken/core';
+import { authSecret, oauthApp, SignInNotSetUp } from '../auth/settings';
 import { fillCrawlQueue } from '../crawl/search';
 import { getDoNotListEntry, releaseProject, takeRefresh } from '../db';
+import { endEveryLapsedConnection } from '../mcp/connections';
 import { ServiceGitHub, SyncStopped, type Allowance } from './github';
 import { HOLD_MS, newSyncRun, syncProject, syncTaggedIssues } from './issues';
 import { followPrs } from './prs';
 
 // The jobs that read GitHub with the read-only service token: the Worker's
 // cron triggers, and the refresh a maintainer asks for with project_status.
-// Each cron in apps/web/wrangler.jsonc names one job here.
+// One more cron, once a day, ends the connections whose grants ran out, and
+// revokes their tokens as the OAuth app, with no service token. Each cron in
+// apps/web/wrangler.jsonc names one job here.
 
 /** Every 15 minutes: the tagged-issue sync (src/sync/issues.ts). */
 export const ISSUE_SYNC_CRON = '*/15 * * * *';
@@ -15,6 +19,8 @@ export const ISSUE_SYNC_CRON = '*/15 * * * *';
 export const PR_JOB_CRON = '7,37 * * * *';
 /** Once an hour, apart from both: the policy crawler's search (src/crawl/search.ts). */
 export const CRAWL_CRON = '52 * * * *';
+/** Once a day, apart from the others: ending lapsed connections (src/mcp/connections.ts). */
+export const LAPSED_CONNECTIONS_CRON = '23 4 * * *';
 
 /**
  * What each job may spend of the token's hourly budget, how many calls one
@@ -33,14 +39,51 @@ export const ALLOWANCES = {
   crawlRead: { leave: 0.6, maxCalls: 60 },
 } satisfies Record<string, Allowance>;
 
+/**
+ * How many lapsed connections one daily run ends, at most. Each is one call
+ * to GitHub to revoke its token, as the OAuth app, never with the service
+ * token, and about ten calls to D1 and KV. docs/architecture.md, under The
+ * sync, says why this number.
+ */
+export const LAPSED_PER_RUN = 200;
+
 /** The read-only service token, or null when the deployment has none. */
 export function serviceToken(env: Partial<Pick<Env, 'GH_SERVICE_TOKEN'>>): string | null {
   const token = env.GH_SERVICE_TOKEN;
   return token ? token : null;
 }
 
+// The origin the libraries are made for when ending a connection with no
+// request. Ending one makes no URL, so any does, and this is the site's own
+// when it has a primary domain.
+function jobOrigin(env: Env): string {
+  const primary = env.PRIMARY_DOMAIN.trim().toLowerCase();
+  return primary ? `https://${primary}` : 'https://scheduled.invalid';
+}
+
+/**
+ * Ends every lapsed connection, up to the day's cap. With a setting sign-in
+ * needs missing, no token can be read or revoked, so it tries none.
+ */
+async function endLapsed(env: Env): Promise<void> {
+  try {
+    oauthApp();
+    authSecret();
+  } catch (problem) {
+    if (!(problem instanceof SignInNotSetUp)) throw problem;
+    console.error(`No lapsed connection was ended. Sign-in is not set up: ${problem.message}`);
+    return;
+  }
+  const ended = await endEveryLapsedConnection(jobOrigin(env), Date.now(), LAPSED_PER_RUN);
+  if (ended > 0) console.log(`Ended ${String(ended)} connections whose grants ran out.`);
+}
+
 /** Runs the job for a cron trigger. */
 export async function runScheduled(cron: string, env: Env): Promise<void> {
+  if (cron === LAPSED_CONNECTIONS_CRON) {
+    await endLapsed(env);
+    return;
+  }
   const token = serviceToken(env);
   if (token === null) {
     console.error(`No job ran on the cron ${cron}. The GH_SERVICE_TOKEN secret is not set. docs/self-hosting.md lists the Worker's secrets.`);

@@ -148,3 +148,22 @@ test("at GitHub's cap of 10 tokens per person, the eleventh sign-in costs the le
   expect((await callMcp(oldest?.oauth.saved?.access_token ?? '')).status).toBe(401);
   expect(await connections()).toBe(10);
 });
+
+test("an error inside a tool is logged, and the agent gets a plain answer that says nothing of the database", async () => {
+  const agent = await connectAgent(github, 'priya');
+  const logged: string[] = [];
+  vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => void logged.push(parts.map(String).join(' ')));
+  await env.DB.prepare('ALTER TABLE donor_sessions RENAME TO donor_sessions_gone').run();
+  let result;
+  try {
+    result = await startSession(agent);
+  } finally {
+    await env.DB.prepare('ALTER TABLE donor_sessions_gone RENAME TO donor_sessions').run();
+  }
+  const text = result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
+
+  expect(result.isError).toBe(true);
+  expect(text).toBe("Something went wrong on Good First Token's side. Try again in a moment.");
+  expect(text).not.toMatch(/D1_|SQLITE|donor_sessions/);
+  expect(logged.some((line) => line.includes('donor_sessions'))).toBe(true);
+});

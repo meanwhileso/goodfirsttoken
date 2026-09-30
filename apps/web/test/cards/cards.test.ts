@@ -13,6 +13,7 @@ import {
   type Card,
 } from '../../src/cards/cards';
 import { loadIssueCard, loadPersonCard, loadProjectCard, monthOf } from '../../src/cards/load';
+import * as render from '../../src/cards/render';
 import { measureCard } from '../../src/cards/render';
 import { addPr, addToDoNotList, blockDonor, createProject, saveClaim, setDelisted, setProjectStatus, setPrState } from '../../src/db';
 import { loadProject } from '../../src/project/load';
@@ -151,6 +152,61 @@ describe('each card', () => {
     const post = await get('/card.png', { method: 'POST' });
     expect(post.status).toBe(405);
     expect(post.headers.get('allow')).toBe('GET, HEAD');
+  });
+
+  test('on HEAD answers its headers without drawing the card', async () => {
+    const now = Date.now();
+    await claimWithPr(priya, 6, { at: now - HOUR, ended: { state: 'merged', at: now - MINUTE } });
+    const drawn = vi.spyOn(render, 'renderCard');
+
+    for (const path of ['/card.png', '/@priya/card.png', `/${repo}/card.png`, `/${repo}/issues/6/card.png`]) {
+      const head = await get(path, { method: 'HEAD' });
+      expect(head.status, path).toBe(200);
+      expect(head.headers.get('content-type'), path).toBe('image/png');
+    }
+
+    expect(drawn).not.toHaveBeenCalled();
+  });
+
+  test('the default card is drawn once and kept, so made-up issue paths cost no drawing each', async () => {
+    const drawn = vi.spyOn(render, 'renderCard');
+
+    const cards = [await png('/card.png'), await png(`/${repo}/issues/9001/card.png`), await png('/sample-owner/made-up/issues/7/card.png')];
+
+    expect(drawn.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(cards[1]).toEqual(cards[0]);
+    expect(cards[2]).toEqual(cards[0]);
+  });
+
+  test('with no primary domain, the default cards kept stay few however many hosts ask, the ones asked for most lately kept', async () => {
+    const vars = env as unknown as { PRIMARY_DOMAIN: string };
+    const primary = vars.PRIMARY_DOMAIN;
+    vars.PRIMARY_DOMAIN = '';
+    try {
+      const drawn = vi.spyOn(render, 'renderCard');
+      const at = (host: string) => workerFetch(`https://${host}.example/card.png`).then((res) => res.arrayBuffer());
+      for (let i = 0; i < 20; i++) await at(`host-${String(i)}`);
+      const afterMany = drawn.mock.calls.length;
+
+      await at('host-19');
+      const newest = drawn.mock.calls.length - afterMany;
+      await at('host-0');
+      const oldest = drawn.mock.calls.length - afterMany - newest;
+      // host-17 is now the oldest kept. Asked for again, it moves to the
+      // newest place, so the next new host pushes out host-18 instead.
+      await at('host-17');
+      await at('host-21');
+      const beforeAgain = drawn.mock.calls.length;
+      await at('host-17');
+      const askedLately = drawn.mock.calls.length - beforeAgain;
+
+      expect(afterMany).toBe(20);
+      expect(newest).toBe(0);
+      expect(oldest).toBe(1);
+      expect(askedLately).toBe(0);
+    } finally {
+      vars.PRIMARY_DOMAIN = primary;
+    }
   });
 
   test('answers 503 when the database is down, as its page does', async () => {

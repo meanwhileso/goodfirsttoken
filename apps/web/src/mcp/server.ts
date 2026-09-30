@@ -35,7 +35,9 @@ function answer(text: string, isError = false): Answer {
  * becomes the tool's refusal. When GitHub stops accepting the connection's
  * token, because the person revoked the app or GitHub revoked the token to
  * keep them at 10, the connection can't work again. So it ends, and the
- * agent's next call gets a 401 and signs in.
+ * agent's next call gets a 401 and signs in. Any other error is logged, and
+ * the agent gets a plain answer, since its message can name the database's
+ * tables.
  */
 async function asCaller(props: AgentProps, origin: string, tool: () => Promise<Answer>): Promise<Answer> {
   try {
@@ -49,7 +51,10 @@ async function asCaller(props: AgentProps, origin: string, tool: () => Promise<A
         true,
       );
     }
-    throw error;
+    // Anything else is ours, and its message can name a table or a query.
+    // The log keeps it, and the agent gets a plain answer.
+    console.error(`A tool failed on ${productName}'s side.`, error);
+    return answer(`Something went wrong on ${productName}'s side. Try again in a moment.`, true);
   }
 }
 

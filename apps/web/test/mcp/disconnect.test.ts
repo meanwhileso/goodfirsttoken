@@ -1,6 +1,11 @@
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
+import { createScheduledController } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { symmetricEncrypt } from 'better-auth/crypto';
+import { endEveryLapsedConnection, endLapsedConnections } from '../../src/mcp/connections';
+import worker from '../../src/server';
+import { LAPSED_CONNECTIONS_CRON } from '../../src/sync/scheduled';
 import { emptyDatabase } from '../db/helpers';
 import { Browser, ORIGIN, location, signIn, startGitHub, storedToken } from '../auth/helpers';
 import {
@@ -399,4 +404,181 @@ test('a person with no agents connected is told so on /me', async () => {
   await signIn(browser, github, 'lena');
 
   expect(await (await browser.fetch('/me')).text()).toContain('No agents connected.');
+});
+
+/** Each connected agent's name, as stored, in order. */
+async function connectionNames(): Promise<string[]> {
+  const { results } = await env.DB.prepare('SELECT client_name FROM connected_agents ORDER BY client_name').all<{
+    client_name: string;
+  }>();
+  return results.map((row) => row.client_name);
+}
+
+/** Moves back when an agent connected and last got tokens, by `by`. */
+function ageConnection(name: string, by: number) {
+  return env.DB.prepare(
+    'UPDATE connected_agents SET connected_at = connected_at - ?1, renewed_at = renewed_at - ?1 WHERE client_name = ?2',
+  )
+    .bind(by, name)
+    .run();
+}
+
+test("the daily job ends everyone's connections whose grants ran out, and revokes their tokens, with no one opening /me", async () => {
+  const kept = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Kept agent') });
+  const idle = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Idle agent') });
+  await connectAgent(github, 'kenji', { oauth: new MemoryOAuthClient('Idle elsewhere') });
+  const [keptToken = '', idleToken = '', elsewhereToken = ''] = appTokens(github);
+  await ageConnection('Idle agent', 30 * DAY + 2 * MINUTE);
+  await ageConnection('Idle elsewhere', 45 * DAY);
+
+  await worker.scheduled(createScheduledController({ cron: LAPSED_CONNECTIONS_CRON, scheduledTime: Date.now() }), env);
+
+  expect(await connectionNames()).toEqual(['Kept agent']);
+  expect((await gitHubUser(idleToken)).status).toBe(401);
+  expect((await gitHubUser(elsewhereToken)).status).toBe(401);
+  expect((await gitHubUser(keptToken)).status).toBe(200);
+  expect((await callMcp(idle.oauth.saved?.access_token ?? '')).status).toBe(401);
+  expect((await startSession(kept)).structuredContent).toMatchObject({ login: 'priya' });
+});
+
+test('when GitHub fails to revoke, the daily job keeps the connection and its token for the next run, which ends both once GitHub answers', async () => {
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  const [token = ''] = appTokens(github);
+  await ageConnection('Lapsed agent', 40 * DAY);
+  let down = true;
+  const revokes: number[] = [];
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.method === 'DELETE' && new URL(request.url).pathname.endsWith('/token')) {
+      if (down) {
+        revokes.push(502);
+        return new Response('{"message":"Bad gateway"}', { status: 502, headers: { 'content-type': 'application/json' } });
+      }
+      revokes.push(200);
+    }
+    return github.fetch(request);
+  });
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+  const first = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+  const kept = await connectionNames();
+  const liveAfterFailure = (await gitHubUser(token)).status;
+  down = false;
+  const second = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+
+  expect(first).toBe(0);
+  expect(kept).toEqual(['Lapsed agent']);
+  expect(liveAfterFailure).toBe(200);
+  expect(second).toBe(1);
+  expect(await connectionNames()).toEqual([]);
+  expect((await gitHubUser(token)).status).toBe(401);
+  // One call to GitHub for the token in each run.
+  expect(revokes).toEqual([502, 200]);
+});
+
+test("connecting another agent ends the person's lapsed connections and revokes their tokens, with no /me visit", async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const webToken = (await storedToken()) ?? '';
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  const [lapsedToken = ''] = appTokens(github).filter((t) => t !== webToken);
+  await ageConnection('Lapsed agent', 40 * DAY);
+
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('New agent') });
+
+  expect(await connectionNames()).toEqual(['New agent']);
+  expect((await gitHubUser(lapsedToken)).status).toBe(401);
+  expect((await gitHubUser(webToken)).status).toBe(200);
+});
+
+test('when GitHub fails to revoke, the check that /me and a sign-in run keeps the lapsed connection and its token too, for a later try', async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const webToken = (await storedToken()) ?? '';
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  const [token = ''] = appTokens(github).filter((t) => t !== webToken);
+  await ageConnection('Lapsed agent', 40 * DAY);
+  let down = true;
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (down && request.method === 'DELETE' && new URL(request.url).pathname.endsWith('/token')) {
+      return new Response('{"message":"Bad gateway"}', { status: 502, headers: { 'content-type': 'application/json' } });
+    }
+    return github.fetch(request);
+  });
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+  await endLapsedConnections(ORIGIN, 1001, Date.now());
+  const kept = await connectionNames();
+  const liveAfterFailure = (await gitHubUser(token)).status;
+  down = false;
+  await endLapsedConnections(ORIGIN, 1001, Date.now());
+
+  expect(kept).toEqual(['Lapsed agent']);
+  expect(liveAfterFailure).toBe(200);
+  expect(await connectionNames()).toEqual([]);
+  expect((await gitHubUser(token)).status).toBe(401);
+});
+
+test("the daily job never revokes a lapsed connection's token while the site's sign-in or another agent holds the same token", async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const webToken = (await storedToken()) ?? '';
+  const other = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Other agent') });
+  const [agentToken = ''] = appTokens(github).filter((t) => t !== webToken);
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Shares the web token') });
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Shares the agent token') });
+  // GitHub gives each sign-in its own token. These rows hold a copy of
+  // another holder's, as the guard is there for.
+  const hold = async (name: string, token: string) =>
+    env.DB.prepare('UPDATE connected_agents SET github_token = ?1 WHERE client_name = ?2')
+      .bind(await symmetricEncrypt({ key: env.AUTH_SECRET, data: token }), name)
+      .run();
+  await hold('Shares the web token', webToken);
+  await hold('Shares the agent token', agentToken);
+  await ageConnection('Shares the web token', 40 * DAY);
+  await ageConnection('Shares the agent token', 40 * DAY);
+
+  const ended = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+
+  expect(ended).toBe(2);
+  expect(await connectionNames()).toEqual(['Other agent']);
+  expect((await gitHubUser(webToken)).status).toBe(200);
+  expect((await gitHubUser(agentToken)).status).toBe(200);
+  expect((await startSession(other)).structuredContent).toMatchObject({ login: 'priya' });
+});
+
+test('a token GitHub no longer knows counts as revoked, and the daily job ends its connection', async () => {
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  await ageConnection('Lapsed agent', 40 * DAY);
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.method === 'DELETE' && new URL(request.url).pathname.endsWith('/token')) {
+      return new Response('{"message":"Not Found"}', { status: 404, headers: { 'content-type': 'application/json' } });
+    }
+    return github.fetch(request);
+  });
+
+  const ended = await endEveryLapsedConnection(ORIGIN, Date.now(), 10);
+
+  expect(ended).toBe(1);
+  expect(await connectionNames()).toEqual([]);
+});
+
+test('one run of the daily job ends a set number of lapsed connections, the one that last got tokens earliest first, and the next run the rest', async () => {
+  for (const name of ['Lapsed a week', 'Lapsed a day', 'Lapsed a month']) {
+    await connectAgent(github, 'arjun', { oauth: new MemoryOAuthClient(name) });
+  }
+  await ageConnection('Lapsed a day', 31 * DAY);
+  await ageConnection('Lapsed a week', 37 * DAY);
+  await ageConnection('Lapsed a month', 60 * DAY);
+
+  const first = await endEveryLapsedConnection(ORIGIN, Date.now(), 2);
+  const left = await connectionNames();
+  const second = await endEveryLapsedConnection(ORIGIN, Date.now(), 2);
+
+  expect(first).toBe(2);
+  expect(left).toEqual(['Lapsed a day']);
+  expect(second).toBe(1);
+  expect(await connectionNames()).toEqual([]);
 });

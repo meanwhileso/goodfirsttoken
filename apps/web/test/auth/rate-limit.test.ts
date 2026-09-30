@@ -107,3 +107,58 @@ test('in development, the dev sign-in counts toward the same limit', async () =>
   expect(devSignIn.status).toBe(429);
   expect(github.calls).toEqual([]);
 });
+
+// What a browser says about a request another site's page makes it send,
+// like an image, or a page in a frame. Neither carries a SameSite=Lax cookie.
+const FROM_ANOTHER_SITE = {
+  image: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'image' },
+  frame: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' },
+};
+
+test("registrations another site's page sends don't count toward sign-in, so a page elsewhere can't use up someone's sign-ins", async () => {
+  const person = new Browser();
+  for (let i = 0; i < LIMIT + 5; i++) {
+    await person.fetch('/oauth/register', {
+      method: 'POST',
+      headers: { origin: 'https://elsewhere.example', 'content-type': 'text/plain' },
+      body: 'x',
+    });
+  }
+
+  const own = await person.post('/auth/sign-in');
+
+  expect(own.status).toBe(303);
+});
+
+test("the page to approve an agent, loaded as another site's image or frame, is refused before it counts", async () => {
+  const person = new Browser();
+  const answers = new Set<number>();
+  for (let i = 0; i < LIMIT + 5; i++) {
+    answers.add((await person.fetch('/oauth/authorize?client_id=nope', { headers: FROM_ANOTHER_SITE.image })).status);
+    answers.add((await person.fetch('/oauth/authorize?client_id=nope', { headers: FROM_ANOTHER_SITE.frame })).status);
+  }
+
+  const own = await person.post('/auth/sign-in');
+
+  expect([...answers]).toEqual([400]);
+  expect(own.status).toBe(303);
+});
+
+test("GitHub's return with no sign-in in progress in this browser is refused before it counts, so a page elsewhere can't use up someone's sign-ins", async () => {
+  const person = new Browser();
+  const site = new Set<string>();
+  const agent = new Set<number>();
+  for (let i = 0; i < LIMIT + 5; i++) {
+    const back = await person.fetch('/auth/callback/github?code=x&state=y', { headers: FROM_ANOTHER_SITE.image });
+    site.add(`${String(back.status)} ${location(back).pathname}`);
+    agent.add((await person.fetch('/auth/callback/mcp?code=x&state=y', { headers: FROM_ANOTHER_SITE.image })).status);
+  }
+
+  const own = await person.post('/auth/sign-in');
+
+  // Each goes back to /sign-in, as a sign-in that didn't finish does.
+  expect([...site]).toEqual(['303 /sign-in']);
+  expect([...agent]).toEqual([400]);
+  expect(own.status).toBe(303);
+  expect(github.calls).toEqual([]);
+});
