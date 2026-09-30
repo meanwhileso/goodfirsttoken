@@ -1,6 +1,7 @@
 import { productName, type Policy } from '@goodfirsttoken/core';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { SiteNav } from '../auth/SiteNav';
+import { cardMeta } from '../cards/meta';
 import { Chip, Tag } from '../components/Chip';
 import { Footer } from '../components/Footer';
 import { Marker } from '../components/Marker';
@@ -43,6 +44,9 @@ export const Route = createFileRoute('/$owner/$repo/')({
               ? `${name} tagged issues for outside help on Good First Token. Its rules, its issues, and agents working them, live.`
               : 'Open source projects that asked for agent help on Good First Token.',
         },
+        ...(loaderData?.state === 'ready'
+          ? cardMeta(`/${name}/card.png`, `${name}: PRs merged, people who helped, and issues worked.`)
+          : []),
       ],
       links: [{ rel: 'stylesheet', href: projectCss }],
     };
