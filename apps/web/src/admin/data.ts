@@ -2,7 +2,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { getRequest, getResponseHeaders } from '@tanstack/react-start/server';
 import { loadAdminPage, type AdminPageParams, type AdminPageResult } from './page';
 
-export type { AdminPage, AdminPageResult, BlockedDonor, PolicyListing } from './page';
+export type { AdminPage, AdminPageResult, BlockedDonor, PageKind, PolicyListing } from './page';
 
 function isParams(value: unknown): value is AdminPageParams {
   if (typeof value !== 'object' || value === null) return false;

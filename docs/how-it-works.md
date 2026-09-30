@@ -1420,9 +1420,12 @@ of them but a request to be removed.
 - A page starts after the last item of the page before, by when it started
   to wait. So an item decided between pages moves nothing, and no item is
   skipped. An item added between pages started to wait later than any page
-  shown, so it waits on a later page. An item waits again, with a new ID,
-  when its maintainer changes a registration, so it can show on a page
-  after the one that showed it before.
+  shown, so it waits on a later page. Two kinds of item come back with a
+  new ID and the time they came back, so they can show on a page after
+  the one that showed them before: a rejected registration its maintainer
+  registers again, and a policy change the crawler replaces with a newer
+  reading. A maintainer who changes a waiting registration's settings
+  leaves its ID and its place as they were.
 - An `after` that isn't a `next` an answer gave is refused as bad input.
 - Only the items on the page are read, so one look makes at most two calls
   to GitHub for each item on it, whatever the queue holds, and none besides.
@@ -1673,8 +1676,13 @@ is in [brand/brief-website.md](../brand/brief-website.md).
   [The admin queue](#the-admin-queue).
 - It shows the queue a page at a time, as `admin_queue` does, of the kinds
   it shows, with the same bound on items and calls to GitHub, and says how
-  many more wait. A link opens the next page, with its place in the
-  address as `after`, which the server checks as `admin_queue` checks it.
+  many more wait. Each section counts the items it shows on this page.
+  When more of its kind wait on other pages, the count says of how many,
+  as in `20 of 21`, and the section says how many wait before this page
+  and after it. A section with none on this page says so, and says none
+  wait only when none of its kind wait on any page. A link opens the next
+  page, with its place in the address as `after`, which the server checks
+  as `admin_queue` checks it.
   An address whose `after` is no page shows no queue, says why, and links
   the first page. After a form, the page opens at the first page.
 - A crawler find's form takes its tags, separated by commas, starting with

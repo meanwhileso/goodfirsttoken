@@ -4,7 +4,15 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { adminDecide, queuePage } from '../../src/admin/actions';
 import type { Caller } from '../../src/auth/permissions';
-import { addCandidate, askRemoval, createProject, savePerson } from '../../src/db';
+import {
+  addCandidate,
+  addPolicyChange,
+  askRemoval,
+  changeSettings,
+  createProject,
+  reopenRegistration,
+  savePerson,
+} from '../../src/db';
 import { Browser, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';
@@ -143,9 +151,10 @@ describe('admin_queue, a page at a time', () => {
     const result = await look(admin);
 
     const calls = callsSince(before);
-    expect(calls.length).toBeLessThanOrEqual(ADMIN_QUEUE_PAGE * 2);
+    // The Limits row in docs/how-it-works.md says 20 items and at most 40 calls.
+    expect(calls.length).toBeLessThanOrEqual(40);
     const shown = result.structuredContent?.items.map((item) => item.repo) ?? [];
-    expect(shown).toEqual(repos.slice(0, ADMIN_QUEUE_PAGE));
+    expect(shown).toEqual(repos.slice(0, 20));
     const read = new Set(calls.map((c) => decodeURIComponent(new URL(c.url).pathname)));
     const notShown = repos.slice(ADMIN_QUEUE_PAGE).filter((repo) => read.has(`/repos/${repo}`));
     expect(notShown).toEqual([]);
@@ -215,6 +224,45 @@ describe('admin_queue, a page at a time', () => {
     expect(callsSince(before)).toEqual([]);
   });
 
+  test('a changed registration keeps its ID and place, while a registration made again and a newer policy change wait at the end with a new ID', async () => {
+    const start = Date.now() - 60 * MINUTE;
+    const changed = await registration(1, start);
+    const again = await registration(2, start + MINUTE);
+    const listed = fakeRepo(3);
+    await savePerson(env.DB, ADMIN, start);
+    const policy = { quote: 'Agent pull requests are welcome.', url: `https://github.com/${listed}/blob/main/CONTRIBUTING.md`, tier: 'invites_agents' } as const;
+    await createProject(
+      env.DB,
+      { repo: listed, status: 'approved', source: 'policy', policy, settings: { tags: ['help wanted'] }, addedBy: ADMIN.githubId },
+      start,
+    );
+    const facts = { stars: 10, createdAt: start - 365 * 86_400_000, pushedAt: start, ownerCreatedAt: start - 365 * 86_400_000 };
+    const reading = { repo: listed, facts, policy, sources: [], aiSentences: [], moreAiSentences: 0 };
+    await addPolicyChange(env.DB, reading, start + 2 * MINUTE);
+    const later = await registration(4, start + 3 * MINUTE);
+    const kinds = ['registration', 'policy_change'] as const;
+    const idsOf = async () => {
+      const page = await queuePage(adminCaller(), { kinds });
+      return page.value.items.map((item) => [item.repo, item.id] as const);
+    };
+    const before = await idsOf();
+    expect(before.map(([repo]) => repo)).toEqual([changed, again, listed, later]);
+    const idOf = (ids: typeof before, repo: string) => ids.find(([r]) => r === repo)?.[1];
+
+    const settings = await changeSettings(env.DB, changed, { tags: ['good first issue'] }, MAINTAINER.githubId, start + 10 * MINUTE);
+    expect(settings?.ok).toBe(true);
+    const rejected = await adminDecide(adminCaller(), { id: idOf(before, again) ?? '', decision: 'reject', reason: 'Not now.' }, start + 11 * MINUTE);
+    expect(rejected.ok).toBe(true);
+    expect(await reopenRegistration(env.DB, again, { tags: ['help wanted'] }, MAINTAINER.githubId, start + 12 * MINUTE)).not.toBeNull();
+    await addPolicyChange(env.DB, reading, start + 13 * MINUTE);
+
+    const after = await idsOf();
+    expect(after.map(([repo]) => repo)).toEqual([changed, later, again, listed]);
+    expect(idOf(after, changed)).toBe(idOf(before, changed));
+    expect(idOf(after, again)).not.toBe(idOf(before, again));
+    expect(idOf(after, listed)).not.toBe(idOf(before, listed));
+  });
+
   test('a look with one kind pages through that kind alone', async () => {
     const repos = await longQueue(LONG);
     const finds = repos.filter((_repo, n) => n % 5 === 4);
@@ -222,7 +270,7 @@ describe('admin_queue, a page at a time', () => {
     const result = await queuePage(adminCaller(), { kinds: ['candidate'] });
 
     expect(result).toMatchObject({ ok: true, value: { more: 0, next: null } });
-    expect(result.ok && result.value.items.map((item) => item.repo)).toEqual(finds);
+    expect(result.value.items.map((item) => item.repo)).toEqual(finds);
   });
 });
 
@@ -240,7 +288,53 @@ function shownRepos(html: string, repos: readonly string[]): string[] {
   return repos.filter((repo) => html.includes(`>${repo}</h3>`));
 }
 
+/** The HTML of the section of /admin that `label` names. */
+function sectionOf(html: string, label: string): string {
+  const start = html.indexOf(`aria-label="${label}"`);
+  expect(start).toBeGreaterThan(-1);
+  return html.slice(start, html.indexOf('</section>', start));
+}
+
 describe('/admin, a page at a time', () => {
+  test('each section counts what waits on this page, and says how many more of its kind wait on other pages', async () => {
+    // A page and one more of registrations, then a request to be removed,
+    // which waits on the second page.
+    const start = Date.now() - 60 * MINUTE;
+    for (let n = 0; n <= ADMIN_QUEUE_PAGE; n++) await registration(n, start + n * MINUTE);
+    const asked = fakeRepo(ADMIN_QUEUE_PAGE + 1);
+    await askRemoval(
+      env.DB,
+      { repo: asked, reason: 'We would rather not take agent PRs.', requestedBy: MAINTAINER.githubId },
+      start + (ADMIN_QUEUE_PAGE + 1) * MINUTE,
+    );
+    const browser = new Browser();
+    await signIn(browser, github, ADMIN.login);
+    const total = ADMIN_QUEUE_PAGE + 1;
+
+    const first = await adminPage(browser, '/admin');
+    const removals = sectionOf(first.html, 'asking to be removed');
+    expect(removals).not.toContain('No requests to be removed.');
+    expect(removals).toContain('>0 of 1</span>');
+    expect(removals).toContain('None on this page. 1 more waits after this page.');
+    const registrations = sectionOf(first.html, 'registrations');
+    expect(registrations).toContain(`>${String(ADMIN_QUEUE_PAGE)} of ${String(total)}</span>`);
+    expect(registrations).toContain('1 more waits after this page.');
+    const finds = sectionOf(first.html, 'found by the crawler');
+    expect(finds).toContain('No finds waiting.');
+    expect(finds).toContain('>0</span>');
+
+    expect(first.next).not.toBeNull();
+    const second = await adminPage(browser, first.next ?? '');
+    const removalsAfter = sectionOf(second.html, 'asking to be removed');
+    expect(removalsAfter).toContain(`>${asked}</h3>`);
+    expect(removalsAfter).toContain('>1</span>');
+    expect(removalsAfter).not.toContain('after this page');
+    const registrationsAfter = sectionOf(second.html, 'registrations');
+    expect(registrationsAfter).toContain(`>1 of ${String(total)}</span>`);
+    expect(registrationsAfter).toContain(`${String(ADMIN_QUEUE_PAGE)} wait before this page.`);
+    expect(registrationsAfter).not.toContain('after this page');
+  });
+
   test('the page reads GitHub for its own items alone, links the next page, and paging shows every item once', async () => {
     const repos = await longQueue(LONG);
     const browser = new Browser();

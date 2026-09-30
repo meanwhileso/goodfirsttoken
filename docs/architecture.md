@@ -754,7 +754,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
   with no GitHub call, sorts it by the time each item started to wait, then
   repo, then ID, and builds only the first `ADMIN_QUEUE_PAGE` of them, from
   `packages/core`, after the place `after` names. Building an item is where
-  it reads GitHub, so a look reads GitHub for the page alone.
+  it reads GitHub, so a look reads GitHub for the page alone. It counts
+  each kind in all and after the page from the same lists, for the words
+  of each section of `/admin`.
 - **A page's place is where the last one ended.** `next` and `after` carry
   the last item's time, repo, and ID, joined with `~`, which none of them
   holds, as `queuePlaceText` and `readQueuePlace` in core write and read

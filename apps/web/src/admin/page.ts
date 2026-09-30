@@ -23,7 +23,9 @@ import {
   adminDecide,
   adminRemoveProject,
   queuePage,
+  type KindCounts,
   type Outcome,
+  type QueuePage,
 } from './actions';
 
 // The admin pages at /admin, on the server. The page's data and its forms
@@ -64,6 +66,10 @@ export interface AdminPage {
   signInAgain: boolean;
   /** How many more wait after this page of the queue. */
   more: number;
+  /** How many of each kind the page shows wait in the whole queue. */
+  waiting: Record<PageKind, number>;
+  /** How many of each kind the page shows wait after this page. */
+  later: Record<PageKind, number>;
   /** The `after` of the next page, or null when none waits. */
   next: string | null;
   /** True on a page after the first. */
@@ -80,6 +86,14 @@ export interface AdminPageParams extends NoticeParams {
 
 /** The kinds of item /admin shows. The admin's agent reads the others with `admin_queue`. */
 const PAGE_KINDS = ['removal', 'candidate', 'registration'] as const;
+
+/** A kind of item /admin shows. */
+export type PageKind = (typeof PAGE_KINDS)[number];
+
+/** The counts of the kinds /admin shows. */
+function pageKinds(counts: KindCounts): Record<PageKind, number> {
+  return { removal: counts.removal, candidate: counts.candidate, registration: counts.registration };
+}
 
 export type AdminPageResult = { state: 'ready'; page: AdminPage } | { state: 'signed_out' } | { state: 'not_found' };
 
@@ -127,7 +141,8 @@ export async function loadAdminPage(
   const badPage = place.ok ? null : `No page of the queue shows. ${describeProblems(place.problems).split('\n').join('. ')}.`;
   const after = place.ok ? place.value.after : undefined;
   let signInAgain = false;
-  const nothing: Outcome<'admin_queue'> = { ok: true, value: { items: [], more: 0, next: null } };
+  const none: KindCounts = { registration: 0, candidate: 0, removal: 0, pause: 0, policy_change: 0 };
+  const nothing: QueuePage = { ok: true, value: { items: [], more: 0, next: null }, waiting: none, later: none };
   let queue =
     badPage !== null
       ? nothing
@@ -138,7 +153,6 @@ export async function loadAdminPage(
         });
   // GitHub stopped taking the admin's token, so the queue shows no facts.
   queue ??= await queuePage({ ...caller, gitHubToken: () => Promise.resolve(null) }, { kinds: PAGE_KINDS, after });
-  if (!queue.ok) throw new Error(`The admin queue was refused: ${queue.refusal.message}`);
   const items = queue.value.items;
   const [listings, blocked, notice] = await Promise.all([
     readListings(caller),
@@ -158,6 +172,8 @@ export async function loadAdminPage(
         notice,
         signInAgain,
         more: queue.value.more ?? 0,
+        waiting: pageKinds(queue.waiting),
+        later: pageKinds(queue.later),
         next: queue.value.next ?? null,
         laterPage: after !== undefined,
         badPage,

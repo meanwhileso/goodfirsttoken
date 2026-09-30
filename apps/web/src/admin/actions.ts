@@ -328,9 +328,30 @@ type QueueKind = QueueItem['kind'];
 /** Every kind of item in the admin queue. */
 export const QUEUE_KINDS: readonly QueueKind[] = ['registration', 'candidate', 'removal', 'pause', 'policy_change'];
 
-/** An item waiting in the queue before it is built: where it sits in the queue, and how to build it. */
+/** An item waiting in the queue before it is built: its kind, where it sits in the queue, and how to build it. */
 interface Waiting extends QueuePlace {
+  kind: QueueKind;
   build: () => Promise<QueueItem>;
+}
+
+/** How many items of each kind, of the kinds asked for. */
+export type KindCounts = Record<QueueKind, number>;
+
+/** One page of the admin queue, with how many of each kind wait in all, and after the page. */
+export interface QueuePage {
+  ok: true;
+  value: ToolOutputInput<'admin_queue'>;
+  /** How many of each kind wait in the whole queue. */
+  waiting: KindCounts;
+  /** How many of each kind wait after this page. */
+  later: KindCounts;
+}
+
+/** How many of `items` are of each kind. */
+function countKinds(items: readonly { kind: QueueKind }[]): KindCounts {
+  const counts: KindCounts = { registration: 0, candidate: 0, removal: 0, pause: 0, policy_change: 0 };
+  for (const item of items) counts[item.kind] += 1;
+  return counts;
 }
 
 /** The queue's order: the one that has waited longest first, then by repo, then by ID, so no two tie. */
@@ -350,12 +371,13 @@ function queueOrder(a: QueuePlace, b: QueuePlace): number {
  * a registration and of a request come from GitHub now, read with the
  * admin's own token, two calls each. A crawler find's and a policy change's
  * are the ones the crawler read. A pause has none. The answer says how many
- * more wait, and where this page ends.
+ * more wait, and where this page ends, and, from D1 alone, how many of each
+ * kind wait in all and after the page.
  */
 export async function queuePage(
   caller: Caller,
   { kinds, after }: { kinds: readonly QueueKind[]; after?: string | undefined },
-): Promise<Outcome<'admin_queue'>> {
+): Promise<QueuePage> {
   await requirePermission(caller, 'review_projects');
   const from = after === undefined ? null : readQueuePlace(after);
   if (after !== undefined && from === null) throw new Error(`${after} is no place in the admin queue.`);
@@ -370,30 +392,35 @@ export async function queuePage(
   ]);
   const waiting: Waiting[] = [
     ...pending.map(({ project, changeId }) => ({
+      kind: 'registration' as const,
       at: iso(project.statusChangedAt),
       repo: project.repo,
       id: registrationId(changeId),
       build: () => registrationItem(token, project, changeId),
     })),
     ...candidates.map((candidate) => ({
+      kind: 'candidate' as const,
       at: iso(candidate.foundAt),
       repo: candidate.repo,
       id: candidate.id,
       build: () => candidateItem(candidate),
     })),
     ...removals.map((request) => ({
+      kind: 'removal' as const,
       at: iso(request.requestedAt),
       repo: request.repo,
       id: request.id,
       build: () => removalItem(token, request),
     })),
     ...paused.map((pause) => ({
+      kind: 'pause' as const,
       at: iso(pause.project.statusChangedAt),
       repo: pause.project.repo,
       id: pauseId(pause.changeId),
       build: () => pauseItem(pause),
     })),
     ...changes.map((change) => ({
+      kind: 'policy_change' as const,
       at: iso(change.foundAt),
       repo: change.repo,
       id: change.id,
@@ -409,6 +436,8 @@ export async function queuePage(
   return {
     ok: true,
     value: { items, more, next: more > 0 && last !== undefined ? queuePlaceText(last) : null },
+    waiting: countKinds(waiting),
+    later: countKinds(rest.slice(shown.length)),
   };
 }
 
