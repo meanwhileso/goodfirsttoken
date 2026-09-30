@@ -1,6 +1,10 @@
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
+import { createScheduledController } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { endEveryLapsedConnection } from '../../src/mcp/connections';
+import worker from '../../src/server';
+import { LAPSED_CONNECTIONS_CRON } from '../../src/sync/scheduled';
 import { emptyDatabase } from '../db/helpers';
 import { Browser, ORIGIN, location, signIn, startGitHub, storedToken } from '../auth/helpers';
 import {
@@ -399,4 +403,57 @@ test('a person with no agents connected is told so on /me', async () => {
   await signIn(browser, github, 'lena');
 
   expect(await (await browser.fetch('/me')).text()).toContain('No agents connected.');
+});
+
+/** Each connected agent's name, as stored, in order. */
+async function connectionNames(): Promise<string[]> {
+  const { results } = await env.DB.prepare('SELECT client_name FROM connected_agents ORDER BY client_name').all<{
+    client_name: string;
+  }>();
+  return results.map((row) => row.client_name);
+}
+
+/** Moves back when an agent connected and last got tokens, by `by`. */
+function ageConnection(name: string, by: number) {
+  return env.DB.prepare(
+    'UPDATE connected_agents SET connected_at = connected_at - ?1, renewed_at = renewed_at - ?1 WHERE client_name = ?2',
+  )
+    .bind(by, name)
+    .run();
+}
+
+test("the daily job ends everyone's connections whose grants ran out, and revokes their tokens, with no one opening /me", async () => {
+  const kept = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Kept agent') });
+  const idle = await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Idle agent') });
+  await connectAgent(github, 'kenji', { oauth: new MemoryOAuthClient('Idle elsewhere') });
+  const [keptToken = '', idleToken = '', elsewhereToken = ''] = appTokens(github);
+  await ageConnection('Idle agent', 30 * DAY + 2 * MINUTE);
+  await ageConnection('Idle elsewhere', 45 * DAY);
+
+  await worker.scheduled(createScheduledController({ cron: LAPSED_CONNECTIONS_CRON, scheduledTime: Date.now() }), env);
+
+  expect(await connectionNames()).toEqual(['Kept agent']);
+  expect((await gitHubUser(idleToken)).status).toBe(401);
+  expect((await gitHubUser(elsewhereToken)).status).toBe(401);
+  expect((await gitHubUser(keptToken)).status).toBe(200);
+  expect((await callMcp(idle.oauth.saved?.access_token ?? '')).status).toBe(401);
+  expect((await startSession(kept)).structuredContent).toMatchObject({ login: 'priya' });
+});
+
+test('one run of the daily job ends a set number of lapsed connections, the longest lapsed first, and the next run the rest', async () => {
+  for (const name of ['Lapsed a week', 'Lapsed a day', 'Lapsed a month']) {
+    await connectAgent(github, 'arjun', { oauth: new MemoryOAuthClient(name) });
+  }
+  await ageConnection('Lapsed a day', 31 * DAY);
+  await ageConnection('Lapsed a week', 37 * DAY);
+  await ageConnection('Lapsed a month', 60 * DAY);
+
+  const first = await endEveryLapsedConnection(ORIGIN, Date.now(), 2);
+  const left = await connectionNames();
+  const second = await endEveryLapsedConnection(ORIGIN, Date.now(), 2);
+
+  expect(first).toBe(2);
+  expect(left).toEqual(['Lapsed a day']);
+  expect(second).toBe(1);
+  expect(await connectionNames()).toEqual([]);
 });

@@ -122,6 +122,11 @@ sign-up, can be reached.
   IPv4 address. The next one gets `429` with `Retry-After: 60`. A form
   refused for its `Origin` doesn't count, so a page on another site can't
   use up someone's sign-ins.
+- GitHub's return to a browser with no sign-in in progress, one without the
+  cookie that ties a sign-in to it, goes back to `/sign-in`, which says it
+  didn't finish, and doesn't count either. Such a return would fail anyway,
+  and a request another site's page makes in the background, like an image,
+  never carries that cookie.
 - When a setting sign-in needs is missing, `OAUTH_CLIENT_ID`,
   `OAUTH_CLIENT_SECRET`, or `AUTH_SECRET`, the sign-in routes answer `503`,
   and the log names it. Pages still answer, with no one signed in. A deploy
@@ -195,6 +200,13 @@ signs in once with the person's GitHub account, and then acts as them.
   agent's request never show on the page. They go only in the link, in its
   `error_description`. An unknown client, or a redirect URI the client
   didn't register, gets the error with no link.
+- The page answers a browser that opens it in a tab of its own, and the
+  site's own page when it loads the page's data, as the browser's
+  `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, and `Sec-Fetch-Site` headers say.
+  Anything else, like another site's image, frame, or script, or a client
+  that sends none of those headers, gets `400` and a page that says to open
+  it in a tab of its own. Chrome, Edge, and Firefox send those headers, and
+  Safari from version 16.4. An older browser gets the `400` too.
 - Each step is tied to the browser that started it by a cookie that lasts
   10 minutes, and works once. So the person has 10 minutes to approve, and
   GitHub has to send them back to the same browser. A step taken late, twice,
@@ -226,7 +238,14 @@ GitHub token GitHub gave that sign-in.
   stays connected. A connection whose agent never traded its code within
   the code's 10 minutes and one more, or went 30 days and a minute without
   getting tokens, ends the next time the person opens `/me` or connects an
-  agent.
+  agent, or at the daily job, whichever comes first.
+- The daily job runs at 04:23 UTC, and ends such connections for everyone,
+  the way Disconnect does, so their GitHub tokens are revoked. It ends at
+  most 200 a day, the longest lapsed first, and the next day's run takes the
+  rest. So a token outlives its grant by a day or so at most, whether or not
+  its person comes back. It needs no service token, since it revokes tokens
+  as the OAuth app. When a setting sign-in needs is missing, it ends none,
+  and the log names the setting.
 - When a step of an agent's sign-in fails after GitHub gave the token, the
   connection is removed and the token is revoked, and the agent gets
   `server_error`.
@@ -296,17 +315,23 @@ hold one token for the site, and one for each connected agent.
   `Retry-After: 60`. Other people's agents keep theirs.
 - A disconnected agent gets `401` on its next call.
 
-**Limits on an agent's sign-in.** Registering a client, opening the page,
-approving, and GitHub's return each count toward the sign-in limit under
-[Signing in](#signing-in): 20 requests a minute from each address. An
-approval refused for its `Origin` doesn't count.
+**Limits on an agent's sign-in.** Opening the page, approving, and
+GitHub's return each count toward the sign-in limit under
+[Signing in](#signing-in): 20 requests a minute from each address. None
+counts when another site's page could have made the browser send it: an
+approval refused for its `Origin`, a page load refused with `400` above,
+and GitHub's return to a browser with no connection in progress, which gets
+`400` and says to connect again from the agent.
 
-- Each registration stores a client, so it counts toward the sign-in limit.
-  One host that signs in agents for many people, like Grok Bot, can
-  register at most 20 clients a minute from one address.
+- Each registration stores a client, so registrations have a limit of
+  their own, 20 a minute from each address, apart from the sign-in limit.
+  Any site's page can register a client, since an agent in a web page does,
+  and registering never uses up the address's sign-ins. One host that signs
+  in agents for many people, like Grok Bot, can register at most 20 clients
+  a minute from one address.
 - The page's data also loads from a server function at a URL of its own,
-  under `/_serverFn/`, which anyone can call. Each call there counts the
-  same as opening the page.
+  under `/_serverFn/`, which anyone can call. Each call there that the page
+  answers counts the same as opening the page.
 - Over the limit, the page says to try again in a minute, with `429`.
 - Trading a code and refreshing tokens at `/oauth/token` have a limit of
   their own: 600 requests a minute from each address. A shared host
@@ -389,8 +414,8 @@ that build them.
   one Good First Token keeps, under [Repo IDs](#repo-ids). When a project
   keeps another ID for the name asked, the answer is no, with
   `not_maintainer`, whatever the caller's role on the repo GitHub shows
-  now. Registering a repo, and naming a new issue repo, check the name
-  GitHub gives too.
+  now. Registering a repo, naming a new issue repo, and asking for a repo's
+  removal check the name GitHub gives too.
 - Being a Good First Token admin is no permission on anyone's repo.
 
 ## Repo IDs
@@ -816,8 +841,9 @@ survives a restart.
   do-not-list covers the issue's repo, as [Live feeds](#live-feeds) says.
 - A room can sleep with watchers connected. They stay connected, and get the
   next event.
-- What a watcher sends is ignored, and its close is answered. A request that
-  isn't a WebSocket upgrade is answered `426`.
+- Watchers only listen. A watcher that sends anything has its socket closed,
+  with code `1008`, and it can connect again. Its close is answered. A
+  request that isn't a WebSocket upgrade is answered `426`.
 - The issue's [text stream](#text-streams) connects to its room, and so
   does [its page](#the-issue-page), through the issue's
   [live socket](#live-sockets).
@@ -3836,6 +3862,11 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   `Cache-Control: no-store, no-transform`, so nothing caches or compresses
   them, and with `Access-Control-Allow-Origin: *`, so any page can read them.
 - A stream is read with `GET` or `HEAD`. Anything else is `405`.
+- Each client can open 60 streams and [live sockets](#live-sockets) a
+  minute, the two counted together: an IPv4 address, or the /64 an IPv6
+  address is in, as the sign-in limit counts them. `HEAD` counts too. The
+  next gets `429` with `Retry-After: 60`, and opens nothing. A stream stays
+  open once it opened, so the limit is on opening them.
 - A repo that isn't a project, an issue that has no claim and isn't among
   the tagged issues of a project that keeps its issues in that repo, a login
   no one has signed in with, and a path whose owner, repo, number, or login
@@ -3869,7 +3900,11 @@ the [views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 - It stays open while the feed sleeps, and has no hour limit. It closes when
   the feed closes it, as a deploy can.
 - It is public and read-only. It sets no cookie and reads none, so any page
-  may open it. What the page sends is ignored.
+  may open it. A socket the page sends anything on is closed, with code
+  `1008`. The site's pages never send.
+- Opening one counts toward the limit of 60 a minute that the text streams
+  count toward too. Over it, the upgrade gets `429` with `Retry-After: 60`,
+  and the page tries again as it does after a drop.
 - It opens only on the `.ndjson` form. An upgrade on a `.txt` path is `400`.
   Otherwise it answers as the stream would: `404` for a feed that doesn't
   exist, `400` for a `since` that isn't an event ID, and `503` when the
@@ -4880,8 +4915,9 @@ A deployment can serve them from a static host, on a hostname of its own.
   it closed without merging. With
   no service token, they read nothing, and the log names the secret.
 - Revoking a token runs as the OAuth app, with its client ID and secret, and
-  names the one token to revoke. Signing out, Disconnect, and an agent's
-  sign-in that replaces an earlier one each revoke this way.
+  names the one token to revoke. Signing out, Disconnect, an agent's
+  sign-in that replaces an earlier one, and the daily job that ends lapsed
+  connections each revoke this way.
 - When GitHub refuses a call, the refusal comes back with GitHub's status
   and message.
 - In local development, GitHub is the GitHub fake, and its sign-in page

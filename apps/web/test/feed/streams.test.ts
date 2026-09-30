@@ -7,6 +7,7 @@ import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
+import { inOneLimitWindow, randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
 import { feedEvent, fields, liveSocket, readStream, storedEvents } from './helpers';
 
@@ -563,17 +564,32 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
     }
   });
 
-  test('ignores what the page sends, and keeps sending events', async () => {
-    const priyas = await claim(priya);
-    const socket = await liveSocket(`/@${priya.login}/live.ndjson`);
+  test('is closed when the page sends anything, on a feed and on an issue room, since watchers only listen', async () => {
+    await claim(priya);
+    const feed = personFeed(env.FEED, priya.githubId);
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const onFeed = await liveSocket(`/@${priya.login}/live.ndjson`);
+    const inRoom = await liveSocket(`/${repo}/issues/${String(issueNumber)}/live.ndjson`);
+    expect(await sockets(feed)).toBe(1);
+    expect(await sockets(room)).toBe(1);
+    const closes = [onFeed, inRoom].map(
+      ({ socket }) =>
+        new Promise<number>((resolve) => {
+          socket.addEventListener('close', ({ code }) => {
+            resolve(code);
+          });
+        }),
+    );
 
-    socket.socket.send('hello');
-    socket.socket.send(JSON.stringify({ kind: 'update', text: 'not a post' }));
-    await post(priyas, `after the page spoke on #${String(issueNumber)}`);
+    onFeed.socket.send('hello');
+    inRoom.socket.send(JSON.stringify({ kind: 'update', text: 'not a post' }));
 
-    await socket.event(`after the page spoke on #${String(issueNumber)}`);
-    expect(socket.events.some((e) => e.text === 'not a post')).toBe(false);
-    socket.socket.close(1000);
+    expect(await Promise.all(closes)).toEqual([1008, 1008]);
+    await vi.waitFor(async () => {
+      expect(await sockets(feed)).toBe(0);
+      expect(await sockets(room)).toBe(0);
+    });
+    expect(inRoom.events.some((e) => e.text === 'not a post')).toBe(false);
   });
 
   test('is public: it answers with no cookie', async () => {
@@ -601,5 +617,58 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
     // Nothing made a room for the issue.
     const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
+  });
+});
+
+describe('the stream limit', () => {
+  // wrangler.jsonc gives the stream limiter 60 opens a minute for each
+  // client. The Workers runtime counts them in the tests too.
+  const LIMIT = 60;
+
+  test('one address opens 60 streams and live sockets a minute, and the next of either gets 429 without opening anything', async () => {
+    await inOneLimitWindow();
+    const address = randomAddress();
+    const feed = homeFeed(env.FEED);
+    const before = await sockets(feed);
+    const opened = await Promise.all(Array.from({ length: 10 }, () => liveSocket('/live.ndjson', address)));
+    const heads: number[] = [];
+    for (let i = 0; i < LIMIT - 10; i++) {
+      heads.push((await workerFetch('http://localhost/live.txt', { method: 'HEAD', headers: { 'cf-connecting-ip': address } })).status);
+    }
+
+    const text = await readStream('/live.txt', { headers: { 'cf-connecting-ip': address } });
+    const upgrade = await workerFetch('http://localhost/live.ndjson', {
+      headers: { Upgrade: 'websocket', 'cf-connecting-ip': address },
+    });
+    const elsewhere = await readStream('/live.txt');
+
+    expect(opened.map(({ res }) => res.status)).toEqual(Array<number>(10).fill(101));
+    expect(heads).toEqual(Array<number>(LIMIT - 10).fill(200));
+    for (const over of [text.res, upgrade]) {
+      expect(over.status).toBe(429);
+      expect(over.headers.get('retry-after')).toBe('60');
+      expect(over.webSocket).toBeNull();
+    }
+    expect(elsewhere.res.status).toBe(200);
+    // Only the 10 sockets opened within the limit, and the stream from
+    // another address, reached the feed.
+    expect(await sockets(feed)).toBe(before + 11);
+    await elsewhere.cancel();
+    for (const { socket } of opened) socket.close(1000);
+  });
+
+  test('an IPv6 client counts by its /64, so changing addresses within it opens no more streams', async () => {
+    await inOneLimitWindow();
+    const prefix = '2001:db8:5eed:7';
+    for (let i = 0; i < LIMIT; i++) {
+      await workerFetch('http://localhost/live.txt', { method: 'HEAD', headers: { 'cf-connecting-ip': randomAddress(prefix) } });
+    }
+
+    const sameNetwork = await workerFetch('http://localhost/live.txt', {
+      method: 'HEAD',
+      headers: { 'cf-connecting-ip': randomAddress(prefix) },
+    });
+
+    expect(sameNetwork.status).toBe(429);
   });
 });

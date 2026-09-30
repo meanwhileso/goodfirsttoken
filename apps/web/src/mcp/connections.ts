@@ -243,20 +243,49 @@ const CODE_LIFETIME = 10 * MINUTE;
 const GRANT_LIFETIME = GRANT_DAYS * 24 * 60 * MINUTE;
 const SLACK = MINUTE;
 
+// A connection whose grant ran out, with ?1 the time before which a code
+// had to be traded, and ?2 the time before which the agent last got tokens.
+const LAPSED = '((renewed_at IS NULL AND connected_at < ?1) OR renewed_at < ?2)';
+const lapsedBefore = (now: number) => [now - CODE_LIFETIME - SLACK, now - GRANT_LIFETIME - SLACK] as const;
+
 /**
  * Ends a person's connections whose grants ran out, the way Disconnect does,
  * so their GitHub tokens are revoked: one whose agent never traded its code,
  * and one whose agent last got tokens more than 30 days ago. /me and each
- * agent's sign-in run it for the person.
+ * agent's sign-in run it for the person, and the daily job, below, for
+ * everyone.
  */
 export async function endLapsedConnections(origin: string, githubId: number, now: number): Promise<void> {
-  const { results } = await env.DB.prepare(
-    `SELECT id FROM connected_agents WHERE github_id = ?1
-     AND ((renewed_at IS NULL AND connected_at < ?2) OR renewed_at < ?3)`,
-  )
-    .bind(githubId, now - CODE_LIFETIME - SLACK, now - GRANT_LIFETIME - SLACK)
+  const { results } = await env.DB.prepare(`SELECT id FROM connected_agents WHERE ${LAPSED} AND github_id = ?3`)
+    .bind(...lapsedBefore(now), githubId)
     .all<Pick<ConnectionRow, 'id'>>();
   for (const { id } of results) await disconnect(origin, githubId, id);
+}
+
+/**
+ * The daily job: ends everyone's connections whose grants ran out, as
+ * endLapsedConnections does for one person, so no token outlives its grant
+ * by more than a day, whether or not its person comes back. It ends at most
+ * `limit` in a run, the longest lapsed first, and the next run takes the
+ * rest. A connection it can't end is logged and left for the next run.
+ * Returns how many it ended.
+ */
+export async function endEveryLapsedConnection(origin: string, now: number, limit: number): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, github_id FROM connected_agents WHERE ${LAPSED}
+     ORDER BY COALESCE(renewed_at, connected_at), id LIMIT ?3`,
+  )
+    .bind(...lapsedBefore(now), limit)
+    .all<{ id: string; github_id: number }>();
+  let ended = 0;
+  for (const row of results) {
+    try {
+      if (await disconnect(origin, row.github_id, row.id)) ended += 1;
+    } catch (error) {
+      console.error(`A lapsed connection wasn't ended: ${failureReason(error)}`);
+    }
+  }
+  return ended;
 }
 
 /**

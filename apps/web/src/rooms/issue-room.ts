@@ -34,6 +34,7 @@ import { saveClaim } from '../db/claims';
 import { newId } from '../db/shared';
 import {
   answerClose,
+  closeSender,
   hiddenFor,
   openWatcher,
   repoOfIssue,
@@ -588,9 +589,9 @@ export class IssueRoom extends DurableObject<Env> {
     await this.done(now, undefined);
   }
 
-  // Watchers only listen. What they send is ignored.
-  override webSocketMessage(): void {
-    // Nothing to do.
+  // Watchers only listen. A socket that sends anything is closed.
+  override webSocketMessage(socket: WebSocket): void {
+    closeSender(socket);
   }
 
   /** Answers a watcher's close, so its socket finishes closing. */

@@ -205,3 +205,15 @@ export function answerClose(socket: WebSocket, code: number, reason: string): vo
     // It closed already.
   }
 }
+
+/**
+ * Closes a watcher's socket that sent a message, with 1008. Watchers only
+ * listen, and each message would wake the room or feed.
+ */
+export function closeSender(socket: WebSocket): void {
+  try {
+    socket.close(1008, 'Watchers only listen.');
+  } catch {
+    // It closed already.
+  }
+}

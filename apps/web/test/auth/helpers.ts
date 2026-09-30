@@ -104,9 +104,19 @@ export class Browser {
     this.address = address;
   }
 
+  /**
+   * Sends a request as this browser. A GET that says nothing else is the
+   * person opening the page in a tab, with the Sec-Fetch headers a browser
+   * sends for that.
+   */
   async fetch(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set('cf-connecting-ip', this.address);
+    if ((init.method ?? 'GET') === 'GET' && !headers.has('sec-fetch-mode')) {
+      headers.set('sec-fetch-site', 'none');
+      headers.set('sec-fetch-mode', 'navigate');
+      headers.set('sec-fetch-dest', 'document');
+    }
     if (this.cookies.size > 0) {
       headers.set('cookie', [...this.cookies].map(([name, value]) => `${name}=${value}`).join('; '));
     }

@@ -3,9 +3,9 @@ import { symmetricDecrypt } from 'better-auth/crypto';
 import { revokeGitHubToken } from '../github';
 import { finishConnecting, MCP_CALLBACK_PATH } from '../mcp/authorize';
 import { disconnect } from '../mcp/connections';
-import { AUTH_BASE_PATH, failureReason, getAuth, type Auth } from './auth';
+import { AUTH_BASE_PATH, COOKIE_PREFIX, failureReason, getAuth, type Auth } from './auth';
 import { tooManySignIns, underSignInLimit } from './rate-limit';
-import { gitHubAccount, readSignedIn } from './session';
+import { gitHubAccount, readSignedIn, sendsCookie } from './session';
 import { SignInNotSetUp, isDevelopment, oauthApp, siteOrigin } from './settings';
 
 // Every request under /auth comes here. Only the routes below answer, and
@@ -26,6 +26,8 @@ const AFTER_SIGN_IN = '/me';
 const AFTER_DISCONNECT = '/me';
 const AFTER_SIGN_OUT = '/';
 const CALLBACK_PATH = `${AUTH_BASE_PATH}/callback/github`;
+/** The cookie that ties a sign-in in progress to the browser that started it. */
+const STATE_COOKIE = `${COOKIE_PREFIX}.state`;
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -165,8 +167,13 @@ async function route(request: Request): Promise<Response> {
   const origin = siteOrigin(request);
   const endpoint = `${request.method} ${pathname}`;
 
-  // A form from another site is refused before it counts toward the limit,
-  // so a page elsewhere can't use up someone's sign-ins.
+  // A request another site's page can make a browser send is refused before
+  // it counts toward the limit, so a page elsewhere can't use up someone's
+  // sign-ins. A form from another site is refused by its Origin. GitHub's
+  // return is refused when the browser has no sign-in in progress, since the
+  // cookie that ties one to it is SameSite=Lax, and a request another site's
+  // page makes in the background never carries it. Such a return fails
+  // anyway.
   if (endpoint === `POST ${AUTH_BASE_PATH}/dev/sign-in`) {
     // Outside development this route doesn't exist.
     if (!isDevelopment()) return text(404, 'Not Found');
@@ -181,6 +188,7 @@ async function route(request: Request): Promise<Response> {
     return seeOther(url, setCookies);
   }
   if (endpoint === `GET ${CALLBACK_PATH}`) {
+    if (!sendsCookie(request, `${STATE_COOKIE}=`)) return seeOther(`${SIGN_IN_PAGE}?error=state_mismatch`);
     if (!(await underSignInLimit(request))) return tooManySignIns();
     const response = await getAuth(origin).handler(request);
     const answer = new Response(response.body, response);

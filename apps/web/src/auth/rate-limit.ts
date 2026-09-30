@@ -2,9 +2,13 @@ import { env } from 'cloudflare:workers';
 
 // Cloudflare rate limiting on the sign-in endpoints: the site's sign-in, and
 // an agent's sign-in to the MCP server. Both count against SIGN_IN_LIMITER,
-// per client address. Requests to the MCP server's token endpoint count
-// against TOKEN_LIMITER, per client address too, with a limit of their own,
-// since one host can refresh tokens for many people's agents.
+// per client address. An agent's registration counts on the same limiter
+// under a key of its own, so registrations can't use up an address's sign-ins
+// on the site. Requests to the MCP server's token endpoint count against
+// TOKEN_LIMITER, per client address too, with a limit of their own, since one
+// host can refresh tokens for many people's agents. Opening a live text
+// stream or a page's live socket counts against STREAM_LIMITER, per client
+// address.
 
 const DOTTED_TAIL = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
@@ -59,6 +63,23 @@ export function limiterKey(address: string | null): string {
 /** True while the request's client is under the sign-in limit, counting this request. */
 export async function underSignInLimit(request: Request): Promise<boolean> {
   const { success } = await env.SIGN_IN_LIMITER.limit({ key: limiterKey(request.headers.get('cf-connecting-ip')) });
+  return success;
+}
+
+/**
+ * True while the request's client is under its limit on registering agents,
+ * counting this request. It is the sign-in limit's number, counted apart.
+ */
+export async function underRegisterLimit(request: Request): Promise<boolean> {
+  const { success } = await env.SIGN_IN_LIMITER.limit({
+    key: `register:${limiterKey(request.headers.get('cf-connecting-ip'))}`,
+  });
+  return success;
+}
+
+/** True while the request's client is under the limit on opening streams and live sockets, counting this request. */
+export async function underStreamLimit(request: Request): Promise<boolean> {
+  const { success } = await env.STREAM_LIMITER.limit({ key: limiterKey(request.headers.get('cf-connecting-ip')) });
   return success;
 }
 

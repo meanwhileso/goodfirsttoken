@@ -43,9 +43,10 @@
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET", "GH_SERVICE_TOKEN"] },
   // The cron triggers. Each names one job in src/sync/scheduled.ts: the
   // tagged-issue sync every 15 minutes, the PR job twice an hour, apart
-  // from it, and the policy crawler's search once an hour, apart from both.
-  // Times are UTC.
-  "triggers": { "crons": ["*/15 * * * *", "7,37 * * * *", "52 * * * *"] },
+  // from it, the policy crawler's search once an hour, apart from both, and
+  // ending the agents' connections whose grants ran out once a day, apart
+  // from all three. Times are UTC.
+  "triggers": { "crons": ["*/15 * * * *", "7,37 * * * *", "52 * * * *", "23 4 * * *"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   // One issue room per issue, named by the issue (src/rooms/issue-room.ts),
   // and one feed each for the homepage, each project, and each person
@@ -109,12 +110,15 @@
   // (src/auth/rate-limit.ts). TOKEN_LIMITER counts requests to the MCP
   // server's token endpoint, per client address, apart from sign-ins, since
   // one host can refresh tokens for many people's agents. MCP_LIMITER counts
-  // calls to the MCP server, per person (src/mcp/server.ts). Wrangler needs a
-  // namespace ID for each, so these are placeholders that local development
-  // simulates. A deploy replaces each with the <name>_NAMESPACE_ID setting.
+  // calls to the MCP server, per person (src/mcp/server.ts). STREAM_LIMITER
+  // counts opening a live text stream or a page's live socket, per client
+  // address (src/feed/streams.ts). Wrangler needs a namespace ID for each, so
+  // these are placeholders that local development simulates. A deploy
+  // replaces each with the <name>_NAMESPACE_ID setting.
   "ratelimits": [
     { "name": "SIGN_IN_LIMITER", "namespace_id": "1", "simple": { "limit": 20, "period": 60 } },
     { "name": "MCP_LIMITER", "namespace_id": "2", "simple": { "limit": 120, "period": 60 } },
-    { "name": "TOKEN_LIMITER", "namespace_id": "3", "simple": { "limit": 600, "period": 60 } }
+    { "name": "TOKEN_LIMITER", "namespace_id": "3", "simple": { "limit": 600, "period": 60 } },
+    { "name": "STREAM_LIMITER", "namespace_id": "4", "simple": { "limit": 60, "period": 60 } }
   ]
 }

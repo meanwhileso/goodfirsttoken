@@ -274,6 +274,18 @@ describe('a repo renamed onto a name another project keeps', () => {
     expect(await getProject(env.DB, TOOLS)).toMatchObject({ status: 'rejected' });
     expect(await idsOf(TOOLS)).not.toMatchObject({ code: idOf(TOOLS) });
   });
+
+  test('can’t have its removal asked for by an old name GitHub sends on to it, under the other project’s name', async () => {
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+    await registered(maintainer, TOOLS);
+    github.deleteRepo(TOOLS);
+    github.renameRepo(APP, TOOLS);
+
+    const result = await call(maintainer, 'request_removal', { repo: APP, reason: 'Take us off, please.' });
+
+    expect(textOf(result)).toContain('Refused (not_maintainer)');
+    expect(await getWaitingRemoval(env.DB, TOOLS)).toBeNull();
+  });
 });
 
 describe('moving a project’s issues', () => {

@@ -177,6 +177,7 @@ variables. In a private repo, either works.
 | `SIGN_IN_LIMITER_NAMESPACE_ID` | Yes | A whole number you pick for the rate limiter on sign-in, like `1001`. It names the limiter within your Cloudflare account, and there is nothing to create. If staging and production share an account, give them different numbers. |
 | `MCP_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1002`, for the rate limiter on the MCP server's tool calls. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
 | `TOKEN_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1003`, for the rate limiter on the MCP server's token endpoint, where agents trade codes and refresh tokens. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
+| `STREAM_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1004`, for the rate limiter on opening the live text streams and the pages' live sockets. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
 | `PRIMARY_DOMAIN` | No | The domain the site is served on, like `example.org`. When it's empty, the site is served on workers.dev. |
 | `REDIRECT_DOMAINS` | No | Other domains, separated by commas, that answer every request with a 301 to the same path on `PRIMARY_DOMAIN`. Each one's zone has to be in the same account. |
 | `STATIC_ORIGIN` | No | The static host's origin, like `https://static.example.org`, set up as [The static host](#the-static-host) says. Pages then load the built files from there, and the deploy uploads them to `<WORKER_NAME>-static`. When it's empty, the Worker serves them. |
@@ -247,6 +248,23 @@ variable or set it to anything else.
   by hand.
 - A deploy reuses the database, the KV namespace, and the queues it finds, so
   running it again loses nothing.
+
+### Limiting unknown tokens at /mcp
+
+A request to `/mcp` with a token the site doesn't know costs one KV read
+before its `401`, and the Worker's own limits don't count it. The Worker
+limits `/mcp` by person, since hosted agents share addresses, and a request
+with an unknown token has no person. The
+[threat model](architecture.md#threat-model) says why this stays.
+
+To cap it, add a rate limiting rule in the Cloudflare dashboard, under your
+zone's Security settings, for requests whose path is `/mcp`, counted by IP,
+and counting only answers with status `401`. Then calls with a valid token
+never add to the count. Once an address is over, the rule blocks it for the
+time you choose, its agents with valid tokens included, and hosted agents
+can share one address. So pick a number well above the few `401`s an agent
+meets when its access token runs out. Counting by response status needs a
+Cloudflare plan that offers it. The Worker runs the same without the rule.
 
 ## The static host
 

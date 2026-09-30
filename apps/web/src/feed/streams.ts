@@ -1,5 +1,6 @@
 import { feedEventSchema, githubLogin, id, issueRef, repoName, validate, type FeedEvent } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
+import { underStreamLimit } from '../auth/rate-limit';
 import { findPersonByLogin, getBlock, getProject } from '../db';
 import { findIssue } from '../issue/find';
 import { homeFeed, personFeed, repoFeed } from '../rooms/feed';
@@ -24,6 +25,9 @@ import { ndjsonLine, textLine } from './format';
 // .ndjson form's URL. The Worker finds the feed or room the same way and
 // hands the upgrade to it, so the browser holds the feed's own hibernating
 // socket, which sends each event as one JSON message.
+//
+// Each client address can open 60 streams and sockets a minute, the two
+// counted together (STREAM_LIMITER). The next gets 429, and opens nothing.
 
 const HOUR = 60 * 60 * 1000;
 
@@ -159,7 +163,8 @@ function parseEvent(data: unknown): FeedEvent | null {
  * as one JSON message: first every event after `since`, or the ones a
  * watcher with no `since` gets, then each new one. Blocked donors' events
  * are left out, as for every watcher. The socket is public and read-only.
- * What the browser sends is ignored, and no cookie is read or set.
+ * The feed or room closes a socket the browser sends anything on. No cookie
+ * is read or set.
  */
 async function openLiveSocket(source: Source, format: Format, since: string | null): Promise<Response> {
   if (format !== 'ndjson') return text(400, 'Open a WebSocket on the .ndjson form of this stream.');
@@ -196,6 +201,11 @@ export async function handleStream(
   const { source, format } = route;
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return text(405, 'Read a stream with GET.', { allow: 'GET, HEAD' });
+  }
+  // Counted before any feed or room is asked, so a request over the limit
+  // costs no read and opens no socket.
+  if (!(await underStreamLimit(request))) {
+    return text(429, 'Too many streams opened from here. Try again in a minute.', { 'retry-after': '60' });
   }
   const since = new URL(request.url).searchParams.get('since') || null;
   if (since !== null && !validate(id, since).ok) {

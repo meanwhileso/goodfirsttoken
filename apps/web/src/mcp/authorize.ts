@@ -5,8 +5,9 @@ import {
   type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider';
 import { env } from 'cloudflare:workers';
-import { AUTH_BASE_PATH, failureReason, GITHUB_SCOPE } from '../auth/auth';
-import { tooManySignIns, underSignInLimit, underTokenLimit } from '../auth/rate-limit';
+import { AUTH_BASE_PATH, COOKIE_PREFIX, failureReason, GITHUB_SCOPE } from '../auth/auth';
+import { tooManySignIns, underRegisterLimit, underSignInLimit, underTokenLimit } from '../auth/rate-limit';
+import { sendsCookie } from '../auth/session';
 import { oauthApp, SignInNotSetUp, siteOrigin } from '../auth/settings';
 import { savePerson } from '../db';
 import { exchangeGitHubCode, GitHubError, gitHubRest, gitHubUrls, revokeGitHubToken } from '../github';
@@ -45,6 +46,13 @@ import { oauthApi, type AgentProps } from './provider';
 /** Where GitHub sends the person back, under the OAuth app's callback URL. */
 export const MCP_CALLBACK_PATH = `${AUTH_BASE_PATH}/callback/mcp`;
 
+/**
+ * The start of the name of the cookie that ties a connection on its way to
+ * GitHub to the browser. The library names it with the provider's
+ * cookiePrefix (src/mcp/provider.ts), then `upstream-` and part of a hash.
+ */
+const UPSTREAM_COOKIE = `${COOKIE_PREFIX}.oauth-upstream-`;
+
 function text(status: number, body: string, headers: HeadersInit = {}): Response {
   const answer = new Headers(headers);
   answer.set('content-type', 'text/plain; charset=utf-8');
@@ -54,8 +62,10 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 
 /**
  * Counts the two OAuth requests an agent sends itself, since anyone can send
- * them. A registration stores a client in OAUTH_KV, so it counts toward the
- * sign-in limit. A request to the token endpoint tries a code or a refresh
+ * them. A registration stores a client in OAUTH_KV, so it counts toward a
+ * limit of the sign-in limit's size, kept apart from sign-ins, since any
+ * site's page can send one, and an agent in a web page registers from its
+ * own origin. A request to the token endpoint tries a code or a refresh
  * token, and one host can refresh tokens for many people's agents, so it
  * counts toward a limit of its own. The page to approve an agent counts
  * where it starts, in openConsent, and the approval and GitHub's return
@@ -65,7 +75,7 @@ function text(status: number, body: string, headers: HeadersInit = {}): Response
 export async function limitAgentSignIn(request: Request): Promise<Response | null> {
   if (request.method !== 'POST') return null;
   const { pathname } = new URL(request.url);
-  if (pathname === REGISTER_PATH && !(await underSignInLimit(request))) return overOAuthLimit(request);
+  if (pathname === REGISTER_PATH && !(await underRegisterLimit(request))) return overOAuthLimit(request);
   if (pathname === TOKEN_PATH && !(await underTokenLimit(request))) return overOAuthLimit(request);
   return null;
 }
@@ -245,15 +255,34 @@ async function checkAuthorizeRequest(
   return { api, authRequest };
 }
 
+const OWN_TAB = 'Open this page in a tab of its own, from the link your agent gave you.';
+
+/**
+ * True when a browser loads the page in a tab of its own, or the site's own
+ * page calls the server function behind it. A browser says which with the
+ * Sec-Fetch headers, which a page can't set. Anything else, like another
+ * site's image or frame, or a client that sends no Sec-Fetch headers, is
+ * neither.
+ */
+function openedByPerson(caller: Request): boolean {
+  const fetchSite = caller.headers.get('sec-fetch-site');
+  if (fetchSite === 'same-origin') return true;
+  return caller.headers.get('sec-fetch-mode') === 'navigate' && caller.headers.get('sec-fetch-dest') === 'document';
+}
+
 /**
  * Starts the page where a person approves an agent, for the request that
- * loads it, with the query string the agent sent. It counts toward the
- * sign-in limit however it is reached, as the page or on its own. Returns the
- * page, or why there is none, with its status and the headers to send: the
- * cookie that binds the form to this browser, and the two that keep the page
- * out of frames.
+ * loads it, with the query string the agent sent. It answers only a browser
+ * that loads the page in a tab of its own, or the site's own page calling the
+ * server function behind it, and 400 to anything else, before counting it. So
+ * another site's page can't use up someone's sign-ins by loading it in the
+ * background. What it answers counts toward the sign-in limit, as the page or
+ * on its own. Returns the page, or why there is none, with its status and the
+ * headers to send: the cookie that binds the form to this browser, and the
+ * two that keep the page out of frames.
  */
 export async function openConsent(caller: Request, search: string): Promise<ConsentOutcome> {
+  if (!openedByPerson(caller)) return errorPage(400, OWN_TAB);
   if (!(await underSignInLimit(caller))) return errorPage(429, 'Too many sign-ins from here. Try again in a minute.');
   const url = new URL(AUTHORIZE_PATH, siteOrigin(caller));
   url.search = search;
@@ -340,6 +369,11 @@ export async function answerConsent(request: Request): Promise<Response> {
  * and the token revoked, unless the site holds it for something else.
  */
 export async function finishConnecting(request: Request): Promise<Response> {
+  // A browser with no connection in progress is refused before it counts, as
+  // the site's own callback is (src/auth/routes.ts). Such a return fails
+  // anyway, and a request another site's page makes in the background never
+  // carries the SameSite=Lax cookie that ties a connection to the browser.
+  if (!sendsCookie(request, UPSTREAM_COOKIE)) return text(400, START_AGAIN);
   if (!(await underSignInLimit(request))) return tooManySignIns();
   const origin = siteOrigin(request);
   const api = oauthApi(origin);

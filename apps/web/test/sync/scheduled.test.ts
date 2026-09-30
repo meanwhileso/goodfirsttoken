@@ -4,7 +4,9 @@ import { createScheduledController } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { addPr, getPr, listIssues, saveClaim } from '../../src/db';
+import { addConnection } from '../../src/mcp/connections';
 import worker from '../../src/server';
+import { LAPSED_CONNECTIONS_CRON } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, maintainer, priya, registeredProject, repo, sha, signIn } from '../db/helpers';
 import { freshNumbers, knowServiceToken } from './helpers';
@@ -74,6 +76,11 @@ async function runCron(cron: string, bindings: Env = env): Promise<void> {
 
 test('every cron trigger in wrangler.jsonc runs one job, and each job has a cron', async () => {
   const claimId = await workToFind();
+  // An agent's connection whose grant ran out 40 days ago.
+  const long = Date.now() - 40 * 24 * 60 * 60 * 1000;
+  await addConnection({ githubId: priya.githubId, clientId: 'c-lapsed', clientName: 'Lapsed agent', gitHubToken: 'made-up-lapsed-token' }, long);
+  await db.prepare('UPDATE connected_agents SET renewed_at = ?1').bind(long).run();
+  const connections = () => db.prepare('SELECT COUNT(*) AS n FROM connected_agents').first<number>('n');
   const ran: string[][] = [];
   // The crawler's search fills a stand-in for the crawl queue, so no
   // consumer reads what it finds while the other jobs run.
@@ -84,25 +91,29 @@ test('every cron trigger in wrangler.jsonc runs one job, and each job has a cron
     const synced = (await listIssues(db, repo)).length > 0;
     const followed = (await getPr(db, claimId))?.state !== 'open';
     const crawled = queued.length > 0;
+    const connected = await connections();
     await runCron(cron, bindings);
     const jobs: string[] = [];
     if (!synced && (await listIssues(db, repo)).length > 0) jobs.push('sync');
     if (!followed && (await getPr(db, claimId))?.state !== 'open') jobs.push('prs');
     if (!crawled && queued.length > 0) jobs.push('crawl');
+    if ((await connections()) !== connected) jobs.push('lapsed');
     ran.push(jobs);
   }
 
   expect(ran.map((jobs) => jobs.length)).toEqual(crons.map(() => 1));
-  expect(ran.flat().sort()).toEqual(['crawl', 'prs', 'sync']);
+  expect(ran.flat().sort()).toEqual(['crawl', 'lapsed', 'prs', 'sync']);
 });
 
-test('with no service token, no job reads GitHub, and the log names the secret', async () => {
+test('with no service token, no job reads GitHub, and the log of each job that reads names the secret', async () => {
   await workToFind();
+  const reading = crons.filter((cron) => cron !== LAPSED_CONNECTIONS_CRON);
 
   for (const cron of crons) await runCron(cron, { ...env, GH_SERVICE_TOKEN: '' });
 
   expect(github.calls).toEqual([]);
-  expect(logged.filter((line) => line.includes('The GH_SERVICE_TOKEN secret is not set'))).toHaveLength(crons.length);
+  expect(reading).toHaveLength(crons.length - 1);
+  expect(logged.filter((line) => line.includes('The GH_SERVICE_TOKEN secret is not set'))).toHaveLength(reading.length);
 });
 
 test('a cron no job answers to runs nothing, and says so', async () => {

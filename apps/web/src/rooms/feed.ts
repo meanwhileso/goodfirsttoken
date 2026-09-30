@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { feedEventSchema, githubId, mustParse, repoName, utcDay, wholeNumber, type FeedEvent } from '@goodfirsttoken/core';
 import {
   answerClose,
+  closeSender,
   askedOf,
   hiddenFor,
   learnHidden,
@@ -241,9 +242,9 @@ export class Feed extends DurableObject<Env> {
     });
   }
 
-  // Watchers only listen. What they send is ignored.
-  override webSocketMessage(): void {
-    // Nothing to do.
+  // Watchers only listen. A socket that sends anything is closed.
+  override webSocketMessage(socket: WebSocket): void {
+    closeSender(socket);
   }
 
   override webSocketClose(socket: WebSocket, code: number, reason: string): void {
