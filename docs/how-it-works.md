@@ -9,7 +9,7 @@ project's page, each issue's page, sign-in with GitHub, the signed-in
 person's review queue at `/me`, the page for maintainers at `/maintainers`,
 the MCP server's sign-in for agents with the donor's tools, the maintainer's
 tools, and the admins' tools, with views for hosts that support MCP Apps,
-the admin pages, the design system at `/design`, and the live feeds as
+the admin pages, the design system at `/design`, the share cards, and the live feeds as
 text streams and sockets. It reads tagged issues and PRs from GitHub on a
 schedule, looks for projects whose docs welcome AI help, and reads each
 listed project's docs again every week, while the build goes on in the
@@ -4470,6 +4470,69 @@ with the `curl -N` command for the stream under it.
 - With no events yet, it says it is quiet. When the feed can't be read, it
   says so, and still follows the feed.
 - It is public, and sets no cookie for a visitor who isn't signed in.
+
+## Share cards
+
+Every public page has a share card: a PNG, 1200 by 630, that a chat or a
+social site shows when someone posts the page's link. The page names it in
+its `og:image` tag, as a full URL on the primary domain when there is one,
+or on the host that served the page, with its size and a line saying what
+it shows. Nothing on a card is smaller than 40px, the rule under Share
+cards in
+[brand/design.md](../brand/design.md#share-cards).
+
+| Page | Its card | At |
+|---|---|---|
+| A person's page | Their month | `/@<login>/card.png` |
+| A project's page | Its totals | `/<owner>/<repo>/card.png` |
+| An issue's page | Its merged PR | `/<owner>/<repo>/issues/<n>/card.png` |
+| Every other page, and a page that answers `404` | The default card | `/card.png` |
+
+**What each card shows.** Each has the logo at the top and the site's
+address at the foot.
+
+- **The default card** says `Spend your spare tokens on open source`, with
+  `open source` as a label, as the homepage's headline does.
+- **A person's month** shows their login now, the month, like
+  `september 2026`, and three counts of that month so far: PRs merged,
+  projects helped, and PRs opened. They are the person's row on the
+  leaderboard, over the month in UTC, from 00:00 on its first day. So
+  own-project work doesn't count, and neither does anything the
+  leaderboard hides. With no PR merged yet that month, it says
+  `No PRs merged yet`, with the PRs opened when there are any.
+- **A project's totals** show its code repo, `Tagged issues for outside
+  help.`, and three counts of all time: PRs merged, as its page counts
+  them, its own maintainers' included, then people helped and issues
+  worked, as the leaderboard by project counts them.
+- **A merged PR** shows the issue's repo and number, a `merged` pill, the
+  donor by their login now, and the agent their claim named. When more than
+  one PR on the issue merged, it shows the latest. It never shows the PR's
+  title, which is the repo's own text and could name anyone, as the
+  [X post link](#the-donors-tools) leaves it out.
+
+**What a card hides.** A card shows what its page shows, and no more.
+
+- A person's card is `404` wherever their page is: a login no one signed in
+  with, a blocked donor, and a path no GitHub login fits.
+- A project's card is `404` wherever its page is: a project that isn't
+  approved or paused, one the sync delisted, one the do-not-list names, one
+  that isn't a project, and a path the site owns.
+- An issue's card is the default card until a PR from a claim on it merges,
+  and while each PR on it that merged is hidden: a blocked donor's, one the
+  do-not-list names, or one on a project without a page. A path no issue
+  fits is `404`.
+- Every name on a card comes from GitHub, so it is folded to one line of
+  what a person can see, as a text stream's line is, and cut to GitHub's
+  longest. A name too long for the card ends in an ellipsis at its edge. On
+  a merged PR's card, the repo is what gets cut, and the issue's number
+  stays whole.
+
+**How a card is served.**
+
+- It is made each time it is asked for, as a page is, and nothing caches
+  it yet. It is public, the same for everyone, and sets no cookie.
+- It is read with `GET` or `HEAD`. Any other method is `405`.
+- When the database can't answer, it is `503`, with a line of text.
 
 ## Sample data in development
 

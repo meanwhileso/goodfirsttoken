@@ -19,6 +19,7 @@
     "@cloudflare/workers-oauth-provider": "1.1.0",
     "@goodfirsttoken/core": "workspace:*",
     "@modelcontextprotocol/server": "2.1.0",
+    "@takumi-rs/wasm": "2.14.0",
     "@tanstack/react-router": "^1.170.39",
     "@tanstack/react-start": "^1.168.58",
     "better-auth": "1.7.6",

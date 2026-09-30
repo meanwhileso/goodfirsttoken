@@ -17,6 +17,7 @@ import {
 import { tally, type TallyScope } from './leaderboard';
 import { checkTime, joinIssue, prFromColumns, splitIssue } from './shared';
 import { SHOWN } from './shown';
+import { HAS_PAGE } from './waiting';
 
 // The prs table: the PR opened for each claim, followed until it merges or
 // closes.
@@ -466,6 +467,44 @@ export async function listMergedPrs(
       agent: mustParse(agentName, row.agent, 'agent'),
       mergedAt: checkTime(row.merged_at, 'mergedAt'),
     })),
+  };
+}
+
+/** A merged PR as a share card shows it: the issue, the donor by their login now, and the agent. */
+export interface MergedOnIssue {
+  issue: string;
+  login: string;
+  agent: string;
+}
+
+/**
+ * The PR that merged latest from a claim on `issue`, like `owner/name#12`,
+ * or null when none did. Left out as for listMergedPrs: a blocked donor's,
+ * and one the do-not-list names. So is one on a project without a page, as
+ * HAS_PAGE says, so nothing shows from a delisted project's repos.
+ */
+export async function latestMergedOnIssue(db: D1Database, issue: string): Promise<MergedOnIssue | null> {
+  const { repo, number } = splitIssue(issue);
+  // The issue's claims through claims_by_issue, each one's PR, person, and
+  // project by key. Inside the subquery, p is the project.
+  const row = await db
+    .prepare(
+      `SELECT c.issue_repo, c.issue_number, c.agent, pe.login
+       FROM claims c
+       JOIN prs p ON p.claim_id = c.id
+       JOIN people pe ON pe.github_id = c.github_id
+       WHERE c.issue_repo = ? AND c.issue_number = ? AND p.state = 'merged' AND ${SHOWN}
+         AND EXISTS (SELECT 1 FROM projects p WHERE p.repo = c.project AND ${HAS_PAGE})
+       ORDER BY p.merged_at DESC, p.claim_id
+       LIMIT 1`,
+    )
+    .bind(repo, number)
+    .first<{ issue_repo: string; issue_number: number; agent: string; login: string }>();
+  if (row === null) return null;
+  return {
+    issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+    login: mustParse(githubLogin, row.login, 'login'),
+    agent: mustParse(agentName, row.agent, 'agent'),
   };
 }
 

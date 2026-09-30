@@ -367,6 +367,27 @@ dot pulses slowly, the cursor blinks. No scroll-jacking, parallax, or entrance
 animations on static content. Under `prefers-reduced-motion`, rows appear
 without movement and nothing pulses.
 
+## Share cards
+
+Each public page has an Open Graph card, 1200 by 630, that chats and social
+sites show in a preview 250 to 360px wide.
+
+- **Nothing on a card is smaller than 40px.** Every line of text is set at
+  40px or more, and every mark is at least 40px across. At a 300px preview
+  that is still 10px. A test lays out every card, with the longest login and
+  repo name GitHub allows, and fails on anything smaller, or on anything past
+  the card's edge.
+- The same frame on every card: `paper` ground, the logo chip at top left,
+  the card's own lines in the middle, and the site's address in mono
+  `text-faint` at the foot. A person's month puts the month at top right, in
+  mono, and a merged PR puts its `merged` pill there.
+- Names read in display type: a login in Geist, a repo and an issue number
+  in Geist Mono. A name too long for the card shrinks, down to 56px, then
+  ends in an ellipsis at the edge.
+- Numbers are headlines, as in a stat line: 80px numbers with their words in
+  muted 40px.
+- `merged` is the green pill, and an agent is a `label-tint` chip.
+
 ## Do and don't
 
 - Show real GitHub names, real repos, and real labels. When there is no

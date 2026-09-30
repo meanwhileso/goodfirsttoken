@@ -10,7 +10,7 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, the share cards, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
@@ -100,6 +100,8 @@ The repo is a pnpm workspace.
 - **`/me` is `src/routes/me.tsx`, with what it reads and its forms in
   `src/me/`,** described under [/me](#me). **`/maintainers` is
   `src/routes/maintainers.tsx`,** which reads nothing.
+- **The share cards live in `src/cards/`,** described under
+  [Share cards](#share-cards).
 
 ### Sign-in
 
@@ -2680,6 +2682,87 @@ The leaderboard, A person's page, and The live page.
   `e2e/leaderboard.spec.ts`, `e2e/person.spec.ts`, and `e2e/live.spec.ts`
   check each view and page in the browser, with screenshots at 390 and
   1280px, under [Tests](#tests).
+
+## Share cards
+
+Each public page's Open Graph image. The rules are in
+[how-it-works.md](how-it-works.md#share-cards), under Share cards, and the
+40px rule in [brand/design.md](../brand/design.md#share-cards).
+
+| File | What it does |
+|---|---|
+| `src/cards/cards.ts` | The four cards as trees of boxes and text: `defaultCard`, `personCard`, `projectCard`, and `mergedCard`. Each folds the names it shows with core's `foldUntrusted` |
+| `src/cards/load.ts` | What each card reads, and when there is no card: `loadPersonCard`, `loadProjectCard`, and `loadIssueCard`, and `monthOf`, a UTC month |
+| `src/cards/render.ts` | `renderCard`, a card as a PNG, and `measureCard`, where the renderer puts each box and line |
+| `src/cards/route.ts` | The paths, and the answer to each: the PNG, `404`, `405`, or `503` |
+| `src/cards/meta.ts` | `cardMeta`, the `og:image` tags a page's `head` adds |
+| `src/cards/takumi.d.ts` | The renderer's types, for the parts the cards use |
+| `src/db/prs.ts` | Adds `latestMergedOnIssue`, the issue's latest merged PR the site shows |
+
+- **The renderer is Takumi,** `@takumi-rs/wasm`, a layout and drawing
+  engine in Rust built to WebAssembly, under MIT or Apache-2.0, with one
+  dependency of its own, `@takumi-rs/helpers`. It reads the site's own
+  font files, WOFF2 with variable weights, as they are. Satori with
+  resvg, the usual choice, doesn't read WOFF2, as its README says, so it
+  would need a second copy of each font in another format. Takumi's
+  `measure` gives back where it puts each box and line, which the 40px
+  test reads. `pnpm audit` finds nothing in either package.
+- **What it costs.** The WebAssembly file is 3.8 MB, 1.6 MB gzipped, and the
+  fonts add about 190 kB, base64 in the Worker's code. As
+  `wrangler deploy --dry-run` counts the build the deploy uses, the Worker
+  grows from about 980 KiB gzipped to about 2,730 KiB. Workers Paid allows
+  10 MB and Workers Free 3 MB, so it still fits a free account, with little
+  room left. CPU is what needs Workers Paid. In Node, a card took 20 to 50 ms
+  to draw, and the first one in a new isolate 150 to 370 ms, as it starts
+  the renderer and registers the fonts. Workers Free allows 10 ms of CPU a
+  request, so every card would fail there, and the sync's runs already need
+  more too. [self-hosting.md](self-hosting.md) names the plan.
+- **Only the Worker loads it.** `render.ts` imports the WebAssembly module
+  through the package's `workerd` export, which `@cloudflare/vite-plugin`
+  and the unit tests' runtime load as a compiled module. The fonts come in
+  with Vite's `?inline`, as data URLs, so a card fetches nothing at render
+  time. The first card an isolate draws starts the renderer and registers
+  both fonts, and the rest reuse it. The pages' own code never imports
+  `render.ts`, so no browser downloads any of it.
+- **Its own types.** The package's types add CSS custom properties to
+  React's `CSSProperties`, for every file in the app, as a module
+  augmentation. `tsconfig.json` points the package's name at
+  `src/cards/takumi.d.ts` instead, so the app keeps React's own types and
+  the lint rules that read them. Vite bundles the package itself all the
+  same.
+- **The route.** `src/server.ts` hands a path shaped like a card's to
+  `src/cards/route.ts`, before TanStack Start, as it does the text streams.
+  Each card sits beside its page: `/card.png`, `/@<login>/card.png`,
+  `/<owner>/<repo>/card.png`, and `/<owner>/<repo>/issues/<n>/card.png`.
+  Each check of a path, and each 404, is the page's own: `githubLogin`,
+  `repoFromPath`, and `issueFromPath`, `findPersonByLogin` and the block,
+  and `hasPage`.
+- **The counts.** A person's month is the person tally over the month, and
+  a project's totals the project tally of all time, with `ownMerged` added
+  to `merged` so the card says what the page says. `latestMergedOnIssue`
+  reads the issue's claims through `claims_by_issue`, each PR, person, and
+  project by key, with `SHOWN` and `HAS_PAGE`.
+- **The tags.** The root route's `head` names the default card, and a
+  person's page, a project's page, and an issue's page each name their own
+  when they have a page to show. TanStack Router keeps the deepest route's
+  tag of each `property`, so the page's card takes the default's place.
+  `cardMeta` gives the full URL on `siteOrigin` on the server, and on the
+  page's own origin in the browser, through `createIsomorphicFn`.
+- **Caching.** A card is made on each request, as a page is, and sends no
+  `Cache-Control`, as a page doesn't. Nothing caches it yet.
+- **How they look.** [docs/cards/](cards/) holds each card at 300px wide,
+  the width of a chat preview, drawn with made-up names.
+- **Tests.** `test/cards/cards.test.ts` draws each card through the Worker
+  and checks it is a 1200 by 630 PNG. It lays out each card with
+  `measureCard`, with the longest login and repo name GitHub allows and
+  big numbers, and fails on a line shorter than a 40px line of either
+  font, a mark under 40px, or anything past the card's edge. A test of the
+  check itself shows it finds text at 39px, a 30px mark, and a line past
+  the edge. The rest check the words each card lays out against D1: the
+  month's edges and the leaderboard's rules, the project's counts against
+  its page, that a merged PR's card names only the repo, issue, donor, and
+  agent, the fold, each hidden case, `404` and the default card, and the
+  `og:image` tag of each kind of page.
 
 ## The sync
 
