@@ -314,6 +314,10 @@ hold one token for the site, and one for each connected agent.
   counted with Cloudflare rate limiting. The next gets `429` with
   `Retry-After: 60`. Other people's agents keep theirs.
 - A disconnected agent gets `401` on its next call.
+- When a tool fails on the site's side, like the database erroring, the
+  agent gets `Something went wrong on Good First Token's side. Try again in
+  a moment.` as an error, and the log keeps what failed. The error's own
+  words never reach the agent, since they can name the database's tables.
 
 **Limits on an agent's sign-in.** Opening the page, approving, and
 GitHub's return each count toward the sign-in limit under
