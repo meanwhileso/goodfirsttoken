@@ -37,7 +37,9 @@ export function withSecurityHeaders(request: Request, response: Response): Respo
   if (response.status === 101 || response.webSocket) return response;
   const url = new URL(request.url);
   const primary = env.PRIMARY_DOMAIN.trim().toLowerCase();
-  const hsts = primary !== '' && url.protocol === 'https:' && url.hostname === primary;
+  // A trailing dot names the same host, as src/redirect.ts reads it.
+  const host = url.hostname.replace(/\.$/, '');
+  const hsts = primary !== '' && url.protocol === 'https:' && host === primary;
   const page = /^text\/html\b/i.test(response.headers.get('content-type') ?? '');
   if (!hsts && !page) return response;
   // The answer's headers can be immutable, as a fetched answer's are.

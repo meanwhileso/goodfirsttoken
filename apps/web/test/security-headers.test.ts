@@ -49,6 +49,12 @@ test('HSTS goes only with https answers from the primary domain, and never asks 
   expect(json.headers.get('strict-transport-security')).toBe(HSTS);
 });
 
+test('the primary domain written with a trailing dot gets HSTS too, as it is the same host', async () => {
+  const res = await workerFetch('https://primary.example./');
+
+  expect(res.headers.get('strict-transport-security')).toBe(HSTS);
+});
+
 test('an answer that is not a page keeps its own headers, with no page policy added', async () => {
   const json = await workerFetch('https://primary.example/healthz');
   const stream = await workerFetch('https://primary.example/live.txt', { method: 'HEAD' });
