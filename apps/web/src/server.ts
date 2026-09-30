@@ -39,7 +39,8 @@ const site: ExportedHandler<Env> = {
     if (isCardPath(request)) return answerCard(request);
     if (new URL(request.url).pathname === AUTHORIZE_PATH && request.method === 'POST') return answerConsent(request);
     const readable = readableRoute(request);
-    if (readable) return handleReadable(request, readable);
+    const answered = readable && (await handleReadable(request, readable));
+    if (answered) return answered;
     return varyByAccept(withPageStatus(await handler.fetch(request)));
   },
 };

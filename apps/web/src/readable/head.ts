@@ -4,7 +4,7 @@ import { productName } from '@goodfirsttoken/core';
 // canonical URL, the Open Graph tags that chat apps and search engines read,
 // and a link to the page's markdown version. The origin is the site's own,
 // from the root route's loader (src/routes/__root.tsx), which reads it from
-// the environment (siteOrigin in src/auth/settings.ts), never from a file.
+// the environment (siteOrigin in src/auth/settings.ts). No file holds it.
 
 type Meta = Record<string, string>;
 type HeadLink = Record<string, string>;

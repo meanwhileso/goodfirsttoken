@@ -2682,7 +2682,10 @@ The rules are in [how-it-works.md](how-it-works.md#readable-by-agents).
   files are answered in `src/server.ts`, before any page renders, so they
   carry no page's HTML, scripts, or cookies. A `.md` path that names no
   page, like `/start.md`, and a path whose owner belongs to the site, asked
-  for with `Accept: text/markdown`, go on to the rest of the site.
+  for with `Accept: text/markdown`, go on to the rest of the site. So does a
+  project's `.md` or `.json` path when the loader finds no project with a
+  page, since a repo's name can end in either: an answer of null from
+  `readableRoute`'s answer hands the request to TanStack Start.
 - **The route list.** A test walks `routeTree`, from
   `src/routeTree.gen.ts`, and fails when a route with a component is in
   neither `MARKDOWN_ROUTES` nor `NO_MARKDOWN`. It then asks for each
@@ -2726,9 +2729,9 @@ code does it.
 | A project's and a person's canonical URL use the name as saved, and the login now | the routes' `head` | Done |
 | `og:title`, `og:description`, `og:url`, `og:type`, and `og:site_name` | `pageHead` | Done |
 | `og:image`, a 1200 by 630 card, with its size and alt text | `cardMeta` in `src/cards/meta.ts`, through `routeHead` | Done |
-| A page that isn't there is `404`, with `noindex` and no canonical URL | the routes' `head`, and the loaders' `not_found` | Done |
+| A page that isn't there is `404`, and a route's not-found page also says `noindex`, with no canonical URL | the routes' `head`, and the loaders' `not_found` | Done |
 | `/me`, `/admin`, and `/oauth/authorize` say `noindex` | their routes' `head` | Done |
-| `/robots.txt` keeps crawlers off the signed-in pages, sign-in, `/mcp`, the dev routes, the server functions, and the hour-long streams, names the sitemap, and covers no project's page | `robotsTxt` | Done |
+| `/robots.txt` keeps crawlers off the signed-in pages, sign-in's `/auth/` and `/oauth/` paths, `/mcp`, the dev routes, the server functions, and the hour-long streams, names the sitemap, and covers no project's page | `robotsTxt` | Done |
 | `/sitemap.xml` lists the public pages and each project with a page, at most 1,000 | `sitemapXml` | Done |
 | Issue and person pages in the sitemap, and a sitemap index past 1,000 projects | | Not yet |
 | The HTML is rendered on the server, so a crawler reads it with no script | TanStack Start | Done |

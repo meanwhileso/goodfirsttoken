@@ -14,7 +14,8 @@ export const PUBLIC_PAGES = ['/', '/projects', '/leaderboard', '/live', '/mainta
 
 /**
  * /robots.txt. Every page is open to crawlers, except the signed-in pages,
- * sign-in itself, the MCP server, the dev routes, and the live streams,
+ * sign-in's `/auth/` and `/oauth/` paths, the MCP server, the dev routes,
+ * and the live streams,
  * which stay open for an hour. Each rule names the path exactly, with `$`,
  * or as a folder, so it can't cover a project's page, like one whose owner
  * starts with `me`.
@@ -26,9 +27,11 @@ export function robotsTxt(origin: string): string {
     'Disallow: /me$',
     'Disallow: /me?',
     'Disallow: /me.md$',
+    'Disallow: /me.md?',
     'Disallow: /admin$',
     'Disallow: /admin?',
     'Disallow: /admin.md$',
+    'Disallow: /admin.md?',
     'Disallow: /auth/',
     'Disallow: /oauth/',
     'Disallow: /mcp$',
@@ -58,7 +61,16 @@ export async function sitemapXml(origin: string): Promise<string | null> {
   let repos: string[];
   try {
     const { projects } = await listProjectsWithPage(env.DB, { limit: SITEMAP_PROJECTS });
-    repos = projects.map((project) => project.repo);
+    // A repo whose name ends in .md or .json has no page of its own to
+    // reach while the repo without the ending has one, since that path is
+    // the other's markdown or JSON. It stays out.
+    const listed = new Set(projects.map((project) => project.repo.toLowerCase()));
+    repos = projects
+      .map((project) => project.repo)
+      .filter((repo) => {
+        const bare = repo.toLowerCase().replace(/\.(md|json)$/, '');
+        return bare === repo.toLowerCase() || !listed.has(bare);
+      });
   } catch (error) {
     console.warn('The sitemap could not read the projects.', error);
     return null;

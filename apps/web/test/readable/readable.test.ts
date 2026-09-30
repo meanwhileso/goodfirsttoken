@@ -194,34 +194,87 @@ describe("every page's markdown version", () => {
   });
 });
 
+/**
+ * Projects that have no page, each made so by one rule: pending, rejected,
+ * delisted by the sync, or on the do-not-list. Each hides after it is made.
+ */
+const HIDDEN: [string, () => Promise<void>][] = [
+  ['sample-owner/sample-pending', async () => {
+    await setProjectStatus(db, 'sample-owner/sample-pending', { status: 'pending', reason: null, changedBy: admin.githubId }, t0);
+  }],
+  ['sample-owner/sample-rejected', async () => {
+    await setProjectStatus(db, 'sample-owner/sample-rejected', { status: 'rejected', reason: 'No tests.', changedBy: admin.githubId }, t0);
+  }],
+  ['sample-owner/sample-delisted', async () => {
+    await setDelisted(db, 'sample-owner/sample-delisted', 'GitHub shows no public repo named sample-owner/sample-delisted.', t0);
+  }],
+  ['sample-owner/sample-removed', async () => {
+    await addToDoNotList(db, { repo: 'sample-owner/sample-removed', reason: null, addedBy: admin.githubId }, t0);
+  }],
+];
+
+describe('a repo whose name ends in .md or .json', () => {
+  test('keeps its HTML page at its path, with its markdown at the path plus .md, when only it is listed', async () => {
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/notes.md');
+
+    const page = await get('/sample-owner/notes.md');
+    const markdown = await get('/sample-owner/notes.md.md');
+
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toContain('text/html');
+    expect(markdown.status).toBe(200);
+    expect(await markdown.text()).toContain('# sample-owner/notes.md');
+  });
+
+  test('keeps its HTML page when it ends in .json, and only it is listed', async () => {
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/data.json');
+
+    const page = await get('/sample-owner/data.json');
+
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toContain('text/html');
+  });
+
+  test('is 404 when neither it nor the repo without the ending is listed', async () => {
+    expect((await get('/sample-owner/notes.md')).status).toBe(404);
+    expect((await get('/sample-owner/data.json')).status).toBe(404);
+  });
+
+  test('gives the path to the markdown of the repo without the ending when both are listed, and leaves it out of the sitemap', async () => {
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/notes');
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/notes.md');
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/data');
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/data.json');
+
+    const markdown = await get('/sample-owner/notes.md');
+    const json = await get('/sample-owner/data.json');
+    const sitemap = await (await get('/sitemap.xml')).text();
+
+    expect(await markdown.text()).toContain('# sample-owner/notes\n');
+    expect(openProjectFileSchema.parse(await json.json()).project.repo).toBe('sample-owner/data');
+    expect(sitemap).toContain(`<loc>${ORIGIN}/sample-owner/notes</loc>`);
+    expect(sitemap).toContain(`<loc>${ORIGIN}/sample-owner/data</loc>`);
+    expect(sitemap).not.toContain(`<loc>${ORIGIN}/sample-owner/notes.md</loc>`);
+    expect(sitemap).not.toContain(`<loc>${ORIGIN}/sample-owner/data.json</loc>`);
+  });
+});
+
 describe('what a page hides, its markdown hides, with the same status', () => {
   test("a pending, rejected, delisted, or do-not-listed project's markdown is 404 as its page is, and shows nothing cached from its repo", async () => {
-    const cases: [string, () => Promise<void>][] = [
-      ['sample-owner/sample-pending', async () => {
-        await setProjectStatus(db, 'sample-owner/sample-pending', { status: 'pending', reason: null, changedBy: admin.githubId }, t0);
-      }],
-      ['sample-owner/sample-rejected', async () => {
-        await setProjectStatus(db, 'sample-owner/sample-rejected', { status: 'rejected', reason: 'No tests.', changedBy: admin.githubId }, t0);
-      }],
-      ['sample-owner/sample-delisted', async () => {
-        await setDelisted(db, 'sample-owner/sample-delisted', 'GitHub shows no public repo named sample-owner/sample-delisted.', t0);
-      }],
-      ['sample-owner/sample-removed', async () => {
-        await addToDoNotList(db, { repo: 'sample-owner/sample-removed', reason: null, addedBy: admin.githubId }, t0);
-      }],
-    ];
-    for (const [name, hide] of cases) {
+    for (const [name, hide] of HIDDEN) {
       await registeredProject({ tags: ['help wanted'] }, name);
       await tag(name, `${name}#1`, 'A title only the page could show');
       await hide();
 
       const page = await get(`/${name}`);
-      const markdown = await get(`/${name}.md`);
+      const markdown = await get(`/${name}`, asMarkdown);
+      const suffixed = await get(`/${name}.md`);
       const issue = await get(`/${name}/issues/1.md`);
 
       expect(page.status, name).toBe(404);
       expect(markdown.status, name).toBe(404);
       expect(await markdown.text(), name).toContain("isn't listed on Good First Token");
+      expect(suffixed.status, name).toBe(404);
       expect(await issue.text(), name).not.toContain('A title only the page could show');
     }
   });
@@ -267,6 +320,33 @@ describe('what a page hides, its markdown hides, with the same status', () => {
     expect(await me.text()).toContain('# Your queue');
     expect(notAdmin.status).toBe(404);
     expect(notAdmin.headers.get('cache-control')).toBe('no-store');
+    vi.unstubAllGlobals();
+  });
+
+  test("a signed-in person's markdown, /me.md, /admin.md, and /me asked for as markdown, lets no other origin read it", async () => {
+    const configured = env.ADMIN_GITHUB_IDS;
+    env.ADMIN_GITHUB_IDS = '1010';
+    restore = () => {
+      env.ADMIN_GITHUB_IDS = configured;
+    };
+    const github = startGitHub();
+    const person = new Browser();
+    await signInOnGitHub(person, github, 'priya');
+    const admin = new Browser();
+    await signInOnGitHub(admin, github, 'sample-admin');
+
+    const answers = [
+      ['/me.md', await person.fetch('/me.md')],
+      ['/me as markdown', await person.fetch('/me', asMarkdown)],
+      ['/admin.md', await admin.fetch('/admin.md')],
+      ['/admin.md for someone who is not an admin', await person.fetch('/admin.md')],
+    ] as const;
+
+    expect(answers[2][1].status).toBe(200);
+    for (const [name, res] of answers) {
+      expect(res.headers.get('access-control-allow-origin'), name).toBeNull();
+      expect(res.headers.get('content-type'), name).toBe('text/markdown; charset=utf-8');
+    }
     vi.unstubAllGlobals();
   });
 });
@@ -416,7 +496,7 @@ describe('robots.txt, the sitemap, and llms.txt', () => {
     for (const path of ['/', '/projects', '/index.md', `/${repo}`, `/${repo}.md`, '/meanwhileso/goodfirsttoken', '/@priya', '/admin-tools/repo', '/mcpx/repo', '/llms.txt', '/projects.json']) {
       expect(allowed(robots, path), path).toBe(true);
     }
-    for (const path of ['/me', '/me.md', '/admin', '/admin?after=x', '/auth/sign-in', '/oauth/authorize', '/mcp', '/live.txt', `/${repo}/live.ndjson`, '/@priya/live.txt?since=e_1']) {
+    for (const path of ['/me', '/me.md', '/me.md?notice=x', '/admin', '/admin?after=x', '/admin.md', '/admin.md?after=x', '/auth/sign-in', '/oauth/authorize', '/mcp', '/live.txt', `/${repo}/live.ndjson`, '/@priya/live.txt?since=e_1']) {
       expect(allowed(robots, path), path).toBe(false);
     }
   });
@@ -502,19 +582,27 @@ describe('the JSON data', () => {
 
   test("/<owner>/<repo>.json is the project's record, found without case, and 404 for a repo with no page", async () => {
     await policyListing('sample-owner/sample-listed');
-    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/sample-pending');
-    await setProjectStatus(db, 'sample-owner/sample-pending', { status: 'pending', reason: null, changedBy: admin.githubId }, t0);
 
     const found = await get('/SAMPLE-OWNER/sample-listed.json');
     const body: unknown = await found.json();
-    const pending = await get('/sample-owner/sample-pending.json');
     const none = await get('/sample-owner/nothing.json');
     const site = await get('/admin/anything.json');
 
     expect(found.status).toBe(200);
     expect(openProjectFileSchema.parse(body).project).toMatchObject({ repo: 'sample-owner/sample-listed', source: 'policy' });
-    expect([pending.status, none.status, site.status]).toEqual([404, 404, 404]);
-    expect(await pending.json()).toEqual(await none.json());
+    expect([none.status, site.status]).toEqual([404, 404]);
+  });
+
+  test("a pending, rejected, delisted, or do-not-listed project's JSON is 404, as its page is, with none of its settings", async () => {
+    for (const [name, hide] of HIDDEN) {
+      await registeredProject({ tags: ['help wanted'], agentNotes: 'Notes only the page could show.' }, name);
+      await hide();
+
+      const res = await get(`/${name}.json`);
+
+      expect(res.status, name).toBe(404);
+      expect(await res.text(), name).not.toContain('Notes only the page could show.');
+    }
   });
 
   test('the list comes a page at a time, by repo, each page linking the next, and the last linking none', async () => {

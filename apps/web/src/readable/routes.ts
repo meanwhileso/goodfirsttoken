@@ -45,7 +45,13 @@ interface MarkdownRoute {
   route: string;
   /** The page's path, with its parameters, or null when this route doesn't take the path. */
   match: (path: string) => Params | null;
-  answer: (request: Request, params: Params) => Promise<Response>;
+  /**
+   * The answer, or null to hand the request on to the rest of the site. The
+   * project page's route hands on a `.md` path whose project has no page,
+   * since the path can be a page of its own, like `/owner/notes.md` for
+   * the repo `owner/notes.md`.
+   */
+  answer: (request: Request, params: Params, suffixed: boolean) => Promise<Response | null>;
 }
 
 const MARKDOWN_TYPE = 'text/markdown; charset=utf-8';
@@ -187,9 +193,10 @@ export const MARKDOWN_ROUTES: readonly MarkdownRoute[] = [
       const found = /^\/([^/@][^/]*)\/([^/]+)\/?$/.exec(path);
       return found ? { owner: found[1] ?? '', repo: found[2] ?? '' } : null;
     },
-    answer: async (request, { owner = '', repo = '' }) => {
+    answer: async (request, { owner = '', repo = '' }, suffixed) => {
       const origin = siteOrigin(request);
       const project = await loadProject(request, owner, repo);
+      if (project.state === 'not_found' && suffixed) return null;
       if (project.state === 'ready') return markdown(200, projectMarkdown(origin, project), page(origin, `/${project.repo}`));
       if (project.state === 'unavailable') {
         return markdown(UNAVAILABLE, notFoundMarkdown(project.repo, "This project can't be read right now. Try again in a moment."));
@@ -274,14 +281,19 @@ async function projectsJson(request: Request, url: URL): Promise<Response> {
   return json(200, result.file);
 }
 
-async function projectJson(request: Request, owner: string, repo: string): Promise<Response> {
+/**
+ * The project's JSON, or null to hand the request on when the project has
+ * no page, since the path can be the page of a repo whose name ends in
+ * `.json`.
+ */
+async function projectJson(request: Request, owner: string, repo: string): Promise<Response | null> {
   const result = await loadProjectFile(siteOrigin(request), owner, repo);
-  if (result.state === 'not_found') return json(404, { error: 'not_found', message: 'No project with a page on Good First Token has this repo.' });
+  if (result.state === 'not_found') return null;
   if (result.state === 'unavailable') return json(UNAVAILABLE, { error: 'unavailable', message: "The project can't be read right now." });
   return json(200, result.file);
 }
 
-type Answer = () => Promise<Response>;
+type Answer = () => Promise<Response | null>;
 
 /**
  * What answers the request, when it is for one of the forms above and uses
@@ -311,16 +323,21 @@ export function readableRoute(request: Request): Answer | null {
 
   const asked = markdownRequest(request, url);
   if (asked === null) return null;
+  const suffixed = path.endsWith('.md');
   for (const route of MARKDOWN_ROUTES) {
     const params = route.match(asked);
-    if (params !== null) return () => route.answer(request, params);
+    if (params !== null) return () => route.answer(request, params, suffixed);
   }
   return null;
 }
 
-/** Answers the request as readableRoute found, with no body for HEAD. */
-export async function handleReadable(request: Request, answer: Answer): Promise<Response> {
+/**
+ * Answers the request as readableRoute found, with no body for HEAD, or
+ * null when the answer hands it on to the rest of the site.
+ */
+export async function handleReadable(request: Request, answer: Answer): Promise<Response | null> {
   const response = await answer();
+  if (response === null) return null;
   return request.method === 'HEAD' ? new Response(null, { status: response.status, headers: response.headers }) : response;
 }
 
