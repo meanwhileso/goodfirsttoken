@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { untrustedLine } from './characters';
 import {
   agentName,
   commitSha,
@@ -54,7 +55,8 @@ export const REVIEW_WINDOW_MS = 7 * DAY;
 
 /** The longest public reason for giving up a claim. */
 export const MAX_RELEASE_REASON = 200;
-export const releaseReason = trimmedText(MAX_RELEASE_REASON);
+/** Why the claimant gave up. It reaches the public feeds, so it folds the way a posted line does. */
+export const releaseReason = untrustedLine(MAX_RELEASE_REASON);
 
 // The facts about one claim that its state depends on.
 const timelineShape = {
@@ -65,8 +67,13 @@ const timelineShape = {
   lastUpdateAt: epochMs,
   /** When the work was first submitted, or null before that. */
   submittedAt: epochMs.nullable(),
-  /** The public reason, for a released claim. Null in every other state. */
-  releaseReason: releaseReason.nullable(),
+  /**
+   * The public reason, for a released claim. Null in every other state. A
+   * release folds it by releaseReason, and a claim stored before reasons
+   * were folded keeps its reason as it was given, so it is checked the way
+   * it was then.
+   */
+  releaseReason: trimmedText(MAX_RELEASE_REASON).nullable(),
   /** The PR, once one is open for the claim. Null before that. */
   pr: prRefSchema.nullable(),
 };

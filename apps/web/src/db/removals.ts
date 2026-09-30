@@ -4,6 +4,7 @@ import {
   githubLogin,
   id,
   mustParse,
+  removalReason,
   removalRequestSchema,
   removalStatusSchema,
   repoName,
@@ -61,10 +62,13 @@ export async function askRemoval(
   ask: { repo: string; reason: string; requestedBy: number },
   now: number,
 ): Promise<AskedRemoval> {
+  // A new reason is checked as request_removal takes it. The request's own
+  // schema also reads reasons stored under the fold before, so it is looser.
+  const reason = mustParse(removalReason, ask.reason, 'reason');
   for (let attempt = 0; attempt < 3; attempt++) {
     const request = mustParse(
       removalRequestSchema,
-      { ...ask, id: newId('rem'), requestedAt: checkTime(now), status: 'waiting', closedBy: null, closedAt: null },
+      { ...ask, reason, id: newId('rem'), requestedAt: checkTime(now), status: 'waiting', closedBy: null, closedAt: null },
       'removal request',
     );
     // The unique index on waiting requests turns a second one into nothing.
