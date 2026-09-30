@@ -272,6 +272,7 @@ To start staging deploys, once #32 merges:
   their settings as secrets.
 - Sign-in (#8), the MCP server (#9), and the sync (#12) add settings each environment needs before its
   first deploy: `SIGN_IN_LIMITER_NAMESPACE_ID`, `MCP_LIMITER_NAMESPACE_ID`, `TOKEN_LIMITER_NAMESPACE_ID`,
+  `STREAM_LIMITER_NAMESPACE_ID`,
   `OAUTH_CLIENT_ID`, `ADMIN_GITHUB_IDS`, and the secrets `OAUTH_CLIENT_SECRET`, `AUTH_SECRET`, and
   `GH_SERVICE_TOKEN`.
   [docs/self-hosting.md](docs/self-hosting.md) says what each one is.

@@ -352,11 +352,13 @@ hold one token for the site, and one for each connected agent.
 
 **Limits on an agent's sign-in.** Opening the page, approving, and
 GitHub's return each count toward the sign-in limit under
-[Signing in](#signing-in): 20 requests a minute from each address. None
-counts when another site's page could have made the browser send it: an
-approval refused for its `Origin`, a page load refused with `400` above,
-and GitHub's return to a browser with no connection in progress, which gets
-`400` and says to connect again from the agent.
+[Signing in](#signing-in): 20 requests a minute from each address.
+Requests another site's page makes in the background, like images, frames,
+scripts, and fetches, don't count: an approval refused for its `Origin`, a
+page load refused with `400` above, and GitHub's return to a browser with no
+connection in progress, which gets `400` and says to connect again from the
+agent. A page another site opens in a tab of its own still counts, since an
+agent in a web page opens the page to approve it that way.
 
 - Each registration stores a client, so registrations have a limit of
   their own, 20 a minute from each address, apart from the sign-in limit.
