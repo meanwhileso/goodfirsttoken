@@ -198,25 +198,27 @@ function tailOf(parts: readonly string[]): string {
 
 // One line of any length, stripped as stripSecrets strips a short one. A
 // longer line is read in pieces cut at whitespace, and each piece is read
-// together with the last few words of the one before it, so a name and its
-// value, or `Authorization: Bearer` and its token, are read together
-// wherever the cut falls. A key or token with no whitespace in it is never
-// cut. A run with no whitespace longer than a piece could hide one, and
-// can't be read in pieces, so it is replaced whole.
+// together with the last few words already stripped before it, which it
+// can replace too, so a name and its value, or `Authorization: Bearer` and
+// its token, are read together wherever the cut falls, even right after
+// another secret. A key or token with no whitespace in it is never cut. A
+// run with no whitespace longer than a piece could hide one, and can't be
+// read in pieces, so it is replaced whole.
 function stripLine(line: string): string {
   if (line.length <= MAX_STRIP_LENGTH) return stripSecrets(line);
   let out = '';
   let piece: string[] = [];
   let length = 0;
-  let tail = '';
+  // Whether the end of `out` can be read with the next piece. Not after a
+  // run replaced whole, which ends a word.
+  let joined = false;
   const flush = () => {
     if (piece.length === 0) return;
-    const text = piece.join('');
-    const both = stripSecrets(tail + text);
-    // The end of the last piece stays as it was, unless it held a secret,
-    // which that piece already replaced. Then this piece is read alone.
-    out += both.startsWith(tail) ? both.slice(tail.length) : stripSecrets(text);
-    tail = tailOf(piece);
+    // The last few words of what is stripped so far, at most TAIL_MAX long.
+    // The slice is long enough that a word it cuts is never among them.
+    const tail = joined ? tailOf(out.slice(-4 * TAIL_MAX).split(/(\s+)/)) : '';
+    out = out.slice(0, out.length - tail.length) + stripSecrets(tail + piece.join(''));
+    joined = true;
     piece = [];
     length = 0;
   };
@@ -224,7 +226,7 @@ function stripLine(line: string): string {
     if (part.length > PIECE_MAX) {
       flush();
       out += /^\s/.test(part) ? part : REDACTED;
-      tail = '';
+      joined = false;
       continue;
     }
     if (length + part.length > PIECE_MAX) flush();
@@ -258,7 +260,6 @@ export function stripSecretsFromText(text: string): string {
     .split('\n')
     .map((raw) => {
       const seen = raw.replace(HIDDEN, '');
-      const wasInKey = inKey;
       let line = seen;
       if (inKey) {
         const end = KEY_ENDS.exec(line);
@@ -279,7 +280,7 @@ export function stripSecretsFromText(text: string): string {
       }
       const stripped = stripLine(line);
       // A line with nothing to redact keeps the characters it was written with.
-      return !wasInKey && !inKey && stripped === seen ? raw : stripped;
+      return stripped === seen ? raw : stripped;
     })
     .join('\n');
 }

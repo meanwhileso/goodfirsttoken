@@ -294,6 +294,17 @@ describe('text of any length, like a PR description, is stripped line by line', 
     }
   });
 
+  test('a name and its value just after a token are read together wherever the cut falls', () => {
+    const password = `hunter2${chars(10)}`;
+    const bearer = chars(40);
+    for (const text of [...aroundTheCut(`${token} password: ${password}`), ...aroundTheCut(`${token} Authorization: Bearer ${bearer}`)]) {
+      const stripped = stripSecretsFromText(text);
+      expect(stripped).not.toContain(token);
+      expect(stripped).not.toContain(password);
+      expect(stripped).not.toContain(bearer);
+    }
+  });
+
   test('a private key flattened onto one long line, its body in chunks with spaces, is redacted from BEGIN through END', () => {
     const end = `${'-'.repeat(5)}END RSA PRIVATE KEY${'-'.repeat(5)}`;
     const chunks = Array.from({ length: 26 }, (_, i) => `${chars(64 - (i % 5))}${String(i)}`);
