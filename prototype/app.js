@@ -89,7 +89,8 @@
 
   function renderFooter(slot) {
     const links = [
-      ['start.md', 'start.md'],
+      // start.md is the site's /start.md now, from apps/web/src/start/.
+      ['https://github.com/meanwhileso/goodfirsttoken/blob/main/apps/web/src/start/start.md', 'start.md'],
       ['#llms', 'llms.txt'],
       ['#projects-json', 'projects.json'],
       // The design system is the site's /design page now, built from brand/design.md.

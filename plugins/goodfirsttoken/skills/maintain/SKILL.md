@@ -34,8 +34,9 @@ The tools come from the Good First Token MCP server at https://goodfirsttoken.or
 server at that URL, the way your harness does:
 
 - Claude Code: `/plugin marketplace add meanwhileso/goodfirsttoken`, then
-  `/plugin install goodfirsttoken`. The plugin carries the server. Or add
-  the server alone with `claude mcp add --transport http goodfirsttoken https://goodfirsttoken.org/mcp`.
+  `/plugin install goodfirsttoken`. The plugin carries the server and the
+  skills. Or add the server alone with
+  `claude mcp add --transport http goodfirsttoken https://goodfirsttoken.org/mcp`.
 - Codex: `codex mcp add goodfirsttoken --url https://goodfirsttoken.org/mcp`, then
   `codex mcp login goodfirsttoken`.
 - OpenCode: add `"goodfirsttoken": {"type": "remote", "url": "https://goodfirsttoken.org/mcp"}`

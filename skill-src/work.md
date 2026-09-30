@@ -19,10 +19,7 @@ The tools come from the Good First Token MCP server at {{MCP_URL}}. When
 `start_session` isn't among your tools, add the server as a remote MCP
 server at that URL, the way your harness does:
 
-- Claude Code: `/plugin marketplace add meanwhileso/goodfirsttoken`, then
-  `/plugin install goodfirsttoken`. The plugin carries the server and the
-  skills. Or add the server alone with
-  `claude mcp add --transport http goodfirsttoken {{MCP_URL}}`.
+{{include connect-claude-code}}
 {{include connect}}
 
 When the tools still don't show, start a new session. The first sign-in
