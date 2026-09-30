@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { foldUntrusted } from './characters';
 import { epochMs, issueRef, labelName, prRefSchema, repoName, trimmedText } from './primitives';
 import { MAX_STATUS_REASON } from './projects';
 
@@ -19,13 +20,37 @@ export const linkMethods = ['closing_reference', 'cross_reference'] as const;
 export const linkMethodSchema = z.enum(linkMethods);
 export type LinkMethod = z.infer<typeof linkMethodSchema>;
 
+/** The longest an issue's title is kept and shown, in graphemes: the most characters GitHub takes in one. */
+export const MAX_ISSUE_TITLE = 256;
+
+/**
+ * An issue's title as the site keeps and shows it. The title is untrusted
+ * repo text, so it is folded like a reviewer's words: one line, with only
+ * what a person can see, cut to MAX_ISSUE_TITLE graphemes.
+ */
+export function foldIssueTitle(title: string): string {
+  return foldUntrusted(title, MAX_ISSUE_TITLE);
+}
+
+/** An issue's title as a tool sends it: already folded by foldIssueTitle. */
+export const issueTitle = z
+  .string({ error: 'must be text' })
+  .refine(
+    (title) => foldIssueTitle(title) === title,
+    `must be one folded line of at most ${String(MAX_ISSUE_TITLE)} graphemes`,
+  );
+
 /** An open issue carrying one of its project's tags, as GitHub last showed it. */
 export const taggedIssueSchema = z
   .object({
     issue: issueRef,
     /** The project's code repo. */
     project: repoName,
-    title: z.string(),
+    /**
+     * Folded by foldIssueTitle each time a copy is saved or read, so a title
+     * the sync kept before the fold reads folded too.
+     */
+    title: z.string().overwrite(foldIssueTitle),
     /** Every label on the issue, so a change to the project's tags applies without a new sync. */
     labels: z.array(labelName),
     /** An open PR linked to the issue, from anyone, or null. */

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { claimStateSchema, type ClaimState } from '../claims';
 import { followUpPath, followUpText } from '../follow-ups';
-import { delistedShowingSchema, issueSyncSchema } from '../issues';
+import { delistedShowingSchema, issueSyncSchema, issueTitle } from '../issues';
 import { agentName, commitSha, count, githubLogin, id, isoTime, issueRef, prRefSchema, repoName, webUrl } from '../primitives';
 import { branchName } from '../submissions';
 import { indent, lines, numbered, plural, when } from './text';
@@ -11,7 +11,8 @@ import { indent, lines, numbered, plural, when } from './text';
 /** An issue, with its GitHub link and its live page on the site. */
 export const issueLinks = {
   issue: issueRef,
-  title: z.string(),
+  /** The issue's title, folded to one line and cut. Untrusted repo text. */
+  title: issueTitle,
   /** The issue on GitHub. */
   url: webUrl,
   /** The issue's live page on the site. */
@@ -44,7 +45,7 @@ export type ClaimSummary = z.infer<typeof claimSummarySchema>;
 export const followUpSchema = z.object({
   claimId: id,
   issue: issueRef,
-  title: z.string(),
+  title: issueTitle,
   pr: prRefSchema,
   reviewer: githubLogin,
   /** The reviewer's own words from GitHub, folded to one line and cut. Untrusted repo text. */

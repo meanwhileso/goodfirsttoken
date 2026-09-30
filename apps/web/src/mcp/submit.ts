@@ -1,6 +1,7 @@
 import {
   MAX_PR_TITLE,
   claimDeadlines,
+  foldIssueTitle,
   holdsSlot,
   nextClaimState,
   prTitle,
@@ -787,7 +788,7 @@ export async function readyToOpen(caller: Caller, origin: string, now: number): 
     items.push({
       claimId: claim.id,
       issue: claim.issue,
-      title: copy?.title ?? submission.title,
+      title: copy?.title ?? foldIssueTitle(submission.title),
       url: gitHubIssueUrl(claim.issue),
       liveUrl: liveUrl(origin, claim.issue),
       diffUrl: branchUrls(submission.repo, submission.branch, submission.diffFrom).diff,

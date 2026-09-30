@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HIDDEN_CHARACTER, UNSAFE_CHARACTER } from './characters';
+import { foldLine, untrustedLine } from './characters';
 import { epochMs, githubId, id, repoName } from './primitives';
 
 // Maintainers' requests to be removed (spec section 4). A maintainer asks
@@ -17,44 +17,18 @@ export const MAX_REMOVAL_REASON = 500;
 export const MAX_REMOVALS_WITHDRAWN = 5;
 
 /**
- * The text as one line, with only what a person can see: each run of
- * characters that could break a line or change what a terminal shows, with
- * the plain spaces around it, becomes one space, and a run at either end
- * goes. Every hidden character goes. One pass over the text, so a long text
- * takes time in proportion to its length.
+ * Why the maintainers want the repo removed, in their own words. Only Good
+ * First Token's admins read it. It folds by foldLine to one line with only
+ * what a person can see, so the queue can show it whole.
  */
-function oneLine(text: string): string {
-  const parts: string[] = [];
-  let spaces = 0;
-  let gap = false;
-  for (const char of text) {
-    if (UNSAFE_CHARACTER.test(char)) {
-      gap = true;
-    } else if (HIDDEN_CHARACTER.test(char)) {
-      continue;
-    } else if (char === ' ') {
-      spaces += 1;
-    } else {
-      if (parts.length > 0) parts.push(gap ? ' ' : ' '.repeat(spaces));
-      parts.push(char);
-      spaces = 0;
-      gap = false;
-    }
-  }
-  return parts.join('');
-}
+export const removalReason = untrustedLine(MAX_REMOVAL_REASON);
 
 /**
- * Why the maintainers want the repo removed, in their own words. Only Good
- * First Token's admins read it. It is always one line, under oneLine above,
- * so the queue can show it whole.
+ * A reason as a request keeps it, folded again each time it is read. A
+ * reason stored under the fold before this one could be only spaces of
+ * another width, which fold to nothing now, so it isn't refused for that.
  */
-export const removalReason = z
-  .string({ error: 'must be text' })
-  .overwrite(oneLine)
-  .trim()
-  .min(1, 'must not be empty')
-  .max(MAX_REMOVAL_REASON, `must be at most ${String(MAX_REMOVAL_REASON)} characters`);
+export const keptRemovalReason = z.string().max(MAX_REMOVAL_REASON).overwrite(foldLine);
 
 /**
  * `waiting` for an admin, then `removed` once an admin removed the repo, or
@@ -69,7 +43,7 @@ export const removalRequestSchema = z
   .object({
     id,
     repo: repoName,
-    reason: removalReason,
+    reason: keptRemovalReason,
     /** The admin or maintainer of the repo who asked, as GitHub said when they asked. */
     requestedBy: githubId,
     requestedAt: epochMs,

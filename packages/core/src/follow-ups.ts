@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { HIDDEN_CHARACTER, UNSAFE_CHARACTER } from './characters';
-import { cutGraphemes, epochMs, githubLogin, id, webUrl } from './primitives';
+import { foldUntrusted } from './characters';
+import { epochMs, githubLogin, id, webUrl } from './primitives';
 
 // Follow-ups (spec section 7, steps 2 and 7): what a reviewer wrote on a
 // donor's open PR, which the PR job reads from GitHub and the donor's next
@@ -16,33 +16,6 @@ export const MAX_FOLLOW_UP_PATH = 4096;
 
 /** The most follow-ups start_session and my_work list at once, oldest first. */
 export const MAX_FOLLOW_UPS = 20;
-
-/** A space between words, of any width. */
-const SPACE = /\p{Zs}/u;
-
-/** A run of the characters in characters.ts, unsafe and hidden, and of spaces. */
-const RUN = new RegExp(`(?:${UNSAFE_CHARACTER.source}|${HIDDEN_CHARACTER.source}|${SPACE.source})+`, 'gu');
-
-/**
- * A run with an unsafe character or a space in it becomes one space, and a
- * run of hidden characters alone goes. A mark that reorders text is both
- * unsafe and hidden, so it becomes a space.
- */
-function foldRun(run: string): string {
-  return UNSAFE_CHARACTER.test(run) || SPACE.test(run) ? ' ' : '';
-}
-
-/**
- * Text from someone else, as one line of at most `max` graphemes, with only
- * what a person can see: every hidden character goes, each run of unsafe
- * characters and spaces becomes one space, and the ends are trimmed. Then
- * longer text is cut, whole graphemes only, and ends in `...`, so a hidden
- * character counts for nothing. So a reviewer's comment can't add a line
- * that reads as the server's own, or words only an agent reads.
- */
-export function foldUntrusted(text: string, max: number): string {
-  return cutGraphemes(text.replace(RUN, foldRun).trim(), max);
-}
 
 /** A reviewer's text, as the follow-ups keep it. */
 export const followUpText = z
