@@ -1,6 +1,7 @@
 import { productName, type Policy } from '@goodfirsttoken/core';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { SiteNav } from '../auth/SiteNav';
+import { cardMeta } from '../cards/meta';
 import { Chip, Tag } from '../components/Chip';
 import { Footer } from '../components/Footer';
 import { Marker } from '../components/Marker';
@@ -47,6 +48,9 @@ export const Route = createFileRoute('/$owner/$repo/')({
         path: loaderData?.state === 'ready' ? `/${loaderData.repo}` : null,
       },
       [{ rel: 'stylesheet', href: projectCss }],
+      loaderData?.state === 'ready'
+        ? cardMeta(`/${name}/card.png`, `${name}: PRs merged, people who helped, and issues worked.`)
+        : [],
     );
   },
   component: ProjectRoute,

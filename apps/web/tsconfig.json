@@ -3,7 +3,9 @@
   "compilerOptions": {
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["./worker-configuration.d.ts", "vite/client", "@cloudflare/vitest-pool-workers/types"]
+    "types": ["./worker-configuration.d.ts", "vite/client", "@cloudflare/vitest-pool-workers/types"],
+    // The share cards' renderer, typed by src/cards/takumi.d.ts, which says why.
+    "paths": { "@takumi-rs/wasm": ["./src/cards/takumi.d.ts"] }
   },
   "include": ["src", "test"]
 }

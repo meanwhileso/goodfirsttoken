@@ -3,6 +3,7 @@ import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-r
 import type { ReactNode } from 'react';
 import markUrl from '../assets/mark.svg?url';
 import { getViewer } from '../auth/viewer';
+import { cardMeta } from '../cards/meta';
 import geistMonoUrl from '../fonts/GeistMono-Variable.woff2?url';
 import geistUrl from '../fonts/Geist-Variable.woff2?url';
 import { getSiteOrigin } from '../readable/origin';
@@ -20,6 +21,7 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: productName },
+      ...cardMeta('/card.png', 'Spend your spare tokens on open source.'),
     ],
     links: [
       // The fonts are preloaded so text first paints in Geist.

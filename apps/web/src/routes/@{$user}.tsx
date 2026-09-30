@@ -1,6 +1,7 @@
 import { githubLogin, productName, validate } from '@goodfirsttoken/core';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { SiteNav } from '../auth/SiteNav';
+import { cardMeta } from '../cards/meta';
 import { Chip, type ChipVariant } from '../components/Chip';
 import { Footer } from '../components/Footer';
 import { Marker } from '../components/Marker';
@@ -42,6 +43,7 @@ export const Route = createFileRoute('/@{$user}')({
         path: loaderData?.state === 'ready' ? `/@${loaderData.login}` : null,
       },
       [{ rel: 'stylesheet', href: personCss }],
+      loaderData?.state === 'ready' ? cardMeta(`/@${login}/card.png`, `@${login}'s month on Good First Token.`) : [],
     );
   },
   component: PersonRoute,

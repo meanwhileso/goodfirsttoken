@@ -362,6 +362,7 @@ describe('page metadata', () => {
   test('each public page names its canonical URL on the primary domain, whatever host served it, with its Open Graph tags and markdown version', async () => {
     await registeredProject();
     await tag(repo, `${repo}#12`);
+    const cards: Record<string, string> = { [`/${repo}`]: `/${repo}/card.png`, [`/${repo}/issues/12`]: `/${repo}/issues/12/card.png`, '/@priya': '/@priya/card.png' };
     for (const path of ['/', '/projects', '/leaderboard', '/live', '/maintainers', `/${repo}`, `/${repo}/issues/12`, '/@priya']) {
       const html = await (await get(path)).text();
       const links = headTags(html, 'link');
@@ -373,8 +374,8 @@ describe('page metadata', () => {
       expect(metaContent(html, 'og:title'), path).toBeTruthy();
       expect(metaContent(html, 'og:description'), path).toBe(metaContent(html, 'description'));
       expect(metaContent(html, 'description'), path).toBeTruthy();
-      // Share cards come later, and no page names an image until then.
-      expect(metaContent(html, 'og:image'), path).toBeUndefined();
+      // A page with a card of its own names it, and the rest the default card.
+      expect(metaContent(html, 'og:image'), path).toBe(`${ORIGIN}${cards[path] ?? '/card.png'}`);
     }
   });
 

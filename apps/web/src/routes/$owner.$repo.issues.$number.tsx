@@ -10,6 +10,7 @@ import { Prompt, PromptPath } from '../components/Prompt';
 import { Rail, RailHead, RailSection } from '../components/Rail';
 import { SlotRing } from '../components/SlotRing';
 import { Slots } from '../components/Slots';
+import { cardMeta } from '../cards/meta';
 import { useLiveFeed } from '../feed/useLiveFeed';
 import { getIssuePage, type IssuePage } from '../issue/data';
 import { issueFromPath } from '../issue/path';
@@ -52,6 +53,10 @@ export const Route = createFileRoute('/$owner/$repo/issues/$number')({
         path: loaderData?.state === 'ready' ? `/${loaderData.repo}/issues/${String(loaderData.number)}` : null,
       },
       [{ rel: 'stylesheet', href: issueCss }],
+      // The issue's card shows its merged PR, or is the default card until one merges.
+      loaderData?.state === 'ready'
+        ? cardMeta(`/${params.owner}/${params.repo}/issues/${params.number}/card.png`, `${name} on Good First Token.`)
+        : [],
     );
   },
   component: IssueRoute,

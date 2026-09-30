@@ -1,6 +1,7 @@
 import handler from '@tanstack/react-start/server-entry';
 import { handleAuthRequest, isAuthPath } from './auth/routes';
 import { siteOrigin } from './auth/settings';
+import { answerCard, isCardPath } from './cards/route';
 import { isCrawlQueue, readCrawlBatch } from './crawl/queue';
 import { deliverFeedBatch } from './feed/queue';
 import { handleStream, isStreamPath } from './feed/streams';
@@ -26,14 +27,16 @@ import { runScheduled } from './sync/scheduled';
 
 // The site: sign-in under /auth (src/auth/routes.ts), the live text streams,
 // like /live.txt (src/feed/streams.ts), /start.md (src/start/start.ts), the
-// form on the page where a person approves an agent (src/mcp/authorize.ts),
-// the pages' markdown versions, /llms.txt, /robots.txt, /sitemap.xml, and the
-// JSON data (src/readable/routes.ts), and TanStack Start for every page.
+// share cards, like /card.png (src/cards/route.ts), the form on the page
+// where a person approves an agent (src/mcp/authorize.ts), the pages'
+// markdown versions, /llms.txt, /robots.txt, /sitemap.xml, and the JSON data
+// (src/readable/routes.ts), and TanStack Start for every page.
 const site: ExportedHandler<Env> = {
   fetch: async (request) => {
     if (isAuthPath(request)) return handleAuthRequest(request);
     if (isStreamPath(request)) return handleStream(request);
     if (isStartPath(request)) return handleStart(request);
+    if (isCardPath(request)) return answerCard(request);
     if (new URL(request.url).pathname === AUTHORIZE_PATH && request.method === 'POST') return answerConsent(request);
     const readable = readableRoute(request);
     if (readable) return handleReadable(request, readable);

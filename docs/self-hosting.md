@@ -7,8 +7,10 @@ staging, checks it, and then deploys production.
 You need:
 
 - A GitHub account, with a copy of this repo under it.
-- A Cloudflare account whose plan includes Workers, D1, KV, and Queues, and
-  R2 if you want a static host.
+- A Cloudflare account on the Workers Paid plan, for Workers, D1, KV, and
+  Queues, and R2 if you want a static host. Workers Free allows 10 ms of CPU
+  a request, and drawing a share card takes 20 to 50 ms, so the cards would
+  fail there. The sync's runs need more than that too.
 - A domain on Cloudflare, if you want the site on your own domain. Without
   one, it is served on workers.dev. A static host needs one too.
 

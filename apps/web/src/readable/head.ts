@@ -42,9 +42,9 @@ export interface PageMeta {
 }
 
 /**
- * The meta tags and links for a page. Share cards (#29) add og:image and
- * twitter:image here, beside og:title, when they are built. Until then the
- * page names no image.
+ * The meta tags and links for a page. Its share card's og:image tags come
+ * from the route, through routeHead, and the root route names the default
+ * card (src/cards/meta.ts).
  */
 export function pageHead(origin: string | null, page: PageMeta): { meta: Meta[]; links: HeadLink[] } {
   const meta: Meta[] = [{ title: page.title }, { property: 'og:title', content: page.title }];
@@ -68,13 +68,15 @@ export function pageHead(origin: string | null, page: PageMeta): { meta: Meta[];
 
 /**
  * A route's head: the page's metadata from pageHead, with the origin from
- * the root route's match, and the route's own links, like its stylesheet.
+ * the root route's match, the route's own links, like its stylesheet, and
+ * its own meta tags, like its share card's.
  */
 export function routeHead(
   matches: readonly { routeId: string; loaderData?: unknown }[],
   page: PageMeta,
   links: HeadLink[] = [],
+  meta: Meta[] = [],
 ): { meta: Meta[]; links: HeadLink[] } {
   const head = pageHead(originFrom(matches), page);
-  return { meta: head.meta, links: [...head.links, ...links] };
+  return { meta: [...head.meta, ...meta], links: [...head.links, ...links] };
 }
