@@ -1558,7 +1558,7 @@ that leaves their settings empty gives them empty strings, and
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
 | `TOKEN_LIMITER` | Rate limiter: 600 requests to `/oauth/token` a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
-| `STREAM_LIMITER` | Rate limiter: 60 opens of a live text stream or a page's live socket a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/feed/streams.ts`, through `src/auth/rate-limit.ts` |
+| `STREAM_LIMITER` | Rate limiter: 300 opens of a live text stream or a page's live socket a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/feed/streams.ts`, through `src/auth/rate-limit.ts` |
 | `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream and page, the scheduled jobs, and the donor's tools |
 | `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
@@ -2201,10 +2201,19 @@ streams' in [Text streams](how-it-works.md#text-streams).
   two D1 reads per batch it sends, shared by its watchers, and each stream a
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
-  hour ends it. `STREAM_LIMITER` lets each client address open 60 streams
+  hour ends it. `STREAM_LIMITER` lets each client address open 300 streams
   and live sockets a minute, the two together. `handleStream` counts after
   it knows the path is a stream and the method is right, and before it
   asks D1 or a feed, so a request over the limit costs neither.
+- **What one address can hold.** A feed sends each event to every socket it
+  holds, so a client with thousands of sockets on the homepage's feed would
+  slow it for everyone. `handleStream` names the client's address, as
+  `limiterKey` keys it, in the `x-gft-watcher-address` header of the
+  upgrade it hands a feed or room, text streams and live sockets alike.
+  `openWatcher` tags each socket it accepts with that address, and answers
+  `429` when the address already holds `WATCHERS_PER_ADDRESS`, 100, there,
+  before it accepts one. `ctx.getWebSockets(tag)` counts them, so the count
+  survives hibernation.
   A live socket costs the same to open, then holds only a hibernating socket
   on the feed or room, for as long as the page is open, with no hour limit.
   Every homepage view opens one on the homepage's feed, so that one object
@@ -2215,13 +2224,16 @@ streams' in [Text streams](how-it-works.md#text-streams).
   hibernation, which Cloudflare bills. So `webSocketMessage` closes the
   socket that sent it, with `1008`, in the feed and in the issue room
   (`closeSender` in `src/rooms/watchers.ts`). The site's pages never send.
-- **Why 60 a minute.** Each page view that shows a live feed opens one
+- **Why 300 a minute, and 100 held.** The cap on sockets held bounds what
+  one address costs a feed, so the rate only has to stop a loop that opens
+  and drops them fast. Each page view that shows a live feed opens one
   socket, and a page that loses it opens it again after a second at the
   earliest, then twice as long each time. So one person reading the site
-  opens a few a minute. The browser tests, which all come from one address,
-  opened at most 35 in one minute of a whole run, when the limit was set.
-  An office or a school behind one address shares the 60, and a page over
-  the limit shows what it loaded and tries again, as after a drop.
+  opens a few a minute. An office, a campus, conference Wi-Fi, or every page
+  on one address reconnecting after a deploy opens many more, and 300 leaves
+  room for them. The browser tests, which all come from one address, opened
+  at most 35 in one minute of a whole run. A page over either limit shows
+  what it loaded and tries again, as after a drop.
 - **Live sockets.** A page opens a WebSocket on a stream's `.ndjson` URL.
   `handleStream` sees the upgrade, finds the feed or room and checks `since`
   the same way as for a stream, and forwards the upgrade to it. The Worker
@@ -4465,7 +4477,8 @@ not.
 - `/mcp` with a valid token counts toward `MCP_LIMITER`, 120 a minute for
   each person.
 - Opening a text stream or a live socket counts toward `STREAM_LIMITER`,
-  60 a minute from each address, and a socket that sends is closed.
+  300 a minute from each address, each address holds at most 100 on one
+  feed or room, and a socket that sends is closed.
 - The address is an IPv4 address or an IPv6 /64, with IPv4 written as IPv6
   folded to IPv4 (`limiterKey`).
 - Every job that reads GitHub has a cap in `ALLOWANCES`
@@ -4537,7 +4550,7 @@ and share cards.
 | A3, C2 | A request to `/mcp` with a token the library doesn't know costs one KV read before its `401`, and no limit counts it | Kept. A limit by address would hurt hosted agents that share addresses, which is why `MCP_LIMITER` counts by person. The cost is one KV read on top of the request itself, and a token of the wrong shape costs none. An operator can add a Cloudflare WAF rate-limiting rule on `/mcp` answers with status `401`, as [self-hosting.md](self-hosting.md#limiting-unknown-tokens-at-mcp) says. The same holds for the KV write each registration makes, kept 90 days, from many IPv6 /64s |
 | A4 | The MACs on `/me` and `/admin` notices use `AUTH_SECRET` as it is, the key Better Auth uses | Kept. Each MAC starts with a purpose of its own, which can't make a session cookie, and a session needs a row in D1 too. Deriving a key of its own is hardening for later |
 | A5 | `request_removal` checked `manage_project` without the name GitHub gives, so a name GitHub sends on to another repo could file a request under a stored project's name | Fixed. It checks the name GitHub gives too. Test: in `test/mcp/repo-ids.test.ts`, "can't have its removal asked for by an old name GitHub sends on to it" |
-| C1 | Nothing limited opening text streams and live sockets, and a socket could send messages that woke the feed or room each time | Fixed. `STREAM_LIMITER` counts every open and upgrade, and a watcher that sends is closed with `1008`. Tests: in `test/feed/streams.test.ts`, "one address opens 60 streams and live sockets a minute", "an IPv6 client counts by its /64", and "is closed when the page sends anything, on a feed and on an issue room" |
+| C1 | Nothing limited opening text streams and live sockets, and a socket could send messages that woke the feed or room each time | Fixed. `STREAM_LIMITER` counts every open and upgrade, 300 a minute from each address, each address holds at most 100 sockets on one feed or room, and a watcher that sends is closed with `1008`. Tests: in `test/feed/streams.test.ts`, "one address opens 300 streams and live sockets a minute", "an IPv6 client counts by its /64", "the 101st from one address is refused with 429" on the homepage feed and on an issue room, and "is closed when the page sends anything, on a feed and on an issue room" |
 | C3 | CI checked gitleaks and actionlint against a checksum file from the same release as the download | Fixed. `ci.yml` pins each SHA-256, taken from the release's checksum file and checked against a download of the tarball. It has no test |
 | C4 | Limits by address are coarse. One client behind a shared address, like CGNAT, can use up the sign-ins of the others there, and Cloudflare's limiter counts each location apart, and roughly | Kept. It is the trade that limits by address make, and the limits are generous for one person |
 

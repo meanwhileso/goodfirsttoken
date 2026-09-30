@@ -234,7 +234,7 @@ export class Feed extends DurableObject<Env> {
     }
     const since = new URL(request.url).searchParams.get('since');
     const resumes = since !== null && this.remembers(since);
-    return openWatcher(this.ctx, this.env.DB, {
+    return openWatcher(this.ctx, this.env.DB, request, {
       // Only the events it sends are read: every one after `since`, or the
       // newest 100 of those not known to be hidden.
       history: (hidden) => (resumes ? this.after(this.placeOf(since) ?? 0) : this.newest(FEED_TAIL, hidden)),

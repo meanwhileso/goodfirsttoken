@@ -572,7 +572,7 @@ export class IssueRoom extends DurableObject<Env> {
       return new Response('Connect with a WebSocket.\n', { status: 426, headers: { Upgrade: 'websocket' } });
     }
     const since = new URL(request.url).searchParams.get('since');
-    return openWatcher(this.ctx, this.env.DB, {
+    return openWatcher(this.ctx, this.env.DB, request, {
       history: () => this.storedAfter(since === null ? 0 : (this.placeOf(since) ?? 0)),
       last: () => this.lastPlace(),
     });

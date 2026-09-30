@@ -1,10 +1,11 @@
 import { feedEventSchema, githubLogin, id, issueRef, repoName, validate, type FeedEvent } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
-import { underStreamLimit } from '../auth/rate-limit';
+import { limiterKey, underStreamLimit } from '../auth/rate-limit';
 import { findPersonByLogin, getBlock, getProject } from '../db';
 import { findIssue } from '../issue/find';
 import { homeFeed, personFeed, repoFeed } from '../rooms/feed';
 import { issueRoom } from '../rooms/issue-room';
+import { WATCHER_ADDRESS_HEADER } from '../rooms/watchers';
 import { ndjsonLine, textLine } from './format';
 
 // The live text streams (spec section 9, "Readable by agents"), one for each
@@ -26,8 +27,9 @@ import { ndjsonLine, textLine } from './format';
 // hands the upgrade to it, so the browser holds the feed's own hibernating
 // socket, which sends each event as one JSON message.
 //
-// Each client address can open 60 streams and sockets a minute, the two
-// counted together (STREAM_LIMITER). The next gets 429, and opens nothing.
+// Each client address can open 300 streams and sockets a minute, the two
+// counted together (STREAM_LIMITER), and hold 100 on each feed or room
+// (src/rooms/watchers.ts). Past either, the answer is 429, and nothing opens.
 
 const HOUR = 60 * 60 * 1000;
 
@@ -146,6 +148,21 @@ async function sourceFor(source: Source): Promise<DurableObjectStub | Response> 
   }
 }
 
+/**
+ * Asks the feed or room for a watcher's socket, naming the client address it
+ * counts against. A 429 from it, for an address that holds as many sockets
+ * as it may, comes back as the answer. Anything else but a socket throws.
+ */
+async function watch(stub: DurableObjectStub, request: Request, since: string | null): Promise<WebSocket | Response> {
+  const query = since === null ? '' : `?since=${encodeURIComponent(since)}`;
+  const upgrade = await stub.fetch(`https://feed.internal/${query}`, {
+    headers: { Upgrade: 'websocket', [WATCHER_ADDRESS_HEADER]: limiterKey(request.headers.get('cf-connecting-ip')) },
+  });
+  if (upgrade.status === 429) return text(429, 'Too many live streams open from here. Close one, or try again in a minute.', { 'retry-after': '60' });
+  if (upgrade.status !== 101 || !upgrade.webSocket) throw new Error(`The feed answered ${String(upgrade.status)}.`);
+  return upgrade.webSocket;
+}
+
 /** The feed event a feed or room sent, or null when the message isn't one. */
 function parseEvent(data: unknown): FeedEvent | null {
   if (typeof data !== 'string') return null;
@@ -166,15 +183,14 @@ function parseEvent(data: unknown): FeedEvent | null {
  * The feed or room closes a socket the browser sends anything on. No cookie
  * is read or set.
  */
-async function openLiveSocket(source: Source, format: Format, since: string | null): Promise<Response> {
+async function openLiveSocket(request: Request, source: Source, format: Format, since: string | null): Promise<Response> {
   if (format !== 'ndjson') return text(400, 'Open a WebSocket on the .ndjson form of this stream.');
   try {
     const stub = await sourceFor(source);
     if (stub instanceof Response) return stub;
-    const query = since === null ? '' : `?since=${encodeURIComponent(since)}`;
-    const upgrade = await stub.fetch(`https://feed.internal/${query}`, { headers: { Upgrade: 'websocket' } });
-    if (upgrade.status !== 101 || !upgrade.webSocket) throw new Error(`The feed answered ${String(upgrade.status)}.`);
-    return new Response(null, { status: 101, webSocket: upgrade.webSocket });
+    const socket = await watch(stub, request, since);
+    if (socket instanceof Response) return socket;
+    return new Response(null, { status: 101, webSocket: socket });
   } catch (error) {
     console.warn('A live socket could not reach its feed.', error);
     return text(503, 'Try again in a moment.');
@@ -212,7 +228,7 @@ export async function handleStream(
     return text(400, 'since has to be the ID of an event, as a line of the stream gives it.');
   }
   if (request.method === 'GET' && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-    return openLiveSocket(source, format, since);
+    return openLiveSocket(request, source, format, since);
   }
   const { type, line } = FORMATS[format];
   const headers = { 'content-type': type, ...HEADERS };
@@ -222,10 +238,9 @@ export async function handleStream(
     const stub = await sourceFor(source);
     if (stub instanceof Response) return stub;
     if (request.method === 'HEAD') return new Response(null, { headers });
-    const query = since === null ? '' : `?since=${encodeURIComponent(since)}`;
-    const upgrade = await stub.fetch(`https://feed.internal/${query}`, { headers: { Upgrade: 'websocket' } });
-    if (upgrade.status !== 101 || !upgrade.webSocket) throw new Error(`The feed answered ${String(upgrade.status)}.`);
-    socket = upgrade.webSocket;
+    const watching = await watch(stub, request, since);
+    if (watching instanceof Response) return watching;
+    socket = watching;
   } catch (error) {
     console.warn('A stream could not reach its feed.', error);
     return text(503, 'Try again in a moment.');

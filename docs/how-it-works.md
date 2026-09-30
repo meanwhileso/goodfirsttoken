@@ -3888,11 +3888,13 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   `Cache-Control: no-store, no-transform`, so nothing caches or compresses
   them, and with `Access-Control-Allow-Origin: *`, so any page can read them.
 - A stream is read with `GET` or `HEAD`. Anything else is `405`.
-- Each client can open 60 streams and [live sockets](#live-sockets) a
+- Each client can open 300 streams and [live sockets](#live-sockets) a
   minute, the two counted together: an IPv4 address, or the /64 an IPv6
   address is in, as the sign-in limit counts them. `HEAD` counts too. The
-  next gets `429` with `Retry-After: 60`, and opens nothing. A stream stays
-  open once it opened, so the limit is on opening them.
+  next gets `429` with `Retry-After: 60`, and opens nothing.
+- Each client can hold 100 streams and live sockets open on one feed or
+  room at once. The next there gets `429` with `Retry-After: 60`, and opens
+  nothing, until one of the 100 closes.
 - A repo that isn't a project, an issue that has no claim and isn't among
   the tagged issues of a project that keeps its issues in that repo, a login
   no one has signed in with, and a path whose owner, repo, number, or login
@@ -3928,8 +3930,9 @@ the [views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 - It is public and read-only. It sets no cookie and reads none, so any page
   may open it. A socket the page sends anything on is closed, with code
   `1008`. The site's pages never send.
-- Opening one counts toward the limit of 60 a minute that the text streams
-  count toward too. Over it, the upgrade gets `429` with `Retry-After: 60`,
+- Opening one counts toward the limit of 300 a minute that the text
+  streams count toward too, and toward the 100 each client can hold on one
+  feed or room. Over either, the upgrade gets `429` with `Retry-After: 60`,
   and the page tries again as it does after a drop.
 - It opens only on the `.ndjson` form. An upgrade on a `.txt` path is `400`.
   Otherwise it answers as the stream would: `404` for a feed that doesn't
