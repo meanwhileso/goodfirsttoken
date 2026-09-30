@@ -25,13 +25,20 @@ import { TokenField, type TokenSquare } from '../components/TokenField';
 import { Wall, type WallLine } from '../components/Wall';
 import { SAMPLE_COMMAND, SAMPLE_EVENTS, SAMPLE_PROMPT, SAMPLE_REPO, type SampleEvent } from '../design/samples';
 import designCss from '../styles/design-page.css?url';
+import { routeHead } from '../readable/head';
 
 // The living design system: every component, rendered with sample data.
 export const Route = createFileRoute('/design')({
-  head: () => ({
-    meta: [{ title: `Design system · ${productName}` }],
-    links: [{ rel: 'stylesheet', href: designCss }],
-  }),
+  head: ({ matches }) =>
+    routeHead(
+      matches,
+      {
+        title: `Design system · ${productName}`,
+        description: "Every component on Good First Token's pages, drawn with sample data.",
+        path: '/design',
+      },
+      [{ rel: 'stylesheet', href: designCss }],
+    ),
   component: DesignSystem,
 });
 

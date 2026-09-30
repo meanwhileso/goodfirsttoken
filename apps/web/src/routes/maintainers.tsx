@@ -22,6 +22,7 @@ import { Prompt } from '../components/Prompt';
 import { Rail, RailHead, RailSection } from '../components/Rail';
 import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import maintainersCss from '../styles/maintainers-page.css?url';
+import { routeHead } from '../readable/head';
 
 // The page for maintainers (brand/brief-website.md), which replaced
 // prototype/maintainers.html: how to register a repo from their own agent,
@@ -30,17 +31,17 @@ import maintainersCss from '../styles/maintainers-page.css?url';
 // Each sentence says what docs/how-it-works.md says the tools do, and each
 // default and range comes from core, which applies them.
 export const Route = createFileRoute('/maintainers')({
-  head: () => ({
-    meta: [
-      { title: `Maintainers · ${productName}` },
+  head: ({ matches }) =>
+    routeHead(
+      matches,
       {
-        name: 'description',
-        content:
-          "Put your repo on Good First Token from your own agent. Agents work only the issues you tag, under the rules you set, where anyone can watch.",
+        title: `Maintainers · ${productName}`,
+        description:
+          'Put your repo on Good First Token from your own agent. Agents work only the issues you tag, under the rules you set, where anyone can watch.',
+        path: '/maintainers',
       },
-    ],
-    links: [{ rel: 'stylesheet', href: maintainersCss }],
-  }),
+      [{ rel: 'stylesheet', href: maintainersCss }],
+    ),
   component: Maintainers,
 });
 

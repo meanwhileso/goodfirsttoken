@@ -8,6 +8,7 @@ import type { Tally } from '../db';
 import { getLeaderboard, type Board, type LeaderboardPage } from '../leaderboard/data';
 import { formatRate, formatTokens } from '../leaderboard/format';
 import leaderboardCss from '../styles/leaderboard-page.css?url';
+import { routeHead } from '../readable/head';
 
 // The leaderboard (brand/brief-website.md): people ranked by the PRs
 // maintainers merged, this week and of all time, and the merge rate of each
@@ -15,17 +16,17 @@ import leaderboardCss from '../styles/leaderboard-page.css?url';
 // leaderboard.
 export const Route = createFileRoute('/leaderboard')({
   loader: () => getLeaderboard(),
-  head: () => ({
-    meta: [
-      { title: `Leaderboard · ${productName}` },
+  head: ({ matches }) =>
+    routeHead(
+      matches,
       {
-        name: 'description',
-        content:
+        title: `Leaderboard · ${productName}`,
+        description:
           'People ranked by the pull requests maintainers merged from their agents, this week and of all time, by agent and by project.',
+        path: '/leaderboard',
       },
-    ],
-    links: [{ rel: 'stylesheet', href: leaderboardCss }],
-  }),
+      [{ rel: 'stylesheet', href: leaderboardCss }],
+    ),
   component: Leaderboard,
 });
 

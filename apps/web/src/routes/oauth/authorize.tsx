@@ -5,6 +5,7 @@ import { Button } from '../../components/Button';
 import { loadConsent } from '../../mcp/consent';
 import { AUTHORIZE_PATH } from '../../mcp/paths';
 import accountCss from '../../styles/account-page.css?url';
+import { routeHead } from '../../readable/head';
 
 // The page where a person approves an agent that wants to connect to the MCP
 // server. The agent sends the browser here, and src/mcp/consent.ts checks its
@@ -15,10 +16,9 @@ import accountCss from '../../styles/account-page.css?url';
 
 export const Route = createFileRoute('/oauth/authorize')({
   loader: ({ location }) => loadConsent({ data: location.searchStr }),
-  head: () => ({
-    meta: [{ title: `Connect an agent · ${productName}` }],
-    links: [{ rel: 'stylesheet', href: accountCss }],
-  }),
+  // A step in one agent's sign-in, which no search engine lists.
+  head: ({ matches }) =>
+    routeHead(matches, { title: `Connect an agent · ${productName}`, path: null }, [{ rel: 'stylesheet', href: accountCss }]),
   component: ConnectAgent,
 });
 

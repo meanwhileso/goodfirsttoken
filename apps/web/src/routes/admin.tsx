@@ -21,6 +21,7 @@ import { Marker } from '../components/Marker';
 import { Quote } from '../components/Quote';
 import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import adminCss from '../styles/admin-page.css?url';
+import { routeHead } from '../readable/head';
 
 // The admin pages (brand/brief-website.md), which replaced prototype/admin.html: the
 // maintainers' requests to be removed, the crawler's finds and the
@@ -43,10 +44,10 @@ export const Route = createFileRoute('/admin')({
     if (result.state === 'not_found') throw notFound();
     return result.page;
   },
-  head: ({ loaderData }) => ({
-    meta: [{ title: loaderData ? `Admin · ${productName}` : `Not found · ${productName}` }],
-    links: [{ rel: 'stylesheet', href: adminCss }],
-  }),
+  head: ({ loaderData, matches }) =>
+    routeHead(matches, { title: loaderData ? `Admin · ${productName}` : `Not found · ${productName}`, path: null }, [
+      { rel: 'stylesheet', href: adminCss },
+    ]),
   server: {
     handlers: {
       POST: ({ request }) => answerAdminForm(request),

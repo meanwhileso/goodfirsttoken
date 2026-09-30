@@ -9,6 +9,7 @@ import { endRevokedConnection, revocationToken } from './mcp/connections';
 import { withPageStatus } from './mcp/page-status';
 import { AUTHORIZE_PATH } from './mcp/paths';
 import { mcpProvider } from './mcp/provider';
+import { handleReadable, readableRoute } from './readable/routes';
 import { redirectToPrimaryDomain } from './redirect';
 import { handleStart, isStartPath } from './start/start';
 import { runScheduled } from './sync/scheduled';
@@ -26,16 +27,30 @@ import { runScheduled } from './sync/scheduled';
 // The site: sign-in under /auth (src/auth/routes.ts), the live text streams,
 // like /live.txt (src/feed/streams.ts), /start.md (src/start/start.ts), the
 // form on the page where a person approves an agent (src/mcp/authorize.ts),
-// and TanStack Start for every page.
+// the pages' markdown versions, /llms.txt, /robots.txt, /sitemap.xml, and the
+// JSON data (src/readable/routes.ts), and TanStack Start for every page.
 const site: ExportedHandler<Env> = {
   fetch: async (request) => {
     if (isAuthPath(request)) return handleAuthRequest(request);
     if (isStreamPath(request)) return handleStream(request);
     if (isStartPath(request)) return handleStart(request);
     if (new URL(request.url).pathname === AUTHORIZE_PATH && request.method === 'POST') return answerConsent(request);
-    return withPageStatus(await handler.fetch(request));
+    const readable = readableRoute(request);
+    if (readable) return handleReadable(request, readable);
+    return varyByAccept(withPageStatus(await handler.fetch(request)));
   },
 };
+
+/**
+ * A page's HTML shares its URL with its markdown version, which a request
+ * gets with `Accept: text/markdown`, so a cache keeps the two apart.
+ */
+function varyByAccept(response: Response): Response {
+  if (!response.headers.get('content-type')?.startsWith('text/html')) return response;
+  const headers = new Headers(response.headers);
+  headers.append('vary', 'Accept');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 export { Feed } from './rooms/feed';
 export { IssueRoom } from './rooms/issue-room';

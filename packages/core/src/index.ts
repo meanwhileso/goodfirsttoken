@@ -8,6 +8,7 @@ export * from './crawl';
 export * from './feed';
 export * from './follow-ups';
 export * from './issues';
+export * from './open-data';
 export * from './people';
 export * from './primitives';
 export * from './projects';

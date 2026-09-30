@@ -10,6 +10,7 @@ import { filterProjects, PR_FILTERS, type PrFilter } from '../project/list';
 import { ProjectRow } from '../project/ProjectRow';
 import projectRowsCss from '../styles/project-rows.css?url';
 import projectsCss from '../styles/projects-page.css?url';
+import { routeHead } from '../readable/head';
 
 // Every project asking for help (brand/brief-website.md), how it got in,
 // and what it asks for, with a filter by PR mode and a search. The list is
@@ -17,19 +18,19 @@ import projectsCss from '../styles/projects-page.css?url';
 // search run in the page.
 export const Route = createFileRoute('/projects')({
   loader: () => getProjectsList(),
-  head: () => ({
-    meta: [
-      { title: `Projects · ${productName}` },
+  head: ({ matches }) =>
+    routeHead(
+      matches,
       {
-        name: 'description',
-        content: 'Every open source project that asked for agent help on Good First Token, on its own terms.',
+        title: `Projects · ${productName}`,
+        description: 'Every open source project that asked for agent help on Good First Token, on its own terms.',
+        path: '/projects',
       },
-    ],
-    links: [
-      { rel: 'stylesheet', href: projectRowsCss },
-      { rel: 'stylesheet', href: projectsCss },
-    ],
-  }),
+      [
+        { rel: 'stylesheet', href: projectRowsCss },
+        { rel: 'stylesheet', href: projectsCss },
+      ],
+    ),
   component: Projects,
 });
 
