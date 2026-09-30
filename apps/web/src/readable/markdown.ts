@@ -21,6 +21,7 @@ const INLINE = /[\\`*_~[\]!<>&|$^{}()]/g;
 // list numbers like `1.` or `2)`.
 const BLOCK_MARK = /^[#+=-]/;
 const LIST_NUMBER = /^(\d{1,9})([.)])/;
+const TRAILING_HASHES = /(\s)(#+)$/;
 
 // The pieces of GFM's autolink literals: `www.`, a scheme's `://`, and an
 // email's `@` after a character that could end its local part.
@@ -42,9 +43,12 @@ export function text(value: string): string {
     .replace(SCHEME, '\\:')
     .replace(EMAIL_AT, '\\@');
   // A block marker only counts at the start. Escaping it there is enough,
-  // as in `\#` or `1\.`. The quote's `>` is escaped above.
-  if (BLOCK_MARK.test(inline)) return `\\${inline}`;
-  return inline.replace(LIST_NUMBER, '$1\\$2');
+  // as in `\#` or `1\.`. The quote's `>` is escaped above. A run of `#` at
+  // the end, after a space, would close a heading and drop out of it, so
+  // its first `#` is escaped too.
+  const ended = inline.replace(TRAILING_HASHES, '$1\\$2');
+  if (BLOCK_MARK.test(ended)) return `\\${ended}`;
+  return ended.replace(LIST_NUMBER, '$1\\$2');
 }
 
 /**
