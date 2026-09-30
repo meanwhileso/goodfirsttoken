@@ -221,9 +221,13 @@ describe('a repo whose name ends in .md or .json', () => {
     const markdown = await get('/sample-owner/notes.md.md');
     const accepted = await get('/sample-owner/notes.md', asMarkdown);
     const sitemap = await (await get('/sitemap.xml')).text();
+    // The name without the ending has no page, and its path never gives the other's.
+    const bare = await get('/sample-owner/notes', asMarkdown);
 
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toContain('text/html');
+    expect(bare.status).toBe(404);
+    expect(await bare.text()).toContain("isn't listed");
     expect(markdown.status).toBe(200);
     expect(await markdown.text()).toContain('# sample-owner/notes.md\n');
     expect(accepted.status).toBe(200);

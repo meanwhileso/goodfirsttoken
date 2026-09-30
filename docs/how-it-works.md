@@ -4845,7 +4845,8 @@ to, as `/start.md` names its server.
   - Otherwise, when the project named with the ending, like
     `<owner>/<x>.md`, has a page, the path is that page. A request whose
     `Accept` asks for markdown gets its markdown, and any other gets its
-    HTML. Its markdown is also at the path plus another `.md`, like
+    HTML, or `406` when it accepts no HTML, as every page does. Its
+    markdown is also at the path plus another `.md`, like
     `/owner/notes.md.md`.
   - Otherwise, the path is a markdown `404` that says the repo isn't
     listed, or a JSON `404`, whatever the request accepts.
