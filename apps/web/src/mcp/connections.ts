@@ -311,7 +311,7 @@ async function endLapsedConnection(origin: string, githubId: number, id: string)
       await revokeGitHubToken(oauthApp(), token);
     } catch (error) {
       if (!(error instanceof GitHubError && error.status === 404)) {
-        console.error(`GitHub didn't revoke a lapsed connection's token, so it waits for the next run: ${failureReason(error)}`);
+        console.error(`GitHub didn't revoke a lapsed connection's token, so it waits for a later try: ${failureReason(error)}`);
         return false;
       }
     }

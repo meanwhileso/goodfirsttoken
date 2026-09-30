@@ -476,7 +476,22 @@ test('when GitHub fails to revoke, the daily job keeps the connection and its to
   expect(revokes).toEqual([502, 200]);
 });
 
-test('when GitHub fails to revoke, opening /me keeps the lapsed connection and its token too, for a later try', async () => {
+test("connecting another agent ends the person's lapsed connections and revokes their tokens, with no /me visit", async () => {
+  const browser = new Browser();
+  await signIn(browser, github, 'priya');
+  const webToken = (await storedToken()) ?? '';
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('Lapsed agent') });
+  const [lapsedToken = ''] = appTokens(github).filter((t) => t !== webToken);
+  await ageConnection('Lapsed agent', 40 * DAY);
+
+  await connectAgent(github, 'priya', { oauth: new MemoryOAuthClient('New agent') });
+
+  expect(await connectionNames()).toEqual(['New agent']);
+  expect((await gitHubUser(lapsedToken)).status).toBe(401);
+  expect((await gitHubUser(webToken)).status).toBe(200);
+});
+
+test('when GitHub fails to revoke, the check that /me and a sign-in run keeps the lapsed connection and its token too, for a later try', async () => {
   const browser = new Browser();
   await signIn(browser, github, 'priya');
   const webToken = (await storedToken()) ?? '';

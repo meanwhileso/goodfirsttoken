@@ -178,7 +178,7 @@ describe('each card', () => {
     expect(cards[2]).toEqual(cards[0]);
   });
 
-  test('with no primary domain, the default cards kept stay few however many hosts ask, the newest kept', async () => {
+  test('with no primary domain, the default cards kept stay few however many hosts ask, the ones asked for most lately kept', async () => {
     const vars = env as unknown as { PRIMARY_DOMAIN: string };
     const primary = vars.PRIMARY_DOMAIN;
     vars.PRIMARY_DOMAIN = '';
@@ -192,10 +192,18 @@ describe('each card', () => {
       const newest = drawn.mock.calls.length - afterMany;
       await at('host-0');
       const oldest = drawn.mock.calls.length - afterMany - newest;
+      // host-17 is now the oldest kept. Asked for again, it moves to the
+      // newest place, so the next new host pushes out host-18 instead.
+      await at('host-17');
+      await at('host-21');
+      const beforeAgain = drawn.mock.calls.length;
+      await at('host-17');
+      const askedLately = drawn.mock.calls.length - beforeAgain;
 
       expect(afterMany).toBe(20);
       expect(newest).toBe(0);
       expect(oldest).toBe(1);
+      expect(askedLately).toBe(0);
     } finally {
       vars.PRIMARY_DOMAIN = primary;
     }

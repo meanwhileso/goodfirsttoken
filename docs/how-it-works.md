@@ -261,9 +261,9 @@ GitHub token GitHub gave that sign-in.
 - Signing the same agent in again, with the same client ID, replaces its
   connection. The earlier one stops working, and its GitHub token is
   revoked. The person's other agents keep theirs.
-- A connection also ends with its grant, the way Disconnect ends it, so its
-  GitHub token is revoked. An agent that revokes its refresh token at
-  `/oauth/token` ends its connection at once, whether its request leaves out
+- A connection also ends with its grant, so its GitHub token is revoked.
+  An agent that revokes its refresh token at `/oauth/token` ends its
+  connection at once, the way Disconnect ends it, whether its request leaves out
   `grant_type` or sends it empty. An agent that revokes only an access token
   stays connected. A connection whose agent never traded its code within
   the code's 10 minutes and one more, or went 30 days and a minute without
@@ -410,9 +410,10 @@ approve an agent shows its name the same way.
   disconnects only the signed-in person's own agents. Signed out, it goes to
   `/sign-in`.
 - Opening `/me` first ends the person's connections whose grants ran out,
-  as under Connections above, and revokes their tokens. An agent approved
-  in the last 10 minutes that hasn't traded its code yet is listed, and
-  Disconnect works on it.
+  as under Connections above, and revokes their tokens. One whose token
+  GitHub couldn't revoke stays listed until a later try ends it. An agent
+  approved in the last 10 minutes that hasn't traded its code yet is
+  listed, and Disconnect works on it.
 - A harness that revokes its refresh token when the server is removed ends
   its connection. Removing the server from a harness that doesn't leaves
   the connection, so `/me` is where access is cut off.
@@ -820,8 +821,8 @@ and on the PR description a donor writes, before `open_pr` or Open PR on
   `Authorization: Bearer` and its token, are read together wherever the cut
   falls. A run of over 800 characters with no whitespace becomes
   `[redacted]` whole, since it could hide a key.
-- A description with nothing to replace and nothing hidden reaches the PR
-  as the donor wrote it.
+- A description with nothing to replace reaches the PR as the donor wrote
+  it, hidden characters and all.
 
 **Timers**
 

@@ -50,8 +50,9 @@ function noticePurpose(signedIn: SignedIn): string {
 
 /**
  * The person's connected agents, the most recently used first. It first
- * ends any of their connections whose grant ran out, so the list shows only
- * agents that can still connect.
+ * ends any of their connections whose grant ran out, so the list shows
+ * only agents that can still connect, apart from one whose token GitHub
+ * couldn't revoke, which stays until a later try ends it.
  */
 async function readAgents(origin: string, githubId: number, now: number): Promise<Connection[]> {
   try {
