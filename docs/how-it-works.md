@@ -200,13 +200,14 @@ signs in once with the person's GitHub account, and then acts as them.
   agent's request never show on the page. They go only in the link, in its
   `error_description`. An unknown client, or a redirect URI the client
   didn't register, gets the error with no link.
-- The page answers a browser that opens it in a tab of its own, and the
-  site's own page when it loads the page's data, as the browser's
-  `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, and `Sec-Fetch-Site` headers say.
-  Anything else, like another site's image, frame, or script, or a client
-  that sends none of those headers, gets `400` and a page that says to open
-  it in a tab of its own. Chrome, Edge, and Firefox send those headers, and
-  Safari from version 16.4. An older browser gets the `400` too.
+- The page refuses what the browser says another site's page asked for,
+  like an image, a frame, or a script's fetch, by its `Sec-Fetch-Mode`,
+  `Sec-Fetch-Dest`, and `Sec-Fetch-Site` headers. That gets `400` and a page
+  that says to open it in a tab of its own. The page answers a browser that
+  opens it in a tab, the site's own page when it loads the page's data, and
+  a request with no `Sec-Fetch-Mode` at all, like one from a browser too old
+  to send it. Every current browser sends these headers, on the requests
+  another site's page makes too, and a page can't take them off.
 - Each step is tied to the browser that started it by a cookie that lasts
   10 minutes, and works once. So the person has 10 minutes to approve, and
   GitHub has to send them back to the same browser. A step taken late, twice,

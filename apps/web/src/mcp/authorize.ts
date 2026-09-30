@@ -258,25 +258,27 @@ async function checkAuthorizeRequest(
 const OWN_TAB = 'Open this page in a tab of its own, from the link your agent gave you.';
 
 /**
- * True when a browser loads the page in a tab of its own, or the site's own
- * page calls the server function behind it. A browser says which with the
- * Sec-Fetch headers, which a page can't set. Anything else, like another
- * site's image or frame, or a client that sends no Sec-Fetch headers, is
- * neither.
+ * False when the browser's Sec-Fetch headers, which a page can't set, say
+ * another site's page asked for this, like an image, a frame, or a script's
+ * fetch. True for a page loaded in a tab of its own, the site's own page
+ * calling the server function behind it, and a request with no
+ * Sec-Fetch-Mode at all, from a browser that sends none. Every current
+ * browser sends them, on another site's requests too, so a page elsewhere
+ * can't take them off.
  */
 function openedByPerson(caller: Request): boolean {
-  const fetchSite = caller.headers.get('sec-fetch-site');
-  if (fetchSite === 'same-origin') return true;
-  return caller.headers.get('sec-fetch-mode') === 'navigate' && caller.headers.get('sec-fetch-dest') === 'document';
+  const mode = caller.headers.get('sec-fetch-mode');
+  if (mode === null) return true;
+  if (caller.headers.get('sec-fetch-site') === 'same-origin') return true;
+  return mode === 'navigate' && caller.headers.get('sec-fetch-dest') === 'document';
 }
 
 /**
  * Starts the page where a person approves an agent, for the request that
- * loads it, with the query string the agent sent. It answers only a browser
- * that loads the page in a tab of its own, or the site's own page calling the
- * server function behind it, and 400 to anything else, before counting it. So
- * another site's page can't use up someone's sign-ins by loading it in the
- * background. What it answers counts toward the sign-in limit, as the page or
+ * loads it, with the query string the agent sent. A request the browser
+ * says another site's page asked for gets 400 before it counts, so a page
+ * elsewhere can't use up someone's sign-ins by loading it in the background.
+ * What it answers counts toward the sign-in limit, as the page or
  * on its own. Returns the page, or why there is none, with its status and the
  * headers to send: the cookie that binds the form to this browser, and the
  * two that keep the page out of frames.

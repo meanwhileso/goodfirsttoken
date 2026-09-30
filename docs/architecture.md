@@ -285,14 +285,17 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 - **The server function has a URL of its own,** under `/_serverFn/`, which
   the client bundle names and anyone can call. So `openConsent` counts the
   sign-in limit itself, for the page and for each call there alike.
-- **Only a page in its own tab, or the site's own call, is counted.**
-  Another site's page can make a browser load the page to approve an agent
-  in an image or a frame, which would use up the person's sign-in limit.
-  `openConsent` reads the browser's Sec-Fetch headers, which a page can't
-  set. It answers `Sec-Fetch-Mode: navigate` with `Sec-Fetch-Dest: document`,
-  a page opened in a tab, and `Sec-Fetch-Site: same-origin`, the site's own
-  page loading the data. Anything else gets `400` before the limit counts
-  it, a client that sends no Sec-Fetch headers included.
+- **What another site's page asked for isn't counted.** Another site's
+  page can make a browser load the page to approve an agent in an image or
+  a frame, which would use up the person's sign-in limit. `openConsent`
+  reads the browser's Sec-Fetch headers, which a page can't set. It answers
+  `Sec-Fetch-Mode: navigate` with `Sec-Fetch-Dest: document`, a page opened
+  in a tab, and `Sec-Fetch-Site: same-origin`, the site's own page loading
+  the data. A request with no `Sec-Fetch-Mode` is answered and counted too,
+  as from a browser too old to send it, a webview, or a proxy that drops it.
+  Every current browser sends the headers on another site's requests too,
+  so a page elsewhere can't use that. Anything else gets `400` before the
+  limit counts it.
 - **GitHub's return needs its cookie before it counts.**
   `finishConnecting` answers `400` to a request with no
   `__Host-gft.oauth-upstream-` cookie before the limit counts it, as the
@@ -4524,7 +4527,7 @@ and share cards.
 
 | # | Finding | Outcome |
 |---|---|---|
-| A1 | A page on another site could use up a person's sign-in limit, with requests the browser sends for it in the background: registrations, the page to approve an agent in an image or frame, and GitHub's return to either callback | Fixed. GitHub's return to a browser with no sign-in in progress is refused before it counts, at both callbacks. The page to approve an agent counts only a page opened in a tab or the site's own call, and answers anything else `400`, uncounted. Registrations count under a key of their own. Tests: in `test/auth/rate-limit.test.ts`, "registrations another site's page sends don't count toward sign-in", "the page to approve an agent, loaded as another site's image or frame, is refused before it counts", and "GitHub's return with no sign-in in progress in this browser is refused before it counts". In `test/mcp/sign-in.test.ts`, "the page to approve an agent answers only a browser opening it in a tab, or the site calling it" |
+| A1 | A page on another site could use up a person's sign-in limit, with requests the browser sends for it in the background: registrations, the page to approve an agent in an image or frame, and GitHub's return to either callback | Fixed. GitHub's return to a browser with no sign-in in progress is refused before it counts, at both callbacks. The page to approve an agent answers `400`, uncounted, to what the browser's Sec-Fetch headers say another site's page asked for, and counts a page opened in a tab, the site's own call, and a request with no Sec-Fetch headers. Registrations count under a key of their own. Tests: in `test/auth/rate-limit.test.ts`, "registrations another site's page sends don't count toward sign-in", "the page to approve an agent, loaded as another site's image or frame, is refused before it counts", and "GitHub's return with no sign-in in progress in this browser is refused before it counts". In `test/mcp/sign-in.test.ts`, "the page to approve an agent refuses, uncounted, what the browser says another site's page asked for" and "the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it" |
 | A2 | An agent's GitHub token outlived its grant until its person came back to `/me` or connected an agent | Fixed for agents. A daily job ends every lapsed connection, for everyone, the way Disconnect does. Tests: in `test/mcp/disconnect.test.ts`, "the daily job ends everyone's connections whose grants ran out" and "one run of the daily job ends a set number of lapsed connections". `test/sync/scheduled.test.ts` checks its cron |
 | A2 | A web session that expires leaves its GitHub token stored and working at GitHub until the person's next sign-in | Kept. The site holds one token for each person, and all their sessions use it. Revoking it when one session expires would sign out their other browsers. The token is encrypted with `AUTH_SECRET`, and the next sign-in revokes it. `test/auth/sign-out.test.ts` holds this rule |
 | A3, C2 | A request to `/mcp` with a token the library doesn't know costs one KV read before its `401`, and no limit counts it | Kept. A limit by address would hurt hosted agents that share addresses, which is why `MCP_LIMITER` counts by person. The cost is one KV read on top of the request itself, and a token of the wrong shape costs none. An operator can add a Cloudflare WAF rate-limiting rule on `/mcp` answers with status `401`, as [self-hosting.md](self-hosting.md#limiting-unknown-tokens-at-mcp) says. The same holds for the KV write each registration makes, kept 90 days, from many IPv6 /64s |
@@ -4539,8 +4542,10 @@ Notes the review made, with nothing to fix now:
 - `findPersonByLogin` matches a login case-sensitively and takes the newest
   row, so an admin's block by a stale login could reach a person who took
   the login later. The admin sees the login in the answer.
-- A browser that sends no Sec-Fetch headers, like Safari before 16.4, can't
-  open the page to approve an agent.
+- A browser that sends no Sec-Fetch headers, like Safari before 16.4, gets
+  no protection from the check on the page to approve an agent, so another
+  site's page could still use up its sign-ins. Every current browser sends
+  them.
 
 ## Choices
 

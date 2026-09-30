@@ -7,9 +7,8 @@ import { PAGE_STATUS_HEADER } from './paths';
 // (src/routes/oauth/authorize.tsx), with the query string the agent sent.
 // It checks the agent's request and starts the consent, or says why there is
 // none. It also answers on its own URL under /_serverFn/, which anyone can
-// call, so openConsent counts each call toward the sign-in limit. It answers
-// only the page loaded in a tab, or a call from the site's own page, as the
-// browser's Sec-Fetch headers say, and 400 to anything else. The headers
+// call, so openConsent counts each call toward the sign-in limit. A call the
+// browser's Sec-Fetch headers say another site's page made gets 400. The headers
 // it sends set the cookie that ties the form to this browser, and keep the
 // page out of frames. TanStack Start renders every page with 200, so the
 // page's status goes in PAGE_STATUS_HEADER, and src/server.ts sets it.

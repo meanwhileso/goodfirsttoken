@@ -545,7 +545,7 @@ test('opening the page to approve an agent counts toward the sign-in limit of 20
   await expectOAuthLimitError(registration);
 });
 
-test('the page to approve an agent answers only a browser opening it in a tab, or the site calling it, and 400 to anything else, uncounted', async () => {
+test("the page to approve an agent refuses, uncounted, what the browser says another site's page asked for: a script, an image, or a frame", async () => {
   await inOneLimitWindow();
   const clientId = await registerClient();
   const { challenge } = await pkce();
@@ -553,9 +553,6 @@ test('the page to approve an agent answers only a browser opening it in a tab, o
   const url = authorizeUrl(clientId, { challenge }).toString();
   const refused = new Set<number>();
   for (let i = 0; i < 25; i++) {
-    // An agent's own request, with no Sec-Fetch headers, and another site's
-    // script, image, and frame.
-    refused.add((await agentFetch(browser.address)(url)).status);
     for (const headers of [
       { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
       { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'image' },
@@ -573,6 +570,21 @@ test('the page to approve an agent answers only a browser opening it in a tab, o
   expect([...refused]).toEqual([400]);
   expect(inTab.status).toBe(200);
   expect(fromSite.status).toBe(200);
+});
+
+test('the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it toward the sign-in limit', async () => {
+  await inOneLimitWindow();
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const address = randomAddress();
+  const url = authorizeUrl(clientId, { challenge }).toString();
+  const answers: number[] = [];
+  for (let i = 0; i < 20; i++) answers.push((await agentFetch(address)(url)).status);
+
+  const over = await agentFetch(address)(url);
+
+  expect(answers).toEqual(Array<number>(20).fill(200));
+  expect(over.status).toBe(429);
 });
 
 // The answer over a limit at /oauth/register or /oauth/token: an OAuth error
