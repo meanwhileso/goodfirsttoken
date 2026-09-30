@@ -1,5 +1,6 @@
 import { newClaim, nextClaimState, type ClaimEvent, type ClaimRecord } from '@goodfirsttoken/core';
 import type { MeasuredNode } from '@takumi-rs/wasm';
+import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   CARD_HEIGHT,
@@ -153,7 +154,7 @@ describe('each card', () => {
   });
 
   test('answers 503 when the database is down, as its page does', async () => {
-    const vars = (await import('cloudflare:workers')).env as unknown as { DB: D1Database };
+    const vars = env as unknown as { DB: D1Database };
     const real = vars.DB;
     vars.DB = { prepare: () => { throw new Error('D1 is down.'); } } as unknown as D1Database;
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
