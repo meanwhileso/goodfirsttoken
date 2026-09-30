@@ -15,7 +15,10 @@ import { CLAIM_LIFETIME_MS, REVIEW_WINDOW_MS } from '@goodfirsttoken/core';
 //   claim_issue check, judgeLabels in ./issues.ts,
 // - and the projects on the do-not-list, or delisted by the sync, among a
 //   donor's claims, which start_session, my_work, and claim_issue stop work
-//   on, doNotListedProjects and delistedProjects in ./projects.ts.
+//   on, doNotListedProjects and delistedProjects in ./projects.ts,
+// - and which projects have a page, HAS_PAGE, for the leaderboard by
+//   project and a person's page, in ./leaderboard.ts, ./claims.ts, and
+//   ./projects.ts.
 //
 // Each piece reads the project as `p`, a projects row, its current settings
 // as `s`, a project_settings row, and a project's cached copy of an issue as
@@ -46,6 +49,14 @@ export const ON_THE_DO_NOT_LIST = `EXISTS (SELECT 1 FROM do_not_list d WHERE d.r
 export const DELISTED = `EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = p.repo AND u.delisted IS NOT NULL)`;
 
 /**
+ * True when the project has a page, as hasPage (src/project/shown.ts) says:
+ * it is approved or paused, not on the do-not-list, and not delisted. Only
+ * then does anything the site cached from its repos show, like an issue's
+ * title, and only then does it show on the leaderboard by project.
+ */
+export const HAS_PAGE = `(p.status IN ('approved', 'paused') AND NOT ${ON_THE_DO_NOT_LIST} AND NOT ${DELISTED})`;
+
+/**
  * True when the project asks for help: it is approved, not on the
  * do-not-list, and not delisted.
  */
@@ -72,15 +83,22 @@ export const OPEN_CLAIM_PR = `(SELECT c.pr_repo || '#' || c.pr_number ${OPEN_CLA
   ORDER BY c.claimed_at, c.id LIMIT 1)`;
 
 /**
+ * True when the claim `c` holds a slot at the time bound to `now`, a
+ * placeholder like `?2`, as core's holdsSlot says.
+ */
+export function holdingSlot(now: string): string {
+  return `((c.state IN ('active', 'paused') AND c.claimed_at + ${String(CLAIM_LIFETIME_MS)} > ${now})
+    OR (c.state = 'awaiting_review' AND c.submitted_at + ${String(REVIEW_WINDOW_MS)} > ${now}))`;
+}
+
+/**
  * How many claims on the issue hold a slot at the time bound to `now`, a
  * placeholder like `?2`. Blocked donors' claims count, since they hold
  * their slots.
  */
 export function slotsTaken(now: string): string {
   return `(SELECT COUNT(*) FROM claims c
-    WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number
-      AND ((c.state IN ('active', 'paused') AND c.claimed_at + ${String(CLAIM_LIFETIME_MS)} > ${now})
-        OR (c.state = 'awaiting_review' AND c.submitted_at + ${String(REVIEW_WINDOW_MS)} > ${now})))`;
+    WHERE c.issue_repo = t.issue_repo AND c.issue_number = t.number AND ${holdingSlot(now)})`;
 }
 
 /**

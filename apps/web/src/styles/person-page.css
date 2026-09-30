@@ -1,0 +1,78 @@
+/* Layout for a person's page only. The components it uses are styled in
+   components.css. */
+
+.person { padding-top: 56px; }
+
+.person-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px 28px; }
+.person-avatar { width: 88px; height: 88px; font-size: 36px; }
+.person-who { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.person-title {
+  font: 600 clamp(32px, 5vw, 56px)/1.08 var(--font-sans); letter-spacing: -0.03em; overflow-wrap: anywhere;
+}
+/* A title in words, where there is no person to name. */
+.person-title--words { font: var(--display-lg); font-size: clamp(36px, 6vw, 64px); letter-spacing: var(--display-lg-tracking); }
+.person-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.person-github { margin-left: auto; color: var(--text-muted); }
+.person-lede { margin-top: 16px; max-width: 34em; font-size: 18px; color: var(--text-muted); }
+.person-stats { margin-top: 48px; }
+
+/* The activity graph: 52 weeks, a column a week. On a narrow screen it
+   scrolls inside its own box, so the page never scrolls sideways. */
+.person-activity { margin-top: 48px; display: flex; flex-direction: column; gap: 12px; }
+.person-activity__scroll { overflow-x: auto; padding-bottom: 4px; }
+.person-activity .token-field { gap: 3px; min-width: 640px; }
+.person-activity .token-field__square { border-radius: 2px; }
+.person-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; font: 12.5px var(--font-mono); color: var(--text-faint);
+}
+.person-legend__scale { display: inline-flex; align-items: center; gap: 4px; }
+.person-legend .token-field__square { display: inline-block; width: 11px; height: 11px; }
+
+/* The work, with the live feed, what they helped, and what they maintain
+   beside it, and under it on narrow screens. */
+.person-split {
+  display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 72px; align-items: start; margin-top: var(--section);
+}
+.person-main, .person-aside { display: flex; flex-direction: column; gap: 72px; min-width: 0; }
+.person-section { min-width: 0; display: flex; flex-direction: column; }
+@container page (max-width: 960px) {
+  .person-split { grid-template-columns: minmax(0, 1fr); gap: 64px; }
+}
+
+/* Said once, in mono, at the bottom of a section. */
+.person-note { margin-top: 14px; font: 14px/1.5 var(--font-mono); color: var(--text-faint); overflow-wrap: anywhere; }
+.person-section .prompt { margin-top: 14px; }
+
+/* A claim, as a row grouped by hairlines, with its state beside it. */
+.person-rows > li { border-top: 1px solid var(--line-soft); }
+.person-rows > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.person-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; padding: 14px 0; }
+.person-row__title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.person-row__title a { color: var(--ink); }
+.person-row__meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; grid-column: 1; min-width: 0; font-size: 14px;
+  color: var(--text-muted); overflow-wrap: anywhere;
+}
+.person-row__side { grid-row: 1 / span 2; grid-column: 2; }
+@container page (max-width: 720px) {
+  .person-row { grid-template-columns: minmax(0, 1fr); }
+  .person-row__side { grid-row: auto; grid-column: 1; }
+}
+
+/* The projects they helped and maintain. */
+.person-helped > li {
+  display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line-soft);
+  font-size: 15px; overflow-wrap: anywhere; min-width: 0;
+}
+.person-helped > li:last-child { border-bottom: 1px solid var(--line-soft); }
+.person-helped > li a { color: var(--ink); min-width: 0; }
+.person-helped__n { font: 600 20px/1 var(--font-sans); font-variant-numeric: tabular-nums; }
+
+/* The live feed is narrower here than on the homepage. */
+.person-aside .wall { font-size: 15px; }
+.person-aside .wall-line { grid-template-columns: 72px minmax(0, 1fr); gap: 4px 12px; }
+.person-aside .wall-line__time { font-size: 13px; }
+@container page (max-width: 720px) {
+  .person-aside .wall-line { grid-template-columns: minmax(0, 1fr); }
+}
+.person-stream { color: var(--text-muted); }

@@ -10,6 +10,7 @@ export * from './crawls';
 export * from './do-not-list';
 export * from './follow-ups';
 export * from './issues';
+export * from './leaderboard';
 export * from './people';
 export * from './projects';
 export * from './prs';

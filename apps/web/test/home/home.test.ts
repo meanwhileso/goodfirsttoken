@@ -4,7 +4,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, getProject, listProjectsAskingForHelp, startOfWeek, topMergers } from '../../src/db';
-import { SAMPLE_CANDIDATES, SAMPLE_CLAIMS, SAMPLE_PEOPLE, SAMPLE_PROJECTS } from '../../src/dev/sample-work';
+import { SAMPLE_CANDIDATES, SAMPLE_CLAIMS, SAMPLE_HISTORY, SAMPLE_PEOPLE, SAMPLE_PROJECTS } from '../../src/dev/sample-work';
 import { fieldOf, light, squareFor } from '../../src/home/live';
 import { loadHome } from '../../src/home/load';
 import { homeFeed } from '../../src/rooms/feed';
@@ -191,7 +191,7 @@ describe('the dev-only seed', () => {
 
     const first = await seed();
     expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({ projects: 6, candidates: 1, claims: 10, lines: 10, merged: 5 });
+    expect(await first.json()).toEqual({ projects: 6, candidates: 1, claims: 10, lines: 10, merged: 5, history: 13 });
 
     const help = await listProjectsAskingForHelp(env.DB, 5, Date.now());
     expect(help.projects.map(({ project, waiting }) => [project.repo, waiting])).toEqual([
@@ -217,7 +217,7 @@ describe('the dev-only seed', () => {
     );
 
     const again = await seed();
-    expect(await again.json()).toMatchObject({ projects: 0, candidates: 0, claims: 0, merged: 0 });
+    expect(await again.json()).toMatchObject({ projects: 0, candidates: 0, claims: 0, merged: 0, history: 0 });
   });
 
   test("names only the GitHub fake's own sample people, and its made-up repos and their open issues", () => {
@@ -234,7 +234,7 @@ describe('the dev-only seed', () => {
         });
       }
     }
-    for (const claim of SAMPLE_CLAIMS) expect(repo(claim.project), claim.project).toBeDefined();
+    for (const claim of [...SAMPLE_CLAIMS, ...SAMPLE_HISTORY]) expect(repo(claim.project), claim.project).toBeDefined();
     for (const candidate of SAMPLE_CANDIDATES) {
       expect(candidate.repo).toMatch(/^sample-owner\//);
       const found = repo(candidate.repo);

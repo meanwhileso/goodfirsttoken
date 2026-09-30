@@ -10,9 +10,12 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AtChar123userChar125RouteImport } from './routes/@{$user}'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DesignRouteImport } from './routes/design'
 import { Route as HealthzRouteImport } from './routes/healthz'
+import { Route as LeaderboardRouteImport } from './routes/leaderboard'
+import { Route as LiveRouteImport } from './routes/live'
 import { Route as MaintainersRouteImport } from './routes/maintainers'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as ProjectsRouteImport } from './routes/projects'
@@ -28,6 +31,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AtChar123userChar125Route = AtChar123userChar125RouteImport.update({
+  id: '/@{$user}',
+  path: '/@{$user}',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -41,6 +49,16 @@ const DesignRoute = DesignRouteImport.update({
 const HealthzRoute = HealthzRouteImport.update({
   id: '/healthz',
   path: '/healthz',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LeaderboardRoute = LeaderboardRouteImport.update({
+  id: '/leaderboard',
+  path: '/leaderboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LiveRoute = LiveRouteImport.update({
+  id: '/live',
+  path: '/live',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MaintainersRoute = MaintainersRouteImport.update({
@@ -91,9 +109,12 @@ const OwnerRepoIssuesNumberRoute = OwnerRepoIssuesNumberRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/@{$user}': typeof AtChar123userChar125Route
   '/admin': typeof AdminRoute
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
+  '/leaderboard': typeof LeaderboardRoute
+  '/live': typeof LiveRoute
   '/maintainers': typeof MaintainersRoute
   '/me': typeof MeRoute
   '/projects': typeof ProjectsRoute
@@ -106,9 +127,12 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/@{$user}': typeof AtChar123userChar125Route
   '/admin': typeof AdminRoute
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
+  '/leaderboard': typeof LeaderboardRoute
+  '/live': typeof LiveRoute
   '/maintainers': typeof MaintainersRoute
   '/me': typeof MeRoute
   '/projects': typeof ProjectsRoute
@@ -122,9 +146,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/@{$user}': typeof AtChar123userChar125Route
   '/admin': typeof AdminRoute
   '/design': typeof DesignRoute
   '/healthz': typeof HealthzRoute
+  '/leaderboard': typeof LeaderboardRoute
+  '/live': typeof LiveRoute
   '/maintainers': typeof MaintainersRoute
   '/me': typeof MeRoute
   '/projects': typeof ProjectsRoute
@@ -139,9 +166,12 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/@{$user}'
     | '/admin'
     | '/design'
     | '/healthz'
+    | '/leaderboard'
+    | '/live'
     | '/maintainers'
     | '/me'
     | '/projects'
@@ -154,9 +184,12 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/@{$user}'
     | '/admin'
     | '/design'
     | '/healthz'
+    | '/leaderboard'
+    | '/live'
     | '/maintainers'
     | '/me'
     | '/projects'
@@ -169,9 +202,12 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/@{$user}'
     | '/admin'
     | '/design'
     | '/healthz'
+    | '/leaderboard'
+    | '/live'
     | '/maintainers'
     | '/me'
     | '/projects'
@@ -185,9 +221,12 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AtChar123userChar125Route: typeof AtChar123userChar125Route
   AdminRoute: typeof AdminRoute
   DesignRoute: typeof DesignRoute
   HealthzRoute: typeof HealthzRoute
+  LeaderboardRoute: typeof LeaderboardRoute
+  LiveRoute: typeof LiveRoute
   MaintainersRoute: typeof MaintainersRoute
   MeRoute: typeof MeRoute
   ProjectsRoute: typeof ProjectsRoute
@@ -206,6 +245,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/@{$user}': {
+      id: '/@{$user}'
+      path: '/@{$user}'
+      fullPath: '/@{$user}'
+      preLoaderRoute: typeof AtChar123userChar125RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -227,6 +273,20 @@ declare module '@tanstack/react-router' {
       path: '/healthz'
       fullPath: '/healthz'
       preLoaderRoute: typeof HealthzRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/leaderboard': {
+      id: '/leaderboard'
+      path: '/leaderboard'
+      fullPath: '/leaderboard'
+      preLoaderRoute: typeof LeaderboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/live': {
+      id: '/live'
+      path: '/live'
+      fullPath: '/live'
+      preLoaderRoute: typeof LiveRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/maintainers': {
@@ -297,9 +357,12 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AtChar123userChar125Route: AtChar123userChar125Route,
   AdminRoute: AdminRoute,
   DesignRoute: DesignRoute,
   HealthzRoute: HealthzRoute,
+  LeaderboardRoute: LeaderboardRoute,
+  LiveRoute: LiveRoute,
   MaintainersRoute: MaintainersRoute,
   MeRoute: MeRoute,
   ProjectsRoute: ProjectsRoute,

@@ -1,0 +1,9 @@
+/* Layout for /live only. The components it uses are styled in
+   components.css. */
+
+.live { padding-top: 56px; }
+.live-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 28px; }
+.live-head .prompt { min-width: 0; max-width: 100%; }
+.live-head .prompt__text { overflow-wrap: anywhere; }
+.live-wall { margin-top: 48px; }
+.live-note { margin-top: 14px; font: 14px var(--font-mono); color: var(--text-faint); }

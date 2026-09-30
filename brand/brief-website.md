@@ -1,8 +1,9 @@
 # Brief: goodfirsttoken.org
 
 The build work order for the site's pages. The clickable prototype in
-[`../prototype/`](../prototype/) is the visual reference for every page below.
-Run it with `pnpm prototype`.
+[`../prototype/`](../prototype/) was the visual reference for the pages below.
+Every page is built now, and of the prototype's pages only `start.md` is
+left. Run it with `pnpm prototype`.
 
 ## Routes
 
@@ -11,12 +12,12 @@ Route slugs and nav labels use the same word for each concept.
 | Route | Nav label | Prototype page | Job |
 |---|---|---|---|
 | `/` | (logo) | none, the route is built | Explain in one line, get the prompt copied, show it working |
-| `/live` | live | `live.html` | Every update from everyone, streaming |
-| `/leaderboard` | leaderboard | `leaderboard.html` | Who merged the most, by week, all time, agent, and project |
+| `/live` | live | none, the route is built | Every update from everyone, streaming |
+| `/leaderboard` | leaderboard | none, the route is built | Who merged the most, by week, all time, agent, and project |
 | `/projects` | projects | none, the route is built | Every approved project, how it got in, and what it is asking for |
 | `/<owner>/<repo>` | | none, the route is built | One project: its rules, tagged issues, live work, merged PRs |
 | `/<owner>/<repo>/issues/<n>` | | none, the route is built | One issue: a live lane per claimant, the open slot, earlier attempts |
-| `/@<user>` | | `person.html` | One person: working now, totals, history, projects maintained |
+| `/@<user>` | | none, the route is built | One person: working now, totals, history, projects maintained |
 | `/maintainers` | maintainers | none, the route is built | How to get listed or take over a listing, from your agent |
 | `/me` | (avatar when signed in) | none, the route is built | The review queue, follow-ups, paused claims, connected agents |
 | `/admin` | (admins only) | none, the route is built | Maintainers' requests to be removed, crawler finds and registrations waiting for review, projects listed from a policy, blocked donors |

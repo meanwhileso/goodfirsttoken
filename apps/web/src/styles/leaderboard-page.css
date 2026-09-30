@@ -1,0 +1,47 @@
+/* Layout for the leaderboard only. The components it uses are styled in
+   components.css. */
+
+.board { padding-top: 56px; }
+.board-title { font-size: clamp(40px, 7vw, 88px); }
+.board-views { margin-top: 36px; }
+.board-panel { margin-top: 40px; }
+.board-panel:focus-visible { outline: 2px solid var(--label); outline-offset: 8px; }
+
+/* Said once, in mono, under a view. */
+.board-note { margin-top: 24px; max-width: 60em; font: 14px/1.6 var(--font-mono); color: var(--text-faint); }
+
+/* The people and projects: the ranks, with the PRs merged on their own
+   projects in a column of their own beside the score. */
+.board-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) 96px 96px; gap: 16px; padding-bottom: 8px;
+  font: 12.5px var(--font-mono); color: var(--text-faint); text-align: right;
+}
+.board-head span:first-child { grid-column: 2; }
+.board-ranks > li { grid-template-columns: 64px minmax(0, 1fr) 96px 96px; }
+.board-ranks .ranks__who a { color: var(--ink); }
+.board-ranks .ranks__who a.mono { font-size: 19px; }
+.board-detail {
+  display: block; margin-top: 6px; font: 13px/1.5 var(--font-mono); color: var(--text-faint); letter-spacing: 0; font-weight: 400;
+}
+.board-score, .board-own { text-align: right; }
+.board-score small, .board-own small { display: block; margin-top: 4px; font: 12px var(--font-mono); color: var(--text-faint); letter-spacing: 0; font-weight: 400; }
+.board-own { font: 600 18px/1 var(--font-sans); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+@container page (max-width: 720px) {
+  .board-head { display: none; }
+  .board-ranks > li { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .board-own { grid-column: 2 / -1; text-align: left; font-size: 14px; }
+  .board-own small { display: inline; margin: 0 0 0 6px; }
+}
+
+/* The agents: merge rate on one 0 to 100 scale, side by side. */
+.board-bars { display: flex; flex-direction: column; gap: 18px; max-width: 760px; }
+.board-bar {
+  display: grid; grid-template-columns: 120px minmax(0, 1fr) 150px; gap: 16px; align-items: center; font-size: 15px;
+}
+.board-bar__track { height: 12px; border-radius: 99px; background: var(--line-soft); overflow: hidden; }
+.board-bar__fill { display: block; height: 100%; border-radius: 99px; background: var(--label); }
+.board-bar__value { font: 14px var(--font-mono); text-align: right; color: var(--text-muted); }
+@container page (max-width: 720px) {
+  .board-bar { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  .board-bar__track { grid-column: 1 / -1; grid-row: 2; }
+}
