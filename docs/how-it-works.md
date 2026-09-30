@@ -4440,9 +4440,10 @@ with the `curl -N` command for the stream under it.
 
 Every public page has a share card: a PNG, 1200 by 630, that a chat or a
 social site shows when someone posts the page's link. The page names it in
-its `og:image` tag, as a full URL on the site's primary domain, with its
-size and a line saying what it shows. Nothing on a card is smaller than
-40px, the rule under Share cards in
+its `og:image` tag, as a full URL on the primary domain when there is one,
+or on the host that served the page, with its size and a line saying what
+it shows. Nothing on a card is smaller than 40px, the rule under Share
+cards in
 [brand/design.md](../brand/design.md#share-cards).
 
 | Page | Its card | At |

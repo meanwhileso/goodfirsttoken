@@ -14,7 +14,7 @@ import {
 } from '../../src/cards/cards';
 import { loadIssueCard, loadPersonCard, loadProjectCard, monthOf } from '../../src/cards/load';
 import { measureCard } from '../../src/cards/render';
-import { addPr, addToDoNotList, blockDonor, createProject, saveClaim, setDelisted, setPrState } from '../../src/db';
+import { addPr, addToDoNotList, blockDonor, createProject, saveClaim, setDelisted, setProjectStatus, setPrState } from '../../src/db';
 import { loadProject } from '../../src/project/load';
 import { admin, DAY, db, emptyDatabase, HOUR, kenji, maintainer, MINUTE, priya, repo, sha, signIn, t0 } from '../db/helpers';
 import { workerFetch } from '../worker';
@@ -362,11 +362,16 @@ describe('a card shows no more than its page', () => {
     expect((await get(`/${repo}/card.png`)).status).toBe(200);
   });
 
-  test('an issue whose PR is open, closed, a blocked donor’s, on a delisted project, or on the do-not-list gets the default card', async () => {
+  test('an issue whose PR is open, closed, a blocked donor’s, on a delisted or rejected project, or on the do-not-list gets the default card', async () => {
     const now = Date.now();
     await createProject(
       db,
       { repo: 'sample-owner/removed-app', status: 'approved', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+      t0,
+    );
+    await createProject(
+      db,
+      { repo: 'sample-owner/rejected-app', status: 'approved', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
       t0,
     );
     await claimWithPr(priya, 1, { at: now - DAY });
@@ -375,12 +380,14 @@ describe('a card shows no more than its page', () => {
     await claimWithPr(priya, 4, { project: other, at: now - DAY, ended: { state: 'merged', at: now - HOUR } });
     await claimWithPr(priya, 7, { project: 'sample-owner/removed-app', at: now - DAY, ended: { state: 'merged', at: now - HOUR } });
     await claimWithPr(priya, 8, { at: now - DAY, ended: { state: 'merged', at: now - HOUR } });
+    await claimWithPr(priya, 9, { project: 'sample-owner/rejected-app', at: now - DAY, ended: { state: 'merged', at: now - HOUR } });
+    await setProjectStatus(db, 'sample-owner/rejected-app', { status: 'rejected', reason: 'Not now.', changedBy: admin.githubId }, now);
     await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, now);
     await setDelisted(db, other, 'sample-owner/sample-desktop is private on GitHub.', now);
     await addToDoNotList(db, { repo: 'sample-owner/removed-app', reason: null, addedBy: admin.githubId }, now);
 
     const fallback = await png('/card.png');
-    for (const issue of [`${repo}#1`, `${repo}#2`, `${repo}#3`, `${other}#4`, 'sample-owner/removed-app#7', `${repo}#99`]) {
+    for (const issue of [`${repo}#1`, `${repo}#2`, `${repo}#3`, `${other}#4`, 'sample-owner/removed-app#7', 'sample-owner/rejected-app#9', `${repo}#99`]) {
       const path = `/${issue.replace('#', '/issues/')}/card.png`;
       expect(same(await png(path), fallback), path).toBe(true);
     }

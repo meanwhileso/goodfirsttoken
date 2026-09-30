@@ -2675,12 +2675,15 @@ Each public page's Open Graph image. The rules are in
   `measure` gives back where it puts each box and line, which the 40px
   test reads. `pnpm audit` finds nothing in either package.
 - **What it costs.** The WebAssembly file is 3.8 MB, 1.6 MB gzipped, and the
-  fonts add about 190 kB, base64 in the Worker's code. The Worker grows from
-  about 2.5 MB gzipped to about 4.1 MB. Workers Paid allows 10 MB, and
-  Workers Free 3 MB, so the site no longer fits a free account. In Node,
-  on the machine this was built on, a card took 20 to 50 ms to draw, and
-  the first one about 150 ms, after 30 ms to register the fonts. That is
-  over Workers Free's 10 ms of CPU too, as the sync's runs already are.
+  fonts add about 190 kB, base64 in the Worker's code. As
+  `wrangler deploy --dry-run` counts the build the deploy uses, the Worker
+  grows from about 980 KiB gzipped to about 2,730 KiB. Workers Paid allows
+  10 MB and Workers Free 3 MB, so it still fits a free account, with little
+  room left. CPU is what needs Workers Paid. In Node, a card took 20 to 50 ms
+  to draw, and the first one in a new isolate 150 to 370 ms, as it starts
+  the renderer and registers the fonts. Workers Free allows 10 ms of CPU a
+  request, so every card would fail there, and the sync's runs already need
+  more too. [self-hosting.md](self-hosting.md) names the plan.
 - **Only the Worker loads it.** `render.ts` imports the WebAssembly module
   through the package's `workerd` export, which `@cloudflare/vite-plugin`
   and the unit tests' runtime load as a compiled module. The fonts come in
