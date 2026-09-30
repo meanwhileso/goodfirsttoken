@@ -1492,6 +1492,26 @@ queue.
 waited longest first, each with an ID. `admin_decide` takes the ID of any
 of them but a request to be removed.
 
+- One look at the queue shows a page of it: the items that waited longest,
+  as many as the [Limits](#limits) row for the admin queue says, of the
+  kind asked for, or of every kind. Items that started to wait at the same
+  moment go by repo, then by ID.
+- The answer says how many more wait after the page, in `more`, and where
+  the page ends, in `next`. `admin_queue` with `after` set to that `next`
+  gives the page after it. A call without `after` gives the first page.
+- A page starts after the last item of the page before, by when it started
+  to wait. So an item decided between pages moves nothing, and no item is
+  skipped. An item added between pages started to wait later than any page
+  shown, so it waits on a later page. An item that waits again comes back
+  with a new ID and the time it came back, as when a maintainer registers
+  a rejected repo again or the crawler replaces a policy change with a
+  newer reading, so it can show on a page after the one that showed it
+  before. A maintainer who changes a waiting registration's settings
+  leaves its ID and its place as they were.
+- An `after` that isn't a `next` an answer gave is refused as bad input.
+- Only the items on the page are read, so one look makes at most two calls
+  to GitHub for each item on it, whatever the queue holds, and none besides.
+
 - A **registration** is a pending project, with the maintainer who
   registered it, the settings they chose, and their notes for agents in
   full. Its ID names the status change that made it pending, so once its
@@ -1554,8 +1574,9 @@ of them but a request to be removed.
   do-not-list.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
-  request to be removed they are read from GitHub when the queue is read,
-  with the admin's own token: the repo, and its owner's account. When GitHub shows no public repo by that
+  request to be removed they are read from GitHub when the page that shows
+  them is read, with the admin's own token: the repo, and its owner's
+  account, two calls. When GitHub shows no public repo by that
   name, the item still waits, with no facts, and says so. When GitHub
   doesn't answer, as on a rate limit, the item says that instead, and
   never that the repo isn't public. `factsMissing` tells the two apart. A
@@ -1735,6 +1756,17 @@ is in [brand/brief-website.md](../brand/brief-website.md).
 - It doesn't show the pauses and policy changes in the queue yet. The
   admin's agent reads them with `admin_queue`, under
   [The admin queue](#the-admin-queue).
+- It shows the queue a page at a time, as `admin_queue` does, of the kinds
+  it shows, with the same bound on items and calls to GitHub, and says how
+  many more wait. Each section counts the items it shows on this page.
+  When more of its kind wait on other pages, the count says of how many,
+  as in `20 of 21`, and the section says how many wait before this page
+  and after it. A section with none on this page says so, and says none
+  wait only when none of its kind wait on any page. A link opens the next
+  page, with its place in the address as `after`, which the server checks
+  as `admin_queue` checks it.
+  An address whose `after` is no page shows no queue and none of its
+  sections, says why, and links the first page. After a form, the page opens at the first page.
 - A crawler find's form takes its tags, separated by commas, starting with
   the ones suggested, and its tier. The form to list a repo by hand takes
   its policy and tags. Listing a repo that is listed already changes those
@@ -4308,6 +4340,7 @@ Each limit the schemas enforce, other than those under project settings:
 | Suggestions left out with `exclude` | 100 | Us |
 | Picks waiting in a session's queue | 20 | Us |
 | Requests withdrawn by someone other than their asker, listed on a registration or crawler find | 5, and a count of the rest | Us |
+| Items one look at the admin queue shows, in `admin_queue` and on `/admin` | 20, the ones that waited longest, with a count of the rest. At 2 calls to GitHub for each, one look makes at most 40 | Us |
 | Agent name | 1 to 40 lowercase letters, digits, dots, underscores, and hyphens, starting with a letter or digit | Us |
 | Model name | 100 characters | Us |
 | IDs the server gives out | 1 to 64 letters, digits, underscores, and hyphens | Us |
@@ -4647,8 +4680,8 @@ A deployment can serve them from a static host, on a hostname of its own.
   linked PRs of each issue whose work waits in the review queue.
 - `/me`'s review queue and its Open PR make the calls `my_work` and
   `open_pr` make, with the token from the person's own sign-in on the site.
-- The admin queue reads each registration's repo and its owner's account,
-  and listing a project from its policy reads the repo and its issue repo.
+- The admin queue reads the repo and its owner's account for each
+  registration and each request to be removed on the page it shows, and listing a project from its policy reads the repo and its issue repo.
   These use the admin's own token: their agent's, or on the admin pages,
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the
