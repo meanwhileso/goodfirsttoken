@@ -250,6 +250,12 @@ variable or set it to anything else.
   by hand.
 - A deploy reuses the database, the KV namespace, and the queues it finds, so
   running it again loses nothing.
+- Turn on **Always Use HTTPS** for the zone of `PRIMARY_DOMAIN`, under SSL/TLS,
+  then Edge Certificates, in the Cloudflare dashboard. Without it, an `http`
+  request gets the page over `http`. The Worker sends
+  `Strict-Transport-Security` on its `https` answers there, so a browser
+  that has seen the site once uses `https` from then on, but a first visit
+  over `http` needs the redirect.
 
 ### Limiting unknown tokens at /mcp
 

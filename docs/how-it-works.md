@@ -37,6 +37,28 @@ open.
 - The domains come from the deployment's settings, listed in
   [self-hosting.md](self-hosting.md). With no primary domain, as in local
   development, nothing redirects.
+- Every `https` answer on the primary domain carries
+  `Strict-Transport-Security: max-age=31536000`, for that host alone, so a
+  browser that has been there uses `https` from then on. The zone's Always
+  Use HTTPS setting sends `http` to `https`, as self-hosting.md says.
+
+## Pages' headers
+
+Every page, any answer sent as `text/html`, carries these, each unless the
+page set its own, as the page to approve an agent sets its own framing
+headers:
+
+| Header | Value | What it does |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | The browser takes the content type as sent |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Another site sees only the origin a link came from |
+| `X-Frame-Options` | `DENY` | No site can show the page in a frame |
+| `Content-Security-Policy` | `frame-ancestors 'none'; base-uri 'none'; object-src 'none'` | No frames, no `<base>`, and no plugins |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | The page never uses them |
+
+The policy names no `form-action`, since the page to approve an agent sends
+the browser on to the agent and to GitHub, and no `script-src`, since the
+pages' own scripts are written inline.
 
 ## Signing in
 
