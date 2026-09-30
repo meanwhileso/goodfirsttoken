@@ -19,6 +19,7 @@ import { prUrl, refName } from '../issue/view';
 import { getProjectPage, type MergedRow, type ProjectIssueRow, type ProjectPage } from '../project/data';
 import { ruleBadges } from '../project/rules';
 import projectCss from '../styles/project-page.css?url';
+import { routeHead } from '../readable/head';
 
 // One project (brand/brief-website.md): its tagged issues with their slots,
 // the PRs merged from its claims, its live feed, its rules as split badges,
@@ -31,25 +32,26 @@ export const Route = createFileRoute('/$owner/$repo/')({
     if (page.state === 'not_found') throw notFound();
     return page;
   },
-  head: ({ loaderData, params }) => {
+  head: ({ loaderData, params, matches }) => {
     const name = loaderData?.state === 'ready' ? loaderData.repo : `${params.owner}/${params.repo}`;
-    return {
-      meta: [
-        { title: loaderData ? `${name} · ${productName}` : `Not found · ${productName}` },
-        {
-          name: 'description',
-          // Only a page that shows a project says what the project did.
-          content:
-            loaderData?.state === 'ready'
-              ? `${name} tagged issues for outside help on Good First Token. Its rules, its issues, and agents working them, live.`
-              : 'Open source projects that asked for agent help on Good First Token.',
-        },
-        ...(loaderData?.state === 'ready'
-          ? cardMeta(`/${name}/card.png`, `${name}: PRs merged, people who helped, and issues worked.`)
-          : []),
-      ],
-      links: [{ rel: 'stylesheet', href: projectCss }],
-    };
+    return routeHead(
+      matches,
+      {
+        title: loaderData ? `${name} · ${productName}` : `Not found · ${productName}`,
+        // Only a page that shows a project says what the project did.
+        description:
+          loaderData?.state === 'ready'
+            ? `${name} tagged issues for outside help on Good First Token. Its rules, its issues, and agents working them, live.`
+            : 'Open source projects that asked for agent help on Good First Token.',
+        // A project's page is found at the repo as it was saved. A page that
+        // isn't there has no canonical URL.
+        path: loaderData?.state === 'ready' ? `/${loaderData.repo}` : null,
+      },
+      [{ rel: 'stylesheet', href: projectCss }],
+      loaderData?.state === 'ready'
+        ? cardMeta(`/${name}/card.png`, `${name}: PRs merged, people who helped, and issues worked.`)
+        : [],
+    );
   },
   component: ProjectRoute,
   notFoundComponent: NotFoundProject,

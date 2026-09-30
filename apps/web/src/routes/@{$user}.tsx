@@ -16,6 +16,7 @@ import { prUrl, refName } from '../issue/view';
 import { formatRate, formatTokens } from '../leaderboard/format';
 import { getPersonPage, type PersonPage, type WorkRow, type WorkStatus } from '../person/data';
 import personCss from '../styles/person-page.css?url';
+import { routeHead } from '../readable/head';
 
 // One person (brand/brief-website.md): what they are working on now, their
 // totals, the activity graph, their history, the projects they helped and
@@ -28,22 +29,22 @@ export const Route = createFileRoute('/@{$user}')({
     if (page.state === 'not_found') throw notFound();
     return page;
   },
-  head: ({ loaderData, params }) => {
+  head: ({ loaderData, params, matches }) => {
     const login = loaderData?.state === 'ready' ? loaderData.login : params.user;
-    return {
-      meta: [
-        { title: loaderData ? `@${login} · ${productName}` : `Not found · ${productName}` },
-        {
-          name: 'description',
-          content:
-            loaderData?.state === 'ready'
-              ? `What @${login}'s agent works on through Good First Token, and the PRs maintainers merged.`
-              : 'People spending their spare tokens on open source through Good First Token.',
-        },
-        ...(loaderData?.state === 'ready' ? cardMeta(`/@${login}/card.png`, `@${login}'s month on Good First Token.`) : []),
-      ],
-      links: [{ rel: 'stylesheet', href: personCss }],
-    };
+    return routeHead(
+      matches,
+      {
+        title: loaderData ? `@${login} · ${productName}` : `Not found · ${productName}`,
+        description:
+          loaderData?.state === 'ready'
+            ? `What @${login}'s agent works on through Good First Token, and the PRs maintainers merged.`
+            : 'People spending their spare tokens on open source through Good First Token.',
+        // By their login now, which the page shows.
+        path: loaderData?.state === 'ready' ? `/@${loaderData.login}` : null,
+      },
+      [{ rel: 'stylesheet', href: personCss }],
+      loaderData?.state === 'ready' ? cardMeta(`/@${login}/card.png`, `@${login}'s month on Good First Token.`) : [],
+    );
   },
   component: PersonRoute,
   notFoundComponent: NotFoundPerson,

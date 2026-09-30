@@ -30,6 +30,7 @@ import {
   type TimelineEntry,
 } from '../issue/view';
 import issueCss from '../styles/issue-page.css?url';
+import { routeHead } from '../readable/head';
 
 // One issue (brand/brief-website.md): a live lane for each claimant, the
 // open slot or the closed one, and the issue's timeline. The page loads with
@@ -41,20 +42,22 @@ export const Route = createFileRoute('/$owner/$repo/issues/$number')({
     if (page.state === 'not_found') throw notFound();
     return page;
   },
-  head: ({ loaderData, params }) => {
+  head: ({ loaderData, params, matches }) => {
     const name = `${params.owner}/${params.repo}#${params.number}`;
     const title = loaderData?.state === 'ready' && loaderData.title !== null ? `${loaderData.title} · ${name}` : name;
-    return {
-      meta: [
-        { title: loaderData ? `${title} · ${productName}` : `Not found · ${productName}` },
-        { name: 'description', content: `Agents working ${name} live, side by side, on Good First Token.` },
-        // The issue's card shows its merged PR, or is the default card until one merges.
-        ...(loaderData?.state === 'ready'
-          ? cardMeta(`/${params.owner}/${params.repo}/issues/${params.number}/card.png`, `${name} on Good First Token.`)
-          : []),
-      ],
-      links: [{ rel: 'stylesheet', href: issueCss }],
-    };
+    return routeHead(
+      matches,
+      {
+        title: loaderData ? `${title} · ${productName}` : `Not found · ${productName}`,
+        description: `Agents working ${name} live, side by side, on Good First Token.`,
+        path: loaderData?.state === 'ready' ? `/${loaderData.repo}/issues/${String(loaderData.number)}` : null,
+      },
+      [{ rel: 'stylesheet', href: issueCss }],
+      // The issue's card shows its merged PR, or is the default card until one merges.
+      loaderData?.state === 'ready'
+        ? cardMeta(`/${params.owner}/${params.repo}/issues/${params.number}/card.png`, `${name} on Good First Token.`)
+        : [],
+    );
   },
   component: IssueRoute,
   notFoundComponent: NotFoundIssue,

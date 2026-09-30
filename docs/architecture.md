@@ -10,8 +10,8 @@ The repo is a pnpm workspace.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, the share cards, and the live text streams and sockets, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
-| `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
+| `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, the share cards, the live text streams and sockets, each page's markdown version, `/llms.txt`, `/robots.txt`, `/sitemap.xml`, and the JSON data at `/projects.json` and `/<owner>/<repo>.json`, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
+| `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, the schema of the JSON data the site publishes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, the parts several skills share in `skill-src/shared/`, and each plugin's version and description. Nothing installs from here. |
@@ -34,10 +34,12 @@ The repo is a pnpm workspace.
   endpoint. Of the requests passed back, it sends every one under `/auth` to
   `src/auth/routes.ts`, every path shaped like a text stream to
   `src/feed/streams.ts`, which also takes a page's live socket there,
-  `/start.md` to `src/start/start.ts`, and the form on `/oauth/authorize`
-  to `src/mcp/authorize.ts`. It hands every other one to TanStack Start,
+  `/start.md` to `src/start/start.ts`, the form on `/oauth/authorize`
+  to `src/mcp/authorize.ts`, and a page's markdown version, `/llms.txt`,
+  `/robots.txt`, `/sitemap.xml`, and the JSON data to
+  `src/readable/routes.ts`. It hands every other one to TanStack Start,
   setting the status a page names, as the page on `/oauth/authorize` and an
-  issue page do. Its `queue` handler hands a
+  issue page do, and adds `Vary: Accept` to a page's HTML. Its `queue` handler hands a
   batch from the crawl queue, `crawl` locally and `<WORKER_NAME>-crawl`
   deployed, to the crawler's consumer, and every other batch to the feed
   queue's consumer. Its `scheduled` handler runs the job for each cron
@@ -97,6 +99,10 @@ The repo is a pnpm workspace.
   described under [The admin's tools and pages](#the-admins-tools-and-pages).
 - **`/start.md` is `src/start/`,** described under
   [Setup for agents](#setup-for-agents).
+- **The site in the forms agents read lives in `src/readable/`:** each
+  page's markdown version, `/llms.txt`, `/robots.txt`, `/sitemap.xml`, the
+  JSON data, and every page's metadata, described under
+  [Readable by agents](#readable-by-agents).
 - **`/me` is `src/routes/me.tsx`, with what it reads and its forms in
   `src/me/`,** described under [/me](#me). **`/maintainers` is
   `src/routes/maintainers.tsx`,** which reads nothing.
@@ -2649,6 +2655,100 @@ The leaderboard, A person's page, and The live page.
   `e2e/leaderboard.spec.ts`, `e2e/person.spec.ts`, and `e2e/live.spec.ts`
   check each view and page in the browser, with screenshots at 390 and
   1280px, under [Tests](#tests).
+
+## Readable by agents
+
+The rules are in [how-it-works.md](how-it-works.md#readable-by-agents).
+
+| File | What it does |
+|---|---|
+| `src/readable/routes.ts` | `readableRoute`, which `src/server.ts` asks first for every `GET` or `HEAD` it would hand to TanStack Start. `MARKDOWN_ROUTES` holds each page's markdown version, by its TanStack route ID, and `NO_MARKDOWN` each page that has none, with why. It also answers `/llms.txt`, `/robots.txt`, `/sitemap.xml`, `/projects.json`, and `/<owner>/<repo>.json` |
+| `src/readable/pages.ts` | Each page's markdown, from the data its loader gives the HTML page |
+| `src/readable/markdown.ts` | `text`, which folds untrusted text to one line and escapes it, and `code`, `link`, and the lists, which build the markdown around it |
+| `src/readable/data.ts` | `loadProjectsFile` and `loadProjectFile`, the JSON data, checked against its schema before it goes out |
+| `src/readable/discovery.ts` | `robotsTxt`, `sitemapXml`, and `llmsTxt` |
+| `src/readable/head.ts` | `routeHead`, each page's title, description, canonical URL, Open Graph tags, its markdown version's link, and the route's own tags, like its share card's |
+| `src/readable/origin.ts` | `getSiteOrigin`, the server function the root route loads the site's origin with |
+| `src/db/projects.ts` | Adds `listProjectsWithPage`, the projects with a page by repo, a page at a time after a repo, with `HAS_PAGE` |
+| `packages/core/src/open-data.ts` | The JSON data's schema, its licence, and its page size |
+
+- **One loader per page.** A markdown version calls the loader its page's
+  server function calls, like `loadProject` or `loadPerson`, with the same
+  request, and writes markdown from what it returns. So the two show the
+  same things, and a page the loader says isn't there, or can't be read,
+  is `404` or `503` in both. `/me` and `/admin` use `loadMePage` and
+  `loadAdminPage`, which check who is signed in first.
+- **Before TanStack Start.** The markdown versions, the JSON, and the text
+  files are answered in `src/server.ts`, before any page renders, so they
+  carry no page's HTML, scripts, or cookies. A `.md` path that names no
+  page, like `/start.md`, and a path whose owner belongs to the site, asked
+  for with `Accept: text/markdown`, go on to the rest of the site. So does a
+  project's `.md` or `.json` path that is the HTML page of a repo named with
+  that ending, since a repo's name can end in either. `ownPage` checks that
+  repo with the project page's rule, only when the repo without the ending
+  has no page, and an answer of null hands the request to TanStack Start.
+  TanStack answers `406` to a request that doesn't accept HTML, so a path
+  that is no page answers its markdown or JSON `404` itself.
+- **The route list.** A test walks `routeTree`, from
+  `src/routeTree.gen.ts`, and fails when a route with a component is in
+  neither `MARKDOWN_ROUTES` nor `NO_MARKDOWN`. It then asks for each
+  markdown version, by path and by `Accept`, and checks its status against
+  the HTML page's.
+- **Every word stays.** `text` keeps every word of untrusted text and
+  escapes the characters that would start a construct, so a reader sees
+  what GitHub or the agent wrote. It leaves plain punctuation alone, like
+  `.` and `,`, where it can't start anything, so the text reads as it was
+  written. A test renders each markdown version with micromark and its GFM
+  extension, raw HTML let through, and checks that text written to add a
+  heading, a list, a quote, a table, emphasis, a link, an autolink, an
+  image, or HTML adds none.
+- **The origin.** Every absolute URL, in the markdown, the JSON, the
+  sitemap, `/llms.txt`, and each page's head, comes from `siteOrigin`, which
+  reads `PRIMARY_DOMAIN` from the environment, or takes the request's
+  origin when it is empty. No domain is in a file.
+- **The head.** The root route loads the origin once with `getSiteOrigin`,
+  and each route's `head` reads it from the root match through
+  `routeHead`. A page's share card tags come from `cardMeta`, which the
+  route passes to `routeHead`, as under Share cards below.
+- **Caching.** Pages set no `Cache-Control`, so neither do their markdown
+  versions, the sitemap, or the JSON. `/llms.txt` and `/robots.txt` change
+  only with a deploy, and take `/start.md`'s five minutes. A signed-in
+  page's markdown is `no-store`.
+- **Tests.** `test/readable/readable.test.ts` walks the route tree, asks for
+  every markdown version through the Worker, and checks the hidden pages,
+  the escaping, the metadata, `/robots.txt` with a small matcher of its
+  rules, the sitemap, every site link in `/llms.txt`, and the JSON against
+  its schema, with its pages. `packages/core/test/open-data.test.ts` checks
+  the schema itself. `e2e/readable.spec.ts` reads each form from the
+  production build.
+
+**The SEO and AI-agent discoverability list.** Each item, and where the
+code does it.
+
+| Item | Where | State |
+|---|---|---|
+| Each public page has its own title and description | each route's `head`, through `routeHead` | Done |
+| Each public page names an absolute canonical URL on the primary domain | `pageHead`, with the origin from `getSiteOrigin` | Done |
+| A project's and a person's canonical URL use the name as saved, and the login now | the routes' `head` | Done |
+| `og:title`, `og:description`, `og:url`, `og:type`, and `og:site_name` | `pageHead` | Done |
+| `og:image`, a 1200 by 630 card, with its size and alt text | `cardMeta` in `src/cards/meta.ts`, through `routeHead` | Done |
+| A page that isn't there is `404`, and a route's not-found page also says `noindex`, with no canonical URL | the routes' `head`, and the loaders' `not_found` | Done |
+| `/me`, `/admin`, and `/oauth/authorize` say `noindex` | their routes' `head` | Done |
+| `/robots.txt` keeps crawlers off the signed-in pages, sign-in's `/auth/` and `/oauth/` paths, `/mcp`, the dev routes, the server functions, and the hour-long streams, names the sitemap, and covers no project's page | `robotsTxt` | Done |
+| `/sitemap.xml` lists the public pages and each project with a page, at most 1,000 | `sitemapXml` | Done |
+| Issue and person pages in the sitemap, and a sitemap index past 1,000 projects | | Not yet |
+| The HTML is rendered on the server, so a crawler reads it with no script | TanStack Start | Done |
+| `<html lang="en">` and a viewport meta tag | `src/routes/__root.tsx` | Done |
+| A redirect domain answers `301` to the primary domain | `src/redirect.ts` | Done |
+| `/llms.txt` explains the site, the MCP server, the skills, the JSON data, and the streams, and links `/start.md` | `llmsTxt` | Done |
+| `/start.md` tells any agent how to set itself up | `src/start/` | Done |
+| Every page has a markdown version at its path plus `.md` and under `Accept: text/markdown`, linked from its head with `rel="alternate"` | `MARKDOWN_ROUTES`, `pageHead` | Done |
+| A markdown version names its HTML page as canonical in a `Link` header, and the HTML says `Vary: Accept` | `markdown` in `routes.ts`, `varyByAccept` in `src/server.ts` | Done |
+| Untrusted text can't add to a markdown page | `text` | Done |
+| The projects' settings are JSON under CC0, with a schema and paging | `src/readable/data.ts`, `packages/core/src/open-data.ts` | Done |
+| Every feed is a plain-text stream | `src/feed/streams.ts` | Done |
+| The public machine-readable answers allow any origin | `routes.ts`, `src/start/start.ts`, `src/feed/streams.ts` | Done |
+| Structured data, like JSON-LD | | Not yet |
 
 ## Share cards
 
