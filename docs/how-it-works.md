@@ -804,14 +804,21 @@ The same replacements run on a submit's title, summary, checks, and model,
 and on the PR description a donor writes, before `open_pr` or Open PR on
 `/me` sends it to GitHub. The description is read line by line:
 
-- A line longer than 1,000 characters is read in pieces cut at whitespace,
-  since no key or token holds whitespace. A run of over 1,000 characters
-  with no whitespace becomes `[redacted]` whole, since it could hide one.
-- A private key is replaced from its `BEGIN` line through its `END` line,
-  or through the end of the description when it has none, each line as
-  `[redacted]`.
-- A description with nothing to replace reaches the PR as the donor wrote
-  it.
+- Characters a person can't see, the ones folding drops, like a zero-width
+  space, a word joiner, or a variation selector, are dropped first, so none
+  can split a token. Line breaks, tabs, and spaces stay.
+- A private key is replaced from its `BEGIN` through its `END`, whether it
+  sits on one line, with its body in chunks with spaces, or across lines,
+  where each line becomes `[redacted]`. With no `END`, it is replaced
+  through the end of the description.
+- A line longer than 1,000 characters is read in pieces of at most 800
+  cut at whitespace, and each piece is read with the last three words of the
+  one before it, so a name and its value, like `password: ...`, or
+  `Authorization: Bearer` and its token, are read together wherever the cut
+  falls. A run of over 800 characters with no whitespace becomes
+  `[redacted]` whole, since it could hide a key.
+- A description with nothing to replace and nothing hidden reaches the PR
+  as the donor wrote it.
 
 **Timers**
 
