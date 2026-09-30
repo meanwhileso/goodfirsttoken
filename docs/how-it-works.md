@@ -3702,6 +3702,10 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   GitHub couldn't have, are `404`. So a request never makes a feed or room
   that nothing could fill. A `since` that isn't an event ID is `400`. When
   the database or the feed can't answer, it is `503`.
+- A blocked donor's stream is `404` too, as their
+  [page](#a-persons-page) is. It says `@<user> has no stream on Good First
+  Token.`, the same words as for a login no one has signed in with, so it
+  doesn't say who is blocked.
 
 ## Live sockets
 
@@ -4230,8 +4234,8 @@ their live feed. What it shows is in
 - A login no one has signed in with, and a blocked donor, are `404`. The
   page says the login has no page on Good First Token, the same words for
   both, so it doesn't say who is blocked. The person's
-  [text stream](#text-streams) still answers for a blocked donor, with none
-  of their events.
+  [text stream](#text-streams) and live socket are `404` for both too, with
+  the same words.
 - A path no GitHub login fits, like `/@-name-`, is `404`, and the page says
   only that there is no page there.
 - When the database can't answer, the page says so, with `503`. When only
@@ -4239,8 +4243,9 @@ their live feed. What it shows is in
 - It is public, and sets no cookie for a visitor who isn't signed in.
 
 **The totals** are the person's row on the leaderboard, of all time: PRs
-merged, the merge rate once a PR has merged or closed, PRs opened, issues worked, projects helped, tokens
-where known, and, when they have any, the PRs merged on their own projects.
+merged, the merge rate once a PR has merged or closed, PRs opened, issues
+worked, projects helped, tokens where known, and, when they have any, the
+PRs merged on their own projects.
 
 **The activity graph** has a square for each UTC day of the last 52 weeks,
 a column a week from Monday to Sunday, this week last. A day is brighter

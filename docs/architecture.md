@@ -2021,12 +2021,13 @@ streams' in [Text streams](how-it-works.md#text-streams).
   event. The socket, the reconnects, and the check for an event seen twice
   are `followFeed` in `src/feed/follow.ts`, which imports nothing that runs,
   so the views MCP Apps hosts show follow an issue's socket with it too.
-- **Which streams exist.** A person's stream needs the person in `people`,
-  a repo's the project in `projects`, and an issue's a claim in `claims` or
-  the issue in `tagged_issues`, which `findIssue` in `src/issue/find.ts`
-  checks for the stream and the issue page alike. Connecting to a feed or
-  room that has never been used makes it, with storage, so a stream for
-  anything else would let anyone make Durable Objects without end.
+- **Which streams exist.** A person's stream needs the person in `people`
+  and not in `donor_blocks`, a repo's the project in `projects`, and an
+  issue's a claim in `claims` or the issue in `tagged_issues`, which
+  `findIssue` in `src/issue/find.ts` checks for the stream and the issue
+  page alike. Connecting to a feed or room that has never been used makes
+  it, with storage, so a stream for anything else would let anyone make
+  Durable Objects without end.
 - **Compression.** Cloudflare compresses `text/plain` for a browser that
   accepts it, which would hold lines back until a chunk fills.
   `Cache-Control: no-transform` turns that off.
@@ -2056,12 +2057,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
   shows. Each view costs one call to the homepage's feed, which reads D1 for
   its block check when it has events, and two D1 queries. Nothing caches
   them yet.
-- **Merged this week** filters `prs` on `closed_at` with `state = 'merged'`,
-  which reads `prs_by_closed`, and joins each PR to its claim and the
-  claimant's row in `people`. It takes the agent of each person's latest
-  merge from SQLite's bare column with `MAX()`: in a query with one `MAX()`,
-  a column that isn't aggregated comes from the row that has the maximum.
-  `startOfWeek` in the same file gives the Monday.
+- **Merged this week** is `topMergers`, the leaderboard's person `tally`
+  over this week with `onlyMerged`, as under
+  [The leaderboard and the person pages](#the-leaderboard-and-the-person-pages).
+  It reads the week's PRs through `prs_by_opened` and `prs_by_closed` at
+  once, a MULTI-INDEX OR, and each one's claim by key. Its `worked` step
+  scans the claims through `claims_by_person`, as under [Indexes](#indexes).
+  The agent of each person's latest merge comes from `ROW_NUMBER()`.
+  `startOfWeek` in `src/db/prs.ts` gives the Monday.
 - **Asking for help** counts each approved project's waiting issues in the
   same query, with `json_each` over the issue's labels and the project's
   current settings. The rule for an issue waiting is SQL in
@@ -2315,11 +2318,15 @@ under The projects list and The project page.
   the wall empty with a note, and any other failed read makes the page
   answer `503`, through `PAGE_STATUS_HEADER`, as the issue page does.
 - **Merged work and top helpers** come from `claims` and `prs` in
-  `src/db/prs.ts`. `topHelpers` and the homepage's `topMergers` share one
-  ranking query and one filter for what shows, which leaves out blocked
-  donors and PRs the do-not-list names. Only the scope differs: a time
-  range read through `prs_by_closed`, or a project read through
-  `claims_by_project`. `listMergedPrs` counts them all with
+  `src/db/prs.ts`. `topHelpers` and the homepage's `topMergers` are both
+  the leaderboard's person `tally`, with `onlyMerged`, as under
+  [The leaderboard and the person pages](#the-leaderboard-and-the-person-pages),
+  so they share one query and one filter for what shows, which leaves out
+  blocked donors and PRs the do-not-list names. Only the scope differs. A
+  project's reads its claims through `claims_by_project` and each one's PR
+  by key. The week's reads its PRs through `prs_by_opened` and
+  `prs_by_closed`, as under Merged this week in
+  [The homepage](#the-homepage). `listMergedPrs` counts them all with
   `COUNT(*) OVER ()` as it takes the first 10. Only PRs from claims are in
   `prs`. The sync keeps a linked PR from anyone only while it is open, and
   the PR job reads only the PRs in `prs`, so a PR from outside Good First
