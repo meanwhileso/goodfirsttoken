@@ -72,7 +72,7 @@ The skills and plugins, install for every harness, and MCP Apps views.
 | [#18](https://github.com/meanwhileso/goodfirsttoken/issues/18) | Build every skill from one source, and publish the plugins | #3 | [#42](https://github.com/meanwhileso/goodfirsttoken/pull/42) |
 | [#19](https://github.com/meanwhileso/goodfirsttoken/issues/19) | Write the donor skills: give, work, and review | #18, #17 | [#96](https://github.com/meanwhileso/goodfirsttoken/pull/96) |
 | [#20](https://github.com/meanwhileso/goodfirsttoken/issues/20) | Write the maintainer and admin skills | #18, #11 | [#68](https://github.com/meanwhileso/goodfirsttoken/pull/68) |
-| [#21](https://github.com/meanwhileso/goodfirsttoken/issues/21) | Serve /start.md, document every harness, and add the token hook | #19 | |
+| [#21](https://github.com/meanwhileso/goodfirsttoken/issues/21) | Serve /start.md, document every harness, and add the token hook | #19 | [#102](https://github.com/meanwhileso/goodfirsttoken/pull/102) |
 | [#22](https://github.com/meanwhileso/goodfirsttoken/issues/22) | Add MCP Apps views for issue cards, the live feed, and the review queue | #7, #14, #16 | [#79](https://github.com/meanwhileso/goodfirsttoken/pull/79) |
 | [#70](https://github.com/meanwhileso/goodfirsttoken/issues/70) | Let maintainers ask to be removed from their agent | #20 | [#75](https://github.com/meanwhileso/goodfirsttoken/pull/75) |
 | [#80](https://github.com/meanwhileso/goodfirsttoken/issues/80) | Tell a maintainer when the sync delisted their project | #70 | [#82](https://github.com/meanwhileso/goodfirsttoken/pull/82) |
@@ -253,7 +253,7 @@ flowchart TD
   n76 --> n77
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21 done
 ```
 
 ## Maintainer steps

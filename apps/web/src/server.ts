@@ -11,6 +11,7 @@ import { withPageStatus } from './mcp/page-status';
 import { AUTHORIZE_PATH } from './mcp/paths';
 import { mcpProvider } from './mcp/provider';
 import { redirectToPrimaryDomain } from './redirect';
+import { handleStart, isStartPath } from './start/start';
 import { runScheduled } from './sync/scheduled';
 
 // The Worker's entry point. A request to a redirect domain is answered here,
@@ -24,13 +25,15 @@ import { runScheduled } from './sync/scheduled';
 // exported from here.
 
 // The site: sign-in under /auth (src/auth/routes.ts), the live text streams,
-// like /live.txt (src/feed/streams.ts), the share cards, like /card.png
-// (src/cards/route.ts), the form on the page where a person approves an
-// agent (src/mcp/authorize.ts), and TanStack Start for every page.
+// like /live.txt (src/feed/streams.ts), /start.md (src/start/start.ts), the
+// share cards, like /card.png (src/cards/route.ts), the form on the page
+// where a person approves an agent (src/mcp/authorize.ts), and TanStack
+// Start for every page.
 const site: ExportedHandler<Env> = {
   fetch: async (request) => {
     if (isAuthPath(request)) return handleAuthRequest(request);
     if (isStreamPath(request)) return handleStream(request);
+    if (isStartPath(request)) return handleStart(request);
     if (isCardPath(request)) return answerCard(request);
     if (new URL(request.url).pathname === AUTHORIZE_PATH && request.method === 'POST') return answerConsent(request);
     return withPageStatus(await handler.fetch(request));
