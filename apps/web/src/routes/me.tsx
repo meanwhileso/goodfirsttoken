@@ -16,6 +16,7 @@ import { getMePage, type Queue } from '../me/data';
 import { answerMeForm } from '../me/page';
 import { ME_PATH } from '../me/paths';
 import accountCss from '../styles/account-page.css?url';
+import { routeHead } from '../readable/head';
 
 // The signed-in person's own page (brand/brief-website.md), which replaced
 // prototype/me.html: their review queue, with Open PR and, for a project
@@ -35,10 +36,8 @@ export const Route = createFileRoute('/me')({
     if (result.state === 'signed_out') throw redirect({ to: '/sign-in' });
     return result.page;
   },
-  head: () => ({
-    meta: [{ title: `Your queue · ${productName}` }],
-    links: [{ rel: 'stylesheet', href: accountCss }],
-  }),
+  // The signed-in person's own page, which no search engine lists.
+  head: ({ matches }) => routeHead(matches, { title: `Your queue · ${productName}`, path: null }, [{ rel: 'stylesheet', href: accountCss }]),
   server: {
     handlers: {
       POST: ({ request }) => answerMeForm(request),

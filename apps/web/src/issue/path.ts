@@ -12,7 +12,7 @@ import { issueRef, repoName, validate } from '@goodfirsttoken/core';
 const RESERVED_OWNERS = new Set(['admin', 'auth', 'dev', 'mcp', 'oauth']);
 
 /** Whether an owner's paths belong to the site, so no project or issue has a page under it. */
-function ownedBySite(owner: string): boolean {
+export function ownedBySite(owner: string): boolean {
   return RESERVED_OWNERS.has(owner.toLowerCase());
 }
 

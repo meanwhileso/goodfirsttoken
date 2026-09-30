@@ -89,7 +89,7 @@ Every public page, the markdown and JSON versions, and share cards.
 | [#25](https://github.com/meanwhileso/goodfirsttoken/issues/25) | Build the issue page with live lanes | #7, #14 | [#56](https://github.com/meanwhileso/goodfirsttoken/pull/56) |
 | [#26](https://github.com/meanwhileso/goodfirsttoken/issues/26) | Build person pages, the leaderboard, and /live | #7, #14, #17 | [#100](https://github.com/meanwhileso/goodfirsttoken/pull/100) |
 | [#27](https://github.com/meanwhileso/goodfirsttoken/issues/27) | Build /me and /maintainers | #7, #9, #16 | [#90](https://github.com/meanwhileso/goodfirsttoken/pull/90) |
-| [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 | |
+| [#28](https://github.com/meanwhileso/goodfirsttoken/issues/28) | Serve markdown versions, llms.txt, and the JSON data | #23, #24, #25, #26, #27 | [#104](https://github.com/meanwhileso/goodfirsttoken/pull/104) |
 | [#29](https://github.com/meanwhileso/goodfirsttoken/issues/29) | Generate share cards | #26 | [#103](https://github.com/meanwhileso/goodfirsttoken/pull/103) |
 | [#65](https://github.com/meanwhileso/goodfirsttoken/issues/65) | Delist a paused project whose repo went private | #24 | [#73](https://github.com/meanwhileso/goodfirsttoken/pull/73) |
 | [#94](https://github.com/meanwhileso/goodfirsttoken/issues/94) | Word /me's refusals for the person reading them | #27 | |
@@ -253,7 +253,7 @@ flowchart TD
   n76 --> n77
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28 done
 ```
 
 ## Maintainer steps

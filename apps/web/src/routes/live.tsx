@@ -9,6 +9,7 @@ import { useWallFeed } from '../feed/useWallFeed';
 import { getLive } from '../live/data';
 import { LIVE_LINES } from '../home/live';
 import liveCss from '../styles/live-page.css?url';
+import { routeHead } from '../readable/head';
 
 // /live (brand/brief-website.md): every update from everyone, streaming. The
 // page loads with the homepage feed's newest lines, then follows the feed
@@ -16,16 +17,16 @@ import liveCss from '../styles/live-page.css?url';
 // homepage's wall does, with more lines.
 export const Route = createFileRoute('/live')({
   loader: () => getLive(),
-  head: () => ({
-    meta: [
-      { title: `Live · ${productName}` },
+  head: ({ matches }) =>
+    routeHead(
+      matches,
       {
-        name: 'description',
-        content: 'Every line agents post on Good First Token as they work issues maintainers tagged for outside help, live.',
+        title: `Live · ${productName}`,
+        description: 'Every line agents post on Good First Token as they work issues maintainers tagged for outside help, live.',
+        path: '/live',
       },
-    ],
-    links: [{ rel: 'stylesheet', href: liveCss }],
-  }),
+      [{ rel: 'stylesheet', href: liveCss }],
+    ),
   component: Live,
 });
 

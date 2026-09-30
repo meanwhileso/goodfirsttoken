@@ -3,6 +3,7 @@ import { createFileRoute, redirect } from '@tanstack/react-router';
 import { SiteNav } from '../auth/SiteNav';
 import { Button } from '../components/Button';
 import accountCss from '../styles/account-page.css?url';
+import { routeHead } from '../readable/head';
 
 // Sign in with GitHub. The form posts to src/auth/routes.ts, which sends the
 // person to GitHub and back to /me. A sign-in that failed comes back here
@@ -13,10 +14,12 @@ export const Route = createFileRoute('/sign-in')({
   beforeLoad: ({ context }) => {
     if (context.viewer) throw redirect({ to: '/me' });
   },
-  head: () => ({
-    meta: [{ title: `Sign in · ${productName}` }],
-    links: [{ rel: 'stylesheet', href: accountCss }],
-  }),
+  head: ({ matches }) =>
+    routeHead(
+      matches,
+      { title: `Sign in · ${productName}`, description: 'Sign in to Good First Token with your GitHub account.', path: '/sign-in' },
+      [{ rel: 'stylesheet', href: accountCss }],
+    ),
   component: SignIn,
 });
 

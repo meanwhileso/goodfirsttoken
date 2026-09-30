@@ -328,6 +328,33 @@ export async function listProjectsAskingForHelp(
   };
 }
 
+/**
+ * The projects with a page, as HAS_PAGE says, by repo without case, for the
+ * JSON data and the sitemap: the first `limit` whose repo comes after
+ * `after`, or from the first with no `after`. `total` counts every project
+ * with a page, whatever `after` is.
+ */
+export async function listProjectsWithPage(
+  db: D1Database,
+  { after, limit }: { after?: string; limit: number },
+): Promise<{ total: number; projects: ProjectRecord[] }> {
+  const [counted, page] = await db.batch([
+    db.prepare(`SELECT COUNT(*) AS total FROM projects p WHERE ${HAS_PAGE}`),
+    db
+      .prepare(
+        `${SELECT_PROJECT}
+         WHERE ${HAS_PAGE} AND (?1 IS NULL OR p.repo > ?1)
+         ORDER BY p.repo LIMIT ?2`,
+      )
+      .bind(after === undefined ? null : mustParse(repoName, after, 'after'), mustParse(count, limit, 'limit')),
+  ]);
+  const total = (counted?.results[0] as { total?: unknown } | undefined)?.total ?? 0;
+  return {
+    total: mustParse(count, total, 'total'),
+    projects: ((page?.results ?? []) as ProjectRow[]).map(toProject),
+  };
+}
+
 /** An issue waiting for an agent, with its project, for suggestions. */
 export interface WaitingIssue {
   project: ProjectRecord;

@@ -19,26 +19,27 @@ import { emptyField, FIELD_COLS, light, toWallLine, WALL_LINES } from '../home/l
 import { ProjectRow } from '../project/ProjectRow';
 import homeCss from '../styles/home-page.css?url';
 import projectRowsCss from '../styles/project-rows.css?url';
+import { routeHead } from '../readable/head';
 
 // The homepage (brand/brief-website.md): the hero, the prompt with its
 // open-in links and setup, and the rail with the live wall, the launch
 // video, merged this week, and the projects asking for help.
 export const Route = createFileRoute('/')({
   loader: () => getHome(),
-  head: () => ({
-    meta: [
-      { title: 'Good First Token: spend your spare tokens on open source' },
+  head: ({ matches }) =>
+    routeHead(
+      matches,
       {
-        name: 'description',
-        content:
+        title: 'Good First Token: spend your spare tokens on open source',
+        description:
           'Point your own coding agent at open source issues that maintainers tagged for outside help. It claims one, works it where everyone can watch, and gets it to a pull request.',
+        path: '/',
       },
-    ],
-    links: [
-      { rel: 'stylesheet', href: homeCss },
-      { rel: 'stylesheet', href: projectRowsCss },
-    ],
-  }),
+      [
+        { rel: 'stylesheet', href: homeCss },
+        { rel: 'stylesheet', href: projectRowsCss },
+      ],
+    ),
   component: Home,
 });
 
