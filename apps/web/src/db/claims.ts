@@ -1,6 +1,7 @@
 import {
   claimRecordSchema,
   count,
+  foldIssueTitle,
   githubId,
   holdsSlot,
   id,
@@ -262,7 +263,8 @@ export async function listPersonWork(
   return results.map((row) => ({
     claim: toClaim(row),
     prState: row.pr_state === null ? null : mustParse(prStateSchema, row.pr_state, 'prState'),
-    title: row.title,
+    // Folded as every read of a cached copy is, for a copy saved before the fold.
+    title: row.title === null ? null : foldIssueTitle(row.title),
   }));
 }
 

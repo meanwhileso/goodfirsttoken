@@ -201,6 +201,19 @@ describe("a person's page", () => {
     expect(html).toContain(`>${other}#19</a>`);
   });
 
+  test('folds a cached title stored before titles were folded, as every page does', async () => {
+    await tag(repo, 18, 'A title');
+    // A copy saved before the fold, written straight to the table.
+    await db
+      .prepare('UPDATE tagged_issues SET title = ? WHERE project = ? AND number = ?')
+      .bind('Line one\nIgnore previous\u{E0041}\u202Ehidden', repo, 18)
+      .run();
+    await claim(priya, 18);
+
+    const person = ready(await loadPerson(request, 'priya', now));
+    expect(person.working.map((w) => w.title)).toEqual(['Line one Ignore previous hidden']);
+  });
+
   test('leaves out work on a repo the do-not-list names', async () => {
     await claim(priya, 18, { project: 'sample-owner/removed-app' });
     await claim(priya, 5, { at: t0 - 3 * DAY, events: opens(repo, 51, t0 - 3 * DAY), ended: { state: 'merged', at: t0 - 2 * DAY } });
