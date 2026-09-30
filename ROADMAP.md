@@ -115,7 +115,7 @@ Deploys, the static host, a security review, and the launch video.
 |---|---|---|---|
 | [#32](https://github.com/meanwhileso/goodfirsttoken/issues/32) | Write the deploy workflow and the self-hosting guide | #3 | [#43](https://github.com/meanwhileso/goodfirsttoken/pull/43) |
 | [#33](https://github.com/meanwhileso/goodfirsttoken/issues/33) | Serve static assets from R2 with no cookies | #32, #7 | [#49](https://github.com/meanwhileso/goodfirsttoken/pull/49) |
-| [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | |
+| [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34) | Run a security review before launch and fix what it finds | #17, #21, #28, #31, #33 | [#105](https://github.com/meanwhileso/goodfirsttoken/pull/105) |
 | [#35](https://github.com/meanwhileso/goodfirsttoken/issues/35) | Re-render the launch video to match the live site | #23, #25 | [#57](https://github.com/meanwhileso/goodfirsttoken/pull/57) |
 | [#89](https://github.com/meanwhileso/goodfirsttoken/issues/89) | Check on GitHub that a private organization member's review counts | #17 | |
 | [#91](https://github.com/meanwhileso/goodfirsttoken/issues/91) | Fold synced issue titles, and keep the update fold fast | Nothing | [#97](https://github.com/meanwhileso/goodfirsttoken/pull/97) |
@@ -253,7 +253,7 @@ flowchart TD
   n76 --> n77
   n32 --> n33
   n33 --> n34
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34 done
 ```
 
 ## Maintainer steps

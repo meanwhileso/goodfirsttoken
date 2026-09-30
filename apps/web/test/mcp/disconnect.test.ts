@@ -550,7 +550,7 @@ test('a token GitHub no longer knows counts as revoked, and the daily job ends i
   expect(await connectionNames()).toEqual([]);
 });
 
-test('one run of the daily job ends a set number of lapsed connections, the longest lapsed first, and the next run the rest', async () => {
+test('one run of the daily job ends a set number of lapsed connections, the one that last got tokens earliest first, and the next run the rest', async () => {
   for (const name of ['Lapsed a week', 'Lapsed a day', 'Lapsed a month']) {
     await connectAgent(github, 'arjun', { oauth: new MemoryOAuthClient(name) });
   }

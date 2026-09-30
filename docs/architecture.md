@@ -4656,9 +4656,10 @@ are B1 to B5 in the table below.
   `src/donor/work.ts`). The PR description a donor writes is stripped
   line by line with `stripSecretsFromText`, on `open_pr` and on `/me`
   alike, since both go through `openPrAs`.
-- Text is folded first (`packages/core/src/characters.ts`), so hidden
-  characters can't split a token. Everything downstream reads the stored,
-  stripped events.
+- Posts, jobs, reasons, and a submit's text are folded first
+  (`packages/core/src/characters.ts`), and the PR description has the same
+  hidden characters dropped, line breaks kept, so no hidden character can
+  split a token. Everything downstream reads the stored, stripped events.
 
 **Pages.**
 
@@ -4693,13 +4694,12 @@ are B1 to B5 in the table below.
   included. Blocked donors' events and do-not-list repos are left out
   (`src/rooms/watchers.ts`).
 
-**Markdown and JSON forms.** These come with
-[#28](https://github.com/meanwhileso/goodfirsttoken/issues/28), which isn't
-merged here. The review read them on #28's branch: each has its content
-type and `nosniff`, and `Access-Control-Allow-Origin: *` on public answers
-only, `text()` escapes, `destination()` allows http and https only, the
-schemas are strict, and `hasPage` gates each answer. This paragraph moves to
-the code's own paths when #28 merges.
+**Markdown and JSON forms** (`src/readable/`). Each has its content type
+and `nosniff`, and `Access-Control-Allow-Origin: *` on public answers only
+(`routes.ts`). `text()` escapes, and `destination()` allows http and https
+only (`markdown.ts`). The schemas are strict
+(`packages/core/src/open-data.ts`), and `hasPage` gates each answer
+(`data.ts`).
 
 **Share cards** (`src/cards/`).
 
@@ -4714,7 +4714,7 @@ the code's own paths when #28 merges.
   about $83. The cost grows with the requests, so it multiplies nothing.
 
 **Errors.** With `people`, `projects`, `claims`, or `prs` renamed, 18 URLs
-across pages, cards, and streams, and #28's Markdown, JSON, and sitemap,
+across pages, the Markdown and JSON forms, the sitemap, cards, and streams
 answered a plain `503` or `404`, with nothing from D1 in them. A tool's own failure
 answers a plain sentence, and the log keeps the error (`asCaller` in
 `src/mcp/server.ts`).
@@ -4737,8 +4737,8 @@ Notes, with nothing to fix now:
 
 | # | Finding | Outcome |
 |---|---|---|
-| A1 | A page on another site could use up a person's sign-in limit, with requests the browser sends for it in the background: registrations, the page to approve an agent in an image or frame, and GitHub's return to either callback | Fixed. GitHub's return to a browser with no sign-in in progress is refused before it counts, at both callbacks. The page to approve an agent answers `400`, uncounted, to what the browser's Sec-Fetch headers say another site's page asked for, and counts a page opened in a tab, the site's own call, and a request with no Sec-Fetch headers. Registrations count under a key of their own. Tests: in `test/auth/rate-limit.test.ts`, "registrations another site's page sends don't count toward sign-in", "the page to approve an agent, loaded as another site's image or frame, is refused before it counts", and "GitHub's return with no sign-in in progress in this browser is refused before it counts". In `test/mcp/sign-in.test.ts`, "the page to approve an agent refuses, uncounted, what the browser says another site's page asked for", "the page to approve an agent refuses a prefetch, uncounted", and "the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it". Kept: a page another site opens in a tab of its own, like a popup, still counts, since agents in web pages open the page to approve them that way. So does an image in a browser that sends no Sec-Fetch headers |
-| A2 | An agent's GitHub token outlived its grant until its person came back to `/me` or connected an agent | Fixed for agents. A daily job ends every lapsed connection, for everyone, the way Disconnect does. Tests: in `test/mcp/disconnect.test.ts`, "the daily job ends everyone's connections whose grants ran out" and "one run of the daily job ends a set number of lapsed connections". `test/sync/scheduled.test.ts` checks its cron |
+| A1 | A page on another site could use up a person's sign-in limit, with requests the browser sends for it in the background: registrations, the page to approve an agent in an image or frame, and GitHub's return to either callback | Fixed. GitHub's return to a browser with no sign-in in progress is refused before it counts, at both callbacks. The page to approve an agent answers `400`, uncounted, to what the browser's Sec-Fetch headers say another site's page asked for, and counts a page opened in a tab, the site's own call, and a request with no Sec-Fetch headers. Registrations count under a key of their own. Tests: in `test/auth/rate-limit.test.ts`, "registrations another site's page sends don't count toward sign-in", "the page to approve an agent, loaded as another site's image or frame, is refused before it counts", and "GitHub's return with no sign-in in progress in this browser is refused before it counts". In `test/mcp/sign-in.test.ts`, "the page to approve an agent refuses, uncounted, what the browser says another site's page asked for", "the page to approve an agent refuses a prefetch, uncounted", and "the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it". Kept: a page another site opens in a tab of its own, like a popup, still counts, since agents in web pages open the page to approve them that way. So does an image in a browser that sends no Sec-Fetch headers. Browsers send Sec-Fetch headers only to secure origins, so over plain http, before Always Use HTTPS is on, another page's image counts too |
+| A2 | An agent's GitHub token outlived its grant until its person came back to `/me` or connected an agent | Fixed for agents. A daily job ends every lapsed connection, for everyone, revoking each token before it ends the connection, and keeping the connection for the next run when GitHub fails. Opening `/me` or connecting an agent does the same for one person. Tests: in `test/mcp/disconnect.test.ts`, "the daily job ends everyone's connections whose grants ran out" and "one run of the daily job ends a set number of lapsed connections, the one that last got tokens earliest first", "when GitHub fails to revoke, the daily job keeps the connection", "when GitHub fails to revoke, opening /me keeps the lapsed connection", and "the daily job never revokes a lapsed connection's token while the site's sign-in or another agent holds the same token". `test/sync/scheduled.test.ts` checks its cron |
 | A2 | A web session that expires leaves its GitHub token stored and working at GitHub until the person's next sign-in | Kept. The site holds one token for each person, and all their sessions use it. Revoking it when one session expires would sign out their other browsers. The token is encrypted with `AUTH_SECRET`, and the next sign-in revokes it. `test/auth/sign-out.test.ts` holds this rule |
 | A3, C2 | A request to `/mcp` with a token the library doesn't know costs one KV read before its `401`, and no limit counts it | Kept. A limit by address would hurt hosted agents that share addresses, which is why `MCP_LIMITER` counts by person. The cost is one KV read on top of the request itself, and a token of the wrong shape costs none. An operator can add a Cloudflare WAF rate-limiting rule on `/mcp` answers with status `401`, as [self-hosting.md](self-hosting.md#limiting-unknown-tokens-at-mcp) says. The same holds for the KV write each registration makes, kept 90 days, from many IPv6 /64s |
 | A4 | The MACs on `/me` and `/admin` notices use `AUTH_SECRET` as it is, the key Better Auth uses | Kept. Each MAC starts with a purpose of its own, which can't make a session cookie, and a session needs a row in D1 too. Deriving a key of its own is hardening for later |
@@ -4764,6 +4764,12 @@ Notes the review made, with nothing to fix now:
   no protection from the check on the page to approve an agent, so another
   site's page could still use up its sign-ins. Every current browser sends
   them.
+- `openInTab` in `scripts/skill-run.ts`, which the skills' steps and the
+  browser tests use to open the page to approve an agent, has no timeout.
+- A run of over 800 characters with no whitespace, in a line of a PR
+  description longer than 1,000, is redacted whole.
+- The framing headers apply under `pnpm dev` too, so an editor's preview in
+  a frame can't show the dev site.
 
 ## Choices
 

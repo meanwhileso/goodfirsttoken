@@ -307,7 +307,7 @@ describe('text of any length, like a PR description, is stripped line by line', 
   });
 
   test('a token split by characters a person cannot see, like a zero-width space, is still redacted', () => {
-    const split = `${token.slice(0, 10)}​${token.slice(10, 20)}⁠${token.slice(20)}`;
+    const split = `${token.slice(0, 10)}\u200b${token.slice(10, 20)}\u2060${token.slice(20)}`;
 
     const stripped = stripSecretsFromText(`Ran it with ${split} set.\nDone.`);
 
@@ -317,9 +317,9 @@ describe('text of any length, like a PR description, is stripped line by line', 
   test('60,000 characters shaped like a=b=c take little time', () => {
     const text = `${'a=b='.repeat(220)} `.repeat(70).slice(0, 60_000);
 
-    const started = performance.now();
+    const started = Date.now();
     stripSecretsFromText(text);
 
-    expect(performance.now() - started).toBeLessThan(1000);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });
