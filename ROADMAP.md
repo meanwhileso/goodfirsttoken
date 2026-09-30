@@ -4,7 +4,22 @@ Good First Token v1, in build order. The design is in [docs/specs/v1.md](docs/sp
 Every item below is a GitHub issue labeled `roadmap`, sized for one agent session, local or in the
 cloud, and written so the session needs only this repo.
 
+## First launch
+
+The build for the first launch is complete. The last build issue, the security review
+[#34](https://github.com/meanwhileso/goodfirsttoken/issues/34), closed in
+[#105](https://github.com/meanwhileso/goodfirsttoken/pull/105).
+
+The open roadmap issues #76, #77, #86, #87, #88, #89, #94, #95, and #98 are follow-ups.
+They stay open for work after launch. The milestone tables group them by the part of the system
+they change.
+
+Before launch, finish the [maintainer steps](#maintainer-steps), including staging setup and runs
+against real GitHub from the supported harnesses. Deployment and those checks remain.
+
 ## Picking up an item
+
+For the first launch, finish the maintainer steps before picking up a follow-up issue.
 
 1. Choose an open issue whose blockers are all closed. Each issue lists its blockers, and GitHub shows
    them in the issue's sidebar. Lower numbers come first.
@@ -263,8 +278,9 @@ These need access to accounts, so they are done by maintainers and have no issue
 
 To start staging deploys, once #32 merges:
 
-- Create the staging and production GitHub OAuth apps, with the callback URL
-  `https://<domain>/auth/callback`. GitHub has no API for this.
+- Create the staging and production GitHub OAuth apps, each with the callback URLs
+  `https://<domain>/auth/callback/github` and `https://<domain>/auth/callback/mcp`.
+  Keep wildcard matching off. GitHub has no API for creating the apps.
 - Create the Cloudflare API token or the credential broker, and add each domain's zone to the
   Cloudflare account. The deploy creates D1, the queues, and KV, and attaches the primary and redirect
   domains itself.
