@@ -249,17 +249,18 @@ const LAPSED = '((renewed_at IS NULL AND connected_at < ?1) OR renewed_at < ?2)'
 const lapsedBefore = (now: number) => [now - CODE_LIFETIME - SLACK, now - GRANT_LIFETIME - SLACK] as const;
 
 /**
- * Ends a person's connections whose grants ran out, the way Disconnect does,
- * so their GitHub tokens are revoked: one whose agent never traded its code,
- * and one whose agent last got tokens more than 30 days ago. /me and each
- * agent's sign-in run it for the person, and the daily job, below, for
- * everyone.
+ * Ends a person's connections whose grants ran out, and revokes their GitHub
+ * tokens: one whose agent never traded its code, and one whose agent last
+ * got tokens more than 30 days ago. Each token is revoked before its
+ * connection ends, and a connection whose token GitHub didn't revoke stays
+ * for a later try. /me and each agent's sign-in run it for the person, and
+ * the daily job, below, for everyone.
  */
 export async function endLapsedConnections(origin: string, githubId: number, now: number): Promise<void> {
   const { results } = await env.DB.prepare(`SELECT id FROM connected_agents WHERE ${LAPSED} AND github_id = ?3`)
     .bind(...lapsedBefore(now), githubId)
     .all<Pick<ConnectionRow, 'id'>>();
-  for (const { id } of results) await disconnect(origin, githubId, id);
+  for (const { id } of results) await endLapsedConnection(origin, githubId, id);
 }
 
 /**
@@ -290,10 +291,10 @@ export async function endEveryLapsedConnection(origin: string, now: number, limi
 }
 
 /**
- * Ends one lapsed connection for the daily job, revoking its token first.
+ * Ends one lapsed connection, revoking its token first.
  * Disconnect deletes the row first, so the agent is cut off at once, and a
- * failed revoke is only logged. A lapsed grant can't be used, so the job can
- * wait for GitHub: when the revoke fails, the row stays for the next run.
+ * failed revoke is only logged. A lapsed grant can't be used, so this can
+ * wait for GitHub: when the revoke fails, the row stays for the next try.
  * GitHub's 404 says it no longer knows the token, which counts as revoked.
  * Returns whether the connection ended.
  */

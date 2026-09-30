@@ -270,9 +270,9 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
     under [The sync](#the-sync), at most `LAPSED_PER_RUN` a run, ordered by
     `COALESCE(renewed_at, connected_at)`. It reads the whole of
     `connected_agents`, which has no index on `renewed_at`, once a day.
-    Unlike Disconnect, it revokes the token before it deletes the row, and
-    keeps the row when GitHub fails, since a lapsed grant can't be used and
-    can wait for the next run.
+    Unlike Disconnect, both revoke the token before they delete the row,
+    through `endLapsedConnection`, and keep the row when GitHub fails, since
+    a lapsed grant can't be used and can wait for the next try.
 - **The MCP TypeScript SDK 2.1.0, pinned.** `@modelcontextprotocol/server`'s
   `createMcpHandler` serves both the 2026-07-28 protocol and 2025 clients,
   with a new `McpServer` for each request, so nothing is kept between

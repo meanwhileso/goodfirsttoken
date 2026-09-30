@@ -267,7 +267,9 @@ GitHub token GitHub gave that sign-in.
   stays connected. A connection whose agent never traded its code within
   the code's 10 minutes and one more, or went 30 days and a minute without
   getting tokens, ends the next time the person opens `/me` or connects an
-  agent, or at the daily job, whichever comes first.
+  agent, or at the daily job, whichever comes first. Each way revokes the
+  token first, and ends the connection once GitHub has. When GitHub fails,
+  the connection and its token wait for the next try.
 - The daily job runs at 04:23 UTC, and ends such connections for everyone,
   so their GitHub tokens are revoked, whether or not their people come back.
   It revokes each token first, and ends the connection once GitHub has. When
