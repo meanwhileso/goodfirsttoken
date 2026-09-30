@@ -39,6 +39,46 @@ import { indent, lines, numbered, plural, renderSettings, when } from './text';
 // listing whose policy the crawler reads differently now.
 const queueItemKinds = ['registration', 'candidate', 'removal', 'pause', 'policy_change'] as const;
 
+/**
+ * The most items one look at the admin queue shows, the ones that have
+ * waited longest. Only these are built, so one look reads GitHub for these
+ * alone, however long the queue is. `admin_queue` and /admin share it.
+ */
+export const ADMIN_QUEUE_PAGE = 20;
+
+/**
+ * Where a page of the admin queue ends: the time, repo, and ID of its last
+ * item. The next page starts after it in the queue's order, so an item
+ * decided between pages moves nothing, and an item added waits at the end.
+ */
+export interface QueuePlace {
+  /** When the item started to wait, as `Date.toISOString` gives it. */
+  at: string;
+  repo: string;
+  id: string;
+}
+
+/** The place as the one string `next` and `after` carry. `~` is in no time, repo name, or ID. */
+export function queuePlaceText(place: QueuePlace): string {
+  return `${place.at}~${place.repo}~${place.id}`;
+}
+
+/** The place a `next` value names, or null when it names none. */
+export function readQueuePlace(text: string): QueuePlace | null {
+  const parts = text.split('~');
+  if (parts.length !== 3) return null;
+  const [at = '', repo = '', itemId = ''] = parts;
+  const time = Date.parse(at);
+  if (!Number.isFinite(time) || new Date(time).toISOString() !== at) return null;
+  if (!repoName.safeParse(repo).success || !id.safeParse(itemId).success) return null;
+  return { at, repo, id: itemId };
+}
+
+const queuePlaceSchema = z
+  .string({ error: 'must be the next value from an admin_queue answer' })
+  .max(256, 'must be the next value from an admin_queue answer')
+  .refine((text) => readQueuePlace(text) !== null, 'must be the next value from an admin_queue answer');
+
 /** What GitHub says about a repo, for an admin to weigh. */
 const repoFactsSchema = z.object({
   stars: count,
@@ -401,18 +441,30 @@ function renderQueueItem(item: QueueItem): string {
 export const adminQueue = defineTool({
   audience: 'admin',
   description:
-    "List maintainers' registrations, crawler finds, and maintainers' requests to be removed, waiting for an admin, with each repo's facts from GitHub, the projects Good First Token paused on its own, and the listings whose policy the crawler reads differently now.",
+    "List maintainers' registrations, crawler finds, and maintainers' requests to be removed, waiting for an admin, with each repo's facts from GitHub, the projects Good First Token paused on its own, and the listings whose policy the crawler reads differently now. It shows the ones that have waited longest, a page at a time, and says how many more wait. Pass the answer's next value as after for the next page.",
   refusals: [],
   input: z.object({
     kind: z.enum(['all', ...queueItemKinds]).default('all'),
+    after: queuePlaceSchema
+      .optional()
+      .describe('The next value from the answer before, for the page after it. Leave it out for the first page.'),
   }),
-  output: z.object({ items: z.array(queueItemSchema) }),
+  output: z.object({
+    items: z.array(queueItemSchema).max(ADMIN_QUEUE_PAGE),
+    /** How many more wait after these. */
+    more: count.default(0),
+    /** What to pass as `after` for the next page, or null when none waits. */
+    next: queuePlaceSchema.nullable().default(null),
+  }),
   text: (out) =>
     out.items.length === 0
       ? 'Nothing waiting.'
       : lines(
-          `${String(out.items.length)} waiting:`,
+          `${String(out.items.length)} waiting${out.more > 0 ? ` here, the longest first, and ${String(out.more)} more after them` : ''}:`,
           numbered(out.items, renderQueueItem),
+          out.more > 0 &&
+            out.next !== null &&
+            `${String(out.more)} more wait. Read the next page with admin_queue, the same kind, and after: ${JSON.stringify(out.next)}.`,
           out.items.some((item) => item.kind !== 'removal') &&
             'Decide each registration, crawler find, pause, and policy change with admin_decide. A rejection needs a reason, which a registering maintainer sees.',
           out.items.some((item) => item.kind === 'removal') &&

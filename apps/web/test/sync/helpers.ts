@@ -39,6 +39,19 @@ export function freshNumbers(github: GitHubFake, repo: string): void {
   nextNumber += 100;
 }
 
+/**
+ * Dates every repo in the fake a day before `addedAt`, at the latest. A
+ * test that runs the clock far ahead makes the fake's repos after a project
+ * it added at an earlier time, and the sync never takes a repo GitHub made
+ * after the project for the project's own, when the project keeps no ID.
+ */
+export function madeBefore(github: GitHubFake, addedAt: number): void {
+  const latest = addedAt - 86_400_000;
+  for (const repo of Object.values(github.state.repos)) {
+    if (Date.parse(repo.createdAt) > latest) repo.createdAt = new Date(latest).toISOString();
+  }
+}
+
 /** The calls the fake recorded for an operation, like `GET /repos/{owner}/{repo}`. */
 export function callsTo(github: GitHubFake, operation: string) {
   return github.calls.filter((call) => call.operation === operation);

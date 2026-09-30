@@ -63,7 +63,9 @@ The same queue is at `/admin` on the Good First Token site.
 1. Call `admin_queue`. Leave out `kind` for everything, or set it to
    `registration`, `candidate`, `removal`, `pause`, or `policy_change`.
    The item that has waited longest comes first. Each registration, crawler
-   find, pause, and policy change has an `id` for `admin_decide`.
+   find, pause, and policy change has an `id` for `admin_decide`. An answer
+   holds one page of the queue. `more` says how many more wait after it,
+   and `next` is where it ends.
 2. When nothing waits, say so and stop.
 3. For each item:
    1. Show the admin its kind, its repo, who registered it or when the
@@ -85,7 +87,10 @@ The same queue is at `/admin` on the Good First Token site.
       request to be removed, ask them to remove the repo or skip it.
    4. Do what they decided, as in Deciding below, or as in Remove at the
       maintainers' request. A skipped item keeps waiting.
-4. At the end, tell the admin which items were approved, rejected, and
+4. When `more` is above 0, call `admin_queue` again with the same `kind`
+   and `after` set to the answer's `next`, and work that page from step 3.
+   Items decided on the page before don't move the next page.
+5. At the end, tell the admin which items were approved, rejected, and
    skipped.
 
 ### Checks for a crawler find
@@ -202,10 +207,10 @@ it, and agents get no new claims on it meanwhile. Its `pause` says why.
   shows nothing read from the repo. Its fields are the ones
   `admin_pause_project` gives, as in Pause and resume below: `repo` is the
   repo GitHub showed that way, the code repo or the issue repo, `showed`
-  is what GitHub showed, `private`, `archived`, `blocked`, or `gone`,
-  `reason` is the sync's reason, `delistedAt` is when the sync delisted the
-  project, or null when that isn't known, `checkedAt` is when it last
-  checked the repos, and `onDoNotList` says whether a repo is on the
+  is what GitHub showed, `private`, `archived`, `blocked`, `gone`, or
+  `replaced`, `reason` is the sync's reason, `delistedAt` is when the sync
+  delisted the project, or null when that isn't known, `checkedAt` is when
+  it last checked the repos, and `onDoNotList` says whether a repo is on the
   do-not-list. Tell the admin all of it, and propose to keep the pause. A
   resume leaves the project with no page, and the sync pauses it again
   while GitHub shows the repo that way. A policy change's `change.delisted`
@@ -223,7 +228,8 @@ it, and agents get no new claims on it meanwhile. Its `pause` says why.
     open repo by each name again. The sync never resumes its own pause.
     When the reason says the repo was archived or blocked, it is the same
     repo, so propose to resume it. When it says the repo went private or is
-    gone, another repo may have taken its name. Read the repo first:
+    gone, or that GitHub shows another repo under the name, another repo
+    may have taken its name. Read the repo first:
     propose to resume only when it is the project the maintainers listed
     and its docs still welcome AI help, and to keep the pause otherwise.
 
@@ -310,9 +316,11 @@ a listing.
 - `changed` in the result says whether the call changed anything.
 - `delisted` in the result says when Good First Token's sync delisted the
   project, because GitHub showed its repo or issue repo private, archived,
-  blocked, or gone. `repo` is that repo, and `showed` is what GitHub
-  showed: `private`, `archived`, `blocked`, or `gone`, which means no
-  public repo by that name, since it went private or was deleted. `reason`
+  blocked, or gone, or showed another repo under its name. `repo` is that
+  repo, and `showed` is what GitHub showed: `private`, `archived`,
+  `blocked`, `gone`, which means no public repo by that name, since it
+  went private or was deleted, or `replaced`, which means another repo
+  under that name, by its GitHub ID. `reason`
   is the sync's reason. `delistedAt` is when the sync delisted the project,
   or null when that isn't known, and `checkedAt` is when the sync last
   checked the repos. Tell the admin all of it.

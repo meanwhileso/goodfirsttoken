@@ -1,4 +1,5 @@
 import {
+  ADMIN_QUEUE_PAGE,
   doNotListNote,
   moreRemovalsWithdrawnNote,
   productName,
@@ -9,7 +10,7 @@ import {
 } from '@goodfirsttoken/core';
 import { createFileRoute, Link, notFound, redirect } from '@tanstack/react-router';
 import { useId, type CSSProperties, type ReactNode } from 'react';
-import { getAdminPage, type AdminPage, type PolicyListing } from '../admin/data';
+import { getAdminPage, type AdminPage, type PageKind, type PolicyListing } from '../admin/data';
 import { answerAdminForm } from '../admin/page';
 import { ADMIN_PATH } from '../admin/paths';
 import { SiteNav } from '../auth/SiteNav';
@@ -28,9 +29,12 @@ import adminCss from '../styles/admin-page.css?url';
 // Only admins see it. Its forms post to /admin, and go through the same
 // actions as the admin's MCP tools (src/admin/).
 export const Route = createFileRoute('/admin')({
-  validateSearch: (search: Record<string, unknown>): { notice?: string; sig?: string } => ({
+  // The server checks `after` as admin_queue checks it, and shows no queue
+  // for a value that isn't a page.
+  validateSearch: (search: Record<string, unknown>): { notice?: string; sig?: string; after?: string } => ({
     ...(typeof search.notice === 'string' ? { notice: search.notice } : {}),
     ...(typeof search.sig === 'string' ? { sig: search.sig } : {}),
+    ...(typeof search.after === 'string' ? { after: search.after } : {}),
   }),
   loaderDeps: ({ search }) => search,
   loader: async ({ deps }) => {
@@ -485,6 +489,93 @@ function Blocked({ blocked }: { blocked: AdminPage['blocked'] }) {
   );
 }
 
+/**
+ * Where this page sits in the queue: how many more wait after it, with links
+ * to the next page and back to the first. An address that names no page of
+ * the queue shows why, and a link to the first page.
+ */
+function QueuePages({ page }: { page: AdminPage }) {
+  if (page.badPage !== null) {
+    return (
+      <p className="admin__notice" role="alert">
+        {page.badPage}{' '}
+        <Link to={ADMIN_PATH} className="mono small">
+          first page
+        </Link>
+      </p>
+    );
+  }
+  if (page.more === 0 && !page.laterPage) return null;
+  return (
+    <nav className="cluster" aria-label="pages of the queue">
+      <span className="mono small muted">
+        {`The queue shows ${String(ADMIN_QUEUE_PAGE)} at a time, the longest waiting first. `}
+        {page.more > 0 ? `${page.more.toLocaleString('en-US')} more wait after these.` : 'None wait after these.'}
+      </span>
+      {page.laterPage && (
+        <Link to={ADMIN_PATH} className="mono small">
+          first page
+        </Link>
+      )}
+      {page.next !== null && (
+        <Link to={ADMIN_PATH} search={{ after: page.next }} className="mono small">
+          next page
+        </Link>
+      )}
+    </nav>
+  );
+}
+
+/**
+ * A section's count: how many it shows, and of how many of its kind wait in
+ * all when some wait on other pages of the queue.
+ */
+function sectionCount(page: AdminPage, kind: PageKind, shown: number): string {
+  const waiting = page.waiting[kind];
+  return shown === waiting ? String(shown) : `${String(shown)} of ${String(waiting)}`;
+}
+
+/** What a section says of its kind on other pages of the queue, or '' when none wait there. */
+function otherPages(page: AdminPage, kind: PageKind, shown: number): string {
+  const later = page.later[kind];
+  const earlier = page.waiting[kind] - shown - later;
+  const verb = (n: number) => (n === 1 ? 'waits' : 'wait');
+  const said: string[] = [];
+  if (earlier > 0) said.push(`${earlier.toLocaleString('en-US')} ${verb(earlier)} before this page.`);
+  if (later > 0) said.push(`${later.toLocaleString('en-US')} more ${verb(later)} after this page.`);
+  return said.join(' ');
+}
+
+/**
+ * The part of a section below its heading: its items, or what to say when
+ * none show, and how many of its kind wait on other pages.
+ */
+function SectionItems({
+  page,
+  kind,
+  count,
+  none,
+  children,
+}: {
+  page: AdminPage;
+  kind: PageKind;
+  count: number;
+  none: string;
+  children: ReactNode;
+}) {
+  const elsewhere = otherPages(page, kind, count);
+  if (count === 0) {
+    const empty = page.waiting[kind] === 0 ? none : `None on this page. ${elsewhere}`;
+    return <p className="admin__empty">{empty}</p>;
+  }
+  return (
+    <>
+      {children}
+      {elsewhere !== '' && <p className="mono small muted">{elsewhere}</p>}
+    </>
+  );
+}
+
 function Admin() {
   const page = Route.useLoaderData();
   return (
@@ -511,48 +602,50 @@ function Admin() {
         )}
         <div className="admin__split">
           <div className="admin__main">
-            <section className="stack" aria-label="asking to be removed">
-              <div className="rail__head">
-                <Marker as="h2" count={page.removals.length}>
-                  asking to be removed
-                </Marker>
-                <span className="mono small faint">each asked by an admin or maintainer of the repo, as GitHub said</span>
-              </div>
-              {page.removals.length === 0 ? (
-                <p className="admin__empty">No requests to be removed.</p>
-              ) : (
-                page.removals.map((item) => <Removal key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />)
-              )}
-            </section>
-            <section className="stack" aria-label="found by the crawler">
-              <div className="rail__head">
-                <Marker as="h2" variant="label" count={page.candidates.length}>
-                  found by the crawler
-                </Marker>
-                <span className="mono small faint">their docs welcome AI</span>
-              </div>
-              {page.candidates.length === 0 ? (
-                <p className="admin__empty">No finds waiting.</p>
-              ) : (
-                page.candidates.map((item) => (
-                  <Candidate key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
-                ))
-              )}
-            </section>
-            <section className="stack" aria-label="registrations">
-              <div className="rail__head">
-                <Marker as="h2" count={page.registrations.length}>
-                  registrations
-                </Marker>
-              </div>
-              {page.registrations.length === 0 ? (
-                <p className="admin__empty">No registrations waiting.</p>
-              ) : (
-                page.registrations.map((item) => (
-                  <Registration key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
-                ))
-              )}
-            </section>
+            <QueuePages page={page} />
+            {/* An address that names no page shows no section, since none can say what waits. */}
+            {page.badPage === null && (
+              <>
+              <section className="stack" aria-label="asking to be removed">
+                <div className="rail__head">
+                  <Marker as="h2" count={sectionCount(page, 'removal', page.removals.length)}>
+                    asking to be removed
+                  </Marker>
+                  <span className="mono small faint">each asked by an admin or maintainer of the repo, as GitHub said</span>
+                </div>
+                <SectionItems page={page} kind="removal" count={page.removals.length} none="No requests to be removed.">
+                  {page.removals.map((item) => (
+                    <Removal key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                  ))}
+                </SectionItems>
+              </section>
+              <section className="stack" aria-label="found by the crawler">
+                <div className="rail__head">
+                  <Marker as="h2" variant="label" count={sectionCount(page, 'candidate', page.candidates.length)}>
+                    found by the crawler
+                  </Marker>
+                  <span className="mono small faint">their docs welcome AI</span>
+                </div>
+                <SectionItems page={page} kind="candidate" count={page.candidates.length} none="No finds waiting.">
+                  {page.candidates.map((item) => (
+                    <Candidate key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                  ))}
+                </SectionItems>
+              </section>
+              <section className="stack" aria-label="registrations">
+                <div className="rail__head">
+                  <Marker as="h2" count={sectionCount(page, 'registration', page.registrations.length)}>
+                    registrations
+                  </Marker>
+                </div>
+                <SectionItems page={page} kind="registration" count={page.registrations.length} none="No registrations waiting.">
+                  {page.registrations.map((item) => (
+                    <Registration key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
+                  ))}
+                </SectionItems>
+              </section>
+              </>
+            )}
           </div>
           <aside className="admin__aside">
             <Listings listings={page.listings} />

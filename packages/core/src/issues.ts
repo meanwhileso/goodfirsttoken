@@ -116,8 +116,10 @@ export type IssueSync = z.infer<typeof issueSyncSchema>;
  * repo. `blocked` is a repo GitHub blocked access to, with a 451. `gone` is
  * no public repo by that name at all: the service token reads public repos
  * only, so a repo that went private and one that was deleted look the same.
+ * `replaced` is another repo under the name, by its GitHub ID, as after the
+ * project's repo was renamed away or deleted and a new one took the name.
  */
-export const delistedShowings = ['private', 'archived', 'blocked', 'gone'] as const;
+export const delistedShowings = ['private', 'archived', 'blocked', 'gone', 'replaced'] as const;
 export const delistedShowingSchema = z.enum(delistedShowings);
 export type DelistedShowing = z.infer<typeof delistedShowingSchema>;
 
@@ -131,6 +133,7 @@ const DELISTED_WORDS: Record<DelistedShowing, readonly [before: string, after: s
   archived: ['', ' is archived on GitHub.'],
   blocked: ['GitHub blocked access to ', '.'],
   gone: ['GitHub shows no public repo named ', '. It went private or was deleted.'],
+  replaced: ['GitHub shows another repo under the name ', ' now.'],
 };
 
 /** The reason the sync delists a project with, which names the repo and what GitHub showed of it. */

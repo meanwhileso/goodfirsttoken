@@ -385,7 +385,78 @@ that build them.
   its owner's, so for a private repo the answer is no too. For a repo GitHub
   blocked access to, it answers `451` and names no role, so the answer is
   no.
+- `manage_project` also checks that the repo GitHub answered with is the
+  one Good First Token keeps, under [Repo IDs](#repo-ids). When a project
+  keeps another ID for the name asked, the answer is no, with
+  `not_maintainer`, whatever the caller's role on the repo GitHub shows
+  now. Registering a repo, and naming a new issue repo, check the name
+  GitHub gives too.
 - Being a Good First Token admin is no permission on anyone's repo.
+
+## Repo IDs
+
+A repo's name can pass to another repo: GitHub frees it when the repo is
+renamed, moved to another account, or deleted, and anyone can then make a
+repo under it. A repo's GitHub ID never passes on. It stays the same
+through a rename or a move, and a new repo gets a new one. So each project
+keeps GitHub's numeric ID for its code repo, and for its issue repo when
+that is another one.
+
+- The IDs come from the reads that check the repos: `register_project`,
+  `admin_add_project`, and approving a crawler find, which lists the repo
+  the same way. `update_project` keeps the new issue repo's ID when it
+  moves the issues. A project keeps a repo's ID while it keeps the repo.
+- Every read that decides something about a project's repo compares the ID
+  GitHub gives now with the one kept: every `manage_project` check, an
+  admin's listing, each read of the sync, and each weekly read of the
+  policy crawler. A different ID is a different repo. The check refuses
+  it, a listing refuses it with `repo_not_eligible`, the sync delists the
+  project with a reason of its own, `replaced`, under Delisting in
+  [Tagged issues](#tagged-issues), and the weekly read leaves the project
+  to the sync, as it does a repo that is gone, under
+  [Keeping listings current](#keeping-listings-current).
+- A check compares every ID any project keeps for the name asked, as a
+  code repo or an issue repo, whatever the project's status. So a rejected
+  registration, a listing, or a project an admin removed keeps its name
+  for the repo it was made for. A tool on a project compares only those,
+  so a project whose repo GitHub renamed onto another project's old name
+  is still managed by its own name. Registering a repo, naming a new issue
+  repo, and an admin's listing take a name on, so they compare the IDs
+  kept for the name GitHub gives too.
+- A listing of a repo whose ID a project keeps under another name, as
+  after GitHub renamed it, lists that project again when the admin names
+  it as the project does, and is refused under any other name, with
+  `repo_not_eligible` and the name it is listed as. So a renamed repo
+  never becomes a second project, from `admin_add_project` or from
+  approving a policy change.
+- A project kept before the IDs were has none. The first check or sync read
+  of each of its repos fills the ID in, trusting the name this once, when
+  GitHub made the repo no later than the project took the name: when the
+  project was added, for its code repo, or for its issue repo, when its
+  settings first named the issue repo it has now. A repo GitHub made later,
+  or whose making GitHub didn't date, is a different repo, and nothing is
+  filled in. This stops a repo made under the name after the listing. It
+  doesn't stop an older repo that was renamed or moved into the name. Every
+  project made since IDs were kept stores them when it is made, so the
+  guard matters only for projects stored before.
+- A rename GitHub follows keeps the ID, so it changes nothing here: the
+  check and the sync pass, and the project keeps the name it was added
+  with. Its page, its issues, its claims, its settings history, and any
+  request to remove it are all kept under that name, and GitHub sends calls
+  to the old name on to the repo, so the name keeps working. Moving all of
+  those records to the new name would be a change of its own. So a
+  maintainer calls every tool with the name the project was added with,
+  which is the name `project_status` gives. When someone later makes a new
+  repo under the old name, GitHub stops sending those calls on, the ID
+  differs, and the sync delists the project.
+- The donor's tools read and write a project's repo by its name. So after
+  another repo takes the name, a claim can read it, or open a PR against
+  it, until the next sync delists the project, up to about 15 minutes.
+- A request to remove a repo keeps no ID. It names a repo, which need not
+  be a project, and it changes nothing but the do-not-list and the
+  project, which are both kept by name. When the repo is a project, the
+  check already compares the project's ID. When it isn't, nothing on Good
+  First Token belongs to the repo that had the name before.
 
 ## People
 
@@ -1133,6 +1204,10 @@ rejection's reason with `project_status`.
   change of status that lands while the takeover saves stays. A rejected
   listing goes back to `pending`, changed by the maintainer, so an admin
   reviews it again.
+- Registering again over a rejected registration, and taking over a
+  listing, need the repo the project was made for, by its GitHub ID, under
+  [Repo IDs](#repo-ids). A new repo under the name is refused with
+  `not_maintainer`, and the project stays as it was.
 - A repo on the [do-not-list](#crawl-candidates) can be registered, a new
   one, a takeover of a rejected listing, or a rejected registration
   registered again. It stays on the list while the registration waits, so
@@ -1237,9 +1312,10 @@ a project is `not_found`.
   maintainer's tool does. Every token the site holds for a person reads
   public repos only, under [Permissions](#permissions), so when GitHub no
   longer shows the code repo, because it went private or was deleted, or
-  blocked access to it, every maintainer is refused with `not_maintainer`.
-  When the sync delisted the project for that, the refusal adds `Good First
-  Token delisted this project:` and the sync's reason. The project's page
+  blocked access to it, or shows another repo under its name, every
+  maintainer is refused with `not_maintainer`. When the sync delisted the
+  project for that, the refusal adds `Good First Token delisted this
+  project:` and the sync's reason. The project's page
   is gone for everyone, so it says only what anyone can see. A delisting
   for an archived code repo, or for an issue repo, reaches the maintainers
   in the answer.
@@ -1418,6 +1494,26 @@ queue.
 waited longest first, each with an ID. `admin_decide` takes the ID of any
 of them but a request to be removed.
 
+- One look at the queue shows a page of it: the items that waited longest,
+  as many as the [Limits](#limits) row for the admin queue says, of the
+  kind asked for, or of every kind. Items that started to wait at the same
+  moment go by repo, then by ID.
+- The answer says how many more wait after the page, in `more`, and where
+  the page ends, in `next`. `admin_queue` with `after` set to that `next`
+  gives the page after it. A call without `after` gives the first page.
+- A page starts after the last item of the page before, by when it started
+  to wait. So an item decided between pages moves nothing, and no item is
+  skipped. An item added between pages started to wait later than any page
+  shown, so it waits on a later page. An item that waits again comes back
+  with a new ID and the time it came back, as when a maintainer registers
+  a rejected repo again or the crawler replaces a policy change with a
+  newer reading, so it can show on a page after the one that showed it
+  before. A maintainer who changes a waiting registration's settings
+  leaves its ID and its place as they were.
+- An `after` that isn't a `next` an answer gave is refused as bad input.
+- Only the items on the page are read, so one look makes at most two calls
+  to GitHub for each item on it, whatever the queue holds, and none besides.
+
 - A **registration** is a pending project, with the maintainer who
   registered it, the settings they chose, and their notes for agents in
   full. Its ID names the status change that made it pending, so once its
@@ -1480,8 +1576,9 @@ of them but a request to be removed.
   do-not-list.
 - Each item has the repo's facts: its stars, when it was made, its last
   push, and when its owner's account was made. For a registration and a
-  request to be removed they are read from GitHub when the queue is read,
-  with the admin's own token: the repo, and its owner's account. When GitHub shows no public repo by that
+  request to be removed they are read from GitHub when the page that shows
+  them is read, with the admin's own token: the repo, and its owner's
+  account, two calls. When GitHub shows no public repo by that
   name, the item still waits, with no facts, and says so. When GitHub
   doesn't answer, as on a rate limit, the item says that instead, and
   never that the repo isn't public. `factsMissing` tells the two apart. A
@@ -1661,6 +1758,17 @@ is in [brand/brief-website.md](../brand/brief-website.md).
 - It doesn't show the pauses and policy changes in the queue yet. The
   admin's agent reads them with `admin_queue`, under
   [The admin queue](#the-admin-queue).
+- It shows the queue a page at a time, as `admin_queue` does, of the kinds
+  it shows, with the same bound on items and calls to GitHub, and says how
+  many more wait. Each section counts the items it shows on this page.
+  When more of its kind wait on other pages, the count says of how many,
+  as in `20 of 21`, and the section says how many wait before this page
+  and after it. A section with none on this page says so, and says none
+  wait only when none of its kind wait on any page. A link opens the next
+  page, with its place in the address as `after`, which the server checks
+  as `admin_queue` checks it.
+  An address whose `after` is no page shows no queue and none of its
+  sections, says why, and links the first page. After a form, the page opens at the first page.
 - A crawler find's form takes its tags, separated by commas, starting with
   the ones suggested, and its tier. The form to list a repo by hand takes
   its policy and tags. Listing a repo that is listed already changes those
@@ -1808,15 +1916,22 @@ too, with the same reason.
   answer stops the run and delists nothing, so a proxy, or an API that
   isn't GitHub's, can't delist a project.
 
+- A repo under the project's name whose GitHub ID isn't the one the
+  project keeps, under [Repo IDs](#repo-ids), is another repo: the
+  project's repo is no longer under that name. The sync delists and pauses
+  the project with the reason `GitHub shows another repo under the name
+  sample-owner/app now.`, and the mark stays while GitHub gives that name
+  to the other repo.
 - The service token reads public repos only, so for a repo that went
   private and for one that was deleted, the reason is the same:
   `GitHub shows no public repo named sample-owner/app. It went private or
   was deleted.`
-- The reason names the repo, and what GitHub showed of it, one of four:
+- The reason names the repo, and what GitHub showed of it, one of five:
   - `private`: GitHub showed the repo, and said it isn't public.
   - `archived`: GitHub showed it archived.
   - `blocked`: GitHub answered `451`, for a repo it blocked access to.
   - `gone`: GitHub showed no public repo by that name.
+  - `replaced`: GitHub showed another repo under that name, by its ID.
 - The mark keeps the reason, when the sync delisted the project, and when
   it last read the repos. The first time stays while the mark does, when a
   later read finds the repos the same way or another way, like archived
@@ -1831,9 +1946,9 @@ too, with the same reason.
   resume it, as [Managing a project](#managing-a-project) says.
 - It lands only on the approved status the sync read, so a change someone
   made at the same moment stays.
-- GitHub answers a renamed or moved repo from its new name, so the sync
-  reads it and pauses nothing. The project and its copies of issues keep
-  the old name, since nothing renames them yet. GitHub gives the repo's PRs
+- GitHub answers a renamed or moved repo from its new name, with the same
+  ID, so the sync reads it and pauses nothing. The project and its copies
+  of issues keep the old name, under [Repo IDs](#repo-ids). GitHub gives the repo's PRs
   under the new name, and they count as the project's: the sync compares a
   PR's repo, without case, with the names the project keeps and the names
   GitHub gave its code repo and issue repo in the same run.
@@ -3055,8 +3170,11 @@ branch, then one REST call for who can open pull requests.
 - It checks again, before it reads, that the project is still listed, off
   the do-not-list, and not delisted.
 - A repo GitHub shows archived or private, or doesn't show, is the sync's.
-  The read leaves it alone, and the sync pauses and delists the project
-  on its next run, under Delisting. So one check decides each of those,
+  So is another repo under the project's name, whose GitHub ID isn't the
+  one the project keeps, under [Repo IDs](#repo-ids). The read fills in a
+  missing ID by the same rule, with the date GitHub made the repo. The
+  read leaves the project alone, and the sync pauses and delists it on
+  its next run, under Delisting. So one check decides each of those,
   with one reason.
 - A repo it can't read whole gets no verdict, as in a crawl, and the log
   names it and says why.
@@ -4409,6 +4527,7 @@ Each limit the schemas enforce, other than those under project settings:
 | Suggestions left out with `exclude` | 100 | Us |
 | Picks waiting in a session's queue | 20 | Us |
 | Requests withdrawn by someone other than their asker, listed on a registration or crawler find | 5, and a count of the rest | Us |
+| Items one look at the admin queue shows, in `admin_queue` and on `/admin` | 20, the ones that waited longest, with a count of the rest. At 2 calls to GitHub for each, one look makes at most 40 | Us |
 | Agent name | 1 to 40 lowercase letters, digits, dots, underscores, and hyphens, starting with a letter or digit | Us |
 | Model name | 100 characters | Us |
 | IDs the server gives out | 1 to 64 letters, digits, underscores, and hyphens | Us |
@@ -4692,8 +4811,8 @@ A deployment can serve them from a static host, on a hostname of its own.
   linked PRs of each issue whose work waits in the review queue.
 - `/me`'s review queue and its Open PR make the calls `my_work` and
   `open_pr` make, with the token from the person's own sign-in on the site.
-- The admin queue reads each registration's repo and its owner's account,
-  and listing a project from its policy reads the repo and its issue repo.
+- The admin queue reads the repo and its owner's account for each
+  registration and each request to be removed on the page it shows, and listing a project from its policy reads the repo and its issue repo.
   These use the admin's own token: their agent's, or on the admin pages,
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the

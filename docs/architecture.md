@@ -332,6 +332,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels and the files |
 | `src/projects/status.ts` | Who can lift a pause, the status a resume puts back, for the maintainer's tools and the admin's alike, and the pause an admin's resume puts back when Good First Token's pause took it over |
+| `src/projects/repo-id.ts` | Whether the repo GitHub gives under a name is the one a project keeps there, by its GitHub ID, for `requirePermission`, the admin's listing, the sync, and the weekly read alike |
 
 - **One permission check, one read.** Every tool starts with
   `requirePermission(caller, 'manage_project', { repo })`, which reads the
@@ -341,6 +342,44 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
   archived, and who can open PRs from that one read, and an issue repo other
   than the code repo goes through the same check, whose answer gives the
   name to save and whether the repo is archived.
+
+#### Repo IDs
+
+The rules are under [Repo IDs](how-it-works.md#repo-ids) in how-it-works.md.
+
+- **Kept on the project row.** `projects.repo_id` and
+  `projects.issue_repo_id` hold GitHub's numeric `id` from the REST read of
+  each repo, the same number as GraphQL's `databaseId`. The `node_id` is
+  left alone, since nothing else here reads GraphQL IDs. `issue_repo_id`
+  holds the code repo's ID when the issues live there, so each column
+  always names the repo in the column beside it.
+- **One rule, in `src/projects/repo-id.ts`.** `compareRepo` says whether a
+  kept ID matches GitHub's, or may be filled in once from GitHub's
+  `created_at`. `isStoredRepo` applies it to every ID kept for a name, and
+  fills in only when none differs. `requirePermission` calls it for the
+  name asked, and with `takesName`, from `register_project` and a new
+  issue repo, for the name GitHub gives too. The admin's listing calls it
+  for both names. `isProjectRepo` calls it for one project's own ID, for
+  the sync and for the policy crawler's weekly read, which asks GraphQL for
+  `databaseId` and `createdAt`. The sync's answer for a different ID is
+  the `replaced` reason from core's `delistedReason`, through the same
+  `setDelisted` and pause as a deleted repo. The weekly read skips it as
+  `left_for_sync`.
+- **One project per ID.** The admin's listing looks up the project that
+  keeps GitHub's ID for the repo, `projectWithRepoId`, and lists that
+  project again under its own name, or refuses another name, so a renamed
+  repo is never listed twice.
+- **Written with the settings.** `createProject`, `takeOverListing`,
+  `reopenRegistration`, `relistFromPolicy`, and `changeSettings` take the
+  IDs their caller read. A save that keeps the issues in the same repo
+  keeps its ID, and one that moves them without an ID leaves none, for the
+  next read to fill in. `storedRepoIds` and `fillRepoId` in
+  `src/db/projects.ts` read and fill them. The time a kept issue repo
+  counts from is the first settings save after the last one that named
+  another repo, found in `project_settings`.
+- **The crawler.** Approving a crawler find lists the repo through the same
+  listing, so it keeps the IDs of the admin's read. The crawler's reads of
+  candidates keep no ID.
 - **Refusals and lost tokens.** `asCaller` in `src/mcp/server.ts` runs every
   tool. It turns a `PermissionRefused` into the tool's refusal, and a GitHub
   `401` from any call into the end of the connection.
@@ -778,13 +817,34 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
 - **The repo's facts** for a registration or a request to be removed come
   from two REST calls with the admin's token, `GET /repos/{owner}/{repo}`
   and `GET /users/{owner}`, in `readStanding` in `src/projects/repo.ts`.
-  Every item's are read at once, so the queue costs two GitHub calls for
-  each registration and each request, on every read of the queue. Only a
+  Every item's on the page are read at once, so a look at the queue costs
+  two GitHub calls for each registration and each request on the page, and
+  none for anything else. Only a
   `404` for the repo gives `factsMissing: 'not_public'`. Any other failure,
   the owner's `404` included, gives `no_answer`, logged with `console.warn`, in
   `factsFromGitHub`. A `401` goes on up, so an agent's connection ends,
   and the page reads the queue again with no token and says to sign in
   again.
+- **One builder for a page of the queue.** `queuePage` in
+  `src/admin/actions.ts` builds the queue for `admin_queue` and `/admin`
+  alike, from the kinds each asks for: `admin_queue` one kind or all, and
+  `/admin` the kinds it shows. It reads what waits of each kind from D1,
+  with no GitHub call, sorts it by the time each item started to wait, then
+  repo, then ID, and builds only the first `ADMIN_QUEUE_PAGE` of them, from
+  `packages/core`, after the place `after` names. Building an item is where
+  it reads GitHub, so a look reads GitHub for the page alone. It counts
+  each kind in all and after the page from the same lists, for the words
+  of each section of `/admin`.
+- **A page's place is where the last one ended.** `next` and `after` carry
+  the last item's time, repo, and ID, joined with `~`, which none of them
+  holds, as `queuePlaceText` and `readQueuePlace` in core write and read
+  them. A count to skip would move when an admin decides an item on the
+  page before, and skip as many items on the next. A place moves with
+  nothing: an item decided leaves the queue behind it, and an item added
+  starts to wait now, after every place a page gave. The input schema
+  refuses any other `after`, and `/admin` checks its `after` with the same
+  schema. The lists are read whole, by the indexes each kind's list already
+  uses, so no migration was needed.
 - **Every status change is a compare-and-set,** through
   `setProjectStatusFrom`, retried up to five times, as for the maintainer's
   pause. So a maintainer's pause or resume that lands at the same moment as
@@ -1442,7 +1502,7 @@ in `people`.
 | Table | One row per | Key |
 |---|---|---|
 | `people` | Person who has signed in: login, interests, when they joined, and when GitHub last showed their login | `github_id` |
-| `projects` | Project: its current status, reason, and who set it and when, how it got in, with the policy quote, link, and tier for a policy listing, who added it and when, where its issues live, and its current settings version | `repo` |
+| `projects` | Project: its current status, reason, and who set it and when, how it got in, with the policy quote, link, and tier for a policy listing, who added it and when, where its issues live, GitHub's IDs for its code repo and issue repo, and its current settings version | `repo` |
 | `project_settings` | Save of a project's settings: the whole settings, who saved them, and when | `repo`, `version` |
 | `project_status_changes` | Change of a project's status: the status, the reason, who made it, and when | `id` |
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
@@ -1576,6 +1636,11 @@ that break the rules, so it returns the problems for the caller to show.
   the sync delisted the project, under
   [The maintainer's tools](#the-maintainers-tools). A mark from before it
   gets none, since that time wasn't kept.
+- **Migration `0013_repo_ids.sql`** adds `projects.repo_id` and
+  `projects.issue_repo_id`, GitHub's numeric IDs for the repos in `repo`
+  and `issue_repo`, under [Repo IDs](#repo-ids). A project from before it
+  gets none, and the first read of each repo fills it in, since the
+  migration can't ask GitHub.
 
 ### Who sees what
 
@@ -2555,7 +2620,9 @@ read-only service token. The rules are in
   `message` of GitHub's JSON error body apart, as `bodyMessage`, which is
   null when the body was anything else. A repo read delists a project only on
   a `404` whose body says `Not Found`, a `451` with a JSON body, or a repo
-  with the fields GitHub sends that says it is private or archived. A
+  with the fields GitHub sends that says it is private or archived, or
+  whose `id` isn't the one the project keeps, under
+  [Repo IDs](#repo-ids). A repo read without a numeric `id`, a
   `/rate_limit` answer without GitHub's budgets, or any other `404` or
   `451`, stops the run. So a proxy, or a `GH_API_URL` that isn't GitHub's
   API, never delists or pauses a project.
@@ -3325,7 +3392,8 @@ and Playwright run it as a local HTTP server.
   committing and deleting files, to any branch and with any mode, a test
   can open, label, unlabel, assign, and close issues, make someone a
   member of an organization, in public or in private, give someone a role
-  on a repo through a team, open a PR
+  on a repo through a team, rename or move a repo, delete one, make a new
+  empty one, open a PR
   from a branch or a fork, click Update branch on a PR, and spend part of
   a person's rate limit, as their other clients would.
 - **It behaves like GitHub where the app depends on it.** Writes need push
@@ -3353,7 +3421,14 @@ and Playwright run it as a local HTTP server.
   User-Agent. A private repo shows only to its owner and collaborators,
   through a token with the `repo` scope, in REST, GraphQL, and search alike,
   and answers 404 to everyone else, as GitHub does for a token with
-  `public_repo`.
+  `public_repo`. A renamed or moved repo keeps its ID, and its old name
+  answers a REST call with a `301` for a read and a `307` for anything else,
+  to `/repositories/{id}` and the rest of the path, which answers as the
+  repo's name now does. `fake.fetch` follows them as `fetch` does, with the
+  same method and body after a `307`. The local server sends every redirect
+  back to its client, which follows it itself. A new repo made under the old name
+  gets a new ID and a later `created_at`, and the old name stops pointing
+  at the renamed repo. A deleted repo answers `404` by every name it had.
 - **Where it differs.** Tests that depend on any of these need the fake
   changed first.
   - A new fork is ready after `forkDelayMs`. GitHub takes as long as its
@@ -3422,6 +3497,9 @@ and Playwright run it as a local HTTP server.
     member's review on a PR in an organization's repo.
   - An app has one callback URL, and any path under it is allowed, the way
     GitHub matches with wildcard matching on.
+  - GraphQL's `repository` finds a renamed or moved repo by its old name,
+    as REST's redirect does. That GitHub's GraphQL follows a rename isn't
+    checked on GitHub.
   - Git object IDs are 40 hex characters made with an FNV hash of the
     content, so they never match a real repo's. The fake can't be cloned
     with `git`.
@@ -3584,7 +3662,9 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
 - **Admin page tests** fetch `/admin` and post its forms through the Worker
   with the same small browser, signed in with the GitHub fake, and call
   `loadAdminPage` on its own for the server function's side. They live in
-  `apps/web/test/admin/`. Server functions have no URL in the unit tests,
+  `apps/web/test/admin/`. `queue-pages.test.ts` builds a queue longer than
+  two pages, pages through it in `admin_queue` and on `/admin`, and counts
+  the GitHub calls each look makes in the fake's call log. Server functions have no URL in the unit tests,
   since the Vitest build sets no base for them, so the end-to-end tests
   call the page's own.
 - **`/me` tests** fetch `/me` and post its forms through the Worker with the

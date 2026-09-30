@@ -11,6 +11,7 @@ import {
   setProjectStatusFrom,
 } from '../db';
 import { whyNotEligible, type RepoFacts } from '../projects/repo';
+import { isProjectRepo } from '../projects/repo-id';
 import { comparable, policyFingerprint, wordsOf } from './fingerprint';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
 import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
@@ -35,9 +36,10 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 // an admin lifts it, kept in the status history. The admin queue shows every
 // such pause, with the line the rules read as a ban. A repo GitHub shows
 // archived, private, or gone is the sync's, which pauses and delists it, so
-// the crawler leaves it alone. Nothing here approves, lists, or adds a
-// project: the only status it writes is a pause. The rules are in
-// docs/how-it-works.md, under Keeping listings current.
+// the crawler leaves it alone. So is another repo under the project's name,
+// by its GitHub ID, as src/projects/repo-id.ts says. Nothing here approves,
+// lists, or adds a project: the only status it writes is a pause. The rules
+// are in docs/how-it-works.md, under Keeping listings current.
 
 /** The reason for a pause on a ban. The project's maintainers read it with project_status. It holds no text of the repo's. */
 export const BAN_REASON =
@@ -51,7 +53,10 @@ export type RereadSkip =
   | 'do_not_list'
   /** The sync delisted it, since GitHub showed its repo or issue repo private, archived, blocked, or gone. */
   | 'delisted'
-  /** GitHub shows its repo archived, private, or gone now, which the sync reads and acts on. */
+  /**
+   * GitHub shows its repo archived, private, or gone now, or another repo
+   * under its name, by its GitHub ID, which the sync reads and acts on.
+   */
   | 'left_for_sync'
   /** GitHub described it in a form the crawler can't use. */
   | 'unreadable'
@@ -288,15 +293,18 @@ export async function rereadRepos(deps: CrawlDeps, repos: readonly string[], run
   const toRead = [...listed.keys()];
   const listings = await readRepos(github, toRead);
   const readable: (FoundRepo & { branch: string; standing: NonNullable<FoundRepo['standing']> })[] = [];
-  toRead.forEach((asked, i) => {
+  for (const [i, asked] of toRead.entries()) {
     const result = listings[i];
-    if (result === undefined || 'gone' in result) skip(asked, 'left_for_sync');
+    const project = listed.get(asked);
+    if (result === undefined || project === undefined || 'gone' in result) skip(asked, 'left_for_sync');
     else if ('failed' in result) fail(asked, result.failed);
     else if (result.found.private || result.found.archived) skip(asked, 'left_for_sync');
-    else if (result.found.standing === null || result.found.branch === null) skip(asked, 'unreadable');
+    else if (result.found.identity === null || result.found.standing === null || result.found.branch === null) skip(asked, 'unreadable');
+    // Another repo under the project's name is the sync's to delist, as a gone one is.
+    else if (!(await isProjectRepo(db, project.repo, project.repo, result.found.identity))) skip(asked, 'left_for_sync');
     else if (result.found.unreadable !== null) noVerdict(asked, result.found.unreadable);
     else readable.push({ ...result.found, branch: result.found.branch, standing: result.found.standing });
-  });
+  }
 
   const read = await readFiles(github, readable);
   for (const repo of readable) {
