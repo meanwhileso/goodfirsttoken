@@ -211,6 +211,8 @@ signs in once with the person's GitHub account, and then acts as them.
   a request with no `Sec-Fetch-Mode` at all, like one from a browser too old
   to send it. Every current browser sends these headers, on the requests
   another site's page makes too, and a page can't take them off.
+- A prefetch, which a browser marks with `prefetch` in `Sec-Purpose`, gets
+  `400` too, since no one opened the page.
 - Each step is tied to the browser that started it by a cookie that lasts
   10 minutes, and works once. So the person has 10 minutes to approve, and
   GitHub has to send them back to the same browser. A step taken late, twice,

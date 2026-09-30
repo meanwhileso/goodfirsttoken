@@ -572,6 +572,25 @@ test("the page to approve an agent refuses, uncounted, what the browser says ano
   expect(fromSite.status).toBe(200);
 });
 
+test('the page to approve an agent refuses a prefetch, uncounted, since no one opened it', async () => {
+  await inOneLimitWindow();
+  const clientId = await registerClient();
+  const { challenge } = await pkce();
+  const browser = new Browser();
+  const url = authorizeUrl(clientId, { challenge }).toString();
+  const refused = new Set<number>();
+  for (let i = 0; i < 25; i++) {
+    for (const purpose of ['prefetch', 'prefetch;prerender', 'prefetch;anonymous-client-ip']) {
+      refused.add((await browser.fetch(url, { headers: { 'sec-purpose': purpose, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' } })).status);
+    }
+  }
+
+  const opened = await browser.fetch(url);
+
+  expect([...refused]).toEqual([400]);
+  expect(opened.status).toBe(200);
+});
+
 test('the page to approve an agent answers a browser that sends no Sec-Fetch headers, and counts it toward the sign-in limit', async () => {
   await inOneLimitWindow();
   const clientId = await registerClient();

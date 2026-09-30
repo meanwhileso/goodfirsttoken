@@ -267,6 +267,9 @@ const OWN_TAB = 'Open this page in a tab of its own, from the link your agent ga
  * can't take them off.
  */
 function openedByPerson(caller: Request): boolean {
+  // A speculative prefetch looks like a tab's navigation, but no one opened
+  // it. Browsers say so in Sec-Purpose.
+  if (/prefetch/i.test(caller.headers.get('sec-purpose') ?? '')) return false;
   const mode = caller.headers.get('sec-fetch-mode');
   if (mode === null) return true;
   if (caller.headers.get('sec-fetch-site') === 'same-origin') return true;
