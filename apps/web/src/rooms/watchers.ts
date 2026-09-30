@@ -169,7 +169,11 @@ export async function openWatcher(
       return new Response('Try again in a moment.\n', { status: 503 });
     }
     if (!learned) {
-      // Other sockets from the address may have come in during the awaits.
+      // Other sockets from the address may have come in during the awaits
+      // above, if the runtime lets another request run while D1 answers. The
+      // tests couldn't make that happen on purpose: upgrades sent together
+      // were each accepted in turn. So no test holds this check, and it stays
+      // for the runtime that does interleave them.
       if (full()) return tooManyWatchers();
       const { 0: client, 1: server } = new WebSocketPair();
       ctx.acceptWebSocket(server, address === null ? [] : [address]);
