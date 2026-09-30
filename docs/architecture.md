@@ -1459,8 +1459,8 @@ hand, so the version rule covers it. The rules are under
   its tokens weren't counted: 198,254 counted, against 232,715 with it.
 - **Failing quietly.** Any error, a bad line of input, no count, or a sum
   too large to be a safe integer prints nothing and exits 0. The server
-  would refuse a submit with such a sum. A hook that prints nothing changes nothing, so the
-  submit goes on. Claude Code treats a hook that can't start at all, as
+  would refuse a submit with such a sum. A hook that prints nothing
+  changes nothing, so the submit goes on. Claude Code treats a hook that can't start at all, as
   with no `node`, as a non-blocking error, and the call goes on too.
 - **The test** is `scripts/token-estimate.test.mjs`, which runs the hook
   as a process against `scripts/fixtures/sample-transcript.jsonl`, and
