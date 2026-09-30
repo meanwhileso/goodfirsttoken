@@ -1,5 +1,8 @@
 import { mustParse, repoName, type RefusalCode } from '@goodfirsttoken/core';
+import { env } from 'cloudflare:workers';
+import { storedRepoIds } from '../db';
 import { GitHubError, gitHubRest } from '../github';
+import { identityOf, isStoredRepo } from '../projects/repo-id';
 import { adminGithubIds } from './settings';
 
 // Every action goes through one named permission check, requirePermission.
@@ -24,7 +27,15 @@ interface Resources {
   /** Pause any project. */
   pause_any_project: undefined;
   /** Register a repo as a project, change its settings, pause it, have its tagged issues read now, or ask for it to be removed. */
-  manage_project: { repo: string };
+  manage_project: {
+    repo: string;
+    /**
+     * True when the call takes the name on for a project, as registering a
+     * repo or naming a new issue repo does. The ID stored for the name
+     * GitHub gives is checked too, since that is the name the project takes.
+     */
+    takesName?: boolean;
+  };
   /** Post to a claim, submit its work, release it, or open its PR. */
   work_claim: { claimantGithubId: number };
 }
@@ -64,8 +75,12 @@ function isAdmin(githubId: number): boolean {
  * https://docs.github.com/en/rest/repos/repos#get-a-repository
  */
 export interface ManagedRepo {
-  /** The repo as GitHub names it, which can differ in case from what was asked. */
+  /** GitHub's ID for the repo, which it keeps through a rename or a transfer. */
+  id: number;
+  /** The repo as GitHub names it, which can differ in case from what was asked, or be its new name after a rename. */
   full_name: string;
+  /** When GitHub made the repo. */
+  created_at: string;
   private: boolean;
   visibility?: string;
   archived: boolean;
@@ -85,7 +100,11 @@ type Granted<P extends Permission> = P extends 'manage_project' ? ManagedRepo : 
  *   permission on the repo, and needs admin or maintain. It asks every time
  *   and keeps nothing. It hands back the repo as GitHub described it, so a
  *   tool reads it once. A repo GitHub doesn't show, or blocked access to,
- *   is refused.
+ *   is refused. So is a repo whose GitHub ID isn't the one a project keeps
+ *   for the name asked, since that is another repo under the name. When the
+ *   call takes the name on, `takesName`, the name GitHub gives is checked
+ *   too. A project kept before IDs were has its ID filled in here, once, as
+ *   src/projects/repo-id.ts says.
  * - `work_claim` goes to the person who made the claim.
  */
 export async function requirePermission<P extends Permission>(
@@ -98,7 +117,7 @@ export async function requirePermission<P extends Permission>(
     throw new PermissionRefused('not_admin', permission, "Only Good First Token's admins can do this.");
   }
   if (permission === 'manage_project') {
-    const { repo } = resource as Resources['manage_project'];
+    const { repo, takesName = false } = resource as Resources['manage_project'];
     const name = mustParse(repoName, repo, 'repo');
     const refused = new PermissionRefused(
       'not_maintainer',
@@ -132,8 +151,18 @@ export async function requirePermission<P extends Permission>(
       }
       throw error;
     }
-    if (found.permissions?.admin === true || found.permissions?.maintain === true) return found as Granted<P>;
-    throw refused;
+    if (found.permissions?.admin !== true && found.permissions?.maintain !== true) throw refused;
+    const identity = identityOf(found);
+    if (identity === null) throw new Error(`GitHub described ${name} without its ID.`);
+    const stored = await storedRepoIds(env.DB, takesName ? [name, found.full_name] : [name]);
+    if (!(await isStoredRepo(env.DB, stored, identity))) {
+      throw new PermissionRefused(
+        'not_maintainer',
+        permission,
+        `The repo GitHub shows as ${name} is not the one Good First Token keeps under that name: its GitHub ID differs. Only an admin or maintainer of the repo Good First Token keeps can do this.`,
+      );
+    }
+    return found as Granted<P>;
   }
   if (permission === 'work_claim') {
     const { claimantGithubId } = resource as Resources['work_claim'];

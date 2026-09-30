@@ -3,6 +3,7 @@ import type { ManagedRepo } from '../auth/permissions';
 import { GitHubError, type GraphQLError, type GraphQLResult } from '../github';
 import { DOC_FILES, MAX_DOC_BYTES, type DocKind, type TreeEntry } from '../projects/docs';
 import { repoFacts, whyNotEligible, type RepoFacts, type Standing } from '../projects/repo';
+import { identityOf, type RepoIdentity } from '../projects/repo-id';
 import type { ServiceGitHub } from '../sync/github';
 import type { PolicyFile, PolicyFileKind, RepoLabel } from './rules';
 
@@ -89,6 +90,7 @@ interface Listing {
 
 // https://docs.github.com/en/graphql/reference/repos#object-repository
 interface ListedRepo {
+  databaseId: number | null;
   nameWithOwner: string;
   isArchived: boolean;
   isPrivate: boolean;
@@ -106,6 +108,8 @@ export interface FoundRepo {
   asked: string;
   /** The repo as GitHub names it now. */
   name: string;
+  /** GitHub's ID for the repo and when it made it, or null when GitHub gave no ID. */
+  identity: RepoIdentity | null;
   archived: boolean;
   private: boolean;
   standing: Standing | null;
@@ -136,7 +140,7 @@ function folderFields({ path, alias, nested }: (typeof FOLDERS)[number]): string
 }
 
 const REPO_FIELDS = `
-  nameWithOwner isArchived isPrivate stargazerCount createdAt pushedAt
+  databaseId nameWithOwner isArchived isPrivate stargazerCount createdAt pushedAt
   defaultBranchRef { name target { oid } }
   owner { ... on User { createdAt } ... on Organization { createdAt } }
   ${FOLDERS.map(folderFields).join('\n')}
@@ -330,6 +334,7 @@ export async function readRepos(github: ServiceGitHub, repos: readonly string[])
       found: {
         asked,
         name: listed.nameWithOwner,
+        identity: identityOf({ id: listed.databaseId, created_at: listed.createdAt }),
         archived: listed.isArchived,
         private: listed.isPrivate,
         standing: standingOf(listed),

@@ -23,6 +23,14 @@ export const githubId = z
   .int({ error: 'must be a numeric GitHub account ID' })
   .min(1, 'must be a numeric GitHub account ID');
 
+/**
+ * A repo's numeric GitHub ID. A repo keeps it through a rename or a
+ * transfer, and a new repo made under an old name gets a new one.
+ */
+export const githubRepoId = z
+  .int({ error: 'must be a numeric GitHub repo ID' })
+  .min(1, 'must be a numeric GitHub repo ID');
+
 /** A repository as `owner/name`. */
 export const repoName = pattern(new RegExp(`^${REPO}$`), 'must be a repository as owner/name');
 

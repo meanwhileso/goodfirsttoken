@@ -21,6 +21,7 @@ import {
   setDelisted,
   setProjectStatus,
   statusHistory,
+  storedRepoIds,
 } from '../../src/db';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { ServiceGitHub } from '../../src/sync/github';
@@ -352,6 +353,23 @@ describe('a listing whose policy changes', () => {
     });
     expect((await week()).run?.reread.changed).toEqual([]);
     expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
+  });
+
+  test('an admin who approves the change after GitHub renamed the repo lists it again under the name it has, and makes no second project', async () => {
+    await listing();
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${CHANGED}\n` });
+    await week();
+    const renamed = `${INVITES}-next`;
+    github.renameRepo(INVITES, renamed);
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'policy_change', INVITES);
+
+    const decided = await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
+
+    expect(decided.structuredContent).toMatchObject({ repo: INVITES, kind: 'policy_change', status: 'approved' });
+    expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', policy: { quote: CHANGED } });
+    expect(await getProject(db, renamed)).toBeNull();
   });
 
   test('an admin who rejects the change keeps the listing as it was, and it comes back only when the docs change again', async () => {
@@ -997,6 +1015,46 @@ describe('an archived repo', () => {
     clock += WEEK;
     await fill();
     expect(sent.filter((m) => m.reread === true)).toEqual([]);
+  });
+});
+
+describe('another repo under the name', () => {
+  test.each([
+    ['ban AI', `# AI policy\n\n${BAN}\n`],
+    ['read as another policy', `# AI policy\n\n${CHANGED}\n`],
+  ])(
+    'whose docs %s is left to the sync: no pause, no policy change, and no fingerprint kept',
+    async (_, docs) => {
+      await listing();
+      await week();
+      const kept = await getPolicyRead(db, INVITES);
+      expect(await storedRepoIds(db, [INVITES])).toMatchObject([{ role: 'code', id: sampleRepo(INVITES).id }]);
+      // The listed repo is renamed away, and a new repo takes its name.
+      github.renameRepo(INVITES, `${INVITES}-next`);
+      github.createRepo(INVITES, { admins: [MAINTAINER.login] });
+      commit(INVITES, { 'AI_POLICY.md': docs });
+
+      const { run } = await week();
+
+      expect(run?.reread).toMatchObject({ read: 0, paused: [], changed: [], skipped: { left_for_sync: 1 } });
+      expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', policy: LISTED });
+      expect(await rows('policy_changes')).toBe(0);
+      expect((await getPolicyRead(db, INVITES))?.fingerprint).toBe(kept?.fingerprint);
+    },
+  );
+
+  test("whose docs ban AI doesn't take over its maintainers' pause", async () => {
+    await registered(SILENT);
+    await week();
+    await setProjectStatus(db, SILENT, { status: 'paused', reason: 'Taking a break.', changedBy: MAINTAINER.githubId }, clock);
+    github.deleteRepo(SILENT);
+    github.createRepo(SILENT, { admins: [MAINTAINER.login] });
+    commit(SILENT, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+
+    const { run } = await week();
+
+    expect(run?.reread).toMatchObject({ read: 0, paused: [], skipped: { left_for_sync: 1 } });
+    expect(await getProject(db, SILENT)).toMatchObject({ status: 'paused', statusChangedBy: MAINTAINER.githubId, statusReason: 'Taking a break.' });
   });
 });
 

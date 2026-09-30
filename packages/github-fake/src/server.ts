@@ -48,6 +48,8 @@ async function toRequest(req: IncomingMessage, origin: string): Promise<Request>
     method,
     headers,
     body: method === 'GET' || method === 'HEAD' ? undefined : Buffer.concat(chunks),
+    // A redirect goes back to the client, which follows it itself.
+    redirect: 'manual',
   });
 }
 
