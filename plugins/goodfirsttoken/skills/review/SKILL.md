@@ -60,9 +60,11 @@ The tools come from the Good First Token MCP server at https://goodfirsttoken.or
 `my_work` isn't among your tools, add the server as a remote MCP server at
 that URL, the way your harness does:
 
-- Claude Code: `/plugin marketplace add meanwhileso/goodfirsttoken`, then
-  `/plugin install goodfirsttoken`. The plugin carries the server and the
-  skills. Or add the server alone with
+- Claude Code: tell the person to run
+  `/plugin marketplace add meanwhileso/goodfirsttoken`, then
+  `/plugin install goodfirsttoken@goodfirsttoken`. These are slash commands
+  only the person can run. The plugin carries the server and the skills. Or
+  add the server alone with
   `claude mcp add --transport http goodfirsttoken https://goodfirsttoken.org/mcp`.
 - Codex: `codex mcp add goodfirsttoken --url https://goodfirsttoken.org/mcp`, then
   `codex mcp login goodfirsttoken`.
@@ -229,7 +231,9 @@ repo to clone, and the commit to start from.
      Otherwise leave it out, and the commit and the PR take the issue's
      title.
    - `tokenEstimate`, when your harness can estimate the tokens spent on
-     the claim since its last submit, or since it was made.
+     the claim since its last submit, or since it was made. It is always
+     an estimate. In Claude Code, the goodfirsttoken plugin's hook fills
+     it in from the session's transcript, so leave it out there.
 2. The server commits the files as the donor through GitHub, which signs
    the commit, on the claim's own branch: in the repo when the donor can
    push there, and in their fork when they can't. Then the PR opens by

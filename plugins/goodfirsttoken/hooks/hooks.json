@@ -1,0 +1,17 @@
+{
+  "description": "Fills a token estimate into submit_work from the session's transcript. Only the number is sent.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_goodfirsttoken_goodfirsttoken__submit_work|mcp__goodfirsttoken__submit_work",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/token-estimate.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

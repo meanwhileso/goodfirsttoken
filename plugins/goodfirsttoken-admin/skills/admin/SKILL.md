@@ -42,9 +42,10 @@ paused, blocked, or removed until the admin says so.
 The admin tools come from the Good First Token MCP server at https://goodfirsttoken.org/mcp.
 Add it as a remote MCP server at that URL, the way your harness does:
 
-- Claude Code: `/plugin marketplace add meanwhileso/goodfirsttoken`, then
-  `/plugin install goodfirsttoken-admin`, which brings the `goodfirsttoken`
-  plugin. That plugin carries the server.
+- Claude Code: tell the admin to run
+  `/plugin marketplace add meanwhileso/goodfirsttoken`, then
+  `/plugin install goodfirsttoken-admin@goodfirsttoken`, which brings the
+  `goodfirsttoken` plugin. That plugin carries the server.
 - Codex: `codex mcp add goodfirsttoken --url https://goodfirsttoken.org/mcp`, then
   `codex mcp login goodfirsttoken`.
 - OpenCode: add `"goodfirsttoken": {"type": "remote", "url": "https://goodfirsttoken.org/mcp"}`
