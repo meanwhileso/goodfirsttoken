@@ -9,6 +9,7 @@ import { AUTH_BASE_PATH, COOKIE_PREFIX, failureReason, GITHUB_SCOPE } from '../a
 import { tooManySignIns, underRegisterLimit, underSignInLimit, underTokenLimit } from '../auth/rate-limit';
 import { sendsCookie } from '../auth/session';
 import { oauthApp, SignInNotSetUp, siteOrigin } from '../auth/settings';
+import { PAGE_CSP } from '../security-headers';
 import { savePerson } from '../db';
 import { exchangeGitHubCode, GitHubError, gitHubRest, gitHubUrls, revokeGitHubToken } from '../github';
 import {
@@ -202,7 +203,7 @@ function errorPage(status: number, message: string, back: WayBack | null = null)
   const headers = new Headers({
     'cache-control': 'no-store',
     'x-frame-options': 'DENY',
-    'content-security-policy': "frame-ancestors 'none'",
+    'content-security-policy': PAGE_CSP,
   });
   if (status === 429) headers.set('retry-after', '60');
   return { page: { kind: 'error', message, back }, status, headers };
@@ -296,6 +297,9 @@ export async function openConsent(caller: Request, search: string): Promise<Cons
   const { api, authRequest } = checked;
   const client = await api.lookupClient(authRequest.clientId);
   const { handle, headers } = await api.beginConsent(authRequest);
+  // The library's policy names only frame-ancestors. The page sends the one
+  // every page gets.
+  headers.set('content-security-policy', PAGE_CSP);
   const page: Consent = {
     kind: 'consent',
     handle,

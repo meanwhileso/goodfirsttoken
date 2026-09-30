@@ -60,14 +60,18 @@ test('an answer that is not a page keeps its own headers, with no page policy ad
   expect(stream.headers.get('x-content-type-options')).toBe('nosniff');
 });
 
-test('the page to approve an agent keeps its own framing and caching headers, and gets the others', async () => {
+test('the page to approve an agent, and its error page, get the full policy every page gets, and keep their own caching', async () => {
   const clientId = await registerClient();
   const { challenge } = await pkce();
 
   const res = await new Browser().fetch(authorizeUrl(clientId, { challenge }).toString());
+  const error = await new Browser().fetch('/oauth/authorize?client_id=nope');
 
+  expect(error.status).toBe(400);
+  expect(headersOf(error, Object.keys(PAGE_HEADERS))).toEqual(PAGE_HEADERS);
+  expect(error.headers.get('cache-control')).toBe('no-store');
   expect(res.status).toBe(200);
-  expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+  expect(res.headers.get('content-security-policy')).toBe(PAGE_HEADERS['content-security-policy']);
   expect(res.headers.get('x-frame-options')).toBe('DENY');
   expect(res.headers.get('cache-control')).toBe('no-store');
   expect(res.headers.get('x-content-type-options')).toBe('nosniff');

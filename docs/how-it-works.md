@@ -46,8 +46,9 @@ build goes on in the open.
 ## Pages' headers
 
 Every page, any answer sent as `text/html`, carries these, each unless the
-page set its own, as the page to approve an agent sets its own framing
-headers:
+page set its own. The page to approve an agent, and its error page, set
+their own framing and caching headers, with the same policy as every other
+page:
 
 | Header | Value | What it does |
 |---|---|---|

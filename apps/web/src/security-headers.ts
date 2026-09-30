@@ -11,11 +11,17 @@ import { env } from 'cloudflare:workers';
 // since TanStack Start writes its hydration scripts inline. Nonces for them
 // can come later. docs/architecture.md says more, under Threat model.
 
+/**
+ * The Content-Security-Policy every page gets. A page that sets its own,
+ * like the page to approve an agent, sends this one, so none is weaker.
+ */
+export const PAGE_CSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
+
 const PAGE_HEADERS: Readonly<Record<string, string>> = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'strict-origin-when-cross-origin',
   'x-frame-options': 'DENY',
-  'content-security-policy': "frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
+  'content-security-policy': PAGE_CSP,
   'permissions-policy': 'camera=(), microphone=(), geolocation=()',
 };
 

@@ -303,7 +303,7 @@ test('the consent page names the agent as text, says where its access goes, warn
   expect(html).toContain('>http://127.0.0.1:33418<');
   expect(html).toContain('That is an app on your computer.');
   expect(page.headers.get('x-frame-options')).toBe('DENY');
-  expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+  expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
   expect(page.headers.get('cache-control')).toBe('no-store');
 });
 

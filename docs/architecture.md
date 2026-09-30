@@ -4531,8 +4531,9 @@ not.
 - PKCE is `S256` only, and every client has to use it. The implicit grant
   is off.
 - The page to approve an agent names it as unverified, shows the scheme and
-  host its access goes to, sends `frame-ancestors 'none'`,
-  `X-Frame-Options: DENY`, and `no-store`, and never redirects on `GET`.
+  host its access goes to, sends the policy every page gets (`PAGE_CSP` in
+  `src/security-headers.ts`), `X-Frame-Options: DENY`, and `no-store`, and
+  never redirects on `GET`. Its error page sends the same.
 - Each step, consent and the trip to GitHub, is 256 random bits, works once
   for 10 minutes, is encrypted in KV under its hash, and is tied to the
   browser by a `__Host-` cookie. The GitHub leg has its own PKCE, and its
