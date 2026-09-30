@@ -13,8 +13,11 @@ import { defaultCard, mergedCard, personCard, projectCard, type Card } from './c
 // site shows gets the default card. docs/how-it-works.md, under Share cards,
 // has the rules.
 
-/** A card, or no card where the page has no page to show. */
-export type CardResult = { state: 'ready'; card: Card } | { state: 'not_found' };
+/**
+ * A card, or no card where the page has no page to show. `isDefault` marks
+ * the default card, which is the same for every path on one site.
+ */
+export type CardResult = { state: 'ready'; card: Card; isDefault?: true } | { state: 'not_found' };
 
 /** The UTC month `now` falls in, from its first moment up to the next month's, and its name, like september 2026. */
 export function monthOf(now: number): { from: number; until: number; name: string } {
@@ -86,7 +89,7 @@ export async function loadIssueCard(request: Request, owner: string, repo: strin
   const asked = issueFromPath(owner, repo, number);
   if (asked === null) return { state: 'not_found' };
   const merged = await latestMergedOnIssue(env.DB, asked);
-  if (merged === null) return { state: 'ready', card: siteCard(request) };
+  if (merged === null) return { state: 'ready', card: siteCard(request), isDefault: true };
   const hash = merged.issue.lastIndexOf('#');
   return {
     state: 'ready',

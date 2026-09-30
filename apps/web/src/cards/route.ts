@@ -1,3 +1,5 @@
+import { siteOrigin } from '../auth/settings';
+import type { Card } from './cards';
 import { loadIssueCard, loadPersonCard, loadProjectCard, siteCard, type CardResult } from './load';
 import { renderCard } from './render';
 
@@ -33,7 +35,7 @@ function text(status: number, body: string, headers: Record<string, string> = {}
 
 /** The card a path names. */
 async function cardFor(request: Request, pathname: string): Promise<CardResult> {
-  if (DEFAULT.test(pathname)) return { state: 'ready', card: siteCard(request) };
+  if (DEFAULT.test(pathname)) return { state: 'ready', card: siteCard(request), isDefault: true };
   let match = PERSON.exec(pathname);
   if (match) return loadPersonCard(request, match[1] ?? '');
   match = ISSUE.exec(pathname);
@@ -43,20 +45,39 @@ async function cardFor(request: Request, pathname: string): Promise<CardResult> 
   return { state: 'not_found' };
 }
 
-/** Answers a request on a card's path with the card as a PNG, or why there is none. */
+// The default card's PNG for each site origin, kept for the isolate's life.
+// It is the same bytes every time, and any issue path with no merged PR
+// asks for it, so it is drawn once.
+const defaultPngs = new Map<string, Uint8Array<ArrayBuffer>>();
+
+async function drawDefault(request: Request, card: Card): Promise<Uint8Array<ArrayBuffer>> {
+  const origin = siteOrigin(request);
+  let png = defaultPngs.get(origin);
+  if (!png) {
+    png = await renderCard(card);
+    defaultPngs.set(origin, png);
+  }
+  // A copy for each answer, so no answer can change the kept bytes.
+  return png.slice();
+}
+
+/**
+ * Answers a request on a card's path with the card as a PNG, or why there is
+ * none. HEAD gets the same status and headers, with no card drawn.
+ */
 export async function answerCard(request: Request): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return text(405, 'A card is read with GET.', { allow: 'GET, HEAD' });
   const { pathname } = new URL(request.url);
+  const headers = { 'content-type': 'image/png', 'x-content-type-options': 'nosniff' };
   let png: Uint8Array<ArrayBuffer>;
   try {
     const found = await cardFor(request, pathname);
     if (found.state === 'not_found') return text(404, 'There is no card at this address.');
-    png = await renderCard(found.card);
+    if (request.method === 'HEAD') return new Response(null, { headers });
+    png = found.isDefault ? await drawDefault(request, found.card) : await renderCard(found.card);
   } catch (error) {
     console.warn(`The card at ${pathname} could not be made.`, error);
     return text(503, "This card can't be made right now. Try again in a moment.");
   }
-  return new Response(request.method === 'HEAD' ? null : png, {
-    headers: { 'content-type': 'image/png', 'x-content-type-options': 'nosniff' },
-  });
+  return new Response(png, { headers });
 }

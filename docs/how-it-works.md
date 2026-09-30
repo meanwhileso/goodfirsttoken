@@ -4540,6 +4540,9 @@ address at the foot.
 - It is made each time it is asked for, as a page is, and nothing caches
   it yet. It is public, the same for everyone, and sets no cookie.
 - It is read with `GET` or `HEAD`. Any other method is `405`.
+- `HEAD` answers the status and headers `GET` would, and draws nothing.
+- The default card is the same for every path on the site, so each Worker
+  instance draws it once and keeps it.
 - When the database can't answer, it is `503`, with a line of text.
 
 ## Sample data in development
