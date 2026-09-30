@@ -239,9 +239,10 @@ function stripLine(line: string): string {
  * `text` of any length, like a PR description, with every key or token in it
  * replaced with `[redacted]`, as stripSecrets strips one line.
  *
- * - Characters a person can't see, the ones foldLine drops, like a
- *   zero-width space, go first, so none can split a token. Line breaks,
- *   tabs, and spaces stay.
+ * - Each line is read without the characters a person can't see, the ones
+ *   foldLine drops, like a zero-width space, so none can split a token.
+ *   Line breaks, tabs, and spaces stay. A line with no secret keeps them
+ *   all, like the joiners inside an emoji.
  * - It reads the text line by line. A line longer than stripSecrets takes
  *   is read in pieces cut at whitespace, each with the last few words of the
  *   piece before it.
@@ -249,14 +250,16 @@ function stripLine(line: string): string {
  *   or across lines, or through the end of the text when it has no END, since
  *   its body can hold spaces and span lines.
  *
- * Text that holds no secret and no hidden character comes back as it was.
+ * Text that holds no secret comes back as it was.
  */
 export function stripSecretsFromText(text: string): string {
   let inKey = false;
   return text
     .split('\n')
     .map((raw) => {
-      let line = raw.replace(HIDDEN, '');
+      const seen = raw.replace(HIDDEN, '');
+      const wasInKey = inKey;
+      let line = seen;
       if (inKey) {
         const end = KEY_ENDS.exec(line);
         if (end === null) return REDACTED;
@@ -274,7 +277,9 @@ export function stripSecretsFromText(text: string): string {
         }
         line = line.slice(0, begin.index) + REDACTED + rest.slice(end.index + end[0].length);
       }
-      return stripLine(line);
+      const stripped = stripLine(line);
+      // A line with nothing to redact keeps the characters it was written with.
+      return !wasInKey && !inKey && stripped === seen ? raw : stripped;
     })
     .join('\n');
 }

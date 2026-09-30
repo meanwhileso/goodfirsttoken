@@ -805,9 +805,11 @@ The same replacements run on a submit's title, summary, checks, and model,
 and on the PR description a donor writes, before `open_pr` or Open PR on
 `/me` sends it to GitHub. The description is read line by line:
 
-- Characters a person can't see, the ones folding drops, like a zero-width
-  space, a word joiner, or a variation selector, are dropped first, so none
-  can split a token. Line breaks, tabs, and spaces stay.
+- Each line is read without the characters a person can't see, the ones
+  folding drops, like a zero-width space, a word joiner, or a variation
+  selector, so none can split a token. A line with nothing to replace keeps
+  them all, so an emoji built with them comes through whole. A line with a
+  key or token loses them. Line breaks, tabs, and spaces stay.
 - A private key is replaced from its `BEGIN` through its `END`, whether it
   sits on one line, with its body in chunks with spaces, or across lines,
   where each line becomes `[redacted]`. With no `END`, it is replaced

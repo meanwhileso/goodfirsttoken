@@ -314,6 +314,12 @@ describe('text of any length, like a PR description, is stripped line by line', 
     expect(stripped).toBe('Ran it with [redacted] set.\nDone.');
   });
 
+  test('a line with no key or token keeps every character, even ones a person cannot see, like the joiners in an emoji', () => {
+    const text = 'Thanks from the whole \u{1F468}\u200d\u{1F469}\u200d\u{1F467} family \u2764\ufe0f\nDone.';
+
+    expect(stripSecretsFromText(text)).toBe(text);
+  });
+
   test('60,000 characters shaped like a=b=c take little time', () => {
     const text = `${'a=b='.repeat(220)} `.repeat(70).slice(0, 60_000);
 

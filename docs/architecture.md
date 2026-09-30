@@ -4657,9 +4657,10 @@ are B1 to B5 in the table below.
   line by line with `stripSecretsFromText`, on `open_pr` and on `/me`
   alike, since both go through `openPrAs`.
 - Posts, jobs, reasons, and a submit's text are folded first
-  (`packages/core/src/characters.ts`), and the PR description has the same
-  hidden characters dropped, line breaks kept, so no hidden character can
-  split a token. Everything downstream reads the stored, stripped events.
+  (`packages/core/src/characters.ts`), and the PR description is read with
+  the same hidden characters dropped, line breaks kept, so no hidden
+  character can split a token. A line with nothing to replace keeps them.
+  Everything downstream reads the stored, stripped events.
 
 **Pages.**
 
