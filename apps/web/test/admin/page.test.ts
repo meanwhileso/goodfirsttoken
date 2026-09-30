@@ -127,6 +127,16 @@ describe('who sees /admin', () => {
     );
   });
 
+  test('the page an admin sees is never stored, by a browser or anyone else', async () => {
+    const browser = await signedIn('sample-admin');
+
+    const page = await browser.fetch('/admin');
+
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(page.headers.get('cache-control')).toBe('no-store');
+  });
+
   test("an admin sees a crawler find's sentences that name AI, each with the rest of its paragraph, and where a paragraph was cut", async () => {
     const now = Date.now();
     await addCandidate(

@@ -59,6 +59,9 @@ are.
 - Every page's nav shows the signed-in person's login from People, in place
   of the GitHub mark.
 - `/me` needs someone signed in and sends anyone else to `/sign-in`.
+- `/me` and `/admin` are sent with `Cache-Control: no-store`, so no browser
+  or cache keeps them, and the back button after signing out shows no one's
+  page.
   `/sign-in` sends someone already signed in to `/me`.
 - A session lasts 7 days. Using the site extends it to 7 days from then, at
   most once a day.

@@ -19,5 +19,8 @@ export const getAdminPage = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<AdminPageResult> => {
     const { result, setCookies } = await loadAdminPage(getRequest(), data);
     for (const cookie of setCookies) getResponseHeaders().append('set-cookie', cookie);
+    // The page holds the signed-in person's own data, so no browser or cache
+    // keeps it, and it is gone after sign-out.
+    getResponseHeaders().set('cache-control', 'no-store');
     return result;
   });

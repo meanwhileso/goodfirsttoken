@@ -190,6 +190,14 @@ describe('the review queue on /me', () => {
     expect(page).not.toContain('<img src=x');
   });
 
+  test('the page is never stored, by a browser or anyone else, so it is gone after sign-out', async () => {
+    const page = await (await site('lena')).fetch('/me');
+
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(page.headers.get('cache-control')).toBe('no-store');
+  });
+
   test('says how long work waits for its PR, as long as core keeps it in the queue', async () => {
     const page = await (await (await site('lena')).fetch('/me')).text();
 
