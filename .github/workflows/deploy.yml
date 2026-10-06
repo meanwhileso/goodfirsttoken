@@ -23,6 +23,7 @@ jobs:
       contents: read
       id-token: write # for the credential broker, which trades the job's OIDC token
     uses: ./.github/workflows/deploy-environment.yml # zizmor: ignore[self-repository] actionlint rejects $/
+    secrets: inherit
     with:
       environment: staging
 
@@ -33,5 +34,6 @@ jobs:
       contents: read
       id-token: write # for the credential broker, which trades the job's OIDC token
     uses: ./.github/workflows/deploy-environment.yml # zizmor: ignore[self-repository] actionlint rejects $/
+    secrets: inherit
     with:
       environment: production

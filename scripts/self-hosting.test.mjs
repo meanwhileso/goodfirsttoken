@@ -68,6 +68,17 @@ test('staging and production deploys each stay off until their repository variab
   assert.match(jobs.production, /^ {4}needs: staging$/m);
 });
 
+test('each deploy call enables environment secret resolution in the reusable workflow', () => {
+  const calls = read('.github/workflows/deploy.yml')
+    .split(/\n(?= {2}\w[\w-]*:\n)/)
+    .filter((block) => /^ {4}uses: .*deploy-environment\.yml/m.test(block));
+
+  assert.equal(calls.length, 2, 'staging and production call the deploy workflow');
+  for (const call of calls) {
+    assert.match(call, /^ {4}secrets: inherit$/m, 'the call enables environment secrets');
+  }
+});
+
 test('the build and the upload read the same STATIC_ORIGIN, and a static host that fails its check stops the deploy before anything else changes', () => {
   // The deploy job's steps, in order, without YAML comments.
   const steps = read('.github/workflows/deploy-environment.yml')
