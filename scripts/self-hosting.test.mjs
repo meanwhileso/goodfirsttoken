@@ -68,14 +68,21 @@ test('staging and production deploys each stay off until their repository variab
   assert.match(jobs.production, /^ {4}needs: staging$/m);
 });
 
-test('each deploy call enables environment secret resolution in the reusable workflow', () => {
+test('each deploy call forwards only the settings and secrets read by the reusable workflow', () => {
+  const reusable = read('.github/workflows/deploy-environment.yml');
+  const needed = [...new Set([...reusable.matchAll(/\bsecrets\.([A-Z_]\w*)/g)].map((match) => match[1]))].sort();
   const calls = read('.github/workflows/deploy.yml')
     .split(/\n(?= {2}\w[\w-]*:\n)/)
     .filter((block) => /^ {4}uses: .*deploy-environment\.yml/m.test(block));
 
   assert.equal(calls.length, 2, 'staging and production call the deploy workflow');
   for (const call of calls) {
-    assert.match(call, /^ {4}secrets: inherit$/m, 'the call enables environment secrets');
+    const passed = [...call.matchAll(/^ {6}([A-Z_]\w*): \$\{\{ secrets\.\1 \}\}$/gm)].map((match) => match[1]);
+    assert.deepEqual(passed.sort(), needed, 'the call forwards every deployment secret under its own name');
+    assert.doesNotMatch(call, /^ {4}secrets: inherit/m, 'unrelated repository secrets stay out');
+  }
+  for (const name of needed) {
+    assert.ok(reusable.includes(`      ${name}:\n        required: false`), `${name} may come from the job environment`);
   }
 });
 

@@ -11,6 +11,49 @@ on:
         required: true
         type: string
 
+    # Optional here because the deploy job reads its environment secrets.
+    secrets:
+      ADMIN_GITHUB_IDS:
+        required: false
+      AUTH_SECRET:
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        required: false
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_CREDENTIAL_BROKER_URL:
+        required: false
+      DB_ID:
+        required: false
+      GH_API_URL:
+        required: false
+      GH_SERVICE_TOKEN:
+        required: false
+      GH_WEB_URL:
+        required: false
+      MCP_LIMITER_NAMESPACE_ID:
+        required: false
+      OAUTH_CLIENT_ID:
+        required: false
+      OAUTH_CLIENT_SECRET:
+        required: false
+      OAUTH_KV_ID:
+        required: false
+      PRIMARY_DOMAIN:
+        required: false
+      REDIRECT_DOMAINS:
+        required: false
+      SIGN_IN_LIMITER_NAMESPACE_ID:
+        required: false
+      STATIC_ORIGIN:
+        required: false
+      STREAM_LIMITER_NAMESPACE_ID:
+        required: false
+      TOKEN_LIMITER_NAMESPACE_ID:
+        required: false
+      WORKER_NAME:
+        required: false
+
 permissions: {}
 
 env:
