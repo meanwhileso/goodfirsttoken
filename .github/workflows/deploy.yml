@@ -23,6 +23,27 @@ jobs:
       contents: read
       id-token: write # for the credential broker, which trades the job's OIDC token
     uses: ./.github/workflows/deploy-environment.yml # zizmor: ignore[self-repository] actionlint rejects $/
+    secrets:
+      ADMIN_GITHUB_IDS: ${{ secrets.ADMIN_GITHUB_IDS }}
+      AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ secrets.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
+      DB_ID: ${{ secrets.DB_ID }}
+      GH_API_URL: ${{ secrets.GH_API_URL }}
+      GH_SERVICE_TOKEN: ${{ secrets.GH_SERVICE_TOKEN }}
+      GH_WEB_URL: ${{ secrets.GH_WEB_URL }}
+      MCP_LIMITER_NAMESPACE_ID: ${{ secrets.MCP_LIMITER_NAMESPACE_ID }}
+      OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+      OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+      OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID }}
+      PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN }}
+      REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS }}
+      SIGN_IN_LIMITER_NAMESPACE_ID: ${{ secrets.SIGN_IN_LIMITER_NAMESPACE_ID }}
+      STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN }}
+      STREAM_LIMITER_NAMESPACE_ID: ${{ secrets.STREAM_LIMITER_NAMESPACE_ID }}
+      TOKEN_LIMITER_NAMESPACE_ID: ${{ secrets.TOKEN_LIMITER_NAMESPACE_ID }}
+      WORKER_NAME: ${{ secrets.WORKER_NAME }}
     with:
       environment: staging
 
@@ -33,5 +54,26 @@ jobs:
       contents: read
       id-token: write # for the credential broker, which trades the job's OIDC token
     uses: ./.github/workflows/deploy-environment.yml # zizmor: ignore[self-repository] actionlint rejects $/
+    secrets:
+      ADMIN_GITHUB_IDS: ${{ secrets.ADMIN_GITHUB_IDS }}
+      AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_CREDENTIAL_BROKER_URL: ${{ secrets.CLOUDFLARE_CREDENTIAL_BROKER_URL }}
+      DB_ID: ${{ secrets.DB_ID }}
+      GH_API_URL: ${{ secrets.GH_API_URL }}
+      GH_SERVICE_TOKEN: ${{ secrets.GH_SERVICE_TOKEN }}
+      GH_WEB_URL: ${{ secrets.GH_WEB_URL }}
+      MCP_LIMITER_NAMESPACE_ID: ${{ secrets.MCP_LIMITER_NAMESPACE_ID }}
+      OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+      OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+      OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID }}
+      PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN }}
+      REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS }}
+      SIGN_IN_LIMITER_NAMESPACE_ID: ${{ secrets.SIGN_IN_LIMITER_NAMESPACE_ID }}
+      STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN }}
+      STREAM_LIMITER_NAMESPACE_ID: ${{ secrets.STREAM_LIMITER_NAMESPACE_ID }}
+      TOKEN_LIMITER_NAMESPACE_ID: ${{ secrets.TOKEN_LIMITER_NAMESPACE_ID }}
+      WORKER_NAME: ${{ secrets.WORKER_NAME }}
     with:
       environment: production
