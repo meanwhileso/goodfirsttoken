@@ -5,7 +5,7 @@ export interface Rank {
   score: number;
 }
 
-/** A ranked list with huge numerals. The first numeral is purple. */
+/** A ranked list with huge numerals. The first numeral uses ink. */
 export function Ranks({ ranks }: { ranks: readonly Rank[] }) {
   return (
     <ol className="ranks">

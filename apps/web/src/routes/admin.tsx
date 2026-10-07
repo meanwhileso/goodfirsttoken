@@ -622,7 +622,7 @@ function Admin() {
               </section>
               <section className="stack" aria-label="found by the crawler">
                 <div className="rail__head">
-                  <Marker as="h2" variant="label" count={sectionCount(page, 'candidate', page.candidates.length)}>
+                  <Marker as="h2" count={sectionCount(page, 'candidate', page.candidates.length)}>
                     found by the crawler
                   </Marker>
                   <span className="mono small faint">their docs welcome AI</span>

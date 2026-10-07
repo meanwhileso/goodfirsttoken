@@ -16,6 +16,10 @@ This file is the north star. The look is in [`design.md`](design.md), the
 sound is in [`voice.md`](voice.md), and the pages are in
 [`brief-website.md`](brief-website.md).
 
+The color roles are in [`design.md`](design.md#color-roles).
+Purple carries the identity, blue carries links and activity, and routine
+metadata stays neutral. Green continues to mean live or merged.
+
 ## Mission
 
 Turn capacity that would otherwise expire at the weekly reset into merged

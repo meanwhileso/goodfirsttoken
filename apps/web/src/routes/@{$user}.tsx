@@ -273,7 +273,7 @@ function Person({ page }: { page: PersonPage }) {
 const STATUS: Record<WorkStatus, { label: string; variant?: ChipVariant }> = {
   working: { label: 'working', variant: 'live' },
   paused: { label: 'paused' },
-  submitted: { label: 'submitted' },
+  submitted: { label: 'submitted', variant: 'submitted' },
   pr_open: { label: 'PR open', variant: 'opened' },
   merged: { label: 'merged', variant: 'merged' },
   pr_closed: { label: 'PR closed' },

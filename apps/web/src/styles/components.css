@@ -35,10 +35,6 @@
 .marker--live::before {
   content: ''; width: 7px; height: 7px; border-radius: 99px; background: var(--merged); animation: pulse 2.4s ease-in-out infinite;
 }
-.marker--label { background: var(--label); border-color: var(--label); color: var(--on-label); }
-/* White like the label, told apart by weight, since a lighter count would
-   fall under 4.5:1 on purple. */
-.marker--label .marker__count { color: var(--on-label); font-weight: 400; }
 
 /* ---------- Tags: a project's own GitHub label, in that label's color ---------- */
 
@@ -55,9 +51,9 @@
   color: var(--text-muted); font: 12.5px/1.3 var(--font-mono); text-wrap: balance;
 }
 a.chip:hover { text-decoration: none; }
-.chip--tint { background: var(--label-tint); border-color: transparent; color: var(--label-ink); }
+.chip--tint { background: var(--metadata); border-color: transparent; color: var(--metadata-ink); }
 .chip--merged { background: var(--merged); border-color: var(--merged); color: var(--on-label); }
-.chip--opened { background: var(--label); border-color: var(--label); color: var(--on-label); }
+.chip--submitted, .chip--opened { background: var(--accent-tint); border-color: transparent; color: var(--accent-ink); }
 /* Ink text, since green text on the green tint is under 4.5:1. The dot
    carries the green. */
 .chip--live { background: var(--merged-tint); border-color: transparent; color: var(--ink); }
@@ -80,23 +76,27 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 }
 .badge__rule, .badge__value { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; }
 .badge__rule { background: #E6E9ED; color: var(--text-muted); }
-.badge__value { background: var(--label-tint); color: var(--label-ink); font-weight: 500; }
+.badge__value { background: var(--metadata); color: var(--metadata-ink); font-weight: 500; }
 .badge--strict .badge__value { background: var(--ink); color: var(--on-ink); }
 
 /* ---------- Slots: the token mark as a counter ---------- */
 
 .slots { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
 .slots__slot { width: 15px; height: 15px; border-radius: 99px; border: 2px solid #C5CCD3; position: relative; }
-.slots__slot--taken { border-color: var(--label); }
-.slots__slot--taken::after { content: ''; position: absolute; inset: 2.5px; border-radius: 99px; background: var(--label); }
+.slots__slot--taken { border-color: var(--accent); }
+.slots__slot--taken::after { content: ''; position: absolute; inset: 2.5px; border-radius: 99px; background: var(--accent); }
 .slots--lg .slots__slot { width: 22px; height: 22px; border-width: 3px; }
 .slots--lg .slots__slot--taken::after { inset: 4px; }
 .slots--closed .slots__slot { border-color: #C5CCD3; }
-.slots--closed .slots__slot--taken::after { background: #C5CCD3; }
+.slots--closed .slots__slot::after {
+  content: ''; position: absolute; inset: auto; left: 50%; top: -3px; bottom: -3px; width: 2px;
+  border-radius: 0; background: #C5CCD3; transform: translateX(-50%) rotate(45deg);
+}
+.slots--closed.slots--lg .slots__slot::after { top: -4px; bottom: -4px; width: 3px; }
 
 /* The large ring in an issue page's open slot, and its closed state */
 .slot-ring {
-  display: inline-block; flex: none; width: 56px; height: 56px; border-radius: 99px; border: 3px dashed var(--label);
+  display: inline-block; flex: none; width: 56px; height: 56px; border-radius: 99px; border: 3px dashed var(--accent);
 }
 .slot-ring--closed { position: relative; border: 3px solid #C5CCD3; }
 .slot-ring--closed::after {
@@ -120,7 +120,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 .dot--pulse { width: 7px; height: 7px; animation: pulse 2.4s ease-in-out infinite; }
 .avatar {
   width: 28px; height: 28px; flex: none; border-radius: 99px; display: inline-flex; align-items: center; justify-content: center;
-  background: var(--label-tint); color: var(--label-ink); font: 700 12px/1 var(--font-sans);
+  background: var(--metadata); color: var(--metadata-ink); font: 700 12px/1 var(--font-sans);
 }
 
 /* ---------- Buttons ---------- */
@@ -143,6 +143,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 .prompt {
   display: flex; align-items: center; gap: 16px; padding: 22px 22px 22px 26px; border-radius: var(--r-xl);
   background: var(--code-bg); color: var(--code-text); font: 19px/1.5 var(--font-mono);
+  --focus: 0 0 0 2px var(--code-bg), 0 0 0 5px var(--code-accent);
 }
 .prompt__text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .prompt__text::before { content: '\203A  '; color: var(--code-accent); }
@@ -166,6 +167,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 16px; flex: none;
   border-radius: var(--r-pill); border: 1px solid var(--code-line); background: var(--code-surface); color: var(--code-text);
   font: 500 14px var(--font-mono); cursor: pointer;
+  --focus: 0 0 0 2px var(--code-surface), 0 0 0 5px var(--code-accent);
 }
 .prompt--sm .copy-btn { height: 34px; padding: 0 12px; font-size: 12.5px; }
 
@@ -175,11 +177,11 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font: 14px var(--font-mono); color: var(--text-muted);
 }
 .open-in a, .open-in button {
-  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--ink);
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--accent);
   font: inherit; cursor: pointer;
 }
-.open-in a::after, .open-in button::after { content: '\2197'; color: var(--label-ink); }
-.open-in a:hover, .open-in button:hover { color: var(--label-ink); text-decoration: none; }
+.open-in a::after, .open-in button::after { content: '\2197'; color: var(--accent); }
+.open-in a:hover, .open-in button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- Tabs: chips that pick a panel ---------- */
 
@@ -196,7 +198,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
   background: var(--paper); border: 2px solid var(--line); box-sizing: border-box;
 }
 .rail__section--live::before {
-  border: 3px solid var(--label); background: radial-gradient(circle, var(--label) 0 4px, var(--paper) 4.5px);
+  border: 3px solid var(--merged); background: radial-gradient(circle, var(--merged) 0 4px, var(--paper) 4.5px);
 }
 .rail__section--merged::before {
   border: 3px solid var(--merged); background: radial-gradient(circle, var(--merged) 0 4px, var(--paper) 4.5px);
@@ -222,6 +224,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 .wall-line__time { color: var(--text-faint); font-size: 14px; padding-top: 3px; }
 .wall-line__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
 .wall-line__who { font-weight: 600; color: var(--wall-ink, var(--ink)); }
+.wall-line__who:hover { color: var(--accent); }
 .wall-line__issue { font-size: 14px; }
 .wall-line__text { flex-basis: 100%; color: var(--wall-ink, var(--ink)); overflow-wrap: anywhere; }
 .wall-line .chip { color: var(--wall-chip, var(--text-muted)); }
@@ -245,10 +248,10 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 
 .token-field { display: grid; gap: 5px; }
 .token-field__square { aspect-ratio: 1; border-radius: 3px; background: var(--line-soft); transition: background 0.6s ease; }
-.token-field__square[data-level="1"] { background: #D9D3FF; }
-.token-field__square[data-level="2"] { background: #B1A3FF; }
-.token-field__square[data-level="3"] { background: #8F7BFF; }
-.token-field__square[data-level="4"] { background: var(--label); }
+.token-field__square[data-level="1"] { background: #DDF4FF; }
+.token-field__square[data-level="2"] { background: #9DCAFA; }
+.token-field__square[data-level="3"] { background: #54A3F0; }
+.token-field__square[data-level="4"] { background: var(--accent); }
 .token-field__square[data-level="merged"] { background: var(--merged); }
 .token-field__square--flash { animation: flash 1.2s ease-out; }
 
@@ -262,7 +265,7 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 .ranks__n {
   font: 600 34px/1 var(--font-sans); letter-spacing: -0.04em; color: var(--text-faint); font-variant-numeric: tabular-nums;
 }
-.ranks > li:first-child .ranks__n { color: var(--label); }
+.ranks > li:first-child .ranks__n { color: var(--ink); }
 .ranks__who { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; min-width: 0; overflow-wrap: anywhere; }
 .ranks__agent { font: 13px var(--font-mono); color: var(--text-muted); margin-left: 5px; letter-spacing: 0; }
 .ranks__score { font: 600 28px/1 var(--font-sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
@@ -288,10 +291,11 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 .site-nav__inner { height: 76px; display: flex; align-items: center; gap: 24px; }
 .site-nav__links { display: flex; align-items: center; gap: 26px; margin-left: auto; font: 14px var(--font-mono); }
 .site-nav__links a { color: var(--text-muted); display: inline-flex; align-items: center; gap: 8px; }
-.site-nav__links a:hover { color: var(--ink); text-decoration: none; }
+.site-nav__links a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .site-nav__links a[aria-current="page"] { color: var(--ink); }
+.site-nav__links a[aria-current="page"]:hover { color: var(--accent); }
 .site-nav__links a[aria-current="page"]::before {
-  content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--label);
+  content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--accent);
 }
 .site-nav__gh {
   display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
@@ -330,3 +334,4 @@ button.chip[aria-selected="true"], button.chip[aria-pressed="true"] {
 }
 .site-footer nav { display: flex; gap: 22px; flex-wrap: wrap; }
 .site-footer a { color: var(--text-muted); }
+.site-footer a:hover { color: var(--accent); }

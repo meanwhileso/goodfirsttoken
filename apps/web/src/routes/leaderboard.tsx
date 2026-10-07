@@ -2,7 +2,6 @@ import { productName } from '@goodfirsttoken/core';
 import { createFileRoute } from '@tanstack/react-router';
 import { SiteNav } from '../auth/SiteNav';
 import { Footer } from '../components/Footer';
-import { InlineLabel } from '../components/InlineLabel';
 import { Tabs } from '../components/Tabs';
 import type { Tally } from '../db';
 import { getLeaderboard, type Board, type LeaderboardPage } from '../leaderboard/data';
@@ -37,7 +36,7 @@ function Leaderboard() {
       <SiteNav current="leaderboard" />
       <main className="wrap board">
         <h1 className="display board-title">
-          Ranked by <InlineLabel>merged</InlineLabel> PRs
+          Ranked by merged PRs
         </h1>
         {page.state === 'ready' ? (
           <Views page={page} />

@@ -39,7 +39,7 @@ body { padding: 1px; }
 .view-links { font: var(--mono-sm); }
 /* A link the host opens, drawn as the site draws a link. */
 .view-link {
-  padding: 0; border: 0; background: none; color: var(--label-ink); font: inherit; text-align: left; cursor: pointer;
+  padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-align: left; cursor: pointer;
   overflow-wrap: anywhere;
 }
 .view-link:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -57,11 +57,11 @@ body { padding: 1px; }
 .view-status { display: flex; flex-direction: column; gap: 10px; }
 .view-notice { padding: 10px 12px; border-radius: var(--r-md); font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .view-notice--refused { background: var(--attention-tint); color: var(--attention); }
-.view-notice--done { background: var(--merged-tint); color: var(--ink); }
-.view-notice--note { background: var(--label-tint); color: var(--text-body); }
+.view-notice--done { background: var(--accent-tint); color: var(--ink); }
+.view-notice--note { background: var(--accent-tint); color: var(--text-body); }
 
 .view-check { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--text-body); overflow-wrap: anywhere; }
-.view-check__box { margin: 3px 0 0; accent-color: var(--label); }
+.view-check__box { margin: 3px 0 0; accent-color: var(--accent); }
 .view-label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-body); }
 .view-field {
   width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
@@ -96,7 +96,7 @@ body { padding: 1px; }
    which :root passes down as --light-attention. A custom property that
    names itself on the same element is a cycle, and a browser drops it. */
 
-:root { --light-attention: var(--attention); }
+:root { --light-attention: var(--attention); --light-accent: var(--accent); }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="dark"] body {
   --paper: var(--code-bg);
@@ -108,13 +108,16 @@ body { padding: 1px; }
   --text-faint: color-mix(in srgb, var(--code-text) 60%, var(--code-bg));
   --line: var(--code-line);
   --line-soft: color-mix(in srgb, var(--code-line) 55%, var(--code-surface));
-  --label-ink: var(--code-accent);
-  --label-tint: color-mix(in srgb, var(--label) 24%, var(--code-surface));
+  --accent: var(--code-accent);
+  --accent-ink: var(--code-accent);
+  --accent-tint: color-mix(in srgb, var(--light-accent) 24%, var(--code-surface));
+  --metadata: color-mix(in srgb, var(--code-text) 8%, var(--code-surface));
+  --metadata-ink: var(--text-muted);
   --merged-tint: color-mix(in srgb, var(--merged) 28%, var(--code-surface));
   --attention: color-mix(in srgb, var(--light-attention) 35%, var(--code-text));
   --attention-tint: color-mix(in srgb, var(--light-attention) 30%, var(--code-surface));
   --on-ink: var(--code-bg);
-  --focus: 0 0 0 2px var(--code-bg), 0 0 0 5px var(--label);
+  --focus: 0 0 0 2px var(--code-surface), 0 0 0 5px var(--code-accent);
 }
 /* components.css spells a few grays out, for paper. On the dark card they
    take the same mixes. */

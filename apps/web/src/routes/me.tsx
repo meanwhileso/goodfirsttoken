@@ -185,7 +185,7 @@ function ReadyToOpen({ queue, now }: { queue: Queue; now: number }) {
   return (
     <RailSection>
       <RailHead>
-        <Marker as="h2" variant="label" count={count}>
+        <Marker as="h2" count={count}>
           ready to open
         </Marker>
       </RailHead>

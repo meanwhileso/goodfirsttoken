@@ -379,6 +379,38 @@ test('a view talks to its host as the extension says: ui/initialize with its ver
   expect(title.ratio).toBeGreaterThanOrEqual(4.5);
 });
 
+test('functional links use blue on paper and readable light blue in a dark host', async ({ page }) => {
+  const view = await openView(page, views['review-queue'], {
+    input: {},
+    result: work([{ ...ready, prOnIssue: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' } }]),
+    theme: 'light',
+  });
+  const link = view.frame.locator('.view-link').first();
+  await expect(link).toHaveCSS('color', 'rgb(9, 105, 218)');
+  await view.send({ method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } });
+  await expect(link).toHaveCSS('color', 'rgb(165, 214, 255)');
+  expect((await contrastOf(view.frame, '.view-link')).ratio).toBeGreaterThanOrEqual(4.5);
+});
+
+test('opening a PR shows a blue notice that remains readable when the host turns dark', async ({ page }) => {
+  const view = await openView(page, views['review-queue'], {
+    input: {},
+    result: work([ready]),
+    theme: 'light',
+    callTool: () => Promise.resolve({
+      content: text('Opened PR #41.'),
+      structuredContent: { claimId: ready.claimId, issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' }, prOnIssue: null },
+    }),
+  });
+  await view.frame.getByRole('button', { name: 'Open PR', exact: true }).click();
+  const notice = view.frame.getByRole('status').filter({ hasText: 'Opened PR #41' });
+  await expect(notice).toHaveCSS('background-color', 'rgb(221, 244, 255)');
+  await view.send({ method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } });
+  await expect(notice).toHaveCSS('background-color', 'color(srgb 0.0740392 0.179294 0.30651)');
+  expect((await contrastOf(view.frame, '.view-notice--done')).ratio).toBeGreaterThanOrEqual(4.5);
+  expect((await contrastOf(view.frame, '.view-notice--done .view-link')).ratio).toBeGreaterThanOrEqual(4.5);
+});
+
 test('in the dark, a refusal and the tough badge keep colors of their own, with the contrast to read them', async ({ page }) => {
   const refusal = `Refused (issue_full): ${ISSUE} has no open slot: 3 of 3 are taken. Pick another issue.`;
   const view = await openView(page, views['issue-cards'], {

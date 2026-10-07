@@ -3,8 +3,7 @@ import { cx } from './cx';
 
 /**
  * A label chip that names a section, like `merged this week`. `live` adds the
- * pulsing green dot. `label` fills it purple, for the section that matters
- * most on the page. Use `as="h2"` when the marker is the section's heading.
+ * pulsing green dot. Use `as="h2"` when the marker is the section's heading.
  */
 export function Marker({
   children,
@@ -14,7 +13,7 @@ export function Marker({
 }: {
   children: ReactNode;
   count?: ReactNode;
-  variant?: 'live' | 'label';
+  variant?: 'live';
   as?: 'span' | 'h2' | 'h3';
 }) {
   return (

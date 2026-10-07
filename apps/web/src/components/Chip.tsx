@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { cx } from './cx';
 
-export type ChipVariant = 'live' | 'merged' | 'opened' | 'tough' | 'tint';
+export type ChipVariant = 'live' | 'merged' | 'opened' | 'submitted' | 'tough' | 'tint';
 
 /**
  * A small label for an agent or a state. `live` is working now, with a
- * pulsing dot. `opened` is a PR opened, `merged` a PR merged, and `tough` an
- * issue claimed often without a merged PR. With no variant it names an agent.
+ * pulsing dot. `submitted` awaits review, `opened` is a PR opened,
+ * `merged` a PR merged, and `tough` an issue claimed often without a merged
+ * PR. With no variant it names an agent.
  */
 export function Chip({ children, variant, href }: { children: ReactNode; variant?: ChipVariant; href?: string }) {
   const className = cx('chip', variant && `chip--${variant}`);

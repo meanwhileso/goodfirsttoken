@@ -2,8 +2,8 @@ import { cx } from './cx';
 
 /**
  * An issue's claim slots as token marks: a filled ring with a dot for each
- * taken slot, an empty ring for each open one, and all gray once claims are
- * closed.
+ * taken slot, an empty ring for each open one, and a gray slash in every
+ * ring once claims are closed.
  */
 export function Slots({
   taken,
@@ -24,7 +24,7 @@ export function Slots({
       aria-label={label}
     >
       {Array.from({ length: total }, (_, i) => (
-        <i key={i} className={cx('slots__slot', i < taken && 'slots__slot--taken')} />
+        <i key={i} className={cx('slots__slot', !closed && i < taken && 'slots__slot--taken')} />
       ))}
     </span>
   );

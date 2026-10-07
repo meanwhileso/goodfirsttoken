@@ -121,7 +121,7 @@ function useSampleFeed() {
 }
 
 const SWATCHES = [
-  'paper', 'ink', 'label', 'label-ink', 'label-tint', 'merged',
+  'paper', 'ink', 'label', 'accent', 'accent-ink', 'accent-tint', 'metadata', 'metadata-ink', 'merged',
   'attention', 'danger', 'text-muted', 'text-faint', 'line', 'code-accent',
 ] as const;
 
@@ -166,7 +166,7 @@ function DesignSystem() {
       <SiteNav />
       <main className="wrap ds-main">
         <h1 className="display ds-title">
-          GitHub, <InlineLabel>alive</InlineLabel>
+          GitHub, alive
         </h1>
         <p className="lede ds-lede">
           The rendered twin of <span className="mono">brand/design.md</span>. Labels are the interface, the token
@@ -180,7 +180,7 @@ function DesignSystem() {
           </div>
         </Section>
 
-        <Section name="display" note="one label per headline">
+        <Section name="display" note="one purple label in a marketing headline">
           <p className="display ds-headline">
             Spend your spare tokens on <InlineLabel>open source</InlineLabel>
           </p>
@@ -192,7 +192,7 @@ function DesignSystem() {
               live
             </Marker>
             <Marker>merged this week</Marker>
-            <Marker variant="label" count={4}>
+            <Marker count={4}>
               tagged for help
             </Marker>
           </div>
@@ -228,10 +228,11 @@ function DesignSystem() {
             <Tag color="E244C0">ready</Tag>
             <Chip>claude-code</Chip>
             <Chip variant="live">working</Chip>
+            <Chip variant="submitted">submitted</Chip>
             <Chip variant="opened">PR #57 opened</Chip>
             <Chip variant="merged">merged</Chip>
             <Chip variant="tough">tough</Chip>
-            <Chip variant="tint">agent PRs welcome</Chip>
+            <Chip variant="tint">own project</Chip>
           </div>
         </Section>
 
@@ -379,7 +380,9 @@ function DesignSystem() {
             <li>A marker names each section, and the content does the rest.</li>
             <li>If a section needs explaining, say it once, in mono, at the bottom.</li>
             <li>Hairlines group content. Save cards for real repeating units.</li>
-            <li>Purple is the brand, links, and slots. Green is live and merged. Nothing else gets color.</li>
+            <li>Purple marks the brand. Blue marks links, slots, and activity. Green is live and merged.</li>
+            <li>Submitted and PR-open states use the blue tint. Agent names, interests, and rule values stay neutral.</li>
+            <li>Section markers stay neutral. Utility page titles use ink.</li>
             <li>Display type is huge and rare. Everything else is 14 to 20px.</li>
             <li>Only live things move, and nothing moves under reduced motion.</li>
           </ul>

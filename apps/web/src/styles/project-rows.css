@@ -9,7 +9,7 @@
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; color: inherit;
 }
 .project-row:hover { text-decoration: none; }
-.project-row:hover .project-row__title { color: var(--label-ink); }
+.project-row:hover .project-row__title { color: var(--accent); }
 .project-row__title { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); overflow-wrap: anywhere; }
 .project-row__meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; grid-column: 1; min-width: 0; font-size: 14px;

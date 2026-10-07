@@ -25,10 +25,11 @@ body {
 }
 h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
 p { margin: 0; text-wrap: pretty; }
-a { color: var(--label-ink); text-decoration: none; }
+a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 3px; }
 :focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-sm); }
 button { font: inherit; }
+input[type="checkbox"] { accent-color: var(--accent); }
 ul, ol { margin: 0; padding: 0; list-style: none; }
 
 .mono { font-family: var(--font-mono); }
@@ -57,7 +58,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 @keyframes blink { 50% { opacity: 0; } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { transform: none; } }
 @keyframes flash {
-  0% { transform: scale(1.35); box-shadow: 0 0 0 4px rgba(112, 87, 255, 0.25); }
+  0% { transform: scale(1.35); box-shadow: 0 0 0 4px rgba(9, 105, 218, 0.25); }
   100% { transform: none; box-shadow: none; }
 }
 

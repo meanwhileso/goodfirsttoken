@@ -177,6 +177,34 @@ test('an element with hidden stays hidden, whatever display its class sets', asy
   expect(result.shown).toEqual([]);
 });
 
+test('identity stays purple while functional marks are blue and metadata stays neutral', async ({ page }) => {
+  await openDesignPaused(page);
+  await expect(page.locator('.logo-chip').first()).toHaveCSS('background-color', 'rgb(112, 87, 255)');
+  await expect(page.locator('.inline-label').first()).toHaveCSS('background-color', 'rgb(112, 87, 255)');
+  await expect(page.locator('.wall-line__issue').first()).toHaveCSS('color', 'rgb(9, 105, 218)');
+  await expect(page.locator('.slots__slot--taken').first()).toHaveCSS('border-top-color', 'rgb(9, 105, 218)');
+  await expect(page.locator('.token-field__square[data-level="4"]').first()).toHaveCSS('background-color', 'rgb(9, 105, 218)');
+  await expect(page.locator('.badge__value').first()).toHaveCSS('background-color', 'rgb(238, 241, 244)');
+  await expect(page.locator('.avatar').first()).toHaveCSS('background-color', 'rgb(238, 241, 244)');
+  await expect(page.locator('.chip--tint').first()).toHaveCSS('color', 'rgb(87, 96, 106)');
+  for (const selector of ['.chip--submitted', '.chip--opened']) {
+    await expect(page.locator(selector).first()).toHaveCSS('background-color', 'rgb(221, 244, 255)');
+    await expect(page.locator(selector).first()).toHaveCSS('color', 'rgb(5, 80, 174)');
+  }
+  await expect(page.locator('.chip--merged').first()).toHaveCSS('background-color', 'rgb(26, 127, 55)');
+  await expect(page.locator('.marker').filter({ hasText: 'tagged for help' })).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+});
+
+test('utility titles use ink and reserve the headline label for marketing', async ({ page }) => {
+  for (const route of ['/projects', '/leaderboard', '/design']) {
+    await page.goto(route);
+    await expect(page.locator('h1')).toHaveCSS('color', 'rgb(14, 17, 22)');
+    await expect(page.locator('h1 .inline-label')).toHaveCount(0);
+  }
+  await page.goto('/maintainers');
+  await expect(page.locator('h1 .inline-label')).toHaveText('tag');
+});
+
 test('every token in brand/design.md is a CSS variable with the same value', async ({ page }) => {
   const tokens = frontMatter(await readFile(new URL('../../../brand/design.md', import.meta.url), 'utf8'));
   const group = (name: string): Tree => {

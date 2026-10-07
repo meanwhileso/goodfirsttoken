@@ -4,7 +4,6 @@ import { useId, useState, useSyncExternalStore } from 'react';
 import { SiteNav } from '../auth/SiteNav';
 import { FilterChips } from '../components/FilterChips';
 import { Footer } from '../components/Footer';
-import { InlineLabel } from '../components/InlineLabel';
 import { getProjectsList, type ListedProject } from '../project/data';
 import { filterProjects, PR_FILTERS, type PrFilter } from '../project/list';
 import { ProjectRow } from '../project/ProjectRow';
@@ -41,7 +40,7 @@ function Projects() {
       <SiteNav current="projects" />
       <main className="wrap projects">
         <h1 className="display projects-title">
-          Every one <InlineLabel>said yes</InlineLabel>
+          Every one said yes
         </h1>
         {list.state === 'unavailable' ? (
           <p className="projects-note">The projects can&apos;t be read right now. Try again in a moment.</p>

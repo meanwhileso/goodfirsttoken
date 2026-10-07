@@ -1,7 +1,7 @@
 import { cx } from './cx';
 
 /**
- * The large ring in an issue page's open slot: a dashed purple ring while a
+ * The large ring in an issue page's open slot: a dashed blue ring while a
  * slot is open, and a gray ring with a slash once claims close. It is
  * drawing only, so the words beside it carry the meaning.
  */

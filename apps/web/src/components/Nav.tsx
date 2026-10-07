@@ -23,7 +23,7 @@ function GitHubMark() {
 /**
  * The site nav: the logo chip, lowercase mono links, and a round GitHub mark,
  * or the signed-in person's avatar and login. The current page gets a small
- * purple dot. When the nav is 880px wide or narrower, the links fold into a
+ * blue dot. When the nav is 880px wide or narrower, the links fold into a
  * menu that a checkbox opens, so it works before any script loads.
  */
 export function Nav({
