@@ -679,7 +679,7 @@ describe('the page, through the Worker', () => {
     await claim(priya);
     const untagged = await (await page(`/${repo}/issues/${number}`)).text();
     expect(untagged).not.toContain('/goodfirsttoken:work');
-    expect(untagged).toContain('the project&#x27;s open tagged issues, so it takes no claims');
+    expect(untagged).toContain('This issue is outside the project&#x27;s open tagged issues.');
 
     await tag({ linkedPr: prRef(70) });
     const linked = await (await page(`/${repo}/issues/${number}`)).text();
@@ -724,18 +724,18 @@ describe('the page, through the Worker', () => {
     const words = await oauth.text();
     expect(words).not.toContain('slots taken');
     // The issue has a claim, so the page doesn't say no one claimed it.
-    expect(words).not.toContain('no one has claimed it');
+    expect(words).not.toContain('No one has claimed it.');
     expect(words).toContain('There is no issue page at this address.');
   });
 
   test('says why an issue it names has no page, and only that there is none for a path that names no issue', async () => {
     const missing = await (await page(`/${repo}/issues/${number}`)).text();
-    expect(missing).toContain('no one has claimed it');
+    expect(missing).toContain('No one has claimed it.');
 
     const malformed = await page(`/sample_owner/sample-app/issues/${number}`);
     expect(malformed.status).toBe(404);
     const words = await malformed.text();
-    expect(words).not.toContain('no one has claimed it');
+    expect(words).not.toContain('No one has claimed it.');
     expect(words).toContain('There is no issue page at this address.');
   });
 });

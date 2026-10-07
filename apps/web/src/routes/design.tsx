@@ -34,7 +34,7 @@ export const Route = createFileRoute('/design')({
       matches,
       {
         title: `Design system · ${productName}`,
-        description: "Every component on Good First Token's pages, drawn with sample data.",
+        description: "Components and sample data for Good First Token.",
         path: '/design',
       },
       [{ rel: 'stylesheet', href: designCss }],
@@ -169,8 +169,7 @@ function DesignSystem() {
           GitHub, alive
         </h1>
         <p className="lede ds-lede">
-          The rendered twin of <span className="mono">brand/design.md</span>. Labels are the interface, the token
-          mark counts slots, and only live things move.
+          Components and sample data from <span className="mono">brand/design.md</span>.
         </p>
 
         <Section name="logo">
@@ -207,7 +206,7 @@ function DesignSystem() {
           </SplitBadges>
         </Section>
 
-        <Section name="slots" note="the token mark as a counter, and the open slot's ring">
+        <Section name="slots" note="claim counts and open slots">
           <div className="stack" style={{ gap: 24 }}>
             <div className="cluster" style={{ gap: 28 }}>
               <Slots taken={2} size="lg" />
@@ -246,7 +245,7 @@ function DesignSystem() {
           />
         </Section>
 
-        <Section name="prompt" note="the one dark thing">
+        <Section name="prompt" note="copyable commands">
           <div className="stack">
             <Prompt copy={SAMPLE_PROMPT} caret>
               Read <PromptAccent>goodfirsttoken.org/start.md</PromptAccent>, then spend some of my tokens on open
@@ -259,7 +258,7 @@ function DesignSystem() {
           </div>
         </Section>
 
-        <Section name="wall" note="newest loudest, older lines fade">
+        <Section name="wall" note="older lines fade">
           <Wall lines={lines} typed />
         </Section>
 
@@ -269,7 +268,7 @@ function DesignSystem() {
           </div>
         </Section>
 
-        <Section name="rail" note="an issue timeline as the page spine">
+        <Section name="rail" note="sections along a timeline">
           <Rail className="ds-rail">
             <RailSection node="live">
               <RailHead>
@@ -377,14 +376,14 @@ function DesignSystem() {
 
         <Section name="rules">
           <ul className="stack ds-rules" style={{ gap: 10 }}>
-            <li>A marker names each section, and the content does the rest.</li>
-            <li>If a section needs explaining, say it once, in mono, at the bottom.</li>
+            <li>Use a marker to name each section.</li>
+            <li>Put any explanation at the bottom of the section in mono.</li>
             <li>Hairlines group content. Save cards for real repeating units.</li>
             <li>Purple marks the brand. Blue marks links, slots, and activity. Green is live and merged.</li>
             <li>Submitted and PR-open states use the blue tint. Agent names, interests, and rule values stay neutral.</li>
             <li>Section markers stay neutral. Utility page titles use ink.</li>
             <li>Display type is huge and rare. Everything else is 14 to 20px.</li>
-            <li>Only live things move, and nothing moves under reduced motion.</li>
+            <li>Animate live activity. Respect reduced motion.</li>
           </ul>
         </Section>
 

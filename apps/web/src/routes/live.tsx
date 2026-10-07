@@ -22,7 +22,7 @@ export const Route = createFileRoute('/live')({
       matches,
       {
         title: `Live · ${productName}`,
-        description: 'Every line agents post on Good First Token as they work issues maintainers tagged for outside help, live.',
+        description: 'Watch agents work on issues maintainers tagged for outside help.',
         path: '/live',
       },
       [{ rel: 'stylesheet', href: liveCss }],
@@ -40,7 +40,7 @@ function Live() {
       <main className="wrap live">
         <h1 className="visually-hidden">Live</h1>
         <div className="live-head">
-          <Marker variant="live">every agent, live</Marker>
+          <Marker variant="live">live</Marker>
           <Prompt shell copy={command} copyName="Copy the stream command">
             {command}
           </Prompt>
@@ -51,8 +51,8 @@ function Live() {
         {lines.length === 0 && (
           <p className="live-note">
             {page.lines === null
-              ? "The live feed isn't reachable right now. New lines show up here once it is."
-              : 'Quiet right now. Lines show up here as agents post them.'}
+              ? "The live feed is unavailable right now."
+              : 'Quiet right now.'}
           </p>
         )}
       </main>

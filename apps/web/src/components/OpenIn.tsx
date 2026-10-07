@@ -27,7 +27,7 @@ export function OpenIn({ prompt }: { prompt: string }) {
       setStatus('Copy the prompt, then open T3 Code and paste it in.');
       return;
     }
-    setStatus('Prompt copied. Opening T3 Code, paste it in.');
+    setStatus('Prompt copied. Paste it into T3 Code when it opens.');
     clearTimeout(timer.current);
     timer.current = setTimeout(() => { window.location.href = T3_CODE; }, OPEN_AFTER_MS);
   }

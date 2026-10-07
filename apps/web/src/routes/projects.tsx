@@ -22,7 +22,7 @@ export const Route = createFileRoute('/projects')({
       matches,
       {
         title: `Projects · ${productName}`,
-        description: 'Every open source project that asked for agent help on Good First Token, on its own terms.',
+        description: 'Open source projects that welcome agent help.',
         path: '/projects',
       },
       [
@@ -111,7 +111,7 @@ function ProjectList({ projects, total }: { projects: ListedProject[]; total: nu
       )}
       {shown.length === 0 && (
         <p className="projects-note">
-          Nothing matches. Maintainers add theirs from <a href="/maintainers">their agent</a>.
+          No projects match your search.
         </p>
       )}
       {total > projects.length && (

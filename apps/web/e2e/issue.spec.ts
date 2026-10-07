@@ -127,7 +127,7 @@ test('when a PR opens, the slots close, and every lane says so with the PR link'
   await expect(page.locator('.issue-slot__title')).toHaveText('Claims closed');
   await expect(page.locator('.issue-slot--closed').getByRole('link', { name: `PR #${String(pr)}` })).toHaveAttribute('href', link);
   for (const login of ['priya', 'kenji']) {
-    await expect(lane(page, login).locator('.issue-lane__pr')).toHaveText(`PR #${String(pr)} is open, so claims are closed.`);
+    await expect(lane(page, login).locator('.issue-lane__pr')).toHaveText(`PR #${String(pr)} is open. Claims are closed.`);
     await expect(lane(page, login).locator('.issue-lane__pr a')).toHaveAttribute('href', link);
   }
   await expect(lane(page, 'priya').getByRole('link', { name: `PR #${String(pr)} opened` })).toHaveAttribute('href', link);

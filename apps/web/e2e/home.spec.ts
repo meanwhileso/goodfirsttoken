@@ -131,7 +131,7 @@ test.describe('the prompt', () => {
 
     await page.locator('.open-in').getByRole('button', { name: 't3 code' }).click();
 
-    await expect(page.locator('.open-in').getByRole('status')).toHaveText('Prompt copied. Opening T3 Code, paste it in.');
+    await expect(page.locator('.open-in').getByRole('status')).toHaveText('Prompt copied. Paste it into T3 Code when it opens.');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(PROMPT);
     expect(opened).toEqual([]);
     const request = page.waitForRequest((r) => r.url().startsWith('t3code:'));
@@ -139,13 +139,13 @@ test.describe('the prompt', () => {
     expect((await request).url()).toBe('t3code://');
   });
 
-  test('the setup, agent by agent, stays shut until opened, and copies the Claude Code commands', async ({ page, context }) => {
+  test('the agent setup stays shut until opened, and copies the Claude Code commands', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await openHome(page);
     const setup = page.locator('.home-setup');
     await expect(setup.locator('dt').first()).toBeHidden();
 
-    await setup.getByText('setup, agent by agent').click();
+    await setup.getByText('set up your agent').click();
 
     await expect(setup.locator('dt')).toHaveText(['claude code', 'codex', 'opencode', 'cursor', 'grok bot', 't3 code']);
     await setup.getByRole('button', { name: 'Copy the Claude Code marketplace command' }).click();

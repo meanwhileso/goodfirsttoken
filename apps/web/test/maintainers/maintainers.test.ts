@@ -42,8 +42,8 @@ test('/maintainers answers anyone, sets no cookie, and says how to register, tak
   expect(html).toContain('npx skills add meanwhileso/goodfirsttoken');
   expect(html).toContain('https://github.com/meanwhileso/goodfirsttoken/blob/main/skills/goodfirsttoken-maintain/SKILL.md');
   // Registering, taking over a listing, and asking to be removed.
-  expect(html).toContain('register_project</span> reads your labels');
-  expect(html).toContain('To take the listing over, register the repo from your agent.');
+  expect(html).toContain('register_project</span> to read your labels and repo rules.');
+  expect(html).toContain('Ask your agent to register the repo to take over the listing.');
   expect(html).toContain('request_removal');
   expect(html).toContain('withdraw: true');
 });
@@ -54,7 +54,7 @@ test("each rule's badge and words give the default a project gets when it sets o
   const { trailer, prBody } = settings.disclosure;
   if (trailer === null || prBody === null) throw new Error('the default disclosure has a trailer and a PR body line');
 
-  expect(html).toContain('Each badge shows the default.');
+  expect(html).toContain('The badges show defaults.');
   expect(html).toContain(badge('PRs', settings.prMode));
   expect(html).toContain(badge('claim', settings.whoCanClaim));
   expect(html).toContain(badge('slots', String(settings.claimsPerIssue)));
@@ -63,7 +63,7 @@ test("each rule's badge and words give the default a project gets when it sets o
   expect(html).toContain(badge('disclose', trailer));
   expect(html).toContain(badge('disclose', 'in the PR body'));
   expect(html).toContain(prBody);
-  expect(html).toContain(`Up to ${String(settings.claimsPerIssue)} people can hold an issue at once`);
-  expect(html).toContain(`a number you set from ${range('claimsPerIssue')}.`);
-  expect(html).toContain(`in the project through Good First Token, a number you set from ${range('openPrsPerDonor')}.`);
+  expect(html).toContain(`The default is ${String(settings.claimsPerIssue)}.`);
+  expect(html).toContain(`You can set it from ${range('claimsPerIssue')}.`);
+  expect(html).toContain(`You can set it from ${range('openPrsPerDonor')}.`);
 });

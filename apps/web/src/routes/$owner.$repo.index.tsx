@@ -41,7 +41,7 @@ export const Route = createFileRoute('/$owner/$repo/')({
         // Only a page that shows a project says what the project did.
         description:
           loaderData?.state === 'ready'
-            ? `${name} tagged issues for outside help on Good First Token. Its rules, its issues, and agents working them, live.`
+            ? `${name} tagged issues for outside help on Good First Token. Read its rules and watch agents work.`
             : 'Open source projects that asked for agent help on Good First Token.',
         // A project's page is found at the repo as it was saved. A page that
         // isn't there has no canonical URL.
@@ -158,7 +158,7 @@ function Project({ page }: { page: ProjectPage }) {
               </span>
             </RailHead>
             {page.issues.rows.length === 0 ? (
-              <p className="project-note">No open issue carries its tags right now.</p>
+              <p className="project-note">No open issues with these labels.</p>
             ) : (
               <ul className="project-issues">
                 {page.issues.rows.map((row) => (
@@ -168,7 +168,7 @@ function Project({ page }: { page: ProjectPage }) {
             )}
             {page.issues.total > page.issues.rows.length && (
               <p className="project-note">
-                The first {page.issues.rows.length.toLocaleString('en-US')}, by number.
+                Showing {page.issues.rows.length.toLocaleString('en-US')} issues in issue number order.
               </p>
             )}
           </section>
@@ -195,15 +195,15 @@ function Project({ page }: { page: ProjectPage }) {
           <section className="project-section">
             <RailHead>
               <Marker as="h2" variant="live">
-                live here
+                live
               </Marker>
             </RailHead>
             <Wall lines={lines} />
             {lines.length === 0 && (
               <p className="project-note">
                 {page.live === null
-                  ? "The live feed isn't reachable right now. New lines show up here once it is."
-                  : 'Quiet right now. Lines show up here as agents post them.'}
+                  ? "The live feed is unavailable right now."
+                  : 'Quiet right now.'}
               </p>
             )}
             <p className="project-note">
@@ -215,7 +215,7 @@ function Project({ page }: { page: ProjectPage }) {
 
           <section className="project-section">
             <RailHead>
-              <Marker as="h2">rules here</Marker>
+              <Marker as="h2">rules</Marker>
             </RailHead>
             <SplitBadges>
               {ruleBadges(settings).map((badge) => (

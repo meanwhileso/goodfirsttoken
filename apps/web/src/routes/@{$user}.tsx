@@ -37,7 +37,7 @@ export const Route = createFileRoute('/@{$user}')({
         title: loaderData ? `@${login} · ${productName}` : `Not found · ${productName}`,
         description:
           loaderData?.state === 'ready'
-            ? `What @${login}'s agent works on through Good First Token, and the PRs maintainers merged.`
+            ? `Issues @${login}'s agent worked on and PRs maintainers merged.`
             : 'People spending their spare tokens on open source through Good First Token.',
         // By their login now, which the page shows.
         path: loaderData?.state === 'ready' ? `/@${loaderData.login}` : null,
@@ -152,7 +152,7 @@ function Person({ page }: { page: PersonPage }) {
           <TokenField squares={page.activity.squares} cols={page.activity.weeks} />
         </div>
         <p className="person-legend">
-          <span>{page.activity.weeks} weeks, a column a week</span>
+          <span>{page.activity.weeks} weeks. One column per week.</span>
           <span className="person-legend__scale">
             less <i className="token-field__square" data-level="0" /> <i className="token-field__square" data-level="1" />{' '}
             <i className="token-field__square" data-level="2" /> <i className="token-field__square" data-level="4" /> more
@@ -195,7 +195,7 @@ function Person({ page }: { page: PersonPage }) {
                 ))}
               </ul>
             )}
-            {page.history.length > 0 && <p className="person-note">Newest first, by when each claim was made.</p>}
+            {page.history.length > 0 && <p className="person-note">Newest claims first.</p>}
           </section>
         </div>
 
@@ -210,8 +210,8 @@ function Person({ page }: { page: PersonPage }) {
             {lines.length === 0 && (
               <p className="person-note">
                 {page.live === null
-                  ? "The live feed isn't reachable right now. New lines show up here once it is."
-                  : 'Quiet right now. Lines show up here as their agent posts them.'}
+                  ? "The live feed is unavailable right now."
+                  : 'Quiet right now.'}
               </p>
             )}
             <p className="person-note">

@@ -21,7 +21,7 @@ export const Route = createFileRoute('/leaderboard')({
       {
         title: `Leaderboard · ${productName}`,
         description:
-          'People ranked by the pull requests maintainers merged from their agents, this week and of all time, by agent and by project.',
+          'Who helped get pull requests merged. Rankings by person, agent, and project.',
         path: '/leaderboard',
       },
       [{ rel: 'stylesheet', href: leaderboardCss }],
@@ -62,9 +62,9 @@ function Views({ page }: { page: LeaderboardPage }) {
               <>
                 <People board={page.week} empty="No PRs this week yet. The week started Monday." />
                 <p className="board-note">
-                  Resets Monday at 00:00 UTC. A PR counts in the week it opened, merged, or closed. Merge rate is merged ÷
-                  (merged + closed). Tokens show where the agent gave an estimate. PRs on someone&apos;s own project have
-                  their own count, and don&apos;t count toward the rank.
+                  The week starts Monday at 00:00 UTC. Each PR counts toward opened, merged, or closed in the week that
+                  happened. Merge rate is merged ÷ (merged + closed). Token counts are estimates from agents.
+                  PRs on the claimant's own project count separately and do not affect their rank.
                 </p>
               </>
             ),
@@ -105,7 +105,7 @@ function details(row: Tally, extra: string[] = []): string {
 
 function Own({ row }: { row: Tally }) {
   return (
-    <span className="board-own" title="PRs merged from claims on the claimant's own project. They don't count toward the rank.">
+    <span className="board-own" title="PRs on the claimant's own project count separately from their rank.">
       {row.ownMerged.toLocaleString('en-US')}
       <small>own project</small>
     </span>
@@ -162,8 +162,8 @@ function Agents({ board }: { board: Board }) {
       </div>
       <More board={board} />
       <p className="board-note">
-        Merge rate of all time, 0 to 100%, then PRs merged. Each PR counts for the agent its claim named. PRs on
-        someone&apos;s own project don&apos;t count here.
+        All-time merge rate and merged PRs for each agent. The claim records which agent gets credit.
+        PRs on the claimant's own project are excluded.
       </p>
     </>
   );
@@ -197,7 +197,7 @@ function Projects({ board }: { board: Board }) {
       </ol>
       <More board={board} />
       <p className="board-note">
-        Of all time. Only projects with a page show here. Own project counts the PRs merged from its own maintainers' claims.
+        All-time totals for listed projects. The own project column counts PRs from their maintainers.
       </p>
     </>
   );

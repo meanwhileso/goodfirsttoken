@@ -53,7 +53,7 @@ function ConnectAgent() {
               <span className="strong">{page.clientName}</span> wants to act as you on {productName}.
             </p>
             <p className="account__note">
-              An agent names itself when it connects, so {productName} can&apos;t check that name. Its access goes to{' '}
+              The agent provides this name. {productName} cannot verify it. Access goes to{' '}
               <span className="mono strong">{page.sendsTo}</span>.
             </p>
             {page.local && (
@@ -62,8 +62,8 @@ function ConnectAgent() {
               </p>
             )}
             <p className="account__note">
-              After you sign in with GitHub, {productName} acts for it with your token, which can fork a public repo,
-              commit to the fork, and open a pull request. It can&apos;t read private repos.
+              Signing in with GitHub lets this agent fork public repos, commit to forks, and open pull requests
+              through {productName}. It cannot read private repos.
             </p>
             <form method="post" action={AUTHORIZE_PATH} className="cluster">
               <input type="hidden" name="handle" value={page.handle} />

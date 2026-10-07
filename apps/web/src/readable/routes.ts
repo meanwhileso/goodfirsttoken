@@ -183,7 +183,7 @@ export const MARKDOWN_ROUTES: readonly MarkdownRoute[] = [
         404,
         named === null
           ? notFoundMarkdown('Not found', 'There is no issue page at this address.')
-          : notFoundMarkdown('Not on Good First Token', `No project on Good First Token tagged ${named}, and no one has claimed it.`),
+          : notFoundMarkdown('Not on Good First Token', `No listed project tagged ${named}. No one has claimed it.`),
       );
     },
   },

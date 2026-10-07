@@ -70,8 +70,8 @@ const WAITS_BECAUSE: Record<ReviewReason, string> = {
   pr_exists: 'A PR was already open on the issue when it was submitted.',
   workflow_files: 'It changes a GitHub Actions workflow file.',
   too_many_files:
-    "Someone else pushed to its branch, and GitHub's comparison lists too many files to check them all for workflow files.",
-  comparison_unread: "Someone else pushed to its branch, and GitHub gave no comparison to check for workflow files.",
+    "Someone else pushed to the branch. GitHub listed too many changed files to check for workflow changes.",
+  comparison_unread: "Someone else pushed to the branch. GitHub did not return a diff to check for workflow changes.",
   reviewed_mode: 'The project asks you to read the diff before its PR opens.',
   person_written_description: 'The project asks you to write the PR description.',
   open_pr_cap: 'You had as many open PRs in the project as it allows.',
@@ -110,10 +110,10 @@ function DescriptionField() {
         required
         maxLength={MAX_PR_DESCRIPTION}
         aria-describedby={note}
-        placeholder="What changed, and why, in your own words."
+        placeholder="Describe what changed and why."
       />
       <span id={note} className="mono small faint">
-        This project asks you to write it. It goes in the PR as you wrote it.
+        The project requires a description from you. Your words go in the PR unchanged.
       </span>
     </div>
   );
@@ -191,8 +191,7 @@ function ReadyToOpen({ queue, now }: { queue: Queue; now: number }) {
       </RailHead>
       {queue.state === 'sign_in_again' ? (
         <p className="account__empty">
-          GitHub no longer takes the token this site holds for you, so your queue can&apos;t be read. Sign out and in
-          again to see it.
+          GitHub rejected your saved token. Sign out and sign in again to load your queue.
         </p>
       ) : queue.state === 'unreadable' ? (
         <p className="account__empty">Your queue can&apos;t be read right now. Load the page again in a minute.</p>
@@ -206,7 +205,7 @@ function ReadyToOpen({ queue, now }: { queue: Queue; now: number }) {
         </ul>
       )}
       <p className="mono small faint account__note">
-        {`Work your agent submits waits here until you open its PR, for ${String(REVIEW_WINDOW_MS / DAY)} days after its first submit.`}
+        {`Open the PR within ${String(REVIEW_WINDOW_MS / DAY)} days of the first submission.`}
       </p>
     </RailSection>
   );
@@ -291,7 +290,7 @@ function InterestsSection({ interests }: { interests: Interests | null }) {
         </form>
       </details>
       <p className="small muted account__note">
-        Your agent&apos;s suggestions rank by these. Separate each one with a comma.
+        Your agent uses these interests to suggest issues. Separate entries with commas.
       </p>
     </section>
   );
@@ -333,7 +332,7 @@ function Me() {
                 <Button type="submit">Sign out</Button>
               </form>
               <p className="small muted account__note">
-                Signing out revokes the GitHub token this site holds for you, and signs you out in every browser.
+                Signing out revokes your saved GitHub token. It signs you out in every browser.
               </p>
             </section>
           </aside>

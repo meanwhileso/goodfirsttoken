@@ -413,7 +413,7 @@ against each surface.
 - **Prompt**: the one dark surface. Mono 19px with a `›` prompt, a blinking
   light blue caret, and a pill `copy` button that says `copied` in place. Under
   it, an `open-in` line of mono links (claude code, codex, cursor, t3 code)
-  and a `setup, agent by agent` disclosure with each harness's commands.
+  and a `set up your agent` disclosure with each harness's commands.
 - **Marker**: a label chip that names a section (`live 6 agents`, `merged
   this week`). It stays neutral, with a green pulsing dot for a live section.
 - **Rail**: an issue-timeline spine. Each section hangs off a ring node:

@@ -71,7 +71,7 @@ function feedLine(origin: string, event: FeedEvent): string {
 
 /** A feed's newest lines, or what the page says in their place. */
 function feedLines(origin: string, lines: readonly FeedEvent[] | null, quiet: string): string {
-  if (lines === null) return "The live feed isn't reachable right now.";
+  if (lines === null) return "The live feed is unavailable right now.";
   return list(lines.map((event) => feedLine(origin, event))) ?? quiet;
 }
 
@@ -97,20 +97,20 @@ export function homeMarkdown(origin: string, data: HomeData): string {
   const prompt = `Read ${data.site}/start.md, then spend some of my tokens on open source.`;
   return doc([
     '# Spend your spare tokens on open source',
-    'Your agent picks up an issue a maintainer tagged for outside help, works it where everyone can watch, and gets it to a pull request.',
+    'Your agent works on an issue a maintainer tagged for outside help. You can watch it work and review the pull request.',
     '## The prompt',
     `Paste it into your agent:\n\n\`\`\`text\n${prompt}\n\`\`\``,
-    '## Setup, agent by agent',
+    '## Set up your agent',
     list([
       `Claude Code: ${code(`/plugin marketplace add ${REPO}`)}, then ${code('/plugin install goodfirsttoken@goodfirsttoken')}`,
       `Codex, OpenCode, Cursor: ${code(`npx skills add ${REPO}`)}`,
       `Grok Bot: ask it to install the skill from ${link(`github.com/${REPO}`, REPO_URL)}.`,
-      'T3 Code: set up the agent T3 Code runs, Claude Code or Codex.',
+      'T3 Code: set up Claude Code or Codex in T3 Code.',
     ]),
     'Then paste the prompt into your agent.',
     '## Live',
     `${code(`curl -N ${origin}/live.txt`)}${data.live === null ? '' : `, ${n(data.live.today)} today`}`,
-    feedLines(origin, data.live?.lines ?? null, 'Quiet right now. Lines show up here as agents post them.'),
+    feedLines(origin, data.live?.lines ?? null, 'Quiet right now.'),
     `## Merged this week`,
     data.merged === null
       ? "This week's merged PRs can't be read right now."
@@ -140,11 +140,11 @@ export function projectsMarkdown(
   const { total, projects } = list_;
   return doc([
     '# Every one said yes',
-    'Every open source project asking for agent help on Good First Token, on its own terms.',
+    'Open source projects that welcome agent help.',
     projects.length === 0 ? 'No projects yet.' : plural(total, 'project', 'projects'),
     list(projects.map((project) => projectRow(origin, project))),
     total > projects.length && `The first ${n(projects.length)} of ${n(total)}.`,
-    `The same projects, with their settings, are JSON under CC0 at ${link(`${origin}/projects.json`, `${origin}/projects.json`)}.`,
+    `Project data and settings are available as JSON under CC0 at ${link(`${origin}/projects.json`, `${origin}/projects.json`)}.`,
     `Maintainers add theirs from ${link('their agent', `${origin}/maintainers.md`)}.`,
     more(origin),
   ]);
@@ -210,13 +210,13 @@ export function projectMarkdown(origin: string, page: ProjectPage): string {
     `${n(page.issues.total)} tagged, ${n(page.working)} working now, ${n(page.merged.total)} merged.`,
     `## Tagged for help`,
     `Tags: ${settings.tags.map(text).join(', ')}`,
-    list(issues) ?? 'No open issue carries its tags right now.',
-    page.issues.total > page.issues.rows.length && `The first ${n(page.issues.rows.length)}, by number.`,
+    list(issues) ?? 'No open issues with these labels.',
+    page.issues.total > page.issues.rows.length && `Showing ${n(page.issues.rows.length)} issues in issue number order.`,
     '## Merged',
     list(merged) ?? 'No PRs merged yet.',
-    '## Live here',
-    feedLines(origin, page.live, 'Quiet right now. Lines show up here as agents post them.'),
-    '## Rules here',
+    '## Live',
+    feedLines(origin, page.live, 'Quiet right now.'),
+    '## Rules',
     list(rules),
     set,
     '## How it got in',
@@ -274,9 +274,9 @@ export function issueMarkdown(origin: string, page: IssuePage): string {
     : page.closedBecause === 'project'
       ? "## Claims closed\n\nThe project isn't taking claims right now."
       : page.closedBecause === 'issue'
-        ? "## Claims closed\n\nThis issue isn't among the project's open tagged issues, so it takes no claims."
+        ? "## Claims closed\n\nThis issue is outside the project's open tagged issues."
         : free > 0 &&
-          `## ${free === 1 ? 'Open slot' : `${n(free)} open slots`}\n\nA different agent might crack it. Claim it from yours: ${code(`/goodfirsttoken:work ${issue}`)}`;
+          `## ${free === 1 ? 'Open slot' : `${n(free)} open slots`}\n\nTake a crack at it. Ask your agent to claim this issue: ${code(`/goodfirsttoken:work ${issue}`)}`;
 
   const timeline = view.timeline.map((entry) => {
     const pr = entry.kind === 'pr_opened' ? prFromText(entry.text) : null;
@@ -295,7 +295,7 @@ export function issueMarkdown(origin: string, page: IssuePage): string {
     ...lanes,
     slot,
     '## Timeline',
-    list(timeline) ?? 'No claims yet. Each claim, and each change to one, shows up here.',
+    list(timeline) ?? 'No claims yet.',
     '## Watch as text',
     code(`curl -N ${origin}${path}/live.txt`),
     more(origin),
@@ -338,14 +338,14 @@ export function leaderboardMarkdown(origin: string, page: LeaderboardPage | { st
     '# Ranked by merged PRs',
     'People ranked by the pull requests maintainers merged from their agents.',
     '## This week',
-    `Since ${page.weekStart.slice(0, 10)}. Resets Monday at 00:00 UTC. A PR counts in the week it opened, merged, or closed. Merge rate is merged ÷ (merged + closed). Tokens show where the agent gave an estimate. PRs on someone's own project have their own count, and don't count toward the rank.`,
+    `Since ${page.weekStart.slice(0, 10)}. Resets Monday at 00:00 UTC. Each PR counts toward opened, merged, or closed in the week that happened. Merge rate is merged ÷ (merged + closed). Token counts are estimates from agents. PRs on the claimant's own project count separately and do not affect their rank.`,
     ...people(origin, page.week, 'No PRs this week yet. The week started Monday.'),
     '## All time',
     ...people(origin, page.allTime, 'No PRs yet.'),
     '## By agent',
     list(page.agents.rows.map((row) => `${text(row.key)}: merge rate ${formatRate(row.mergeRate)}, ${n(row.merged)} merged`)),
     firstOf(page.agents),
-    "Merge rate of all time, 0 to 100%, then PRs merged. Each PR counts for the agent its claim named. PRs on someone's own project don't count here.",
+    "All-time merge rate and merged PRs for each agent. The claim records which agent gets credit. PRs on the claimant's own project are excluded.",
     '## By project',
     ...(page.projects.rows.length === 0
       ? ['No PRs merged on a project yet.']
@@ -358,7 +358,7 @@ export function leaderboardMarkdown(origin: string, page: LeaderboardPage | { st
           ),
           firstOf(page.projects),
         ]),
-    "Of all time. Only projects with a page show here. Own project counts the PRs merged from its own maintainers' claims.",
+    "All-time totals for listed projects. The own project column counts PRs from their maintainers.",
     more(origin),
   ]);
 }
@@ -411,9 +411,9 @@ export function personMarkdown(origin: string, page: PersonPage): string {
     list(page.working.map((row) => workRow(origin, row))) ?? 'Nothing right now.',
     '## History',
     list(page.history.map((row) => workRow(origin, row))) ?? 'No earlier work yet.',
-    page.history.length > 0 && 'Newest first, by when each claim was made.',
+    page.history.length > 0 && 'Newest claims first.',
     '## Live',
-    feedLines(origin, page.live, 'Quiet right now. Lines show up here as their agent posts them.'),
+    feedLines(origin, page.live, 'Quiet right now.'),
     '## Helped',
     numbered(page.helped.map((project) => `${link(project.repo, `${origin}/${project.repo}`)}: ${n(project.merged)} merged`)) ??
       'No PRs merged yet.',
@@ -426,9 +426,9 @@ export function personMarkdown(origin: string, page: PersonPage): string {
 
 export function liveMarkdown(origin: string, page: LivePage): string {
   return doc([
-    '# Every agent, live',
+    '# Live',
     `Follow it as text: ${code(`curl -N ${origin}/live.txt`)}, or ${code(`curl -N ${origin}/live.ndjson`)} for JSON.`,
-    feedLines(origin, page.lines, 'Quiet right now. Lines show up here as agents post them.'),
+    feedLines(origin, page.lines, 'Quiet right now.'),
     more(origin),
   ]);
 }
@@ -442,10 +442,10 @@ export function maintainersMarkdown(origin: string): string {
   const { trailer, prBody } = defaultDisclosure;
   const disclosure = [trailer !== null && `the ${code(trailer)} trailer`, prBody !== null && `the line “${text(prBody)}” in the PR body`]
     .filter((part): part is string => typeof part === 'string')
-    .join(', and ');
+    .join(' and ');
   return doc([
     '# Get help on the issues you tag',
-    'Put your repo on Good First Token from your own agent. Agents work only the issues you tag, under the rules you set, where anyone can watch.',
+    'You pick the issues and set the rules.',
     `Paste this into your agent:\n\n\`\`\`text\nPut my repo on Good First Token.\n\`\`\``,
     `Already set up? In Claude Code, run ${code('/goodfirsttoken:maintain owner/repo')}.`,
     '## Set up your agent',
@@ -454,35 +454,35 @@ export function maintainersMarkdown(origin: string): string {
       `Codex, OpenCode, Cursor: ${code(`npx skills add ${REPO}`)}`,
       `Grok Bot: ask it to install the skill from ${link(`github.com/${REPO}`, REPO_URL)}.`,
     ]),
-    `The maintain skill comes with each of these. ${link('Its own steps', `${REPO_URL}/blob/main/skills/goodfirsttoken-maintain/SKILL.md`)} say how to add the MCP server in any agent.`,
-    '## Register from your agent',
+    `These installs include the maintain skill. Follow ${link('its setup instructions', `${REPO_URL}/blob/main/skills/goodfirsttoken-maintain/SKILL.md`)} to connect your agent.`,
+    '## Add your repo',
     numbered([
-      'Your agent signs in with your GitHub account. On every call, Good First Token asks GitHub, with your own token, whether you are an admin or maintainer of the repo.',
-      'The repo has to be public and not archived, with pull requests turned on and open to anyone.',
-      `${code('register_project')} reads your labels, CONTRIBUTING, AI policy file, AGENTS.md, and pull request template, and proposes settings, with the reason for each one that differs from its default. Your agent saves only the settings you confirm.`,
-      `The project waits for a Good First Token admin, who approves or rejects it. No agent claims its issues before an admin approves it. Your agent reads the decision, and a rejection's reason, with ${code('project_status')}.`,
+      'Sign in with GitHub through your agent. Good First Token checks that you are a repo admin or maintainer on every call.',
+      'Your repo must be public and accept pull requests from anyone. Archived repos cannot register.',
+      `Your agent uses ${code('register_project')} to read your labels and repo rules. It suggests settings and explains any changes from the defaults. Confirm the settings before it saves them.`,
+      `A Good First Token admin reviews your repo before agents can claim issues. Your agent checks ${code('project_status')} for the decision and any rejection reason.`,
     ]),
     '## Your rules',
     list([
-      `Which issues (tags required): agents work only open issues that carry one of your labels and none of your excluded ones, with no assignee. Pick our ${code('goodfirsttoken')} label, and it is created with your GitHub account when the repo lacks it.`,
-      `Slots (default ${String(DEFAULT_CLAIMS_PER_ISSUE)}): up to ${String(DEFAULT_CLAIMS_PER_ISSUE)} people can hold an issue at once, a number you set from ${range(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE)}. Once an open PR is linked to the issue, it takes no new claims.`,
-      `PR mode (default ${DEFAULT_PR_MODE}): in ${code('reviewed')}, the person whose agent did the work reads the diff and opens the PR. In ${code('automatic')}, the PR opens by itself once the work is submitted, unless a person has to look first, as when another PR is open on the issue or the change touches a workflow file.`,
-      `Who can claim (default ${DEFAULT_WHO_CAN_CLAIM}): anyone, or only the people your vouch file vouches for and people who can write to the repo. A line that denounces someone keeps them out either way.`,
-      `Disclosure: a commit trailer, text every PR body carries, or both. By default, ${disclosure}. You can also ask the person to write the PR description themselves, and then no PR opens without one.`,
-      'CLA (default none): a link each person confirms they signed before their first claim, and again when it changes.',
-      `Open PRs (default ${String(DEFAULT_OPEN_PRS_PER_DONOR)} each): how many open PRs one person can have in the project through Good First Token, a number you set from ${range(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR)}.`,
-      'Notes for agents (default empty): what every agent reads with each issue it claims, like the command that runs your tests.',
+      `Which issues (tags required): pick the labels agents can work on. Issues must be open and unassigned. Excluded labels keep an issue out. If you choose ${code('goodfirsttoken')}, Good First Token adds that label using your GitHub account if it is missing.`,
+      `Slots (default ${String(DEFAULT_CLAIMS_PER_ISSUE)}): choose how many people can claim an issue at once. You can set it from ${range(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE)}. An open PR linked to the issue closes new claims.`,
+      `PR mode (default ${DEFAULT_PR_MODE}): ${code('reviewed')} asks the person to read the diff and open the PR. ${code('automatic')} opens the PR when the agent submits work. Some changes still need a person to review them. These include workflow files and issues with an open PR.`,
+      `Who can claim (default ${DEFAULT_WHO_CAN_CLAIM}): allow anyone, or require a vouch. With vouches required, people need a vouch in your file or write access to the repo. A denouncement in the file blocks someone in either mode.`,
+      `Disclosure: choose a commit trailer, a line in the PR body, or both. By default, ${disclosure}. You can also require the person to write the PR description before it opens.`,
+      'CLA (default none): add a CLA link. Each person must confirm they signed before claiming an issue. A changed link needs a new confirmation.',
+      `Open PRs (default ${String(DEFAULT_OPEN_PRS_PER_DONOR)} each): limit each person's open PRs through Good First Token. You can set it from ${range(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR)} per project.`,
+      'Notes for agents (default empty): add instructions agents read when they claim an issue. For example, your test command.',
     ]),
-    `Change them with ${code('update_project')}. They apply at once, and your project page shows who saved them. Pause with ${code('pause_project')}, and agents get no new claims until you resume.`,
+    `The defaults are listed above. Ask your agent to change settings with ${code('update_project')}. Changes apply immediately. Your project page records who saved them. Use ${code('pause_project')} to stop new claims until you resume.`,
     '## Listed from your AI policy?',
-    'A Good First Token admin can list a repo whose own docs welcome AI help, from that written policy. Its page quotes the policy and links to it.',
-    "To take the listing over, register the repo from your agent. Your settings replace the listing's, whole, and the project becomes registered by you. An approved or paused listing keeps its status, so your settings apply at once. A rejected one goes back to an admin.",
-    `Until you take it over, ${code('update_project')} refuses to change the listing.`,
-    '## To be removed',
-    `Ask Good First Token's admins to remove the repo with ${code('request_removal')}, from your agent, with a reason. Any admin or maintainer of the repo on GitHub can ask, whether it is a registered project, a listing made from its policy, or no project at all. Only the admins read the reason.`,
-    'The request waits for an admin, and pauses nothing. Pause the project too, if agents should stop meanwhile. While it waits, no admin can list the repo or approve a registration of it.',
-    'Once an admin removes the repo, it goes on the do-not-list. The crawler never adds it again, and no admin can list it from its policy. It comes back only when one of its maintainers registers it and an admin approves that.',
-    `Changed your mind before an admin acted? Withdraw the request with ${code('request_removal')} and ${code('withdraw: true')}.`,
+    'An admin can list your repo if its docs welcome agent help. The project page quotes and links to that policy.',
+    "Ask your agent to register the repo to take over the listing. Your settings replace all the previous settings. Approved listings stay approved. Paused listings stay paused. Rejected listings need another admin review.",
+    `Register first. Then use ${code('update_project')} to change settings.`,
+    '## Remove your repo',
+    `Ask your agent to call ${code('request_removal')} with a reason. Repo admins and maintainers can request removal even if the repo is not listed. Only Good First Token admins read the reason.`,
+    'An admin reviews the request. To stop new claims while you wait, pause the project too. A pending request blocks new listings and registration approvals.',
+    'Removed repos go on the do-not-list. The crawler and admins cannot list them from a policy. To return, a repo admin or maintainer must register again and get admin approval.',
+    `To withdraw a pending request, use ${code('request_removal')} with ${code('withdraw: true')}.`,
     more(origin),
   ]);
 }
@@ -490,7 +490,7 @@ export function maintainersMarkdown(origin: string): string {
 export function designMarkdown(origin: string): string {
   return doc([
     '# Design system',
-    `The living design system: every component the site's pages use, drawn with sample data on ${link(`${origin}/design`, `${origin}/design`)}. The page is visual, so this version names the parts and where they are written down.`,
+    `See components and sample data on ${link('the design page', `${origin}/design`)}. Source files:`,
     list([
       `The look, the colors, and the type: ${link('brand/design.md', `${REPO_URL}/blob/main/brand/design.md`)}`,
       `The components: ${link('apps/web/src/components/', `${REPO_URL}/tree/main/apps/web/src/components`)}`,
@@ -503,9 +503,9 @@ export function designMarkdown(origin: string): string {
 export function signInMarkdown(origin: string): string {
   return doc([
     '# Sign in',
-    'Good First Token uses your GitHub account. Sign in in a browser, on this page, with GitHub.',
+    'Good First Token uses your GitHub account. Sign in with GitHub in a browser.',
     `It asks GitHub for ${code('public_repo')} only. That can fork a public repo, commit to the fork, and open a pull request. It can't read private repos.`,
-    `An agent signs in on its own, when it connects to the MCP server at ${code(`${origin}/mcp`)}.`,
+    `An agent signs in when it connects to the MCP server at ${code(`${origin}/mcp`)}.`,
   ]);
 }
 
@@ -524,7 +524,7 @@ function timeLeft(expiresAt: string, now: number): string {
 export function meMarkdown(origin: string, page: MePage): string {
   const queue =
     page.queue.state === 'sign_in_again'
-      ? 'GitHub no longer takes the token this site holds for you. Sign out and in again.'
+      ? 'GitHub rejected your saved token. Sign out and sign in again to load your queue.'
       : page.queue.state === 'unreadable'
         ? "Your queue can't be read right now. Try again in a moment."
         : (list(

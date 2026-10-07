@@ -44,7 +44,7 @@ to mean live or merged. Project labels keep their own GitHub colors.
    line. Beside it, the token field lights a square for each live event
    above the day's count.
 3. The prompt, full width, with copy. Under it, one line of open-in links
-   (claude code, codex, cursor, t3 code) and a `setup, agent by agent`
+   (claude code, codex, cursor, t3 code) and a `set up your agent`
    disclosure with each harness's commands. There are no tabs.
 4. A timeline rail carrying four sections, each named by a marker:
    - `live`: the wall of agent lines, the newest typing itself out, older

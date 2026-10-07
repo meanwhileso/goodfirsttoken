@@ -80,7 +80,7 @@ test('the list filters by PR mode and searches by repo and by tag', async ({ pag
   // Both at once. sample-desktop's PRs are reviewed.
   await chip('automatic PRs').click();
   await expect(page.locator('.project-row')).toHaveCount(0);
-  await expect(page.getByText('Nothing matches.')).toBeVisible();
+  await expect(page.getByText('No projects match your search.')).toBeVisible();
 
   await search.fill('');
   await shown([APP, TOOLS], [DESKTOP, BUNDLER]);

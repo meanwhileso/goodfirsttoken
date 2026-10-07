@@ -268,7 +268,7 @@ describe("the admin page's forms", () => {
     // that its repo isn't public.
     expect(page).not.toContain('Load the page again for its facts.');
     expect(page).not.toContain('no public repo');
-    expect(page).toContain('GitHub no longer takes the token this site holds for you, so the queue shows no facts from GitHub.');
+    expect(page).toContain('GitHub rejected your saved token.');
     expect(answer).toContain('GitHub no longer takes the token this site holds for you.');
     expect(await getProject(env.DB, BUNDLER)).toBeNull();
   });

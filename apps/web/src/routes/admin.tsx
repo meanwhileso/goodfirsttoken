@@ -326,7 +326,7 @@ function Registration({ item, now, signInAgain }: { item: QueueItem; now: number
       <Block label="settings they chose">
         <SettingsBadges settings={item.settings} />
       </Block>
-      <Block label="notes every agent will read, word for word">
+      <Block label="notes for agents">
         {notes === '' ? <p className="small muted">No notes.</p> : <p className="admin-item__note">{notes}</p>}
       </Block>
       <form method="post" action={ADMIN_PATH}>
@@ -597,8 +597,7 @@ function Admin() {
         )}
         {page.signInAgain && (
           <p className="admin__notice">
-            GitHub no longer takes the token this site holds for you, so the queue shows no facts from GitHub. Sign out and
-            in again to see them.
+            GitHub rejected your saved token. Sign out and sign in again to load repo details.
           </p>
         )}
         <div className="admin__split">
@@ -612,7 +611,7 @@ function Admin() {
                   <Marker as="h2" count={sectionCount(page, 'removal', page.removals.length)}>
                     asking to be removed
                   </Marker>
-                  <span className="mono small faint">each asked by an admin or maintainer of the repo, as GitHub said</span>
+                  <span className="mono small faint">GitHub confirmed repo access for each requester</span>
                 </div>
                 <SectionItems page={page} kind="removal" count={page.removals.length} none="No requests to be removed.">
                   {page.removals.map((item) => (

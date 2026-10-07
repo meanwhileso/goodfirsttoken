@@ -37,7 +37,7 @@ export const Route = createFileRoute('/maintainers')({
       {
         title: `Maintainers · ${productName}`,
         description:
-          'Put your repo on Good First Token from your own agent. Agents work only the issues you tag, under the rules you set, where anyone can watch.',
+          'Get agent help on your repo. You pick the issues and set the rules.',
         path: '/maintainers',
       },
       [{ rel: 'stylesheet', href: maintainersCss }],
@@ -110,7 +110,7 @@ function DefaultDisclosure() {
   return (
     <>
       By default, {trailer !== null && <>the <span className="mono">{trailer}</span> trailer</>}
-      {trailer !== null && prBody !== null && ', and '}
+      {trailer !== null && prBody !== null && ' and '}
       {prBody !== null && <>the line <q>{prBody}</q> in the PR body</>}.
     </>
   );
@@ -130,8 +130,7 @@ function Maintainers() {
           Get help on the issues you <InlineLabel>tag</InlineLabel>
         </h1>
         <p className="lede maintainers__lede">
-          Put your repo on Good First Token from your own agent. Agents work only the issues you tag, under the rules you
-          set, where anyone can watch.
+          You pick the issues and set the rules.
         </p>
 
         <section className="maintainers__start" aria-label="Start">
@@ -151,34 +150,32 @@ function Maintainers() {
             </RailHead>
             <Install />
             <p className="maintainers__note">
-              The maintain skill comes with each of these. <a href={SKILL_URL}>Its own steps</a> say how to add the MCP
-              server in any agent.
+              These installs include the maintain skill. Follow <a href={SKILL_URL}>its setup instructions</a> to connect
+              your agent.
             </p>
           </RailSection>
 
           <RailSection node="live">
             <RailHead>
               <Marker as="h2">
-                register from your agent
+                add your repo
               </Marker>
             </RailHead>
             <ol className="maintainers-steps">
               <li>
-                Your agent signs in with your GitHub account. On every call, Good First Token asks GitHub, with your
-                own token, whether you are an admin or maintainer of the repo.
+                Sign in with GitHub through your agent. Good First Token checks that you are a repo admin or
+                maintainer on every call.
               </li>
               <li>
-                The repo has to be public and not archived, with pull requests turned on and open to anyone.
+                Your repo must be public and accept pull requests from anyone. Archived repos cannot register.
               </li>
               <li>
-                <span className="mono">register_project</span> reads your labels, CONTRIBUTING, AI policy file,
-                AGENTS.md, and pull request template, and proposes settings, with the reason for each one that differs
-                from its default. Your agent saves only the settings you confirm.
+                Your agent uses <span className="mono">register_project</span> to read your labels and repo rules.
+                It suggests settings and explains any changes from the defaults. Confirm the settings before it saves them.
               </li>
               <li>
-                The project waits for a Good First Token admin, who approves or rejects it. No agent claims its issues
-                before an admin approves it. Your agent reads the decision, and a rejection&apos;s reason, with{' '}
-                <span className="mono">project_status</span>.
+                A Good First Token admin reviews your repo before agents can claim issues. Your agent checks{' '}
+                <span className="mono">project_status</span> for the decision and any rejection reason.
               </li>
             </ol>
           </RailSection>
@@ -189,42 +186,42 @@ function Maintainers() {
             </RailHead>
             <ul className="maintainers-rules">
               <Rule name="Which issues" badges={[{ rule: 'tags', value: 'required', strict: true }]}>
-                Agents work only open issues that carry one of your labels and none of your excluded ones, with no
-                assignee. Pick our <span className="mono">goodfirsttoken</span> label, and it is created with your
-                GitHub account when the repo lacks it.
+                Pick the labels agents can work on. Issues must be open and unassigned. Excluded labels keep an issue
+                out. If you choose <span className="mono">goodfirsttoken</span>, Good First Token adds that label
+                using your GitHub account if it is missing.
               </Rule>
               <Rule name="Slots" badges={[{ rule: 'slots', value: String(DEFAULT_CLAIMS_PER_ISSUE) }]}>
-                {`Up to ${String(DEFAULT_CLAIMS_PER_ISSUE)} people can hold an issue at once, a number you set from ${range(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE)}.`}{' '}
-                Once an open PR is linked to the issue, it takes no new claims.
+                {`Choose how many people can claim an issue at once. The default is ${String(DEFAULT_CLAIMS_PER_ISSUE)}. You can set it from ${range(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE)}.`}{' '}
+                An open PR linked to the issue closes new claims.
               </Rule>
               <Rule name="PR mode" badges={[{ rule: 'PRs', value: DEFAULT_PR_MODE, strict: DEFAULT_PR_MODE === 'reviewed' }]}>
-                In <span className="mono">reviewed</span>, the person whose agent did the work reads the
-                diff and opens the PR. In <span className="mono">automatic</span>, the PR opens by itself once the work
-                is submitted, unless a person has to look first, as when another PR is open on the issue or the change
-                touches a workflow file.
+                <span className="mono">reviewed</span> asks the person to read the diff and open the PR.{' '}
+                <span className="mono">automatic</span> opens the PR when the agent submits work. Some changes still
+                need a person to review them. These include workflow files and issues with an open PR.
               </Rule>
               <Rule name="Who can claim" badges={[{ rule: 'claim', value: DEFAULT_WHO_CAN_CLAIM, strict: DEFAULT_WHO_CAN_CLAIM === 'vouched' }]}>
-                Anyone, or only the people your vouch file vouches for and people who can write to the repo. A line
-                that denounces someone keeps them out either way.
+                Allow anyone, or require a vouch. With vouches required, people need a vouch in your file or write
+                access to the repo. A denouncement in the file blocks someone in either mode.
               </Rule>
               <Rule name="Disclosure" badges={disclosureBadges}>
-                A commit trailer, text every PR body carries, or both. <DefaultDisclosure /> You can also ask the
-                person to write the PR description themselves, and then no PR opens without one.
+                Choose a commit trailer, a line in the PR body, or both. <DefaultDisclosure /> You can also require
+                the person to write the PR description before it opens.
               </Rule>
               <Rule name="CLA" badges={[{ rule: 'CLA', value: 'none' }]}>
-                A link each person confirms they signed before their first claim, and again when it changes.
+                Add a CLA link. Each person must confirm they signed before claiming an issue. A changed link needs
+                a new confirmation.
               </Rule>
               <Rule name="Open PRs" badges={[{ rule: 'open PRs each', value: String(DEFAULT_OPEN_PRS_PER_DONOR) }]}>
-                {`How many open PRs one person can have in the project through Good First Token, a number you set from ${range(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR)}.`}
+                {`Limit each person's open PRs through Good First Token. The default is ${String(DEFAULT_OPEN_PRS_PER_DONOR)} per project. You can set it from ${range(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR)}.`}
               </Rule>
               <Rule name="Notes for agents" badges={[{ rule: 'notes', value: 'empty' }]}>
-                What every agent reads with each issue it claims, like the command that runs your tests.
+                Add instructions agents read when they claim an issue. For example, your test command.
               </Rule>
             </ul>
             <p className="maintainers__note">
-              Each badge shows the default. Change them with <span className="mono">update_project</span>. They apply
-              at once, and your project page shows who saved them. Pause with{' '}
-              <span className="mono">pause_project</span>, and agents get no new claims until you resume.
+              The badges show defaults. Ask your agent to change settings with <span className="mono">update_project</span>.
+              Changes apply immediately. Your project page records who saved them. Use{' '}
+              <span className="mono">pause_project</span> to stop new claims until you resume.
             </p>
           </RailSection>
 
@@ -234,43 +231,40 @@ function Maintainers() {
             </RailHead>
             <div className="maintainers-prose">
               <p>
-                A Good First Token admin can list a repo whose own docs welcome AI help, from that written policy. Its
-                page quotes the policy and links to it.
+                An admin can list your repo if its docs welcome agent help. The project page quotes and links to
+                that policy.
               </p>
               <p>
-                To take the listing over, register the repo from your agent. Your settings replace the listing&apos;s,
-                whole, and the project becomes registered by you. An approved or paused listing keeps its status, so
-                your settings apply at once. A rejected one goes back to an admin.
+                Ask your agent to register the repo to take over the listing. Your settings replace all the previous
+                settings. Approved listings stay approved. Paused listings stay paused. Rejected listings need another
+                admin review.
               </p>
               <p>
-                Until you take it over, <span className="mono">update_project</span> refuses to change the listing.
+                Register first. Then use <span className="mono">update_project</span> to change settings.
               </p>
             </div>
           </RailSection>
 
           <RailSection>
             <RailHead>
-              <Marker as="h2">to be removed</Marker>
+              <Marker as="h2">remove your repo</Marker>
             </RailHead>
             <div className="maintainers-prose">
               <p>
-                Ask Good First Token&apos;s admins to remove the repo with{' '}
-                <span className="mono">request_removal</span>, from your agent, with a reason. Any admin or maintainer
-                of the repo on GitHub can ask, whether it is a registered project, a listing made from its policy, or
-                no project at all. Only the admins read the reason.
+                Ask your agent to call <span className="mono">request_removal</span> with a reason. Repo admins and
+                maintainers can request removal even if the repo is not listed. Only Good First Token admins read the reason.
               </p>
               <p>
-                The request waits for an admin, and pauses nothing. Pause the project too, if agents should stop
-                meanwhile. While it waits, no admin can list the repo or approve a registration of it.
+                An admin reviews the request. To stop new claims while you wait, pause the project too. A pending
+                request blocks new listings and registration approvals.
               </p>
               <p>
-                Once an admin removes the repo, it goes on the do-not-list. The crawler never adds it again, and no
-                admin can list it from its policy. It comes back only when one of its maintainers registers it and an
-                admin approves that.
+                Removed repos go on the do-not-list. The crawler and admins cannot list them from a policy. To return,
+                a repo admin or maintainer must register again and get admin approval.
               </p>
               <p>
-                Changed your mind before an admin acted? Withdraw the request with{' '}
-                <span className="mono">request_removal</span> and <span className="mono">withdraw: true</span>.
+                To withdraw a pending request, use <span className="mono">request_removal</span> with{' '}
+                <span className="mono">withdraw: true</span>.
               </p>
             </div>
           </RailSection>
