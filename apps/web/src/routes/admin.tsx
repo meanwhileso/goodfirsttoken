@@ -1,5 +1,6 @@
 import {
   ADMIN_QUEUE_PAGE,
+  crawlPriorityReasonText,
   doNotListNote,
   moreRemovalsWithdrawnNote,
   productName,
@@ -234,6 +235,35 @@ function RemovalWaitsNote({ item }: { item: QueueItem }) {
   );
 }
 
+function DiscoveryEvidence({ item }: { item: QueueItem }) {
+  const evidence = item.evidence;
+  if (evidence == null) return null;
+  return (
+    <Block label="discovery evidence">
+      <p className="small strong">{item.priority?.qualifies ? 'Discovery priority qualifies.' : 'Discovery priority does not qualify.'}</p>
+      {item.priority && item.priority.reasons.length > 0 && <p className="small muted">{item.priority.reasons.map((reason) => crawlPriorityReasonText[reason]).join(' ')}</p>}
+      <p className="small">Review AI policy separately.</p>
+      <p className="small">
+        @{evidence.maintainerGitHubLogin}, {evidence.role}.{' '}
+        <a href={evidence.roleSourceUrl}>role source</a>{' · '}
+        <a href={evidence.identitySourceUrl}>identity source</a>
+      </p>
+      <p className="small">
+        <a href={evidence.postUrl}>@{evidence.xHandle}&apos;s {evidence.postKind} post</a>{' · '}
+        {evidence.publishedAt}{' · '}{evidence.timePrecision === 'date' ? 'date only, UTC midnight' : 'exact UTC'}
+      </p>
+      <p className="mono small muted">
+        {evidence.stars.toLocaleString('en-US')} stars · {evidence.public ? 'public' : 'private'} · {evidence.archived ? 'archived' : 'unarchived'}<br />
+        pushed {evidence.pushedAt}<br />
+        metadata checked {evidence.metadataCheckedAt}<br />
+        role and activity checked {evidence.evidenceCheckedAt}<br />
+        verifier GitHub ID {evidence.verifierGitHubId}
+      </p>
+      {evidence.note && <Quote>{evidence.note}</Quote>}
+    </Block>
+  );
+}
+
 function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; signInAgain: boolean }) {
   const titleId = useId();
   const tagsId = useId();
@@ -249,6 +279,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         <span className="mono small muted">found {span(item.requestedAt, now)} ago</span>
       </div>
       <Facts item={item} now={now} signInAgain={signInAgain} />
+      <DiscoveryEvidence item={item} />
       {policy && (
         <Quote>
           &ldquo;{policy.quote}&rdquo;{' '}

@@ -5,6 +5,8 @@ import {
   queuePlaceText,
   readQueuePlace,
   validate,
+  qualifyCrawlPriority,
+  verifyCrawlPriority,
   type QueuePlace,
   type CrawlCandidate,
   type Policy,
@@ -23,6 +25,8 @@ import { env } from 'cloudflare:workers';
 import { requirePermission, type Caller } from '../auth/permissions';
 import {
   addSeed,
+  saveSeedEvidence,
+  getSeed,
   crawlerSkips,
   addToDoNotList,
   blockDonor,
@@ -223,14 +227,17 @@ async function removalItem(token: string | null, request: RemovalRequest): Promi
   };
 }
 
-async function candidateItem(candidate: CrawlCandidate): Promise<QueueItem> {
-  const [doNotList, removals] = await Promise.all([
+async function candidateItem(candidate: CrawlCandidate, now: number): Promise<QueueItem> {
+  const [doNotList, removals, seed] = await Promise.all([
     getDoNotListEntry(env.DB, candidate.repo),
     removalsOf(candidate.repo),
+    getSeed(env.DB, candidate.repo),
   ]);
   return {
     id: candidate.id,
     kind: 'candidate',
+    evidence: seed?.evidence ?? null,
+    priority: qualifyCrawlPriority(seed?.evidence ?? null, now),
     repo: candidate.repo,
     requestedBy: null,
     requestedAt: iso(candidate.foundAt),
@@ -386,6 +393,7 @@ export async function queuePage(
   const from = after === undefined ? null : readQueuePlace(after);
   if (after !== undefined && from === null) throw new Error(`${after} is no place in the admin queue.`);
   const token = await caller.gitHubToken();
+  const now = Date.now();
   const wants = (kind: QueueKind) => kinds.includes(kind);
   const [pending, candidates, removals, paused, changes] = await Promise.all([
     wants('registration') ? listPendingProjects(env.DB) : [],
@@ -407,7 +415,7 @@ export async function queuePage(
       at: iso(candidate.foundAt),
       repo: candidate.repo,
       id: candidate.id,
-      build: () => candidateItem(candidate),
+      build: () => candidateItem(candidate, now),
     })),
     ...removals.map((request) => ({
       kind: 'removal' as const,
@@ -864,11 +872,10 @@ export async function adminPauseProject(
 /**
  * Adds a repo to the crawler's seed list, for the crawler to read whatever
  * its stars or last push. A repo on the do-not-list is refused, since the
- * crawler never reads one. A repo that is a project already, or one the
- * crawler put in the admin queue before, isn't added, and the answer says
- * why: the crawler reads a listed project each week, and an earlier find
- * again as its passes find it. Nothing is read from GitHub: the crawler
- * reads the repo when it queues it.
+ * crawler never reads one. Ordinary calls skip projects and earlier finds.
+ * Evidence calls can update a waiting find, keeping seed handling history
+ * and queuing no policy read. The server stamps the verifier and validates
+ * timestamps against this action's clock. No source URL is fetched.
  */
 export async function adminSeedRepo(
   caller: Caller,
@@ -876,6 +883,12 @@ export async function adminSeedRepo(
   now: number,
 ): Promise<Outcome<'admin_seed_repo'>> {
   await requirePermission(caller, 'review_projects');
+  let evidence;
+  try {
+    evidence = input.evidence == null ? input.evidence : verifyCrawlPriority(input.evidence, caller.githubId, now);
+  } catch (error) {
+    return refuse('invalid_input', error instanceof Error ? error.message : 'Invalid priority evidence.');
+  }
   const skip = (await crawlerSkips(env.DB, [input.repo])).get(input.repo.toLowerCase());
   if (skip === 'do_not_list') {
     return refuse(
@@ -883,9 +896,20 @@ export async function adminSeedRepo(
       `${input.repo} is on the do-not-list, because its maintainers asked to be removed, so the crawler never reads it.`,
     );
   }
-  if (skip !== undefined) return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip } };
+  if (evidence !== undefined && (skip === undefined || (skip === 'proposed' && await getWaitingCandidate(env.DB, input.repo) !== null))) {
+    const saved = await saveSeedEvidence(env.DB, { repo: input.repo, addedBy: caller.githubId, evidence, proposed: skip === 'proposed' }, now);
+    if (saved === null) return refuse('repo_not_eligible', `${input.repo} is on the do-not-list, so discovery evidence was not saved.`);
+    return { ok: true, value: { repo: saved.seed.repo, added: saved.added, evidenceChanged: saved.evidenceChanged, leftAlone: skip ?? null,
+      evidence: saved.seed.evidence, priority: qualifyCrawlPriority(saved.seed.evidence, now) } };
+  }
+  if (skip !== undefined) {
+    const seed = await getSeed(env.DB, input.repo);
+    return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip, evidenceChanged: false,
+      evidence: seed?.evidence ?? null, priority: qualifyCrawlPriority(seed?.evidence ?? null, now) } };
+  }
   const { seed, added } = await addSeed(env.DB, { repo: input.repo, addedBy: caller.githubId }, now);
-  return { ok: true, value: { repo: seed.repo, added, leftAlone: null } };
+  return { ok: true, value: { repo: seed.repo, added, leftAlone: null, evidenceChanged: false,
+    evidence: seed.evidence, priority: qualifyCrawlPriority(seed.evidence, now) } };
 }
 
 /**

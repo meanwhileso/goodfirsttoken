@@ -2,7 +2,7 @@ import { ADMIN_QUEUE_PAGE } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { adminDecide, queuePage } from '../../src/admin/actions';
+import { adminDecide, adminSeedRepo, queuePage } from '../../src/admin/actions';
 import type { Caller } from '../../src/auth/permissions';
 import {
   addCandidate,
@@ -16,6 +16,7 @@ import {
 import { Browser, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';
+import { priorityEvidence } from '../priority-evidence';
 
 // The admin queue a page at a time, in admin_queue and on /admin. A queue
 // longer than a page is read for the page's items alone, so one look makes
@@ -143,6 +144,33 @@ function nextPage(pages: { read: number }): void {
 }
 
 describe('admin_queue, a page at a time', () => {
+  test('adding, expiring, and clearing evidence leaves mixed-kind page order and cursors unchanged', async () => {
+    const repos = await longQueue(LONG);
+    await connectAgent(github, ADMIN.login);
+    const readAll = async () => {
+      const pages = [];
+      let after: string | null = null;
+      do {
+        const result = await queuePage(adminCaller(), { kinds: ['registration', 'candidate', 'removal', 'pause', 'policy_change'], ...(after === null ? {} : { after }) });
+        const out = result.value;
+        pages.push({ items: out.items.map(({ id, repo, requestedAt }) => ({ id, repo, requestedAt })), next: out.next, more: out.more });
+        after = out.next ?? null;
+      } while (after !== null);
+      return pages;
+    };
+    const before = await readAll();
+    const at = Date.now();
+    const repo = repos[4];
+    if (!repo) throw new Error('missing candidate');
+    await adminSeedRepo(adminCaller(), { repo, evidence: priorityEvidence(at) }, at);
+    expect(await readAll()).toEqual(before);
+    vi.spyOn(Date, 'now').mockReturnValue(at + 31 * 86400000);
+    expect(await readAll()).toEqual(before);
+    const expired = await queuePage(adminCaller(), { kinds: ['candidate'] });
+    expect(expired.value.items.find((item) => item.repo === repo)?.priority).toMatchObject({ qualifies: false, reasons: expect.arrayContaining(['metadata_old']) as unknown });
+    await adminSeedRepo(adminCaller(), { repo, evidence: null }, at + 31 * 86400000);
+    expect(await readAll()).toEqual(before);
+  });
   test('one look at a queue longer than a page makes at most two calls to GitHub for each item on the page, and reads only those repos', async () => {
     const repos = await longQueue(LONG);
     const admin = await connectAgent(github, ADMIN.login);

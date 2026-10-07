@@ -5,6 +5,7 @@ export const productName = 'Good First Token';
 export * from './characters';
 export * from './claims';
 export * from './crawl';
+export * from './crawl-priority';
 export * from './feed';
 export * from './follow-ups';
 export * from './issues';

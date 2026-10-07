@@ -13,6 +13,9 @@ import {
 import { PermissionRefused, type Caller } from '../../src/auth/permissions';
 import {
   addCandidate,
+  addSeed,
+  addToDoNotList,
+  markSeedsHandled,
   getBlock,
   getCandidate,
   getDoNotListEntry,
@@ -27,6 +30,7 @@ import {
 import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
+import { priorityEvidence } from '../priority-evidence';
 
 // The admin's tools, called by agents through the MCP client SDK against the
 // whole Worker and the GitHub fake, and the actions behind them, called
@@ -251,6 +255,8 @@ describe('admin_queue', () => {
       items: [
         {
           id: expect.stringMatching(/^reg_\d+$/) as unknown,
+          evidence: null,
+          priority: null,
           kind: 'registration',
           repo: HARBOR,
           requestedBy: 'octo-maintainer',
@@ -802,6 +808,92 @@ describe('admin_pause_project', () => {
 });
 
 describe('admin_seed_repo', () => {
+  test('the server stamps saved evidence without reading its source URLs, and reports freshness', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const evidence = priorityEvidence();
+    const reads = github.calls.length;
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const saved = await call(admin, 'admin_seed_repo', { repo: 'sample-owner/popular-seed', evidence });
+    expect(saved.structuredContent).toMatchObject({ added: true, evidenceChanged: true, evidence: { ...evidence, verifierGitHubId: ADMIN.githubId }, priority: { qualifies: true, reasons: [] } });
+    expect(textOf(saved)).toContain('Discovery priority qualifies');
+    expect(github.calls.slice(reads)).toEqual([]);
+    expect(fetch.mock.calls.some(([input]) => [evidence.roleSourceUrl, evidence.identitySourceUrl, evidence.postUrl].includes(
+      typeof input === 'string' ? input : input instanceof Request ? input.url : input.href,
+    ))).toBe(false);
+    const cleared = await call(admin, 'admin_seed_repo', { repo: 'sample-owner/popular-seed', evidence: null });
+    expect(cleared.structuredContent).toMatchObject({ added: false, evidenceChanged: true, evidence: null, priority: { qualifies: false } });
+    expect(await getSeed(env.DB, 'sample-owner/popular-seed')).toMatchObject({ evidence: null, handledAt: null, outcome: null });
+  });
+
+  test('a waiting find accepts evidence and shows it in queue detail without changing its policy or rereading it', async () => {
+    const candidate = await crawlerFind();
+    const admin = await connectAgent(github, ADMIN.login);
+    const reads = github.calls.length;
+    const saved = await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() });
+    expect(saved.structuredContent).toMatchObject({ leftAlone: 'proposed', added: true, evidenceChanged: true, priority: { qualifies: true } });
+    expect(textOf(saved)).toContain('Saved discovery evidence');
+    expect(textOf(saved)).not.toContain('Nothing changed');
+    const seed = await getSeed(env.DB, candidate.repo);
+    expect(seed).toMatchObject({ handledAt: expect.any(Number) as unknown, outcome: 'proposed', evidence: { verifierGitHubId: ADMIN.githubId } });
+    expect(await listSeedsToHandle(env.DB, 10)).toEqual([]);
+    const queue = await call(admin, 'admin_queue', {});
+    expect(queue.structuredContent).toMatchObject({ items: [{ id: candidate.id, evidence: seed?.evidence, priority: { qualifies: true } }] });
+    expect(textOf(queue)).toContain('Discovery priority qualifies');
+    expect(await getCandidate(env.DB, candidate.id)).toEqual(candidate);
+    expect(github.calls.slice(reads)).toEqual([]);
+    await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: null });
+    expect(await getSeed(env.DB, candidate.repo)).toEqual({ ...seed, evidence: null });
+  });
+
+  test('an evidence update to a waiting find preserves an ordinary seed and its handling history', async () => {
+    const candidate = await crawlerFind();
+    const admin = await connectAgent(github, ADMIN.login);
+    const at = Date.now() - 5000;
+    await addSeed(env.DB, { repo: candidate.repo, addedBy: ADMIN.githubId }, at);
+    await markSeedsHandled(env.DB, [{ repo: candidate.repo, outcome: 'queued' }], at + 1);
+    const original = await getSeed(env.DB, candidate.repo);
+    await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() });
+    expect(await getSeed(env.DB, candidate.repo)).toMatchObject({ ...original, evidence: { verifierGitHubId: ADMIN.githubId } });
+  });
+
+  test('do-not-list takes precedence over a waiting find for evidence writes', async () => {
+    const candidate = await crawlerFind();
+    const admin = await connectAgent(github, ADMIN.login);
+    await addToDoNotList(env.DB, { repo: candidate.repo, addedBy: ADMIN.githubId, reason: null }, Date.now());
+    const saved = await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() });
+    expect(textOf(saved)).toMatch(/^Refused \(repo_not_eligible\)/);
+    expect(await getSeed(env.DB, candidate.repo)).toBeNull();
+  });
+
+  test('listed projects and finds with only a decided candidate keep their evidence-write skips', async () => {
+    await registerHarbor();
+    const candidate = await crawlerFind();
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_decide', { id: candidate.id, decision: 'reject', reason: 'Read the policy again later.' });
+    expect((await call(admin, 'admin_seed_repo', { repo: HARBOR, evidence: priorityEvidence() })).structuredContent).toMatchObject({ leftAlone: 'project', evidenceChanged: false });
+    expect((await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() })).structuredContent).toMatchObject({ leftAlone: 'proposed', evidenceChanged: false });
+    expect(await getSeed(env.DB, candidate.repo)).toBeNull();
+  });
+
+  test('future evidence and forged verifier IDs are refused without saving a seed', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const future = await call(admin, 'admin_seed_repo', { repo: TOOLS, evidence: priorityEvidence(Date.now() + 86400000) });
+    expect(textOf(future)).toContain('future');
+    expect(future.isError).toBe(true);
+    const forged = await call(admin, 'admin_seed_repo', { repo: TOOLS, evidence: { ...priorityEvidence(), verifierGitHubId: 9001 } });
+    expect(forged.isError).toBe(true);
+    expect(await getSeed(env.DB, TOOLS)).toBeNull();
+  });
+
+  test('non-admin and anonymous callers cannot write or clear evidence', async () => {
+    const priya = await connectAgent(github, 'priya');
+    await expect(call(priya, 'admin_seed_repo', { repo: TOOLS, evidence: priorityEvidence() })).rejects.toThrow('not found');
+    await expect(call(priya, 'admin_seed_repo', { repo: TOOLS, evidence: null })).rejects.toThrow('not found');
+    for (const githubId of [0, 1001]) {
+      await expect(adminSeedRepo({ githubId, login: 'priya', gitHubToken: () => Promise.resolve(null) }, { repo: TOOLS, evidence: priorityEvidence() }, Date.now())).rejects.toBeInstanceOf(PermissionRefused);
+    }
+    expect(await getSeed(env.DB, TOOLS)).toBeNull();
+  });
   test("an admin adds a repo to the crawler's seed list once, whatever the case of its name, without asking GitHub", async () => {
     const admin = await connectAgent(github, ADMIN.login);
     const reads = github.calls.length;
@@ -809,9 +901,9 @@ describe('admin_seed_repo', () => {
     const added = await call(admin, 'admin_seed_repo', { repo: 'sample-policies/small-seed' });
     const again = await call(admin, 'admin_seed_repo', { repo: 'Sample-Policies/Small-Seed' });
 
-    expect(added.structuredContent).toEqual({ repo: 'sample-policies/small-seed', added: true, leftAlone: null });
+    expect(added.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: true, leftAlone: null, evidence: null });
     expect(textOf(added)).toContain("Added sample-policies/small-seed to the crawler's seed list.");
-    expect(again.structuredContent).toEqual({ repo: 'sample-policies/small-seed', added: false, leftAlone: null });
+    expect(again.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: false, leftAlone: null, evidence: null });
     expect(await listSeedsToHandle(env.DB, 10)).toEqual([
       {
         repo: 'sample-policies/small-seed',
@@ -819,6 +911,7 @@ describe('admin_seed_repo', () => {
         addedAt: expect.any(Number) as unknown,
         handledAt: null,
         outcome: null,
+        evidence: null,
       },
     ]);
     expect(github.calls.slice(reads)).toEqual([]);
@@ -832,9 +925,9 @@ describe('admin_seed_repo', () => {
     const project = await call(admin, 'admin_seed_repo', { repo: HARBOR.toUpperCase() });
     const proposed = await call(admin, 'admin_seed_repo', { repo: candidate.repo });
 
-    expect(project.structuredContent).toEqual({ repo: HARBOR.toUpperCase(), added: false, leftAlone: 'project' });
+    expect(project.structuredContent).toMatchObject({ repo: HARBOR.toUpperCase(), added: false, leftAlone: 'project', evidence: null });
     expect(textOf(project)).toBe(`${HARBOR.toUpperCase()} is a project already, so a seed adds nothing. Nothing changed.`);
-    expect(proposed.structuredContent).toEqual({ repo: candidate.repo, added: false, leftAlone: 'proposed' });
+    expect(proposed.structuredContent).toMatchObject({ repo: candidate.repo, added: false, leftAlone: 'proposed', evidence: null });
     expect(textOf(proposed)).toBe(`The crawler put ${candidate.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`);
     expect(await getSeed(env.DB, HARBOR)).toBeNull();
     expect(await getSeed(env.DB, candidate.repo)).toBeNull();

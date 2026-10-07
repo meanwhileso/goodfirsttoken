@@ -1808,7 +1808,7 @@ list, for the [policy crawler](#the-policy-crawler) to read whatever its
 stars or last push.
 
 - A repo is on the list once, whatever the case of its name, and keeps the
-  admin who added it and when. Adding it again changes nothing, and the
+  admin who added it and when. An ordinary call again changes nothing, and the
   answer says so.
 - A repo on the do-not-list is refused with `repo_not_eligible`.
 - A repo that is a project already, whatever its status, or that the
@@ -1817,6 +1817,42 @@ stars or last push.
   it, under [Keeping listings current](#keeping-listings-current). The
   answer says which, and that nothing changed.
 - It asks GitHub nothing. The crawler reads the repo when it queues it.
+
+`admin_seed_repo` also takes optional `evidence` researched by an admin's
+agent. `evidence: null` clears it and keeps the ordinary seed. The server
+validates bounded fields, public HTTPS source URLs without credentials, and
+a numeric X post URL whose author matches the handle. It stamps the verifier
+with the calling admin's GitHub ID and fetches no source URL. Future push,
+publication, and check times are refused with `invalid_input`.
+
+A seed qualifies for priority with at least 10,000 stars, public and
+unarchived metadata, a push in the last 30 days, a named maintainer, creator,
+or owner, and an authored post in the last 90 days. Record a role source for
+the repo or its owning organization, and an official GitHub profile, repo
+file, or project page linking the person to X. Repo metadata and role and
+activity checks must be within 30 days. A quote with the person's own words
+counts. Bare reposts, follower counts, unverified roles, and old pinned posts
+confer no priority. Failed X reads leave ordinary discovery in place.
+
+Use exact UTC publication times when available. A date alone uses UTC
+midnight and `timePrecision: date`. Rechecking a post keeps its original
+publication time. Checks and publication times exactly 30 and 90 days old
+still qualify, and expire one millisecond later.
+
+Saving or clearing evidence preserves `addedBy`, `addedAt`, `handledAt`, and
+`outcome`. A waiting candidate accepts evidence before the ordinary
+`leftAlone: proposed` skip. If no seed exists, the call creates one already
+handled at the call's time with outcome `proposed`. An existing seed keeps
+its history. No extra policy read is queued. Projects and decided finds
+keep their skips. The do-not-list takes precedence, including for a waiting
+candidate. `added` reports seed creation. `evidenceChanged` reports an
+evidence change even when `added` is false.
+
+Seed results and candidate admin detail show saved evidence and current
+qualification. Admin queue reads recompute freshness, while its mixed-kind
+chronological order, page size, and cursors stay the same. Evidence stays
+off public pages. Expiration and clearing evidence change no policy,
+verdict, listing, PR mode, or issue tag. Review AI policy separately.
 
 **Checking a request to be removed.** `admin_remove_project` doesn't check
 who asked. `request_removal` does: it saves a request only from an admin or
@@ -2789,7 +2825,9 @@ projects due for their weekly read there, under
 
 - First the seeds admins added that it hasn't handled yet, under The seed
   list in [The admin queue](#the-admin-queue), whatever their stars or last
-  push. It records what it did with each: queued it, or left it alone, and
+  push. Qualifying evidence comes first, before the run's seed limit. Within
+  each group, the oldest added time comes first, then the repo name. The
+  producer's clock determines freshness. It records what it did with each: queued it, or left it alone, and
   why.
 - Then one call advances the broad search. Up to four calls read a separate
   popular sample. The remaining calls advance the broad search. Both use

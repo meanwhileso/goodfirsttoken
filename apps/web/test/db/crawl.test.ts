@@ -40,7 +40,7 @@ describe('the seed list', () => {
     const again = await addSeed(db, { repo: 'Sample-Owner/Seeded', addedBy: maintainer.githubId }, t0 + HOUR);
 
     expect(first).toEqual({
-      seed: { repo: 'sample-owner/seeded', addedBy: admin.githubId, addedAt: t0, handledAt: null, outcome: null },
+      seed: { repo: 'sample-owner/seeded', addedBy: admin.githubId, addedAt: t0, handledAt: null, outcome: null, evidence: null },
       added: true,
     });
     expect(again).toEqual({ seed: first.seed, added: false });

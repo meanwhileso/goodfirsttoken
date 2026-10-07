@@ -1,5 +1,5 @@
 import { LOCAL_API_URL, LOCAL_WEB_URL } from '@goodfirsttoken/github-fake/local';
-import { DONOR, DONOR_ISSUE, FIXTURE_REPO, runDonorSkills, runSkills } from '../scripts/skill-run';
+import { DONOR, DONOR_ISSUE, FIXTURE_REPO, runDonorSkills, runSeedEvidenceSkills, runSkills } from '../scripts/skill-run';
 import { expect, test } from './fixtures';
 import { SITE } from './hosts';
 
@@ -22,6 +22,14 @@ test("a maintainer's agent registers a sample repo with the proposed settings, a
   expect(said).toContain(
     `@sample-admin's agent calls admin_decide ${JSON.stringify({ id: run.queueId, decision: 'approve' })}`,
   );
+});
+
+test('the admin research flow records and clears evidence for a waiting find through MCP', async ({ request }) => {
+  expect((await request.post('/dev/seed')).status()).toBe(200);
+  const said: string[] = [];
+  const run = await runSeedEvidenceSkills(SITE, (line) => said.push(line));
+  expect(run).toMatchObject({ repo: 'sample-owner/sample-cli', qualified: true, leftAlone: 'proposed', cleared: true });
+  expect(said.some((line) => line.includes('admin_seed_repo') && line.includes('"evidence":null'))).toBe(true);
 });
 
 test("a donor's agent follows the give skill from a session to a claim, updates, a submit, and a PR", async ({ request }) => {

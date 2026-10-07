@@ -1630,7 +1630,7 @@ in `people`.
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
-| `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
+| `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
 | `crawl_passes` | Pass of the crawler's broad search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
 | `popular_crawl_passes` | Monthly popular sample: start and push date, total results at its first page, next page, queued count, and finish time | `started_at` |
 | `crawl_queued_repos` | Successful seed, broad, and popular sends recorded for a broad pass, with repo names compared without case | `broad_started_at, repo` |
@@ -3218,6 +3218,7 @@ admin queue as crawl candidates. The rules are in
 | `src/crawl/reads.ts` | What the consumer reads from GitHub: each repo's facts and folders, its files, its labels, and its pull request settings |
 | `src/crawl/rules.ts` | The tiers and the suggestions, as pure functions of the files and labels |
 | `src/db/seeds.ts` | The `crawl_seeds` table, the seed list |
+| `packages/core/src/crawl-priority.ts` | Strict input and stored evidence schemas, action-clock validation, and pure qualification rules |
 | `src/db/crawls.ts` | The `crawl_passes` table, where each broad pass stands |
 | `src/db/popular-crawls.ts` | The `popular_crawl_passes` checkpoint and `crawl_queued_repos` records of successful sends |
 | `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue |
@@ -3232,6 +3233,23 @@ admin queue as crawl candidates. The rules are in
   queries small. The consumer's `max_concurrency` of 1 keeps it to one
   batch at a time, since GitHub asks a client not to make concurrent
   requests for one user.
+- **Verified seed evidence.** Migration `0015_crawl_priority.sql` adds nullable
+  JSON to existing seeds. `admin_seed_repo` validates research facts and
+  stamps the authenticated admin's GitHub ID. It fetches no arbitrary URL.
+  `saveSeedEvidence` upserts or clears only that JSON, preserving all handling
+  history. Its SQL write checks the do-not-list too. A waiting candidate with
+  no seed gets a handled `proposed` seed, so saving evidence queues no read.
+- **Qualification before the limit.** `listSeedsToHandle` receives the
+  producer's clock. SQL ranks qualifying evidence before `LIMIT`, then
+  orders each group by `added_at` and repo name. Stored UTC times are
+  canonical, so SQL's inclusive comparisons match the core's 30-day checks
+  and 90-day publication window. Date-only publication starts at UTC
+  midnight. Unknown role or activity leaves a seed in the ordinary group.
+- **Admin detail.** `candidateItem` reads the repo's seed and uses the core's
+  pure qualifier at the queue reader's clock. `/admin` and MCP candidate
+  detail display the evidence and current status. Notes render as text, and
+  MCP text quotes notes as JSON data. The queue comparator, pagination, and
+  cursors remain chronological. Public project records contain no evidence.
 - **Why these shares and caps.** The crawl is the job that can wait
   longest, so its consumer leaves the most for the others: it stops while
   less than three fifths of an hourly budget is left, 500 above where a
