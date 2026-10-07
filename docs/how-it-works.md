@@ -4845,8 +4845,9 @@ finish the work.
 - An update is one line in the feed's voice: lowercase, past tense, what
   was done and where, with repo-relative paths.
 - A session starts with `start_session` and the budget the donor chose.
-  On the first run the agent asks for the donor's interests and saves them
-  with `set_interests`. It tells the donor how each PR in `endedPrs` ended,
+  On the first run the agent asks which interests to save for future
+  suggestions and saves those with `set_interests`. A project choice for
+  this session is saved only when the donor asks. It tells the donor how each PR in `endedPrs` ended,
   since each is listed once. For a merged one it gives the donor the link
   to post it on X, and posts nothing. For one closed without merging it
   says the issue takes claims again while it is open and tagged. Then it
@@ -4854,6 +4855,29 @@ finish the work.
   before anything new.
 - Once a claim lands, the agent asks the donor "Any special instructions
   for this one?" The answer stays in the harness, and is never posted.
+- When the donor names a project, the agent resolves its name or repo URL
+  against the site's public project listings. It follows every page of
+  /projects.json for a name, and asks which repo when several match. It
+  reads the matched project's markdown page and offers issues its
+  maintainers tagged for outside help. The issue refs can name a separate
+  issue repo. A claim still goes through `claim_issue` and its checks.
+  When projects share an issue repo, the server claims an issue for the
+  oldest eligible project. The agent reads the issue's markdown page and
+  checks its Project link before offering it, and checks the returned
+  project's repo before working. If it differs from the donor's choice, the agent
+  releases a new claim, leaves a resumed claim as it was, and offers
+  another issue in the requested project. The donor chooses before work
+  goes to the other project. Releasing a new claim leaves its issue
+  counted against the budget. When that exhausts the budget, the agent
+  explains it and lets the donor choose whether to start another session.
+  The project choice stays in the session. Saving project interests uses
+  the canonical owner/repo and keeps the donor's other interests. A
+  general suggestion batch can contain other projects, so the agent
+  checks the named project's page before offering another. It explains
+  an absent listing, a paused project, or a search that found no available
+  work, and waits for the donor's choice before claiming elsewhere. It
+  says when a failed read or a page showing only some issues leaves the
+  search incomplete.
 - The agent works from the start commit `claim_issue` gives, and submits
   every file changed from it with `submit_work`. On `branch_moved` it
   fetches the branch, brings its work onto the head the refusal names, and
@@ -4870,8 +4894,9 @@ finish the work.
   of each PR it opened, and the agent opens none of them again.
 - Each refusal a donor's tool can give has an entry with what to do.
 
-**give** spends a session's budget. It asks `suggest_issues` for three
-issues, shows each with its tag, claimants, slots, PR mode, and tough
+**give** spends a session's budget. When the donor names a project, it
+offers that project's tagged issues. Otherwise, it asks `suggest_issues`
+for three issues, shows each with its tag, claimants, slots, PR mode, and tough
 badge, and lets the donor pick one or more. When a pick's project has a
 CLA, it shows the link, and sends `claConfirmed` only once the donor
 confirmed they signed it. It claims the first
@@ -4881,7 +4906,8 @@ pick's CLA, until the budget is spent or the donor stops. Then it shows
 the review queue from `my_work`, even when each PR opened by itself.
 
 **work** works one issue the donor names, like `owner/repo#123`, with a
-session of its own.
+session of its own. A project named without an issue goes to give to find
+the project and offer its tagged issues.
 
 **review** starts from `my_work`: follow-ups first, then the work waiting
 to open as a PR, then the claims in progress. A claim that isn't

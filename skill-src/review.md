@@ -44,6 +44,7 @@ only.
 
 {{include donor-review}}
 {{include donor-start}}
+{{include donor-project}}
 {{include donor-work}}
 {{include donor-views}}
 {{include donor-refusals}}

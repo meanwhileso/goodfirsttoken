@@ -1,7 +1,9 @@
 ## Refusals
 
-A refusal reads `Refused (code): message`. Tell the donor the message,
-then:
+A refusal reads `Refused (code): message`. Tell the donor the message.
+When the donor named a project, keep that choice as in Find a named
+project. Ask before switching projects, including when an entry below
+offers another project. Then:
 
 - `not_found`: The session, claim, or issue doesn't exist on Good First
   Token, or no pick is left in the session's queue. For a session, start

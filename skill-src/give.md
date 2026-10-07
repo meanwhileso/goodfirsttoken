@@ -1,5 +1,5 @@
 ---
-description: Spend a person's spare tokens on open source issues that maintainers tagged for outside help. Starts a session with a budget, offers follow-ups and unfinished claims first, suggests three issues, claims the ones the person picks, works each one with live updates, and submits the work. Use when the person asks to spend some of their tokens on open source.
+description: Spend a person's spare tokens on open source issues that maintainers tagged for outside help. Finds a project the person names, by name or repo URL, and offers its tagged issues. Starts a session with a budget, offers follow-ups and unfinished claims first, claims the issues the person picks, works each one with live updates, and submits the work. Use when the person asks to spend or donate tokens on open source or a named project.
 plugin: goodfirsttoken
 ---
 
@@ -27,20 +27,24 @@ signs in with GitHub, which gives Good First Token access to public repos
 only.
 
 {{include donor-start}}
+{{include donor-project}}
 ## Pick an issue
 
-1. Call `suggest_issues` with `sessionId`. It gives up to three issues that
-   maintainers tagged for outside help, ranked against the donor's
+1. When the donor named a project, find it and offer its issues as in Find
+   a named project. Otherwise, call `suggest_issues` with `sessionId`.
+   It gives up to three issues that maintainers tagged for outside help,
+   ranked against the donor's
    interests. `No eligible issues right now.` means nothing takes the
    donor's claim now. Tell them, and stop.
-2. Show the donor each issue as the answer lists it: the issue and its
-   title, its project, the tag, who holds it and with which agent, the
-   slots taken, the PR mode, the tough badge, and its link. `prMode`
+2. For suggestions, show the donor each issue as the answer lists it: the
+   issue and its title, its project, the tag, who holds it and with which
+   agent, the slots taken, the PR mode, the tough badge, and its link. `prMode`
    `reviewed` means the donor reads the diff and opens the PR. `automatic`
    means the PR opens by itself once the work is submitted. Tough means 3
    or more claims on it ended without a merged PR. Take a crack at
    it anyway if the donor wants.
-3. Let the donor pick one or more, by number. For more issues, call
+3. Let the donor pick one or more, by number. For more issues in a named
+   project, keep looking on its project page. Otherwise, call
    `suggest_issues` again with every issue shown so far in `exclude`.
 4. When a pick has a `claUrl`, its project has a CLA. Show the donor the
    link, and ask them to confirm they signed it. Never confirm it for
@@ -58,7 +62,8 @@ only.
    pick passed over, because it filled up, got a PR, or stopped taking the
    donor's claim, with why. Ask about special instructions again for each
    new claim.
-9. When no pick is left, suggest more, until the budget is spent or the
+9. When no pick is left, find more in the named project, or suggest more
+   when the donor has no project choice, until the budget is spent or the
    donor stops. Then call `my_work`, and show the donor their review
    queue, as in The review queue. Do it even when each PR opened by itself,
    since work from an earlier session can wait there.
@@ -68,6 +73,13 @@ only.
 {{include donor-views}}
 {{include donor-refusals}}
 ## Example
+
+The donor says: "I want to donate some tokens to Good First Token."
+Read /projects.json and follow its next links. If a listing's repo name
+matches goodfirsttoken, take its owner/repo and read its markdown link.
+Offer the issues its maintainers tagged for outside help. If several
+listings match, ask which one. If none matches, tell the donor and offer
+to find another project.
 
 The repo is made up. The donor says: spend some of my tokens on open
 source, two issues. You start a session:

@@ -57,8 +57,16 @@ It works inside Claude Code, Codex, OpenCode, Grok Bot, and Cursor.
 ## Add it to your agent
 
 Tell your agent "Read goodfirsttoken.org/start.md, then spend some of my
-tokens on open source," and it sets itself up. Or add the MCP server and the
-skills yourself:
+tokens on open source," and it sets itself up.
+
+You can name a project in the prompt, for example: "I want to donate some
+tokens to Good First Token." The agent looks for the project's listing and
+offers issues its maintainers tagged for outside help. You can also give a
+GitHub repo URL or owner/repo. If the match is unclear, the agent asks which
+project you mean. If it can't find available work there, it lets you choose
+another project.
+
+Or add the MCP server and the skills yourself:
 
 | Harness | Add the MCP server | Get the skills |
 |---|---|---|
