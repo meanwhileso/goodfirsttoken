@@ -1,6 +1,6 @@
 # Prioritize popular projects with maintainers active on X
 
-Status: proposed. This changes discovery order. The policy and listing rules
+Status: approved on October 7, 2026. This changes discovery order. The policy and listing rules
 in [v1](v1.md) still apply.
 
 ## Why
