@@ -90,7 +90,7 @@ export interface FillRun {
 // https://docs.github.com/en/rest/search/search#search-repositories
 interface SearchAnswer {
   total_count: number;
-  items: { full_name: unknown; archived: unknown; private: unknown }[];
+  items: { full_name: string; archived: boolean; private: boolean }[];
 }
 
 /**
@@ -154,25 +154,24 @@ function searchAnswer(data: unknown): SearchAnswer {
   if (typeof total !== 'number' || !Number.isInteger(total) || total < 0 || !Array.isArray(data.items)) throw malformed();
   // A search that ran out of time serves only part of what it finds.
   // Its checkpoint stays where it is, and the next run asks again.
-  if ('incomplete_results' in data && data.incomplete_results === true) {
+  if (!('incomplete_results' in data) || typeof data.incomplete_results !== 'boolean') throw malformed();
+  if (data.incomplete_results) {
     throw new SyncStopped('github_error', "GitHub's search ran out of time and gave only part of its results.");
   }
   const items: SearchAnswer['items'] = [];
   for (const item of data.items as unknown[]) {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) throw malformed();
-    items.push({
-      full_name: 'full_name' in item ? item.full_name : undefined,
-      archived: 'archived' in item ? item.archived : undefined,
-      private: 'private' in item ? item.private : undefined,
-    });
+    const name = repoName.safeParse('full_name' in item ? item.full_name : undefined);
+    if (!name.success || !('archived' in item) || typeof item.archived !== 'boolean' || !('private' in item) || typeof item.private !== 'boolean') {
+      throw malformed();
+    }
+    items.push({ full_name: name.data, archived: item.archived, private: item.private });
   }
   return { total_count: total, items };
 }
 function searchRepos(data: SearchAnswer): string[] {
   return data.items.flatMap((item) => {
-    if (item.archived === true || item.private === true) return [];
-    const name = repoName.safeParse(item.full_name);
-    return name.success ? [name.data] : [];
+    return item.archived || item.private ? [] : [item.full_name];
   });
 }
 

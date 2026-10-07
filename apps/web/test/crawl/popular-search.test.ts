@@ -303,3 +303,51 @@ describe('the popular sample', () => {
     expect(sent.flatMap((message) => message.repos)).toContain(names.at(-101));
   });
 });
+
+
+const validSearchItem = { full_name: 'sample-policies/invites-agents', private: false, archived: false };
+const validSearchResponse = { total_count: 250, incomplete_results: false, items: [validSearchItem] };
+const malformedSearchResponses: [string, Record<string, unknown>][] = [
+  ['missing full_name', { ...validSearchResponse, items: [validSearchItem, { private: false, archived: false }] }],
+  ['invalid full_name', { ...validSearchResponse, items: [validSearchItem, { ...validSearchItem, full_name: 'not a repo' }] }],
+  ['non-string full_name', { ...validSearchResponse, items: [validSearchItem, { ...validSearchItem, full_name: 42 }] }],
+  ['missing private', { ...validSearchResponse, items: [validSearchItem, { full_name: validSearchItem.full_name, archived: false }] }],
+  ['nonboolean private', { ...validSearchResponse, items: [validSearchItem, { ...validSearchItem, private: 'false' }] }],
+  ['missing archived', { ...validSearchResponse, items: [validSearchItem, { full_name: validSearchItem.full_name, private: false }] }],
+  ['nonboolean archived', { ...validSearchResponse, items: [validSearchItem, { ...validSearchItem, archived: 'false' }] }],
+  ['missing incomplete_results', { ...validSearchResponse, incomplete_results: undefined }],
+  ['nonboolean incomplete_results', { ...validSearchResponse, incomplete_results: 'false' }],
+  ['null incomplete_results', { ...validSearchResponse, incomplete_results: null }],
+];
+
+describe.each(['broad', 'popular'])('%s response validation', (path) => {
+  test.each(malformedSearchResponses)('%s preserves both checkpoints and sends nothing', async (_kind, response) => {
+    const before = path === 'popular' ? { ...broad, finishedAt: start - HOUR } : broad;
+    await startCrawlPass(db, before);
+    changeSearch(() => response);
+    const run = await fill(2);
+    expect(run).toMatchObject({ stopped: 'github_error', searches: 1, queued: 0 });
+    expect(sent).toEqual([]);
+    expect(await latestCrawlPass(db)).toEqual(before);
+    expect(await popular()).toMatchObject({
+      started_at: start, pushed_since: start - 30 * DAY, pool: null,
+      page: 1, queued: 0, finished_at: null,
+    });
+  });
+
+  test('valid archived and private results keep their skips while the public repo is sent', async () => {
+    await startCrawlPass(db, path === 'popular' ? { ...broad, finishedAt: start - HOUR } : broad);
+    changeSearch(() => ({
+      total_count: 3, incomplete_results: false,
+      items: [
+        { full_name: 'sample-owner/archived', private: false, archived: true },
+        { full_name: 'sample-owner/private', private: true, archived: false },
+        validSearchItem,
+      ],
+    }));
+    await fill(2);
+    expect(sent).toEqual([{ repos: [validSearchItem.full_name] }]);
+    if (path === 'popular') expect(await popular()).toMatchObject({ queued: 1, finished_at: start });
+    else expect(await latestCrawlPass(db)).toMatchObject({ queued: 1, low: broad.low + broad.width });
+  });
+});
