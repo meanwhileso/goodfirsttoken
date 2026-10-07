@@ -122,6 +122,14 @@ Finding projects whose own docs welcome AI, and keeping listings current.
 | [#77](https://github.com/meanwhileso/goodfirsttoken/issues/77) | Read fewer welcoming policies as bans | #76 | |
 | [#98](https://github.com/meanwhileso/goodfirsttoken/issues/98) | Show pauses and policy changes on /admin | #31 | |
 
+### Popular projects and maintainers on X
+
+The proposed [crawler priority spec](docs/specs/crawler-priority.md) keeps broad
+discovery and adds a popular sample with verified maintainer activity as a
+priority signal. Review the spec before opening its two implementation issues.
+Build the popular sample first, then seed evidence and admin detail. The
+classifier fixes #76 and #77 remain separate and can proceed alongside it.
+
 ## M8 Launch readiness
 
 Deploys, the static host, a security review, and the launch video.
