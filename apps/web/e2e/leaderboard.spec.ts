@@ -66,7 +66,7 @@ test('this week ranks people by PRs merged, with the merge rate from merged and 
   // sample-maintainer's merge was on their own project, so it ranks nothing.
   await expect(person(page, 'sample-maintainer').locator('.board-score')).toHaveText('0merged');
   await expect(person(page, 'sample-maintainer').locator('.board-own')).toHaveText('1own project');
-  await expect(panel(page)).toContainText('Resets Monday at 00:00 UTC.');
+  await expect(panel(page)).toContainText('The week starts Monday at 00:00 UTC.');
   // rowan is blocked, and merged two this week.
   await expect(page.getByText('@rowan')).toHaveCount(0);
 });

@@ -49,7 +49,7 @@ export const Route = createFileRoute('/$owner/$repo/issues/$number')({
       matches,
       {
         title: loaderData ? `${title} · ${productName}` : `Not found · ${productName}`,
-        description: `Agents working ${name} live, side by side, on Good First Token.`,
+        description: `Watch agents work on ${name} on Good First Token.`,
         path: loaderData?.state === 'ready' ? `/${loaderData.repo}/issues/${String(loaderData.number)}` : null,
       },
       [{ rel: 'stylesheet', href: issueCss }],
@@ -102,7 +102,7 @@ function NotFoundIssue() {
           <>
             <h1 className="issue-title">Not on Good First Token</h1>
             <p className="issue-lede">
-              No project on Good First Token tagged <span className="mono">{issue}</span>, and no one has claimed it.
+              No listed project tagged <span className="mono">{issue}</span>. No one has claimed it.
             </p>
           </>
         )}
@@ -184,7 +184,7 @@ function Issue({ page }: { page: IssuePage }) {
         ) : page.closedBecause === 'project' ? (
           <ClosedSlot>The project isn&apos;t taking claims right now.</ClosedSlot>
         ) : page.closedBecause === 'issue' ? (
-          <ClosedSlot>This issue isn&apos;t among the project&apos;s open tagged issues, so it takes no claims.</ClosedSlot>
+          <ClosedSlot>This issue is outside the project&apos;s open tagged issues.</ClosedSlot>
         ) : (
           free > 0 && <OpenSlot free={free} issue={issue} />
         )}
@@ -198,7 +198,7 @@ function Issue({ page }: { page: IssuePage }) {
             </Marker>
           </RailHead>
           {view.timeline.length === 0 ? (
-            <p className="issue-note">No claims yet. Each claim, and each change to one, shows up here.</p>
+            <p className="issue-note">No claims yet.</p>
           ) : (
             <ol className="issue-timeline">
               {view.timeline.map((entry) => (
@@ -283,7 +283,7 @@ function LaneView({
       {lane.lines.length === 0 && <p className="issue-lane__empty">No lines yet.</p>}
       {openPrs.map((pr) => (
         <p key={`${pr.repo}#${String(pr.number)}`} className="issue-lane__pr">
-          <a href={prUrl(pr)}>PR {refName(pr, issueRepo)}</a> is open, so claims are closed.
+          <a href={prUrl(pr)}>PR {refName(pr, issueRepo)}</a> is open. Claims are closed.
         </p>
       ))}
     </article>
@@ -296,7 +296,7 @@ function OpenSlot({ free, issue }: { free: number; issue: string }) {
     <article className="issue-slot">
       <SlotRing />
       <h2 className="issue-slot__title">{free === 1 ? 'Open slot' : `${free.toLocaleString('en-US')} open slots`}</h2>
-      <p className="issue-slot__words">A different agent might crack it. Claim it from yours.</p>
+      <p className="issue-slot__words">Take a crack at it. Ask your agent to claim this issue.</p>
       <Prompt small copy={command} copyName="Copy the claim command">
         /goodfirsttoken:work <PromptPath>{issue}</PromptPath>
       </Prompt>

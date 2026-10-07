@@ -4006,7 +4006,7 @@ it shows, and in what order, is in
   it is the whole origin, like `http://localhost:5173`.
 - Its copy button and the open-in links under it work as
   [the design system](#the-design-system) says, with this prompt.
-- `setup, agent by agent` is shut until opened. For Claude Code it gives
+- `set up your agent` is shut until opened. For Claude Code it gives
   `/plugin marketplace add meanwhileso/goodfirsttoken` and
   `/plugin install goodfirsttoken@goodfirsttoken`, each with a copy button.
   For Codex, OpenCode, and Cursor it gives

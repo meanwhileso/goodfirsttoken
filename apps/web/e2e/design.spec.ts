@@ -552,7 +552,7 @@ test.describe('the prompt', () => {
 
     await page.locator('.open-in').getByRole('button', { name: 't3 code' }).click();
 
-    await expect(page.locator('.open-in').getByRole('status')).toHaveText('Prompt copied. Opening T3 Code, paste it in.');
+    await expect(page.locator('.open-in').getByRole('status')).toHaveText('Prompt copied. Paste it into T3 Code when it opens.');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(SAMPLE_PROMPT);
   });
 });

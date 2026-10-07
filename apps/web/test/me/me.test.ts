@@ -201,7 +201,7 @@ describe('the review queue on /me', () => {
   test('says how long work waits for its PR, as long as core keeps it in the queue', async () => {
     const page = await (await (await site('lena')).fetch('/me')).text();
 
-    expect(page).toContain(`for ${String(REVIEW_WINDOW_MS / 86_400_000)} days after its first submit.`);
+    expect(page).toContain(`Open the PR within ${String(REVIEW_WINDOW_MS / 86_400_000)} days of the first submission.`);
   });
 
   test('with no work waiting, it says so', async () => {
@@ -221,7 +221,7 @@ describe('the review queue on /me', () => {
     const page = await (await browser.fetch('/me')).text();
     const answer = await back(browser, await browser.post('/me', openPr(claimId)));
 
-    expect(page).toContain('GitHub no longer takes the token this site holds for you, so your queue can&#x27;t be read.');
+    expect(page).toContain('GitHub rejected your saved token.');
     expect(page).toContain('aria-label="Disconnect Claude Code (test)"');
     expect(shown(answer)).toContain('No PR opened. GitHub no longer takes the token this site holds for you.');
     expect(pulls()).toEqual([]);

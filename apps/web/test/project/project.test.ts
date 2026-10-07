@@ -659,7 +659,7 @@ describe('the page, through the Worker', () => {
     expect(html).toContain('merged<span class="marker__count">11</span>');
     expect(html).toContain('<b>101</b> tagged');
     expect(html).toContain('<b>11</b> merged');
-    expect(html).toContain('The first 100, by number.');
+    expect(html).toContain('Showing 100 issues in issue number order.');
   });
 
   test('draws reviewed PRs on ink, and the defaults that let agents act, like no CLA, plain', async () => {

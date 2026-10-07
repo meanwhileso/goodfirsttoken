@@ -42,7 +42,8 @@ describe the code as it is.
   inside each plugin under plugins/ are generated. Edit skill-src/ and
   follow "Changing a skill or a plugin" in CONTRIBUTING.md.
 - Words on the site and in docs, issues, PRs, and commits follow
-  brand/voice.md. No em dashes.
+  brand/voice.md, including "Patterns to cut" and its copy review steps.
+  No em dashes.
 - Tests check behavior and must fail when the code is wrong. A bug fix
   starts with a failing test.
 - A spec for a larger change goes in docs/specs/ as its own PR, and
