@@ -5053,6 +5053,14 @@ to, as `/start.md` names its server.
 Every page is built from one set of components. `/design` shows each of
 them, with sample data that the page says is sample.
 
+Purple carries the logo and the signature marketing headlines. Links,
+claim-slot marks, navigation, and activity data use blue. Agent chips,
+avatars, rule values, section markers, and rank numerals stay neutral.
+Submitted and open PR states use a blue tint with dark blue text. Live and
+merged remain green. Dark prompts and agent views use light blue for links
+and keyboard focus. The full roles and tokens are in
+[brand/design.md](../brand/design.md#color-roles).
+
 - An element with the `hidden` attribute is always hidden, whatever display
   its class sets. No other rule sets `display` with `!important`.
 - Every page is paper down to the bottom of the window, under the footer

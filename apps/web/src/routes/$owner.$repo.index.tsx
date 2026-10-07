@@ -148,7 +148,7 @@ function Project({ page }: { page: ProjectPage }) {
         <div className="project-main">
           <section className="project-section">
             <RailHead>
-              <Marker as="h2" variant="label" count={page.issues.total.toLocaleString('en-US')}>
+              <Marker as="h2" count={page.issues.total.toLocaleString('en-US')}>
                 tagged for help
               </Marker>
               <span className="project-tags">

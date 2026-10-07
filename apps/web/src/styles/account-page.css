@@ -16,7 +16,7 @@
    sign-out beside it. */
 .account--me form { margin-top: 0; }
 .account__notice {
-  margin-top: 32px; padding: 14px 16px; border-radius: var(--r-md); background: var(--label-tint); color: var(--text-body);
+  margin-top: 32px; padding: 14px 16px; border-radius: var(--r-md); background: var(--accent-tint); color: var(--text-body);
   font-size: 15px; max-width: 44em; overflow-wrap: anywhere;
 }
 .account__split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 64px; align-items: start; margin-top: 56px; }
@@ -28,7 +28,7 @@
 }
 .account__empty { color: var(--text-muted); font-size: 15px; }
 .account__interests { --gap: 6px; }
-.account__edit summary { cursor: pointer; color: var(--label-ink); width: max-content; }
+.account__edit summary { cursor: pointer; color: var(--accent); width: max-content; }
 .account__form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
 
 /* One piece of work in the review queue. */
@@ -53,4 +53,4 @@
 .account-input { height: 44px; }
 .account-input--mono { font-family: var(--font-mono); font-size: 14px; }
 .account-textarea { min-height: 160px; resize: vertical; }
-.account-input:focus, .account-textarea:focus { outline: none; border-color: var(--label); box-shadow: var(--focus); }
+.account-input:focus, .account-textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }

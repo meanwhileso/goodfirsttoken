@@ -14,8 +14,11 @@
   --line: #D8DEE4;
   --line-soft: #EEF1F4;
   --label: #7057FF;
-  --label-ink: #5B3FD9;
-  --label-tint: #F2F1FB;
+  --accent: #0969DA;
+  --accent-ink: #0550AE;
+  --accent-tint: #DDF4FF;
+  --metadata: #EEF1F4;
+  --metadata-ink: #57606A;
   --merged: #1A7F37;
   --merged-tint: #E6F4EA;
   --help: #008672;
@@ -26,7 +29,7 @@
   --code-surface: #161B22;
   --code-line: #30363D;
   --code-text: #E6EDF3;
-  --code-accent: #B7A8FF;
+  --code-accent: #A5D6FF;
   --on-label: #FFFFFF;
   --on-ink: #FFFFFF;
 
@@ -70,8 +73,8 @@
   /* elevation */
   --shadow-none: none;
   --shadow-window: 0 30px 80px rgba(14, 17, 22, 0.10), 0 2px 6px rgba(14, 17, 22, 0.05);
-  /* A paper gap, then a solid purple ring: 4.5:1 on paper, 4:1 on the dark prompt. */
-  --focus: 0 0 0 2px #FBFBF9, 0 0 0 5px #7057FF;
+  /* A paper gap, then a blue ring. Dark surfaces override both colors. */
+  --focus: 0 0 0 2px #FBFBF9, 0 0 0 5px #0969DA;
 
   /* layout, from the Layout section of brand/design.md. base.css switches
      the gutter and section space to their phone sizes. */

@@ -31,8 +31,8 @@ const INK = '#0E1116';
 const MUTED = '#57606A';
 const FAINT = '#6A737D';
 const LABEL = '#7057FF';
-const LABEL_INK = '#5B3FD9';
-const LABEL_TINT = '#F2F1FB';
+const METADATA_INK = '#57606A';
+const METADATA = '#EEF1F4';
 const MERGED = '#1A7F37';
 const WHITE = '#FFFFFF';
 
@@ -283,7 +283,7 @@ export function mergedCard(merged: MergedPr): Card {
       ]),
       box({ alignItems: 'center', gap: 24, overflow: 'hidden' }, [
         text(`@${foldUntrusted(merged.login, 39)}`, { fontSize: 64, fontWeight: 600, letterSpacing: '-0.02em', ...ONE_LINE }),
-        chip(foldUntrusted(merged.agent, 40), { background: LABEL_TINT, color: LABEL_INK }),
+        chip(foldUntrusted(merged.agent, 40), { background: METADATA, color: METADATA_INK }),
       ]),
     ],
   });

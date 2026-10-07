@@ -158,7 +158,7 @@ function Maintainers() {
 
           <RailSection node="live">
             <RailHead>
-              <Marker as="h2" variant="label">
+              <Marker as="h2">
                 register from your agent
               </Marker>
             </RailHead>

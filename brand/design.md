@@ -1,7 +1,7 @@
 ---
-version: alpha-1
+version: alpha-2
 name: Good First Token
-description: A developer-native identity built from GitHub's own vocabulary. The logo is a GitHub label chip in the purple GitHub gives "good first issue" by default, with a ring-and-dot token inside it. Warm near-white paper, GitHub ink, one purple for the brand and links, one green that means live or merged. Geist for reading, Geist Mono for anything a machine says. Hairlines group content, and the prompt box is the only dark surface.
+description: A developer-native identity built from GitHub's own vocabulary. The logo is a GitHub label chip in the purple GitHub gives "good first issue" by default, with a ring-and-dot token inside it. Warm near-white paper, GitHub ink, purple for identity, blue for interaction and activity, neutral metadata, and green for live or merged. Geist for reading, Geist Mono for anything a machine says. Hairlines group content, and the prompt box is the only dark surface.
 colors:
   paper: "#FBFBF9"
   surface: "#FFFFFF"
@@ -13,8 +13,11 @@ colors:
   line: "#D8DEE4"
   line-soft: "#EEF1F4"
   label: "#7057FF"
-  label-ink: "#5B3FD9"
-  label-tint: "#F2F1FB"
+  accent: "#0969DA"
+  accent-ink: "#0550AE"
+  accent-tint: "#DDF4FF"
+  metadata: "#EEF1F4"
+  metadata-ink: "#57606A"
   merged: "#1A7F37"
   merged-tint: "#E6F4EA"
   help: "#008672"
@@ -25,7 +28,7 @@ colors:
   code-surface: "#161B22"
   code-line: "#30363D"
   code-text: "#E6EDF3"
-  code-accent: "#B7A8FF"
+  code-accent: "#A5D6FF"
   on-label: "#FFFFFF"
   on-ink: "#FFFFFF"
 typography:
@@ -110,7 +113,7 @@ spacing:
 elevation:
   none: "none"
   window: "0 30px 80px rgba(14, 17, 22, 0.10), 0 2px 6px rgba(14, 17, 22, 0.05)"
-  focus: "0 0 0 2px #FBFBF9, 0 0 0 5px #7057FF"
+  focus: "0 0 0 2px #FBFBF9, 0 0 0 5px #0969DA"
 components:
   button-primary:
     backgroundColor: "{colors.ink}"
@@ -171,13 +174,84 @@ components:
   badge:
     keyBackground: "#E6E9ED"
     keyColor: "{colors.text-muted}"
-    valueBackground: "{colors.label-tint}"
-    valueColor: "{colors.label-ink}"
+    valueBackground: "{colors.metadata}"
+    valueColor: "{colors.metadata-ink}"
     fontFamily: Geist Mono
     fontSize: 12.5px
     rounded: 6px
     height: 24px
 ---
+
+## Color roles
+
+Purple carries identity. Blue carries interaction and activity. Neutral
+metadata gives the logo and the homepage's signature headline room to
+stand out. Green means live or merged. Every state also has a label or shape.
+
+### Palette
+
+| Token | Value | Role |
+|---|---|---|
+| `label` | `#7057FF` | Logo chip, app mark, signature marketing headline |
+| `accent` | `#0969DA` | Links, slot marks, activity data, active navigation |
+| `accent-ink` | `#0550AE` | Small text on the accent tint |
+| `accent-tint` | `#DDF4FF` | Informational notices and pending PR states |
+| `code-accent` | `#A5D6FF` | Links, prompt URL, caret, and focus on dark surfaces |
+| `metadata` | `#EEF1F4` | Routine chips, avatar fallback, rule values |
+| `metadata-ink` | `#57606A` | Routine chip text and avatar initials |
+| `merged` | `#1A7F37` | Live indicators and merged work |
+
+Paper, surface, ink, reading colors, hairlines, attention, and danger keep
+their existing values. Primary buttons stay ink. Real GitHub labels keep
+the colors returned by GitHub, including purple labels.
+
+`accent` text reads at 5.0:1 on paper and 5.2:1 on white. `accent-ink` on
+`accent-tint` reads at 6.7:1. `code-accent` on `code-surface` reads at 11.3:1.
+Use the light blue token for dark links. The blue used on paper is too dark
+for small text on the prompt or a dark agent view.
+
+### Color roles
+
+- **Identity.** Keep the purple logo and app mark. Keep one purple inline
+  label in the homepage headline and the maintainer marketing headline.
+  Projects, leaderboard, live, account, and admin titles use ink. The
+  design page shows the headline label in its component example.
+- **Interaction.** Links and their hover states use blue. The active nav
+  dot and keyboard focus use blue. On paper, focus has a 2px paper gap and
+  a 3px `accent` ring. On a dark surface, use a 2px background gap and a
+  3px `code-accent` ring. Keep link hover underlines.
+- **Claims.** Taken slots have blue rings with a blue dot. Available slots
+  have empty gray rings. The large available-slot ring is dashed blue.
+  Closed slots keep their gray ring and slash. Labels and shapes carry the
+  state as well as color.
+- **Activity.** The homepage's agent-work grid uses four blue levels:
+  `#DDF4FF`, `#9DCAFA`, `#54A3F0`, `#0969DA`. Empty squares stay `line-soft`.
+  The flash uses blue. The person's merged-work graph stays green. Chart
+  bars use blue. Rank numerals use neutral ink or muted text, including
+  first place.
+- **Live and merged.** A live dot, a working-now chip, and a live timeline
+  node stay green. A merged pill and merged timeline node stay green.
+  Blue activity marks describe quantities and claim occupancy. They do
+  not replace explicit live indicators.
+- **PR states.** Submitted and PR-open chips use `accent-ink` on
+  `accent-tint`, with their state written out. Merged stays green. Released,
+  expired, and closed stay neutral. Tough and refused keep attention colors.
+- **Metadata.** Agent names, interests, own-project labels, avatar initials,
+  and ordinary rule values use neutral metadata colors. Strict rule values
+  such as `reviewed` stay white on ink. Submitted and open PR states have
+  their own chip variants, separate from metadata chips.
+- **Sections and notices.** Section markers use `surface`, ink text, and a
+  hairline border. `surface` is white on the site and `code-surface` in a
+  dark agent view. A live marker adds its green dot. Emphasize a
+  section through placement and spacing. Informational account, admin,
+  and agent-view notices use the blue tint with body text.
+- **Prompts and agent views.** The prompt URL, prompt symbol, and caret
+  use light blue. Dark agent-view links and pending states use
+  `code-accent`. Their soft blue and neutral surfaces mix with
+  `code-surface`. Check text and focus against each actual dark background.
+- **Share cards.** Keep the purple logo, green merged pill, and ink names
+  and numbers. Agent chips become neutral. Preserve the existing size and
+  layout rules.
 
 ## Overview
 
@@ -230,11 +304,14 @@ pages are deleted as the real routes ship.
   for timestamps and counts. Never go lighter than `text-faint` for text.
 - **`line` `#D8DEE4`**: card borders and section rules. **`line-soft`
   `#EEF1F4`**: dividers between rows inside a card.
-- **`label` `#7057FF`**: the logo chip, the inline headline label, slot rings,
-  the first rank numeral, the token field, bar fills. White on it is 4.7:1.
-  As text it is only for large numerals. Small purple text uses `label-ink`.
-- **`label-ink` `#5B3FD9`**: links and purple text on white (6.6:1).
-- **`label-tint` `#F2F1FB`**: soft chips such as "agent PRs welcome."
+- **`label` `#7057FF`**: the logo chip, app mark, and signature marketing
+  headline label. White on it is 4.7:1.
+- **`accent` `#0969DA`**: links, slot marks, activity data, and active
+  navigation. Text on paper is 5.0:1.
+- **`accent-ink` `#0550AE` on `accent-tint` `#DDF4FF`**: submitted and
+  open PR chips (6.7:1). Informational notices use this tint with body text.
+- **`metadata` `#EEF1F4` and `metadata-ink` `#57606A`**: agent chips,
+  avatar initials, interests, own-project labels, and ordinary rule values.
 - **`merged` `#1A7F37`**: means exactly two things, live (the dot) and merged
   (the pill). White on it is 5.1:1. Do not use it for success toasts or
   decoration.
@@ -245,8 +322,8 @@ pages are deleted as the real routes ship.
 - **`danger` `#CF222E`**: the text color for Disconnect, Reject, and Release.
   Primary actions stay ink.
 - **Code colors**: `code-bg` `#0E1116`, `code-surface` `#161B22`, `code-line`
-  `#30363D`, `code-text` `#E6EDF3`, and `code-accent` `#B7A8FF` for the URL
-  inside the prompt.
+  `#30363D`, `code-text` `#E6EDF3`, and `code-accent` `#A5D6FF` for the URL,
+  symbol, caret, and focus inside the prompt.
 - **A view in a dark chat**: the issue cards, the live feed, and the review
   queue that hosts with MCP Apps show in a chat are a `surface` card on the
   chat's own background, and dark when the host is. The dark card takes the
@@ -273,7 +350,7 @@ what a machine says. The sizes and weights stay the same.
 
 | Token | Size | Weight | Line height | Use |
 |---|---|---|---|---|
-| `display-xl` | up to 112px | 600 | 0.98 | Hero headlines, one per page, may hold one inline label |
+| `display-xl` | up to 112px | 600 | 0.98 | Hero headlines, one per page. Marketing headlines may hold one inline label |
 | `display-lg` | up to 64px | 600 | 1.02 | Page titles (issue title, repo name, person) |
 | stat numbers | up to 48px | 600 | 1 | Numbers in a stat line |
 | `display-sm` | 22px | 600 | 1.25 | Rank names |
@@ -308,8 +385,10 @@ heading. Markers do that job. On phones, `display-xl` scales down to 48px and
 
 Flat. Cards use a 1px `line` border and no shadow. The only shadow is
 `window`, used when we draw an agent or browser window inside a page or video.
-Focus is a 3px purple ring set 2px out from the element (`focus`), on every
-interactive element. It has at least 3:1 contrast on paper and on the prompt.
+Focus is a 3px blue ring set 2px out from the element (`focus`), on every
+interactive element. On the dark prompt and in dark agent views, the ring
+uses light blue `code-accent` with a dark gap. It has at least 3:1 contrast
+against each surface.
 
 ## Shapes
 
@@ -323,38 +402,37 @@ interactive element. It has at least 3:1 contrast on paper and on the prompt.
 
 - **Nav**: the logo chip, then lowercase mono links (`live` with a pulsing
   green dot, `leaderboard`, `projects`, `maintainers`) and a round GitHub
-  mark. The current page gets a small purple dot. Under 880px it collapses
+  mark. The current page gets a small blue dot. Under 880px it collapses
   into a CSS-only checkbox hamburger.
-- **Display headline with one inline label**: the label is a purple pill in
-  Geist Mono at 0.78em, set inside the sentence.
+- **Marketing headline with one inline label**: the label is a purple pill
+  in Geist Mono at 0.78em, set inside the sentence. Utility titles use ink.
 - **Token field**: a 14-by-10 grid of rounded squares beside the homepage
-  hero. Each live event lights a square and bumps the day's count. On the
+  hero. Each live event lights a blue square and bumps the day's count. On the
   person page the same component is a 52-week, 13px-square activity graph,
   with green squares for merges.
 - **Prompt**: the one dark surface. Mono 19px with a `›` prompt, a blinking
-  purple caret, and a pill `copy` button that says `copied` in place. Under
+  light blue caret, and a pill `copy` button that says `copied` in place. Under
   it, an `open-in` line of mono links (claude code, codex, cursor, t3 code)
   and a `setup, agent by agent` disclosure with each harness's commands.
 - **Marker**: a label chip that names a section (`live 6 agents`, `merged
-  this week`). Variants: live (green pulsing dot), label (purple fill for the
-  section that matters most on the page).
+  this week`). It stays neutral, with a green pulsing dot for a live section.
 - **Rail**: an issue-timeline spine. Each section hangs off a ring node:
-  purple for live work, green for merged, gray otherwise.
+  green for live work or merged, gray otherwise.
 - **Wall**: the live feed. Mono 17px, one line per event (time, `@user`,
   agent label, issue link, text). The newest line types itself out, and each
   older line is dimmer than the one above, down to `text-faint` and no
   lighter.
 - **Stat line**: numbers at up to 48px with their words in muted 18px, as one
   sentence.
-- **Ranks**: huge rank numerals (the first in purple), name with the agent in
+- **Ranks**: huge neutral rank numerals, name with the agent in
   mono beside it, score on the right.
-- **Slots**: three rings. Filled ring and dot for a taken slot, empty ring
-  for an open one, all gray when claims are closed.
-- **Split badge**: rule on gray, value on label tint (or ink for a strict
+- **Slots**: three rings. Blue ring and dot for a taken slot, empty gray ring
+  for an open one, gray slashed rings when claims are closed.
+- **Split badge**: rule on gray, value on neutral metadata (or ink for a strict
   value like `reviewed`).
 - **Lane**: one pane per claimant on an issue page. Head: avatar, `@user`,
   agent label, state label. Body: that claimant's lines. The open slot is a
-  pane with a dashed purple ring and the claim command. The closed slot has
+  pane with a dashed blue ring and the claim command. The closed slot has
   a gray ring with a slash.
 - **Quote**: an issue body or a maintainer's words, with a 3px rule on the
   left.
@@ -386,14 +464,14 @@ sites show in a preview 250 to 360px wide.
   ends in an ellipsis at the edge.
 - Numbers are headlines, as in a stat line: 80px numbers with their words in
   muted 40px.
-- `merged` is the green pill, and an agent is a `label-tint` chip.
+- `merged` is the green pill, and an agent is a neutral metadata chip.
 
 ## Do and don't
 
 - Show real GitHub names, real repos, and real labels. When there is no
   number yet, show an honest empty state.
-- Do keep purple for the brand, links, and markers. Don't fill large areas
-  with it.
+- Do keep purple for identity and blue for interaction and activity. Keep
+  metadata and section markers neutral.
 - Do keep green for live and merged. Don't use it as a generic success color.
 - Do use lucide-style stroke icons. Don't use emoji anywhere in the UI.
 - Don't use gradients, glass, glows, or AI-sparkle imagery.

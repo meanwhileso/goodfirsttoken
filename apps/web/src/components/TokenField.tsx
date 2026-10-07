@@ -4,7 +4,7 @@ import { cx } from './cx';
 export type TokenSquare = 0 | 1 | 2 | 3 | 4 | 'merged';
 
 /**
- * A grid of rounded squares, one for each unit of agent work, darker purple
+ * A grid of rounded squares, one for each unit of agent work, darker blue
  * for more and green for a merge. The square at `flash` pulses once, and
  * pulses again each time `flash.count` changes.
  */

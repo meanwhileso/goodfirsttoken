@@ -5,7 +5,7 @@
 .admin__head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .admin__title { font: var(--display-lg); font-size: clamp(36px, 6vw, 64px); letter-spacing: var(--display-lg-tracking); }
 .admin__notice {
-  margin-top: 32px; padding: 14px 16px; border-radius: var(--r-md); background: var(--label-tint); color: var(--text-body);
+  margin-top: 32px; padding: 14px 16px; border-radius: var(--r-md); background: var(--accent-tint); color: var(--text-body);
   font-size: 15px; max-width: 44em; overflow-wrap: anywhere;
 }
 .admin__split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 64px; align-items: start; margin-top: 56px; }
@@ -45,4 +45,4 @@
 .admin-input, .admin-select { height: 44px; }
 .admin-input--mono { font-family: var(--font-mono); font-size: 14px; }
 .admin-textarea { min-height: 72px; resize: vertical; }
-.admin-input:focus, .admin-textarea:focus, .admin-select:focus { outline: none; border-color: var(--label); box-shadow: var(--focus); }
+.admin-input:focus, .admin-textarea:focus, .admin-select:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }

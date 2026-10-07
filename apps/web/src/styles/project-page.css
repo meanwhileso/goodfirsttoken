@@ -39,7 +39,7 @@
   color: inherit;
 }
 .project-issue:hover { text-decoration: none; }
-.project-issue:hover .project-issue__title { color: var(--label-ink); }
+.project-issue:hover .project-issue__title { color: var(--accent); }
 .project-issue__title { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); overflow-wrap: anywhere; }
 .project-issue__meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; grid-column: 1; min-width: 0; font-size: 14px;
@@ -52,6 +52,7 @@
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; padding: 14px 0;
 }
 .project-pr__name { font-size: 16px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.project-pr__name:hover { color: var(--accent); }
 .project-pr__meta {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; grid-column: 1; min-width: 0; font-size: 14px;
   color: var(--text-muted);

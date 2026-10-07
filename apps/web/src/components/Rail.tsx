@@ -6,7 +6,7 @@ export function Rail({ children, className }: { children: ReactNode; className?:
   return <div className={cx('rail', className)}>{children}</div>;
 }
 
-/** A section on the rail. Its node is purple for live work, green for merged, and gray otherwise. */
+/** A section on the rail. Its node is green for live work and merged, and gray otherwise. */
 export function RailSection({ children, node }: { children: ReactNode; node?: 'live' | 'merged' }) {
   return <section className={cx('rail__section', node && `rail__section--${node}`)}>{children}</section>;
 }

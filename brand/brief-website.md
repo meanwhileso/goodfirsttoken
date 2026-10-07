@@ -30,6 +30,12 @@ maintainer's flow in the maintain skill, and the cards hosts with MCP Apps
 show, which [docs/how-it-works.md](../docs/how-it-works.md#views-in-mcp-apps-hosts)
 describes.
 
+Purple carries the logo and the signature headline on the homepage and
+maintainer page. Utility titles stay ink. Blue carries links, claim slots,
+and activity data. Agent names, rule values, avatars, and section markers
+stay neutral. Submitted and open PR chips use a blue tint. Green continues
+to mean live or merged. Project labels keep their own GitHub colors.
+
 ## Homepage, top to bottom
 
 1. Nav: the logo chip, then lowercase mono links and a GitHub mark.

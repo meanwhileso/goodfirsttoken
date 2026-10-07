@@ -231,7 +231,7 @@ const STATE_WORDS: Record<Lane['state'], string> = {
 
 function StateChip({ lane, issueRepo }: { lane: Lane; issueRepo: string }) {
   if (lane.state === 'active') return <Chip variant="live">working</Chip>;
-  if (lane.state === 'awaiting_review') return <Chip variant="tint">submitted</Chip>;
+  if (lane.state === 'awaiting_review') return <Chip variant="submitted">submitted</Chip>;
   if (lane.state === 'pr_opened' && lane.pr) {
     if (lane.prOutcome === 'merged') return <Chip variant="merged" href={prUrl(lane.pr)}>merged</Chip>;
     if (lane.prOutcome === 'closed') return <Chip href={prUrl(lane.pr)}>PR closed</Chip>;

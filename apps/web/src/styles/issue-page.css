@@ -31,13 +31,14 @@
 .issue-lane__head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
 .issue-lane__who { font-size: 17px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .issue-lane__who a { color: var(--ink); }
+.issue-lane__who a:hover { color: var(--accent); }
 .issue-lane__state { margin-left: auto; }
 .issue-lane__lines { display: flex; flex-direction: column; gap: 10px; font: 14px/1.5 var(--font-mono); color: var(--text-body); }
 .issue-line { overflow-wrap: anywhere; }
 .issue-line__time { color: var(--text-faint); margin-right: 4px; }
 .issue-line__job {
-  display: inline-block; padding: 0 6px; margin-right: 2px; border-radius: 6px; background: var(--label-tint);
-  color: var(--label-ink); font-size: 12.5px;
+  display: inline-block; padding: 0 6px; margin-right: 2px; border-radius: 6px; background: var(--metadata);
+  color: var(--metadata-ink); font-size: 12.5px;
 }
 .issue-line--new { animation: rise 0.45s ease-out; }
 .issue-lane--paused .issue-lane__lines { color: var(--text-muted); }
@@ -47,7 +48,7 @@
   color: var(--text-muted);
 }
 
-/* The open slot: a dashed purple ring and the claim command. Closed, a gray
+/* The open slot: a dashed blue ring and the claim command. Closed, a gray
    ring with a slash. */
 .issue-slot { align-items: flex-start; justify-content: center; gap: 18px; }
 .issue-slot .prompt { align-self: stretch; }
@@ -71,6 +72,7 @@
 .issue-event__time { color: var(--text-faint); }
 .issue-event__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
 .issue-event__who { font-weight: 600; color: var(--ink); }
+a.issue-event__who:hover { color: var(--accent); }
 .issue-event__text { color: var(--text-body); overflow-wrap: anywhere; min-width: 0; }
 @container page (max-width: 720px) {
   .issue-timeline > li { grid-template-columns: minmax(0, 1fr); }

@@ -5,7 +5,7 @@
 .board-title { font-size: clamp(40px, 7vw, 88px); }
 .board-views { margin-top: 36px; }
 .board-panel { margin-top: 40px; }
-.board-panel:focus-visible { outline: 2px solid var(--label); outline-offset: 8px; }
+.board-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 8px; }
 
 /* Said once, in mono, under a view. */
 .board-note { margin-top: 24px; max-width: 60em; font: 14px/1.6 var(--font-mono); color: var(--text-faint); }
@@ -19,6 +19,7 @@
 .board-head span:first-child { grid-column: 2; }
 .board-ranks > li { grid-template-columns: 64px minmax(0, 1fr) 96px 96px; }
 .board-ranks .ranks__who a { color: var(--ink); }
+.board-ranks .ranks__who a:hover { color: var(--accent); }
 .board-ranks .ranks__who a.mono { font-size: 19px; }
 .board-detail {
   display: block; margin-top: 6px; font: 13px/1.5 var(--font-mono); color: var(--text-faint); letter-spacing: 0; font-weight: 400;
@@ -39,7 +40,7 @@
   display: grid; grid-template-columns: 120px minmax(0, 1fr) 150px; gap: 16px; align-items: center; font-size: 15px;
 }
 .board-bar__track { height: 12px; border-radius: 99px; background: var(--line-soft); overflow: hidden; }
-.board-bar__fill { display: block; height: 100%; border-radius: 99px; background: var(--label); }
+.board-bar__fill { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
 .board-bar__value { font: 14px var(--font-mono); text-align: right; color: var(--text-muted); }
 @container page (max-width: 720px) {
   .board-bar { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }

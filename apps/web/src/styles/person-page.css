@@ -13,6 +13,7 @@
 .person-title--words { font: var(--display-lg); font-size: clamp(36px, 6vw, 64px); letter-spacing: var(--display-lg-tracking); }
 .person-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .person-github { margin-left: auto; color: var(--text-muted); }
+.person-github:hover { color: var(--accent); }
 .person-lede { margin-top: 16px; max-width: 34em; font-size: 18px; color: var(--text-muted); }
 .person-stats { margin-top: 48px; }
 
@@ -49,6 +50,7 @@
 .person-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 24px; align-items: center; padding: 14px 0; }
 .person-row__title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .person-row__title a { color: var(--ink); }
+.person-row__title a:hover { color: var(--accent); }
 .person-row__meta {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; grid-column: 1; min-width: 0; font-size: 14px;
   color: var(--text-muted); overflow-wrap: anywhere;
@@ -66,6 +68,7 @@
 }
 .person-helped > li:last-child { border-bottom: 1px solid var(--line-soft); }
 .person-helped > li a { color: var(--ink); min-width: 0; }
+.person-helped > li a:hover { color: var(--accent); }
 .person-helped__n { font: 600 20px/1 var(--font-sans); font-variant-numeric: tabular-nums; }
 
 /* The live feed is narrower here than on the homepage. */
