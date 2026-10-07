@@ -363,7 +363,7 @@ function PolicyListing({ policy }: { policy: Policy | null }) {
     <div className="project-policy">
       {policy && (
         <Quote>
-          {`“${policy.quote}” `}
+          <div className="project-policy__text">{policy.quote}</div>
           <a className="mono small" href={policy.url}>
             {policyFile(policy.url)} ↗
           </a>

@@ -691,12 +691,28 @@ describe('the page, through the Worker', () => {
 
     const html = shown(await (await page('/sample-owner/sample-listed')).text());
 
-    expect(html).toContain(`“${POLICY.quote}”`);
+    expect(html).toContain(`<div class="project-policy__text">${POLICY.quote}</div>`);
     expect(html).toContain(`href="${POLICY.url}"`);
     expect(html).toContain('CONTRIBUTING.md#ai ↗');
     expect(html).toContain('listed from its AI policy');
     expect(html).toContain('<a href="/maintainers">take it over or remove it</a>');
     expect(html).not.toContain('registered by');
+  });
+
+  test('keeps policy markdown, line breaks, and indentation as escaped text, with its source link outside the excerpt', async () => {
+    const quote = '## Agents welcome\n\n- **Disclose it.**\n  Use `Assisted-by: Codex`.\n<img src=x onerror=alert(1)>\n<script>alert(2)</script>\n[link](javascript:alert(3))';
+    await createProject(
+      db,
+      { repo: 'sample-owner/sample-listed', status: 'approved', source: 'policy', policy: { ...POLICY, quote }, settings: { tags: ['help wanted'] }, addedBy: admin.githubId },
+      t0,
+    );
+
+    const html = shown(await (await page('/sample-owner/sample-listed')).text());
+    const escaped = quote.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    expect(html).toContain(`<div class="project-policy__text">${escaped}</div><a`);
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('<script>alert(2)</script>');
+    expect(html).not.toContain('href="javascript:');
   });
 
   test('says a paused project is paused, and grays its slots', async () => {

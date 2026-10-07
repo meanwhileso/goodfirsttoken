@@ -100,7 +100,12 @@ test('a project listed from its policy says so on the list, and its page quotes 
   await expect(page).toHaveURL(new RegExp(`/${BUNDLER}$`));
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(BUNDLER);
   const policy = page.locator('.project-policy');
-  await expect(policy.locator('.quote')).toContainText('“AI help is fine. Write the PR description yourself.”');
+  const excerpt = policy.locator('.project-policy__text');
+  await expect(excerpt).toHaveText('AI help is fine. Write the PR description yourself.');
+  await expect(excerpt).toHaveCSS('white-space', 'pre-wrap');
+  await expect(excerpt).toHaveCSS('font-family', /Geist Mono/);
+  await expect(excerpt).toHaveCSS('overflow-wrap', 'anywhere');
+  await expect(excerpt.locator('a')).toHaveCount(0);
   await expect(policy.getByRole('link', { name: /CONTRIBUTING\.md/ })).toHaveAttribute(
     'href',
     `https://github.com/${BUNDLER}/blob/main/CONTRIBUTING.md`,
