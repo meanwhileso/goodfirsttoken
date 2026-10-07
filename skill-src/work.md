@@ -28,12 +28,15 @@ signs in with GitHub, which gives Good First Token access to public repos
 only.
 
 {{include donor-start}}
+{{include donor-project}}
 When the donor wants the issue they named first, go on to Claim the issue.
 
 ## Claim the issue
 
-1. Take the issue the donor named, as owner/repo#number. Ask for it when
-   they didn't name one.
+1. Take the issue the donor named, as owner/repo#number. When they named a
+   project without an issue, use the give skill to find that project and
+   offer its tagged issues. Otherwise, ask for the issue when they didn't
+   name one.
 2. Call `claim_issue` with `sessionId` and the issue as `issue`. When the
    donor already holds a claim on it, the answer has `resumed` `true`, and
    the commit the claim started from.

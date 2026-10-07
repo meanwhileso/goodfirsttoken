@@ -35,7 +35,14 @@ requests as them. It can't read private repos.
 
 ## 4. Work
 
-Follow the give skill. These rules always hold:
+Follow the give skill.
+
+When the person names a project, find its Good First Token listing by name
+or repo URL and offer its issues tagged for outside help. Keep their project
+choice when looking for more work. If the project is absent, paused, or has
+no available work you can find, explain that and let them choose another.
+
+These rules always hold:
 
 1. Work only issues the server gives you. Show the person each issue's link,
    and let them pick.
