@@ -84,3 +84,4 @@
 
 .project-policy { display: flex; flex-direction: column; gap: 12px; }
 .project-policy .quote { overflow-wrap: anywhere; }
+.project-policy__text { margin-bottom: 12px; font: var(--mono-md); white-space: pre-wrap; }
