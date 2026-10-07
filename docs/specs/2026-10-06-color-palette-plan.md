@@ -46,10 +46,12 @@ Vitest, and the existing share-card renderer.
   the current reference, remove the staged wording, and update
   `brand/brand.md`, `brand/brief-website.md`, and the design-system section
   of `docs/how-it-works.md`.
-- [ ] Run `pnpm check`, relevant Workers tests, and browser tests. Review
+- [x] Run `pnpm check`, relevant Workers tests, and browser tests. Review
   the site at 390 and 1280 pixels, and check dark agent-view contrast.
   Obtain Linux screenshot baselines from the CI Playwright run, as
-  `CONTRIBUTING.md` requires. Review every changed baseline before accepting.
+  `CONTRIBUTING.md` requires. Review every changed baseline before accepting. The five design-system
+  and two leaderboard baselines were inspected from Linux CI artifacts,
+  including an independent adversarial review.
 - [x] Have a different agent review adversarially, prove and triage each
   finding, fix confirmed bugs with a failing test, and record the results
   in the PR disclosure and review section. The reviews found a green
