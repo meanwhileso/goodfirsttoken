@@ -283,7 +283,7 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   // seed whose finds an admin rejected goes in, and comes back only when its
   // docs read differently, as a repo the search finds does.
   const since = pass?.startedAt ?? null;
-  const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN, since)).map((seed) => seed.repo);
+  const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN, since, now())).map((seed) => seed.repo);
   const { queued: seeded, skips } = await send(deps, seeds, { readRejected: true, ...(since === null ? {} : { broadStartedAt: since }) });
   run.seeds = seeded.length;
   await markSeedsHandled(

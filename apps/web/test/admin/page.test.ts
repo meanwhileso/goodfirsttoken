@@ -2,6 +2,8 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { loadAdminPage } from '../../src/admin/page';
+import { adminSeedRepo } from '../../src/admin/actions';
+import { priorityEvidence } from '../priority-evidence';
 import { signNotice } from '../../src/auth/notice';
 import {
   addCandidate,
@@ -86,6 +88,41 @@ function harborId(html: string): string {
 }
 
 describe('who sees /admin', () => {
+  test('candidate detail shows safe evidence links and recomputed freshness, with escaped notes and no public evidence', async () => {
+    const now = Date.now();
+    await addCandidate(env.DB, { repo: BUNDLER,
+      facts: { stars: 10000, createdAt: now - 86400000, pushedAt: now, ownerCreatedAt: now - 86400000 },
+      policy: { quote: 'Agents are welcome.', url: `https://github.com/${BUNDLER}/blob/main/AGENTS.md`, tier: 'invites_agents' },
+      settings: {}, suggestedTags: [], }, now);
+    const browser = await signedIn('sample-admin');
+    const evidence = priorityEvidence(now, { note: '<script>alert("evidence")</script>', publishedAt: new Date(now - 89 * 86400000).toISOString() });
+    await adminSeedRepo({ githubId: 1010, login: 'sample-admin', gitHubToken: () => Promise.resolve(null) }, { repo: BUNDLER, evidence }, now);
+    const html = await (await browser.fetch('/admin')).text();
+    expect(html).toContain('Discovery priority qualifies.');
+    expect(html).toContain(`href="${evidence.roleSourceUrl}"`);
+    expect(html).toContain(`href="${evidence.identitySourceUrl}"`);
+    expect(html).toContain(`href="${evidence.postUrl}"`);
+    expect(html).toContain('sample_person');
+    expect(html).toContain('exact UTC');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).not.toContain('<script>alert("evidence")</script>');
+    vi.spyOn(Date, 'now').mockReturnValue(now + 2 * 86400000);
+    const expired = await (await browser.fetch('/admin')).text();
+    expect(expired).toContain('Discovery priority does not qualify.');
+    expect(expired).toContain('The authored post is older than 90 days.');
+    // Listing decisions expose policy, while operational evidence stays in admin detail.
+    await createProject(env.DB, { repo: BUNDLER, addedBy: 1010, status: 'approved', source: 'policy',
+      policy: { quote: 'Agents are welcome.', url: `https://github.com/${BUNDLER}/blob/main/AGENTS.md`, tier: 'invites_agents' }, settings: { tags: ['help wanted'] } }, now);
+    for (const path of ['/', '/projects', `/${BUNDLER}`, `/${BUNDLER}.md`]) {
+      const response = await new Browser().fetch(path);
+      expect(response.status).toBe(200);
+      const publicHtml = await response.text();
+      expect(publicHtml).not.toContain(evidence.postUrl);
+      expect(publicHtml).not.toContain('sample_person');
+      expect(publicHtml).not.toContain(evidence.identitySourceUrl);
+      if (path.includes(BUNDLER)) expect(publicHtml).toContain('Agents are welcome.');
+    }
+  });
   test('someone signed out is sent to sign in', async () => {
     const page = await new Browser().fetch('/admin');
 

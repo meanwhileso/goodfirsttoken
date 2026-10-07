@@ -1,4 +1,4 @@
-import type { CrawlCandidate, CrawlMessage } from '@goodfirsttoken/core';
+import { verifyCrawlPriority, type CrawlCandidate, type CrawlMessage } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -11,6 +11,7 @@ import {
   getSeed,
   latestCrawlPass,
   listCandidates,
+  saveSeedEvidence,
 } from '../../src/db';
 import worker from '../../src/server';
 import { ServiceGitHub, type Allowance } from '../../src/sync/github';
@@ -18,6 +19,7 @@ import { ALLOWANCES } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
 import { admin, db, emptyDatabase, maintainer, registeredProject, signIn } from '../db/helpers';
 import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
+import { priorityEvidence } from '../priority-evidence';
 
 // The policy crawler end to end: its search fills the crawl queue, and the
 // queue's consumer reads each repo from the GitHub fake and puts the ones
@@ -344,6 +346,14 @@ describe('what the crawler skips', () => {
 });
 
 describe('the seed list', () => {
+  test('seed ordering uses the producer clock even when the system clock differs, and expired evidence stays discoverable', async () => {
+    await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start - 1000);
+    await saveSeedEvidence(db, { repo: INVITES, addedBy: admin.githubId, evidence: verifyCrawlPriority(priorityEvidence(start), admin.githubId, start) }, start);
+    const clock = start + 31 * 86400000;
+    const run = await fillCrawlQueue({ db, queue, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, ALLOWANCES.crawlSearch), now: () => clock });
+    expect(sent[0]).toEqual({ repos: [SEED, INVITES] });
+    expect(run.seeds).toBe(2);
+  });
   test('adds a repo the search never finds, queued once, and read like any other', async () => {
     await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
 

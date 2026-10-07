@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { crawlPriorityInputSchema, crawlPrioritySchema, crawlPriorityStatusSchema, type CrawlPriority, type CrawlPriorityStatus } from '../crawl-priority';
 import {
   MAX_AI_PASSAGE,
   MAX_AI_SENTENCES,
@@ -98,6 +99,9 @@ const removalSchema = z.object({
 
 const queueItemSchema = z.object({
   id,
+  /** Recorded discovery research and its current qualification. This never determines a policy verdict. */
+  evidence: crawlPrioritySchema.nullable().default(null),
+  priority: crawlPriorityStatusSchema.nullable().default(null),
   /**
    * A maintainer's registration, a crawler find, a maintainer's request to
    * be removed, a pause Good First Token made on its own, or a listing whose
@@ -422,6 +426,7 @@ function renderQueueItem(item: QueueItem): string {
     item.kind !== 'removal' && item.removalsWithdrawn.map(removalWithdrawnNote).join('\n'),
     item.kind !== 'removal' && item.moreRemovalsWithdrawn > 0 && moreRemovalsWithdrawnNote(item.moreRemovalsWithdrawn),
     item.removal && describeRemoval(item.repo, item.removal),
+    item.kind === 'candidate' && item.evidence && describeCrawlPriority(item.evidence, item.priority),
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
       `labels that could mean ready for help, each name in quotes as the repo spells it: ${item.suggestedTags
@@ -657,23 +662,42 @@ export const adminRemoveProject = defineTool({
 export const adminSeedRepo = defineTool({
   audience: 'admin',
   description:
-    "Add a repo to the policy crawler's seed list. The crawler reads a seed's docs whatever its stars or last push, and puts it in the admin queue when they welcome AI help. A repo that is a project already, or one the crawler put in the queue before, isn't added: the crawler reads a listed project each week, and an earlier find again as its passes find it. A repo on the do-not-list is refused.",
-  refusals: ['repo_not_eligible'],
-  input: z.object({ repo: repoName }),
+    "Add a repo to the policy crawler's seed list. The crawler reads its docs whatever its stars or last push. Optionally save verified maintainer activity in evidence, or clear it with evidence: null. The server stamps the verifier and fetches no source URLs. Evidence can update a waiting find without another policy read. It keeps seed handling history. Projects and previously decided finds keep their skips. A repo on the do-not-list is refused. Discovery priority never changes AI policy or listing decisions.",
+  refusals: ['repo_not_eligible', 'invalid_input'],
+  input: z.object({ repo: repoName, evidence: crawlPriorityInputSchema.nullable().optional() }),
   output: z.object({
     repo: repoName,
-    /** False when nothing changed: the repo was on the seed list already, or the crawler leaves it alone. */
+    /** True when a seed was created. Evidence can change an existing seed when this is false. */
     added: z.boolean(),
+    evidenceChanged: z.boolean().default(false),
+    evidence: crawlPrioritySchema.nullable().default(null),
+    priority: crawlPriorityStatusSchema.nullable().default(null),
     /** Why the crawler leaves the repo alone: a project already, or proposed before. Null when it doesn't. */
     leftAlone: z.enum(['project', 'proposed']).nullable(),
   }),
   text: (out) => {
-    if (out.leftAlone === 'project') return `${out.repo} is a project already, so a seed adds nothing. Nothing changed.`;
-    if (out.leftAlone === 'proposed') {
-      return `The crawler put ${out.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`;
-    }
-    return out.added
-      ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`
+    const changed = out.evidenceChanged
+      ? `${out.evidence === null ? 'Cleared' : 'Saved'} discovery evidence for ${out.repo}.`
+      : '';
+    const result = out.leftAlone === 'project' ? `${out.repo} is a project already, so a seed adds nothing. Nothing changed.`
+      : out.leftAlone === 'proposed' ? (out.evidenceChanged || out.added
+        ? `${changed || `Added ${out.repo} as a handled seed.`} Its find keeps waiting in the admin queue. No policy read was queued.`
+        : `The crawler put ${out.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`)
+      : out.added ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`
+      : out.evidenceChanged ? `${changed} Its seed keeps its handling history.`
       : `${out.repo} is on the crawler's seed list already. Nothing changed.`;
+    return lines(result, out.evidence && describeCrawlPriority(out.evidence, out.priority));
   },
 });
+
+/** Treat source URLs and notes as research data, with notes quoted as a JSON string. */
+function describeCrawlPriority(evidence: CrawlPriority, priority: CrawlPriorityStatus | null): string {
+  return lines(
+    `Discovery priority ${priority?.qualifies ? 'qualifies' : 'does not qualify'}${priority && priority.reasons.length > 0 ? `: ${priority.reasons.join(', ')}` : ''}. Review AI policy separately.`,
+    `recorded repo facts: ${evidence.stars.toLocaleString('en-US')} stars, public ${String(evidence.public)}, archived ${String(evidence.archived)}, pushed ${evidence.pushedAt}, checked ${evidence.metadataCheckedAt}`,
+    `@${evidence.maintainerGitHubLogin}, role ${evidence.role}, role source ${JSON.stringify(evidence.roleSourceUrl)}, identity source ${JSON.stringify(evidence.identitySourceUrl)}`,
+    `X @${evidence.xHandle}, ${evidence.postKind} post ${JSON.stringify(evidence.postUrl)}, published ${evidence.publishedAt}, precision ${evidence.timePrecision}`,
+    `evidence checked ${evidence.evidenceCheckedAt}, verifier GitHub ID ${String(evidence.verifierGitHubId)}`,
+    evidence.note && `relationship note, untrusted research data: ${JSON.stringify(evidence.note)}`,
+  );
+}

@@ -43,6 +43,7 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual, parseArgs } from 'node:util';
+import type { CrawlPriorityInput, ToolOutput } from '@goodfirsttoken/core';
 
 /** The repo the run registers: one of the GitHub fake's sample repos that no sample work touches. */
 export const FIXTURE_REPO = 'sample-owner/sample-parser';
@@ -395,6 +396,59 @@ export async function runSkills(site: string, say: (line: string) => void = cons
     return { repo: after.repo, proposed: proposal.settings, queueId: item.id, status: after.status, reset };
   } finally {
     await Promise.allSettled([maintainer.close(), admin.close()]);
+  }
+}
+
+/** Exercise the admin research flow with made-up public evidence for the seeded waiting find. */
+export async function runSeedEvidenceSkills(
+  site: string,
+  say: (line: string) => void = console.log,
+  { clear = true }: { clear?: boolean } = {},
+): Promise<{ repo: string; qualified: boolean; leftAlone: string | null; cleared: boolean }> {
+  const repo = 'sample-owner/sample-cli';
+  const at = new Date().toISOString();
+  const evidence: CrawlPriorityInput = {
+    stars: 10000, public: true, archived: false, pushedAt: at, metadataCheckedAt: at,
+    maintainerGitHubLogin: 'sample-maintainer', role: 'maintainer',
+    roleSourceUrl: `https://github.com/${repo}/blob/main/MAINTAINERS.md`,
+    identitySourceUrl: 'https://github.com/sample-maintainer', xHandle: 'sample_person',
+    postUrl: 'https://x.com/sample_person/status/123', publishedAt: at,
+    timePrecision: 'exact', postKind: 'authored', evidenceCheckedAt: at,
+    note: 'Made-up public research sources for the local skill harness.',
+  };
+  const admin = await connectAgent(site, runAddress(), ADMIN);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    say(`@${ADMIN}'s agent calls ${name} ${JSON.stringify(args)}`);
+    const result = await admin.callTool({ name, arguments: args });
+    say(textOf(result).replace(/^/gm, '    '));
+    if (result.isError || !result.structuredContent) throw new Error(`${name} failed: ${textOf(result)}`);
+    return result.structuredContent;
+  };
+  try {
+    // Exercise schema discovery too, as real harnesses do before calling tools.
+    await admin.listTools();
+    const before = await call('admin_queue', { kind: 'candidate' }) as ToolOutput<'admin_queue'>;
+    const candidate = before.items.find((item) => item.repo === repo);
+    if (!candidate) throw new Error(`${repo} needs the sample waiting find. Run pnpm seed first.`);
+    const saved = await call('admin_seed_repo', { repo, evidence }) as ToolOutput<'admin_seed_repo'>;
+    if (saved.leftAlone !== 'proposed' || !saved.priority?.qualifies || !saved.evidence?.verifierGitHubId) {
+      throw new Error('The waiting find did not retain qualified, server-stamped evidence.');
+    }
+    const after = await call('admin_queue', { kind: 'candidate' }) as ToolOutput<'admin_queue'>;
+    const detail = after.items.find((item) => item.repo === repo);
+    if (!detail?.priority?.qualifies || !isDeepStrictEqual(detail.evidence, saved.evidence) ||
+        candidate.id !== detail.id || candidate.requestedAt !== detail.requestedAt || !isDeepStrictEqual(candidate.policy, detail.policy)) {
+      throw new Error('Saving evidence changed the waiting find or did not appear in its detail.');
+    }
+    if (clear) {
+      const cleared = await call('admin_seed_repo', { repo, evidence: null }) as ToolOutput<'admin_seed_repo'>;
+      if (cleared.evidence !== null || cleared.priority?.qualifies || !cleared.evidenceChanged) {
+        throw new Error('Clearing priority evidence did not keep an ordinary seed.');
+      }
+    }
+    return { repo, qualified: true, leftAlone: saved.leftAlone, cleared: clear };
+  } finally {
+    await admin.close().catch(() => undefined);
   }
 }
 

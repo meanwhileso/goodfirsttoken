@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { count, epochMs, githubId, httpsUrl, id, labelName, repoName, trimmedText } from './primitives';
 import { policySchema, projectSettingsPatchSchema } from './projects';
+import { crawlPrioritySchema } from './crawl-priority';
 
 // The policy crawler's records (spec section 5): the repos it found for the
 // admin queue, and the do-not-list it honors.
@@ -137,6 +138,8 @@ export type CrawlSeedOutcome = z.infer<typeof crawlSeedOutcomeSchema>;
 /** A repo an admin asked the crawler to read, whatever its stars or last push. */
 export const crawlSeedSchema = z.object({
   repo: repoName,
+  /** Admin research affecting discovery order, or null for an ordinary seed. */
+  evidence: crawlPrioritySchema.nullable().default(null),
   /** The admin who added it. */
   addedBy: githubId,
   addedAt: epochMs,
