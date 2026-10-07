@@ -2,21 +2,32 @@ import { repoName, SEARCH_PAGES, type CrawlMessage, type CrawlPass } from '@good
 import {
   crawlerSkips,
   latestCrawlPass,
+  latestPopularCrawlPass,
   listProjectsToReread,
   listSeedsToHandle,
   markRereadsQueued,
   markSeedsHandled,
   moveCrawlPass,
+  movePopularCrawlPass,
+  queuedCrawlRepos,
+  recordCrawlQueuedRepos,
+  retireCrawlQueuedRepos,
   seedsQueuedSince,
   startCrawlPass,
+  startPopularCrawlPass,
   type CrawlerSkip,
+  type PopularCrawlPass,
 } from '../db';
 import { SyncStopped, type ServiceGitHub, type StopReason } from '../sync/github';
 
 // The policy crawler's cron job (spec section 5). It fills the crawl queue
 // with batches of repos for its consumer (src/crawl/queue.ts) to read: first
-// the seeds an admin added, then the repos GitHub's search finds with at
-// least 1,000 stars and a push in the last 30 days. Search serves at most
+// the seeds an admin added and listed projects due for their weekly read.
+// Then it advances the broad search, reads up to four popular pages, and
+// spends the remaining calls on the broad search. Both find public repos
+// pushed in the last 30 days. Broad search starts at 1,000 stars. The popular
+// sample starts at 10,000 stars and reads the highest-star results first.
+// Search serves at most
 // 1,000 results for a query, so it reads the pool in bands of star counts,
 // each narrow enough for search to serve whole, and keeps where it stands in
 // crawl_passes. A run stops when its share of the search budget or its calls
@@ -28,6 +39,9 @@ import { SyncStopped, type ServiceGitHub, type StopReason } from '../sync/github
 
 /** The fewest stars a repo needs for the search to find it. */
 export const CRAWL_MIN_STARS = 1000;
+/** The popular sample reads the highest-star results above this threshold. */
+const POPULAR_MIN_STARS = 10000;
+const POPULAR_CALLS_PER_RUN = 4;
 /** The search finds repos pushed in this many days before the pass started. */
 export const CRAWL_PUSHED_DAYS = 30;
 /** Repos in one message of the crawl queue. */
@@ -66,15 +80,17 @@ export interface FillRun {
   queued: number;
   /** The pass as the run left it, or null when there is none. */
   pass: CrawlPass | null;
+  popularPass: PopularCrawlPass | null;
+  popularSearches: number;
+  popularQueued: number;
   calls: number;
   stopped: StopReason | 'moved' | null;
 }
 
 // https://docs.github.com/en/rest/search/search#search-repositories
 interface SearchAnswer {
-  total_count?: unknown;
-  incomplete_results?: unknown;
-  items?: { full_name?: unknown; archived?: unknown; private?: unknown }[];
+  total_count: number;
+  items: { full_name: unknown; archived: unknown; private: unknown }[];
 }
 
 /**
@@ -88,15 +104,22 @@ interface SearchAnswer {
 async function send(
   deps: FillDeps,
   repos: readonly string[],
-  options: { readRejected?: boolean } = {},
+  options: { readRejected?: boolean; broadStartedAt?: number } = {},
 ): Promise<{ queued: string[]; skips: Map<string, CrawlerSkip> }> {
   const skips = await crawlerSkips(deps.db, repos, options);
-  const queued = repos.filter((repo) => !skips.has(repo.toLowerCase()));
+  const unique = [...new Map(repos.map((repo) => [repo.toLowerCase(), repo])).values()];
+  const recorded = options.broadStartedAt === undefined ? new Set<string>() : await queuedCrawlRepos(deps.db, unique, options.broadStartedAt);
+  // Keep recognizing seeds handled before the successful-send ledger existed.
+  const seeded = options.broadStartedAt === undefined ? new Set<string>() : await seedsQueuedSince(deps.db, unique, options.broadStartedAt);
+  const queued = unique.filter((repo) => !skips.has(repo.toLowerCase()) && !recorded.has(repo.toLowerCase()) && !seeded.has(repo.toLowerCase()));
   const messages: { body: CrawlMessage }[] = [];
   for (let start = 0; start < queued.length; start += CRAWL_BATCH) {
     messages.push({ body: { repos: queued.slice(start, start + CRAWL_BATCH) } });
   }
-  if (messages.length > 0) await deps.queue.sendBatch(messages);
+  if (messages.length > 0) {
+    await deps.queue.sendBatch(messages);
+    if (options.broadStartedAt !== undefined) await recordCrawlQueuedRepos(deps.db, queued, options.broadStartedAt);
+  }
   return { queued, skips };
 }
 
@@ -123,6 +146,36 @@ function searchPath(pass: CrawlPass): string {
   return `/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=asc&per_page=${String(PER_PAGE)}&page=${String(pass.page)}`;
 }
 
+/** Validate whole search responses before sending or moving a checkpoint. */
+function searchAnswer(data: unknown): SearchAnswer {
+  const malformed = () => new SyncStopped('github_error', "GitHub's API answered a search in a form GitHub doesn't use.");
+  if (data === null || typeof data !== 'object' || !('total_count' in data) || !('items' in data)) throw malformed();
+  const total = data.total_count;
+  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0 || !Array.isArray(data.items)) throw malformed();
+  // A search that ran out of time serves only part of what it finds.
+  // Its checkpoint stays where it is, and the next run asks again.
+  if ('incomplete_results' in data && data.incomplete_results === true) {
+    throw new SyncStopped('github_error', "GitHub's search ran out of time and gave only part of its results.");
+  }
+  const items: SearchAnswer['items'] = [];
+  for (const item of data.items as unknown[]) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) throw malformed();
+    items.push({
+      full_name: 'full_name' in item ? item.full_name : undefined,
+      archived: 'archived' in item ? item.archived : undefined,
+      private: 'private' in item ? item.private : undefined,
+    });
+  }
+  return { total_count: total, items };
+}
+function searchRepos(data: SearchAnswer): string[] {
+  return data.items.flatMap((item) => {
+    if (item.archived === true || item.private === true) return [];
+    const name = repoName.safeParse(item.full_name);
+    return name.success ? [name.data] : [];
+  });
+}
+
 /**
  * Reads one page of the band the pass reads now, queues what it finds, and
  * says where the pass stands after it. A band search counts more than 1,000
@@ -131,17 +184,10 @@ function searchPath(pass: CrawlPass): string {
  * one star count with more than search serves gives what search serves.
  */
 async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promise<CrawlPass> {
-  const { data } = await deps.github.read<SearchAnswer>(searchPath(pass));
+  const response = await deps.github.read<unknown>(searchPath(pass));
   run.searches += 1;
+  const data = searchAnswer(response.data);
   const total = data.total_count;
-  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0 || !Array.isArray(data.items)) {
-    throw new SyncStopped('github_error', "GitHub's API answered a search in a form GitHub doesn't use.");
-  }
-  // A search that ran out of time counts and serves only part of what it
-  // finds. The pass stays where it is, and the next run asks again.
-  if (data.incomplete_results === true) {
-    throw new SyncStopped('github_error', "GitHub's search ran out of time and gave only part of its results.");
-  }
   const next: CrawlPass = { ...pass };
   if (pass.open && pass.low === CRAWL_MIN_STARS && pass.page === 1) next.pool = total;
   if (pass.page === 1 && total > SEARCH_LIMIT) {
@@ -149,16 +195,7 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
     if (pass.width > 1) return { ...next, width: Math.floor(pass.width / 2) };
     console.warn(`The crawler's search counts ${String(total)} repos with ${String(pass.low)} stars, more than it serves. It reads the first ${String(SEARCH_LIMIT)}.`);
   }
-  const found = data.items.flatMap((item) => {
-    if (item.archived === true || item.private === true) return [];
-    const name = repoName.safeParse(item.full_name);
-    return name.success ? [name.data] : [];
-  });
-  // A seed this pass queued already is read once in it. A seed the search
-  // queues first counts as handled in the pass, so the seed step leaves it.
-  const seeded = await seedsQueuedSince(deps.db, found, pass.startedAt);
-  const repos = found.filter((repo) => !seeded.has(repo.toLowerCase()));
-  const { queued } = await send(deps, repos, { readRejected: true });
+  const { queued } = await send(deps, searchRepos(data), { readRejected: true, broadStartedAt: pass.startedAt });
   await markSeedsHandled(
     deps.db,
     queued.map((repo) => ({ repo, outcome: 'queued' as const })),
@@ -173,6 +210,25 @@ async function searchOnce(deps: FillDeps, pass: CrawlPass, run: FillRun): Promis
   if (pass.open) return { ...next, finishedAt: deps.now() };
   const sparse = total < SPARSE;
   return { ...next, low: pass.low + pass.width, page: 1, width: sparse ? pass.width * 2 : pass.width, open: sparse };
+}
+
+/** One descending page of the popular sample, with the broad pass's send scope. */
+async function popularSearchOnce(deps: FillDeps, pass: PopularCrawlPass, broadStartedAt: number, run: FillRun): Promise<PopularCrawlPass> {
+  const since = new Date(pass.pushedSince).toISOString().slice(0, 10);
+  const q = `stars:>=${String(POPULAR_MIN_STARS)} pushed:>=${since} archived:false is:public`;
+  const path = `/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=${String(PER_PAGE)}&page=${String(pass.page)}`;
+  const response = await deps.github.read<unknown>(path);
+  run.searches += 1;
+  run.popularSearches += 1;
+  const data = searchAnswer(response.data);
+  const total = data.total_count;
+  const { queued } = await send(deps, searchRepos(data), { readRejected: true, broadStartedAt });
+  await markSeedsHandled(deps.db, queued.map((repo) => ({ repo, outcome: 'queued' as const })), deps.now(), broadStartedAt);
+  run.queued += queued.length;
+  run.popularQueued += queued.length;
+  const next = { ...pass, pool: pass.page === 1 ? total : pass.pool, queued: pass.queued + queued.length };
+  const pages = Math.min(SEARCH_PAGES, Math.ceil(Math.min(total, SEARCH_LIMIT) / PER_PAGE));
+  return pass.page < pages ? { ...next, page: pass.page + 1 } : { ...next, finishedAt: deps.now() };
 }
 
 /**
@@ -197,12 +253,16 @@ async function queueRereads(deps: FillDeps): Promise<number> {
  * search reads the pool once a month. It queues the seeds an admin added
  * that it hasn't handled in this pass, and records for each seed whether it
  * queued it or left it alone, and why. Then it queues the listed projects
- * due for their weekly read. Then it reads the pool on from where the pass
- * stands, until the pass is done or the run has to stop.
+ * due for their weekly read. It spends one call on the broad pass, up to
+ * four on the independent monthly popular sample, then the rest on broad
+ * search. Both share the run's allowance and keep their own checkpoints.
  */
 export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   const { db, github, now } = deps;
-  const run: FillRun = { seeds: 0, rereads: 0, searches: 0, queued: 0, pass: null, calls: 0, stopped: null };
+  const run: FillRun = {
+    seeds: 0, rereads: 0, searches: 0, queued: 0, pass: null,
+    popularPass: null, popularSearches: 0, popularQueued: 0, calls: 0, stopped: null,
+  };
 
   // Starting a pass, the seeds, and the weekly reads need no call to GitHub.
   let pass = await latestCrawlPass(db);
@@ -210,13 +270,21 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
     pass = (await startCrawlPass(db, newPass(now()))) ?? (await latestCrawlPass(db));
   }
   run.pass = pass;
+  let popularPass = await latestPopularCrawlPass(db);
+  if (popularPass === null || (popularPass.finishedAt !== null && now() - popularPass.startedAt >= CRAWL_PASS_EVERY_MS)) {
+    const sample = { startedAt: now(), pushedSince: now() - CRAWL_PUSHED_DAYS * DAY_MS, pool: null, page: 1, queued: 0, finishedAt: null };
+    popularPass = (await startPopularCrawlPass(db, sample)) ?? (await latestPopularCrawlPass(db));
+  }
+  run.popularPass = popularPass;
+  // Every path in this run uses the latest broad scope, even once it is done.
+  if (pass !== null) await retireCrawlQueuedRepos(db, pass.startedAt);
 
   // A seed is read once in each pass, whatever its stars or last push. A
   // seed whose finds an admin rejected goes in, and comes back only when its
   // docs read differently, as a repo the search finds does.
   const since = pass?.startedAt ?? null;
   const seeds = (await listSeedsToHandle(db, SEEDS_PER_RUN, since)).map((seed) => seed.repo);
-  const { queued: seeded, skips } = await send(deps, seeds, { readRejected: true });
+  const { queued: seeded, skips } = await send(deps, seeds, { readRejected: true, ...(since === null ? {} : { broadStartedAt: since }) });
   run.seeds = seeded.length;
   await markSeedsHandled(
     db,
@@ -228,15 +296,31 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   run.rereads = await queueRereads(deps);
 
   try {
-    if (pass !== null && pass.finishedAt === null) await github.checkGitHub();
-    while (pass !== null && pass.finishedAt === null) {
+    if (pass?.finishedAt === null || popularPass?.finishedAt === null) await github.checkGitHub();
+    const advanceBroad = async (): Promise<boolean> => {
+      if (pass === null || pass.finishedAt !== null) return true;
       const next = await searchOnce(deps, pass, run);
       if (!(await moveCrawlPass(db, pass, next))) {
         run.stopped = 'moved';
-        break;
+        return false;
       }
       pass = next;
       run.pass = pass;
+      return true;
+    };
+    if (await advanceBroad()) {
+      for (let calls = 0; calls < POPULAR_CALLS_PER_RUN && popularPass !== null && popularPass.finishedAt === null && pass !== null; calls++) {
+        const next = await popularSearchOnce(deps, popularPass, pass.startedAt, run);
+        if (!(await movePopularCrawlPass(db, popularPass, next))) {
+          run.stopped = 'moved';
+          break;
+        }
+        popularPass = next;
+        run.popularPass = popularPass;
+      }
+      while (run.stopped === null && pass !== null && pass.finishedAt === null) {
+        if (!(await advanceBroad())) break;
+      }
     }
   } catch (error) {
     if (!(error instanceof SyncStopped)) throw error;
@@ -250,8 +334,11 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
       : run.pass.finishedAt !== null
         ? `the pass is done, with ${String(run.pass.queued)} repos of ${String(run.pass.pool ?? 'an unknown number')} queued`
         : `the pass is at ${run.pass.open ? `${String(run.pass.low)} stars and up` : `${String(run.pass.low)} to ${String(run.pass.low + run.pass.width - 1)} stars`}, page ${String(run.pass.page)}, with ${String(run.pass.queued)} repos of ${String(run.pass.pool ?? 'an unknown number')} queued`;
+  const sample = run.popularPass;
+  const popularWhere = sample === null ? 'No popular sample' :
+    `The popular sample counted ${String(sample.pool ?? 'an unknown number')} repos, with a ${String(SEARCH_LIMIT)}-repo cap. It queued ${String(sample.queued)}. ${sample.finishedAt === null ? `Next page: ${String(sample.page)}` : `Finished${sample.page === SEARCH_PAGES && (sample.pool ?? 0) > SEARCH_LIMIT ? ' at the sample cap' : ''}`}`;
   console.log(
-    `The crawler queued seeds: ${String(run.seeds)}, listed projects to read again: ${String(run.rereads)}, repos from search: ${String(run.queued)}, searches: ${String(run.searches)}, calls to GitHub: ${String(run.calls)}. ${where[0]?.toUpperCase() ?? ''}${where.slice(1)}. Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The crawler queued seeds: ${String(run.seeds)}, listed projects to read again: ${String(run.rereads)}, repos from search: ${String(run.queued)}, searches: ${String(run.searches)}, calls to GitHub: ${String(run.calls)}. ${where[0]?.toUpperCase() ?? ''}${where.slice(1)}. ${popularWhere}. Popular searches this run: ${String(run.popularSearches)}, popular repos queued: ${String(run.popularQueued)}. Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

@@ -1631,7 +1631,9 @@ in `people`.
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added to the crawler's seed list: who added it and when, and when the crawler's cron job handled it and what it did | `repo` |
-| `crawl_passes` | Pass of the crawler's search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
+| `crawl_passes` | Pass of the crawler's broad search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
+| `popular_crawl_passes` | Monthly popular sample: start and push date, total results at its first page, next page, queued count, and finish time | `started_at` |
+| `crawl_queued_repos` | Successful seed, broad, and popular sends recorded for a broad pass, with repo names compared without case | `broad_started_at, repo` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read and whether they read a ban, and why the crawler last paused it | `project` |
 | `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, status, and the admin's decision | `id` |
@@ -1761,7 +1763,8 @@ that break the rules, so it returns the problems for the caller to show.
 The spec says everything the site shows is public GitHub data or the public
 live feed. It says crawl results stay in the deployment's database, and only
 listed projects and their policy quotes are public, so `crawl_candidates`,
-`crawl_seeds`, and `crawl_passes` stay private, a rejection's reason
+`crawl_seeds`, `crawl_passes`, `popular_crawl_passes`, and
+`crawl_queued_repos` stay private, a rejection's reason
 included. The crawler keeps no verdict on a repo it doesn't propose. Its log
 names the repos it proposed, a repo it couldn't read whole or GitHub failed
 on, with no verdict on it, and a find it couldn't write. The reason an admin gives for
@@ -3210,12 +3213,13 @@ admin queue as crawl candidates. The rules are in
 
 | File | What it does |
 |---|---|
-| `src/crawl/search.ts` | The cron job: queues the seeds, then reads the pool with GitHub's search in bands of star counts, and keeps where the pass stands |
+| `src/crawl/search.ts` | The cron job: queues seeds and weekly reads, then schedules the broad search and a bounded popular sample with independent checkpoints |
 | `src/crawl/queue.ts` | The crawl queue's consumer: reads each batch, sorts each repo, and writes the finds |
 | `src/crawl/reads.ts` | What the consumer reads from GitHub: each repo's facts and folders, its files, its labels, and its pull request settings |
 | `src/crawl/rules.ts` | The tiers and the suggestions, as pure functions of the files and labels |
 | `src/db/seeds.ts` | The `crawl_seeds` table, the seed list |
-| `src/db/crawls.ts` | The `crawl_passes` table, where each pass of the search stands |
+| `src/db/crawls.ts` | The `crawl_passes` table, where each broad pass stands |
+| `src/db/popular-crawls.ts` | The `popular_crawl_passes` checkpoint and `crawl_queued_repos` records of successful sends |
 | `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue |
 | `src/crawl/fingerprint.ts` | The hash of what the rules read in a repo's docs, which a weekly read and a crawler find keep |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
@@ -3246,6 +3250,50 @@ admin queue as crawl candidates. The rules are in
   change. The pass's first search is the band with no upper end from 1,000
   stars, whose `total_count` is the size of the pool, kept in
   `crawl_passes.pool`. The push date is set when the pass starts.
+- **A popular sample.** `popularSearchOnce` asks for `stars:>=10000`,
+  `archived:false`, `is:public`, and the push date fixed at the sample's
+  start. It sorts by stars descending and requests 100 results per page.
+  It reads at most ten pages. `pool` keeps the first page's total count.
+  The log reports that count and the 1,000-result cap separately, so it
+  does not claim full coverage above 10,000 stars. The sample starts on
+  the next cron even when the broad pass is unfinished or finished. It
+  starts again only after finishing and 30 days after its own start.
+- **Search scheduling.** Seeds and weekly reads come first. One search call
+  advances the broad pass, up to four advance the popular sample, and the
+  remaining calls advance broad search. Both share one `ServiceGitHub`
+  and the existing 20-call allowance, including the rate-limit check.
+  A small allowance therefore advances broad search first. Popular pages
+  cannot consume all the calls while broad work remains.
+- **Independent checkpoints.** Migration `0014_popular_crawls.sql` adds
+  `popular_crawl_passes` and `crawl_queued_repos`. The local
+  `PopularCrawlPass` interface keeps start time, push date, pool count,
+  page, queued count, and finish time. `startPopularCrawlPass` excludes an
+  unfinished sample. `movePopularCrawlPass` compares the saved page,
+  count, and pool before updating it. Incomplete or malformed searches,
+  rate limits, and failed sends leave that checkpoint unchanged. A broad
+  page saved earlier in the run stays saved. Starting a sample never
+  resets a broad pass.
+- **Recorded sends across paths.** `send` checks the existing crawler skips
+  and `crawl_queued_repos` for seeds and both searches. The latest broad
+  pass's `startedAt` scopes every path in a run, even after the pass
+  finishes. A successful queue send is recorded afterward. Subsequent
+  paths count those names as seen, without case. The ledger is private.
+  It excludes weekly reads, which have their own schedule. A new broad
+  pass changes the scope for subsequent popular pages without changing
+  the sample's cursor or push date. Completed older scopes can then be
+  retired. The latest scope stays available between passes.
+  `seedsQueuedSince` also protects seeds handled before the ledger was
+  added. Earlier non-seed sends cannot be reconstructed, so rollout may
+  queue those repos again in the first sample. A crash before recording,
+  or concurrent sends before either records, can also duplicate delivery.
+  The consumer still inserts a candidate once and rechecks its skips.
+  Saved queued counts cover committed successful pages. A crash between
+  recording a send and saving its checkpoint can leave that count lower
+  than physical deliveries. The run's counters count successful sends.
+- **Queue order.** The queue is FIFO. This schedule changes new messages'
+  entry order. Existing messages keep their place. A time estimate for a
+  newly prioritized repo needs the current backlog. GitHub's changing
+  search index can still repeat or omit results between pages.
 - **What a batch reads.** One GraphQL query for all its repos: each one's
   `nameWithOwner`, whether it is archived or private, its stars, when it
   was made and last pushed, its default branch and the commit it points
@@ -3402,10 +3450,10 @@ admin queue as crawl candidates. The rules are in
   the new one through `setFindFingerprint`. The cron job starts the pass
   before it reads the seeds, and passes its start as `since` to
   `listSeedsToHandle` and `markSeedsHandled`, so each pass reads every
-  seed once, with `readRejected` as for the search. `searchOnce` leaves out
-  a repo `seedsQueuedSince` says the pass queued as a seed, and marks each
-  seed it queues handled in the pass with `markSeedsHandled`, so a seed the
-  search finds too is read once. `admin_seed_repo` doesn't pass
+  seed once, with `readRejected` as for both searches. Each search marks
+  seeds it queues handled with `markSeedsHandled`. The shared send ledger
+  and `seedsQueuedSince` prevent recorded paths from queuing those names
+  again in that broad pass. `admin_seed_repo` doesn't pass
   `readRejected`, so adding a seed for a repo with any find adds nothing,
   as before.
 - **The link** is on `https://github.com`, as the sample data's are,
