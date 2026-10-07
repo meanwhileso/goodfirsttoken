@@ -17,6 +17,7 @@ describe('popular checkpoints', () => {
     expect(starts.filter((pass) => pass !== null)).toHaveLength(1);
     expect(await latestCrawlPass(db)).toEqual(broad);
     expect(await latestPopularCrawlPass(db)).toEqual(starts.find((pass) => pass !== null));
+    expect(await startPopularCrawlPass(db, { ...sample, startedAt: t0 + 31 * DAY })).toBeNull();
   });
 
   test('competing page moves preserve the winning page and count', async () => {
@@ -36,6 +37,16 @@ describe('popular checkpoints', () => {
     const done = { ...sample, pool: 0, finishedAt: t0 + HOUR };
     expect(await movePopularCrawlPass(db, sample, done)).toBe(true);
     expect(await movePopularCrawlPass(db, done, { ...done, page: 2 })).toBe(false);
+    const next = { ...sample, startedAt: t0 + 30 * DAY, pushedSince: t0 };
+    expect(await startPopularCrawlPass(db, next)).toEqual(next);
+    expect(await latestPopularCrawlPass(db)).toEqual(next);
+  });
+
+  test('an already finished sample prevents new starts before thirty days, including a stale producer request', async () => {
+    await startPopularCrawlPass(db, sample);
+    await movePopularCrawlPass(db, sample, { ...sample, pool: 0, finishedAt: t0 + 1 });
+    expect(await startPopularCrawlPass(db, { ...sample, startedAt: t0 + 11 })).toBeNull();
+    expect(await startPopularCrawlPass(db, { ...sample, startedAt: t0 + 30 * DAY - 1 })).toBeNull();
     const next = { ...sample, startedAt: t0 + 30 * DAY, pushedSince: t0 };
     expect(await startPopularCrawlPass(db, next)).toEqual(next);
     expect(await latestPopularCrawlPass(db)).toEqual(next);

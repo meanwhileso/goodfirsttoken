@@ -3,7 +3,7 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fillCrawlQueue } from '../../src/crawl/search';
-import { addSeed, getSeed, latestCrawlPass, markSeedsHandled, moveCrawlPass, startCrawlPass } from '../../src/db';
+import { addSeed, getSeed, latestCrawlPass, markSeedsHandled, moveCrawlPass, startCrawlPass, startPopularCrawlPass } from '../../src/db';
 import { ServiceGitHub } from '../../src/sync/github';
 import { startGitHub } from '../auth/helpers';
 import { admin, DAY, db, emptyDatabase, HOUR, maintainer, registeredProject, signIn } from '../db/helpers';
@@ -248,6 +248,60 @@ describe('the popular sample', () => {
     expect(sent.flatMap((message) => message.repos).filter((repo) => repo === names[2])).toHaveLength(1);
     const scopes = await db.prepare('SELECT DISTINCT broad_started_at FROM crawl_queued_repos').all<{ broad_started_at: number }>();
     expect(scopes.results).toEqual([{ broad_started_at: broad.startedAt }]);
+  });
+
+  test.each(['no previous sample', 'an old finished sample'])('a delayed producer that observed %s cannot start a second sample in the same month', async (previous) => {
+    await startCrawlPass(db, { ...broad, finishedAt: start - HOUR });
+    if (previous === 'an old finished sample') {
+      await startPopularCrawlPass(db, {
+        startedAt: start - 30 * DAY, pushedSince: start - 60 * DAY,
+        pool: 0, page: 1, queued: 0, finishedAt: start - DAY,
+      });
+    }
+    let release: () => void = () => undefined;
+    let observed: () => void = () => undefined;
+    const reading = new Promise<void>((resolve) => { observed = resolve; });
+    const resume = new Promise<void>((resolve) => { release = resolve; });
+    let hold = true;
+    const delayed: D1Database = {
+      prepare: (sql) => {
+        const statement = db.prepare(sql);
+        if (hold && sql.startsWith('SELECT * FROM popular_crawl_passes')) {
+          hold = false;
+          return {
+            bind: statement.bind.bind(statement),
+            first: async <T>(column?: string): Promise<T | null> => {
+              const row = column === undefined ? await statement.first<T>() : await statement.first<T>(column);
+              observed();
+              await resume;
+              return row;
+            },
+            run: statement.run.bind(statement), all: statement.all.bind(statement), raw: statement.raw.bind(statement),
+          };
+        }
+        return statement;
+      },
+      batch: db.batch.bind(db), exec: db.exec.bind(db),
+      withSession: db.withSession.bind(db), dump: () => Promise.reject(new Error('No database export in this test.')),
+    };
+    const stale = fill(3, { db: delayed });
+    await reading;
+    const first = await fill(3);
+    expect(first.popularPass).toMatchObject({ startedAt: start, finishedAt: start });
+    vi.setSystemTime(start + 11);
+    release();
+    const resumed = await stale;
+    expect(resumed.popularPass).toEqual(first.popularPass);
+    expect(await popular()).toMatchObject({ started_at: start, finished_at: start });
+    const samples = previous === 'no previous sample' ? 1 : 2;
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM popular_crawl_passes').first<number>('n')).toBe(samples);
+    vi.setSystemTime(start + 30 * DAY - 1);
+    await fill();
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM popular_crawl_passes').first<number>('n')).toBe(samples);
+    vi.setSystemTime(start + 30 * DAY);
+    await fill();
+    expect(await popular()).toMatchObject({ started_at: start + 30 * DAY });
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM popular_crawl_passes').first<number>('n')).toBe(samples + 1);
   });
 
   test('concurrent producers leave one checkpoint move and permit duplicate delivery before recording', async () => {

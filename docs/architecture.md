@@ -3267,8 +3267,10 @@ admin queue as crawl candidates. The rules are in
 - **Independent checkpoints.** Migration `0014_popular_crawls.sql` adds
   `popular_crawl_passes` and `crawl_queued_repos`. The local
   `PopularCrawlPass` interface keeps start time, push date, pool count,
-  page, queued count, and finish time. `startPopularCrawlPass` excludes an
-  unfinished sample. `movePopularCrawlPass` compares the saved page,
+  page, queued count, and finish time. `startPopularCrawlPass` atomically
+  excludes an unfinished sample or any sample started in the previous
+  30 days. A delayed producer cannot restart a sample another run just
+  finished. `movePopularCrawlPass` compares the saved page,
   count, and pool before updating it. Incomplete or malformed searches,
   rate limits, and failed sends leave that checkpoint unchanged. A broad
   page saved earlier in the run stays saved. Starting a sample never

@@ -9,6 +9,7 @@ import {
   markSeedsHandled,
   moveCrawlPass,
   movePopularCrawlPass,
+  POPULAR_CRAWL_PASS_EVERY_MS,
   queuedCrawlRepos,
   recordCrawlQueuedRepos,
   retireCrawlQueuedRepos,
@@ -270,7 +271,7 @@ export async function fillCrawlQueue(deps: FillDeps): Promise<FillRun> {
   }
   run.pass = pass;
   let popularPass = await latestPopularCrawlPass(db);
-  if (popularPass === null || (popularPass.finishedAt !== null && now() - popularPass.startedAt >= CRAWL_PASS_EVERY_MS)) {
+  if (popularPass === null || (popularPass.finishedAt !== null && now() - popularPass.startedAt >= POPULAR_CRAWL_PASS_EVERY_MS)) {
     const sample = { startedAt: now(), pushedSince: now() - CRAWL_PUSHED_DAYS * DAY_MS, pool: null, page: 1, queued: 0, finishedAt: null };
     popularPass = (await startPopularCrawlPass(db, sample)) ?? (await latestPopularCrawlPass(db));
   }

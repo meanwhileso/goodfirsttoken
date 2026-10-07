@@ -1,6 +1,9 @@
 import { crawlPassSchema, mustParse, repoName } from '@goodfirsttoken/core';
 import { checkTime } from './shared';
 
+/** Minimum time between popular sample starts, once the prior sample finishes. */
+export const POPULAR_CRAWL_PASS_EVERY_MS = 30 * 24 * 60 * 60 * 1000;
+
 // Internal discovery state. Popular sampling does not change the core or
 // MCP interfaces used for policy review and public listings.
 const popularPassSchema = crawlPassSchema.pick({
@@ -33,15 +36,16 @@ export async function latestPopularCrawlPass(db: D1Database): Promise<PopularCra
   const row = await db.prepare('SELECT * FROM popular_crawl_passes ORDER BY started_at DESC LIMIT 1').first<PassRow>();
   return row === null ? null : toPass(row);
 }
-/** Starts one sample, unless another run has a sample in progress. */
+/** Atomically starts a sample only once the prior sample is finished and thirty days old. */
 export async function startPopularCrawlPass(db: D1Database, pass: PopularCrawlPass): Promise<PopularCrawlPass | null> {
   const p = mustParse(popularPassSchema, pass, 'popular crawl pass');
   const row = await db.prepare(
     `INSERT INTO popular_crawl_passes (started_at, pushed_since, pool, page, queued, finished_at)
      SELECT ?1, ?2, ?3, ?4, ?5, ?6
      WHERE NOT EXISTS (SELECT 1 FROM popular_crawl_passes WHERE finished_at IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM popular_crawl_passes WHERE started_at > ?1 - ?7)
      ON CONFLICT DO NOTHING RETURNING *`,
-  ).bind(p.startedAt, p.pushedSince, p.pool, p.page, p.queued, p.finishedAt).first<PassRow>();
+  ).bind(p.startedAt, p.pushedSince, p.pool, p.page, p.queued, p.finishedAt, POPULAR_CRAWL_PASS_EVERY_MS).first<PassRow>();
   return row === null ? null : toPass(row);
 }
 /** Compare and swap the sample's last successful page. */
