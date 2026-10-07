@@ -50,9 +50,11 @@ Vitest, and the existing share-card renderer.
   the site at 390 and 1280 pixels, and check dark agent-view contrast.
   Obtain Linux screenshot baselines from the CI Playwright run, as
   `CONTRIBUTING.md` requires. Review every changed baseline before accepting.
-- [ ] Have a different agent review adversarially, prove and triage each
+- [x] Have a different agent review adversarially, prove and triage each
   finding, fix confirmed bugs with a failing test, and record the results
-  in the PR disclosure and review section.
+  in the PR disclosure and review section. The reviews found a green
+  PR-opened notice and an outdated JSON token reference. Both were fixed;
+  no findings were dropped.
 
 ## Done when
 
