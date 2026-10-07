@@ -130,7 +130,7 @@ priority signal. Build the popular sample first, then seed evidence and admin de
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#112](https://github.com/meanwhileso/goodfirsttoken/issues/112) | Sample popular projects early without stopping broad discovery | Nothing | |
+| [#112](https://github.com/meanwhileso/goodfirsttoken/issues/112) | Sample popular projects early without stopping broad discovery | Nothing | PR pending |
 | [#113](https://github.com/meanwhileso/goodfirsttoken/issues/113) | Prioritize seeds from verified maintainer activity on X | #112 | |
  The
 classifier fixes #76 and #77 remain separate and can proceed alongside it.

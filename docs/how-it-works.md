@@ -2791,9 +2791,24 @@ projects due for their weekly read there, under
   list in [The admin queue](#the-admin-queue), whatever their stars or last
   push. It records what it did with each: queued it, or left it alone, and
   why.
-- Then the public repos GitHub's search finds with at least 1,000 stars and
-  a push in the 30 days before the pass started, and not archived. Search
-  leaves out forks, as it does by default.
+- Then one call advances the broad search. Up to four calls read a separate
+  popular sample. The remaining calls advance the broad search. Both use
+  the same allowance. The first rate-limit check counts toward it.
+- The broad search finds public, unarchived repos with at least 1,000 stars
+  and a push in the 30 days before the pass started. Search leaves out
+  forks, as it does by default.
+- The popular sample finds public, unarchived repos with at least 10,000
+  stars and a push in the 30 days before the sample started. It reads the
+  highest-star results first, 100 per page, for at most ten pages. This
+  samples the first 1,000 results. The broad search still covers that pool.
+  The log reports the sample's total count, cap, next page, and queued count
+  separately from the broad pass. It says when the sample finishes.
+  Saved queued counts cover committed successful pages. Physical queue
+  deliveries may differ after a crash or concurrent run.
+- The sample starts even while an older broad pass is unfinished, or when
+  that pass has finished and the next one is not due. It keeps its own
+  page and push date. A finished sample starts again once 30 days have
+  passed since it started. It never resets the broad checkpoint.
 - It leaves out a repo on the do-not-list, a repo that is a project
   already, whatever its status, and a repo whose find waits in the admin
   queue, or was approved. A repo whose finds an admin rejected, from the
@@ -2817,22 +2832,38 @@ projects due for their weekly read there, under
   searches is left, or after 20 calls, the first question to GitHub
   included. The next run picks up where it stopped.
 - A search GitHub says ran out of time, with `incomplete_results`, stops
-  the run. The pass stays where it was, and the next run asks again.
+  the run. Malformed results, rate limits, and failed queue sends also
+  leave the affected search checkpoint at its last successful page. The
+  next run asks again. A successful page from the other search stays saved.
 - A pass that is done stays done until 30 days after it started. The next
   run then starts a new pass, so the search reads the pool once a month.
 - Each pass reads every seed once, whatever its stars or last push: a
   seed added meanwhile at the next run, and every other seed again once a
   new pass starts. A seed it leaves alone is recorded with why, each
-  pass. A seed the pass queued already isn't queued again when its search
-  finds the repo too. A seed the search queues first, as when there are
-  more seeds than one run takes, counts as queued in the pass, so the seed
-  step leaves it until the next pass.
+  pass. A seed either search queues first, as when there are more seeds
+  than one run takes, counts as handled in the pass.
+- After a seed or either search sends a repo successfully, the crawler
+  records the send for the latest broad pass. Later seed, popular, and
+  broad results with that name count as seen, without case. This scope
+  stays in use after the broad pass finishes. If a new broad pass starts
+  during an unfinished sample, subsequent sample pages use the new scope
+  and keep their page and push date. Completed older scopes are retired
+  after that switch. The latest scope stays available between passes.
+  Seeds handled before these records existed stay protected by their
+  handling history. Older non-seed sends cannot be reconstructed, so the
+  first sample may queue those repos once more.
 - A repo whose stars change while a pass reads the pool can land in two
   bands, or in none. Search gives repos with the same stars in no set
   order, so a band read over several pages can give one of them twice, or
   skip it.
 - Two runs at once, as when one outlasts the hour, can queue the same seed
-  or page twice. A repo read twice is put in the admin queue once.
+  or page before either records its send. A crash after sending and before
+  recording can also deliver twice. Each checkpoint uses compare and swap
+  so competing runs cannot both move it from the same page. A repo read
+  twice is put in the admin queue once.
+- The queue is FIFO. The popular sample changes the order of new messages
+  entering it. Messages already queued keep their place. Check the backlog
+  before estimating when a newly queued repo will be read.
 
 **What it reads in each repo.** The crawl queue's consumer reads each batch
 from the repo's default branch. It lists the folders, then reads every

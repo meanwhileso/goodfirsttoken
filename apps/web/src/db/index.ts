@@ -12,6 +12,7 @@ export * from './follow-ups';
 export * from './issues';
 export * from './leaderboard';
 export * from './people';
+export * from './popular-crawls';
 export * from './projects';
 export * from './prs';
 export * from './removals';

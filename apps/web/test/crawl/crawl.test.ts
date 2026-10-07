@@ -402,6 +402,7 @@ describe('the search', () => {
     const queued = sent.flatMap((m) => m.repos);
     expect(bands()).toEqual([
       '>=1000',
+      '>=10000',
       '1000..1009',
       '1000..1004',
       ...Array<string>(5).fill('1000..1001'),
@@ -415,7 +416,7 @@ describe('the search', () => {
     expect(queued).not.toContain(SEED);
     expect(queued).not.toContain(ARCHIVED);
     expect(sent.every((m) => m.repos.length <= 10)).toBe(true);
-    expect(run.pass).toMatchObject({ pool: queued.length, queued: queued.length, finishedAt: start });
+    expect(run.pass).toMatchObject({ pool: queued.length, queued: queued.length - (run.popularPass?.queued ?? 0), finishedAt: start });
   });
 
   test('stops when a run has made its calls, and the next run picks up where it stopped', async () => {
@@ -432,7 +433,7 @@ describe('the search', () => {
     expect(runs.slice(0, -1).every((run) => run.stopped === 'calls' && run.calls === 3)).toBe(true);
     expect(new Set(queued).size).toBe(queued.length);
     for (const name of names) expect(queued).toContain(name);
-    expect(await latestCrawlPass(db)).toMatchObject({ finishedAt: expect.any(Number) as unknown, queued: queued.length });
+    expect(await latestCrawlPass(db)).toMatchObject({ finishedAt: expect.any(Number) as unknown, queued: queued.length - (runs.at(-1)?.popularPass?.queued ?? 0) });
   });
 
   test("stops before a search when too little of the search budget is left, and reads on once it starts over", async () => {
@@ -444,7 +445,7 @@ describe('the search', () => {
 
     expect(stopped).toMatchObject({ stopped: 'budget', searches: 0, queued: 0 });
     expect(stopped.pass).toMatchObject({ low: 1000, open: true, page: 1, finishedAt: null });
-    expect(resumed).toMatchObject({ stopped: null, searches: 1 });
+    expect(resumed).toMatchObject({ stopped: null, searches: 2 });
     expect(resumed.pass?.finishedAt).not.toBeNull();
   });
 
@@ -550,6 +551,25 @@ describe('the consumer', () => {
     expect(once.retried).toEqual([{ id: 'm0', delaySeconds: 30 }]);
     expect(thrice.retried).toEqual([{ id: 'm0', delaySeconds: 120 }]);
     expect(await everyFind()).toEqual([]);
+  });
+
+  test('a seed delivered twice after a producer fails to record its send creates one candidate', async () => {
+    await addSeed(db, { repo: INVITES, addedBy: admin.githubId }, start);
+    const broken: D1Database = {
+      prepare: (sql) => {
+        if (/INSERT INTO crawl_queued_repos/.test(sql)) throw new Error('Lost after send.');
+        return db.prepare(sql);
+      },
+      batch: db.batch.bind(db), exec: db.exec.bind(db),
+      withSession: db.withSession.bind(db), dump: () => Promise.reject(new Error('No database export in this test.')),
+    };
+    await expect(fillCrawlQueue({ db: broken, queue, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, ALLOWANCES.crawlSearch), now: Date.now })).rejects.toThrow('Lost after send.');
+    await fill();
+    const duplicated = sent.filter((message) => message.repos.includes(INVITES));
+    expect(duplicated).toHaveLength(2);
+    const { acked } = await consume(duplicated);
+    expect(acked).toHaveLength(2);
+    expect((await listCandidates(db, 'waiting')).filter((candidate) => candidate.repo === INVITES)).toHaveLength(1);
   });
 
   test('a malformed message goes back at once, so its tries take it to the dead-letter queue', async () => {
