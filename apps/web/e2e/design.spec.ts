@@ -202,7 +202,7 @@ test('utility titles use ink and reserve the headline label for marketing', asyn
     await expect(page.locator('h1 .inline-label')).toHaveCount(0);
   }
   await page.goto('/maintainers');
-  await expect(page.locator('h1 .inline-label')).toHaveText('tag');
+  await expect(page.locator('h1 .inline-label')).toHaveText('issues');
 });
 
 test('every token in brand/design.md is a CSS variable with the same value', async ({ page }) => {
