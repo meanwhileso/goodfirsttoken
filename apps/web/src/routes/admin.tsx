@@ -27,7 +27,7 @@ import { routeHead } from '../readable/head';
 // The admin pages (brand/brief-website.md), which replaced prototype/admin.html: the
 // maintainers' requests to be removed, the crawler's finds and the
 // registrations waiting for an admin, the projects listed from a policy, a
-// form to list one by hand, and the blocked donors.
+// form to list a project, and the blocked donors.
 // Only admins see it. Its forms post to /admin, and go through the same
 // actions as the admin's MCP tools (src/admin/).
 export const Route = createFileRoute('/admin')({
@@ -411,9 +411,9 @@ function Removal({ item, now, signInAgain }: { item: QueueItem; now: number; sig
 
 function Listings({ listings }: { listings: PolicyListing[] }) {
   return (
-    <section className="stack" aria-label="listed from their policy">
+    <section className="stack" aria-label="policy listings">
       <Marker as="h2" count={listings.length}>
-        listed from their policy
+        policy listings
       </Marker>
       {listings.length === 0 ? (
         <p className="admin__empty">No projects listed from a policy yet.</p>
@@ -436,8 +436,8 @@ function Listings({ listings }: { listings: PolicyListing[] }) {
 function ListByHand() {
   const ids = { repo: useId(), url: useId(), quote: useId(), tier: useId(), tags: useId() };
   return (
-    <section className="stack" aria-label="list one by hand">
-      <Marker as="h2">list one by hand</Marker>
+    <section className="stack" aria-label="list a project">
+      <Marker as="h2">list a project</Marker>
       <form method="post" action={ADMIN_PATH}>
         <input type="hidden" name="action" value="add" />
         <div className="admin-field">
@@ -475,9 +475,9 @@ function Blocked({ blocked }: { blocked: AdminPage['blocked'] }) {
   const loginId = useId();
   const reasonId = useId();
   return (
-    <section className="stack" aria-label="blocked">
+    <section className="stack" aria-label="blocked donors">
       <Marker as="h2" count={blocked.length}>
-        blocked
+        blocked donors
       </Marker>
       {blocked.length > 0 && (
         <ul className="admin-list mono small">
@@ -637,10 +637,10 @@ function Admin() {
             {/* An address that names no page shows no section, since none can say what waits. */}
             {page.badPage === null && (
               <>
-              <section className="stack" aria-label="asking to be removed">
+              <section className="stack" aria-label="removal requests">
                 <div className="rail__head">
                   <Marker as="h2" count={sectionCount(page, 'removal', page.removals.length)}>
-                    asking to be removed
+                    removal requests
                   </Marker>
                   <span className="mono small faint">GitHub confirmed repo access for each requester</span>
                 </div>
@@ -650,10 +650,10 @@ function Admin() {
                   ))}
                 </SectionItems>
               </section>
-              <section className="stack" aria-label="found by the crawler">
+              <section className="stack" aria-label="crawler candidates">
                 <div className="rail__head">
                   <Marker as="h2" count={sectionCount(page, 'candidate', page.candidates.length)}>
-                    found by the crawler
+                    crawler candidates
                   </Marker>
                   <span className="mono small faint">their docs welcome AI</span>
                 </div>

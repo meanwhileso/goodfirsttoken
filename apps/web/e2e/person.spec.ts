@@ -90,7 +90,7 @@ test('shows what they work on now, their history with how each PR ended, their t
 test("a maintainer's page lists the projects they registered, and their own-project merges apart", async ({ page }) => {
   await openPerson(page, 'sample-maintainer');
 
-  const maintains = page.locator('.person-section').filter({ has: page.getByRole('heading', { name: 'maintains' }) });
+  const maintains = page.locator('.person-section').filter({ has: page.getByRole('heading', { name: 'projects maintained' }) });
   await expect(maintains.getByRole('link', { name: 'sample-owner/sample-app' })).toHaveAttribute('href', '/sample-owner/sample-app');
   await expect(page.locator('.person-stats')).toContainText('2 merged on their own projects');
   await expect(page.locator('.person-row').filter({ hasText: 'own project' })).toHaveCount(2);

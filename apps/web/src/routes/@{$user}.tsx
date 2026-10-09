@@ -223,7 +223,7 @@ function Person({ page }: { page: PersonPage }) {
 
           <section className="person-section">
             <RailHead>
-              <Marker as="h2">helped</Marker>
+              <Marker as="h2">projects helped</Marker>
             </RailHead>
             {page.helped.length === 0 ? (
               <p className="person-note">No PRs merged yet.</p>
@@ -243,7 +243,7 @@ function Person({ page }: { page: PersonPage }) {
 
           <section className="person-section">
             <RailHead>
-              <Marker as="h2">maintains</Marker>
+              <Marker as="h2">projects maintained</Marker>
             </RailHead>
             {page.maintains.length === 0 ? (
               <>

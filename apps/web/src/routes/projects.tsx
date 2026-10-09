@@ -40,7 +40,7 @@ function Projects() {
       <SiteNav current="projects" />
       <main className="wrap projects">
         <h1 className="display projects-title">
-          Every one said yes
+          Projects
         </h1>
         {list.state === 'unavailable' ? (
           <p className="projects-note">The projects can&apos;t be read right now. Try again in a moment.</p>
