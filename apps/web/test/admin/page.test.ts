@@ -447,7 +447,7 @@ describe("maintainers' requests to be removed on /admin", () => {
     const page = await (await browser.fetch('/admin')).text();
     const answer = await back(browser, await browser.post('/admin', { action: 'remove', repo: HARBOR }));
 
-    expect(page).toContain('asking to be removed');
+    expect(page).toContain('removal requests');
     expect(page).toContain('@<!-- -->octo-maintainer<!-- --> · <!-- -->3 hours<!-- --> ago');
     expect(page).toContain(reason);
     expect(page).toContain('Its project is pending, registered by its maintainers.');

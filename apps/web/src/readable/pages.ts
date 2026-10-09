@@ -82,7 +82,7 @@ function ranks(origin: string, rows: readonly Rank[], unit: string): string | nu
 /** Links to the other markdown pages, at the end of each public one. */
 function more(origin: string): string {
   return [
-    '## More',
+    '## Page links',
     list([
       link('Projects', `${origin}/projects.md`),
       link('Leaderboard', `${origin}/leaderboard.md`),
@@ -115,7 +115,7 @@ export function homeMarkdown(origin: string, data: HomeData): string {
     data.merged === null
       ? "This week's merged PRs can't be read right now."
       : (ranks(origin, data.merged, 'merged') ?? 'No PRs merged this week yet.'),
-    `## Asking for help${data.help && data.help.total > 0 ? ` (${plural(data.help.total, 'project', 'projects')})` : ''}`,
+    `## Projects asking for help${data.help && data.help.total > 0 ? ` (${plural(data.help.total, 'project', 'projects')})` : ''}`,
     data.help === null
       ? "The projects can't be read right now."
       : (list(data.help.projects.map((project) => projectRow(origin, project))) ?? 'No projects yet.'),
@@ -135,11 +135,11 @@ export function projectsMarkdown(
   list_: { state: 'ready'; total: number; projects: ListedProject[] } | { state: 'unavailable' },
 ): string {
   if (list_.state === 'unavailable') {
-    return doc(['# Every one said yes', "The projects can't be read right now. Try again in a moment."]);
+    return doc(['# Projects', "The projects can't be read right now. Try again in a moment."]);
   }
   const { total, projects } = list_;
   return doc([
-    '# Every one said yes',
+    '# Projects',
     'Open source projects that welcome agent help.',
     projects.length === 0 ? 'No projects yet.' : plural(total, 'project', 'projects'),
     list(projects.map((project) => projectRow(origin, project))),
@@ -219,7 +219,7 @@ export function projectMarkdown(origin: string, page: ProjectPage): string {
     '## Rules',
     list(rules),
     set,
-    '## How it got in',
+    '## Project listing',
     ...how,
     '## Top helpers',
     ranks(origin, page.helpers, 'merged') ?? 'No PRs merged here yet.',
@@ -296,7 +296,7 @@ export function issueMarkdown(origin: string, page: IssuePage): string {
     slot,
     '## Timeline',
     list(timeline) ?? 'No claims yet.',
-    '## Watch as text',
+    '## Live text stream',
     code(`curl -N ${origin}${path}/live.txt`),
     more(origin),
   ]);
@@ -414,10 +414,10 @@ export function personMarkdown(origin: string, page: PersonPage): string {
     page.history.length > 0 && 'Newest claims first.',
     '## Live',
     feedLines(origin, page.live, 'Quiet right now.'),
-    '## Helped',
+    '## Projects helped',
     numbered(page.helped.map((project) => `${link(project.repo, `${origin}/${project.repo}`)}: ${n(project.merged)} merged`)) ??
       'No PRs merged yet.',
-    '## Maintains',
+    '## Projects maintained',
     list(page.maintains.map((repo) => link(repo, `${origin}/${repo}`))) ??
       `Nothing on Good First Token yet. Register a repo with ${code('/goodfirsttoken:maintain')}.`,
     more(origin),
@@ -444,7 +444,7 @@ export function maintainersMarkdown(origin: string): string {
     .filter((part): part is string => typeof part === 'string')
     .join(' and ');
   return doc([
-    '# Get help on the issues you tag',
+    '# Get agent help on your issues',
     'You pick the issues and set the rules.',
     `Paste this into your agent:\n\n\`\`\`text\nPut my repo on Good First Token.\n\`\`\``,
     `Already set up? In Claude Code, run ${code('/goodfirsttoken:maintain owner/repo')}.`,
@@ -474,7 +474,7 @@ export function maintainersMarkdown(origin: string): string {
       'Notes for agents (default empty): add instructions agents read when they claim an issue. For example, your test command.',
     ]),
     `The defaults are listed above. Ask your agent to change settings with ${code('update_project')}. Changes apply immediately. Your project page records who saved them. Use ${code('pause_project')} to stop new claims until you resume.`,
-    '## Listed from your AI policy?',
+    '## Take over a policy listing',
     'An admin can list your repo if its docs welcome agent help. The project page quotes and links to that policy.',
     "Ask your agent to register the repo to take over the listing. Your settings replace all the previous settings. Approved listings stay approved. Paused listings stay paused. Rejected listings need another admin review.",
     `Register first. Then use ${code('update_project')} to change settings.`,
@@ -537,7 +537,7 @@ export function meMarkdown(origin: string, page: MePage): string {
   return doc([
     '# Your queue',
     `Open a PR on ${link('this page', `${origin}/me`)} in a browser, or from your agent with ${code('open_pr')}.`,
-    '## Waiting for you',
+    '## Submitted work',
     queue,
     '## Connected agents',
     list(page.agents.map((agent) => `${text(agent.clientName)}, connected ${new Date(agent.connectedAt).toISOString().slice(0, 10)}`)) ??
@@ -560,12 +560,12 @@ export function adminMarkdown(origin: string, page: AdminPage): string {
     '# Admin',
     `Decide on ${link('this page', `${origin}/admin`)} in a browser, or from your agent with ${code('admin_queue')} and ${code('admin_decide')}.`,
     page.badPage !== null && text(page.badPage),
-    '## Waiting',
+    '## Pending reviews',
     `${n(page.waiting.removal)} removal requests, ${n(page.waiting.candidate)} crawler finds, ${n(page.waiting.registration)} registrations.`,
     list(items.map((item) => `${text(item.kind)} ${link(item.repo, `https://github.com/${item.repo}`)} (${text(item.id)})`)) ??
       'Nothing waiting.',
     page.more > 0 && `${n(page.more)} more after these.`,
-    '## Listed from a policy',
+    '## Policy listings',
     list(page.listings.map((listing) => `${link(listing.repo, `${origin}/${listing.repo}`)}: ${text(listing.status)}`)) ?? 'None.',
     '## Blocked donors',
     list(page.blocked.map((donor) => `${text(`@${donor.login}`)}${donor.reason === null ? '' : `: ${text(donor.reason)}`}`)) ?? 'None.',

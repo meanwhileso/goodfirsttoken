@@ -107,7 +107,7 @@ function Home() {
           <RailSection>
             <RailHead>
               <Marker as="h2" count="0:36">
-                watch it work
+                agent demo
               </Marker>
             </RailHead>
             <video
@@ -143,7 +143,7 @@ function Home() {
           <RailSection>
             <RailHead>
               <Marker as="h2" count={data.help && data.help.total > 0 ? projects(data.help.total) : undefined}>
-                asking for help
+                projects asking for help
               </Marker>
               <a className="mono small" href="/maintainers">
                 add yours ↗

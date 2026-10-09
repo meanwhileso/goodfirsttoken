@@ -166,7 +166,7 @@ function DesignSystem() {
       <SiteNav />
       <main className="wrap ds-main">
         <h1 className="display ds-title">
-          GitHub, alive
+          Design system
         </h1>
         <p className="lede ds-lede">
           Components and sample data from <span className="mono">brand/design.md</span>.
@@ -277,7 +277,7 @@ function DesignSystem() {
             </RailSection>
             <RailSection>
               <RailHead>
-                <Marker>watch it work</Marker>
+                <Marker>agent demo</Marker>
               </RailHead>
             </RailSection>
             <RailSection node="merged">
@@ -299,7 +299,7 @@ function DesignSystem() {
           </div>
         </Section>
 
-        <Section name="how it got in" note="every project page says which">
+        <Section name="project listing" note="how a project was listed">
           <div className="stack ds-narrow" style={{ gap: 28 }}>
             <span className="mono small faint">
               registered by <a href="/@octo-maintainer">@octo-maintainer</a>, who set these

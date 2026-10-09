@@ -340,20 +340,20 @@ describe('/admin, a page at a time', () => {
     const total = ADMIN_QUEUE_PAGE + 1;
 
     const first = await adminPage(browser, '/admin');
-    const removals = sectionOf(first.html, 'asking to be removed');
+    const removals = sectionOf(first.html, 'removal requests');
     expect(removals).not.toContain('No requests to be removed.');
     expect(removals).toContain('>0 of 1</span>');
     expect(removals).toContain('None on this page. 1 more waits after this page.');
     const registrations = sectionOf(first.html, 'registrations');
     expect(registrations).toContain(`>${String(ADMIN_QUEUE_PAGE)} of ${String(total)}</span>`);
     expect(registrations).toContain('1 more waits after this page.');
-    const finds = sectionOf(first.html, 'found by the crawler');
+    const finds = sectionOf(first.html, 'crawler candidates');
     expect(finds).toContain('No finds waiting.');
     expect(finds).toContain('>0</span>');
 
     expect(first.next).not.toBeNull();
     const second = await adminPage(browser, first.next ?? '');
-    const removalsAfter = sectionOf(second.html, 'asking to be removed');
+    const removalsAfter = sectionOf(second.html, 'removal requests');
     expect(removalsAfter).toContain(`>${asked}</h3>`);
     expect(removalsAfter).toContain('>1</span>');
     expect(removalsAfter).not.toContain('after this page');

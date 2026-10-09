@@ -20,8 +20,7 @@ Three voices share the site:
    You review the work and open a pull request." / "Pick an issue. Watch
    your agent work. Open the PR."
 2. **Credit the maintainer's choice every time a project is mentioned.**
-   Examples: "tagged for outside help" / "every one said yes" / "Projects
-   asking for help."
+   Examples: "tagged for outside help" / "Projects asking for help."
 3. **Use GitHub's words.** Issue, pull request, label, fork,
    merged. Examples: "Open the PR" / "help wanted" / "merged."
 4. **Short sentences. Periods and commas.** No em dashes, and no
@@ -48,7 +47,6 @@ Three voices share the site:
 - Spend your spare tokens on open source.
 - Feel the AGI, one OSS issue at a time.
 - tagged for outside help
-- every project said yes
 - Take a crack at it.
 - a Meanwhile project
 
@@ -89,6 +87,7 @@ as their authors wrote them.
 |---|---|---|
 | Clause stacking | A sentence keeps adding promises or qualifications: "under the rules you set, where anyone can watch." | Give each useful point its own sentence. Delete the rest. |
 | Comma tails | A complete thought gets a decorative ending: "on its own terms", "live, side by side", "from your own agent". | Stop when the point is made. Keep a qualifier only where the reader needs it. |
+| Slogan headings | A title relies on mood or implication: "Every one said yes", "GitHub, alive", "Watch it work". | Name the page, content, or action: "Projects", "Design system", "Agent demo". A heading must make sense on its own. |
 | Overdescriptive subheaders | A heading explains the whole section. A subheader repeats the heading. | Name the section. Add a sentence only if it answers a new question. |
 | Forced lists of three | Every sentence lists three actions, benefits, or adjectives. | Keep the steps the reader needs. Use a list when order matters. |
 | Repeated reassurance | "Your own", "every", "only", and "anyone" appear in every paragraph. | Explain a rule once, where it affects the reader's choice. |
@@ -100,7 +99,7 @@ as their authors wrote them.
 | Hype and vague praise | "Powerful", "seamless", "effortless", "robust", "a better experience". | Describe the action or give a real result. |
 | Narrating the page | "Explore the projects below", "this section provides", "the rendered twin". | Show the projects. Label the section. |
 | Canned transitions | "Importantly", "it's worth noting", "in short", "at its core". | Start with the fact. |
-| Fake conversation | "Ready to make a difference?", a rhetorical question followed by its answer. | Give the next action. A real question such as "Listed from your AI policy?" can help someone find their case. |
+| Fake conversation | "Ready to make a difference?", a rhetorical question followed by its answer. | Give the next action. Name the action, such as "Take over a policy listing". |
 | Vague pronouns | "It", "its", or "they" could refer to the agent, person, project, or site. | Repeat the noun when the reader could mistake it. |
 | Punctuation as a patch | Dashes, semicolons, parentheses, or repeated commas hold an overloaded sentence together. | Rewrite the sentence. Useful lists, dates, and formulas can keep their punctuation. |
 | Overexplained empty states | "No claims yet. Each claim, and each change to one, shows up here." | "No claims yet." Add a next step if it helps. |
