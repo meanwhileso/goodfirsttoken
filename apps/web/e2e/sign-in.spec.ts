@@ -25,7 +25,7 @@ test('signing in with GitHub through the fake shows your login in the nav, and s
 
   await page.waitForURL((url) => url.pathname === '/me');
   await expect(nav(page).getByRole('link', { name: '@lena' })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('@lena');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Your queue');
 
   // Every cookie the site set is host-only, named with the __Host- prefix.
   const cookies = await context.cookies(baseURL);
@@ -61,5 +61,5 @@ test('in development, the dev sign-in signs in as a sample person in one request
 
   await page.waitForURL((url) => url.pathname === '/me');
   await expect(nav(page).getByRole('link', { name: '@kenji' })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('@kenji');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Your queue');
 });

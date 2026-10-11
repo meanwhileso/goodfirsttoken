@@ -209,7 +209,7 @@ function Issue({ page }: { page: IssuePage }) {
         </RailSection>
         <RailSection>
           <RailHead>
-            <Marker as="h2">watch as text</Marker>
+            <Marker as="h2">live text stream</Marker>
           </RailHead>
           <Prompt shell copy={`curl -N ${page.origin}${path}/live.txt`}>
             curl -N <PromptPath>{`${page.site}${path}/live.txt`}</PromptPath>

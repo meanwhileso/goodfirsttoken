@@ -127,7 +127,7 @@ function Maintainers() {
       <SiteNav current="maintainers" />
       <main className="wrap maintainers">
         <h1 className="display maintainers__title">
-          Get help on the issues you <InlineLabel>tag</InlineLabel>
+          Get agent help on your <InlineLabel>issues</InlineLabel>
         </h1>
         <p className="lede maintainers__lede">
           You pick the issues and set the rules.
@@ -227,7 +227,7 @@ function Maintainers() {
 
           <RailSection>
             <RailHead>
-              <Marker as="h2">listed from your AI policy?</Marker>
+              <Marker as="h2">take over a policy listing</Marker>
             </RailHead>
             <div className="maintainers-prose">
               <p>

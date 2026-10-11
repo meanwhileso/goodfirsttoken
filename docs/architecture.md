@@ -2307,7 +2307,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-homepage).
   scans the claims through `claims_by_person`, as under [Indexes](#indexes).
   The agent of each person's latest merge comes from `ROW_NUMBER()`.
   `startOfWeek` in `src/db/prs.ts` gives the Monday.
-- **Asking for help** counts each approved project's waiting issues in the
+- **Projects asking for help** counts each approved project's waiting issues in the
   same query, with `json_each` over the issue's labels and the project's
   current settings. The rule for an issue waiting is SQL in
   `src/db/waiting.ts`, which every part of the site that asks follows.

@@ -186,7 +186,7 @@ function ReadyToOpen({ queue, now }: { queue: Queue; now: number }) {
     <RailSection>
       <RailHead>
         <Marker as="h2" count={count}>
-          ready to open
+          Submitted work
         </Marker>
       </RailHead>
       {queue.state === 'sign_in_again' ? (
@@ -303,8 +303,8 @@ function Me() {
     <>
       <SiteNav current="me" />
       <main className="wrap account account--me">
-        <h1 className="account__title">@{viewer.login}</h1>
-        <p className="lede account__lede">You&apos;re signed in with GitHub.</p>
+        <h1 className="account__title">Your queue</h1>
+        <p className="lede account__lede">Signed in as @{viewer.login}.</p>
         {page.notice !== null && (
           <p className="account__notice" role="status">
             {withLinks(page.notice)}{' '}

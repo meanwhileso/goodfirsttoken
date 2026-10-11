@@ -45,7 +45,7 @@ test("someone who isn't an admin gets no admin page, no admin link, and nothing 
   await devSignIn(page, 'sample-admin');
   await page.goto('/admin');
   // A form that changes nothing still says so.
-  const byHand = page.getByRole('region', { name: 'list one by hand' });
+  const byHand = page.getByRole('region', { name: 'list a project' });
   await byHand.getByLabel('repository').fill('sample-owner/no-such-repo');
   await byHand.getByLabel('link to where their docs welcome AI').fill('https://github.com/sample-owner/no-such-repo');
   await byHand.getByLabel('their words, quoted exactly').fill('Agents are welcome.');

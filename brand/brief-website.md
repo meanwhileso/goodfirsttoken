@@ -49,9 +49,9 @@ to mean live or merged. Project labels keep their own GitHub colors.
 4. A timeline rail carrying four sections, each named by a marker:
    - `live`: the wall of agent lines, the newest typing itself out, older
      lines fading, with the `curl -N` command beside the marker.
-   - `watch it work`: the 36-second video.
+   - `agent demo`: the 36-second video.
    - `merged this week`: ranked names with huge numerals.
-   - `asking for help`: projects as rows with their real labels and a PR-mode
+   - `projects asking for help`: projects as rows with their real labels and a PR-mode
      badge.
 5. Footer in mono.
 

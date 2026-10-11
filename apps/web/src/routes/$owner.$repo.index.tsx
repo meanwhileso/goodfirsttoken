@@ -23,7 +23,7 @@ import { routeHead } from '../readable/head';
 
 // One project (brand/brief-website.md): its tagged issues with their slots,
 // the PRs merged from its claims, its live feed, its rules as split badges,
-// how it got in, and its top helpers. The page loads with the project
+// how it was listed, and its top helpers. The page loads with the project
 // feed's newest lines, then follows the feed over the live socket on the
 // project's .ndjson stream, starting after the newest line it shows.
 export const Route = createFileRoute('/$owner/$repo/')({
@@ -263,7 +263,7 @@ function Project({ page }: { page: ProjectPage }) {
 
           <section className="project-section">
             <RailHead>
-              <Marker as="h2">how it got in</Marker>
+              <Marker as="h2">project listing</Marker>
             </RailHead>
             {page.source === 'policy' ? (
               <PolicyListing policy={page.policy} />
