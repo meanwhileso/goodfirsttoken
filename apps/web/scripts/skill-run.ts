@@ -146,29 +146,65 @@ function fromAddress(address: string) {
  * agent needs. Node's fetch always sends Sec-Fetch-Mode: cors, so this uses
  * node:http. It follows no redirect.
  */
-function openInTab(url: URL, headers: Record<string, string>): Promise<Response> {
+/** How long the page to approve an agent has to answer in full, in milliseconds. */
+const OPEN_IN_TAB_DEADLINE_MS = 10_000;
+
+export function openInTab(
+  url: URL,
+  headers: Record<string, string>,
+  deadlineMs: number = OPEN_IN_TAB_DEADLINE_MS,
+): Promise<Response> {
   return new Promise((resolve, reject) => {
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    let finished = false;
+   
+    const finish = (settle: () => void) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      settle();
+    };
     const sent = send(
       url,
       { method: 'GET', headers: { ...headers, 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } },
       (answer) => {
         const chunks: Buffer[] = [];
-        answer.on('data', (chunk: Buffer) => chunks.push(chunk));
-        answer.on('error', reject);
+        answer.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        answer.on('error', (error) => {
+          finish(() => {
+            reject(error);
+          });
+        });
         answer.on('end', () => {
-          const received = new Headers();
-          for (const [name, value] of Object.entries(answer.headers)) {
-            for (const one of Array.isArray(value) ? value : value === undefined ? [] : [value]) received.append(name, one);
-          }
-          resolve(new Response(Buffer.concat(chunks), { status: answer.statusCode ?? 500, headers: received }));
+          finish(() => {
+            const received = new Headers();
+            for (const [name, value] of Object.entries(answer.headers)) {
+              for (const one of Array.isArray(value) ? value : value === undefined ? [] : [value]) received.append(name, one);
+            }
+            resolve(new Response(Buffer.concat(chunks), { status: answer.statusCode ?? 500, headers: received }));
+          });
         });
       },
     );
-    sent.on('error', reject);
+    // One timer covers connecting, the headers, and the whole body.
+       const timer = setTimeout(() => {
+      finish(() => {
+        sent.destroy();
+        // Origin and path only: the query string carries the sign-in state.
+        reject(new Error(`The page to approve an agent (${url.origin}${url.pathname}) did not answer within ${String(deadlineMs)} ms.`));
+      });
+    }, deadlineMs);
+    sent.on('error', (error) => {
+      finish(() => {
+        reject(error);
+      });
+    });
     sent.end();
   });
 }
+      
 
 /** Where a redirect points. */
 function location(response: Response, from: string): URL {
