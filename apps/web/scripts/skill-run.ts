@@ -157,8 +157,7 @@ export function openInTab(
   return new Promise((resolve, reject) => {
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
     let finished = false;
-   
-    const finish = (settle: () => void) => {
+   const finish = (settle: () => void) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -204,8 +203,6 @@ export function openInTab(
     sent.end();
   });
 }
-      
-
 /** Where a redirect points. */
 function location(response: Response, from: string): URL {
   const to = response.headers.get('location');
