@@ -28,6 +28,7 @@ pnpm test        # unit tests, the Worker's inside the Workers runtime
 pnpm test:e2e    # browser tests against a production build
 pnpm skills:build  # the skills and plugins, from skill-src/
 pnpm skills:run    # the maintain, admin, and give skills' steps, against pnpm dev
+pnpm --filter @goodfirsttoken/web db:migration:new <name>  # a new D1 migration, named for the time
 ```
 
 Before the first `pnpm test:e2e`, run `pnpm exec playwright install chromium`.

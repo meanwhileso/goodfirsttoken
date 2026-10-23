@@ -15,7 +15,7 @@
     "seed": "pnpm --filter @goodfirsttoken/github-fake seed && node apps/web/scripts/seed-local.mjs",
     "test": "node --test \"scripts/**/*.test.mjs\" \"apps/web/scripts/*.test.mjs\" && pnpm -r test",
     "test:e2e": "pnpm --filter @goodfirsttoken/web test:e2e",
-    "lint": "eslint .",
+    "lint": "node scripts/check-migrations.mjs apps/web/migrations=15 && eslint .",
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm lint && pnpm typecheck && pnpm skills:check",
     "prototype": "node scripts/serve.mjs prototype",

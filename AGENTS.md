@@ -23,6 +23,10 @@ describe the code as it is.
 - `pnpm test` runs the unit tests, the Worker's inside the Workers runtime.
 - `pnpm test:e2e` runs the Playwright tests against a production build. Run
   `pnpm exec playwright install chromium` once first.
+- `pnpm --filter @goodfirsttoken/web db:migration:new <name>` makes a D1
+  migration named for the UTC time, `YYYYMMDDHHMMSS_name.sql`. Never use
+  `wrangler d1 migrations create`, and never rename a migration that has
+  shipped. `pnpm lint` fails a new file with a number.
 - `pnpm prototype` serves prototype/ at http://localhost:8943.
 - `pnpm video:render` re-renders the launch video. It needs ffmpeg and cwebp.
 

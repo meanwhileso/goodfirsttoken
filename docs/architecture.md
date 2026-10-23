@@ -1917,8 +1917,13 @@ projects whose issues live in each repo through `projects_by_issue_repo`.
 
 ### Migrations
 
-Migrations live in `apps/web/migrations/`, Wrangler's default folder,
-numbered in order. `pnpm dev` runs `apps/web/scripts/migrate-local.mjs`
+Migrations live in `apps/web/migrations/`, Wrangler's default folder. The
+first fifteen are numbered, `0001` to `0015`. A new one is named for the UTC
+time it was made, `YYYYMMDDHHMMSS_name.sql`, so two branches that each add one
+never pick the same number. `pnpm --filter @goodfirsttoken/web db:migration:new name`
+makes the file, and `pnpm lint` fails a new numbered one. Wrangler applies them
+in filename order, and a timestamp sorts after every number. `pnpm dev` runs
+`apps/web/scripts/migrate-local.mjs`
 before it starts Vite. The script runs `wrangler d1 migrations apply DB
 --local` with no input attached. Wrangler asks before it applies a migration
 only when both its input and output are a terminal, so it applies new ones
@@ -1929,7 +1934,8 @@ Playwright's web server runs it too, before it builds the app, with
 tests apply the migrations in their setup, and a deploy applies
 them to the environment's database before the Worker goes up, as
 [Deploys](#deploys) describes. A schema change is a new migration. A
-migration that has run on a deployed database never changes.
+migration that has run on a deployed database never changes and is never
+renamed, since Wrangler tracks them by filename.
 
 ## The issue room
 
