@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
-import { getRequest, getResponseHeaders } from '@tanstack/react-start/server';
+import { appendResponseHeader, getRequest, setResponseHeader } from '@tanstack/react-start/server';
 import { loadAdminPage, type AdminPageParams, type AdminPageResult } from './page';
 
 export type { AdminPage, AdminPageResult, BlockedDonor, PageKind, PolicyListing } from './page';
@@ -18,9 +18,9 @@ export const getAdminPage = createServerFn({ method: 'GET' })
   .validator((params: unknown): AdminPageParams => (isParams(params) ? params : {}))
   .handler(async ({ data }): Promise<AdminPageResult> => {
     const { result, setCookies } = await loadAdminPage(getRequest(), data);
-    for (const cookie of setCookies) getResponseHeaders().append('set-cookie', cookie);
+    for (const cookie of setCookies) appendResponseHeader('set-cookie', cookie);
     // The page holds the signed-in person's own data, so no browser or cache
     // keeps it, and it is gone after sign-out.
-    getResponseHeaders().set('cache-control', 'no-store');
+    setResponseHeader('cache-control', 'no-store');
     return result;
   });
