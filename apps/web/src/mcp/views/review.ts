@@ -36,13 +36,18 @@ function clearedPart(host: Host, toOpen: PrToOpen): HTMLElement {
     : h(
         'label',
         { class: 'view-label' },
-        h('span', null, "The description is too long to fill in from a link. GitHub's form opens with the title filled in. Paste the description there."),
+        h('span', null, 'The description is too long to fill in from a link. Paste it into the form.'),
         h('textarea', { class: 'view-field', rows: 8, readonly: true, 'aria-label': 'PR description to paste' }, toOpen.body),
       );
+  // Only the short line is a status. The description to paste is read when the donor wants it.
   return h(
     'div',
-    { class: 'view-cleared', role: 'status' },
-    toOpen.bodyInLink && h('p', { class: 'view-quiet' }, "GitHub's form opens with the title and description filled in."),
+    { class: 'view-cleared' },
+    h(
+      'p',
+      { class: 'view-quiet', role: 'status' },
+      toOpen.bodyInLink ? "GitHub's form opens with the title and description filled in." : "GitHub's form opens with the title filled in.",
+    ),
     paste,
     h('p', { class: 'view-quiet' }, 'Good First Token records the PR once it is open.'),
     h('div', { class: 'cluster view-actions' }, link(host, toOpen.compareUrl, 'Open the PR on GitHub', 'btn btn--primary btn--sm')),
@@ -56,17 +61,24 @@ function clearedPart(host: Host, toOpen: PrToOpen): HTMLElement {
  */
 function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
   const size = item.additions === null || item.deletions === null ? null : `+${String(item.additions)} -${String(item.deletions)}`;
-  // Work open_pr cleared already waits only for its PR to open on GitHub.
+  // Work open_pr cleared already waits only for its PR to open on GitHub,
+  // or, once the donor opened it, for Good First Token to record it.
   const cleared = isObject(item.toOpen) ? item.toOpen : null;
+  const ownPr = isObject(item.prFromBranch) ? item.prFromBranch : null;
+  const waitsOnGitHub = cleared !== null || ownPr !== null;
   const description =
-    item.personWrittenDescription && cleared === null
+    item.personWrittenDescription && !waitsOnGitHub
       ? h('textarea', { class: 'view-field', rows: 5, 'aria-label': 'Your PR description, in your own words' })
       : null;
   const open = h('button', { type: 'button', class: 'btn btn--primary btn--sm' }, 'Open PR');
   const diff = link(host, item.diffUrl, 'Read the diff', 'btn btn--sm');
-  const actions = h('div', { class: 'cluster view-actions' }, diff, cleared === null && open);
+  const actions = h('div', { class: 'cluster view-actions' }, diff, !waitsOnGitHub && open);
   const status = h('div', { class: 'view-status' });
-  if (cleared !== null) {
+  if (ownPr !== null) {
+    status.appendChild(
+      h('p', { class: 'view-notice view-notice--note', role: 'status' }, 'Your PR is open on GitHub: ', link(host, ownPr.url, ownPr.url), '. Good First Token records it.'),
+    );
+  } else if (cleared !== null) {
     status.appendChild(clearedPart(host, cleared));
   } else if (!item.openable) {
     open.disabled = true;
@@ -87,7 +99,8 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
         return;
       }
       const opened = answer.data as ToolOutput<'open_pr'>;
-      actions.remove();
+      // The diff stays, for the donor to read again.
+      open.remove();
       description?.closest('label')?.remove();
       // Work the agent pushed is cleared, and the donor opens its PR on GitHub's form.
       if (opened.pr === null) {

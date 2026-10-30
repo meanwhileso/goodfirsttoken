@@ -183,7 +183,7 @@ test("Open PR on /me clears the pushed work, opens nothing on GitHub, and links 
   await work.getByRole('button', { name: `Open PR for ${DESKTOP}` }).click();
 
   await expect(page.getByRole('status')).toContainText(`The PR for ${DESKTOP} is ready to open. Open it on GitHub from your queue.`);
-  const open = item(page, DESKTOP).getByRole('link', { name: `Open the PR for ${DESKTOP} on GitHub` });
+  const open = item(page, DESKTOP).getByRole('link', { name: `Open the PR on GitHub for ${DESKTOP}` });
   const href = (await open.getAttribute('href')) ?? '';
   const form = new URL(href);
   const branch = `goodfirsttoken/issue-1431-${claims.get(DESKTOP) ?? ''}`;
@@ -198,7 +198,7 @@ test("Open PR on /me clears the pushed work, opens nothing on GitHub, and links 
   expect(made.filter((c) => c.operation === PULLS || c.operation.startsWith('mutation'))).toEqual([]);
   // The link stays when the page loads again.
   await page.goto('/me');
-  await expect(item(page, DESKTOP).getByRole('link', { name: `Open the PR for ${DESKTOP} on GitHub` })).toHaveAttribute('href', href);
+  await expect(item(page, DESKTOP).getByRole('link', { name: `Open the PR on GitHub for ${DESKTOP}` })).toHaveAttribute('href', href);
 });
 
 for (const width of WIDTHS) {
@@ -209,7 +209,7 @@ for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await devSignIn(page, 'priya');
     await expect(page.locator('.queue-item')).toHaveCount(2);
-    await expect(item(page, DESKTOP).getByRole('link', { name: `Open the PR for ${DESKTOP} on GitHub` })).toBeVisible();
+    await expect(item(page, DESKTOP).getByRole('link', { name: `Open the PR on GitHub for ${DESKTOP}` })).toBeVisible();
     await expect(item(page, BUNDLER).getByLabel('your PR description')).toBeVisible();
     await expect(page.getByRole('button', { name: `Disconnect ${AGENT}` })).toBeVisible();
     await page.evaluate(() => document.fonts.ready);

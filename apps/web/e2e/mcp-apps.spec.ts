@@ -227,6 +227,7 @@ const ready = {
   checks: 'pnpm test: 214 passing',
   reviewReason: 'reviewed_mode',
   toOpen: null,
+  prFromBranch: null,
   prOnIssue: null,
   expiresAt: '2026-10-06T10:00:00.000Z',
   personWrittenDescription: false,
@@ -310,6 +311,7 @@ test("Open PR on pushed work shows the button to GitHub's form from the answer, 
     result: work([
       ready,
       { ...ready, claimId: 'c_e2eclaim5', issue: 'sample-owner/sample-app#8', reviewReason: 'ready_to_open', personWrittenDescription: true, toOpen: long },
+      { ...ready, claimId: 'c_e2eclaim6', issue: 'sample-owner/sample-app#9', reviewReason: 'ready_to_open', prFromBranch: { repo: 'sample-owner/sample-app', number: 42, url: 'https://github.example/sample-owner/sample-app/pull/42' } },
     ]),
     callTool: () =>
       Promise.resolve({
@@ -332,6 +334,12 @@ test("Open PR on pushed work shows the button to GitHub's form from the answer, 
   await expect(first).toContainText('Good First Token records the PR once it is open.');
   await expect(first.getByRole('button', { name: 'Open PR' })).toHaveCount(0);
   await expect(first.getByRole('textbox')).toHaveCount(0);
+  // The diff stays, for the donor to read again.
+  await expect(first.getByRole('button', { name: 'Read the diff' })).toBeVisible();
+  // The donor's own PR, open from the claim's branch, waits to be recorded, with no Open PR.
+  const own = view.frame.locator('.view-ready').nth(2);
+  await expect(own.getByRole('status')).toHaveText('Your PR is open on GitHub: https://github.example/sample-owner/sample-app/pull/42. Good First Token records it.');
+  await expect(own.getByRole('button', { name: 'Open PR' })).toHaveCount(0);
   await first.getByRole('button', { name: 'Open the PR on GitHub' }).click();
   await expect.poll(async () => sent(await view.messages(), 'ui/open-link').map((m) => m.params)).toEqual([{ url: long.compareUrl }, { url: toOpen.compareUrl }]);
   expect(sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([{ content: text(cleared) }]);

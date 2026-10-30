@@ -530,7 +530,7 @@ export function meMarkdown(origin: string, page: MePage): string {
         : (list(
             page.queue.items.map(
               (item) =>
-                `${link(item.title, item.liveUrl)} (${text(item.issue)}): ${link('diff', item.diffUrl)}, ${timeLeft(item.expiresAt, page.now)}${item.toOpen === null ? '' : `. Ready to open: ${link('open the PR on GitHub', item.toOpen.compareUrl)}${item.toOpen.bodyInLink ? '' : `. The description is too long for the link, so copy it from ${link('this page', `${origin}/me`)}`}`}${item.openable ? '' : `. Can't open it now: ${text(item.reason ?? 'release the claim.')}`}`,
+                `${link(item.title, item.liveUrl)} (${text(item.issue)}): ${link('diff', item.diffUrl)}, ${timeLeft(item.expiresAt, page.now)}${item.prFromBranch === null ? '' : `. Your PR is open: ${link(`#${String(item.prFromBranch.number)}`, item.prFromBranch.url)}`}${item.toOpen === null ? '' : `. Ready to open: ${link('open the PR on GitHub', item.toOpen.compareUrl)}${item.toOpen.bodyInLink ? '' : `. The description is too long for the link, so copy it from ${link('this page', `${origin}/me`)}`}`}${item.openable ? '' : `. Can't open it now: ${text(item.reason ?? 'release the claim.')}`}`,
             ),
           ) ?? 'Nothing waiting for you.');
   const interests = page.interests;

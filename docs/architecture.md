@@ -540,7 +540,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | File | What it does |
 |---|---|
 | `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
-| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
+| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |

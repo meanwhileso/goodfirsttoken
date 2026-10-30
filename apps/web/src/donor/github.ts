@@ -220,6 +220,13 @@ export interface IssueRules {
   assignee: string | null;
   /** What the agent does after a refusal. */
   next: string;
+  /**
+   * Leave the labels and assignees unchecked, for work open_pr cleared.
+   * Maintainers often relabel or assign an issue once a PR is on it, so
+   * open_pr's check of them stands (docs/specs/agent-submits.md). The issue
+   * still has to be one GitHub shows, and open.
+   */
+  labelsAndAssigneesStand?: boolean;
 }
 
 const TO_CLAIM: IssueRules = { assignee: null, next: 'Pick another issue.' };
@@ -243,6 +250,7 @@ export async function checkIssueFacts(
   if (found === null) return notEligible(`GitHub shows you no issue ${issue}. ${next}`);
   if (found.isPullRequest) return notEligible(`${issue} is a pull request on GitHub. ${next}`);
   if (!found.open) return notEligible(`${issue} is closed on GitHub. ${next}`);
+  if (rules.labelsAndAssigneesStand === true) return { ok: true, issue: found };
   const others = found.assignees.filter((login) => login.toLowerCase() !== rules.assignee?.toLowerCase());
   if (others.length > 0 || (found.assigned && found.assignees.length === 0)) {
     return notEligible(`${issue} has an assignee on GitHub, so someone is on it. ${next}`);

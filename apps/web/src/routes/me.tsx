@@ -130,7 +130,7 @@ function ClearedPr({ item, toOpen }: { item: ReviewItem; toOpen: NonNullable<Rev
   return (
     <div className="queue-item__cleared">
       {toOpen.bodyInLink ? (
-        <p className="small">GitHub&apos;s form opens with the title and description filled in.</p>
+        <p className="small muted">GitHub&apos;s form opens with the title and description filled in.</p>
       ) : (
         <div className="account-field">
           <label htmlFor={id}>PR description to paste</label>
@@ -143,7 +143,7 @@ function ClearedPr({ item, toOpen }: { item: ReviewItem; toOpen: NonNullable<Rev
       )}
       <p className="small muted">Good First Token records the PR once it is open.</p>
       <div className="cluster">
-        <ButtonLink href={toOpen.compareUrl} variant="primary" size="sm" aria-label={`Open the PR for ${item.issue} on GitHub`}>
+        <ButtonLink href={toOpen.compareUrl} variant="primary" size="sm" aria-label={`Open the PR on GitHub for ${item.issue}`}>
           Open the PR on GitHub
         </ButtonLink>
         <div className="open-in">
@@ -181,14 +181,28 @@ function ReadyItem({ item, now }: { item: ReviewItem; now: number }) {
       </div>
       <Quote>{item.summary}</Quote>
       <p className="mono small muted queue-item__checks">checked: {item.checks}</p>
-      <p className="small muted">{WAITS_BECAUSE[item.reviewReason]}</p>
+      {/* Cleared work says so only while it has a PR to open. */}
+      {(item.reviewReason !== 'ready_to_open' || item.toOpen !== null) && (
+        <p className="small muted">{WAITS_BECAUSE[item.reviewReason]}</p>
+      )}
       {item.prOnIssue !== null && (
         <p className="queue-item__warning">
           A PR is already open on this issue: <a href={item.prOnIssue.url}>{item.prOnIssue.url}</a>. Open yours if a
           second one helps.
         </p>
       )}
-      {item.toOpen !== null ? (
+      {item.prFromBranch !== null ? (
+        <>
+          <p className="small">
+            Your PR is open on GitHub: <a href={item.prFromBranch.url}>{item.prFromBranch.url}</a>. Good First Token
+            records it.
+          </p>
+          <div className="open-in">
+            <a href={item.diffUrl}>diff</a>
+            <a href={item.url}>issue on GitHub</a>
+          </div>
+        </>
+      ) : item.toOpen !== null ? (
         <ClearedPr item={item} toOpen={item.toOpen} />
       ) : item.openable ? (
         <form method="post" action={ME_PATH} className="queue-item__form">

@@ -2417,7 +2417,7 @@ describe('clearing pushed work, and recording its PR', () => {
     expect(textOf(cleared)).toContain(`Cleared to open as a PR, titled: ${toOpen.title}`);
     expect(textOf(cleared)).toContain(toOpen.compareUrl);
     expect(textOf(cleared)).toContain("Then call record_pr with the PR's link.");
-    expect(textOf(cleared)).toContain(`---\n${toOpen.body}\n---`);
+    expect(textOf(cleared)).toContain(`\n\`\`\`\n${toOpen.body}\n\`\`\``);
 
     const again = push('priya/sample-app', name, start, 'priya', { 'src/slash.ts': 'export const keepSlash = 1;\n' });
     await call(priya, 'submit_work', { claimId, branch: { repo: 'priya/sample-app', name, head: again }, ...NOTES });
@@ -2425,18 +2425,83 @@ describe('clearing pushed work, and recording its PR', () => {
     expect(resubmitted).toMatchObject([{ claimId, reviewReason: 'reviewed_mode', toOpen: null }]);
   });
 
-  test('cleared work keeps its link after the maintainers relabel or assign the issue, as record_pr still takes its PR', async () => {
+  test('cleared work keeps its link after the maintainers relabel or assign the issue, as record_pr still takes its PR, and names a PR from the person assigned', async () => {
     const { priya, claimId, issue } = await pushed(reviewed);
     const toOpen = (await call(priya, 'open_pr', { claimId })).structuredContent?.toOpen as ToOpen;
     github.unlabelIssue(APP, numberOf(issue), 'help wanted', BY);
-    github.assignIssue(APP, numberOf(issue), 'sample-maintainer', BY);
+    github.assignIssue(APP, numberOf(issue), 'sam', BY);
+    const theirs = github.openPullRequest(APP, { title: 'Another try', body: `Closes #${String(numberOf(issue))}`, by: 'sam' });
     const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
 
     const number = await openAs('priya', toOpen);
     const recorded = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
 
-    expect(waiting).toMatchObject([{ claimId, reviewReason: 'ready_to_open', openable: true, reason: null, toOpen }]);
+    expect(waiting).toMatchObject([{ claimId, reviewReason: 'ready_to_open', openable: true, reason: null, toOpen, prOnIssue: { number: theirs } }]);
     expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened' });
+  });
+
+  test("cleared work whose PR the donor opened from its branch, not recorded yet, names that PR as theirs, and as no other PR on the issue", async () => {
+    const { priya, claimId } = await pushed(reviewed);
+    const toOpen = (await call(priya, 'open_pr', { claimId })).structuredContent?.toOpen as ToOpen;
+    const number = await openAs('priya', toOpen);
+
+    const listed = await call(priya, 'my_work');
+
+    const [item] = listed.structuredContent?.readyToOpen as Record<string, unknown>[];
+    expect(item).toMatchObject({ claimId, reviewReason: 'ready_to_open', toOpen: null, prOnIssue: null, prFromBranch: { number, url: prUrl(number) } });
+    expect(textOf(listed)).toContain(`Call record_pr with that link.`);
+    expect(textOf(listed)).not.toContain('Ask the donor whether a second PR helps.');
+  });
+
+  test('cleared work on an issue closed since lists with no link, and says why it cannot open', async () => {
+    const { priya, claimId, issue } = await pushed(reviewed);
+    await call(priya, 'open_pr', { claimId });
+    github.closeIssue(APP, numberOf(issue), BY);
+
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    expect(waiting).toMatchObject([{ claimId, toOpen: null, openable: false }]);
+    expect(waiting[0]?.reason).toContain('is closed on GitHub');
+  });
+
+  test('cleared work whose branch moved since lists with no link, and says to submit the branch again', async () => {
+    const { priya, claimId, name, start } = await pushed(reviewed);
+    await call(priya, 'open_pr', { claimId });
+    push('priya/sample-app', name, start, 'priya', { 'b.txt': 'b\n' });
+
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    expect(waiting).toMatchObject([{ claimId, toOpen: null, openable: false }]);
+    expect(waiting[0]?.reason).toMatch(/^priya\/sample-app:goodfirsttoken\/\S+ is at [0-9a-f]{7}, and open_pr cleared [0-9a-f]{7}, so a PR from it wouldn't be recorded\. Submit the branch again\.$/);
+  });
+
+  test('cleared work of a donor blocked since lists with no link, and says why', async () => {
+    const { priya, claimId } = await pushed(reviewed);
+    await call(priya, 'open_pr', { claimId });
+    await savePerson(env.DB, admin, Date.now());
+    await blockDonor(env.DB, { githubId: people.priya.githubId, reason: 'Spam.', blockedBy: admin.githubId }, Date.now());
+
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    expect(waiting).toMatchObject([{ claimId, toOpen: null, openable: false }]);
+    expect(waiting[0]?.reason).not.toBeNull();
+    expect(textOf(await call(priya, 'my_work'))).not.toContain('cleared to open');
+  });
+
+  test("cleared work GitHub can't be read for lists with no link, and says to try again", async () => {
+    const { priya, claimId } = await pushed(reviewed);
+    await call(priya, 'open_pr', { claimId });
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url.startsWith(github.apiUrl)) return Promise.resolve(Response.json({ message: 'Server Error' }, { status: 502 }));
+      return github.fetch(request);
+    });
+
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    expect(waiting).toMatchObject([
+      { claimId, reviewReason: 'ready_to_open', toOpen: null, openable: false, reason: "GitHub couldn't be read for this work just now, so its link isn't shown. Try again in a minute." },
+    ]);
   });
 
   test('work not cleared yet still says it cannot open once the issue loses its tag', async () => {

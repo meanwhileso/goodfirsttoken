@@ -4,7 +4,7 @@ import { symmetricDecrypt } from 'better-auth/crypto';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { signNotice } from '../../src/auth/notice';
-import { createProject, getPerson, getSubmission, saveIssues, savePerson } from '../../src/db';
+import { createProject, getPerson, getSubmission, saveIssues, savePerson, setProjectStatus } from '../../src/db';
 import { loadMePage } from '../../src/me/page';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { Browser, ORIGIN, location, signIn, startGitHub } from '../auth/helpers';
@@ -383,7 +383,7 @@ describe('work the agent pushed, on /me', () => {
 
   /** The link the page gives to open the PR on GitHub, from its href. */
   function formLink(html: string, issue: string): string | null {
-    const label = `aria-label="Open the PR for ${issue} on GitHub"`;
+    const label = `aria-label="Open the PR on GitHub for ${issue}"`;
     const anchor = /<a\b[^>]*>/g;
     for (const [tag] of html.matchAll(anchor)) {
       if (!tag.includes(label)) continue;
@@ -467,6 +467,67 @@ describe('work the agent pushed, on /me', () => {
     expect(answer).toContain('Good First Token records the PR once it is open.');
     const markdown = await (await browser.fetch('/me.md')).text();
     expect(markdown).toContain('The description is too long for the link, so copy it from [this page]');
+  });
+
+  test('the PR the donor opened from the link shows as theirs, with no link to open another and no warning of a second PR', async () => {
+    await project({ tags: ['help wanted'], prMode: 'automatic' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const { name, result } = await pushed(priya, issue);
+    const toOpen = result.structuredContent?.toOpen as { title: string; body: string };
+    const browser = await site('priya');
+    const made = await github.fetch(
+      new Request(`${github.apiUrl}/repos/${APP}/pulls`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${await siteToken('priya')}`, 'content-type': 'application/json', 'user-agent': 'me-test' },
+        body: JSON.stringify({ title: toOpen.title, body: toOpen.body, head: `priya:${name}`, base: 'main' }),
+      }),
+    );
+    const madeText = await made.text();
+    const { html_url: url } = JSON.parse(madeText) as { html_url: string };
+
+    const page = await (await browser.fetch('/me')).text();
+
+    expect(page).toContain(`Your PR is open on GitHub: <a href="${url}">${url}</a>. Good First Token`);
+    expect(formLink(page, issue)).toBeNull();
+    expect(page).not.toContain('A PR is already open on this issue');
+    expect(page).not.toContain('It is cleared to open as a PR.');
+  });
+
+  test("cleared work GitHub can't be read for says to try again, with no Open PR form and no word that it is cleared", async () => {
+    await project({ tags: ['help wanted'], prMode: 'automatic', personWrittenDescription: false });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    await pushed(priya, issue);
+    const browser = await site('priya');
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url.startsWith(github.apiUrl)) return Promise.resolve(Response.json({ message: 'Server Error' }, { status: 502 }));
+      return github.fetch(request);
+    });
+
+    const page = await (await browser.fetch('/me')).text();
+
+    expect(page).toContain('Its PR can&#x27;t open now.');
+    expect(page).toContain('GitHub couldn&#x27;t be read for this work just now');
+    expect(page).not.toContain(`aria-label="Open PR for ${issue}"`);
+    expect(page).not.toContain('It is cleared to open as a PR.');
+    expect(formLink(page, issue)).toBeNull();
+  });
+
+  test('cleared work in a paused project says why it can\'t open, and not that it is cleared', async () => {
+    await project({ tags: ['help wanted'], prMode: 'automatic' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    await pushed(priya, issue);
+    await setProjectStatus(env.DB, APP, { status: 'paused', reason: 'Taking a break.', changedBy: maintainer.githubId }, Date.now());
+
+    const page = await (await (await site('priya')).fetch('/me')).text();
+
+    expect(page).toContain('Its PR can&#x27;t open now.');
+    expect(page).toContain('paused');
+    expect(page).not.toContain('It is cleared to open as a PR.');
+    expect(formLink(page, issue)).toBeNull();
   });
 
   test("Open PR refuses as open_pr does, like a branch that moved since its submit, and clears nothing", async () => {

@@ -541,11 +541,19 @@ function toOpenText(claimId: string, open: PrToOpen): string {
     form,
     `Then call record_pr with the PR's link.`,
     `Title: ${open.title}`,
-    'Body, between the lines:',
-    '---',
-    open.body,
-    '---',
+    `Body, in the fenced block. The fence lines aren't part of it:`,
+    fenced(open.body),
   );
+}
+
+/**
+ * Text in a fenced block whose fence of backticks is longer than any run of
+ * backticks in it, so no line of the text can end the block.
+ */
+function fenced(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return lines(fence, text, fence);
 }
 
 /** A claim's branch as the donor's agent pushed it (docs/specs/agent-submits.md). */
@@ -718,12 +726,17 @@ const reviewItemSchema = z.object({
   reviewReason: reviewReasonSchema,
   /**
    * For pushed work open_pr cleared, with no PR recorded yet: how to open its
-   * PR, with the compare page link. Null for work that isn't cleared, and for
-   * cleared work whose repo GitHub didn't show this time, which open_pr
-   * clears again.
+   * PR, with the compare page link. Null for work that isn't cleared, for
+   * cleared work that can't open now, which `reason` explains, and for
+   * cleared work whose PR is open already, in `prFromBranch`.
    */
   toOpen: prToOpenSchema.nullable(),
-  /** A PR already open on the issue, from anyone. The donor decides whether a second one helps. */
+  /**
+   * For cleared work, a PR open on GitHub from the claim's own branch that
+   * isn't recorded yet: the donor's own PR, which record_pr records.
+   */
+  prFromBranch: prRefSchema.nullable(),
+  /** A PR already open on the issue, from anyone else. The donor decides whether a second one helps. */
   prOnIssue: prRefSchema.nullable(),
   /** When the work expires unless its PR is opened. */
   expiresAt: isoTime,
@@ -741,17 +754,21 @@ function renderReviewItem(item: ReviewItem): string {
     item.additions === null || item.deletions === null
       ? ''
       : ` · +${String(item.additions)} -${String(item.deletions)}`;
+  // Cleared work says it is cleared only while it has a PR to open.
+  const cleared = item.reviewReason === 'ready_to_open';
   return lines(
     `${item.issue}  ${item.title}`,
     `claim ${item.claimId}${size} · ${item.agent} (${item.model}) · expires ${when(item.expiresAt)}`,
-    `waiting because ${describeReviewReason(item.reviewReason)}`,
+    !(cleared && !item.openable) && `waiting because ${describeReviewReason(item.reviewReason)}`,
     `summary: ${item.summary}`,
     `checked: ${item.checks}`,
     `diff: ${item.diffUrl}`,
     item.prOnIssue &&
       `A PR is already open on the issue: ${item.prOnIssue.url}. Ask the donor whether a second PR helps.`,
-    item.toOpen === null && item.personWrittenDescription && 'Ask the donor to write the PR description.',
+    !cleared && item.personWrittenDescription && 'Ask the donor to write the PR description.',
     !item.openable && `Can't open it now: ${item.reason ?? 'Release the claim with release_claim.'}`,
+    item.prFromBranch &&
+      `Its PR is open on GitHub from the claim's branch: ${item.prFromBranch.url}. Call record_pr with that link. Open no other.`,
     item.toOpen && clearedText(item.toOpen),
   );
 }
@@ -773,7 +790,9 @@ function clearedText(open: PrToOpen): string {
 function clearedBodies(items: readonly ReviewItem[]): string | false {
   const cleared = items.flatMap((item) => (item.toOpen ? [{ claimId: item.claimId, body: item.toOpen.body }] : []));
   if (cleared.length === 0) return false;
-  return cleared.map(({ claimId, body }) => lines(`Body of the PR for claim ${claimId}, between the lines:`, '---', body, '---')).join('\n');
+  return cleared
+    .map(({ claimId, body }) => lines(`Body of the PR for claim ${claimId}, in the fenced block. The fence lines aren't part of it:`, fenced(body)))
+    .join('\n');
 }
 
 /** A claim in progress, as my_work lists it, with whether the agent can go on with it. */

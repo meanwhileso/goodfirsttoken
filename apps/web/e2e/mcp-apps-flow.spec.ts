@@ -33,8 +33,9 @@ test("a Pick in the issue cards claims with the donor's own agent and follows th
   data(await call('set_interests', { languages: [], projects: [PROJECT], kinds: [] }));
 
   // The project reviews agent PRs, so the work waits for the donor to open it.
-  // me.spec.ts claims sample-desktop#1431 and clears its pushed branch, so
-  // this test leaves it out, and its PR never holds that work in review.
+  // me.spec.ts claims sample-desktop#1431 and clears its pushed branch. This
+  // test leaves that issue out, so the PR it opens isn't on that issue, and
+  // me.spec.ts's work doesn't wait on another PR.
   const shown: string[] = [`${PROJECT}#1431`];
   let suggested = await call('suggest_issues', { sessionId, exclude: shown });
   for (let tries = 0; tries < 5 && !suggestionsOf(suggested).some((s) => s.issue.startsWith(`${PROJECT}#`)); tries++) {

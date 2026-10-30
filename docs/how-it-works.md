@@ -2811,15 +2811,27 @@ GitHub. [/me](#your-queue-on-me) shows the same queue.
   command, and the compare page link, aimed at the code repo's default
   branch as GitHub shows it now. The text names the title, the command,
   and the link, and tells the agent to call `record_pr` once the PR is
-  open. The bodies follow the list word for word, since the list indents
-  its items.
-- The issue isn't checked against cleared work, so a label or assignee the
-  maintainers changed since leaves it openable, as `record_pr` still takes
-  its PR. A blocked donor or a project that isn't open still marks it
-  `openable: false`, with no link.
-- `toOpen` is null for work that isn't cleared, and for work that can't
-  open now. It is null too when GitHub can't be read this time, and Open
-  PR clears the work again.
+  open. The bodies follow the list, since the list indents its items. Each
+  is in a fenced block whose fence of backticks is longer than any run of
+  backticks in it, as in `open_pr`'s text.
+- For cleared work, the issue's labels and assignees aren't checked
+  again, as `record_pr` still takes its PR once maintainers relabel or
+  assign the issue. The issue must still be one GitHub shows, and open.
+  The PRs on the issue are read as for other work.
+- The branch is read once. When its head moved from the cleared commit,
+  the work shows no link and says to submit the branch again, since
+  `record_pr` and the job would refuse that PR.
+- A PR on the issue from the claim's own branch, in the repo its submit
+  named, is the donor's own PR, opened and not recorded yet. It is
+  `prFromBranch`, and no other PR on the issue. The work then has no
+  `toOpen`, and the text tells the agent to call `record_pr` with that
+  PR's link.
+- `toOpen` is null for work that isn't cleared, and for cleared work that
+  can't open now: the donor is blocked, the project isn't open, the issue
+  is closed or gone, or the branch moved. `openable` is false then, with
+  the reason, and the text doesn't say the work is cleared. When GitHub
+  can't be read for cleared work, it is `openable: false` too, and the
+  reason says to try again in a minute.
 
 ## Your queue on /me
 
@@ -2866,10 +2878,15 @@ sign-in on the site. The PR is theirs, as when their agent opens it.
   [The donor's tools](#the-donors-tools). The notice says the PR is ready
   to open.
 - Cleared work has no Open PR. It has a button to GitHub's form for its
-  PR, from the queue's `toOpen`. The notice is cut short, so the link
-  never rides in it. The item says Good First Token records the PR once it
-  is open. When the description is too long for the link, the form fills
-  in the title alone, and the item shows the description to paste.
+  PR, from the queue's `toOpen`, named for its issue. The notice is cut
+  short, so the link never rides in it. The item says it is cleared, and
+  that Good First Token records the PR once it is open. When the
+  description is too long for the link, the form fills in the title
+  alone, and the item shows the description to paste.
+- Once the donor opened the PR, and before it is recorded, the item links
+  it as theirs, says Good First Token records it, and has no button.
+- Cleared work that can't open now says why, as other work does, and not
+  that it is cleared.
 - When GitHub no longer takes the token from the person's sign-in on the
   site, the notice says to sign out and in again. When GitHub answers with
   another error, as when the person's rate limit is spent or GitHub is
@@ -4000,7 +4017,10 @@ Apps shows each tool's text, as a terminal harness does.
   GitHub's form from the answer's `toOpen`, and says Good First Token
   records the PR once it is open. Work cleared already shows the same, and
   no Open PR. When the description is too long for the link, the item
-  shows it to paste. The view tells the agent what it cleared.
+  shows it to paste. Only the short line about the form is a status. The
+  diff's link stays after Open PR. The view tells the agent what it
+  cleared. The donor's own PR, open and not recorded yet, shows as theirs,
+  with no Open PR.
 - The follow-ups come before that work, and the claims in progress after
   it, as `my_work` lists them. With nothing at all, the view shows the
   tool's text.
@@ -5259,7 +5279,8 @@ to, as `/start.md` names its server.
 - `/me.md` and `/admin.md` follow their pages: someone signed out is sent to
   sign in, with `307`, and `/admin.md` is `404` for someone who isn't an
   admin. For the person signed in, `/me.md` lists their queue with its diff
-  links, time left, and, for cleared work, the link to open its PR on
+  links, time left, the donor's own PR when it is open and not recorded
+  yet, and, for cleared work, the link to open its PR on
   GitHub, their connected agents, and their interests, and
   `/admin.md` lists what waits, by kind and repo, the projects listed from a
   policy, and the blocked donors. Their forms stay on the pages. Both are

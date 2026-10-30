@@ -324,13 +324,14 @@ Nothing opens until the donor says so.
    the donor the body to paste. Then call `record_pr` with the PR's link.
 7. Cleared work stays under `readyToOpen`, waiting as `ready_to_open`,
    until its PR is recorded. Its `toOpen` is the PR to open, as `open_pr`
-   gave it. Open it as in step 6. Cleared work with a null `toOpen` and
-   `openable` true couldn't be read from GitHub this time. Clear it again
-   with `open_pr`.
-8. When `openable` is false, the PR can't open now. Its `reason` says why, and
+   gave it. Open it as in step 6. Its body is in a fenced block. Send what
+   is between the fence lines.
+8. When `prFromBranch` names a PR, the donor opened it from the claim's
+   branch already. Call `record_pr` with its link, and open no other.
+9. When `openable` is false, the PR can't open now. Its `reason` says why, and
    what to do.
-9. Work in the queue expires 7 days after its first submit, unless its PR
-   opens.
+10. Work in the queue expires 7 days after its first submit, unless its PR
+    opens.
 
 ## Follow-ups
 
