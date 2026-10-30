@@ -227,6 +227,8 @@ describe('the job that records cleared PRs', () => {
 
   test('two cleared claims cost two list reads, and the next run reads the one read longest ago first', async () => {
     const first = await cleared();
+    // A minute apart, so the older clearance comes first.
+    later(MINUTE);
     const second = await cleared();
 
     const before = github.calls.length;
