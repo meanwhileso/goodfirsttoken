@@ -344,6 +344,14 @@ test.each(skillNames)('every call the %s skill shows in a code block is one a to
   expect(problems).toEqual([]);
 });
 
+test.each(['give', 'work', 'review'])('the %s skill submits a pushed branch, and never files or onto', async (skill) => {
+  const { calls } = await skillAndServer(skill);
+  const submits = calls.filter((match) => match?.[1] === 'submit_work').map((match) => JSON.parse(match?.[2] ?? '{}') as Record<string, unknown>);
+
+  expect(submits.length).toBeGreaterThan(0);
+  expect(submits.filter((args) => 'files' in args || 'onto' in args || !('branch' in args))).toEqual([]);
+});
+
 test('every sentence a skill quotes from the server is among the strings the MCP tools answer with, and some are checked', () => {
   const quoted = Object.entries(skills)
     .filter(([skill]) => skill in READERS)
@@ -374,7 +382,7 @@ const DONOR_CONTRACT: Record<string, string[]> = {
   'post after each change, and every 10 minutes': ['`post_update` after each code change, test run, or decision, and at least every 10 minutes'],
   'fold a post that came too soon into the next one': ['`posted` `false`', 'fold it into your next update'],
   'keep secrets out of everything public': [
-    "Keep local paths, environment contents, tokens, and secrets out of every update, summary, check note, release reason, and file you submit, and out of the PR's title.",
+    "Keep local paths, environment contents, tokens, and secrets out of every update, summary, check note, release reason, commit message, and file you push, and out of the PR's title and body.",
   ],
   'start from the start commit, on the claim branch': [
     "Start from the commit `claim_issue` gives, on the claim's branch. When you can't clone the repo and check out that commit, tell the donor and release the claim.",

@@ -1,8 +1,10 @@
 ## The review queue
 
 Work waits in the donor's review queue when the project reviews agent PRs,
-wants a person-written description, or the PR couldn't open by itself.
-Nothing opens until the donor says so.
+wants a person-written description, or something else holds it, like a
+change to a workflow file. Nothing in the queue opens until the donor says
+so. In automatic mode, a submit with nothing to hold it skips the queue,
+and you open its PR at once.
 
 1. Call `my_work`. Under `readyToOpen` it lists each piece of work waiting
    to open as a PR: the issue, the claim, the lines added and removed, the
@@ -18,16 +20,19 @@ Nothing opens until the donor says so.
    them the marker has to be in it. Pass it to `open_pr` as `description`,
    word for word.
 5. When the donor says to open one, like "open 2", call `open_pr` with its
-   `claimId`, and `description` when they wrote one. Tell them the PR's
-   link. When the answer names another PR open on the issue, tell them
-   that too.
+   `claimId`, and `description` when they wrote one. When the answer names
+   another PR open on the issue, tell them.
 6. For work you pushed, `open_pr` opens nothing. It clears the work, and
-   answers with the PR to open: run the GitHub CLI command it gives, with
-   the body on its standard input, word for word. When the GitHub CLI
-   can't, give the donor the link to GitHub's form. When `bodyInLink` is
+   answers with `toOpen`, the PR to open. Write its body to a file, word
+   for word, with a quoted heredoc like `cat > body.md <<'EOF'`, outside
+   the repo. Then run the GitHub CLI command it gives, with that file on
+   its standard input, like `<command> < body.md`. When the GitHub CLI
+   refuses, give the donor the link to GitHub's form. When `bodyInLink` is
    true, the form has the title and body filled in. When it is false, the
    body is too long for the link, and the form has the title alone. Give
-   the donor the body to paste. Then call `record_pr` with the PR's link.
+   the donor the body to paste. When the GitHub CLI says a PR already
+   exists for the branch, that is the one to record. Then call `record_pr`
+   with the PR's link, and tell the donor the link.
 7. Cleared work stays under `readyToOpen`, waiting as `ready_to_open`,
    until its PR is recorded. Its `toOpen` is the PR to open, as `open_pr`
    gave it. Open it as in step 6. Its body is in a fenced block. Send what

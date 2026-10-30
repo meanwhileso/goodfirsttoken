@@ -62,8 +62,9 @@ function ConnectAgent() {
               </p>
             )}
             <p className="account__note">
-              Signing in with GitHub lets this agent fork public repos, commit to forks, and open pull requests
-              through {productName}. It cannot read private repos.
+              {productName} asks GitHub for public_repo only, which lets it add a project&apos;s label for its
+              maintainers. It cannot read private repos. This agent pushes its work with your git, and opens pull
+              requests with GitHub CLI or GitHub&apos;s form.
             </p>
             <form method="post" action={AUTHORIZE_PATH} className="cluster">
               <input type="hidden" name="handle" value={page.handle} />

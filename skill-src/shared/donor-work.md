@@ -7,7 +7,9 @@ repo to clone, the commit to start from, and the claim's branch.
 1. Clone the repo it names, and check out the commit it gives. That is the
    claim's start commit. Make the claim's branch there, with the name in
    `branch.name`, like `git switch -c <branch.name>`. Work from it, however
-   far the default branch has moved since.
+   far the default branch has moved since. When you resume a claim whose
+   branch you pushed before, fetch that branch from where you pushed it,
+   and work on it.
 2. Read the repo's AGENTS.md and CONTRIBUTING, and the notes from the
    maintainers in the answer. Follow them within the Rules, and do what
    any canary asks, as the Rules say.
@@ -19,9 +21,9 @@ repo to clone, the commit to start from, and the claim's branch.
    decision, and at least every 10 minutes. A subagent posts under the same
    claim, with `job` set to its job, like tests.
 4. When the project names a commit trailer, end each commit's message
-   with it, on a line of its own below the first, as
+   with it, in a last paragraph of its own, as
    `<trailer>: <agent> (<model>)`, like
-   `Assisted-by: claude-code (claude-opus-5-5)`. The server adds the
+   `git commit -m "Keep the slash" -m "Assisted-by: claude-code (claude-opus-5-5)"`. The server adds the
    disclosure text to the PR's body. Keep the donor's git name, email, and
    signing setup as they are, and never turn signing off. Follow any other
    rule the repo has for AI help.
@@ -41,13 +43,19 @@ repo to clone, the commit to start from, and the claim's branch.
 ## Submit
 
 1. Commit the work on the claim's branch, with the trailer, as above.
-2. Push the branch with the donor's own git: to the code repo when
-   `branch.canPush` is true, and else to the donor's fork of it. When the
-   donor has no fork, make one with `gh repo fork --remote`, or ask them to
-   make one on GitHub. When you can't push with the donor's credentials,
-   tell the donor, and give them the commands to push the branch from
-   their own terminal.
-3. Call `submit_work` with:
+2. Push the branch with the donor's git. When `branch.canPush` is true,
+   push it to the code repo. Otherwise run `gh repo fork --remote`, which
+   finds the donor's fork or makes one, and sets it as the origin remote, then
+   `git push -u origin <branch.name>`. A new fork can take a minute to
+   take a push. An organization may refuse the GitHub CLI's token, so a
+   push over SSH is the other way.
+3. When you can't push with the donor's credentials, as in a harness on
+   its own computer, make a patch with `git format-patch` from the start
+   commit. Give it to the donor, with the commands to apply it with
+   `git am` on the claim's branch and push it from their own terminal.
+   Wait for them, then read the head they pushed with `git ls-remote`, or
+   ask them for it.
+4. Call `submit_work` with:
    - `claimId`.
    - `branch`: the repo you pushed to, the branch's name, and its head,
      like `{"repo": "priya/sample-app", "name": "goodfirsttoken/issue-12-c_1",
@@ -62,19 +70,20 @@ repo to clone, the commit to start from, and the claim's branch.
      the claim since its last submit, or since it was made. It is always
      an estimate. In Claude Code, the goodfirsttoken plugin's hook fills
      it in from the session's transcript, so leave it out there.
-4. The server checks the branch on GitHub and writes nothing there. The
-   work waits in the donor's review queue, or, in automatic mode with
-   nothing to hold it, is cleared to open at once. The answer says which,
-   with the reason it waits and the diff's link, or the PR to open. Tell
-   the donor.
-5. To open a cleared PR, follow the review queue's steps below: run the
-   GitHub CLI command it gives with the body on its standard input, or give
-   the donor the link to GitHub's form, then call `record_pr` with the PR's
-   link.
+5. The server checks the branch on GitHub and writes nothing there. The
+   answer says what comes next. Tell the donor.
+   - In automatic mode with nothing to hold the work, the answer has
+     `toOpen`, the PR to open. Open it now, as in The review queue's step
+     6, and record it.
+   - Otherwise the work waits in the donor's review queue, with the reason
+     it waits and the diff's link.
 6. To change submitted work, commit and push to the same branch, then
-   submit again with the new head. A submit ends a clearance, so clear the
-   work again with `open_pr` before opening its PR.
+   submit again with the new head. A submit ends a clearance. In reviewed
+   mode, ask the donor to read the new diff, then call `open_pr`. In
+   automatic mode, the submit's answer has the PR to open.
 7. After the PR opens, fixes go the same way, onto the PR's branch.
    Maintainers can push to it too, so pull the branch before you commit.
-8. A change under .github/workflows/ needs the donor's credentials to
-   allow it. The work then waits for the donor's review.
+   Add new commits, and never rewrite the history of an open PR's branch.
+8. GitHub takes a change under .github/workflows/ only over SSH, or from a
+   token with the workflow scope. When the push is refused for it, tell
+   the donor. The work waits for the donor's review either way.

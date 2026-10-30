@@ -94,5 +94,5 @@ pull the branch, commit the fix on top with the trailer, push it, and submit
 the new head:
 
 ```
-submit_work {"claimId": "c_example2", "branch": {"repo": "kenji/sample-app", "name": "goodfirsttoken/issue-41-c_example2", "head": "4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6"}, "summary": "Stops the redirect loop when the base path is the root.", "checks": "make test passes.", "agent": "codex", "model": "example-model"}
+submit_work {"claimId": "c_example2", "branch": {"repo": "kenji/sample-router", "name": "goodfirsttoken/issue-57-c_example2", "head": "4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6"}, "summary": "Stops the redirect loop when the base path is the root.", "checks": "make test passes.", "agent": "codex", "model": "example-model"}
 ```

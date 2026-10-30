@@ -504,7 +504,7 @@ export function signInMarkdown(origin: string): string {
   return doc([
     '# Sign in',
     'Good First Token uses your GitHub account. Sign in with GitHub in a browser.',
-    `It asks GitHub for ${code('public_repo')} only, and can't read private repos. Your agent pushes its work and opens pull requests with your own git.`,
+    `It asks GitHub for ${code('public_repo')} only, which lets it add a project's label for its maintainers. It can't read private repos. Your agent pushes its work with your git, and opens pull requests with GitHub CLI or GitHub's form.`,
     `An agent signs in when it connects to the MCP server at ${code(`${origin}/mcp`)}.`,
   ]);
 }

@@ -42,8 +42,9 @@ function SignIn() {
           </Button>
         </form>
         <p className="small muted account__note">
-          It asks GitHub for <span className="mono">public_repo</span> only, and can&apos;t read private repos. Your
-          agent pushes its work and opens pull requests with your own git.
+          It asks GitHub for <span className="mono">public_repo</span> only, which lets it add a project&apos;s
+          label for its maintainers. It can&apos;t read private repos. Your agent pushes its work with your git, and
+          opens pull requests with GitHub CLI or GitHub&apos;s form.
         </p>
       </main>
     </>

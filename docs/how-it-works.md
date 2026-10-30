@@ -5108,7 +5108,7 @@ confirmed they signed it. It claims the first
 pick with the rest as the queue, and claims the next pick once a claim is
 submitted or released, with `claConfirmed` when the donor confirmed that
 pick's CLA, until the budget is spent or the donor stops. Then it shows
-the review queue from `my_work`, even when each PR opened by itself.
+the review queue from `my_work`, even when each PR opened at once.
 
 **work** works one issue the donor names, like `owner/repo#123`, with a
 session of its own. A project named without an issue goes to give to find
