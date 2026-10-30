@@ -150,6 +150,20 @@ Deploys, the static host, a security review, and the launch video.
 | [#92](https://github.com/meanwhileso/goodfirsttoken/issues/92) | Tie each project to its GitHub repo ID | Nothing | [#99](https://github.com/meanwhileso/goodfirsttoken/pull/99) |
 | [#93](https://github.com/meanwhileso/goodfirsttoken/issues/93) | Cap the GitHub reads behind the admin queue | Nothing | [#101](https://github.com/meanwhileso/goodfirsttoken/pull/101) |
 
+## M9 Agent-side submits
+
+The proposed [agent-side submits spec](docs/specs/agent-submits.md) has the donor's agent push the
+claim's branch and open the PR with the donor's own tools. Good First Token checks the branch and the
+PR with GitHub reads, and records them. Once the spec is approved, each item below becomes an issue
+labeled `roadmap`, this list becomes a table, and the dependency graph gets the items.
+
+1. Accept a pushed branch in `submit_work`, and return the branch name from `claim_issue`.
+2. Clear work to open in `open_pr`, return the PR's text, and add `record_pr`. Follows item 1.
+3. Find and record PRs from cleared claims' branches. Follows item 2.
+4. Show cleared work with its compare page link in `my_work`, on /me, and in MCP Apps. Follows item 2.
+5. Teach the skills and /start.md to push, open the PR, and record it. Follows items 3 and 4.
+6. Remove the server's write path for donors' work. Follows item 5 and the spec's open question 1.
+
 ## Dependency graph
 
 An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
