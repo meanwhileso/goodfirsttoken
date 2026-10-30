@@ -119,3 +119,25 @@ test('the local server sends the OAuth page back to the app with its redirect, f
   expect(response.status).toBe(302);
   expect(response.headers.get('location')).toMatch(new RegExp(`^${app.callbackUrl}\\?`));
 });
+
+test('the local server gives a sample person a token of their own, from no OAuth app, as their own tools hold', async () => {
+  const server = await start();
+  const owner = server.fake.state.accounts['sample-owner'];
+  if (!owner) throw new Error('no sample-owner');
+  // An organization that approved no OAuth app still takes the person's own token.
+  owner.oauthAppRestrictions = { approved: [] };
+
+  const given = await fetch(`${server.webUrl}/_fake/token`, { method: 'POST', body: JSON.stringify({ login: 'priya' }) });
+  const { token } = (await given.json()) as { token: string };
+  const fork = await fetch(`${server.apiUrl}/repos/sample-owner/sample-app/forks`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'user-agent': 'test' },
+    body: '{}',
+  });
+  const unnamed = await fetch(`${server.webUrl}/_fake/token`, { method: 'POST', body: '{}' });
+
+  expect(given.status).toBe(200);
+  expect(server.fake.state.tokens[token]).toMatchObject({ login: 'priya', clientId: null });
+  expect(fork.status).toBe(202);
+  expect(unnamed.status).toBe(400);
+});

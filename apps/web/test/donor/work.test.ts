@@ -2,7 +2,6 @@ import { describe, expect, test } from 'vitest';
 import {
   branchFor,
   closingLine,
-  commitMessage,
   isWorkflowPath,
   prBody,
   pullMismatch,
@@ -35,21 +34,20 @@ describe('why work waits for the donor', () => {
   const opens: ReviewFacts = {
     prOnIssue: false,
     workflowFiles: false,
-    unchecked: null,
+    tooManyFiles: false,
     prMode: 'automatic',
     personWrittenDescription: false,
     atOpenPrCap: false,
   };
 
-  test('automatic work with nothing in the way opens by itself', () => {
+  test('automatic work with nothing in the way is cleared by itself', () => {
     expect(reviewReason(opens)).toBeNull();
   });
 
   test('each reason alone sends the work to the review queue', () => {
     expect(reviewReason({ ...opens, prOnIssue: true })).toBe('pr_exists');
     expect(reviewReason({ ...opens, workflowFiles: true })).toBe('workflow_files');
-    expect(reviewReason({ ...opens, unchecked: 'too_many_files' })).toBe('too_many_files');
-    expect(reviewReason({ ...opens, unchecked: 'comparison_unread' })).toBe('comparison_unread');
+    expect(reviewReason({ ...opens, tooManyFiles: true })).toBe('too_many_files');
     expect(reviewReason({ ...opens, prMode: 'reviewed' })).toBe('reviewed_mode');
     expect(reviewReason({ ...opens, personWrittenDescription: true })).toBe('person_written_description');
     expect(reviewReason({ ...opens, atOpenPrCap: true })).toBe('open_pr_cap');
@@ -59,19 +57,19 @@ describe('why work waits for the donor', () => {
     const all: ReviewFacts = {
       prOnIssue: true,
       workflowFiles: true,
-      unchecked: 'comparison_unread',
+      tooManyFiles: true,
       prMode: 'reviewed',
       personWrittenDescription: true,
       atOpenPrCap: true,
     };
     expect(reviewReason(all)).toBe('pr_exists');
     expect(reviewReason({ ...all, prOnIssue: false })).toBe('workflow_files');
-    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false })).toBe('comparison_unread');
-    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false, unchecked: null })).toBe('reviewed_mode');
+    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false })).toBe('too_many_files');
+    expect(reviewReason({ ...all, prOnIssue: false, workflowFiles: false, tooManyFiles: false })).toBe('reviewed_mode');
   });
 });
 
-describe('the branch, the commit, and the PR', () => {
+describe('the branch and the PR', () => {
   test("a claim's branch is named for its issue and its claim, so each claim has its own", () => {
     expect(branchFor({ id: 'c_2x8Qm0vT4kLp9aZr1yWc', issue: 'sample-owner/sample-app#311' })).toBe(
       'goodfirsttoken/issue-311-c_2x8Qm0vT4kLp9aZr1yWc',
@@ -79,18 +77,6 @@ describe('the branch, the commit, and the PR', () => {
     expect(branchFor({ id: 'c_other', issue: 'sample-owner/sample-app#311' })).not.toBe(
       branchFor({ id: 'c_2x8Qm0vT4kLp9aZr1yWc', issue: 'sample-owner/sample-app#311' }),
     );
-  });
-
-  test("the commit carries the project's trailer with the agent and model, and no trailer when the project uses none", () => {
-    const base = { title: 'Keep the slash', summary: 'Keeps it.', agent: 'codex', model: 'gpt-5.5-codex' };
-    expect(commitMessage({ ...base, disclosure: { trailer: 'Assisted-by', prBody: null } })).toEqual({
-      headline: 'Keep the slash',
-      body: 'Keeps it.\n\nAssisted-by: codex (gpt-5.5-codex)',
-    });
-    expect(commitMessage({ ...base, disclosure: { trailer: 'Generated-by', prBody: 'Made with an agent.' } }).body).toBe(
-      'Keeps it.\n\nGenerated-by: codex (gpt-5.5-codex)',
-    );
-    expect(commitMessage({ ...base, disclosure: { trailer: null, prBody: 'Made with an agent.' } }).body).toBe('Keeps it.');
   });
 
   test('the PR closes an issue in its own repo by number, and one the project keeps elsewhere by its repo too', () => {

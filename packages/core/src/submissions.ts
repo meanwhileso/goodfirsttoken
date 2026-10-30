@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName, trimmedText } from './primitives';
 
 // The work a claim submitted (spec section 7, steps 5 and 6). submit_work
-// commits it to a branch as the donor, or takes a branch the donor's agent
-// pushed (docs/specs/agent-submits.md), then opens the PR or puts the work in
-// the donor's review queue, where open_pr opens it.
+// takes a branch the donor's agent pushed (docs/specs/agent-submits.md), and
+// puts the work in the donor's review queue, where open_pr clears it to open
+// as a PR. The server writes nothing to GitHub for it.
 
 /**
  * Why submitted work waits in the donor's review queue for them to open its
@@ -13,18 +13,19 @@ import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName,
  * - `pr_exists`: a PR is already open on the issue, so a person decides
  *   whether a second one helps.
  * - `workflow_files`: the change touches a GitHub Actions workflow file.
- * - `too_many_files`: the branch holds commits the server didn't make, and
- *   GitHub's comparison lists 300 files, its most, or fewer commits than the
- *   branch has, so it may leave a workflow file or a commit out.
- * - `comparison_unread`: the branch holds commits the server didn't make,
- *   and GitHub gave no comparison to check.
+ * - `too_many_files`: GitHub's comparison of the branch lists 300 files,
+ *   its most, or fewer commits than the branch has, so it may leave a
+ *   workflow file or a commit out.
+ * - `comparison_unread`: only older submits with files gave this. GitHub
+ *   gave no comparison to check.
  * - `reviewed_mode`: the project's PR mode is `reviewed`.
  * - `person_written_description`: the project wants the donor to write the
  *   PR description.
  * - `open_pr_cap`: the donor has as many open PRs in the project as it allows.
- * - `pr_refused`: the PR was to open by itself, and GitHub didn't open it.
- * - `ready_to_open`: pushed work with no other reason to wait, which the
- *   agent opens with open_pr.
+ * - `pr_refused`: only submits with files gave this, when the server opened
+ *   PRs: the PR was to open by itself, and GitHub didn't open it. Stored
+ *   work may still have it.
+ * - `ready_to_open`: work with no other reason to wait, cleared to open.
  */
 export const reviewReasons = [
   'pr_exists',
@@ -57,8 +58,10 @@ export const prTitle = oneLine(MAX_PR_TITLE, `must be at most ${String(MAX_PR_TI
 export const branchName = z.string({ error: 'must be a branch name' }).min(1).max(255);
 
 /**
- * How a claim's work reached its branch: `files`, which the server committed,
- * or `branch`, which the donor's agent pushed.
+ * How a claim's work reached its branch: `branch`, which the donor's agent
+ * pushed, or `files`, which the server committed for older submits. Those
+ * keep their branches, which open_pr, the compare page link, and the job
+ * that records cleared PRs work for too.
  */
 export const submissionSources = ['files', 'branch'] as const;
 export const submissionSourceSchema = z.enum(submissionSources);
@@ -78,9 +81,8 @@ export const submissionRecordSchema = z.object({
   /** The commit the latest submit made, or the head it named. */
   commit: commitSha,
   /**
-   * The commit the submits' files are read against: the claim's start
-   * commit, or the branch's head a submit named with `onto` after someone
-   * else pushed to it.
+   * The claim's start commit. Older submits with files could name a later
+   * head here.
    */
   base: commitSha,
   /**
@@ -89,10 +91,7 @@ export const submissionRecordSchema = z.object({
    * from it, as the PR's own change is.
    */
   diffFrom: commitSha,
-  /**
-   * The paths the latest submit sent, which the branch changes from `base`.
-   * For a pushed branch, the paths GitHub's comparison lists from `diffFrom`.
-   */
+  /** The paths GitHub's comparison lists from `diffFrom`. */
   paths: z.array(z.string().min(1)).max(300),
   title: prTitle,
   /** The agent's summary, with keys and tokens replaced. */
@@ -104,11 +103,11 @@ export const submissionRecordSchema = z.object({
   /** Lines added and removed from `diffFrom`, as GitHub counts them, or null when it didn't say. */
   additions: count.nullable(),
   deletions: count.nullable(),
-  /** Why the work waits for the donor, or null when its PR was to open by itself. */
+  /** Why the work waits for the donor, or null when its claim's PR is open. */
   reviewReason: reviewReasonSchema.nullable(),
   submittedAt: epochMs,
   /**
-   * For a pushed branch, open_pr's word that the work may become a PR: the
+   * open_pr's word that the work may become a PR: the
    * head it cleared, the PR's body, and when. A PR counts only from that
    * head. A later submit ends it. Null until then.
    */

@@ -204,7 +204,7 @@ describe('what each result says', () => {
     test("a body with its own rules and fences sits in a fence longer than any run of backticks in it, in my_work and open_pr", () => {
       const tricky = 'Adds the formatter.\n\n---\n\nRun it:\n\n````sh\npnpm test\n````\n\nCloses #918';
       const text = textOf(toolResult('my_work', cleared({ ...toOpen, body: tricky })));
-      const opened = textOf(toolResult('open_pr', { ...samples.open_pr.output, state: 'awaiting_review', pr: null, toOpen: { ...toOpen, body: tricky } }));
+      const opened = textOf(toolResult('open_pr', { ...samples.open_pr.output, toOpen: { ...toOpen, body: tricky } }));
 
       for (const said of [text, opened]) expect(said).toContain(`\n\`\`\`\`\`\n${tricky}\n\`\`\`\`\``);
     });
@@ -231,7 +231,7 @@ describe('what each result says', () => {
 
     test('with a body too long for the link, tells the agent the link fills in the title alone, and to give the donor the body', () => {
       const text = textOf(toolResult('my_work', cleared({ ...toOpen, bodyInLink: false })));
-      const opened = textOf(toolResult('open_pr', { ...samples.open_pr.output, state: 'awaiting_review', pr: null, toOpen: { ...toOpen, bodyInLink: false } }));
+      const opened = textOf(toolResult('open_pr', { ...samples.open_pr.output, toOpen: { ...toOpen, bodyInLink: false } }));
 
       for (const said of [text, opened]) {
         expect(said).toMatch(/the title filled in: \S+\n *The body is too long for the link, so give the donor the body/);
@@ -750,164 +750,27 @@ describe('tool inputs', () => {
     expect(claim('octo/.github#1').ok).toBe(true);
   });
 
-  const submit = (paths: string[]) =>
-    validate(tools.submit_work.input, {
-      claimId: 'c_1',
-      files: paths.map((path) => ({ path, content: 'x' })),
-      summary: 'Adds the NDJSON formatter.',
-      checks: 'pnpm test',
-      agent: 'claude-code',
-      model: 'claude-opus-5-5',
-    });
-
-  test('a submit writes only inside the repo', () => {
-    expect(submit(['src/index.ts', 'docs/how-it-works.md', '.github/workflows/ci.yml']).ok).toBe(true);
-    for (const path of ['/etc/passwd', '../outside.ts', 'src/../../outside.ts', '.git/config', 'src\\index.ts', 'src//index.ts', '']) {
-      expect(problemFields(submit([path])), path).toEqual(['files[0].path']);
-    }
-  });
-
-  test('a submit lists each file once', () => {
-    expect(problemFields(submit(['src/a.ts', 'src/a.ts']))).toEqual(['files']);
-  });
-
-  test('a submit can not list a file and a path under it', () => {
-    expect(problemFields(submit(['src', 'src/a.ts']))).toEqual(['files']);
-    expect(problemFields(submit(['src/a.ts', 'src']))).toEqual(['files']);
-    expect(submit(['src/a.ts', 'src/ab.ts', 'srcs/a.ts']).ok).toBe(true);
-  });
-
-  test('a submit can not list two paths that differ only in case', () => {
-    expect(problemFields(submit(['README.md', 'readme.md']))).toEqual(['files']);
-    expect(problemFields(submit(['Src/a.ts', 'src/a.ts/b.ts']))).toEqual(['files']);
-  });
-
-  test('a submitted path is at most 20 folders deep', () => {
-    const deep = (folders: number) => `${'d/'.repeat(folders)}f.txt`;
-    expect(submit([deep(20)]).ok).toBe(true);
-    expect(submit([deep(21)])).toMatchObject({
-      ok: false,
-      problems: [{ field: 'files[0].path', message: 'must be a path inside the repo, like src/index.ts, at most 20 folders deep' }],
-    });
-  });
-
-  test('a submit can not list two paths that differ only in how an accent is written', () => {
-    // é as one character, and as e and a combining accent.
-    expect(problemFields(submit(['caf\u00E9.md', 'cafe\u0301.md']))).toEqual(['files']);
-    expect(problemFields(submit(['r\u00E9sum\u00E9/a.md', 're\u0301sume\u0301']))).toEqual(['files']);
-    expect(submit(['caf\u00E9.md', 'cafe.md']).ok).toBe(true);
-  });
-
-  /** The first problem with a submit of one path, or null when it is taken. */
-  const pathProblem = (path: string) => {
-    const result = submit([path]);
-    return result.ok ? null : (result.problems.find((p) => p.field === 'files[0].path')?.message ?? null);
-  };
-
-  test("a submit writes nothing into Git's own folder, however Windows or macOS would spell it", () => {
-    const gitDirs = [
-      '.GIT/config',
-      'src/.Git/hooks/pre-commit',
-      '.git./config',
-      '.git /config',
-      'GIT~1/config',
-      // NTFS streams of the folder, one of them its index.
-      '.git:foo/config',
-      '.git::$INDEX_ALLOCATION/config',
-      '.git . :x/config',
-      // Its short name on Windows, with dots, spaces, or a stream after it.
-      'git~1./config',
-      'GIT~1 /config',
-      'git~1:x/config',
-      // Characters HFS+ leaves out of a name.
-      '.g\u200Cit/config',
-      '\uFEFF.git/config',
-      '.git\u200C/config',
-      '.\u206Fgit/config',
-    ];
-    for (const path of gitDirs) {
-      expect(pathProblem(path), JSON.stringify(path)).toContain("outside Git's own folder");
-    }
-    expect(submit(['.gitignore', '.github/CODEOWNERS', 'docs/.gitkeep', 'src/git~2.ts', 'git~1a/b.ts', '.gitx/a.ts']).ok).toBe(true);
-  });
-
-  test('a submitted path has no control characters, none that turn text around, and no part that ends in a dot or a space', () => {
-    for (const path of ['src/a\u0001.ts', 'src/a\u000A.ts', 'src/a\u007F.ts']) {
-      expect(pathProblem(path), JSON.stringify(path)).toContain('no control characters');
-    }
-    for (const path of ['src/\u202Egnp.ts', 'src/a\u202A.ts', 'src/a\u202C.ts', 'src/\u2066a.ts', 'src/a\u2069.ts']) {
-      expect(pathProblem(path), JSON.stringify(path)).toContain('change the direction text shows in');
-    }
-    for (const path of ['src./a.ts', 'docs /a.md', 'a.ts.', 'a.ts ', 'src/...']) {
-      expect(pathProblem(path), JSON.stringify(path)).toContain('ends in a dot or a space');
-    }
-    expect(submit(['src/a.b.ts', 'src/a b.ts', 'docs/.well-known/x', 'src/.env.example']).ok).toBe(true);
-  });
-
-  const submitFiles = (files: { path: string; content: string | null }[]) =>
-    validate(tools.submit_work.input, {
-      claimId: 'c_1',
-      files,
-      summary: 'Adds the NDJSON formatter.',
-      checks: 'pnpm test',
-      agent: 'claude-code',
-      model: 'claude-opus-5-5',
-    });
-
-  test('a submit sends a pushed branch or files, not both and not neither, and onto goes with files only', () => {
+  test('a submit names the pushed branch, and files, which older skills sent, pass the schema for the server to refuse', () => {
     const notes = { claimId: 'c_1', summary: 'Adds the NDJSON formatter.', checks: 'pnpm test', agent: 'claude-code', model: 'claude-opus-5-5' };
     const branch = { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-918-c_1', head: 'a'.repeat(40) };
-    const files = [{ path: 'a.txt', content: 'a\n' }];
+    // Any shape an older skill sent, with onto, which the schema drops.
+    const files = [{ path: 'a.txt', content: 'a\n' }, { path: '../outside', content: '\u0000' }];
 
     expect(validate(tools.submit_work.input, { ...notes, branch }).ok).toBe(true);
-    expect(validate(tools.submit_work.input, { ...notes, files, onto: 'b'.repeat(40) }).ok).toBe(true);
-    expect(problemFields(validate(tools.submit_work.input, { ...notes, branch, files }))).toEqual(['branch']);
+    const old = validate(tools.submit_work.input, { ...notes, files, onto: 'b'.repeat(40) });
+    expect(old.ok && old.value.files).toEqual(files);
+    expect(old.ok && 'onto' in old.value).toBe(false);
     expect(problemFields(validate(tools.submit_work.input, notes))).toEqual(['branch']);
-    expect(problemFields(validate(tools.submit_work.input, { ...notes, branch, onto: 'b'.repeat(40) }))).toEqual(['onto']);
     expect(problemFields(validate(tools.submit_work.input, { ...notes, branch: { ...branch, head: 'main' } }))).toEqual([
       'branch.head',
     ]);
-  });
-
-  test('a submitted file holds at most 1 MiB of UTF-8, counted in bytes', () => {
-    const oneFile = (content: string) => submitFiles([{ path: 'a.txt', content }]);
-    expect(oneFile('x'.repeat(1_048_576)).ok).toBe(true);
-    expect(problemFields(oneFile('x'.repeat(1_048_577)))).toEqual(['files[0].content']);
-    // é takes two bytes, so half as many fit.
-    expect(oneFile('é'.repeat(524_288)).ok).toBe(true);
-    expect(problemFields(oneFile(`${'é'.repeat(524_288)}x`))).toEqual(['files[0].content']);
-    // An emoji takes four bytes, and two UTF-16 code units, so a quarter as many fit.
-    expect(oneFile('🚀'.repeat(262_144)).ok).toBe(true);
-    expect(problemFields(oneFile(`${'🚀'.repeat(262_144)}x`))).toEqual(['files[0].content']);
-  });
-
-  test('the files of one submit hold at most 2 MiB of UTF-8 in all, and a deletion counts nothing', () => {
-    const full = (n: number) => ({ path: `f${String(n)}.txt`, content: 'x'.repeat(1_048_576) });
-    expect(submitFiles([full(1), full(2), { path: 'gone.txt', content: null }]).ok).toBe(true);
-    expect(problemFields(submitFiles([full(1), full(2), { path: 'one-more.txt', content: 'x' }]))).toEqual(['files']);
-  });
-
-  test('a submitted file is text: a NUL character or half a surrogate pair is refused, and an empty file or a deletion is taken', () => {
-    expect(problemFields(submitFiles([{ path: 'logo.png', content: '\u0089PNG\r\n\u001a\n\u0000\u0000' }]))).toEqual([
-      'files[0].content',
-    ]);
-    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'broken \ud83d text' }]))).toEqual(['files[0].content']);
-    expect(problemFields(submitFiles([{ path: 'a.txt', content: 'broken \ude00 text' }]))).toEqual(['files[0].content']);
-    expect(submitFiles([{ path: 'emoji.txt', content: 'ship it 🚀\n' }]).ok).toBe(true);
-    expect(submitFiles([{ path: 'empty.txt', content: '' }, { path: 'old.txt', content: null }]).ok).toBe(true);
-  });
-
-  test("a file's text is taken as it was sent, spaces and line endings included", () => {
-    const content = '  indented\r\nline two\t\n\n';
-    const result = submitFiles([{ path: 'a.txt', content }]);
-    expect(result.ok && result.value.files?.[0]?.content).toBe(content);
   });
 
   test('a PR title and a model name are one line, and a title is at most 256 characters', () => {
     const withTitle = (title: string) =>
       validate(tools.submit_work.input, {
         claimId: 'c_1',
-        files: [{ path: 'a.txt', content: 'x' }],
+        branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-918-c_1', head: 'a'.repeat(40) },
         title,
         summary: 'Adds the NDJSON formatter.',
         checks: 'pnpm test',
@@ -927,7 +790,7 @@ describe('tool inputs', () => {
     const notes = (title: string, model: string) =>
       validate(tools.submit_work.input, {
         claimId: 'c_1',
-        files: [{ path: 'a.txt', content: 'x' }],
+        branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-918-c_1', head: 'a'.repeat(40) },
         title,
         summary: 'Adds the NDJSON formatter.',
         checks: 'pnpm test',

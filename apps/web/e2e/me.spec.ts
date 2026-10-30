@@ -8,15 +8,15 @@ import { SITE } from './hosts';
 // /me and /maintainers in the browser, against the MCP server, the issue
 // rooms, and the GitHub fake. priya's own agent, connected through the MCP
 // client SDK the way a harness connects, claims two of the sample issues.
-// It submits work with files to one. For the other, it pushes the claim's
-// branch to her fork, as her own git would, and submits the branch. Both
-// projects review agent PRs, so the work waits in her review queue, and one
-// of them asks her to write the PR description. Signed in on the site, she
-// clears the pushed work from /me, which links GitHub's form for its PR,
-// opens the other PR, and disconnects the agent. The sample work gives the
-// site its sample projects, and this opens a PR on them, so it runs last,
-// in the `me` project, once the other tests are done. The projects, people,
-// and files are made up.
+// For each, it pushes the claim's branch to her fork, as her own git would,
+// and submits the branch. Both projects review agent PRs, so the work waits
+// in her review queue, and one of them asks her to write the PR
+// description. Signed in on the site, she clears the work from /me, which
+// links GitHub's form for its PR, opens one PR there with her own GitHub
+// token, records it through her agent, and disconnects the agent. The
+// sample work gives the site its sample projects, and this opens a PR on
+// them, so it runs last, in the `me` project, once the other tests are
+// done. The projects, people, and files are made up.
 
 const DESKTOP = 'sample-owner/sample-desktop#1431';
 const BUNDLER = 'sample-owner/sample-bundler#120';
@@ -102,17 +102,27 @@ async function fakeCalls(request: APIRequestContext): Promise<FakeCall[]> {
   return (await (await request.get(`${LOCAL_WEB_URL}/_fake/calls`)).json()) as FakeCall[];
 }
 
+/** A GitHub token of priya's own, from no OAuth app, as her git and GitHub CLI hold. */
+async function ownToken(request: APIRequestContext): Promise<string> {
+  const given = await request.post(`${LOCAL_WEB_URL}/_fake/token`, { data: { login: 'priya' } });
+  expect(given.ok()).toBe(true);
+  return ((await given.json()) as { token: string }).token;
+}
+
 /**
  * Pushes the claim's branch to priya's fork of the repo on the GitHub fake,
  * as her own git would: a fork, made when she has none, the branch from the
- * start commit, and one commit on it with the project's trailer. It uses
- * the GitHub token her agent's commits ran with. Returns the fork and the
- * branch's head.
+ * start commit, and one commit on it with the project's trailer, with a
+ * token of her own. Returns the fork and the branch's head.
  */
-async function push(request: APIRequestContext, repo: string, branch: string, start: string): Promise<{ fork: string; head: string }> {
-  const token = (await fakeCalls(request)).find((c) => c.operation.startsWith('mutation createCommitOnBranch') && c.login === 'priya')?.token;
-  if (!token) throw new Error("no GitHub token of priya's agent in the fake's calls");
-  const headers = { authorization: `Bearer ${token}` };
+async function push(
+  request: APIRequestContext,
+  repo: string,
+  branch: string,
+  start: string,
+  file: { path: string; text: string },
+): Promise<{ fork: string; head: string }> {
+  const headers = { authorization: `Bearer ${await ownToken(request)}` };
   const forked = await request.post(`${LOCAL_API_URL}/repos/${repo}/forks`, { headers, data: {} });
   expect(forked.ok(), await forked.text()).toBe(true);
   const fork = ((await forked.json()) as { full_name: string }).full_name;
@@ -127,7 +137,7 @@ async function push(request: APIRequestContext, repo: string, branch: string, st
     branch: { repositoryNameWithOwner: fork, branchName: branch },
     expectedHeadOid: start,
     message: { headline: 'Read the layout before the session restores it', body: 'Assisted-by: claude-code (e2e-model)' },
-    fileChanges: { additions: [{ path: 'docs/e2e-lock.md', contents: Buffer.from('A note from the browser test of /me.\n').toString('base64') }] },
+    fileChanges: { additions: [{ path: file.path, contents: Buffer.from(file.text).toString('base64') }] },
   };
   const answer = (await (await request.post(`${LOCAL_API_URL}/graphql`, { headers, data: { query, variables: { input } } })).json()) as {
     data?: { createCommitOnBranch?: { commit?: { oid?: string } } };
@@ -143,22 +153,30 @@ test.beforeAll(async ({ request }) => {
   agent = await connectAgent(SITE, runAddress(), 'priya');
   const { sessionId } = await call('start_session', { agent: 'claude-code', budget: { kind: 'until_limit' } });
   const bundler = await call('claim_issue', { sessionId, issue: BUNDLER });
+  const bundlerBranch = (bundler.branch as { name: string }).name;
   claims.set(BUNDLER, (bundler.claim as { claimId: string }).claimId);
-  const files = await call('submit_work', {
+  const onBundler = await push(request, 'sample-owner/sample-bundler', bundlerBranch, (bundler.clone as { commit: string }).commit, {
+    path: 'docs/e2e-note.md',
+    text: 'A note from the browser test of /me.\n',
+  });
+  const waiting = await call('submit_work', {
     claimId: claims.get(BUNDLER),
-    files: [{ path: 'docs/e2e-note.md', content: 'A note from the browser test of /me.\n' }],
+    branch: { repo: onBundler.fork, name: bundlerBranch, head: onBundler.head },
     summary: 'Warns when two plugins claim a file type.',
     checks: 'Read it twice.',
     agent: 'claude-code',
     model: 'e2e-model',
   });
-  expect(files.reviewReason).toBe('reviewed_mode');
+  expect(waiting.reviewReason).toBe('reviewed_mode');
 
   const desktop = await call('claim_issue', { sessionId, issue: DESKTOP });
   const { claimId } = desktop.claim as { claimId: string };
   const branch = (desktop.branch as { name: string }).name;
   claims.set(DESKTOP, claimId);
-  const { fork, head } = await push(request, 'sample-owner/sample-desktop', branch, (desktop.clone as { commit: string }).commit);
+  const { fork, head } = await push(request, 'sample-owner/sample-desktop', branch, (desktop.clone as { commit: string }).commit, {
+    path: 'docs/e2e-lock.md',
+    text: 'A note from the browser test of /me.\n',
+  });
   const pushed = await call('submit_work', {
     claimId,
     branch: { repo: fork, name: branch, head },
@@ -167,7 +185,7 @@ test.beforeAll(async ({ request }) => {
     agent: 'claude-code',
     model: 'e2e-model',
   });
-  expect(pushed).toMatchObject({ source: 'branch', reviewReason: 'reviewed_mode', toOpen: null });
+  expect(pushed).toMatchObject({ reviewReason: 'reviewed_mode', toOpen: null });
 });
 
 test.afterAll(async () => {
@@ -246,7 +264,7 @@ for (const width of WIDTHS) {
   });
 }
 
-test("a project that asks for the donor's own description starts the form empty, refuses it empty, and opens the PR with exactly her words, as her, with the token from her sign-in on the site", async ({
+test("a project that asks for the donor's own description starts the form empty, refuses it empty, and clears the PR with exactly her words, which she opens on GitHub's form with her own token", async ({
   page,
   request,
 }) => {
@@ -274,23 +292,33 @@ test("a project that asks for the donor's own description starts the form empty,
   await item(page, BUNDLER).getByLabel('your PR description').fill(words);
   await item(page, BUNDLER).getByRole('button', { name: `Open PR for ${BUNDLER}` }).click();
 
-  const notice = page.getByRole('status').filter({ hasText: 'Opened PR #' });
-  await expect(notice).toContainText(`for ${BUNDLER}`);
-  const number = Number(/Opened PR #(\d+)/.exec((await notice.textContent()) ?? '')?.[1]);
+  await expect(page.getByRole('status')).toContainText(`The PR for ${BUNDLER} is ready to open.`);
+  const link = item(page, BUNDLER).getByRole('link', { name: `Open the PR on GitHub for ${BUNDLER}` });
+  const form = new URL((await link.getAttribute('href')) ?? '');
+  const branch = `goodfirsttoken/issue-120-${claims.get(BUNDLER) ?? ''}`;
+  expect(`${form.origin}${form.pathname}`).toBe(`${LOCAL_WEB_URL}/sample-owner/sample-bundler/compare/main...priya:${branch}`);
+  const body = form.searchParams.get('body');
+  expect(body).toBe(`${words}\n\nCloses #120\n\nWritten with a coding agent through Good First Token.`);
+  // priya opens the PR on GitHub's form, with her own token, and her agent
+  // records it. The site's tokens open no PR.
+  const opened = await request.post(`${LOCAL_API_URL}/repos/sample-owner/sample-bundler/pulls`, {
+    headers: { authorization: `Bearer ${await ownToken(request)}` },
+    data: { title: form.searchParams.get('title'), body, head: `priya:${branch}`, base: 'main' },
+  });
+  expect(opened.ok(), await opened.text()).toBe(true);
+  const { number, html_url: url } = (await opened.json()) as { number: number; html_url: string };
+  const recorded = await call('record_pr', { claimId: claims.get(BUNDLER), pr: url });
+  expect(recorded).toMatchObject({ state: 'pr_opened', pr: { number } });
+  await page.goto('/me');
   await expect(item(page, BUNDLER)).toHaveCount(0);
   await expect(item(page, DESKTOP)).toHaveCount(1);
   const pr = await pullOf('sample-owner/sample-bundler', number, request);
-  expect(pr).toMatchObject({ state: 'open', user: { login: 'priya' }, head: { ref: `goodfirsttoken/issue-120-${claims.get(BUNDLER) ?? ''}` } });
-  expect(pr.body).toBe(`${words}\n\nCloses #120\n\nWritten with a coding agent through Good First Token.`);
-  // The PR opened with the token from priya's sign-in on the site, and her
-  // agent's own token made the commit. The fake's log is the whole run's,
-  // so it holds other tests' PRs too. This test's is priya's.
+  expect(pr).toMatchObject({ state: 'open', user: { login: 'priya' }, head: { ref: branch } });
+  // The fake's log is the whole run's, so it holds other tests' PRs too.
+  // This test's opened with priya's own token, from no OAuth app.
   const calls = await fakeCalls(request);
-  const opened = calls.filter((c) => c.operation === PULLS && c.url.includes('/sample-bundler/') && c.login === 'priya');
-  const committed = calls.filter((c) => c.operation.startsWith('mutation createCommitOnBranch') && c.login === 'priya');
-  expect(opened).toHaveLength(1);
-  expect(committed.length).toBeGreaterThan(0);
-  expect(committed.map((c) => c.token)).not.toContain(opened[0]?.token);
+  const made = calls.filter((c) => c.operation === PULLS && c.url.includes('/sample-bundler/') && c.login === 'priya');
+  expect(made).toHaveLength(1);
 });
 
 test('Disconnect on /me cuts the agent off, and its next tool call fails', async ({ page }) => {

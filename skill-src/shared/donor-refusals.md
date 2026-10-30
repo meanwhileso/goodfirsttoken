@@ -47,18 +47,13 @@ offers another project. Then:
 - `no_changes`: The pushed branch changes no file from the default
   branch, or a fix names the last submit's head. Commit the work, push the
   branch, and submit its new head.
-- `file_mode`: Only a submit with files gets this. Push the claim's branch
-  and submit with `branch` instead.
-- `path_conflict`: Only a submit with files gets this. Push the claim's
-  branch and submit with `branch` instead.
-- `fork_not_ready`: Only a submit with files gets this. Push the claim's
-  branch and submit with `branch` instead.
+- `skill_outdated`: The call sent files, as an older skill did. Update
+  the skill as the message says, push the claim's branch, and submit with
+  `branch`.
 - `branch_moved`: From `open_pr`, the pushed branch moved since its
-  submit. Submit it again, then open the PR. From a submit with files,
-  push the claim's branch and submit with `branch` instead.
-- `github_refused`: GitHub refused a read, or a write a submit with files
-  made, and the message gives GitHub's reason. Tell the donor the reason.
-  The claim stays as it was.
+  submit. Submit it again, then open the PR.
+- `github_refused`: GitHub didn't give a read the server needed, and the
+  message says which. Submit again. The claim stays as it was.
 - `branch_not_found`: The pushed branch doesn't have the claim's name, or
   GitHub doesn't show it at the head you named. Push the branch
   `claim_issue` named, and submit with the head the message gives.
@@ -72,9 +67,6 @@ offers another project. Then:
   commit it names, with `git rebase -i` and `git commit --amend`, then
   push with `--force-with-lease` and submit again. After the PR opens, add
   a new commit instead, and ask the donor what to do about the old one.
-- `branch_pushed`: The claim's branch was pushed, so a submit with files
-  would write over it. Push your work to the branch, and submit with
-  `branch`.
 - `not_cleared`: `record_pr` found the work not cleared to open. Submit
   the pushed branch, clear it with `open_pr`, open the PR, and record it.
 - `pr_mismatch`: `record_pr` found the PR isn't the cleared one, and the

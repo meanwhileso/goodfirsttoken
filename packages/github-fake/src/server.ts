@@ -2,10 +2,14 @@
 // Node only. The API is under /api on the same port, so one server stands
 // in for both github.com and api.github.com.
 //
-// Three routes exist only on the fake, for tests and `pnpm seed`:
+// Four routes exist only on the fake, for tests and `pnpm seed`:
 //   GET  /_fake/health   the fake's base URLs
 //   GET  /_fake/calls    every call so far, with whose token made it
 //   POST /_fake/reset    back to the sample data
+//   POST /_fake/token    a token of a sample person's own, from no OAuth
+//                        app, as their own tools hold, for a test to push
+//                        and open a PR as they would. The body is
+//                        {"login": "..."}.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -75,6 +79,15 @@ export async function startGitHubFakeServer(options: ServerOptions = {}): Promis
         await send(res, Response.json({ ok: true, webUrl: fake.webUrl, apiUrl: fake.apiUrl }));
       } else if (path === '/_fake/calls') {
         await send(res, Response.json(fake.calls));
+      } else if (path === '/_fake/token' && request.method === 'POST') {
+        const { login } = (await request.json().catch(() => ({}))) as { login?: unknown };
+        if (typeof login === 'string') {
+          const token = fake.tokenFor(login);
+          save();
+          await send(res, Response.json({ token }));
+        } else {
+          await send(res, Response.json({ message: 'Send {"login": "..."}.' }, { status: 400 }));
+        }
       } else if (path === '/_fake/reset' && request.method === 'POST') {
         fake.reset();
         save();

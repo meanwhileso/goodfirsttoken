@@ -95,37 +95,20 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
       if (answer.isError || !isObject(answer.data)) {
         open.textContent = 'Open PR';
         open.disabled = false;
-        status.appendChild(notice(answer.text || "The PR didn't open.", 'refused'));
+        status.appendChild(notice(answer.text || "The work wasn't cleared to open.", 'refused'));
         return;
       }
       const opened = answer.data as ToolOutput<'open_pr'>;
       // The diff stays, for the donor to read again.
       open.remove();
       description?.closest('label')?.remove();
-      // Work the agent pushed is cleared, and the donor opens its PR on GitHub's form.
-      if (opened.pr === null) {
-        if (isObject(opened.toOpen)) status.appendChild(clearedPart(host, opened.toOpen));
-        told.push(answer.text);
-        await host.updateContext(told.join('\n')).catch(() => {
-          status.appendChild(notice(`Tell your agent you cleared claim ${item.claimId} to open as a PR.`, 'note'));
-        });
-        return;
-      }
-      const pr = opened.pr;
-      status.appendChild(
-        h(
-          'p',
-          { class: 'view-notice view-notice--done', role: 'status' },
-          `Opened PR #${String(pr.number)}: `,
-          link(host, pr.url, pr.url),
-          opened.prOnIssue && ` Another PR is open on the issue too: ${opened.prOnIssue.url}`,
-        ),
-      );
-      // The agent hears of it at its next turn, so it doesn't open it again.
+      // The work is cleared, and the donor opens its PR on GitHub's form.
+      if (isObject(opened.toOpen)) status.appendChild(clearedPart(host, opened.toOpen));
+      // The agent hears of it at its next turn, so it records the PR.
       // When the host won't tell it, the donor can.
       told.push(answer.text);
       await host.updateContext(told.join('\n')).catch(() => {
-        status.appendChild(notice(`Tell your agent you opened PR #${String(pr.number)} for claim ${item.claimId}.`, 'note'));
+        status.appendChild(notice(`Tell your agent you cleared claim ${item.claimId} to open as a PR.`, 'note'));
       });
     })();
   });

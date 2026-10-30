@@ -9,7 +9,7 @@ import {
   markClearedChecked,
 } from '../db';
 import { pullMismatch } from '../donor/work';
-import { pullFacts } from '../donor/writes';
+import { pullFacts } from '../donor/branches';
 import { GitHubError } from '../github';
 import { clearedPrOf, recordPull } from '../mcp/submit';
 import { SyncStopped, type ServiceGitHub, type StopReason } from './github';

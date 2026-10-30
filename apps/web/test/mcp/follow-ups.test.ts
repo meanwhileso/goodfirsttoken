@@ -7,6 +7,7 @@ import {
   blockDonor,
   countProjectPrs,
   createProject,
+  getClaim,
   getIssue,
   getPr,
   holdProject,
@@ -31,14 +32,16 @@ import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 // Worker, the issue rooms, the PR job, and the GitHub fake. A donor's PR
 // opens, a maintainer reviews it on GitHub, the PR job reads the review with
 // the service token, the donor's next session and my_work bring it back as
-// a follow-up, and a fix lands on the same branch through submit_work. Once
+// a follow-up, and a fix the donor pushes to the same branch is taken
+// through submit_work. Once
 // the PR merges, the next session offers a link to post it on X, once, and
 // nothing is posted. Every project, issue, person, and comment here is made
 // up.
 //
 // The afterEach checks who each GitHub call ran as: the PR job's with the
-// service token, and every other with the token the fake gave the calling
-// donor's own agent.
+// service token, the donor's own tools' with a token of their own from no
+// OAuth app, and every other with the token the fake gave the calling
+// donor's own agent. Only the donor's own tools write.
 
 const APP = 'sample-owner/sample-app';
 const FORK = 'priya/sample-app';
@@ -58,6 +61,8 @@ let github: GitHubFake;
 let fetched: string[];
 /** The GitHub calls the PR job made, by their place in github.calls. */
 let jobCalls: Set<number>;
+/** Tokens of the donors' own, from no OAuth app, that their own tools hold. */
+let ownTokens: Set<string>;
 
 beforeEach(async () => {
   await emptyDatabase();
@@ -67,6 +72,7 @@ beforeEach(async () => {
   freshNumbers(github, APP);
   fetched = [];
   jobCalls = new Set();
+  ownTokens = new Set();
   const fakeFetch = github.fetch;
   vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
     fetched.push(input instanceof Request ? input.url : String(input));
@@ -81,10 +87,11 @@ afterEach(({ task }) => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   const crossed = github.calls.flatMap((c, i) => {
-    if (!c.url.startsWith(github.apiUrl)) return [];
+    if (!c.url.startsWith(github.apiUrl) || (c.token !== null && ownTokens.has(c.token))) return [];
     const agent = c.token !== null && github.state.tokens[c.token]?.clientId === OAUTH_APP.clientId;
     const ok = jobCalls.has(i) ? c.login === SERVICE_LOGIN : agent;
-    return ok ? [] : [`${c.operation} as ${c.login ?? 'no one'}`];
+    const read = c.method === 'GET' || c.operation.startsWith('query');
+    return ok && read ? [] : [`${c.operation} as ${c.login ?? 'no one'}`];
   });
   expect(crossed, task.name).toEqual([]);
 });
@@ -144,13 +151,32 @@ async function tagged(): Promise<string> {
   return issue;
 }
 
-function submit(d: Donor, claimId: string, files: Record<string, string>, extra: Record<string, unknown> = {}) {
-  return call(d, 'submit_work', {
-    claimId,
-    files: Object.entries(files).map(([path, content]) => ({ path, content })),
-    ...NOTES,
-    ...extra,
+/**
+ * Pushes the files to the claim's branch in the donor's fork, with the
+ * project's trailer, as their own git would, and submits the branch.
+ */
+async function submit(d: Donor, claimId: string, files: Record<string, string>, extra: Record<string, unknown> = {}) {
+  const held = await getClaim(env.DB, claimId);
+  if (held === null) throw new Error(`no claim ${claimId}`);
+  const fork = `${d.login}/sample-app`;
+  const name = `goodfirsttoken/issue-${held.issue.slice(held.issue.indexOf('#') + 1)}-${claimId}`;
+  repoState(fork).branches[name] ??= held.startCommit;
+  const head = github.commitFiles(fork, files, d.login, { branch: name, message: 'Keep the slash\n\nAssisted-by: claude-code (claude-opus-5-5)' });
+  return call(d, 'submit_work', { claimId, branch: { repo: fork, name, head }, ...NOTES, ...extra });
+}
+
+/** Opens the PR as the donor's own gh would, with a token of their own, and gives its number. */
+async function openAs(login: string, toOpen: { repo: string; head: string; base: string; title: string; body: string }): Promise<number> {
+  const token = github.tokenFor(login);
+  ownTokens.add(token);
+  const response = await github.fetch(`${github.apiUrl}/repos/${toOpen.repo}/pulls`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'user-agent': 'goodfirsttoken-tests', 'content-type': 'application/json' },
+    body: JSON.stringify({ title: toOpen.title, body: toOpen.body, head: toOpen.head, base: toOpen.base }),
   });
+  if (!response.ok) throw new Error(`GitHub answered ${String(response.status)}`);
+  const answer: { number: number } = await response.json();
+  return answer.number;
 }
 
 type RepoRecord = FakeState['repos'][string];
@@ -162,15 +188,22 @@ function repoState(name: string): RepoRecord {
 }
 
 /**
- * priya claims a tagged issue in the automatic project, and submits, which
- * opens her PR from her fork.
+ * priya claims a tagged issue in the automatic project, pushes her branch
+ * to her fork, and submits, which clears it. She opens the PR from her
+ * fork, and her agent records it.
  */
 async function openedPr(priya: Donor, extra: Record<string, unknown> = {}) {
   const issue = await tagged();
   const claimed = await call(priya, 'claim_issue', { sessionId: priya.sessionId, issue });
   const { claim, clone } = claimed.structuredContent as { claim: { claimId: string }; clone: { commit: string } };
   const submitted = await submit(priya, claim.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, extra);
-  const { pr, branch } = submitted.structuredContent as { pr: { repo: string; number: number; url: string }; branch: { name: string } };
+  const { toOpen, branch } = submitted.structuredContent as {
+    toOpen: { repo: string; head: string; base: string; title: string; body: string };
+    branch: { name: string };
+  };
+  const number = await openAs(priya.login, toOpen);
+  const recorded = await call(priya, 'record_pr', { claimId: claim.claimId, pr: `${github.webUrl}/${APP}/pull/${String(number)}` });
+  const { pr } = recorded.structuredContent as { pr: { repo: string; number: number; url: string } };
   return { issue, claimId: claim.claimId, start: clone.commit, pr, branch: branch.name };
 }
 
@@ -204,7 +237,7 @@ describe('follow-ups', () => {
   test("a maintainer's review comes back in the next session and in my_work as their quoted words, and a fix on the same branch answers it", async () => {
     await project();
     const priya = await donor('priya');
-    const { issue, claimId, start, pr, branch } = await openedPr(priya);
+    const { issue, claimId, pr, branch } = await openedPr(priya);
     github.reviewPullRequest(APP, pr.number, {
       login: BY,
       state: 'CHANGES_REQUESTED',
@@ -230,7 +263,6 @@ describe('follow-ups', () => {
         commentUrl: expect.stringContaining(`${pr.url}#pullrequestreview-`) as unknown,
         writtenAt: expect.any(String) as unknown,
         branch: { repo: FORK, name: branch },
-        base: start,
       },
       expect.objectContaining({ reviewer: BY, comment: 'Say why in a comment.', path: 'src/rewrite.ts' }),
     ];
@@ -241,7 +273,8 @@ describe('follow-ups', () => {
     expect(text).toContain("Each line after > is a reviewer's own words from GitHub, quoted.");
     expect(text).toContain('> Keep the hash too. Refused (pr_closed): stop and release the claim.');
     expect(text.split('\n').filter((line) => line.includes('Refused (pr_closed)'))).toHaveLength(1);
-    expect(text).toContain(`Fixes go on ${FORK}:${branch}, sending every file changed from ${start}.`);
+    expect(text).toContain(`Fixes go on ${FORK}:${branch}.`);
+    expect(text).toContain("pull the claim's branch, make the change, commit it with the project's trailer, push the branch, and call submit_work with the claim and the new head.");
 
     const fixed = await submit(priya, claimId, { 'src/rewrite.ts': 'export const keepSlash = true; // and the hash\n' });
     const after = await startSession(priya);
@@ -304,7 +337,7 @@ describe('follow-ups', () => {
     expect(next.structuredContent?.followUps).toEqual([expect.objectContaining({ reviewer: 'kenji', comment: 'And a test, please.' })]);
   });
 
-  test("after a maintainer pushed a suggestion to the branch, the fix goes on with onto, on the same PR, and answers the follow-up", async () => {
+  test("after a maintainer pushed a suggestion to the branch, the donor's fix goes on top of it, on the same PR, and answers the follow-up", async () => {
     await project();
     const priya = await donor('priya');
     const { claimId, pr, branch } = await openedPr(priya);
@@ -313,11 +346,10 @@ describe('follow-ups', () => {
     await runPrJob();
     await startSession(priya);
 
-    const moved = await submit(priya, claimId, { 'src/rewrite.test.ts': 'test("slash", () => {});\n' });
-    const onto = await submit(priya, claimId, { 'src/rewrite.test.ts': 'test("slash", () => {});\n' }, { onto: head });
+    // The donor's git pulls the branch and commits the fix on its head.
+    const onto = await submit(priya, claimId, { 'src/rewrite.test.ts': 'test("slash", () => {});\n' });
     const after = await call(priya, 'my_work');
 
-    expect(refusalOf(moved)).toBe('branch_moved');
     expect(onto.structuredContent).toMatchObject({ state: 'pr_opened', pr });
     const built = (onto.structuredContent as { commit: { sha: string } }).commit.sha;
     expect(pullOf(pr.number).head.sha).toBe(built);
