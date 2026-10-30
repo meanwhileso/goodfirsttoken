@@ -545,7 +545,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
 | `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR, and the reads that check a pushed branch: the branch's repo and its fork parent, a comparison with its commits, and a PR's head |
-| `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, and the words of the commit and the PR |
+| `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, the commit trailer check, and the words of the commit and the PR |
 | `src/donor/vouch.ts` | The vouch file's format |
 | `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
 

@@ -34,7 +34,8 @@ export const refusalCodes = [
   // GitHub makes a new fork in the background, and hadn't finished it.
   'fork_not_ready',
   // Someone else pushed to the claim's branch since its last submit, so a
-  // commit would undo their work.
+  // commit would undo their work. For a pushed branch, open_pr found it
+  // moved from the head its submit checked.
   'branch_moved',
   // The submit changes an executable file, a symbolic link, or a submodule,
   // or a path under a link or a submodule, which a commit through GitHub's

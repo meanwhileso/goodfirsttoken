@@ -774,6 +774,7 @@ export const openPr = defineTool({
     'open_pr_cap',
     'issue_not_eligible',
     'github_refused',
+    'branch_moved',
   ],
   input: z.object({
     claimId: id,

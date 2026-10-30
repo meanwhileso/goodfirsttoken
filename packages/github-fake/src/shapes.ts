@@ -426,13 +426,34 @@ export function diffFiles(ctx: Ctx, from: Oid, to: Oid): FileDiff[] {
 }
 
 // The commits on `head` since `base`, following first parents.
+// The commits `head` has that `base` doesn't, through every parent, as
+// `git log base..head` finds them, parents before children. A merge brings
+// in the commits of each side.
 export function commitsSince(ctx: Ctx, base: Oid, head: Oid): Oid[] {
-  const found: Oid[] = [];
-  for (let oid: Oid | undefined = head; oid && oid !== base; ) {
-    found.push(oid);
-    oid = readObject(ctx.state.objects, oid, 'commit').parents[0];
+  const store = ctx.state.objects;
+  const parentsOf = (oid: Oid) => readObject(store, oid, 'commit').parents;
+  const inBase = new Set<Oid>();
+  for (const stack = [base]; stack.length > 0; ) {
+    const oid = stack.pop() as Oid;
+    if (inBase.has(oid)) continue;
+    inBase.add(oid);
+    stack.push(...parentsOf(oid));
   }
-  return found.reverse();
+  // A walk that lists a commit once each of its parents is listed.
+  const found: Oid[] = [];
+  const seen = new Set<Oid>();
+  for (const stack: { oid: Oid; done: boolean }[] = [{ oid: head, done: false }]; stack.length > 0; ) {
+    const { oid, done } = stack.pop() as { oid: Oid; done: boolean };
+    if (done) {
+      found.push(oid);
+      continue;
+    }
+    if (seen.has(oid) || inBase.has(oid)) continue;
+    seen.add(oid);
+    stack.push({ oid, done: true });
+    for (const parent of [...parentsOf(oid)].reverse()) stack.push({ oid: parent, done: false });
+  }
+  return found;
 }
 
 function diffStats(ctx: Ctx, repo: RepoRecord, pull: PullData) {

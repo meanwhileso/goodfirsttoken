@@ -737,7 +737,9 @@ async function submitPushed(
   let repo = facts.name;
   if (lower(pushed.repo) !== lower(facts.name)) {
     const found = await writer.repoOf(pushed.repo);
-    const forked = found !== null && [found.parent, found.source].some((from) => from !== null && lower(from) === lower(facts.name));
+    // The code repo's old name, after a rename, finds the code repo itself.
+    const forked =
+      found !== null && [found.name, found.parent, found.source].some((from) => from !== null && lower(from) === lower(facts.name));
     if (found === null || !forked) {
       return refuse(
         refusal('branch_elsewhere', `GitHub shows ${pushed.repo} as no fork of ${facts.name}, so nothing was taken. Push the branch to ${facts.name}, or to the donor's fork of it, and submit again.`),
@@ -770,16 +772,23 @@ async function submitPushed(
   // branch, so main's changes merged into it don't count.
   const diffFrom = facts.head ?? claim.startCommit;
   const own = await writer.comparison(repo, diffFrom, head);
-  if (own !== null && own.aheadBy === 0) {
-    return refuse(refusal('no_changes', `${repo}:${branch} has no commits that ${facts.defaultBranch} doesn't, so nothing was taken. Commit your work on the branch, push it, and submit again.`));
+  // A fix after the PR opens is checked against the last submit's head.
+  const fixing = claim.pr !== null && earlier !== null;
+  const since = fixing ? await writer.comparison(repo, earlier.commit, head) : own;
+  if (own === null || since === null) {
+    return refuse(refusal('github_refused', `GitHub gave no comparison of ${repo}:${branch}, so its commits couldn't be checked, and nothing was taken. Submit again.`));
+  }
+  if (own.aheadBy === 0 || own.files === 0) {
+    return refuse(refusal('no_changes', `${repo}:${branch} changes no file from ${facts.defaultBranch}, so nothing was taken. Commit your work on the branch, push it, and submit again.`));
   }
   // Until the PR opens, every commit of the branch's own change. After it,
   // the commits since the last submit, apart from those GitHub names
   // another person as the author of, since maintainers may push to it.
   const trailer = project.settings.disclosure.trailer;
-  const since = claim.pr !== null && earlier !== null ? await writer.comparison(repo, earlier.commit, head) : own;
-  if (trailer !== null && since !== null) {
-    const mine = since.commits.filter((commit) => commit.author === null || lower(commit.author) === lower(donor.login));
+  if (trailer !== null) {
+    const mine = fixing
+      ? since.commits.filter((commit) => commit.author === null || lower(commit.author) === lower(donor.login))
+      : since.commits;
     const missing = mine.filter((commit) => commit.parents < 2 && !hasTrailer(commit.message, trailer));
     if (missing.length > 0) {
       const named = missing.map((commit) => commit.sha.slice(0, 7)).join(', ');
@@ -789,25 +798,28 @@ async function submitPushed(
     }
   }
 
+  // Every read comes before the room records the submit. A PR already open
+  // from the claim's own branch isn't another PR on the issue.
+  const others: PrRef[] = [];
+  if (claim.pr === null) {
+    for (const pr of await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name])) {
+      const from = await writer.pullHead(pr.repo, pr.number);
+      if (from?.ref === branch && from.repo !== null && lower(from.repo) === lower(repo)) continue;
+      others.push(pr);
+    }
+  }
+  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
   const room = issueRoom(env.ISSUE_ROOM, claim.issue);
   const recorded = await room.submit({ claimId: claim.id, githubId: donor.githubId, tokenEstimate: input.tokenEstimate ?? null });
   if (!recorded.ok) return refuse(recorded.refusal);
-  // A PR already open from the claim's own branch isn't another PR on the issue.
-  const others: PrRef[] = [];
-  for (const pr of await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name])) {
-    const from = await writer.pullHead(pr.repo, pr.number);
-    if (from?.ref === branch && from.repo !== null && lower(from.repo) === lower(repo)) continue;
-    others.push(pr);
-  }
-  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
-  const listed = own !== null && own.commits.length >= own.aheadBy && own.files < COMPARE_FILES;
+  const listed = own.commits.length >= own.aheadBy && own.files < COMPARE_FILES;
   const reason =
     recorded.claim.state === 'pr_opened'
       ? null
       : (reviewReason({
           prOnIssue: others.length > 0,
-          workflowFiles: own?.paths.some(isWorkflowPath) ?? false,
-          unchecked: own === null ? 'comparison_unread' : listed ? null : 'too_many_files',
+          workflowFiles: own.paths.some(isWorkflowPath),
+          unchecked: listed ? null : 'too_many_files',
           prMode: project.settings.prMode,
           personWrittenDescription: project.settings.personWrittenDescription,
           atOpenPrCap: openPrRefusal(project, openPrs) !== null,
@@ -820,11 +832,11 @@ async function submitPushed(
     commit: head,
     base: claim.startCommit,
     diffFrom,
-    paths: (own?.paths ?? []).slice(0, COMPARE_FILES),
+    paths: own.paths.slice(0, COMPARE_FILES),
     ...notes,
     agent: input.agent,
-    additions: own?.additions ?? null,
-    deletions: own?.deletions ?? null,
+    additions: own.additions,
+    deletions: own.deletions,
     reviewReason: reason,
     submittedAt: now,
   });
@@ -898,6 +910,16 @@ export async function openPrAs(caller: Caller, input: ToolInput<'open_pr'>, now:
   // The PR is public, so a key or token in the donor's words goes to it only
   // as [redacted], as in the rest of the PR's body.
   const description = input.description === undefined ? undefined : stripSecretsFromText(input.description);
+  // A pushed branch opens only at the head its submit checked.
+  if (submission.source === 'branch') {
+    const head = await writer.branchHead(submission.repo, submission.branch);
+    if (head !== submission.commit) {
+      const at = typeof head === 'string' ? `is at ${head}` : 'is gone';
+      return refused(
+        refusal('branch_moved', `${submission.repo}:${submission.branch} ${at}, and its submit checked ${submission.commit}, so no PR opened. Submit the branch again, then open the PR.`),
+      );
+    }
+  }
   const opened = await openFor(writer, work, facts, submission, description);
   if (isRefusal(opened)) return refused(opened);
   return { ok: true, value: { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue } };

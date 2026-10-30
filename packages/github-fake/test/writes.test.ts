@@ -436,6 +436,34 @@ test('a comparison lists the files a branch changed since a commit, with lines a
   expect(unknown.status).toBe(404);
 });
 
+test('a comparison of a branch with the base merged in lists only the commits the base lacks, each once, oldest first', async () => {
+  const { sha } = await forkWithBranch('sam', 'merged-in');
+  const first = fake.commitFiles('sam/goodfirsttoken', { 'a.txt': 'a\n' }, 'sam', { branch: 'merged-in', message: 'Add a' });
+  const main = fake.commitFiles('meanwhileso/goodfirsttoken', { 'z.txt': 'z\n' }, 'octo-maintainer');
+  const pull = await rest<{ number: number }>(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: fake.tokenFor('sam'),
+    body: { title: 'Merge me', head: 'sam:merged-in', base: 'main' },
+  });
+  const merge = fake.updatePullRequestBranch('meanwhileso/goodfirsttoken', pull.body.number, 'sam');
+
+  const own = await rest<{ status: string; ahead_by: number; commits: { sha: string }[] }>(
+    fake,
+    'GET',
+    `/repos/sam/goodfirsttoken/compare/${main}...${merge}`,
+  );
+  const fromStart = await rest<{ ahead_by: number; commits: { sha: string }[] }>(
+    fake,
+    'GET',
+    `/repos/sam/goodfirsttoken/compare/${sha}...${merge}`,
+  );
+
+  expect(own.body).toMatchObject({ status: 'ahead', ahead_by: 2 });
+  expect(own.body.commits.map((c) => c.sha)).toEqual([first, merge]);
+  expect(fromStart.body.ahead_by).toBe(3);
+  expect(new Set(fromStart.body.commits.map((c) => c.sha))).toEqual(new Set([first, main, merge]));
+  expect(fromStart.body.commits.at(-1)?.sha).toBe(merge);
+});
+
 test('a comparison lists a file moved with the same text as renamed, with its old name, and commitFiles deletes a file given null', async () => {
   const before = await head('meanwhileso/goodfirsttoken', 'main');
   const after = fake.commitFiles(

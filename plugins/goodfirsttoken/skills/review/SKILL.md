@@ -402,7 +402,9 @@ offers another project. Then:
   files.
 - `branch_moved`: Someone pushed to the claim's branch, so nothing was
   committed. Follow step 5 of Submit. When the message says there is no
-  branch for `onto` to name, submit again without `onto`.
+  branch for `onto` to name, submit again without `onto`. From `open_pr`,
+  the pushed branch moved since its submit: submit it again, then open the
+  PR.
 - `github_refused`: GitHub refused the fork, the branch, the commit, or the
   PR, and the message gives GitHub's reason. For a change under
   .github/workflows/, leave it out, and tell the donor to make it on

@@ -66,14 +66,14 @@ export function branchFor(claim: Pick<ClaimRecord, 'id' | 'issue'>): string {
 }
 
 /**
- * Whether a commit message carries the trailer, as a line of its own that
- * starts with its name, a colon, and some text. Git compares trailer names
- * without case.
+ * Whether a commit message carries the trailer, as a line of its own below
+ * the first that starts with its name, a colon, and some text. Git compares
+ * trailer names without case.
  * https://git-scm.com/docs/git-interpret-trailers
  */
 export function hasTrailer(message: string, trailer: string): boolean {
   const name = trailer.toLowerCase();
-  return message.split('\n').some((line) => {
+  return message.split('\n').slice(1).some((line) => {
     const colon = line.indexOf(':');
     return colon > 0 && line.slice(0, colon).trim().toLowerCase() === name && line.slice(colon + 1).trim() !== '';
   });
