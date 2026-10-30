@@ -40,6 +40,70 @@ export interface Entry {
   mode: number;
 }
 
+/** A PR as GitHub shows it: where it goes and comes from, who made it and when, and its words. */
+export interface PullFacts {
+  number: number;
+  url: string;
+  /** Open, merged, or closed without merging. */
+  state: 'open' | 'merged' | 'closed';
+  /** When GitHub made it, in milliseconds. */
+  createdAt: number;
+  /** The GitHub ID of the account that opened it. */
+  authorId: number | null;
+  baseRepo: string;
+  baseRef: string;
+  /** The repo it comes from, or null when that fork was deleted. */
+  headRepo: string | null;
+  headRef: string;
+  headSha: string;
+  title: string;
+  body: string;
+}
+
+/** A PR from GitHub's REST answer, or null when a field is missing. */
+export function pullFacts(data: unknown): PullFacts | null {
+  const pull = data as {
+    number?: unknown;
+    html_url?: unknown;
+    state?: unknown;
+    merged_at?: unknown;
+    created_at?: unknown;
+    user?: { id?: unknown } | null;
+    base?: { ref?: unknown; repo?: { full_name?: unknown } | null };
+    head?: { ref?: unknown; sha?: unknown; repo?: { full_name?: unknown } | null };
+    title?: unknown;
+    body?: unknown;
+  } | null;
+  const baseRepo = pull?.base?.repo?.full_name;
+  const headRepo = pull?.head?.repo?.full_name;
+  if (
+    pull === null ||
+    typeof pull.number !== 'number' ||
+    typeof pull.html_url !== 'string' ||
+    typeof pull.created_at !== 'string' ||
+    typeof baseRepo !== 'string' ||
+    typeof pull.base?.ref !== 'string' ||
+    typeof pull.head?.ref !== 'string' ||
+    typeof pull.head.sha !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    number: pull.number,
+    url: pull.html_url,
+    state: pull.state === 'open' ? 'open' : typeof pull.merged_at === 'string' ? 'merged' : 'closed',
+    createdAt: Date.parse(pull.created_at),
+    authorId: typeof pull.user?.id === 'number' ? pull.user.id : null,
+    baseRepo,
+    baseRef: pull.base.ref,
+    headRepo: typeof headRepo === 'string' ? headRepo : null,
+    headRef: pull.head.ref,
+    headSha: pull.head.sha,
+    title: typeof pull.title === 'string' ? pull.title : '',
+    body: typeof pull.body === 'string' ? pull.body : '',
+  };
+}
+
 /** A commit in a comparison: its message, how many parents it has, and its author's login, or null when GitHub names no user. */
 export interface ComparedCommit {
   sha: string;
@@ -437,6 +501,21 @@ export class DonorWriter {
         parent: typeof parent === 'string' ? parent : null,
         source: typeof source === 'string' ? source : null,
       };
+    } catch (error) {
+      if (error instanceof GitHubError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * A PR as GitHub shows it, for checking against a clearance, or null when
+   * GitHub shows no such PR.
+   * https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request
+   */
+  async pull(repo: string, number: number): Promise<PullFacts | null> {
+    try {
+      const { data } = await this.reader.read<unknown>(`/repos/${repo}/pulls/${String(number)}`);
+      return pullFacts(data);
     } catch (error) {
       if (error instanceof GitHubError && error.status === 404) return null;
       throw error;

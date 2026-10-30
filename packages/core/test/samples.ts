@@ -177,6 +177,7 @@ export const samples: Samples = {
       diffUrl: `https://github.com/priya/goodfirsttoken/compare/${sha}...gft-918`,
       pr,
       reviewReason: null,
+      toOpen: null,
     },
     mentions: ['4f2a91c', 'priya/goodfirsttoken:gft-918', pr.url],
   },
@@ -228,8 +229,12 @@ export const samples: Samples = {
     ],
   },
   open_pr: {
-    output: { claimId: 'c_2', issue, state: 'pr_opened', pr, prOnIssue: null },
+    output: { claimId: 'c_2', issue, state: 'pr_opened', pr, toOpen: null, prOnIssue: null },
     mentions: ['PR #957', pr.url],
+  },
+  record_pr: {
+    output: { claimId: 'c_2', issue, state: 'pr_opened', pr },
+    mentions: ['Recorded PR #957', pr.url],
   },
   set_interests: {
     output: { interests: { languages: ['rust'], projects: [repo], kinds: ['docs'] } },

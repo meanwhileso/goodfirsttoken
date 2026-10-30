@@ -506,6 +506,37 @@ const changedFiles = z
     }
   });
 
+/**
+ * A PR cleared to open, for the agent to open with the donor's own tools
+ * (docs/specs/agent-submits.md): where it goes, from where, and its title
+ * and body, with the GitHub CLI command and the compare page that open it.
+ */
+const prToOpenSchema = z.object({
+  repo: repoName,
+  /** The branch the PR comes from, as `owner:branch`. */
+  head: z.string().min(1),
+  base: z.string().min(1),
+  title: z.string().min(1),
+  body: z.string().min(1),
+  /** The GitHub CLI command, which reads the body from `pr-body.md`. */
+  command: z.string().min(1),
+  /** GitHub's form for the PR, with its title and body filled in. */
+  compareUrl: webUrl,
+});
+type PrToOpen = z.infer<typeof prToOpenSchema>;
+
+/** How the agent opens a cleared PR, and records it. */
+function toOpenText(claimId: string, open: PrToOpen): string {
+  return lines(
+    `Cleared claim ${claimId} to open as a PR. Write the body below to pr-body.md, word for word, then run:`,
+    indent(open.command, 2),
+    `When gh can't open it, give the donor this link, which opens GitHub's form filled in: ${open.compareUrl}`,
+    `Then call record_pr with the PR's link.`,
+    `Title: ${open.title}`,
+    `Body:\n${indent(open.body, 2)}`,
+  );
+}
+
 /** A claim's branch as the donor's agent pushed it (docs/specs/agent-submits.md). */
 const pushedBranch = z.object({
   repo: repoName.describe("The repo you pushed the branch to: the project's code repo, or the donor's fork of it."),
@@ -627,6 +658,8 @@ export const submitWork = defineTool({
     pr: prRefSchema.nullable(),
     /** Why the work went to the donor's review queue, or null when it didn't. */
     reviewReason: reviewReasonSchema.nullable(),
+    /** In automatic mode, pushed work with nothing to hold it is cleared to open: how to open it. */
+    toOpen: prToOpenSchema.nullable(),
   }),
   text: (out) => {
     const committed =
@@ -634,6 +667,7 @@ export const submitWork = defineTool({
         ? `Took ${out.commit.sha.slice(0, 7)} on ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`
         : `Committed ${out.commit.sha.slice(0, 7)} to ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`;
     if (out.pr) return lines(committed, `PR #${String(out.pr.number)}: ${out.pr.url}`);
+    if (out.toOpen) return lines(committed, toOpenText(out.claimId, out.toOpen), `Diff: ${out.diffUrl}`);
     const reason = out.reviewReason ?? 'pr_refused';
     return lines(
       committed,
@@ -786,13 +820,45 @@ export const openPr = defineTool({
     claimId: id,
     issue: issueRef,
     state: claimStateSchema,
-    pr: prRefSchema,
+    /** The PR the server opened, for work submitted with files, or null. */
+    pr: prRefSchema.nullable(),
+    /** For work the agent pushed: how to open its PR, which the server cleared, or null. */
+    toOpen: prToOpenSchema.nullable(),
     /** Another PR open on the issue on GitHub when this one opened, from anyone, or null. */
     prOnIssue: prRefSchema.nullable(),
   }),
   text: (out) =>
     lines(
-      `Opened PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
+      out.pr && `Opened PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
+      out.toOpen && toOpenText(out.claimId, out.toOpen),
       out.prOnIssue && `Another PR is open on the issue too: ${out.prOnIssue.url}.`,
     ),
+});
+
+export const recordPr = defineTool({
+  audience: 'donor',
+  description:
+    "Record the PR you opened for work open_pr cleared, by its link on GitHub. The server reads it and checks that it is the cleared one: in the code repo, aimed at its default branch, from the claim's branch at the cleared commit, opened by the donor, with the closing line and the project's disclosure text in its body. Then the claim has its PR, which the server follows until it merges or closes.",
+  refusals: [
+    'not_found',
+    'not_claim_owner',
+    'donor_blocked',
+    'claim_released',
+    'claim_expired',
+    'not_cleared',
+    'pr_mismatch',
+    'pr_already_opened',
+    'github_refused',
+  ],
+  input: z.object({
+    claimId: id,
+    pr: webUrl.describe("The PR's link on GitHub, like https://github.com/owner/repo/pull/12."),
+  }),
+  output: z.object({
+    claimId: id,
+    issue: issueRef,
+    state: claimStateSchema,
+    pr: prRefSchema,
+  }),
+  text: (out) => `Recorded PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
 });

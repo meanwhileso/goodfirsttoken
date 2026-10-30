@@ -124,9 +124,14 @@ Nothing opens until the donor says so.
    `claimId`, and `description` when they wrote one. Tell them the PR's
    link. When the answer names another PR open on the issue, tell them
    that too.
-6. When `openable` is false, the PR can't open now. Its `reason` says why, and
+6. For work you pushed, `open_pr` opens nothing. It answers with the PR to
+   open: write its body to pr-body.md, word for word, and run the GitHub
+   CLI command it gives. When the GitHub CLI can't, give the donor the link
+   to GitHub's form, which has the title and body filled in. Then call `record_pr`
+   with the PR's link.
+7. When `openable` is false, the PR can't open now. Its `reason` says why, and
    what to do.
-7. Work in the queue expires 7 days after its first submit, unless its PR
+8. Work in the queue expires 7 days after its first submit, unless its PR
    opens.
 
 ## Follow-ups
@@ -423,6 +428,12 @@ offers another project. Then:
 - `branch_pushed`: The claim's branch was pushed, so a submit with files
   would write over it. Push your work to the branch, and submit with
   `branch`.
+- `not_cleared`: `record_pr` found the work not cleared to open. Submit
+  the pushed branch, clear it with `open_pr`, open the PR, and record it.
+- `pr_mismatch`: `record_pr` found the PR isn't the cleared one, and the
+  message says how. Fix it on GitHub, like gh pr edit with the body file,
+  then call `record_pr` again. When the branch moved, submit it again and
+  clear it again first.
 - `not_submitted`: The claim has no submitted work yet. Submit it with
   `submit_work` first.
 - `pr_already_opened`: The claim already has a PR. Fixes go onto it with

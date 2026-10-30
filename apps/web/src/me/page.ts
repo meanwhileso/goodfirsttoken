@@ -123,8 +123,12 @@ function refusalText(refusal: Refusal): string {
 }
 
 function openedText(opened: Extract<Opened, { ok: true }>['value']): string {
-  const { pr, issue, prOnIssue } = opened;
+  const { pr, toOpen, issue, prOnIssue } = opened;
   const also = prOnIssue === null ? '' : ` Another PR is open on the issue too: ${prOnIssue.url}`;
+  if (pr === null) {
+    // Work the agent pushed opens on GitHub, from its form, and is recorded once it is open.
+    return `Open the PR for ${issue} on GitHub, where its title and description are filled in: ${toOpen?.compareUrl ?? ''}${also}`;
+  }
   return `Opened PR #${String(pr.number)} on ${pr.repo} for ${issue}: ${pr.url}${also}`;
 }
 

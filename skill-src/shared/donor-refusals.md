@@ -81,6 +81,12 @@ offers another project. Then:
 - `branch_pushed`: The claim's branch was pushed, so a submit with files
   would write over it. Push your work to the branch, and submit with
   `branch`.
+- `not_cleared`: `record_pr` found the work not cleared to open. Submit
+  the pushed branch, clear it with `open_pr`, open the PR, and record it.
+- `pr_mismatch`: `record_pr` found the PR isn't the cleared one, and the
+  message says how. Fix it on GitHub, like gh pr edit with the body file,
+  then call `record_pr` again. When the branch moved, submit it again and
+  clear it again first.
 - `not_submitted`: The claim has no submitted work yet. Submit it with
   `submit_work` first.
 - `pr_already_opened`: The claim already has a PR. Fixes go onto it with

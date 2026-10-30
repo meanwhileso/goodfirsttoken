@@ -53,6 +53,7 @@ test("a tools/list answers with the donor's tools and the maintainer's tools, ea
     'release_claim',
     'submit_work',
     'open_pr',
+    'record_pr',
     'my_work',
     'register_project',
     'update_project',

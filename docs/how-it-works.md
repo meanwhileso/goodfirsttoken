@@ -575,7 +575,7 @@ same answer. Each issue's room holds its claims and runs their timers, as
 | `awaiting_review` | Submitted, waiting for the donor to open the PR | Yes |
 | `pr_opened` | A PR is open for the claim's work | No |
 | `released` | The donor gave up, with a public reason | No |
-| `expired` | 24 hours passed with no submit, or 7 days passed after the first submit with no PR | No |
+| `expired` | 24 hours passed with no submit, or 7 days passed after the first submit with no PR. A PR the agent opened in those 7 days still moves it to `pr_opened` when it is recorded | No |
 
 **Time**
 
@@ -2718,6 +2718,52 @@ queue. Open PR on [/me](#your-queue-on-me) opens it by the same rules.
 - When GitHub refuses, `open_pr` refuses with `github_refused` and GitHub's
   reason, and the work stays in the queue.
 
+**Clearing pushed work.** For a branch the agent pushed, `open_pr` opens
+nothing on GitHub. It clears the work to open, and the agent opens the PR
+with the donor's own tools, under
+[the agent-side submits spec](specs/agent-submits.md).
+
+- Its checks are the ones above, apart from GitHub's: the claim, the
+  description, the issue, and the open-PR cap. The cap counts the donor's
+  open PRs in the project and their claims cleared to open with no PR
+  recorded yet, while the claim waits for review. The branch must still be
+  at the head its submit checked, or it is refused with `branch_moved`.
+- The clearance saves the head, the PR's body, and when, on the claim's
+  submission. The body is the one `open_pr` writes for a PR it opens: the
+  donor's description or the summary and checks, the closing line, and the
+  disclosure text. Calling again clears again, with the new body. A later
+  submit ends the clearance.
+- The answer has the PR's repo, its head as `<owner>:<branch>`, its base,
+  title, and body, the GitHub CLI command that opens it, which reads the
+  body from `pr-body.md`, and a link to GitHub's form for it, with
+  `quick_pull=1` and the title and body filled in.
+- In automatic mode, a submit of a pushed branch with nothing to hold it
+  clears the work at once, and its answer has the same.
+- Open PR on /me and in the MCP Apps review queue clears pushed work the
+  same way, and shows the link to GitHub's form.
+
+**Recording the PR.** `record_pr` takes the claim and the PR's link, reads
+the PR with the donor's token, and checks it against the clearance.
+
+- It refuses someone else's claim with `not_claim_owner`, a blocked donor
+  with `donor_blocked`, a link that isn't a PR on GitHub with
+  `pr_mismatch`, and work that isn't cleared with `not_cleared`. A claim
+  whose PR is recorded answers with that PR when the link names it, and is
+  refused with `pr_already_opened` when it names another.
+- The PR must be in the code repo, aimed at its default branch, open or
+  merged, from the claim's branch in the repo its submit named, at the
+  cleared head, and opened by the claim's GitHub ID. Its body must have the
+  closing line, and the disclosure text word for word when the project
+  sets one, and its title and body nothing the secret scrubber finds. A PR
+  that fails is refused with `pr_mismatch`, which says what to fix, and it
+  records once it is fixed.
+- The issue's labels, assignees, and other PRs aren't checked again, since
+  maintainers often relabel or assign an issue once a PR is on it.
+- The claim's room records the PR with when GitHub made it. A PR made
+  while the work waited for review counts though the claim expired since,
+  which is the one move from `expired`. The PRs table records it, and the
+  PR job follows it. A second record of the same PR changes nothing.
+
 **The review queue.** `my_work` lists the donor's claims awaiting review,
 as each claim's room holds it now, with its latest submit: the diff on
 GitHub and the lines added and removed, both from where the branch parts
@@ -3567,7 +3613,7 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
 
 | Who | Tools |
 |---|---|
-| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `set_interests` |
+| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `set_interests` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project`, `request_removal` |
 | Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project`, `admin_seed_repo` |
 
@@ -3685,7 +3731,7 @@ tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `not_vouched`, `pr_closed`, `description_required`, `no_changes`,
 `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`,
 `github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`,
-`trailer_missing`, and `branch_pushed`.
+`trailer_missing`, `branch_pushed`, `not_cleared`, and `pr_mismatch`.
 
 Every tool lists the refusals an agent can get from it, in its spec in
 `packages/core`, and answers an agent with no other. The skills that use a
@@ -3714,6 +3760,7 @@ tool say what to do with each one on its list, under
 | `my_work` | None |
 | `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`, `trailer_missing`, `branch_pushed` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused`, `branch_moved` |
+| `record_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `claim_released`, `claim_expired`, `not_cleared`, `pr_mismatch`, `pr_already_opened`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
@@ -3769,6 +3816,8 @@ tool say what to do with each one on its list, under
 | `not_from_start` | The claim's start commit isn't an ancestor of a pushed branch's head |
 | `trailer_missing` | A commit on a pushed branch, other than a merge, lacks the trailer the project names |
 | `branch_pushed` | A submit with files after the claim's branch was pushed, which would write over the pushed work |
+| `not_cleared` | Recording a PR for work `open_pr` hasn't cleared to open |
+| `pr_mismatch` | The PR to record isn't the cleared one: another repo, base, branch, head, or author, closed without merging, a body without the closing line or the disclosure text, words with a key or token, or a link that isn't a PR |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo, as GitHub says, or GitHub doesn't show them the repo or blocked access to it |
 | `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy or the crawler's seed list, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting |
 | `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |

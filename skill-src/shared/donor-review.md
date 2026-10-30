@@ -21,9 +21,14 @@ Nothing opens until the donor says so.
    `claimId`, and `description` when they wrote one. Tell them the PR's
    link. When the answer names another PR open on the issue, tell them
    that too.
-6. When `openable` is false, the PR can't open now. Its `reason` says why, and
+6. For work you pushed, `open_pr` opens nothing. It answers with the PR to
+   open: write its body to pr-body.md, word for word, and run the GitHub
+   CLI command it gives. When the GitHub CLI can't, give the donor the link
+   to GitHub's form, which has the title and body filled in. Then call `record_pr`
+   with the PR's link.
+7. When `openable` is false, the PR can't open now. Its `reason` says why, and
    what to do.
-7. Work in the queue expires 7 days after its first submit, unless its PR
+8. Work in the queue expires 7 days after its first submit, unless its PR
    opens.
 
 ## Follow-ups
