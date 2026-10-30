@@ -65,11 +65,13 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
             'p',
             { class: 'view-notice view-notice--done', role: 'status' },
             'Open the PR on GitHub: ',
-            link(host, opened.toOpen?.compareUrl ?? '', 'its form, filled in'),
+            link(host, opened.toOpen?.compareUrl ?? '', "GitHub's pull request form, filled in"),
           ),
         );
         told.push(answer.text);
-        await host.updateContext(told.join('\n')).catch(() => undefined);
+        await host.updateContext(told.join('\n')).catch(() => {
+          status.appendChild(notice(`Once the PR is open, tell your agent to record it for claim ${item.claimId}.`, 'note'));
+        });
         return;
       }
       const pr = opened.pr;

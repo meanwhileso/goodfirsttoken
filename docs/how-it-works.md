@@ -588,9 +588,9 @@ same answer. Each issue's room holds its claims and runs their timers, as
   recent its last update.
 - A claim awaiting review expires 7 days after its first submit.
 - `pr_opened`, `released`, and `expired` never change with time.
-- Time is applied before any event. A claim past a deadline is expired first,
-  so a late update is refused, and the claim frees its slot even when no
-  timer has run.
+- Time is applied before any event, apart from the one Open PR below. A
+  claim past a deadline is expired first, so a late update is refused, and
+  the claim frees its slot even when no timer has run.
 - `claimDeadlines` gives the next time a claim's state would change, for a
   timer to wake at.
 
@@ -605,11 +605,16 @@ same answer. Each issue's room holds its claims and runs their timers, as
   the PR opened to answer a review, keeps the state. The 7 days still count
   from the first submit, so submitting again never extends a slot.
 - **Open PR.** Moves `awaiting_review` to `pr_opened` and records the PR.
-  Refused before a submit, and refused when the claim already has a PR.
+  Refused before a submit, and refused when the claim already has a PR. An
+  Open PR may carry when GitHub made the PR, `madeAt`, for a PR the agent
+  opened itself. When that time is before the 7 days ran out, the claim
+  moves to `pr_opened` though it expired since. That is the one move out of
+  `expired`. Only `record_pr` sends `madeAt`, from GitHub's own time.
 - **Release.** Moves `active`, `paused`, or `awaiting_review` to `released`
   and records the public reason. Refused once a PR is open, because the claim
   holds no slot. To withdraw that work, close the PR on GitHub.
-- A `released` or `expired` claim refuses every event. `pr_opened` is final.
+- A `released` or `expired` claim refuses every other event. `pr_opened` is
+  final.
 - The state machine has no fact about whether the claim's PR is still open.
   A claim stays `pr_opened` once its PR merges or closes, since that is a
   fact about the PR, which [PRs](#prs) records. The issue room refuses the
@@ -2729,13 +2734,14 @@ with the donor's own tools, under
   recorded yet, while the claim waits for review. The branch must still be
   at the head its submit checked, or it is refused with `branch_moved`.
 - The clearance saves the head, the PR's body, and when, on the claim's
-  submission. The body is the one `open_pr` writes for a PR it opens: the
+  submission, while the submission is still at that head. The title is the
+  submission's. The body is the one `open_pr` writes for a PR it opens: the
   donor's description or the summary and checks, the closing line, and the
   disclosure text. Calling again clears again, with the new body. A later
   submit ends the clearance.
 - The answer has the PR's repo, its head as `<owner>:<branch>`, its base,
   title, and body, the GitHub CLI command that opens it, which reads the
-  body from `pr-body.md`, and a link to GitHub's form for it, with
+  body on standard input, and a link to GitHub's form for it, with
   `quick_pull=1` and the title and body filled in.
 - In automatic mode, a submit of a pushed branch with nothing to hold it
   clears the work at once, and its answer has the same.
@@ -2746,15 +2752,20 @@ with the donor's own tools, under
 the PR with the donor's token, and checks it against the clearance.
 
 - It refuses someone else's claim with `not_claim_owner`, a blocked donor
-  with `donor_blocked`, a link that isn't a PR on GitHub with
+  with `donor_blocked`, a project GitHub shows no repo for with
+  `project_not_open`, a link that isn't a PR on GitHub with
   `pr_mismatch`, and work that isn't cleared with `not_cleared`. A claim
   whose PR is recorded answers with that PR when the link names it, and is
   refused with `pr_already_opened` when it names another.
 - The PR must be in the code repo, aimed at its default branch, open or
   merged, from the claim's branch in the repo its submit named, at the
-  cleared head, and opened by the claim's GitHub ID. Its body must have the
-  closing line, and the disclosure text word for word when the project
-  sets one, and its title and body nothing the secret scrubber finds. A PR
+  cleared head, and opened by the claim's GitHub ID. A PR whose fork was
+  deleted is judged by its branch name, head, and author. Its body must
+  have the closing line as a line of its own, the disclosure text word for
+  word when the project sets one, and the description the donor wrote when
+  the project asks for one, compared line by line with line breaks and
+  indents ignored. Its title and body must have nothing the secret scrubber
+  finds. A PR
   that fails is refused with `pr_mismatch`, which says what to fix, and it
   records once it is fixed.
 - The issue's labels, assignees, and other PRs aren't checked again, since
@@ -3760,7 +3771,7 @@ tool say what to do with each one on its list, under
 | `my_work` | None |
 | `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`, `trailer_missing`, `branch_pushed` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused`, `branch_moved` |
-| `record_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `claim_released`, `claim_expired`, `not_cleared`, `pr_mismatch`, `pr_already_opened`, `github_refused` |
+| `record_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_cleared`, `pr_mismatch`, `pr_already_opened`, `github_refused` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
