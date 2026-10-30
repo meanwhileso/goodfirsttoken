@@ -609,7 +609,8 @@ same answer. Each issue's room holds its claims and runs their timers, as
   Open PR may carry when GitHub made the PR, `madeAt`, for a PR the agent
   opened itself. When that time is before the 7 days ran out, the claim
   moves to `pr_opened` though it expired since. That is the one move out of
-  `expired`. Only `record_pr` sends `madeAt`, from GitHub's own time.
+  `expired`. Only `record_pr` and the job that records cleared PRs send
+  `madeAt`, from GitHub's own time.
 - **Release.** Moves `active`, `paused`, or `awaiting_review` to `released`
   and records the public reason. Refused once a PR is open, because the claim
   holds no slot. To withdraw that work, close the PR on GitHub.
@@ -2774,6 +2775,18 @@ the PR with the donor's token, and checks it against the clearance.
   while the work waited for review counts though the claim expired since,
   which is the one move from `expired`. The PRs table records it, and the
   PR job follows it. A second record of the same PR changes nothing.
+- A job records the PRs nobody recorded, as when the donor opens one on
+  GitHub's form. Twice an hour, right after the PR job, it lists each
+  cleared claim's PRs on GitHub by the claim's branch, with the read-only
+  service token, and records the first that passes the checks above. A
+  blocked donor's PR isn't recorded. It looks while the claim waits for
+  review, and for a day after its 7 days ran out, for a PR made in time. A
+  PR made in time that no run found in that day is left for `record_pr`.
+  A claim it recorded, or one released, is read no more.
+- Each run reads the claims it read longest ago first. A repo GitHub no
+  longer shows stops that claim's read alone. A PR a room recorded that
+  the PRs table missed is added to it, with no read of GitHub, so the PR
+  job follows it.
 
 **The review queue.** `my_work` lists the donor's claims awaiting review,
 as each claim's room holds it now, with its latest submit: the diff on
@@ -5407,9 +5420,11 @@ A deployment can serve them from a static host, on a hostname of its own.
   These use the admin's own token: their agent's, or on the admin pages,
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the
-  `GH_SERVICE_TOKEN` secret: the sync, the PR job, a maintainer's refresh,
-  and the policy crawler. They read public data only, and never with a
-  person's token. The PR job reads each open PR's state, author, reviews,
+  `GH_SERVICE_TOKEN` secret: the sync, the PR job, the job that records
+  cleared PRs, a maintainer's refresh, and the policy crawler. They read public data only, and never with a
+  person's token. The job that records cleared PRs lists each cleared
+  claim's PRs by its branch. The PR job reads each open PR's state,
+  author, reviews,
   and comments on lines, with how each author relates to the repo, in one
   query, and reads an issue again, as the sync does, when a claim's PR on
   it closed without merging. With

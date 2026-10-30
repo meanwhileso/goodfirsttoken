@@ -2911,6 +2911,7 @@ read-only service token. The rules are in
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
 | `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged |
+| `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |
 | `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
@@ -3123,6 +3124,25 @@ read-only service token. The rules are in
   after both, so it cuts those first, which takes thousands of PRs within
   the job's 100 calls. At 50 closes a day, the 700 PRs of the 14 days take
   14 queries, about 14 points, of the job's 100 calls.
+- **Recording cleared PRs** is `recordClearedPrs` in `src/sync/cleared.ts`,
+  which runs on the PR job's cron right after it, with its own
+  `ServiceGitHub` and `ALLOWANCES.cleared`, 100 calls. Each cleared claim
+  with no PR recorded costs one REST read a run: the code repo's PRs listed
+  by the claim's branch as `owner:branch`, open and closed, up to 100. With
+  the rate limit check, a run reads 99 claims at most. The claims come from
+  the submissions table, the ones read longest ago first by
+  `cleared_checked_at`, then the oldest clearance, while the claim waits
+  for review and for a day after its 7 days ran out, so a PR made in time
+  is found on a later run. A read GitHub refuses, other than a rate limit,
+  stops that claim alone, and a room or D1 failure while recording does
+  too. The two jobs on this cron make at most 200 calls to GitHub
+  together. A PR the claims table mirrors from a room and the PRs table
+  lacks is added to the PRs table first, with no read. The PR's base repo's default
+  branch comes with the listed PR, so the job reads nothing else. The
+  first PR that passes `pullMismatch` is recorded through `recordPull`, the
+  same way `record_pr` records one, with GitHub's `created_at`. The list
+  follows a rename, so each PR's base repo is the code repo by the name
+  GitHub gives it now. With no claim cleared, the job makes no call.
 - **Reading an issue again** when a claim's PR closed without merging is
   `rereadIssue` in `src/sync/issues.ts`, which the PR job calls with its own
   `ServiceGitHub`, so its calls count in the job's run: one REST read of

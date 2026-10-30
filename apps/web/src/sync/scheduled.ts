@@ -5,6 +5,7 @@ import { getDoNotListEntry, releaseProject, takeRefresh } from '../db';
 import { endEveryLapsedConnection } from '../mcp/connections';
 import { ServiceGitHub, SyncStopped, type Allowance } from './github';
 import { HOLD_MS, newSyncRun, syncProject, syncTaggedIssues } from './issues';
+import { recordClearedPrs } from './cleared';
 import { followPrs } from './prs';
 
 // The jobs that read GitHub with the read-only service token: the Worker's
@@ -15,7 +16,10 @@ import { followPrs } from './prs';
 
 /** Every 15 minutes: the tagged-issue sync (src/sync/issues.ts). */
 export const ISSUE_SYNC_CRON = '*/15 * * * *';
-/** Twice an hour, apart from the sync: the PR job (src/sync/prs.ts). */
+/**
+ * Twice an hour, apart from the sync: the PR job (src/sync/prs.ts), then
+ * the job that records cleared PRs nobody recorded (src/sync/cleared.ts).
+ */
 export const PR_JOB_CRON = '7,37 * * * *';
 /** Once an hour, apart from both: the policy crawler's search (src/crawl/search.ts). */
 export const CRAWL_CRON = '52 * * * *';
@@ -34,6 +38,7 @@ export const LAPSED_CONNECTIONS_CRON = '23 4 * * *';
 export const ALLOWANCES = {
   sync: { leave: 0.2, maxCalls: 1000, checkCalls: 100 },
   prs: { leave: 0.1, maxCalls: 100 },
+  cleared: { leave: 0.1, maxCalls: 100 },
   refresh: { leave: 0.5, maxCalls: 60 },
   crawlSearch: { leave: 0.1, maxCalls: 20 },
   crawlRead: { leave: 0.6, maxCalls: 60 },
@@ -96,6 +101,7 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       return;
     case PR_JOB_CRON:
       await followPrs({ db: env.DB, rooms: env.ISSUE_ROOM, github: new ServiceGitHub(token, ALLOWANCES.prs), now });
+      await recordClearedPrs({ db: env.DB, github: new ServiceGitHub(token, ALLOWANCES.cleared), now });
       return;
     case CRAWL_CRON:
       await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, github: new ServiceGitHub(token, ALLOWANCES.crawlSearch), now });

@@ -47,6 +47,7 @@ import {
   prBody,
   pullMismatch,
   redacted,
+  type ClearedPr,
   reviewReason,
 } from '../donor/work';
 import {
@@ -1049,6 +1050,34 @@ export async function recordPull(claim: ClaimRecord, pull: PullFacts): Promise<{
   return opened.refusal;
 }
 
+/**
+ * What a PR must be to count for the cleared claim: from its branch at the
+ * cleared head, into the code repo's default branch, by the claimant, with
+ * the closing line, the disclosure, and a description the donor wrote.
+ * record_pr and the job that records cleared PRs (src/sync/cleared.ts)
+ * check with it.
+ */
+export function clearedPrOf(
+  claim: ClaimRecord,
+  project: ProjectRecord,
+  submission: SubmissionRecord,
+  clearance: NonNullable<SubmissionRecord['clearance']>,
+  codeRepo: string,
+  defaultBranch: string,
+): ClearedPr {
+  return {
+    codeRepo,
+    defaultBranch,
+    repo: submission.repo,
+    branch: submission.branch,
+    commit: clearance.commit,
+    githubId: claim.githubId,
+    issue: claim.issue,
+    disclosure: project.settings.disclosure,
+    description: project.settings.personWrittenDescription ? openingOf(clearance.body, closingLine(claim.issue, codeRepo)) : null,
+  };
+}
+
 /** The part of a PR body `prBody` wrote before its closing line: the description. */
 function openingOf(body: string, closing: string): string {
   const at = body.indexOf(`\n\n${closing}`);
@@ -1100,17 +1129,7 @@ export async function recordPr(caller: Caller, input: ToolInput<'record_pr'>): P
   if (isRefusal(facts)) return refuse(facts);
   const pull = await writer.pull(named.repo, named.number);
   if (pull === null) return refuse(refusal('pr_mismatch', `GitHub shows no PR at ${input.pr}, so nothing was recorded.`));
-  const mismatch = pullMismatch(pull, {
-    codeRepo: facts.name,
-    defaultBranch: facts.defaultBranch,
-    repo: submission.repo,
-    branch: submission.branch,
-    commit: submission.clearance.commit,
-    githubId: claim.githubId,
-    issue: claim.issue,
-    disclosure: project.settings.disclosure,
-    description: project.settings.personWrittenDescription ? openingOf(submission.clearance.body, closingLine(claim.issue, facts.name)) : null,
-  });
+  const mismatch = pullMismatch(pull, clearedPrOf(claim, project, submission, submission.clearance, facts.name, facts.defaultBranch));
   if (mismatch !== null) return refuse(refusal('pr_mismatch', `${mismatch} Nothing was recorded.`));
   const recorded = await recordPull(claim, pull);
   return isRefusal(recorded) ? refuse(recorded) : result(recorded);
