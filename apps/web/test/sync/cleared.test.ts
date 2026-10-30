@@ -2,7 +2,7 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { defaultDisclosure, type ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { getPr, saveSubmission } from '../../src/db';
+import { blockDonor, getPr, saveSubmission } from '../../src/db';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { recordClearedPrs } from '../../src/sync/cleared';
 import { ALLOWANCES } from '../../src/sync/scheduled';
@@ -173,12 +173,8 @@ describe('the job that records cleared PRs', () => {
 
   test('it leaves alone a PR from another author or another commit, and stops looking a day after the claim expired', async () => {
     const { claim, branch, body } = await cleared();
-    // kenji opens one from priya's branch, and closes it. Then priya opens
-    // hers after a push moved the branch off the cleared commit.
-    const byKenji = await openPr('kenji', { head: `priya:${branch}`, body });
-    github.closePullRequest(APP, byKenji, 'kenji');
-    github.commitFiles(FORK, { 'b.txt': 'b\n' }, 'priya', { branch, message: 'More\n\nAssisted-by: claude-code (claude-opus-5-5)' });
-    await openPr('priya', { head: `priya:${branch}`, body });
+    // kenji opens one from priya's branch at the cleared commit, with the right body.
+    await openPr('kenji', { head: `priya:${branch}`, body });
 
     const run = await runJob();
     later(8 * DAY + MINUTE);
@@ -187,6 +183,82 @@ describe('the job that records cleared PRs', () => {
     expect(run).toMatchObject({ checked: 1, recorded: 0 });
     expect(after).toMatchObject({ checked: 0, recorded: 0 });
     expect(await getPr(db, claim.id)).toBeNull();
+  });
+
+  test('it leaves alone a PR from another branch, or from the claim branch after a push moved it', async () => {
+    const { claim, branch, head, body } = await cleared();
+    const fork = github.state.repos[FORK];
+    if (!fork) throw new Error('no fork');
+    fork.branches['keep-hash'] = head;
+    await openPr('priya', { head: 'priya:keep-hash', body });
+    github.commitFiles(FORK, { 'b.txt': 'b\n' }, 'priya', { branch, message: 'More\n\nAssisted-by: claude-code (claude-opus-5-5)' });
+    await openPr('priya', { head: `priya:${branch}`, body });
+
+    const run = await runJob();
+
+    expect(run).toMatchObject({ checked: 1, recorded: 0 });
+    expect(await getPr(db, claim.id)).toBeNull();
+  });
+
+  test("a claim GitHub can't list PRs for doesn't stop the run, and the claims after it are read", async () => {
+    const gone = await cleared();
+    const fine = await cleared();
+    const number = await openPr('priya', { head: `priya:${fine.branch}`, body: fine.body });
+    // gone's project is a repo GitHub no longer shows.
+    await registeredProject({ tags: ['help wanted'] }, 'sample-owner/gone');
+    await db.prepare('UPDATE claims SET project = ? WHERE id = ?').bind('sample-owner/gone', gone.claim.id).run();
+
+    const run = await runJob();
+
+    expect(run).toMatchObject({ checked: 1, recorded: 1, failed: 1, stopped: null });
+    expect(await getPr(db, fine.claim.id)).toMatchObject({ pr: prOf(number) });
+  });
+
+  test("a blocked donor's PR isn't recorded", async () => {
+    const { claim, branch, body } = await cleared();
+    await openPr('priya', { head: `priya:${branch}`, body });
+    await blockDonor(db, { githubId: priya.githubId, reason: 'Spam PRs.', blockedBy: maintainer.githubId }, Date.now());
+
+    const run = await runJob();
+
+    expect(run.recorded).toBe(0);
+    expect(await getPr(db, claim.id)).toBeNull();
+  });
+
+  test('two cleared claims cost two list reads, and the next run reads the one read longest ago first', async () => {
+    const first = await cleared();
+    const second = await cleared();
+
+    const before = github.calls.length;
+    await runJob();
+    const lists = github.calls.slice(before).filter((c) => c.operation === 'GET /repos/{owner}/{repo}/pulls');
+
+    expect(lists).toHaveLength(2);
+    expect(lists.map((c) => decodeURIComponent(c.url))).toEqual([
+      expect.stringContaining(first.branch) as unknown,
+      expect.stringContaining(second.branch) as unknown,
+    ]);
+    // A run with room for one read reads the claim read longest ago: they tie, so the oldest clearance.
+    later(MINUTE);
+    const third = await cleared();
+    const one = recordClearedPrs({ ...jobDeps(github, { leave: 0, maxCalls: 2 }) });
+    const at = github.calls.length;
+    await one;
+    const read = github.calls.slice(at).filter((c) => c.operation === 'GET /repos/{owner}/{repo}/pulls');
+    expect(read.map((c) => decodeURIComponent(c.url))).toEqual([expect.stringContaining(third.branch) as unknown]);
+  });
+
+  test('a PR the room recorded and the PRs table missed is added there, with no read of GitHub', async () => {
+    const { claim, branch, body } = await cleared();
+    const number = await openPr('priya', { head: `priya:${branch}`, body });
+    await runJob();
+    await db.prepare('DELETE FROM prs WHERE claim_id = ?').bind(claim.id).run();
+
+    const before = github.calls.length;
+    await runJob();
+
+    expect(await getPr(db, claim.id)).toMatchObject({ pr: prOf(number), state: 'open' });
+    expect(github.calls.slice(before).filter((c) => c.operation === 'GET /repos/{owner}/{repo}/pulls')).toEqual([]);
   });
 
   test('it reads nothing when no claim waits cleared', async () => {

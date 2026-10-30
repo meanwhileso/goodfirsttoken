@@ -5,6 +5,7 @@ import {
   mustParse,
   reviewReasonSchema,
   submissionRecordSchema,
+  type PrRef,
   type ReviewReason,
   type SubmissionRecord,
 } from '@goodfirsttoken/core';
@@ -158,9 +159,10 @@ export async function countClearedByProject(
 }
 
 /**
- * The claims cleared to open with no PR recorded, oldest clearance first,
- * that waited for review until `since` at least: released claims and claims
- * with a PR are left out. The job that records cleared PRs reads these.
+ * The claims cleared to open with no PR recorded that waited for review
+ * until `since` at least, the ones the job that records cleared PRs read
+ * longest ago first, then the oldest clearance. Released claims and claims
+ * with a PR are left out.
  */
 export async function listClearedWithoutPr(db: D1Database, since: number): Promise<string[]> {
   const { results } = await db
@@ -169,11 +171,34 @@ export async function listClearedWithoutPr(db: D1Database, since: number): Promi
        WHERE s.cleared_at IS NOT NULL AND c.state IN ('awaiting_review', 'expired') AND c.pr_number IS NULL
          AND c.submitted_at + ?1 > ?2
          AND NOT EXISTS (SELECT 1 FROM prs p WHERE p.claim_id = c.id)
-       ORDER BY s.cleared_at, c.id`,
+       ORDER BY s.cleared_checked_at IS NOT NULL, s.cleared_checked_at, s.cleared_at, c.id`,
     )
     .bind(REVIEW_WINDOW_MS, since)
     .all<{ id: string }>();
   return results.map((row) => row.id);
+}
+
+/** Notes that the job that records cleared PRs looked up the claim's branch at `now`. */
+export async function markClearedChecked(db: D1Database, claimId: string, now: number): Promise<void> {
+  await db.prepare('UPDATE submissions SET cleared_checked_at = ?2 WHERE claim_id = ?1').bind(mustParse(id, claimId, 'claimId'), now).run();
+}
+
+/**
+ * Cleared claims whose room recorded a PR, mirrored in the claims table,
+ * that the PRs table doesn't have, as when a run died between the two. The
+ * PR job follows only the PRs table, so the job that records cleared PRs
+ * adds these.
+ */
+export async function listClearedPrsMissing(db: D1Database): Promise<{ claimId: string; pr: PrRef }[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.id AS id, c.pr_repo AS repo, c.pr_number AS number, c.pr_url AS url FROM submissions s
+       JOIN claims c ON c.id = s.claim_id
+       WHERE s.cleared_at IS NOT NULL AND c.pr_number IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM prs p WHERE p.claim_id = c.id)`,
+    )
+    .all<{ id: string; repo: string; number: number; url: string }>();
+  return results.map((row) => ({ claimId: row.id, pr: { repo: row.repo, number: row.number, url: row.url } }));
 }
 
 /** The claim's latest submit, or null when it has none. */
