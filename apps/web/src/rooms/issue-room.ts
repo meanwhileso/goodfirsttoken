@@ -389,12 +389,15 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * Records the PR opened for the claim's submitted work. The PR is open on
-   * the issue from then on, so the issue takes no new claims.
+   * the issue from then on, so the issue takes no new claims. `madeAt` is
+   * when GitHub says a PR the agent opened itself was made, so one made
+   * before the claim expired counts.
    */
-  async openPr(request: { claimId: string; githubId: number; pr: PrRef }): Promise<ChangeResult> {
+  async openPr(request: { claimId: string; githubId: number; pr: PrRef; madeAt?: number }): Promise<ChangeResult> {
     return this.guard(() => {
       const pr = input(prRefSchema, request.pr, 'pr');
-      return this.change(request, { kind: 'open_pr', pr }, (_, after) => {
+      const event = request.madeAt === undefined ? { kind: 'open_pr' as const, pr } : { kind: 'open_pr' as const, pr, madeAt: request.madeAt };
+      return this.change(request, event, (_, after) => {
         // In the same step as the claim, so no claim can land in between.
         this.addIssuePr(pr);
         return { claim: after, kind: 'pr_opened', text: `opened PR ${prName(pr)}` };

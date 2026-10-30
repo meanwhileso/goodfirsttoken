@@ -61,6 +61,12 @@ export const refusalCodes = [
   // A submit with files after the claim's branch was pushed, which would
   // write over the pushed work.
   'branch_pushed',
+  // Recording a PR for work open_pr hasn't cleared to open.
+  'not_cleared',
+  // A PR to record isn't the one the clearance allows: another repo, base,
+  // branch, commit, or author, or a body without the closing line or the
+  // disclosure text.
+  'pr_mismatch',
   // Maintainers and admins (spec sections 3 and 4).
   'not_maintainer',
   'repo_not_eligible',

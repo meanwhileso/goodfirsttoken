@@ -58,12 +58,29 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
       const opened = answer.data as ToolOutput<'open_pr'>;
       actions.remove();
       description?.closest('label')?.remove();
+      // Work the agent pushed opens on GitHub, from its form with the title and description filled in.
+      if (opened.pr === null) {
+        status.appendChild(
+          h(
+            'p',
+            { class: 'view-notice view-notice--done', role: 'status' },
+            'Open the PR on GitHub: ',
+            link(host, opened.toOpen?.compareUrl ?? '', "GitHub's pull request form, filled in"),
+          ),
+        );
+        told.push(answer.text);
+        await host.updateContext(told.join('\n')).catch(() => {
+          status.appendChild(notice(`Once the PR is open, tell your agent to record it for claim ${item.claimId}.`, 'note'));
+        });
+        return;
+      }
+      const pr = opened.pr;
       status.appendChild(
         h(
           'p',
           { class: 'view-notice view-notice--done', role: 'status' },
-          `Opened PR #${String(opened.pr.number)}: `,
-          link(host, opened.pr.url, opened.pr.url),
+          `Opened PR #${String(pr.number)}: `,
+          link(host, pr.url, pr.url),
           opened.prOnIssue && ` Another PR is open on the issue too: ${opened.prOnIssue.url}`,
         ),
       );
@@ -71,7 +88,7 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
       // When the host won't tell it, the donor can.
       told.push(answer.text);
       await host.updateContext(told.join('\n')).catch(() => {
-        status.appendChild(notice(`Tell your agent you opened PR #${String(opened.pr.number)} for claim ${item.claimId}.`, 'note'));
+        status.appendChild(notice(`Tell your agent you opened PR #${String(pr.number)} for claim ${item.claimId}.`, 'note'));
       });
     })();
   });

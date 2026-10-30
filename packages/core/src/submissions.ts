@@ -107,5 +107,11 @@ export const submissionRecordSchema = z.object({
   /** Why the work waits for the donor, or null when its PR was to open by itself. */
   reviewReason: reviewReasonSchema.nullable(),
   submittedAt: epochMs,
+  /**
+   * For a pushed branch, open_pr's word that the work may become a PR: the
+   * head it cleared, the PR's body, and when. A PR counts only from that
+   * head. A later submit ends it. Null until then.
+   */
+  clearance: z.object({ commit: commitSha, body: z.string().min(1), at: epochMs }).nullable(),
 });
 export type SubmissionRecord = z.infer<typeof submissionRecordSchema>;

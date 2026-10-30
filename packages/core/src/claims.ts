@@ -155,7 +155,9 @@ export const claimEventSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tick') }),
   z.object({ kind: z.literal('update') }),
   z.object({ kind: z.literal('submit') }),
-  z.object({ kind: z.literal('open_pr'), pr: prRefSchema }),
+  // `madeAt` is when GitHub says the PR was made, for a PR the agent opened
+  // itself, which the server records after (docs/specs/agent-submits.md).
+  z.object({ kind: z.literal('open_pr'), pr: prRefSchema, madeAt: epochMs.optional() }),
   z.object({ kind: z.literal('release'), reason: releaseReason }),
 ]);
 export type ClaimEvent = z.infer<typeof claimEventSchema>;
@@ -232,9 +234,18 @@ export function nextClaimState<T extends ClaimTimeline>(
     };
   }
 
+  const ok = (next: T): ClaimTransition<T> => ({ ok: true, claim: next });
+  // A PR made while the work waited for review counts, though it is recorded
+  // after the claim expired.
+  if (event.kind === 'open_pr' && event.madeAt !== undefined && claim.submittedAt !== null) {
+    const waited = claim.state === 'awaiting_review' || claim.state === 'expired';
+    if (waited && event.madeAt < claim.submittedAt + REVIEW_WINDOW_MS && now >= claim.submittedAt + REVIEW_WINDOW_MS) {
+      return ok({ ...claim, state: 'pr_opened', pr: event.pr });
+    }
+  }
+
   const current = advance(claim, now);
   const state: ClaimState = current.state;
-  const ok = (next: T): ClaimTransition<T> => ({ ok: true, claim: next });
   const refuse = (refusal: Refusal): ClaimTransition<T> => ({ ok: false, claim: current, refusal });
 
   if (event.kind === 'tick') return ok(current);

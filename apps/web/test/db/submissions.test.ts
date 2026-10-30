@@ -42,6 +42,7 @@ function submission(claimId: string, rest: Partial<SubmissionRecord> = {}): Subm
     deletions: 1,
     reviewReason: 'reviewed_mode',
     submittedAt: t0 + HOUR,
+    clearance: null,
     ...rest,
   };
 }

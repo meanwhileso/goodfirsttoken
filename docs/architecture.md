@@ -544,8 +544,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
-| `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR, and the reads that check a pushed branch: the branch's repo and its fork parent, a comparison with its commits, and a PR's head |
-| `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, the commit trailer check, and the words of the commit and the PR |
+| `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR, and the reads that check a pushed branch and its PR: the branch's repo and its fork parent, a comparison with its commits, a PR's head, and a PR's facts for `record_pr` |
+| `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, the commit trailer check, the words of the commit and the PR, and whether a PR is the one a clearance allows |
 | `src/donor/vouch.ts` | The vouch file's format |
 | `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
 
@@ -1632,7 +1632,7 @@ in `people`.
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the PR job's reads of its reviews covered, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
 | `follow_ups` | Review or comment on a line that a reviewer wrote on a claim's open PR, as the PR job read it: GitHub's ID for it, the reviewer, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
-| `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
+| `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, `open_pr`'s clearance of pushed work, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |

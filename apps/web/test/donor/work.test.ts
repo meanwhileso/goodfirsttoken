@@ -5,6 +5,7 @@ import {
   commitMessage,
   isWorkflowPath,
   prBody,
+  pullMismatch,
   reviewReason,
   type ReviewFacts,
 } from '../../src/donor/work';
@@ -119,5 +120,66 @@ describe('the branch, the commit, and the PR', () => {
     expect(prBody({ ...base, disclosure: { trailer: 'Assisted-by', prBody: null } })).toBe(
       'Keeps the slash.\n\nWhat claude-code (claude-opus-5-5) checked: pnpm test\n\nCloses #311',
     );
+  });
+});
+
+describe('whether a PR is the one a clearance allows', () => {
+  const issue = 'sample-owner/sample-app#12';
+  const disclosure = { trailer: 'Assisted-by', prBody: 'Written with an agent.\nReviewed by a person.' };
+  const cleared = {
+    codeRepo: 'sample-owner/sample-app',
+    defaultBranch: 'main',
+    repo: 'priya/sample-app',
+    branch: 'goodfirsttoken/issue-12-c_1',
+    commit: 'a'.repeat(40),
+    githubId: 1001,
+    issue,
+    disclosure,
+    description: null,
+  };
+  const pull = {
+    url: 'https://github.com/sample-owner/sample-app/pull/40',
+    state: 'open' as const,
+    authorId: 1001,
+    baseRepo: 'sample-owner/sample-app',
+    baseRef: 'main',
+    headRepo: 'priya/sample-app',
+    headRef: 'goodfirsttoken/issue-12-c_1',
+    headSha: 'a'.repeat(40),
+    title: 'Keep the slash',
+    body: 'Keeps the slash.\n\nCloses #12\n\nWritten with an agent.\nReviewed by a person.',
+  };
+
+  test('a PR from the cleared head, with the closing line and the disclosure, passes', () => {
+    expect(pullMismatch(pull, cleared)).toBeNull();
+  });
+
+  test('the closing line must be a line of its own, naming this issue and no other', () => {
+    expect(pullMismatch({ ...pull, body: pull.body.replace('Closes #12', 'Closes #123') }, cleared)).toContain('lacks the line "Closes #12"');
+    expect(pullMismatch({ ...pull, body: pull.body.replace('Closes #12', 'This Closes #12 too') }, cleared)).toContain('lacks the line');
+  });
+
+  test('line breaks from a web form, and indented lines, still match the disclosure', () => {
+    expect(pullMismatch({ ...pull, body: pull.body.replaceAll('\n', '\r\n') }, cleared)).toBeNull();
+    expect(pullMismatch({ ...pull, body: pull.body.split('\n').map((line) => `  ${line}`).join('\n') }, cleared)).toBeNull();
+  });
+
+  test('a merged PR whose fork was deleted passes when its branch, head, and author match', () => {
+    expect(pullMismatch({ ...pull, state: 'merged', headRepo: null }, cleared)).toBeNull();
+    expect(pullMismatch({ ...pull, state: 'merged', headRepo: null, headRef: 'other' }, cleared)).toContain('comes from');
+  });
+
+  test('a PR from another branch or fork, in another repo, closed, or with a key in it, fails', () => {
+    expect(pullMismatch({ ...pull, headRef: 'other' }, cleared)).toContain('comes from');
+    expect(pullMismatch({ ...pull, headRepo: 'sam/sample-app' }, cleared)).toContain('comes from');
+    expect(pullMismatch({ ...pull, baseRepo: 'priya/sample-app' }, cleared)).toContain('is in priya/sample-app');
+    expect(pullMismatch({ ...pull, state: 'closed' }, cleared)).toContain('closed without merging');
+    expect(pullMismatch({ ...pull, body: `${pull.body}\n\nghp_${'a'.repeat(36)}` }, cleared)).toContain('looks like a key');
+  });
+
+  test("a description the donor wrote must be in the PR, as they wrote it", () => {
+    const written = { ...cleared, description: 'I checked this on my phone.\nIt works.' };
+    expect(pullMismatch(pull, written)).toContain('description the donor wrote');
+    expect(pullMismatch({ ...pull, body: `I checked this on my phone.\r\nIt works.\n\n${pull.body}` }, written)).toBeNull();
   });
 });
