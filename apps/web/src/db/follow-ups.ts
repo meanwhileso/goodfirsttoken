@@ -1,5 +1,4 @@
 import {
-  commitSha,
   count,
   followUpRecordSchema,
   githubId,
@@ -93,8 +92,6 @@ export interface WaitingFollowUp {
   pr: PrRef;
   /** The claim's branch, which the PR comes from. */
   branch: { repo: string; name: string };
-  /** The commit a fix sends every changed file from. */
-  base: string;
 }
 
 interface WaitingRow extends FollowUpRow {
@@ -106,7 +103,6 @@ interface WaitingRow extends FollowUpRow {
   pr_url: string;
   branch_repo: string;
   branch: string;
-  base: string;
 }
 
 /**
@@ -137,7 +133,7 @@ export async function listWaitingFollowUps(
     .prepare(
       `SELECT * FROM (
          SELECT f.*, f.rowid AS seq, c.issue_repo, c.issue_number, c.project, pr.repo AS pr_repo, pr.number AS pr_number,
-           pr.url AS pr_url, sub.repo AS branch_repo, sub.branch, sub.base,
+           pr.url AS pr_url, sub.repo AS branch_repo, sub.branch,
            ROW_NUMBER() OVER (PARTITION BY f.claim_id ORDER BY f.written_at, f.rowid) AS turn,
            COUNT(*) OVER () AS waiting
          FROM claims c
@@ -158,7 +154,6 @@ export async function listWaitingFollowUps(
     project: mustParse(repoName, row.project, 'project'),
     pr: mustParse(prRefSchema, prFromColumns(row.pr_repo, row.pr_number, row.pr_url), 'pr'),
     branch: { repo: mustParse(repoName, row.branch_repo, 'branch.repo'), name: row.branch },
-    base: mustParse(commitSha, row.base, 'base'),
   }));
   return { followUps, waiting: mustParse(count, results[0]?.waiting ?? 0, 'waiting') };
 }

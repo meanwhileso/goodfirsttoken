@@ -3,10 +3,8 @@ import {
   githubId,
   id,
   mustParse,
-  reviewReasonSchema,
   submissionRecordSchema,
   type PrRef,
-  type ReviewReason,
   type SubmissionRecord,
 } from '@goodfirsttoken/core';
 import { fromJson } from './shared';
@@ -221,15 +219,3 @@ export async function getSubmissions(db: D1Database, claimIds: readonly string[]
   return new Map(results.map((row) => [row.claim_id, toSubmission(row)]));
 }
 
-/** Records why the claim's work waits for the donor. Null when the claim has no submission. */
-export async function setReviewReason(
-  db: D1Database,
-  claimId: string,
-  reason: ReviewReason,
-): Promise<SubmissionRecord | null> {
-  const row = await db
-    .prepare('UPDATE submissions SET review_reason = ? WHERE claim_id = ? RETURNING *')
-    .bind(mustParse(reviewReasonSchema, reason, 'reason'), mustParse(id, claimId, 'claimId'))
-    .first<SubmissionRow>();
-  return row === null ? null : toSubmission(row);
-}

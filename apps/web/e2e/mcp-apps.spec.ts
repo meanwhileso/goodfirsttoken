@@ -242,23 +242,33 @@ function work(readyToOpen: unknown[]) {
   };
 }
 
-test('the review queue shows each piece of work with its notes and diff, and Open PR calls open_pr with its claim', async ({ page }) => {
+const toOpen = {
+  repo: 'sample-owner/sample-app',
+  head: 'priya:goodfirsttoken/issue-7-c_e2eclaim3',
+  base: 'main',
+  title: 'Fix the parser',
+  body: 'Fixes the parser on empty input.\n\nCloses #7\n\nWritten with a coding agent through Good First Token.',
+  command: "gh pr create --repo sample-owner/sample-app --head priya:goodfirsttoken/issue-7-c_e2eclaim3 --base 'main' --title 'Fix the parser' --body-file -",
+  compareUrl: 'https://github.example/sample-owner/sample-app/compare/main...priya:goodfirsttoken/issue-7-c_e2eclaim3?quick_pull=1&title=Fix+the+parser&body=Fixes',
+  bodyInLink: true,
+};
+
+/** open_pr's answer for a claim it cleared. */
+function cleared(claimId: string, open = toOpen) {
+  return {
+    content: text(`Cleared claim ${claimId} to open as a PR.`),
+    structuredContent: { claimId, issue: ISSUE, state: 'awaiting_review', toOpen: open, prOnIssue: null },
+  };
+}
+
+test("the review queue shows each piece of work with its notes and diff, and Open PR calls open_pr with its claim and links GitHub's form", async ({ page }) => {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
   const view = await openView(page, views['review-queue'], {
     input: {},
     result: work([ready, { ...ready, claimId: 'c_e2eclaim4', issue: 'sample-owner/sample-app#8', title: 'Paused project', openable: false, reason: 'sample-owner/sample-app is paused. Wait for it, or release the claim with release_claim.' }]),
     callTool: (name, args) => {
       calls.push({ name, args });
-      return Promise.resolve({
-        content: text(`Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3: https://github.example/sample-owner/sample-app/pull/41`),
-        structuredContent: {
-          claimId: 'c_e2eclaim3',
-          issue: ISSUE,
-          state: 'pr_opened',
-          pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' },
-          prOnIssue: null,
-        },
-      });
+      return Promise.resolve(cleared('c_e2eclaim3'));
     },
   });
   const [first, paused] = [view.frame.locator('.view-ready').first(), view.frame.locator('.view-ready').nth(1)];
@@ -274,34 +284,18 @@ test('the review queue shows each piece of work with its notes and diff, and Ope
 
   await first.getByRole('button', { name: 'Open PR' }).click();
 
-  await expect(first.getByRole('status')).toContainText('Opened PR #41: https://github.example/sample-owner/sample-app/pull/41');
+  await expect(first.getByRole('status')).toContainText("GitHub's form opens with the title and description filled in.");
   await expect(first.getByRole('button', { name: 'Open PR' })).toHaveCount(0);
   // The host told the agent, so the donor needn't.
   await expect.poll(async () => sent(await view.messages(), 'ui/update-model-context').length).toBe(1);
   await expect(first.getByText(/Tell your agent/)).toHaveCount(0);
   expect(calls).toEqual([{ name: 'open_pr', args: { claimId: 'c_e2eclaim3' } }]);
-  // The agent hears of the PR at its next turn.
-  expect(sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([
-    { content: text(`Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3: https://github.example/sample-owner/sample-app/pull/41`) },
-  ]);
-  await first.getByRole('button', { name: 'https://github.example/sample-owner/sample-app/pull/41' }).click();
-  await expect.poll(async () => sent(await view.messages(), 'ui/open-link').map((m) => m.params)).toEqual([
-    { url: ready.diffUrl },
-    { url: 'https://github.example/sample-owner/sample-app/pull/41' },
-  ]);
+  // The agent hears of the clearance at its next turn, and records the PR.
+  expect(sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([{ content: text('Cleared claim c_e2eclaim3 to open as a PR.') }]);
+  await first.getByRole('button', { name: 'Open the PR on GitHub' }).click();
+  await expect.poll(async () => sent(await view.messages(), 'ui/open-link').map((m) => m.params)).toEqual([{ url: ready.diffUrl }, { url: toOpen.compareUrl }]);
   expect(view.violations).toEqual([]);
 });
-
-const toOpen = {
-  repo: 'sample-owner/sample-app',
-  head: 'priya:goodfirsttoken/issue-7-c_e2eclaim3',
-  base: 'main',
-  title: 'Fix the parser',
-  body: 'Fixes the parser on empty input.\n\nCloses #7\n\nWritten with a coding agent through Good First Token.',
-  command: "gh pr create --repo sample-owner/sample-app --head priya:goodfirsttoken/issue-7-c_e2eclaim3 --base 'main' --title 'Fix the parser' --body-file -",
-  compareUrl: 'https://github.example/sample-owner/sample-app/compare/main...priya:goodfirsttoken/issue-7-c_e2eclaim3?quick_pull=1&title=Fix+the+parser&body=Fixes',
-  bodyInLink: true,
-};
 
 test("Open PR on pushed work shows the button to GitHub's form from the answer, and work cleared already shows it without Open PR", async ({ page }) => {
   const long = { ...toOpen, compareUrl: 'https://github.example/sample-owner/sample-app/compare/main...priya:goodfirsttoken/issue-8-c_e2eclaim5?quick_pull=1&title=Fix+the+parser', bodyInLink: false };
@@ -316,7 +310,7 @@ test("Open PR on pushed work shows the button to GitHub's form from the answer, 
     callTool: () =>
       Promise.resolve({
         content: text(cleared),
-        structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'awaiting_review', pr: null, toOpen, prOnIssue: null },
+        structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'awaiting_review', toOpen, prOnIssue: null },
       }),
   });
   const [first, waiting] = [view.frame.locator('.view-ready').first(), view.frame.locator('.view-ready').nth(1)];
@@ -448,25 +442,6 @@ test('functional links use blue on paper and readable light blue in a dark host'
   expect((await contrastOf(view.frame, '.view-link')).ratio).toBeGreaterThanOrEqual(4.5);
 });
 
-test('opening a PR shows a blue notice that remains readable when the host turns dark', async ({ page }) => {
-  const view = await openView(page, views['review-queue'], {
-    input: {},
-    result: work([ready]),
-    theme: 'light',
-    callTool: () => Promise.resolve({
-      content: text('Opened PR #41.'),
-      structuredContent: { claimId: ready.claimId, issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' }, prOnIssue: null },
-    }),
-  });
-  await view.frame.getByRole('button', { name: 'Open PR', exact: true }).click();
-  const notice = view.frame.getByRole('status').filter({ hasText: 'Opened PR #41' });
-  await expect(notice).toHaveCSS('background-color', 'rgb(221, 244, 255)');
-  await view.send({ method: 'ui/notifications/host-context-changed', params: { theme: 'dark' } });
-  await expect(notice).toHaveCSS('background-color', 'color(srgb 0.0740392 0.179294 0.30651)');
-  expect((await contrastOf(view.frame, '.view-notice--done')).ratio).toBeGreaterThanOrEqual(4.5);
-  expect((await contrastOf(view.frame, '.view-notice--done .view-link')).ratio).toBeGreaterThanOrEqual(4.5);
-});
-
 test('in the dark, a refusal and the tough badge keep colors of their own, with the contrast to read them', async ({ page }) => {
   const refusal = `Refused (issue_full): ${ISSUE} has no open slot: 3 of 3 are taken. Pick another issue.`;
   const view = await openView(page, views['issue-cards'], {
@@ -532,17 +507,13 @@ for (const refusal of ['isError', 'error'] as const) {
       input: {},
       result: work([ready]),
       refuse: { 'ui/update-model-context': refusal },
-      callTool: () =>
-        Promise.resolve({
-          content: text(`Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3.`),
-          structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' }, prOnIssue: null },
-        }),
+      callTool: () => Promise.resolve(cleared('c_e2eclaim3')),
     });
     const item = view.frame.locator('.view-ready');
 
     await item.getByRole('button', { name: 'Open PR' }).click();
 
-    await expect(item.getByRole('status').filter({ hasText: 'Tell your agent' })).toHaveText('Tell your agent you opened PR #41 for claim c_e2eclaim3.');
+    await expect(item.getByRole('status').filter({ hasText: 'Tell your agent' })).toHaveText('Tell your agent you cleared claim c_e2eclaim3 to open as a PR.');
     expect(sent(await view.messages(), 'ui/update-model-context')).toHaveLength(1);
   });
 }
@@ -623,39 +594,28 @@ test("a view draws the first answer the host sends, and keeps it when the host s
   await expect(queue.frame.getByRole('button', { name: 'Open PR' })).toBeVisible();
   await queue.send({
     method: 'ui/notifications/tool-result',
-    params: {
-      content: text('Opened PR #41.'),
-      structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' }, prOnIssue: null },
-    },
+    params: cleared('c_e2eclaim3'),
   });
   await page.waitForTimeout(300);
   await expect(queue.frame.getByRole('button', { name: 'Open PR' })).toBeVisible();
 });
 
-test('each Open PR tells the agent every PR the queue opened so far, since a context update takes the place of the last', async ({ page }) => {
-  const opened = (claimId: string, number: number) => ({
-    content: text(`Opened PR #${String(number)} on sample-owner/sample-app for ${ISSUE}, claim ${claimId}.`),
-    structuredContent: { claimId, issue: ISSUE, state: 'pr_opened', pr: { repo: 'sample-owner/sample-app', number, url: `https://github.example/sample-owner/sample-app/pull/${String(number)}` }, prOnIssue: null },
-  });
+test('each Open PR tells the agent every claim the queue cleared so far, since a context update takes the place of the last', async ({ page }) => {
   const view = await openView(page, views['review-queue'], {
     input: {},
     result: work([ready, { ...ready, claimId: 'c_e2eclaim4', issue: 'sample-owner/sample-app#8' }]),
-    callTool: (_name, args) => Promise.resolve(args.claimId === 'c_e2eclaim3' ? opened('c_e2eclaim3', 41) : opened('c_e2eclaim4', 42)),
+    callTool: (_name, args) => Promise.resolve(cleared(String(args.claimId))),
   });
   const items = view.frame.locator('.view-ready');
 
   await items.first().getByRole('button', { name: 'Open PR' }).click();
-  await expect(items.first().getByRole('status')).toContainText('Opened PR #41');
+  await expect(items.first().getByRole('button', { name: 'Open the PR on GitHub' })).toBeVisible();
   await items.nth(1).getByRole('button', { name: 'Open PR' }).click();
-  await expect(items.nth(1).getByRole('status')).toContainText('Opened PR #42');
+  await expect(items.nth(1).getByRole('button', { name: 'Open the PR on GitHub' })).toBeVisible();
 
   await expect.poll(async () => sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([
-    { content: text(`Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3.`) },
-    {
-      content: text(
-        `Opened PR #41 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim3.\nOpened PR #42 on sample-owner/sample-app for ${ISSUE}, claim c_e2eclaim4.`,
-      ),
-    },
+    { content: text('Cleared claim c_e2eclaim3 to open as a PR.') },
+    { content: text('Cleared claim c_e2eclaim3 to open as a PR.\nCleared claim c_e2eclaim4 to open as a PR.') },
   ]);
 });
 

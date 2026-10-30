@@ -10,8 +10,9 @@ import { SITE } from './hosts';
 // from the admin queue. It reads the queue and lists a project, so it runs
 // in the `skills` project, once the admin pages' tests are done. Then a
 // sample donor's agent follows the give skill on the one sample issue no
-// other test claims, sample-owner/sample-app#311, and gets its work to a PR
-// on the GitHub fake.
+// other test claims, sample-owner/sample-app#311: it pushes the claim's
+// branch, submits it, opens the PR with the donor's own token, and records
+// it.
 
 test("a maintainer's agent registers a sample repo with the proposed settings, and an admin's agent approves it from the queue", async () => {
   const said: string[] = [];
@@ -32,7 +33,7 @@ test('the admin research flow records and clears evidence for a waiting find thr
   expect(said.some((line) => line.includes('admin_seed_repo') && line.includes('"evidence":null'))).toBe(true);
 });
 
-test("a donor's agent follows the give skill from a session to a claim, updates, a submit, and a PR", async ({ request }) => {
+test("a donor's agent follows the give skill from a session to a claim, updates, a pushed branch, a submit, and a recorded PR", async ({ request }) => {
   // The server asks for a wait of up to 10 seconds between two posts.
   test.setTimeout(90_000);
   // Outside CI, Playwright reuses a GitHub fake that is already running.
@@ -54,8 +55,9 @@ test("a donor's agent follows the give skill from a session to a claim, updates,
   expect(run).toMatchObject({ issue: DONOR_ISSUE, resumed: false });
   expect(run.waitedSeconds).toBeGreaterThan(0);
   expect(said.filter((line) => line.startsWith(`@${DONOR}'s agent calls post_update`))).toHaveLength(3);
-  // The project opens agent PRs by itself, so the submit opened this one.
-  expect(run.reviewReason).toBeNull();
+  // The project opens agent PRs by itself, so the submit cleared the work at once.
+  expect(run.reviewReason).toBe('ready_to_open');
+  expect(said.some((line) => line.startsWith(`@${DONOR}'s agent calls record_pr`))).toBe(true);
   const pr = (await (await request.get(`${LOCAL_API_URL}/repos/sample-owner/sample-app/pulls/${String(run.pr.number)}`)).json()) as {
     state: string;
     user: { login: string };

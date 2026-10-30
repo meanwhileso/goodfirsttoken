@@ -14,11 +14,13 @@ import { freshNumbers } from '../sync/helpers';
 
 // /me, fetched and posted through the whole Worker by a browser signed in on
 // the site with the GitHub fake, beside the donor's own agent, which claims
-// and submits through the MCP client SDK. The review queue and Open PR run
-// my_work's and open_pr's rules with the GitHub token from the person's
-// sign-in on the site. sample-maintainer is an admin of the made-up
-// sample-owner repos, and the donors can push to none of them. Every
-// project setting, issue, and file here is made up.
+// and submits through the MCP client SDK. The donor's own git pushes the
+// claim's branch to their fork, which the fake's commitFiles stands in for.
+// The review queue and Open PR run my_work's and open_pr's rules with the
+// GitHub token from the person's sign-in on the site, and Open PR clears
+// the work for the donor to open its PR on GitHub. sample-maintainer is an
+// admin of the made-up sample-owner repos, and the donors can push to none
+// of them. Every project setting, issue, and file here is made up.
 
 const APP = 'sample-owner/sample-app';
 const BY = 'sample-maintainer';
@@ -27,6 +29,7 @@ const PEOPLE = { priya: 1001, kenji: 1002, sam: 1003, lena: 1006 } as const;
 type Login = keyof typeof PEOPLE;
 const NOTES = { summary: 'Keeps the trailing slash when a rewrite runs.', checks: 'pnpm test: 12 passing.' };
 const PR_CALL = 'POST /repos/{owner}/{repo}/pulls';
+const TRAILED = 'Keep the trailing slash in rewrites\n\nAssisted-by: claude-code (claude-opus-5-5)';
 
 let github: GitHubFake;
 
@@ -54,6 +57,7 @@ interface Result {
 
 interface Donor {
   agent: ConnectedAgent;
+  login: Login;
   sessionId: string;
 }
 
@@ -70,7 +74,7 @@ async function agentOf(login: Login): Promise<Donor> {
     name: 'start_session',
     arguments: { agent: 'claude-code', budget: { kind: 'until_limit' } },
   })) as Result;
-  return { agent, sessionId: String(started.structuredContent?.sessionId) };
+  return { agent, login, sessionId: String(started.structuredContent?.sessionId) };
 }
 
 /** A browser signed in on the site as `login`. */
@@ -105,19 +109,48 @@ async function tagged(title = 'Keep the trailing slash in rewrites'): Promise<st
   return issue;
 }
 
-/** The donor's agent claims the issue and submits work to it, which waits in their review queue. */
-async function submitted(d: Donor, issue: string): Promise<string> {
+/**
+ * The donor's agent claims the issue, pushes the claim's branch to the
+ * donor's fork, made with a token of their own when they have none, and
+ * submits it.
+ */
+async function pushed(d: Donor, issue: string) {
   const claimed = await tool(d, 'claim_issue', { sessionId: d.sessionId, issue });
-  const claimId = (claimed.structuredContent as { claim: { claimId: string } }).claim.claimId;
+  const content = claimed.structuredContent as { claim: { claimId: string }; clone: { commit: string }; branch: { name: string } };
+  const { claimId } = content.claim;
+  const name = content.branch.name;
+  const fork = `${d.login}/sample-app`;
+  if (github.state.repos[fork] === undefined) {
+    const made = await github.fetch(`${github.apiUrl}/repos/${APP}/forks`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${github.tokenFor(d.login)}`, 'content-type': 'application/json', 'user-agent': 'me-test' },
+      body: '{}',
+    });
+    if (!made.ok) throw new Error(`no fork for ${d.login}`);
+  }
+  const branches = github.state.repos[fork]?.branches;
+  if (!branches) throw new Error(`the fake has no fork ${fork}`);
+  branches[name] ??= content.clone.commit;
+  const head = github.commitFiles(fork, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, d.login, { branch: name, message: TRAILED });
   const result = await tool(d, 'submit_work', {
     claimId,
-    files: [{ path: 'src/rewrite.ts', content: 'export const keepSlash = true;\n' }],
+    branch: { repo: fork, name, head },
     ...NOTES,
     agent: 'claude-code',
     model: 'claude-opus-5-5',
   });
-  expect(result.structuredContent?.reviewReason).not.toBeNull();
+  return { claimId, name, head, fork, result };
+}
+
+/** The donor's agent claims the issue and submits work to it, which waits in their review queue. */
+async function submitted(d: Donor, issue: string): Promise<string> {
+  const { claimId, result } = await pushed(d, issue);
+  expect(result.structuredContent?.reviewReason).not.toBe('ready_to_open');
   return claimId;
+}
+
+async function clearance(claimId: string) {
+  return (await getSubmission(env.DB, claimId))?.clearance ?? null;
 }
 
 /** Follows the form's redirect back to /me, and returns the page's HTML. */
@@ -230,7 +263,7 @@ describe('the review queue on /me', () => {
 });
 
 describe('Open PR on /me', () => {
-  test("opens the PR as the donor with the token from their sign-in on the site, and the work leaves the queue", async () => {
+  test('clears the work as the donor with the token from their sign-in on the site, with reads alone, and the work waits for its PR on GitHub', async () => {
     await project({ tags: ['help wanted'], prMode: 'reviewed' });
     const issue = await tagged();
     const priya = await agentOf('priya');
@@ -240,20 +273,17 @@ describe('Open PR on /me', () => {
 
     const answer = await back(browser, await browser.post('/me', openPr(claimId)));
 
-    const [pull] = pulls('priya');
-    if (!pull?.pull) throw new Error('no PR opened');
-    const submission = await getSubmission(env.DB, claimId);
-    expect(pull.pull).toMatchObject({ head: { repo: 'priya/sample-app', ref: submission?.branch }, base: { ref: 'main' } });
-    expect(pull.body).toContain(NOTES.summary);
-    expect(pull.body).toContain(`Closes #${issue.slice(issue.indexOf('#') + 1)}`);
-    const opened = github.calls.slice(before).filter((call) => call.operation === PR_CALL);
-    expect(opened.map((call) => call.token)).toEqual([await siteToken('priya')]);
-    // Every call the form made to GitHub ran as priya, with her site token.
+    const cleared = await clearance(claimId);
+    expect(cleared?.body).toContain(NOTES.summary);
+    expect(cleared?.body).toContain(`Closes #${issue.slice(issue.indexOf('#') + 1)}`);
+    // Every call the form made to GitHub ran as priya, with her site token, and read.
     const made = github.calls.slice(before).filter((call) => call.url.startsWith(github.apiUrl));
+    expect(made.length).toBeGreaterThan(0);
     expect(new Set(made.map((call) => call.token))).toEqual(new Set([await siteToken('priya')]));
-    expect(shown(answer)).toContain(`Opened PR #${String(pull.number)} on ${APP} for ${issue}: `);
-    expect(await stateOf(issue, claimId)).toBe('pr_opened');
-    expect(answer).toContain('Nothing to open yet.');
+    expect(made.filter((call) => call.method !== 'GET' && !call.operation.startsWith('query'))).toEqual([]);
+    expect(pulls()).toEqual([]);
+    expect(shown(answer)).toContain(`The PR for ${issue} is ready to open. Open it on GitHub from your queue.`);
+    expect(await stateOf(issue, claimId)).toBe('awaiting_review');
   });
 
   test("a claim ID from another donor is refused, and nothing is read from GitHub, opened, or changed", async () => {
@@ -342,45 +372,32 @@ describe('Open PR on /me', () => {
     expect(await stateOf(issue, claimId)).toBe('awaiting_review');
   });
 
-  test("the refusals open_pr gives come back in the page's notice, like a second Open PR on work whose PR is open", async () => {
+  test("the refusals open_pr gives come back in the page's notice, like an Open PR on work whose PR is recorded", async () => {
     await project({ tags: ['help wanted'], prMode: 'reviewed' });
     const issue = await tagged();
     const priya = await agentOf('priya');
-    const claimId = await submitted(priya, issue);
+    const { claimId, name } = await pushed(priya, issue);
     const browser = await site('priya');
     await back(browser, await browser.post('/me', openPr(claimId)));
+    const cleared = await clearance(claimId);
+    // priya opens the PR on GitHub's form, and her agent records it.
+    const made = await github.fetch(`${github.apiUrl}/repos/${APP}/pulls`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${github.tokenFor('priya')}`, 'content-type': 'application/json', 'user-agent': 'me-test' },
+      body: JSON.stringify({ title: 'Keep the trailing slash in rewrites', body: cleared?.body, head: `priya:${name}`, base: 'main' }),
+    });
+    const { html_url: url }: { html_url: string } = await made.json();
+    await tool(priya, 'record_pr', { claimId, pr: url });
 
     const again = await back(browser, await browser.post('/me', openPr(claimId)));
 
     expect(shown(again)).toContain('No PR opened.');
+    expect(shown(again)).toContain('already');
     expect(pulls('priya')).toHaveLength(1);
   });
 });
 
-describe('work the agent pushed, on /me', () => {
-  const TRAILED = 'Keep the trailing slash in rewrites\n\nAssisted-by: claude-code (claude-opus-5-5)';
-
-  /** The donor's agent claims the issue, pushes the claim's branch to their fork, and submits it. */
-  async function pushed(d: Donor, issue: string, login: Login = 'priya') {
-    const claimed = await tool(d, 'claim_issue', { sessionId: d.sessionId, issue });
-    const content = claimed.structuredContent as { claim: { claimId: string }; clone: { commit: string }; branch: { name: string } };
-    const { claimId } = content.claim;
-    const name = content.branch.name;
-    const fork = `${login}/sample-app`;
-    const branches = github.state.repos[fork]?.branches;
-    if (!branches) throw new Error(`the fake has no fork ${fork}`);
-    branches[name] ??= content.clone.commit;
-    const head = github.commitFiles(fork, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, login, { branch: name, message: TRAILED });
-    const result = await tool(d, 'submit_work', {
-      claimId,
-      branch: { repo: fork, name, head },
-      ...NOTES,
-      agent: 'claude-code',
-      model: 'claude-opus-5-5',
-    });
-    return { claimId, name, head, fork, result };
-  }
-
+describe('cleared work, on /me', () => {
   /** The link the page gives to open the PR on GitHub, from its href. */
   function formLink(html: string, issue: string): string | null {
     const label = `aria-label="Open the PR on GitHub for ${issue}"`;
@@ -390,10 +407,6 @@ describe('work the agent pushed, on /me', () => {
       return /href="([^"]*)"/.exec(tag)?.[1]?.replaceAll('&amp;', '&') ?? null;
     }
     return null;
-  }
-
-  async function clearance(claimId: string) {
-    return (await getSubmission(env.DB, claimId))?.clearance ?? null;
   }
 
   test('Open PR clears the work by open_pr\'s rules, opens nothing on GitHub, and links the form with its title and body from the clearance', async () => {
@@ -479,7 +492,7 @@ describe('work the agent pushed, on /me', () => {
     const made = await github.fetch(
       new Request(`${github.apiUrl}/repos/${APP}/pulls`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${await siteToken('priya')}`, 'content-type': 'application/json', 'user-agent': 'me-test' },
+        headers: { authorization: `Bearer ${github.tokenFor('priya')}`, 'content-type': 'application/json', 'user-agent': 'me-test' },
         body: JSON.stringify({ title: toOpen.title, body: toOpen.body, head: `priya:${name}`, base: 'main' }),
       }),
     );
@@ -593,7 +606,7 @@ describe('the description a project asks the donor to write', () => {
     expect(await stateOf(issue, claimId)).toBe('awaiting_review');
   });
 
-  test("written, it opens the PR with the donor's words in place of the agent's summary, as they wrote them", async () => {
+  test("written, it clears the PR with the donor's words in place of the agent's summary, as they wrote them", async () => {
     await project({ tags: ['help wanted'], prMode: 'reviewed', personWrittenDescription: true });
     const issue = await tagged();
     const priya = await agentOf('priya');
@@ -604,16 +617,15 @@ describe('the description a project asks the donor to write', () => {
 
     await back(browser, await browser.post('/me', openPr(claimId, { description: `  ${words}\r\n` })));
 
-    const [pull] = pulls('priya');
+    const body = (await clearance(claimId))?.body;
     const number = issue.slice(issue.indexOf('#') + 1);
-    expect(pull?.body).toBe(
+    expect(body).toBe(
       `Rewrites keep the *trailing* slash now.\n\nI read the diff <b>twice</b>, and ran the tests.\n\nCloses #${number}\n\nWritten with a coding agent through Good First Token.`,
     );
-    expect(pull?.body).not.toContain(NOTES.summary);
-    expect(await stateOf(issue, claimId)).toBe('pr_opened');
+    expect(body).not.toContain(NOTES.summary);
   });
 
-  test('a key or token in the words reaches the PR only as [redacted]', async () => {
+  test("a key or token in the words reaches the PR's body only as [redacted]", async () => {
     await project({ tags: ['help wanted'], prMode: 'reviewed', personWrittenDescription: true });
     const issue = await tagged();
     const priya = await agentOf('priya');
@@ -624,9 +636,9 @@ describe('the description a project asks the donor to write', () => {
 
     await back(browser, await browser.post('/me', openPr(claimId, { description: `It works with ${token} set.` })));
 
-    const [pull] = pulls('priya');
-    expect(pull?.body).toMatch(/^It works with \[redacted\] set\./);
-    expect(pull?.body).not.toContain(token);
+    const body = (await clearance(claimId))?.body;
+    expect(body).toMatch(/^It works with \[redacted\] set\./);
+    expect(body).not.toContain(token);
   });
 
   test('longer than open_pr takes is refused, and opens nothing', async () => {

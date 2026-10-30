@@ -28,24 +28,17 @@ export const refusalCodes = [
   // Posting, submitting, and opening a PR (spec sections 7 and 8).
   'not_claim_owner',
   'description_required',
-  // The submitted files leave the branch as it is, so there is nothing to
-  // commit.
+  // A submit with files, which older skills sent. The server takes a pushed
+  // branch alone, so the agent updates the skill and pushes the branch.
+  'skill_outdated',
+  // The pushed branch changes no file past the default branch, or a fix
+  // names the last submit's head, so there is nothing new to take.
   'no_changes',
-  // GitHub makes a new fork in the background, and hadn't finished it.
-  'fork_not_ready',
-  // Someone else pushed to the claim's branch since its last submit, so a
-  // commit would undo their work. For a pushed branch, open_pr found it
-  // moved from the head its submit checked.
+  // The claim's branch moved from the head its submit checked, so open_pr
+  // clears nothing, or my_work shows no link to open it.
   'branch_moved',
-  // The submit changes an executable file, a symbolic link, or a submodule,
-  // or a path under a link or a submodule, which a commit through GitHub's
-  // API would make a plain file or a folder.
-  'file_mode',
-  // A submitted path is a folder, goes under a file, or differs only in
-  // case or accents from a path the branch has.
-  'path_conflict',
-  // GitHub refused a write the server made with the donor's token: the fork,
-  // the branch, the commit, or the PR.
+  // GitHub didn't give a read the server needed, like a comparison of the
+  // pushed branch, or refused it.
   'github_refused',
   // A pushed branch: GitHub shows no such branch in the repo the agent
   // named, or its head isn't the commit the agent named.
@@ -58,9 +51,6 @@ export const refusalCodes = [
   // A commit on a pushed branch lacks the disclosure trailer the project
   // asks for.
   'trailer_missing',
-  // A submit with files after the claim's branch was pushed, which would
-  // write over the pushed work.
-  'branch_pushed',
   // Recording a PR for work open_pr hasn't cleared to open.
   'not_cleared',
   // A PR to record isn't the one the clearance allows: another repo, base,

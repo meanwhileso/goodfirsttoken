@@ -112,7 +112,7 @@ export {
   removalWaitsNote,
   removalWithdrawnNote,
 } from './admin';
-export { MAX_FILE_BYTES, MAX_PR_DESCRIPTION, MAX_SUBMIT_BYTES, utf8Length } from './donor';
+export { MAX_PR_DESCRIPTION } from './donor';
 export type { Suggestion } from './donor';
 export type { QueuePlace } from './admin';
 export { claimStateLabel } from './shared';

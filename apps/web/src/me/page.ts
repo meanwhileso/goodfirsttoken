@@ -123,18 +123,17 @@ function refusalText(refusal: Refusal): string {
 }
 
 function openedText(opened: Extract<Opened, { ok: true }>['value']): string {
-  const { pr, issue, prOnIssue } = opened;
+  const { issue, prOnIssue } = opened;
   const also = prOnIssue === null ? '' : ` Another PR is open on the issue too: ${prOnIssue.url}`;
-  // Work the agent pushed is cleared, and the donor opens its PR on GitHub.
-  // The queue item links GitHub's form from the clearance itself, since a
-  // notice is cut short and the link can run to thousands of characters.
-  if (pr === null) return `The PR for ${issue} is ready to open. Open it on GitHub from your queue.${also}`;
-  return `Opened PR #${String(pr.number)} on ${pr.repo} for ${issue}: ${pr.url}${also}`;
+  // The work is cleared, and the donor opens its PR on GitHub. The queue
+  // item links GitHub's form from the clearance itself, since a notice is
+  // cut short and the link can run to thousands of characters.
+  return `The PR for ${issue} is ready to open. Open it on GitHub from your queue.${also}`;
 }
 
 /**
- * Opens the PR for a claim in the person's review queue, by open_pr's
- * rules, as open_pr takes its input. A description left blank is none,
+ * Clears the work of a claim in the person's review queue to open as a PR,
+ * by open_pr's rules, as open_pr takes its input. A description left blank is none,
  * which open_pr refuses for a project that asks for one. A browser sends
  * each line break in a form as CR LF, and it goes to the PR as LF, like the
  * rest of the PR's description.

@@ -164,7 +164,7 @@ PR with GitHub reads, and records them. The last item removes the server's write
 | [#126](https://github.com/meanwhileso/goodfirsttoken/issues/126) | Find and record PRs from cleared claims' branches | #125 | [#132](https://github.com/meanwhileso/goodfirsttoken/pull/132) |
 | [#127](https://github.com/meanwhileso/goodfirsttoken/issues/127) | Show cleared work with its compare page link | #125 | [#133](https://github.com/meanwhileso/goodfirsttoken/pull/133) |
 | [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | [#134](https://github.com/meanwhileso/goodfirsttoken/pull/134) |
-| [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | |
+| [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | [#135](https://github.com/meanwhileso/goodfirsttoken/pull/135) |
 
 ## Dependency graph
 

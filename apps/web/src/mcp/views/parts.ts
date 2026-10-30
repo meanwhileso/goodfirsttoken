@@ -41,7 +41,7 @@ export function issueHead(issue: string, title: string): HTMLElement {
 }
 
 /** A notice under an item: what a button did, or the refusal's own text. */
-export function notice(text: string, kind: 'refused' | 'done' | 'note'): HTMLElement {
+export function notice(text: string, kind: 'refused' | 'note'): HTMLElement {
   return h('p', { class: `view-notice view-notice--${kind}`, role: kind === 'refused' ? 'alert' : 'status' }, text);
 }
 

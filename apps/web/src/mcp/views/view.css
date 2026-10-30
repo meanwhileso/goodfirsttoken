@@ -57,7 +57,6 @@ body { padding: 1px; }
 .view-status, .view-cleared { display: flex; flex-direction: column; gap: 10px; }
 .view-notice { padding: 10px 12px; border-radius: var(--r-md); font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .view-notice--refused { background: var(--attention-tint); color: var(--attention); }
-.view-notice--done { background: var(--accent-tint); color: var(--ink); }
 .view-notice--note { background: var(--accent-tint); color: var(--text-body); }
 
 .view-check { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--text-body); overflow-wrap: anywhere; }

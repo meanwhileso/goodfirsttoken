@@ -270,7 +270,7 @@ async function followUpsFor(
       waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
       now,
     );
-  const followUps = waiting.map(({ record, issue, pr, branch, base }) => ({
+  const followUps = waiting.map(({ record, issue, pr, branch }) => ({
     claimId: record.claimId,
     issue,
     title: titles.get(lower(issue)) ?? issue,
@@ -281,7 +281,6 @@ async function followUpsFor(
     commentUrl: record.url,
     writtenAt: new Date(record.writtenAt).toISOString(),
     branch,
-    base,
   }));
   return { followUps, moreFollowUps: all - followUps.length, markShown };
 }

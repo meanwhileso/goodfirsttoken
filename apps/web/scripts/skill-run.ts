@@ -12,9 +12,14 @@
 //    set_interests on the first run, suggest_issues until the sample work's
 //    sample-owner/sample-app#311 comes up, claim_issue, post_update three
 //    times with the second folded into the third after the wait the server
-//    asks for, submit_work, and my_work, with open_pr when the work waits
-//    in the review queue. The issue takes that claim until a PR opens on it,
-//    so on one local database the donor's steps run once, after pnpm seed.
+//    asks for, a commit with the project's trailer pushed to the claim's
+//    branch in ines's fork, submit_work with the branch, which clears the
+//    work at once, the PR opened as GitHub CLI would open it, record_pr,
+//    and my_work, which has to list nothing to open. The GitHub fake takes no git push, so the
+//    push and the PR go through the fake's API with a token of ines's own,
+//    from no OAuth app, as her own git and GitHub CLI hold. The issue takes
+//    that claim until a PR opens on it, so on one local database the
+//    donor's steps run once, after pnpm seed.
 //
 // Each person approves their agent the way they would in a browser, on the
 // site's page and then on the GitHub fake's sign-in page, here over plain
@@ -44,6 +49,7 @@ import { request as httpsRequest } from 'node:https';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual, parseArgs } from 'node:util';
 import type { CrawlPriorityInput, ToolOutput } from '@goodfirsttoken/core';
+import { LOCAL_API_URL, LOCAL_WEB_URL } from '@goodfirsttoken/github-fake/local';
 
 /** The repo the run registers: one of the GitHub fake's sample repos that no sample work touches. */
 export const FIXTURE_REPO = 'sample-owner/sample-parser';
@@ -470,6 +476,8 @@ interface Claimed {
   claim: { claimId: string; issue: string };
   resumed: boolean;
   clone: { url: string; commit: string };
+  branch: { name: string; canPush: boolean };
+  project: { repo: string; settings: { disclosure: { trailer: string | null } } };
 }
 
 interface Posted {
@@ -477,9 +485,12 @@ interface Posted {
   waitSeconds: number | null;
 }
 
+type ToOpen = NonNullable<ToolOutput<'submit_work'>['toOpen']>;
+
 interface Submitted {
   pr: { number: number; url: string } | null;
   reviewReason: string | null;
+  toOpen: ToOpen | null;
 }
 
 export interface DonorRun {
@@ -489,13 +500,84 @@ export interface DonorRun {
   resumed: boolean;
   /** How long the server asked the run to wait before its folded update. */
   waitedSeconds: number;
-  /** The PR the work is on, opened by itself or from the review queue. */
+  /** The PR the work is on, which the donor's own tools opened and record_pr recorded. */
   pr: { number: number; url: string };
-  /** Why the work waited in the review queue, or null when the PR opened by itself. */
+  /** Why the work waited in the review queue, `ready_to_open` when the submit cleared it at once. */
   reviewReason: string | null;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The donor's own side of GitHub, on the GitHub fake: a token of theirs from
+ * no OAuth app, as their git and GitHub CLI hold, and calls with it. The
+ * site's own token for them is never used for this.
+ */
+async function ownGitHub(login: string) {
+  const given = await fetch(`${LOCAL_WEB_URL}/_fake/token`, { method: 'POST', body: JSON.stringify({ login }) });
+  if (!given.ok) throw new Error(`The GitHub fake at ${LOCAL_WEB_URL} gave no token for @${login}. Start it with pnpm dev.`);
+  const { token } = (await given.json()) as { token: string };
+  return async (method: string, path: string, body?: unknown): Promise<Response> =>
+    fetch(`${LOCAL_API_URL}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'user-agent': 'goodfirsttoken-skill-run' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+}
+
+/**
+ * Pushes the claim's branch as the donor's git would: to the code repo when
+ * they can push there, and to their fork otherwise, made when they have
+ * none. The branch starts at the start commit, and gets one commit with the
+ * project's trailer. Returns the branch as submit_work takes it.
+ */
+async function pushBranch(
+  github: Awaited<ReturnType<typeof ownGitHub>>,
+  claimed: Claimed,
+  files: Record<string, string>,
+  message: { headline: string; trailer: string },
+): Promise<{ repo: string; name: string; head: string }> {
+  const code = claimed.project.repo;
+  let repo = code;
+  if (!claimed.branch.canPush) {
+    const forked = await github('POST', `/repos/${code}/forks`, { default_branch_only: true });
+    if (!forked.ok) throw new Error(`GitHub made no fork of ${code}: ${String(forked.status)} ${await forked.text()}`);
+    repo = ((await forked.json()) as { full_name: string }).full_name;
+  }
+  const name = claimed.branch.name;
+  // A run that stopped after its push left the branch. GitHub answers 409
+  // while it is still making a new fork.
+  let head: string | null = null;
+  for (let tries = 0; tries < 20 && head === null; tries++) {
+    const ref = await github('GET', `/repos/${repo}/git/ref/heads/${name.split('/').map(encodeURIComponent).join('/')}`);
+    if (ref.ok) {
+      head = ((await ref.json()) as { object: { sha: string } }).object.sha;
+    } else if (ref.status === 404) {
+      const made = await github('POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${name}`, sha: claimed.clone.commit });
+      if (made.ok) head = claimed.clone.commit;
+      else if (made.status !== 409) throw new Error(`GitHub made no branch ${name} in ${repo}: ${String(made.status)} ${await made.text()}`);
+    }
+    if (head === null) await sleep(500);
+  }
+  if (head === null) throw new Error(`GitHub was still making ${repo}.`);
+  const answer = await github('POST', '/graphql', {
+    query: 'mutation ($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }',
+    variables: {
+      input: {
+        branch: { repositoryNameWithOwner: repo, branchName: name },
+        expectedHeadOid: head,
+        message: { headline: message.headline, body: message.trailer },
+        fileChanges: {
+          additions: Object.entries(files).map(([path, text]) => ({ path, contents: Buffer.from(text).toString('base64') })),
+        },
+      },
+    },
+  });
+  const committed = (await answer.json()) as { data?: { createCommitOnBranch?: { commit?: { oid?: string } } }; errors?: unknown };
+  const oid = committed.data?.createCommitOnBranch?.commit?.oid;
+  if (oid === undefined) throw new Error(`The push to ${repo}:${name} failed: ${JSON.stringify(committed.errors)}`);
+  return { repo, name, head: oid };
+}
 
 /**
  * Runs the give skill's steps against `site`, a site in development with
@@ -580,38 +662,53 @@ export async function runDonorSkills(site: string, say: (line: string) => void =
     ) as Posted;
     if (!folded.posted) throw new Error('The folded update, after the wait, was not posted.');
 
-    // Submit. GitHub may still be making the donor's fork, and the same
-    // submit works once it is done.
-    const submit = {
-      claimId,
-      files: [
-        { path: 'src/rewrite.ts', content: 'export const keepTrailingSlash = true;\n' },
-        { path: 'test/rewrite.test.ts', content: "import { keepTrailingSlash } from '../src/rewrite';\n" },
-      ],
-      summary: 'Keeps the trailing slash when a rewrite starts from a path that ends in one.',
-      checks: 'pnpm skills:run follows the give skill with no model, so it ran no tests.',
-      agent: 'claude-code',
-      model: 'skill-run',
-    };
-    let result = await call('submit_work', submit);
-    for (let tries = 0; tries < 5 && refusalOf(result) === 'fork_not_ready'; tries++) {
-      await sleep(2000);
-      result = await call('submit_work', submit);
-    }
-    const submitted = answer(result, 'submit_work') as Submitted;
+    // The agent commits the work on the claim's branch with the project's
+    // trailer, and the donor's own git pushes it.
+    const own = await ownGitHub(DONOR);
+    const trailer = claimed.project.settings.disclosure.trailer;
+    const branch = await pushBranch(
+      own,
+      claimed,
+      {
+        'src/rewrite.ts': 'export const keepTrailingSlash = true;\n',
+        'test/rewrite.test.ts': "import { keepTrailingSlash } from '../src/rewrite';\n",
+      },
+      { headline: 'Keep the trailing slash in rewrites', trailer: trailer === null ? '' : `${trailer}: claude-code (skill-run)` },
+    );
+    say(`@${DONOR}'s own git pushes ${branch.name} to ${branch.repo}, at ${branch.head.slice(0, 7)}.`);
 
-    // The review queue. Work that waits there opens once the donor read it.
-    const queue = answer(await call('my_work', {}), 'my_work') as { readyToOpen: { claimId: string }[] };
-    const waiting = queue.readyToOpen.some((item) => item.claimId === claimId);
-    let pr = submitted.pr;
-    if (pr === null) {
-      if (!waiting) throw new Error(`The work went to the review queue with ${String(submitted.reviewReason)}, and my_work doesn't list it.`);
-      say(`@${DONOR} reads the diff, and says to open it.`);
-      pr = (answer(await call('open_pr', { claimId }), 'open_pr') as { pr: { number: number; url: string } }).pr;
-    } else if (waiting) {
-      throw new Error(`The PR opened by itself, and my_work still lists claim ${claimId} to open.`);
+    // Submit the pushed branch.
+    const submitted = answer(
+      await call('submit_work', {
+        claimId,
+        branch,
+        summary: 'Keeps the trailing slash when a rewrite starts from a path that ends in one.',
+        checks: 'pnpm skills:run follows the give skill with no model, so it ran no tests.',
+        agent: 'claude-code',
+        model: 'skill-run',
+      }),
+      'submit_work',
+    ) as Submitted;
+
+    // The project opens agent PRs by itself, so the submit clears the work
+    // at once, and says how to open its PR.
+    const { toOpen } = submitted;
+    if (toOpen === null) {
+      throw new Error(`${DONOR_ISSUE}'s project opens agent PRs by itself, and the submit sent the work to the review queue with ${String(submitted.reviewReason)}.`);
     }
-    return { issue: DONOR_ISSUE, claimId, resumed: claimed.resumed, waitedSeconds: early.waitSeconds, pr, reviewReason: submitted.reviewReason };
+
+    // The donor's own GitHub CLI opens the PR, as toOpen.command would.
+    say(`@${DONOR}'s agent runs ${toOpen.command}`);
+    const made = await own('POST', `/repos/${toOpen.repo}/pulls`, { title: toOpen.title, body: toOpen.body, head: toOpen.head, base: toOpen.base });
+    if (!made.ok) throw new Error(`GitHub opened no PR: ${String(made.status)} ${await made.text()}`);
+    const { html_url: url } = (await made.json()) as { html_url: string };
+    const recorded = answer(await call('record_pr', { claimId, pr: url }), 'record_pr') as { state: string; pr: { number: number; url: string } };
+    if (recorded.state !== 'pr_opened') throw new Error(`record_pr left claim ${claimId} ${recorded.state}.`);
+    const after = answer(await call('my_work', {}), 'my_work') as { readyToOpen: { claimId: string }[] };
+    if (after.readyToOpen.length > 0) {
+      throw new Error(`The PR is recorded, and my_work still lists work to open: ${after.readyToOpen.map((item) => item.claimId).join(', ')}.`);
+    }
+    return { issue: DONOR_ISSUE, claimId, resumed: claimed.resumed, waitedSeconds: early.waitSeconds, pr: recorded.pr, reviewReason: submitted.reviewReason };
   } finally {
     await donor.close().catch(() => undefined);
   }
@@ -640,7 +737,7 @@ async function main(): Promise<void> {
   );
   const given = await runDonorSkills(site);
   console.log(
-    `\nDone. @${DONOR} claimed ${given.issue} as claim ${given.claimId}, posted as they worked, submitted, and the work is on PR #${String(given.pr.number)}: ${given.pr.url}`,
+    `\nDone. @${DONOR} claimed ${given.issue} as claim ${given.claimId}, posted as they worked, pushed and submitted the branch, opened its PR, and recorded it: PR #${String(given.pr.number)}, ${given.pr.url}`,
   );
 }
 

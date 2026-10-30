@@ -44,7 +44,6 @@ const followUp = {
   commentUrl: `${pr.url}#discussion_r1`,
   writtenAt: at,
   branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-912-c_0' },
-  base: sha,
 };
 
 const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3 };
@@ -171,7 +170,6 @@ export const samples: Samples = {
       claimId: 'c_1',
       issue,
       state: 'pr_opened',
-      source: 'files',
       commit: { sha, url: `https://github.com/priya/goodfirsttoken/commit/${sha}` },
       branch: { repo: 'priya/goodfirsttoken', name: 'gft-918', url: 'https://github.com/priya/goodfirsttoken/tree/gft-918' },
       diffUrl: `https://github.com/priya/goodfirsttoken/compare/${sha}...gft-918`,
@@ -231,8 +229,23 @@ export const samples: Samples = {
     ],
   },
   open_pr: {
-    output: { claimId: 'c_2', issue, state: 'pr_opened', pr, toOpen: null, prOnIssue: null },
-    mentions: ['PR #957', pr.url],
+    output: {
+      claimId: 'c_2',
+      issue,
+      state: 'awaiting_review',
+      toOpen: {
+        repo,
+        head: 'priya:goodfirsttoken/issue-918-c_2',
+        base: 'main',
+        title: 'Format events as NDJSON',
+        body: 'Adds the NDJSON formatter.\n\nCloses #918',
+        command: `gh pr create --repo ${repo} --head priya:goodfirsttoken/issue-918-c_2 --base 'main' --title 'Format events as NDJSON' --body-file -`,
+        compareUrl: `https://github.com/${repo}/compare/main...priya:goodfirsttoken/issue-918-c_2?quick_pull=1&title=Format`,
+        bodyInLink: true,
+      },
+      prOnIssue: null,
+    },
+    mentions: ['Cleared claim c_2', 'gh pr create', 'Then call record_pr'],
   },
   record_pr: {
     output: { claimId: 'c_2', issue, state: 'pr_opened', pr },

@@ -1,7 +1,9 @@
 # Submit work with the donor's own tools
 
-Status: approved on October 29, 2026. This changes how a donor's work
-reaches GitHub. It replaces step 5 of
+Status: approved on October 29, 2026, and built. Item 6 removed `files`
+and the server's write path, so no donor tool writes to GitHub.
+
+This changes how a donor's work reaches GitHub. It replaces step 5 of
 [the donor's flow](v1.md#7-the-donors-flow) in v1, the Open PR step in
 step 6, and the reason
 [section 3](v1.md#3-identity-permissions-and-token-storage) gives for the

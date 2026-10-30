@@ -6,12 +6,12 @@ import {
   type Disclosure,
   type ReviewReason,
 } from '@goodfirsttoken/core';
-import type { PullFacts } from './writes';
+import type { PullFacts } from './branches';
 
 // The rules for a claim's submitted work, as pure functions: which paths are
-// workflow files, why work waits for the donor, the branch it goes on, and
-// the words of its commit and its PR, and whether a PR the agent opened is
-// the one open_pr cleared. submit_work, open_pr, and record_pr
+// workflow files, why work waits for the donor, the branch it goes on, the
+// trailer its commits carry, the words of its PR, and whether a PR the
+// donor opened is the one open_pr cleared. submit_work, open_pr, and record_pr
 // (src/mcp/submit.ts) use them. The rules are in docs/how-it-works.md,
 // under The donor's tools.
 
@@ -26,18 +26,17 @@ export function isWorkflowPath(path: string): boolean {
   return first === '.github' && second === 'workflows';
 }
 
-/** What decides whether finished work opens its PR by itself. */
+/** What decides whether finished work is cleared to open by itself. */
 export interface ReviewFacts {
   /** An open PR on the issue other than the claim's own, from anyone. */
   prOnIssue: boolean;
   /** The branch's change touches a workflow file. */
   workflowFiles: boolean;
   /**
-   * Why the branch's change couldn't be checked for workflow files, when it
-   * holds someone else's push: GitHub's comparison was too long to list
-   * every file, or GitHub gave none. Null when it was checked.
+   * GitHub's comparison of the branch was too long to list every file and
+   * commit, so it couldn't all be checked.
    */
-  unchecked: 'too_many_files' | 'comparison_unread' | null;
+  tooManyFiles: boolean;
   prMode: 'automatic' | 'reviewed';
   personWrittenDescription: boolean;
   /** The donor has as many open PRs in the project as it allows. */
@@ -45,14 +44,14 @@ export interface ReviewFacts {
 }
 
 /**
- * Why finished work waits in the donor's review queue, or null when its PR
- * opens by itself. When several reasons apply, the first in core's
+ * Why finished work waits in the donor's review queue, or null when it is
+ * cleared to open by itself. When several reasons apply, the first in core's
  * reviewReasons is the one given.
  */
 export function reviewReason(facts: ReviewFacts): ReviewReason | null {
   if (facts.prOnIssue) return 'pr_exists';
   if (facts.workflowFiles) return 'workflow_files';
-  if (facts.unchecked !== null) return facts.unchecked;
+  if (facts.tooManyFiles) return 'too_many_files';
   if (facts.prMode === 'reviewed') return 'reviewed_mode';
   if (facts.personWrittenDescription) return 'person_written_description';
   if (facts.atOpenPrCap) return 'open_pr_cap';
@@ -156,25 +155,6 @@ export function pullMismatch(
 /** Text the agent wrote, with keys and tokens replaced, cut to what a submit takes. */
 export function redacted(text: string, max = MAX_SUBMIT_NOTES): string {
   return stripSecrets(text.slice(0, max)).slice(0, max);
-}
-
-/**
- * The commit's message: the title, then the summary, then the project's
- * disclosure trailer, when it has one, naming the agent and the model.
- */
-export function commitMessage(input: {
-  title: string;
-  summary: string;
-  agent: string;
-  model: string;
-  disclosure: Disclosure;
-}): { headline: string; body: string } {
-  const trailer =
-    input.disclosure.trailer === null ? null : `${input.disclosure.trailer}: ${input.agent} (${input.model})`;
-  return {
-    headline: input.title,
-    body: trailer === null ? input.summary : `${input.summary}\n\n${trailer}`,
-  };
 }
 
 /**

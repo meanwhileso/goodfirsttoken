@@ -24,7 +24,6 @@ import { refusalCodeSchema } from '../refusals';
 import { budgetSchema, queueSchema, type Budget } from '../sessions';
 import {
   branchName,
-  submissionSourceSchema,
   MAX_SUBMIT_NOTES,
   prTitle,
   reviewReasonSchema,
@@ -340,172 +339,6 @@ export const postUpdate = defineTool({
     ),
 });
 
-export const MAX_PATH = 4096;
-
-/**
- * The most folders a submitted path can be in, one inside the other. The
- * server reads a path's folders a level at a time, so this caps the reads
- * one after another. Real repos keep their files far shallower.
- */
-export const MAX_PATH_DEPTH = 20;
-
-/** The most a submitted file can hold: 1 MiB of UTF-8, the largest file GitHub recommends. */
-export const MAX_FILE_BYTES = 1_048_576;
-
-/**
- * The most the files of one submit can hold together: 2 MiB of UTF-8. The
- * MCP server takes a request body of at most 4 MiB. JSON carries most text
- * byte for byte, a quote, a backslash, or a line break in two bytes, and
- * another control character in six, as \u0001. The paths, up to 300 of up
- * to 4,096 characters, and the notes go in the same body. So a submit near
- * this cap can still be over the MCP server's limit, which refuses it before
- * it reaches the tool.
- */
-export const MAX_SUBMIT_BYTES = 2_097_152;
-
-/** How many bytes `text` takes as UTF-8. A lone surrogate counts as the three bytes of U+FFFD. */
-export function utf8Length(text: string): number {
-  let bytes = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      bytes += 4;
-      i++;
-    } else bytes += 3;
-  }
-  return bytes;
-}
-
-/** Half of a UTF-16 surrogate pair with no other half, which UTF-8 can't hold. */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-/**
- * Characters HFS+, the older macOS filesystem, leaves out of a name, so
- * `.g\u200Cit` names Git's own folder there. Git skips the same ones
- * (is_hfs_dotgit, in its utf8.c).
- */
-const HFS_IGNORED = /[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g;
-
-/** Characters that change the direction text shows in, so a path can read as another. */
-const BIDI = /[\u202A-\u202E\u2066-\u2069]/;
-
-// eslint-disable-next-line no-control-regex -- control characters are what it looks for
-const CONTROL = /[\u0000-\u001f\u007f]/;
-
-/** The text before any dots and spaces it ends with, which Windows drops from a name. */
-function withoutTrailingDots(text: string): string {
-  let end = text.length;
-  while (end > 0 && (text[end - 1] === '.' || text[end - 1] === ' ')) end--;
-  return text.slice(0, end);
-}
-
-/**
- * A part of a path that names Git's own folder, by the rules Git checks a
- * tree with before it writes one out (is_hfs_dotgit and is_ntfs_dotgit):
- * `.git`, or `git~1`, its short name on Windows, in any case, once the
- * characters HFS+ ignores are out, and up to a colon, which starts an NTFS
- * stream, and any dots and spaces before it or the end.
- */
-function isGitDir(part: string): boolean {
-  const name = part.replace(HFS_IGNORED, '').toLowerCase();
-  const colon = name.indexOf(':');
-  const stem = withoutTrailingDots(colon === -1 ? name : name.slice(0, colon));
-  return stem === '.git' || stem === 'git~1';
-}
-
-/** What is wrong with a path in the repo, or null when nothing is. */
-function pathProblem(path: string): string | null {
-  const inside = 'must be a path inside the repo, like src/index.ts';
-  if (path.startsWith('/') || path.includes('\\')) return `${inside}, with / between its parts`;
-  if (CONTROL.test(path)) return `${inside}, with no control characters`;
-  if (BIDI.test(path)) return `${inside}, with no characters that change the direction text shows in`;
-  const parts = path.split('/');
-  if (parts.length - 1 > MAX_PATH_DEPTH) return `${inside}, at most ${String(MAX_PATH_DEPTH)} folders deep`;
-  for (const part of parts) {
-    if (part === '' || part === '.' || part === '..') return `${inside}, with no empty, ., or .. part`;
-    if (isGitDir(part)) return `${inside}, outside Git's own folder: no part can name .git, however it is spelled`;
-    if (part.endsWith('.') || part.endsWith(' ')) {
-      return `${inside}, with no part that ends in a dot or a space, which Windows drops`;
-    }
-  }
-  return null;
-}
-
-const repoPath = z
-  .string({ error: 'must be a path in the repo, like src/index.ts' })
-  .max(MAX_PATH, { error: `must be at most ${MAX_PATH.toLocaleString('en-US')} characters`, abort: true })
-  .superRefine((path, ctx) => {
-    const problem = pathProblem(path);
-    if (problem !== null) ctx.addIssue({ code: 'custom', message: problem });
-  });
-
-/**
- * The first pair of paths that can't both be files in one commit: the same
- * path twice, two paths that differ only in case or in how their accents
- * are written, or a file and a path under it. Those count as the same
- * because some filesystems ignore case, and macOS's keep each name in one
- * Unicode form, so é written as one character or as e and an accent is one
- * name there.
- */
-function firstClash(paths: readonly string[]): string | undefined {
-  const files = new Map<string, string>();
-  const dirs = new Map<string, string>();
-  for (const path of paths) {
-    const lower = path.normalize('NFC').toLowerCase();
-    const parts = lower.split('/');
-    const parents = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'));
-    const other =
-      files.get(lower) ??
-      dirs.get(lower) ??
-      parents.map((parent) => files.get(parent)).find((found) => found !== undefined);
-    if (other !== undefined) {
-      return other === path ? `lists ${path} twice` : `lists ${other} and ${path}, which can't both be files`;
-    }
-    files.set(lower, path);
-    for (const parent of parents) dirs.set(parent, path);
-  }
-  return undefined;
-}
-
-/**
- * A file's full new text. Only text is taken: JSON carries text, and Git
- * counts a file with a NUL character as binary.
- */
-const fileText = z
-  .string({ error: "must be the file's full new text, or null to delete it" })
-  .refine((text) => !text.includes('\0'), {
-    message: 'must be text: it has a NUL character, which makes Git count it as binary, and submit_work takes text only',
-    abort: true,
-  })
-  .refine((text) => !LONE_SURROGATE.test(text), { message: 'must be UTF-8 text', abort: true })
-  .refine(
-    (text) => utf8Length(text) <= MAX_FILE_BYTES,
-    `must be at most ${MAX_FILE_BYTES.toLocaleString('en-US')} bytes of UTF-8`,
-  );
-
-const changedFile = z.object({
-  path: repoPath,
-  content: fileText.nullable().describe("The file's full new text, or null to delete it."),
-});
-
-const changedFiles = z
-  .array(changedFile)
-  .min(1, 'must list at least one changed file')
-  .max(300, 'must list at most 300 files')
-  .superRefine((files, ctx) => {
-    const clash = firstClash(files.map((file) => file.path));
-    if (clash) ctx.addIssue({ code: 'custom', message: clash });
-    const bytes = files.reduce((sum, file) => sum + (file.content === null ? 0 : utf8Length(file.content)), 0);
-    if (bytes > MAX_SUBMIT_BYTES) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `must hold at most ${MAX_SUBMIT_BYTES.toLocaleString('en-US')} bytes of UTF-8 in all, and these hold ${bytes.toLocaleString('en-US')}`,
-      });
-    }
-  });
-
 /**
  * A PR cleared to open, for the agent to open with the donor's own tools
  * (docs/specs/agent-submits.md): where it goes, from where, and its title
@@ -592,23 +425,22 @@ function nextStep(reason: ReviewReason): string {
     case 'person_written_description':
       return 'Ask the donor to read the diff and write the PR description. Pass it to open_pr word for word.';
     case 'open_pr_cap':
-      return 'Ask the donor to read the diff. Open the PR with open_pr once one of their PRs in the project merges or closes.';
+      return 'Ask the donor to read the diff. Clear it with open_pr once one of their PRs in the project merges or closes.';
     case 'pr_refused':
-      return 'Ask the donor to read the diff, then try open_pr.';
+      return 'Ask the donor to read the diff, then clear it with open_pr.';
     case 'ready_to_open':
-      return 'Open the PR with open_pr.';
+      return 'Clear it with open_pr, then open the PR as its answer says.';
     default:
-      return 'Ask the donor to read the diff, then open the PR with open_pr.';
+      return 'Ask the donor to read the diff, then clear it with open_pr, and open the PR as its answer says.';
   }
 }
 
 export const submitWork = defineTool({
   audience: 'donor',
   description:
-    "Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open. An older way is files: every file changed from the start commit, each with its full new text or null to delete it, which the server commits as the donor and opens the PR from. Send one or the other. Once a claim's branch was pushed, send branch. With files, when someone else pushed to the branch, the submit is refused with branch_moved: fetch the branch, bring your work onto its head, and submit with onto set to that head.",
+    "Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open.",
   // not_found, not_claim_owner, and the claim's own refusals come from the
-  // claims table, the permission, or the claim's room. A PR that doesn't
-  // open by itself sends the work to the review queue, with no refusal.
+  // claims table, the permission, or the claim's room.
   refusals: [
     'not_found',
     'not_claim_owner',
@@ -618,28 +450,28 @@ export const submitWork = defineTool({
     'claim_expired',
     'pr_closed',
     'issue_not_eligible',
+    'skill_outdated',
     'no_changes',
-    'file_mode',
-    'path_conflict',
-    'fork_not_ready',
-    'branch_moved',
     'github_refused',
     'branch_not_found',
     'branch_elsewhere',
     'not_from_start',
     'trailer_missing',
-    'branch_pushed',
   ],
   input: z
     .object({
       claimId: id,
-      branch: pushedBranch.optional().describe("The claim's branch as you pushed it. Send this or files."),
-      files: changedFiles
+      branch: pushedBranch.optional().describe("The claim's branch as you pushed it."),
+      // Older skills sent each changed file whole. The server reads none of
+      // it, and refuses the submit with skill_outdated, whose message names
+      // the update, so an older skill gets that in place of a schema error.
+      files: z
+        .array(z.unknown())
         .optional()
-        .describe('Every file changed from the start commit, for the server to commit. Send this or branch.'),
+        .describe("Refused: older skills sent the changed files here. Push the claim's branch, and send branch."),
       title: prTitle
         .optional()
-        .describe("The PR's title and the commit's first line, as the repo's own rules want them. Leave it out to use the issue's title."),
+        .describe("The PR's title, as the repo's own rules want it. Leave it out to use the issue's title."),
       summary: trimmedText(MAX_SUBMIT_NOTES).describe('What the change does. It starts the PR description.'),
       checks: trimmedText(MAX_SUBMIT_NOTES).describe('What you checked, like tests and lint runs, in your own words.'),
       agent: agentName,
@@ -649,26 +481,16 @@ export const submitWork = defineTool({
         .describe(
           'Tokens spent on this claim since its last submit, or since it was made, when the harness can estimate them. The server adds up the estimates of every submit.',
         ),
-      onto: commitSha
-        .optional()
-        .describe(
-          "With files: the head of the claim's branch that your files build on, after a branch_moved refusal named it. The files are then every file changed from it, on this submit and the later ones.",
-        ),
     })
     .superRefine((input, ctx) => {
-      if ((input.branch === undefined) === (input.files === undefined)) {
-        ctx.addIssue({ code: 'custom', path: ['branch'], message: 'send branch or files, and not both' });
-      }
-      if (input.onto !== undefined && input.files === undefined) {
-        ctx.addIssue({ code: 'custom', path: ['onto'], message: 'goes with files only' });
+      if (input.branch === undefined && input.files === undefined) {
+        ctx.addIssue({ code: 'custom', path: ['branch'], message: "must name the claim's branch as you pushed it" });
       }
     }),
   output: z.object({
     claimId: id,
     issue: issueRef,
     state: claimStateSchema,
-    /** How the work reached the branch: the server committed files, or the agent pushed it. */
-    source: submissionSourceSchema,
     commit: z.object({ sha: commitSha, url: webUrl }),
     branch: z.object({ repo: repoName, name: branchName, url: webUrl }),
     /** The change from the start commit, on GitHub. */
@@ -677,19 +499,16 @@ export const submitWork = defineTool({
     pr: prRefSchema.nullable(),
     /** Why the work went to the donor's review queue, or null when it didn't. */
     reviewReason: reviewReasonSchema.nullable(),
-    /** In automatic mode, pushed work with nothing to hold it is cleared to open: how to open it. */
+    /** In automatic mode, work with nothing to hold it is cleared to open: how to open it. */
     toOpen: prToOpenSchema.nullable(),
   }),
   text: (out) => {
-    const committed =
-      out.source === 'branch'
-        ? `Took ${out.commit.sha.slice(0, 7)} on ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`
-        : `Committed ${out.commit.sha.slice(0, 7)} to ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`;
-    if (out.pr) return lines(committed, `PR #${String(out.pr.number)}: ${out.pr.url}`);
-    if (out.toOpen) return lines(committed, toOpenText(out.claimId, out.toOpen), `Diff: ${out.diffUrl}`);
+    const took = `Took ${out.commit.sha.slice(0, 7)} on ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`;
+    if (out.pr) return lines(took, `PR #${String(out.pr.number)}: ${out.pr.url}`);
+    if (out.toOpen) return lines(took, toOpenText(out.claimId, out.toOpen), `Diff: ${out.diffUrl}`);
     const reason = out.reviewReason ?? 'pr_refused';
     return lines(
-      committed,
+      took,
       `The work is in the donor's review queue because ${describeReviewReason(reason)}. ${nextStep(reason)}`,
       `Diff: ${out.diffUrl}`,
     );
@@ -835,7 +654,7 @@ export const myWork = defineTool({
           out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
           out.readInPart.length > 0 && renderReadInPart(out.readInPart),
           out.readyToOpen.length > 0 &&
-            `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff. One that is cleared already says how to open it:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
+            `Ready to open as a PR (${String(out.readyToOpen.length)}). Clear one with open_pr after the donor reads its diff. One that is cleared already says how to open it:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
           clearedBodies(out.readyToOpen),
           out.working.length > 0 &&
             `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
@@ -851,7 +670,7 @@ export const MAX_PR_DESCRIPTION = 60_000;
 export const openPr = defineTool({
   audience: 'donor',
   description:
-    "Open the PR for work in the donor's review queue, once the donor has read the diff. When the project asks for a person-written description, ask the donor to write it and pass it word for word. Don't draft it.",
+    "Clear the work in the donor's review queue to open as a PR, once the donor has read the diff. The answer gives the PR's title and body, the command that opens it with the donor's own tools, and GitHub's form for it. Then record the PR with record_pr. When the project asks for a person-written description, ask the donor to write it and pass it word for word. Don't draft it.",
   // A claim with a PR is refused with pr_already_opened before its PR's
   // state is read, so open_pr never gives pr_closed.
   refusals: [
@@ -866,7 +685,6 @@ export const openPr = defineTool({
     'description_required',
     'open_pr_cap',
     'issue_not_eligible',
-    'github_refused',
     'branch_moved',
   ],
   input: z.object({
@@ -879,17 +697,14 @@ export const openPr = defineTool({
     claimId: id,
     issue: issueRef,
     state: claimStateSchema,
-    /** The PR the server opened, for work submitted with files, or null. */
-    pr: prRefSchema.nullable(),
-    /** For work the agent pushed: how to open its PR, which the server cleared, or null. */
-    toOpen: prToOpenSchema.nullable(),
-    /** Another PR open on the issue on GitHub when this one opened, from anyone, or null. */
+    /** How to open the PR the server cleared, with the donor's own tools. */
+    toOpen: prToOpenSchema,
+    /** Another PR open on the issue on GitHub when the work was cleared, from anyone, or null. */
     prOnIssue: prRefSchema.nullable(),
   }),
   text: (out) =>
     lines(
-      out.pr && `Opened PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
-      out.toOpen && toOpenText(out.claimId, out.toOpen),
+      toOpenText(out.claimId, out.toOpen),
       out.prOnIssue && `Another PR is open on the issue too: ${out.prOnIssue.url}.`,
     ),
 });
@@ -908,7 +723,6 @@ export const recordPr = defineTool({
     'not_cleared',
     'pr_mismatch',
     'pr_already_opened',
-    'github_refused',
   ],
   input: z.object({
     claimId: id,

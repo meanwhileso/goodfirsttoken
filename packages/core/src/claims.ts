@@ -118,8 +118,8 @@ export type ClaimTimeline = z.infer<typeof claimTimelineSchema>;
 
 /**
  * A stored claim: who holds which issue, the commit the work starts from, and
- * the timeline. `submit_work` sends files relative to `startCommit`, so the
- * submit itself doesn't repeat it.
+ * the timeline. The claim's branch starts at `startCommit`, and `submit_work`
+ * checks that it does.
  */
 export const claimRecordSchema = z
   .object({

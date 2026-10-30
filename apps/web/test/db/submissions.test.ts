@@ -1,6 +1,6 @@
 import { newClaim, type ClaimRecord, type SubmissionRecord } from '@goodfirsttoken/core';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { getSubmission, getSubmissions, saveClaim, saveSubmission, setReviewReason } from '../../src/db';
+import { getSubmission, getSubmissions, saveClaim, saveSubmission } from '../../src/db';
 import { db, emptyDatabase, HOUR, priya, refusal, repo, sha, signIn, t0 } from './helpers';
 
 // The submissions table: each claim's branch and its latest submit. Every
@@ -72,15 +72,6 @@ describe('submissions', () => {
     expect(await getSubmission(db, 'c_1')).toEqual(later);
     expect([...(await getSubmissions(db, ['c_1', 'c_2', 'c_3'])).keys()].sort()).toEqual(['c_1', 'c_2']);
     expect(await getSubmission(db, 'c_3')).toBeNull();
-  });
-
-  test("a work's reason for waiting can change once GitHub didn't open its PR", async () => {
-    await saveSubmission(db, submission('c_1', { reviewReason: null }));
-
-    const changed = await setReviewReason(db, 'c_1', 'pr_refused');
-
-    expect(changed?.reviewReason).toBe('pr_refused');
-    expect(await setReviewReason(db, 'c_3', 'pr_refused')).toBeNull();
   });
 
   test('a submit for a claim the claims table lacks, or one that breaks its schema, is refused', async () => {
