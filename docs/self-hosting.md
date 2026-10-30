@@ -49,10 +49,9 @@ in step 5.
    - On workers.dev: open Workers & Pages once, so your account has a
      workers.dev subdomain, and note it. The site is then at
      `<WORKER_NAME>.<your subdomain>.workers.dev`.
-4. **Leave the resources to the deploy.** The deploy creates the D1 database
-   and the queues when they are missing. Wrangler creates the KV namespace on
-   the first deploy and keeps using it. To use a D1 database or KV namespace
-   you already have, set its ID in step 4.
+4. **Leave the resources to the deploy.** The deploy creates the D1 database,
+   the queues, and the KV namespace when they are missing. To use a D1
+   database or KV namespace you already have, set its ID in step 4.
 5. **Make a credential.** Each environment uses one of these two forms:
    - **An API token.** In the dashboard, go to My Profile, API Tokens, and
      Create Token. Start from the Edit Cloudflare Workers template, and add
@@ -175,7 +174,7 @@ variables. In a private repo, either works.
 | `CLOUDFLARE_ACCOUNT_ID` | Yes | Your Cloudflare account ID. |
 | `WORKER_NAME` | Yes | The environment's Worker name from step 2. The D1 database is `<WORKER_NAME>-db`, and the queues are `<WORKER_NAME>-feed`, its dead-letter queue `<WORKER_NAME>-feed-dlq`, `<WORKER_NAME>-crawl`, and its dead-letter queue `<WORKER_NAME>-crawl-dlq`. |
 | `DB_ID` | No | The ID of a D1 database to use. When it's empty, the deploy uses `<WORKER_NAME>-db`, and creates it if it's missing. |
-| `OAUTH_KV_ID` | No | The ID of a KV namespace for the grants agents hold when they connect to the MCP server. When it's empty, Wrangler creates one on the first deploy and keeps using it. |
+| `OAUTH_KV_ID` | No | The ID of a KV namespace for the grants agents hold when they connect to the MCP server. When it's empty, the deploy uses the namespace the Worker is already bound to. A Worker with none gets `<WORKER_NAME>-oauth-kv`, which the deploy creates if it's missing. |
 | `SIGN_IN_LIMITER_NAMESPACE_ID` | Yes | A whole number you pick for the rate limiter on sign-in, like `1001`. It names the limiter within your Cloudflare account, and there is nothing to create. If staging and production share an account, give them different numbers. |
 | `MCP_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1002`, for the rate limiter on the MCP server's tool calls. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
 | `TOKEN_LIMITER_NAMESPACE_ID` | Yes | Another whole number you pick, like `1003`, for the rate limiter on the MCP server's token endpoint, where agents trade codes and refresh tokens. It works like `SIGN_IN_LIMITER_NAMESPACE_ID`, and needs a number no other limiter in the account uses. |
