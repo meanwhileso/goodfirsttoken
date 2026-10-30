@@ -7,18 +7,26 @@ onlyBuiltDependencies:
   - esbuild
   - workerd
 
-# The Workers test pool pins miniflare 5.20260815.0-alpha, which pins sharp
-# 0.35.2, with GHSA-rgj7-g3m4-5g8c. This moves that one pin to the fixed
-# 0.35.4. It does nothing once the pool's miniflare changes. Remove it then.
+# The Workers test pool, @cloudflare/vitest-pool-workers 0.22.0, pins zod
+# 4.4.3 and miniflare 5.20260815.0-alpha. That miniflare pins sharp 0.35.2
+# and undici 7.29.0. The pool's latest release, 0.23.0, pins the same
+# versions. Each of the three has advisories, fixed in these versions:
 #
-# Both miniflare versions, the Workers test pool's and the one wrangler and
-# the Vite plugin use, pin undici 7.29.0, with GHSA-3wwx-pv8p-q78v and
-# GHSA-w293-vg96-wgc3. This moves that one pin to the fixed 7.29.1. It does
-# nothing once miniflare pins a fixed undici. Remove it then. wrangler, the
-# Vite plugin, and the test pool also bundle their own copy of undici 7.29.0
-# into their built code, which no override reaches, until they upgrade.
-# They run in local development and the tests, and wrangler and the Vite
-# plugin in the deploy job too. The Worker loads none of them.
+#   sharp   0.35.5  GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w
+#   undici  7.30.1  GHSA-xjj6-f33q-929c and seven more
+#   zod     4.6.6   GHSA-mrhx-c7xc-m3w5
+#
+# These overrides move the pool's pins to fixed versions. Each one does
+# nothing once the pool pins a fixed version. Remove it then. The miniflare
+# that wrangler and the Vite plugin use already pins the fixed sharp and
+# undici.
+#
+# The test pool, and the wrangler 4.124.0 it pins, also bundle their own
+# copy of undici 7.29.0 into their built code, which no override reaches.
+# Dependabot can't see a bundled copy. They run only in the tests. The
+# Worker loads neither. The wrangler and Vite plugin this app depends on
+# bundle the fixed undici 7.30.1.
 overrides:
-  miniflare@5.20260815.0-alpha>sharp: 0.35.4
-  undici@7.29.0: 7.29.1
+  miniflare@5.20260815.0-alpha>sharp: 0.35.5
+  undici@7.29.0: 7.30.1
+  '@cloudflare/vitest-pool-workers@0.22.0>zod': 4.6.7

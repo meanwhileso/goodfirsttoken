@@ -124,7 +124,7 @@ The rules are in [how-it-works.md](how-it-works.md#signing-in).
 | `src/auth/permissions.ts` | `requirePermission` and the named permissions |
 | `src/auth/settings.ts` | Reads the settings sign-in needs, with the development stand-ins, and the admins' GitHub IDs |
 
-- **Better Auth 1.7.6, pinned,** with its GitHub provider and
+- **Better Auth 1.7.14, pinned,** with its GitHub provider and
   `encryptOAuthTokens` on. It talks to D1 through its Kysely adapter, which
   has a D1 dialect. At its first request in each isolate, Better Auth checks
   that the tables have every column it expects. So one instance is kept per
@@ -273,11 +273,11 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
     Unlike Disconnect, both revoke the token before they delete the row,
     through `endLapsedConnection`, and keep the row when GitHub fails, since
     a lapsed grant can't be used and can wait for the next try.
-- **The MCP TypeScript SDK 2.1.0, pinned.** `@modelcontextprotocol/server`'s
+- **The MCP TypeScript SDK 2.4.0, pinned.** `@modelcontextprotocol/server`'s
   `createMcpHandler` serves both the 2026-07-28 protocol and 2025 clients,
   with a new `McpServer` for each request, so nothing is kept between
   requests and no Durable Object is needed. The example's `McpAgent` needs
-  one. The tests use `@modelcontextprotocol/client` 2.1.0 as the agent.
+  one. The tests use `@modelcontextprotocol/client` 2.4.0 as the agent.
 - **The page is a TanStack route.** Its server function checks the request
   and starts the consent, and sets the library's headers: the cookie,
   `no-store`, and the two that keep the page out of frames. It never
@@ -349,7 +349,7 @@ The rules are in [how-it-works.md](how-it-works.md#connecting-an-agent).
 - **Over a limit, the OAuth routes answer in OAuth's terms.** At
   `/oauth/register` and `/oauth/token` the answer is `429` with a JSON body
   whose `error` is `temporarily_unavailable`, `Retry-After: 60`, and
-  `no-store`. `@modelcontextprotocol/client` 2.1.0 reads any other body as a
+  `no-store`. `@modelcontextprotocol/client` 2.4.0 reads any other body as a
   server error, and on a refresh a server error makes it drop to a new sign-in
   in the browser, which a headless agent can't finish. With this body it
   throws, keeps its tokens, and can refresh again later. A request with an
@@ -990,9 +990,9 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
   protocol version `2026-01-26`.
 - **The SDK and the MCP SDK.** The extension's server helpers,
   `registerAppTool` and `registerAppResource`, take
-  `@modelcontextprotocol/server` 2.x as a peer, which 2.1.0 is, and only add
+  `@modelcontextprotocol/server` 2.x as a peer, which 2.4.0 is, and only add
   the MIME type and `_meta` through `McpServer`'s own `registerTool` and
-  `registerResource`. `apps.ts` does the same with 2.1.0's API, so the Worker
+  `registerResource`. `apps.ts` does the same with 2.4.0's API, so the Worker
   takes no new dependency. The SDK's `App`, the view's side, brings zod and
   the MCP SDK's protocol with it, 418 KB bundled. A view needs a handful of
   messages, `ui/initialize`, the tool's input and answer, `tools/call`,

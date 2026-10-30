@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
-import { getRequest, getResponseHeaders } from '@tanstack/react-start/server';
+import { appendResponseHeader, getRequest, setResponseHeader } from '@tanstack/react-start/server';
 import { openConsent } from './authorize';
 import { PAGE_STATUS_HEADER } from './paths';
 
@@ -16,11 +16,10 @@ export const loadConsent = createServerFn({ method: 'GET' })
   .validator((search: unknown) => (typeof search === 'string' ? search : ''))
   .handler(async ({ data: search }) => {
     const outcome = await openConsent(getRequest(), search);
-    const headers = getResponseHeaders();
     for (const [name, value] of outcome.headers) {
-      if (name === 'set-cookie') headers.append(name, value);
-      else headers.set(name, value);
+      if (name === 'set-cookie') appendResponseHeader(name, value);
+      else setResponseHeader(name, value);
     }
-    if (outcome.status !== 200) headers.set(PAGE_STATUS_HEADER, String(outcome.status));
+    if (outcome.status !== 200) setResponseHeader(PAGE_STATUS_HEADER, String(outcome.status));
     return outcome.page;
   });
