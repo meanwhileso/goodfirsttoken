@@ -2244,7 +2244,7 @@ describe('clearing pushed work, and recording its PR', () => {
     expect(toOpen.body).toContain(`Closes #${String(numberOf(issue))}`);
     expect(toOpen.body).toContain('Written with a coding agent through Good First Token.');
     expect(toOpen.command).toBe(
-      `gh pr create --repo ${APP} --head priya:${name} --base 'main' --title 'Keep the trailing slash in rewrites' --body-file pr-body.md`,
+      `gh pr create --repo ${APP} --head priya:${name} --base 'main' --title 'Keep the trailing slash in rewrites' --body-file -`,
     );
     const form = new URL(toOpen.compareUrl);
     expect(`${form.origin}${form.pathname}`).toBe(`${github.webUrl}/${APP}/compare/main...priya:${name}`);
@@ -2281,9 +2281,40 @@ describe('clearing pushed work, and recording its PR', () => {
     const held = await send(second, two);
     const refused = await call(priya, 'open_pr', { claimId: two.claimId });
 
+    const reclear = await call(priya, 'open_pr', { claimId: one.claimId });
+
     expect(cleared.structuredContent).toMatchObject({ reviewReason: 'ready_to_open' });
     expect(held.structuredContent).toMatchObject({ reviewReason: 'open_pr_cap', toOpen: null });
     expect(refusalOf(refused)).toBe('open_pr_cap');
+    // A claim's own clearance doesn't count against clearing it again.
+    expect(reclear.structuredContent).toMatchObject({ pr: null, toOpen: { head: `priya:${branchOf(first, one.claimId)}` } });
+  });
+
+  test('a submit with files in automatic mode counts cleared work toward the cap, and opens no PR past it', async () => {
+    await project(APP, { ...automatic, openPrsPerDonor: 1 });
+    const [first, second] = [await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    const one = await claim(priya, first);
+    const two = await claim(priya, second);
+    const name = branchOf(first, one.claimId);
+    const head = push('priya/sample-app', name, one.start, 'priya', { 'a.txt': 'a\n' });
+    await call(priya, 'submit_work', { claimId: one.claimId, branch: { repo: 'priya/sample-app', name, head }, ...NOTES });
+
+    const files = await submit(priya, two.claimId, { 'b.txt': 'b\n' });
+
+    expect(files.structuredContent).toMatchObject({ pr: null, reviewReason: 'open_pr_cap' });
+  });
+
+  test("a record_pr retried after the PRs table missed the PR adds it there", async () => {
+    const { priya, claimId, submitted } = await pushed();
+    const number = await openAs('priya', submitted.structuredContent?.toOpen as ToOpen);
+    await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+    await env.DB.prepare('DELETE FROM prs WHERE claim_id = ?').bind(claimId).run();
+
+    const again = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+
+    expect(again.structuredContent).toMatchObject({ state: 'pr_opened' });
+    expect(await getPr(env.DB, claimId)).toMatchObject({ pr: prOf(APP, number), state: 'open' });
   });
 
   test('record_pr records the PR the agent opened from the cleared commit, once, and the PR job follows it', async () => {

@@ -43,6 +43,7 @@ import {
   commitMessage,
   hasTrailer,
   isWorkflowPath,
+  closingLine,
   prBody,
   pullMismatch,
   redacted,
@@ -638,7 +639,10 @@ export async function submitWork(
   const diffFrom = facts.head ?? claim.startCommit;
   const lines = await writer.lineCounts(target, diffFrom, committed.sha);
   const prs = await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name]);
-  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  // Claims cleared to open, with no PR yet, count as open PRs.
+  const openPrs =
+    ((await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0) +
+    ((await countClearedByProject(env.DB, donor.githubId, now, claim.id)).get(lower(project.repo)) ?? 0);
   // Until onto builds on someone else's push, the branch holds only the
   // claim's submits, which change the submitted paths and no others. After
   // it, only GitHub's comparison names what the branch changes, so one too
@@ -914,7 +918,7 @@ function prToOpen(facts: RepoFacts & { defaultBranch: string }, submission: Subm
     base: facts.defaultBranch,
     title: submission.title,
     body,
-    command: `gh pr create --repo ${facts.name} --head ${head} --base ${shellWord(facts.defaultBranch)} --title ${shellWord(submission.title)} --body-file pr-body.md`,
+    command: `gh pr create --repo ${facts.name} --head ${head} --base ${shellWord(facts.defaultBranch)} --title ${shellWord(submission.title)} --body-file -`,
     compareUrl: `${gitHubUrls().web}/${facts.name}/compare/${encodePath(facts.defaultBranch)}...${owner}:${encodePath(submission.branch)}?${query.toString()}`,
   };
 }
@@ -942,7 +946,7 @@ async function clear(
     codeRepo: facts.name,
     disclosure: project.settings.disclosure,
   });
-  await setClearance(env.DB, claim.id, { commit: submission.commit, body, at: now });
+  await setClearance(env.DB, claim.id, submission.commit, { commit: submission.commit, body, at: now });
   return prToOpen(facts, submission, body);
 }
 
@@ -1027,8 +1031,7 @@ export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: n
  * Records a PR the agent opened for cleared work on the claim: its room
  * first, with when GitHub made it, so a PR made before the claim expired
  * counts, then the PRs table, whose job follows it. A second record of the
- * same PR changes nothing. The job that finds PRs from cleared claims'
- * branches records them this way too.
+ * same PR changes nothing.
  */
 export async function recordPull(claim: ClaimRecord, pull: PullFacts): Promise<{ claim: ClaimRecord; pr: PrRef } | Refusal> {
   const pr: PrRef = { repo: pull.baseRepo, number: pull.number, url: pull.url };
@@ -1044,6 +1047,12 @@ export async function recordPull(claim: ClaimRecord, pull: PullFacts): Promise<{
     return { claim: held, pr };
   }
   return opened.refusal;
+}
+
+/** The part of a PR body `prBody` wrote before its closing line: the description. */
+function openingOf(body: string, closing: string): string {
+  const at = body.indexOf(`\n\n${closing}`);
+  return at === -1 ? body : body.slice(0, at);
 }
 
 /** A PR's repo and number from its link on GitHub, or null for another link. */
@@ -1075,8 +1084,12 @@ export async function recordPr(caller: Caller, input: ToolInput<'record_pr'>): P
     return refuse(refusal('pr_mismatch', `${input.pr} isn't a link to a PR on GitHub, so nothing was recorded. Send the PR's link, like ${gitHubUrls().web}/owner/repo/pull/12.`));
   }
   if (claim.pr !== null) {
-    if (lower(claim.pr.repo) === lower(named.repo) && claim.pr.number === named.number) return result({ claim, pr: claim.pr });
-    return refuse(refusal('pr_already_opened', `Claim ${claim.id} already has its PR, ${claim.pr.url}.`));
+    if (lower(claim.pr.repo) !== lower(named.repo) || claim.pr.number !== named.number) {
+      return refuse(refusal('pr_already_opened', `Claim ${claim.id} already has its PR, ${claim.pr.url}.`));
+    }
+    // A record the PRs table missed, as when a call died after the room took it, is added now.
+    if ((await getPr(env.DB, claim.id)) === null) await addPr(env.DB, { claimId: claim.id, pr: claim.pr, openedAt: Date.now() });
+    return result({ claim, pr: claim.pr });
   }
   const submission = await getSubmission(env.DB, claim.id);
   if (submission?.source !== 'branch' || submission.clearance === null) {
@@ -1096,6 +1109,7 @@ export async function recordPr(caller: Caller, input: ToolInput<'record_pr'>): P
     githubId: claim.githubId,
     issue: claim.issue,
     disclosure: project.settings.disclosure,
+    description: project.settings.personWrittenDescription ? openingOf(submission.clearance.body, closingLine(claim.issue, facts.name)) : null,
   });
   if (mismatch !== null) return refuse(refusal('pr_mismatch', `${mismatch} Nothing was recorded.`));
   const recorded = await recordPull(claim, pull);

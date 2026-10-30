@@ -518,7 +518,7 @@ const prToOpenSchema = z.object({
   base: z.string().min(1),
   title: z.string().min(1),
   body: z.string().min(1),
-  /** The GitHub CLI command, which reads the body from `pr-body.md`. */
+  /** The GitHub CLI command, which reads the body on standard input. */
   command: z.string().min(1),
   /** GitHub's form for the PR, with its title and body filled in. */
   compareUrl: webUrl,
@@ -528,12 +528,15 @@ type PrToOpen = z.infer<typeof prToOpenSchema>;
 /** How the agent opens a cleared PR, and records it. */
 function toOpenText(claimId: string, open: PrToOpen): string {
   return lines(
-    `Cleared claim ${claimId} to open as a PR. Write the body below to pr-body.md, word for word, then run:`,
+    `Cleared claim ${claimId} to open as a PR. Run this, with the body below on its standard input, word for word:`,
     indent(open.command, 2),
     `When gh can't open it, give the donor this link, which opens GitHub's form filled in: ${open.compareUrl}`,
     `Then call record_pr with the PR's link.`,
     `Title: ${open.title}`,
-    `Body:\n${indent(open.body, 2)}`,
+    'Body, between the lines:',
+    '---',
+    open.body,
+    '---',
   );
 }
 
@@ -843,6 +846,7 @@ export const recordPr = defineTool({
     'not_found',
     'not_claim_owner',
     'donor_blocked',
+    'project_not_open',
     'claim_released',
     'claim_expired',
     'not_cleared',

@@ -22,8 +22,8 @@ Nothing opens until the donor says so.
    link. When the answer names another PR open on the issue, tell them
    that too.
 6. For work you pushed, `open_pr` opens nothing. It answers with the PR to
-   open: write its body to pr-body.md, word for word, and run the GitHub
-   CLI command it gives. When the GitHub CLI can't, give the donor the link
+   open: run the GitHub CLI command it gives, with the body on its standard
+   input, word for word. When the GitHub CLI can't, give the donor the link
    to GitHub's form, which has the title and body filled in. Then call `record_pr`
    with the PR's link.
 7. When `openable` is false, the PR can't open now. Its `reason` says why, and

@@ -114,16 +114,20 @@ export async function saveSubmission(db: D1Database, submission: SubmissionRecor
 
 /**
  * Saves open_pr's clearance of the claim's latest submit, or ends it with
- * null. Null when the claim has no submission.
+ * null, while that submit's head is still `commit`. Null when the claim has
+ * no such submission, as after a submit made meanwhile.
  */
 export async function setClearance(
   db: D1Database,
   claimId: string,
+  commit: string,
   clearance: SubmissionRecord['clearance'],
 ): Promise<SubmissionRecord | null> {
   const row = await db
-    .prepare('UPDATE submissions SET cleared_commit = ?2, cleared_body = ?3, cleared_at = ?4 WHERE claim_id = ?1 RETURNING *')
-    .bind(mustParse(id, claimId, 'claimId'), clearance?.commit ?? null, clearance?.body ?? null, clearance?.at ?? null)
+    .prepare(
+      'UPDATE submissions SET cleared_commit = ?3, cleared_body = ?4, cleared_at = ?5 WHERE claim_id = ?1 AND commit_sha = ?2 RETURNING *',
+    )
+    .bind(mustParse(id, claimId, 'claimId'), commit, clearance?.commit ?? null, clearance?.body ?? null, clearance?.at ?? null)
     .first<SubmissionRow>();
   return row === null ? null : toSubmission(row);
 }

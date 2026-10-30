@@ -95,14 +95,32 @@ export interface ClearedPr {
   githubId: number;
   issue: string;
   disclosure: Disclosure;
+  /** The description the donor wrote, for a project that asks for one, or null. */
+  description: string | null;
+}
+
+/**
+ * Text as lines with their ends trimmed. GitHub's web form sends CR LF, and
+ * an agent may copy a body indented, so neither keeps text from matching.
+ */
+function plainLines(text: string): string[] {
+  return text.replaceAll('\r\n', '\n').split('\n').map((line) => line.trim());
+}
+
+/** Whether `text` holds `part` as whole lines, in order. */
+function holdsLines(text: string, part: string): boolean {
+  const lines = plainLines(text);
+  const wanted = plainLines(part.trim());
+  return lines.some((_, start) => wanted.every((line, i) => lines[start + i] === line));
 }
 
 /**
  * Why the PR isn't the one the clearance allows, or null when it is: in
  * the code repo, aimed at its default branch, open or merged, from the
  * claim's branch at the cleared head, opened by the claimant, with the
- * closing line and the disclosure text in its body, and no key or token in
- * its words.
+ * closing line, the disclosure text, and a description the donor wrote, as
+ * whole lines in its body, and no key or token in its words. A PR whose
+ * fork was deleted is judged by its branch name, head, and author.
  */
 export function pullMismatch(
   pull: Pick<PullFacts, 'url' | 'state' | 'authorId' | 'baseRepo' | 'baseRef' | 'headRepo' | 'headRef' | 'headSha' | 'title' | 'body'>,
@@ -112,7 +130,8 @@ export function pullMismatch(
   if (lower(pull.baseRepo) !== lower(cleared.codeRepo)) return `${pull.url} is in ${pull.baseRepo}, and the PR goes in ${cleared.codeRepo}.`;
   if (pull.baseRef !== cleared.defaultBranch) return `${pull.url} is aimed at ${pull.baseRef}, and the PR goes into ${cleared.defaultBranch}.`;
   if (pull.state === 'closed') return `${pull.url} closed without merging.`;
-  if (pull.headRepo === null || lower(pull.headRepo) !== lower(cleared.repo) || pull.headRef !== cleared.branch) {
+  const fromRepo = pull.headRepo === null || lower(pull.headRepo) === lower(cleared.repo);
+  if (!fromRepo || pull.headRef !== cleared.branch) {
     return `${pull.url} comes from ${pull.headRepo ?? 'a deleted fork'}:${pull.headRef}, and the claim's branch is ${cleared.repo}:${cleared.branch}.`;
   }
   if (pull.headSha !== cleared.commit) {
@@ -120,10 +139,13 @@ export function pullMismatch(
   }
   if (pull.authorId !== cleared.githubId) return `${pull.url} was opened by another GitHub account than the claim's.`;
   const closing = closingLine(cleared.issue, cleared.codeRepo);
-  if (!pull.body.includes(closing)) return `${pull.url}'s description lacks the line "${closing}". Add it with gh pr edit.`;
+  if (!holdsLines(pull.body, closing)) return `${pull.url}'s description lacks the line "${closing}". Add it with gh pr edit.`;
   const disclosure = cleared.disclosure.prBody;
-  if (disclosure !== null && !pull.body.includes(disclosure)) {
+  if (disclosure !== null && !holdsLines(pull.body, disclosure)) {
     return `${pull.url}'s description lacks the project's disclosure text, word for word. Add it with gh pr edit.`;
+  }
+  if (cleared.description !== null && !holdsLines(pull.body, cleared.description)) {
+    return `${pull.url}'s description lacks the description the donor wrote, word for word. Put it back with gh pr edit.`;
   }
   if (stripSecretsFromText(pull.title) !== pull.title || stripSecretsFromText(pull.body) !== pull.body) {
     return `${pull.url}'s title or description has what looks like a key or a token. Take it out with gh pr edit.`;
