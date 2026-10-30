@@ -157,6 +157,25 @@ export async function countClearedByProject(
   return new Map(results.map((row) => [row.project.toLowerCase(), row.n]));
 }
 
+/**
+ * The claims cleared to open with no PR recorded, oldest clearance first,
+ * that waited for review until `since` at least: released claims and claims
+ * with a PR are left out. The job that records cleared PRs reads these.
+ */
+export async function listClearedWithoutPr(db: D1Database, since: number): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.id AS id FROM submissions s JOIN claims c ON c.id = s.claim_id
+       WHERE s.cleared_at IS NOT NULL AND c.state IN ('awaiting_review', 'expired') AND c.pr_number IS NULL
+         AND c.submitted_at + ?1 > ?2
+         AND NOT EXISTS (SELECT 1 FROM prs p WHERE p.claim_id = c.id)
+       ORDER BY s.cleared_at, c.id`,
+    )
+    .bind(REVIEW_WINDOW_MS, since)
+    .all<{ id: string }>();
+  return results.map((row) => row.id);
+}
+
 /** The claim's latest submit, or null when it has none. */
 export async function getSubmission(db: D1Database, claimId: string): Promise<SubmissionRecord | null> {
   const row = await db

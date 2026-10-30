@@ -52,6 +52,8 @@ export interface PullFacts {
   authorId: number | null;
   baseRepo: string;
   baseRef: string;
+  /** The base repo's default branch, as GitHub gives it with the PR, or null when it doesn't. */
+  baseDefault: string | null;
   /** The repo it comes from, or null when that fork was deleted. */
   headRepo: string | null;
   headRef: string;
@@ -69,7 +71,7 @@ export function pullFacts(data: unknown): PullFacts | null {
     merged_at?: unknown;
     created_at?: unknown;
     user?: { id?: unknown } | null;
-    base?: { ref?: unknown; repo?: { full_name?: unknown } | null };
+    base?: { ref?: unknown; repo?: { full_name?: unknown; default_branch?: unknown } | null };
     head?: { ref?: unknown; sha?: unknown; repo?: { full_name?: unknown } | null };
     title?: unknown;
     body?: unknown;
@@ -96,6 +98,7 @@ export function pullFacts(data: unknown): PullFacts | null {
     authorId: typeof pull.user?.id === 'number' ? pull.user.id : null,
     baseRepo,
     baseRef: pull.base.ref,
+    baseDefault: typeof pull.base.repo?.default_branch === 'string' ? pull.base.repo.default_branch : null,
     headRepo: typeof headRepo === 'string' ? headRepo : null,
     headRef: pull.head.ref,
     headSha: pull.head.sha,
