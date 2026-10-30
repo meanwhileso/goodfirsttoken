@@ -28,15 +28,26 @@ import {
   getPr,
   getProject,
   getSubmission,
+  countClearedByProject,
   getSubmissions,
   listPersonClaims,
   saveSubmission,
+  setClearance,
   setReviewReason,
 } from '../db';
 import { checkIssueFacts, linkedPrs, readIssue, readRepoFacts, type GitHubIssue, type IssueRules, type RepoFacts } from '../donor/github';
-import { GitHubError } from '../github';
+import { GitHubError, gitHubUrls } from '../github';
 import { blockedRefusal, openPrRefusal, projectClosedRefusal, type Donor } from '../donor/rules';
-import { branchFor, commitMessage, hasTrailer, isWorkflowPath, prBody, redacted, reviewReason } from '../donor/work';
+import {
+  branchFor,
+  commitMessage,
+  hasTrailer,
+  isWorkflowPath,
+  prBody,
+  pullMismatch,
+  redacted,
+  reviewReason,
+} from '../donor/work';
 import {
   DonorWriter,
   NOT_READY,
@@ -47,6 +58,7 @@ import {
   type Addition,
   type Entry,
   type PathFacts,
+  type PullFacts,
 } from '../donor/writes';
 import { issueRoom } from '../rooms/issue-room';
 import {
@@ -662,6 +674,7 @@ export async function submitWork(
     deletions: lines?.deletions ?? null,
     reviewReason: reason,
     submittedAt: now,
+    clearance: null,
   });
 
   const urls = branchUrls(target, branch, diffFrom);
@@ -677,6 +690,7 @@ export async function submitWork(
         diffUrl: urls.diff,
         pr,
         reviewReason: why,
+        toOpen: null,
       }),
     );
   // A claim whose PR is open takes the commit on that PR's branch, which
@@ -808,7 +822,10 @@ async function submitPushed(
       others.push(pr);
     }
   }
-  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  // Claims cleared to open, with no PR yet, count as open PRs.
+  const openPrs =
+    ((await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0) +
+    ((await countClearedByProject(env.DB, donor.githubId, now, claim.id)).get(lower(project.repo)) ?? 0);
   const room = issueRoom(env.ISSUE_ROOM, claim.issue);
   const recorded = await room.submit({ claimId: claim.id, githubId: donor.githubId, tokenEstimate: input.tokenEstimate ?? null });
   if (!recorded.ok) return refuse(recorded.refusal);
@@ -824,7 +841,7 @@ async function submitPushed(
           personWrittenDescription: project.settings.personWrittenDescription,
           atOpenPrCap: openPrRefusal(project, openPrs) !== null,
         }) ?? 'ready_to_open');
-  await saveSubmission(env.DB, {
+  const saved = await saveSubmission(env.DB, {
     claimId: claim.id,
     source: 'branch',
     repo,
@@ -839,7 +856,10 @@ async function submitPushed(
     deletions: own.deletions,
     reviewReason: reason,
     submittedAt: now,
+    clearance: null,
   });
+  // In automatic mode, work with nothing to hold it is cleared to open now.
+  const toOpen = reason === 'ready_to_open' ? await clear(saved, work, facts, undefined, now) : null;
   const urls = branchUrls(repo, branch, diffFrom);
   const result = (state: ClaimRecord['state'], pr: PrRef | null, why: ReviewReason | null) =>
     answer(
@@ -853,6 +873,7 @@ async function submitPushed(
         diffUrl: urls.diff,
         pr,
         reviewReason: why,
+        toOpen,
       }),
     );
   // A claim whose PR is open takes the fixes on that PR's branch, which
@@ -862,6 +883,67 @@ async function submitPushed(
     return result('pr_opened', recorded.claim.pr, null);
   }
   return result(recorded.claim.state, null, reason);
+}
+
+/** How the agent opens a cleared PR, as open_pr and submit_work answer with it. */
+type PrToOpen = NonNullable<ToolOutput<'open_pr'>['toOpen']>;
+
+/** A path's parts, each encoded for a URL. */
+function encodePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/** Text as one shell word, in single quotes. */
+function shellWord(text: string): string {
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * How the agent opens the PR for pushed work: its head and base, its title
+ * and body, the GitHub CLI command, and GitHub's form for it with the title
+ * and body filled in.
+ * https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/using-query-parameters-to-create-a-pull-request
+ */
+function prToOpen(facts: RepoFacts & { defaultBranch: string }, submission: SubmissionRecord, body: string): PrToOpen {
+  const owner = submission.repo.slice(0, submission.repo.indexOf('/'));
+  const head = `${owner}:${submission.branch}`;
+  const query = new URLSearchParams({ quick_pull: '1', title: submission.title, body });
+  return {
+    repo: facts.name,
+    head,
+    base: facts.defaultBranch,
+    title: submission.title,
+    body,
+    command: `gh pr create --repo ${facts.name} --head ${head} --base ${shellWord(facts.defaultBranch)} --title ${shellWord(submission.title)} --body-file pr-body.md`,
+    compareUrl: `${gitHubUrls().web}/${facts.name}/compare/${encodePath(facts.defaultBranch)}...${owner}:${encodePath(submission.branch)}?${query.toString()}`,
+  };
+}
+
+/**
+ * Clears pushed work to open as a PR: saves the head it may open from and
+ * the PR's body, and answers with how to open it. A PR counts only from
+ * that head (docs/specs/agent-submits.md).
+ */
+async function clear(
+  submission: SubmissionRecord,
+  work: Work,
+  facts: RepoFacts & { defaultBranch: string },
+  description: string | undefined,
+  now: number,
+): Promise<PrToOpen> {
+  const { claim, project } = work;
+  const body = prBody({
+    description,
+    summary: submission.summary,
+    checks: submission.checks,
+    agent: submission.agent,
+    model: submission.model,
+    issue: claim.issue,
+    codeRepo: facts.name,
+    disclosure: project.settings.disclosure,
+  });
+  await setClearance(env.DB, claim.id, { commit: submission.commit, body, at: now });
+  return prToOpen(facts, submission, body);
 }
 
 /** What opening a claim's PR did: the PR, as open_pr answers with it, or why none opened. */
@@ -893,7 +975,10 @@ export async function openPrAs(caller: Caller, input: ToolInput<'open_pr'>, now:
       ),
     );
   }
-  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  // Claims cleared to open, with no PR yet, count as open PRs.
+  const openPrs =
+    ((await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0) +
+    ((await countClearedByProject(env.DB, donor.githubId, now, claim.id)).get(lower(project.repo)) ?? 0);
   const capped = openPrRefusal(project, openPrs);
   if (capped) return refused(capped);
 
@@ -920,14 +1005,101 @@ export async function openPrAs(caller: Caller, input: ToolInput<'open_pr'>, now:
       );
     }
   }
+  // Pushed work is cleared, and the agent opens its PR.
+  if (submission.source === 'branch') {
+    const toOpen = await clear(submission, work, facts, description, now);
+    return { ok: true, value: { claimId: claim.id, issue: claim.issue, state: claim.state, pr: null, toOpen, prOnIssue } };
+  }
   const opened = await openFor(writer, work, facts, submission, description);
   if (isRefusal(opened)) return refused(opened);
-  return { ok: true, value: { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue } };
+  return {
+    ok: true,
+    value: { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, toOpen: null, prOnIssue },
+  };
 }
 
 export async function openPr(caller: Caller, input: ToolInput<'open_pr'>, now: number): Promise<Answer> {
   const opened = await openPrAs(caller, input, now);
   return opened.ok ? answer(toolResult('open_pr', opened.value)) : refuse(opened.refusal);
+}
+
+/**
+ * Records a PR the agent opened for cleared work on the claim: its room
+ * first, with when GitHub made it, so a PR made before the claim expired
+ * counts, then the PRs table, whose job follows it. A second record of the
+ * same PR changes nothing. The job that finds PRs from cleared claims'
+ * branches records them this way too.
+ */
+export async function recordPull(claim: ClaimRecord, pull: PullFacts): Promise<{ claim: ClaimRecord; pr: PrRef } | Refusal> {
+  const pr: PrRef = { repo: pull.baseRepo, number: pull.number, url: pull.url };
+  const room = issueRoom(env.ISSUE_ROOM, claim.issue);
+  const opened = await room.openPr({ claimId: claim.id, githubId: claim.githubId, pr, madeAt: pull.createdAt });
+  if (opened.ok) {
+    await addPr(env.DB, { claimId: claim.id, pr, openedAt: pull.createdAt });
+    return { claim: opened.claim, pr };
+  }
+  const held = (await room.snapshot()).claims.find((c) => c.id === claim.id);
+  if (opened.refusal.code === 'pr_already_opened' && held?.pr != null && samePr(held.pr, pr)) {
+    await addPr(env.DB, { claimId: claim.id, pr, openedAt: pull.createdAt });
+    return { claim: held, pr };
+  }
+  return opened.refusal;
+}
+
+/** A PR's repo and number from its link on GitHub, or null for another link. */
+function pullOf(url: string): { repo: string; number: number } | null {
+  const web = gitHubUrls().web.replace(/\/+$/, '');
+  if (!url.startsWith(`${web}/`)) return null;
+  const match = /^([^/]+)\/([^/]+)\/pull\/([0-9]+)\/?$/.exec(url.slice(web.length + 1));
+  if (match === null) return null;
+  return { repo: `${match[1] ?? ''}/${match[2] ?? ''}`, number: Number(match[3]) };
+}
+
+/**
+ * record_pr: the PR the agent opened for work open_pr cleared, read with the
+ * donor's token and checked against the clearance before it is recorded.
+ */
+export async function recordPr(caller: Caller, input: ToolInput<'record_pr'>): Promise<Answer> {
+  const found = await ownClaim(caller, input.claimId);
+  if (isRefusal(found)) return refuse(found);
+  const donor = await donorOf(caller);
+  const blocked = await blockedRefusal(env.DB, donor);
+  if (blocked) return refuse(blocked);
+  const project = await getProject(env.DB, found.project);
+  if (project === null) return refuse(refusal('not_found', `${found.project} is no longer a project.`));
+  const claim = (await issueRoom(env.ISSUE_ROOM, found.issue).snapshot()).claims.find((held) => held.id === found.id) ?? found;
+  const result = (recorded: { claim: ClaimRecord; pr: PrRef }) =>
+    answer(toolResult('record_pr', { claimId: claim.id, issue: claim.issue, state: recorded.claim.state, pr: recorded.pr }));
+  const named = pullOf(input.pr);
+  if (named === null) {
+    return refuse(refusal('pr_mismatch', `${input.pr} isn't a link to a PR on GitHub, so nothing was recorded. Send the PR's link, like ${gitHubUrls().web}/owner/repo/pull/12.`));
+  }
+  if (claim.pr !== null) {
+    if (lower(claim.pr.repo) === lower(named.repo) && claim.pr.number === named.number) return result({ claim, pr: claim.pr });
+    return refuse(refusal('pr_already_opened', `Claim ${claim.id} already has its PR, ${claim.pr.url}.`));
+  }
+  const submission = await getSubmission(env.DB, claim.id);
+  if (submission?.source !== 'branch' || submission.clearance === null) {
+    return refuse(refusal('not_cleared', `Claim ${claim.id}'s work isn't cleared to open, so nothing was recorded. Submit the pushed branch with submit_work, then clear it with open_pr.`));
+  }
+  const writer = new DonorWriter(await tokenOf(caller));
+  const facts = await codeRepo(writer, project);
+  if (isRefusal(facts)) return refuse(facts);
+  const pull = await writer.pull(named.repo, named.number);
+  if (pull === null) return refuse(refusal('pr_mismatch', `GitHub shows no PR at ${input.pr}, so nothing was recorded.`));
+  const mismatch = pullMismatch(pull, {
+    codeRepo: facts.name,
+    defaultBranch: facts.defaultBranch,
+    repo: submission.repo,
+    branch: submission.branch,
+    commit: submission.clearance.commit,
+    githubId: claim.githubId,
+    issue: claim.issue,
+    disclosure: project.settings.disclosure,
+  });
+  if (mismatch !== null) return refuse(refusal('pr_mismatch', `${mismatch} Nothing was recorded.`));
+  const recorded = await recordPull(claim, pull);
+  return isRefusal(recorded) ? refuse(recorded) : result(recorded);
 }
 
 /** Work in the donor's review queue, as my_work lists it and /me shows it. */

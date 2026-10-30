@@ -87,7 +87,7 @@ interface PathCall {
   calls: RecordedCall[];
 }
 
-const PATHS = new Set(['submit_work', 'open_pr', 'my_work']);
+const PATHS = new Set(['submit_work', 'open_pr', 'record_pr', 'my_work']);
 let pathCalls: PathCall[] = [];
 
 afterEach(({ task }) => {
@@ -531,7 +531,7 @@ describe('automatic and reviewed', () => {
     ]);
     const [pull] = pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === branch);
     if (!pull) throw new Error('no PR');
-    expect(opened.structuredContent).toEqual({ claimId, issue, state: 'pr_opened', pr: prOf(APP, pull.number), prOnIssue: null });
+    expect(opened.structuredContent).toEqual({ claimId, issue, state: 'pr_opened', pr: prOf(APP, pull.number), toOpen: null, prOnIssue: null });
     expect(refusalOf(twice)).toBe('pr_already_opened');
     expect(after.structuredContent?.readyToOpen).toEqual([]);
     expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'open' });
@@ -1814,6 +1814,18 @@ describe('a branch the agent pushed', () => {
     return call(d, 'submit_work', { claimId, branch, ...NOTES, ...extra });
   }
 
+  /** Clears the work with open_pr, opens its PR as the donor's own gh would, and records it. */
+  async function openAndRecord(d: Donor, claimId: string): Promise<Result> {
+    const cleared = await call(d, 'open_pr', { claimId });
+    const toOpen = cleared.structuredContent?.toOpen as { repo: string; head: string; base: string; title: string; body: string };
+    await asGitHub(agentToken(d.login), 'POST', `/repos/${toOpen.repo}/pulls`, toOpen);
+    const [pull] = Object.values(repoState(toOpen.repo).issues).filter(
+      (issue) => issue.pull !== null && issue.state === 'open' && `${issue.pull.head.owner}:${issue.pull.head.ref}` === toOpen.head,
+    );
+    if (!pull) throw new Error('no PR');
+    return call(d, 'record_pr', { claimId, pr: `${github.webUrl}/${toOpen.repo}/pull/${String(pull.number)}` });
+  }
+
   test("claim_issue names the claim's branch and whether the donor can push to the code repo", async () => {
     await project(APP, reviewed);
     const [first, second] = [await tagged(APP), await tagged(APP)];
@@ -1832,7 +1844,7 @@ describe('a branch the agent pushed', () => {
     expect(textOf(forker)).toContain(`Commit on the branch ${branchOf(second, idOf(forker))}, and push it to the donor's fork of ${APP}.`);
   });
 
-  test("a branch pushed to the donor's fork is taken with GitHub reads alone, and waits for open_pr", async () => {
+  test("a branch pushed to the donor's fork is taken with GitHub reads alone, and in automatic mode is cleared to open", async () => {
     await project(APP, automatic);
     const issue = await tagged(APP);
     const priya = await donor('priya');
@@ -1850,7 +1862,8 @@ describe('a branch the agent pushed', () => {
       pr: null,
       reviewReason: 'ready_to_open',
     });
-    expect(textOf(result)).toContain('ready to open as a PR. Open the PR with open_pr.');
+    expect(result.structuredContent).toMatchObject({ toOpen: { repo: APP, head: `priya:${name}` } });
+    expect(textOf(result)).toContain('Then call record_pr');
     expect(writes(lastCalls())).toEqual([]);
     expect(await getSubmission(env.DB, claimId)).toMatchObject({
       source: 'branch',
@@ -2055,7 +2068,7 @@ describe('a branch the agent pushed', () => {
     const before = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
     spy.mockRestore();
     await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
-    await call(priya, 'open_pr', { claimId });
+    await openAndRecord(priya, claimId);
     const fix = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'b\n' });
     vi.spyOn(DonorWriter.prototype, 'comparison').mockImplementation(async function (this: DonorWriter, repo, base, to) {
       return base === head ? null : comparison.call(this, repo, base, to);
@@ -2155,7 +2168,7 @@ describe('a branch the agent pushed', () => {
     const name = branchOf(issue, claimId);
     const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
     await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
-    const opened = await call(priya, 'open_pr', { claimId });
+    const opened = await openAndRecord(priya, claimId);
     const same = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
     push('priya/sample-app', name, start, BY, { 'm.txt': 'm\n' }, 'Tidy up');
     const fix = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'b\n' });
@@ -2166,5 +2179,219 @@ describe('a branch the agent pushed', () => {
     expect(refusalOf(same)).toBe('no_changes');
     expect(fixed.structuredContent).toMatchObject({ state: 'pr_opened', source: 'branch', commit: { sha: fix } });
     expect(await getSubmission(env.DB, claimId)).toMatchObject({ commit: fix });
+  });
+});
+
+describe('clearing pushed work, and recording its PR', () => {
+  const TRAILED = 'Keep the trailing slash in rewrites\n\nAssisted-by: claude-code (claude-opus-5-5)';
+  const DAY = 24 * HOUR;
+
+  function push(repo: string, branch: string, from: string, by: string, files: Record<string, string | null>, message = TRAILED): string {
+    const state = repoState(repo);
+    state.branches[branch] ??= from;
+    return github.commitFiles(repo, files, by, { branch, message });
+  }
+
+  /** A claim of priya's on a new issue, with a pushed branch in her fork, submitted. */
+  async function pushed(settings: ProjectSettingsInput = automatic) {
+    await project(APP, settings);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'src/slash.ts': 'export const keepSlash = true;\n' });
+    const submitted = await call(priya, 'submit_work', { claimId, branch: { repo: 'priya/sample-app', name, head }, ...NOTES });
+    return { issue, priya, claimId, start, name, head, submitted };
+  }
+
+  interface ToOpen {
+    repo: string;
+    head: string;
+    base: string;
+    title: string;
+    body: string;
+    command: string;
+    compareUrl: string;
+  }
+
+  /** Opens the PR as the donor's own gh would, with the title and body the server gave. */
+  async function openAs(login: string, toOpen: ToOpen, extra: Record<string, unknown> = {}): Promise<number> {
+    await asGitHub(agentToken(login), 'POST', `/repos/${toOpen.repo}/pulls`, {
+      title: toOpen.title,
+      body: toOpen.body,
+      head: toOpen.head,
+      base: toOpen.base,
+      ...extra,
+    });
+    const head = typeof extra.head === 'string' ? extra.head : toOpen.head;
+    const [pull] = Object.values(repoState(toOpen.repo).issues).filter(
+      (issue) => issue.pull !== null && issue.state === 'open' && `${issue.pull.head.owner}:${issue.pull.head.ref}` === head,
+    );
+    if (!pull) throw new Error('no PR');
+    return pull.number;
+  }
+
+  const prUrl = (number: number) => `${github.webUrl}/${APP}/pull/${String(number)}`;
+
+  test("open_pr clears pushed work and gives the PR's title, body, command, and form, and writes nothing to GitHub", async () => {
+    const { priya, claimId, issue, name, head } = await pushed(reviewed);
+
+    const opened = await call(priya, 'open_pr', { claimId });
+
+    const toOpen = opened.structuredContent?.toOpen as ToOpen;
+    expect(opened.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null });
+    expect(toOpen).toMatchObject({ repo: APP, head: `priya:${name}`, base: 'main', title: 'Keep the trailing slash in rewrites' });
+    expect(toOpen.body).toContain(`Closes #${String(numberOf(issue))}`);
+    expect(toOpen.body).toContain('Written with a coding agent through Good First Token.');
+    expect(toOpen.command).toBe(
+      `gh pr create --repo ${APP} --head priya:${name} --base 'main' --title 'Keep the trailing slash in rewrites' --body-file pr-body.md`,
+    );
+    const form = new URL(toOpen.compareUrl);
+    expect(`${form.origin}${form.pathname}`).toBe(`${github.webUrl}/${APP}/compare/main...priya:${name}`);
+    expect(Object.fromEntries(form.searchParams)).toEqual({ quick_pull: '1', title: toOpen.title, body: toOpen.body });
+    expect(textOf(opened)).toContain('Then call record_pr');
+    expect(writes(lastCalls())).toEqual([]);
+    expect((await getSubmission(env.DB, claimId))?.clearance).toMatchObject({ commit: head, body: toOpen.body });
+  });
+
+  test('in automatic mode, a submit with nothing to hold it clears the work at once, and a later submit ends the clearance', async () => {
+    const { priya, claimId, name, start, submitted } = await pushed();
+    const again = push('priya/sample-app', name, start, 'priya', { 'src/slash.ts': 'export const keepSlash = false;\n' });
+
+    await call(priya, 'submit_work', { claimId, branch: { repo: 'priya/sample-app', name, head: again }, ...NOTES });
+
+    expect(submitted.structuredContent).toMatchObject({ reviewReason: 'ready_to_open', toOpen: { head: `priya:${name}` } });
+    expect(textOf(submitted)).toContain('Then call record_pr');
+    expect((await getSubmission(env.DB, claimId))?.clearance?.commit).toBe(again);
+  });
+
+  test('cleared work counts toward the open-PR cap, so a donor at the cap clears no more', async () => {
+    await project(APP, { ...automatic, openPrsPerDonor: 1 });
+    const [first, second] = [await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    const one = await claim(priya, first);
+    const two = await claim(priya, second);
+    const send = async (issue: string, c: { claimId: string; start: string }) => {
+      const name = branchOf(issue, c.claimId);
+      const head = push('priya/sample-app', name, c.start, 'priya', { 'a.txt': `${c.claimId}\n` });
+      return call(priya, 'submit_work', { claimId: c.claimId, branch: { repo: 'priya/sample-app', name, head }, ...NOTES });
+    };
+
+    const cleared = await send(first, one);
+    const held = await send(second, two);
+    const refused = await call(priya, 'open_pr', { claimId: two.claimId });
+
+    expect(cleared.structuredContent).toMatchObject({ reviewReason: 'ready_to_open' });
+    expect(held.structuredContent).toMatchObject({ reviewReason: 'open_pr_cap', toOpen: null });
+    expect(refusalOf(refused)).toBe('open_pr_cap');
+  });
+
+  test('record_pr records the PR the agent opened from the cleared commit, once, and the PR job follows it', async () => {
+    const { priya, claimId, issue, submitted } = await pushed();
+    const number = await openAs('priya', submitted.structuredContent?.toOpen as ToOpen);
+
+    const recorded = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+    const again = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+
+    expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, number) });
+    expect(again.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, number) });
+    expect(await getPr(env.DB, claimId)).toMatchObject({ pr: prOf(APP, number), state: 'open' });
+    expect((await issueRoom(env.ISSUE_ROOM, issue).history()).filter((e) => e.kind === 'pr_opened')).toHaveLength(1);
+  });
+
+  test('record_pr refuses work not cleared, and a PR from another commit, branch, author, or base, or missing the closing line or the disclosure', async () => {
+    const { priya, claimId, issue, name, start, submitted } = await pushed(reviewed);
+    const notCleared = await call(priya, 'record_pr', { claimId, pr: prUrl(1) });
+    const toOpen = (await call(priya, 'open_pr', { claimId })).structuredContent?.toOpen as ToOpen;
+    expect(submitted.structuredContent).toMatchObject({ toOpen: null });
+    const wrongLink = await call(priya, 'record_pr', { claimId, pr: 'https://example.com/pull/1' });
+
+    // Another author: sam opens a PR from priya's branch.
+    await donor('sam');
+    const bySam = await openAs('sam', toOpen);
+    const authored = await call(priya, 'record_pr', { claimId, pr: prUrl(bySam) });
+    github.closePullRequest(APP, bySam, 'sam');
+    // Another base.
+    repoState(APP).branches.develop = repoState(APP).branches.main ?? '';
+    const onDevelop = await openAs('priya', toOpen, { base: 'develop' });
+    const based = await call(priya, 'record_pr', { claimId, pr: prUrl(onDevelop) });
+    github.closePullRequest(APP, onDevelop, 'priya');
+    // No closing line, then fixed on GitHub.
+    const bare = await openAs('priya', toOpen, { body: 'Keeps the slash.\n\nWritten with a coding agent through Good First Token.' });
+    const unclosed = await call(priya, 'record_pr', { claimId, pr: prUrl(bare) });
+    const record = repoState(APP).issues[String(bare)];
+    if (!record) throw new Error('no PR');
+    record.body = toOpen.body.replace('Written with a coding agent through Good First Token.', '');
+    const undisclosed = await call(priya, 'record_pr', { claimId, pr: prUrl(bare) });
+    record.body = toOpen.body;
+    // A push after the clearance moves the head off the cleared commit.
+    push('priya/sample-app', name, start, 'priya', { 'b.txt': 'b\n' });
+    const moved = await call(priya, 'record_pr', { claimId, pr: prUrl(bare) });
+
+    expect(refusalOf(notCleared)).toBe('not_cleared');
+    expect(refusalOf(wrongLink)).toBe('pr_mismatch');
+    expect(refusalOf(authored)).toBe('pr_mismatch');
+    expect(textOf(authored)).toContain('opened by another GitHub account');
+    expect(refusalOf(based)).toBe('pr_mismatch');
+    expect(textOf(based)).toContain('is aimed at develop');
+    expect(refusalOf(unclosed)).toBe('pr_mismatch');
+    expect(textOf(unclosed)).toContain(`lacks the line "Closes #${String(numberOf(issue))}"`);
+    expect(refusalOf(undisclosed)).toBe('pr_mismatch');
+    expect(textOf(undisclosed)).toContain("lacks the project's disclosure text");
+    expect(refusalOf(moved)).toBe('pr_mismatch');
+    expect(textOf(moved)).toContain('and open_pr cleared');
+    expect(await getPr(env.DB, claimId)).toBeNull();
+  });
+
+  test('a refused PR records once it is fixed on GitHub', async () => {
+    const { priya, claimId, submitted } = await pushed();
+    const toOpen = submitted.structuredContent?.toOpen as ToOpen;
+    const number = await openAs('priya', toOpen, { body: 'Keeps the slash.' });
+    const refused = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+    const record = repoState(APP).issues[String(number)];
+    if (!record) throw new Error('no PR');
+    record.body = toOpen.body;
+
+    const recorded = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+
+    expect(refusalOf(refused)).toBe('pr_mismatch');
+    expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, number) });
+  });
+
+  test('a PR still records after the maintainers relabel or assign the issue, with another PR on it, and once merged', async () => {
+    const { priya, claimId, issue, submitted } = await pushed();
+    const number = await openAs('priya', submitted.structuredContent?.toOpen as ToOpen);
+    github.unlabelIssue(APP, numberOf(issue), 'help wanted', BY);
+    github.assignIssue(APP, numberOf(issue), 'sample-maintainer', BY);
+    github.openPullRequest(APP, { title: 'Another try', body: `Closes #${String(numberOf(issue))}`, by: 'sam' });
+    github.mergePullRequest(APP, number, BY);
+
+    const recorded = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+
+    expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, number) });
+  });
+
+  test('a PR made before the work expired records after it expires, and one made after does not', async () => {
+    const { priya, claimId, submitted } = await pushed();
+    const toOpen = submitted.structuredContent?.toOpen as ToOpen;
+    const number = await openAs('priya', toOpen);
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now + 8 * DAY);
+    const recorded = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+    vi.useRealTimers();
+
+    const late = await pushed();
+    const lateNumber = await openAs('priya', late.submitted.structuredContent?.toOpen as ToOpen);
+    const record = repoState(APP).issues[String(lateNumber)];
+    if (!record) throw new Error('no PR');
+    record.createdAt = new Date(now + 7 * DAY + HOUR).toISOString();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now + 8 * DAY);
+    const tooLate = await call(late.priya, 'record_pr', { claimId: late.claimId, pr: prUrl(lateNumber) });
+    vi.useRealTimers();
+
+    expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, number) });
+    expect(refusalOf(tooLate)).toBe('claim_expired');
   });
 });

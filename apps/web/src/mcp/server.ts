@@ -11,7 +11,7 @@ import * as donor from './donor';
 import { pauseProject, projectStatus, registerProject, requestRemoval, updateProject } from './maintainer';
 import { MCP_PATH } from './paths';
 import type { AgentProps } from './provider';
-import { openPr, submitWork } from './submit';
+import { openPr, recordPr, submitWork } from './submit';
 
 // The MCP server at /mcp, over streamable HTTP. The OAuth provider checks the
 // access token first and hands this handler the grant's props: who the
@@ -112,6 +112,7 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
     run(() => submitWork(caller, input, Date.now())),
   );
   server.registerTool('open_pr', specOf(tools.open_pr), (input) => run(() => openPr(caller, input, Date.now())));
+  server.registerTool('record_pr', specOf(tools.record_pr), (input) => run(() => recordPr(caller, input)));
   server.registerTool('my_work', specOf(tools.my_work), () => run(() => donor.myWork(caller, origin, Date.now())));
   // The maintainer's tools. Each asks GitHub for the caller's permission on
   // the repo, with their own token, on every call.

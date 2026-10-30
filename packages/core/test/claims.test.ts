@@ -160,6 +160,23 @@ describe('submitting and review', () => {
     expect(result.refusal.message).toContain('7 days');
   });
 
+  test('a PR made before the work expired is recorded after it expires, and one made after is refused', () => {
+    const { claim, submittedAt } = submitted();
+    const expiresAt = submittedAt + 7 * DAY;
+    const expired = apply(claim, tick, expiresAt + HOUR);
+
+    const late = nextClaimState(expired, { kind: 'open_pr', pr, madeAt: expiresAt - 1 }, expiresAt + HOUR);
+    const stored = nextClaimState(claim, { kind: 'open_pr', pr, madeAt: expiresAt - 1 }, expiresAt + HOUR);
+    const tooLate = nextClaimState(expired, { kind: 'open_pr', pr, madeAt: expiresAt }, expiresAt + HOUR);
+    const unsubmitted = nextClaimState(apply(newClaim(claimedAt), tick, claimedAt + 2 * DAY), { kind: 'open_pr', pr, madeAt: claimedAt + HOUR }, claimedAt + 2 * DAY);
+
+    expect(expired.state).toBe('expired');
+    expect(late).toMatchObject({ ok: true, claim: { state: 'pr_opened', pr } });
+    expect(stored).toMatchObject({ ok: true, claim: { state: 'pr_opened', pr } });
+    expect(tooLate).toMatchObject({ ok: false, refusal: { code: 'claim_expired' } });
+    expect(unsubmitted).toMatchObject({ ok: false, refusal: { code: 'claim_expired' } });
+  });
+
   test('submitting again while awaiting review keeps the first 7 days', () => {
     const { claim, submittedAt } = submitted();
     const again = apply(claim, submit, submittedAt + 6 * DAY);
