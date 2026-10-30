@@ -114,25 +114,38 @@ function queueNames(config) {
 // Creates the D1 databases that have no ID and the queues, when missing.
 // Wrangler creates a missing producer queue on its own, but not a dead-letter
 // queue. And migrations run before the deploy, so the database has to exist
-// first.
+// first. Each ID found or made here is masked for the job's later steps, since
+// the config step never had it to mask and Wrangler prints it in errors.
 export async function ensureResources({ config, token, fetch, log }) {
   if (!token) throw new Error('CLOUDFLARE_API_TOKEN is not set. Run the credential step first.');
   const api = cloudflare({ token, account: config.account_id, fetch });
+  // A resource Cloudflare answers with no ID stops the deploy, since a later
+  // error could print the ID unmasked.
+  const mask = (id, what) => {
+    if (!id) throw new Error(`Cloudflare answered with no ID for the ${what}, so it can't be masked.`);
+    log(`::add-mask::${id}`);
+  };
   for (const db of config.d1_databases ?? []) {
     if (db.database_id) continue;
-    if (await api('GET', `/d1/database/${encodeURIComponent(db.database_name)}`)) {
+    const found = await api('GET', `/d1/database/${encodeURIComponent(db.database_name)}`);
+    if (found) {
+      mask(found.uuid, `D1 database for ${db.binding}`);
       log(`The D1 database for ${db.binding} exists.`);
     } else {
-      await api('POST', '/d1/database', { body: { name: db.database_name } });
+      const created = await api('POST', '/d1/database', { body: { name: db.database_name } });
+      mask(created?.uuid, `D1 database for ${db.binding}`);
       log(`Created the D1 database for ${db.binding}.`);
     }
   }
   for (const queue of queueNames(config)) {
     const found = (await api('GET', '/queues', { query: { name: queue } })) ?? [];
-    if (found.some((existing) => existing.queue_name === queue)) {
+    const existing = found.find((each) => each.queue_name === queue);
+    if (existing) {
+      mask(existing.queue_id, `queue ${queue}`);
       log(`The queue ${queue} exists.`);
     } else {
-      await api('POST', '/queues', { body: { queue_name: queue } });
+      const created = await api('POST', '/queues', { body: { queue_name: queue } });
+      mask(created?.queue_id, `queue ${queue}`);
       log(`Created the queue ${queue}.`);
     }
   }

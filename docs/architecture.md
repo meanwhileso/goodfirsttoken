@@ -4483,7 +4483,11 @@ The job runs these steps. The scripts are in `scripts/`.
 6. `deploy.mjs resources` creates each D1 database that has no ID, and each
    queue, dead-letter queues included, when missing. Wrangler would create a
    missing producer queue itself, but not a dead-letter queue, and a database
-   has to exist before its migrations run.
+   has to exist before its migrations run. It masks the ID of each database
+   and queue it finds or creates, so later steps' logs don't show it. Step 2
+   never had these IDs, and Wrangler prints a database's ID in the path of a
+   failed API call. A resource Cloudflare answers with no ID stops the
+   deploy.
 7. `deploy.mjs migrations` runs `wrangler d1 migrations apply --remote` for
    each database that has a migrations folder, and skips one that has none.
 8. `deploy.mjs secrets` puts each secret in `secrets.required` with
@@ -4709,7 +4713,8 @@ not.
 - `wrangler.jsonc` holds local names and placeholder IDs only.
 - `scripts/deploy-config.mjs` refuses deployment keys, IDs, and unknown keys
   in the local config, writes the git-ignored `wrangler.deploy.json` with
-  `O_NOFOLLOW` and mode `0600`, and masks every deployment value in logs.
+  `O_NOFOLLOW` and mode `0600`, and masks every deployment value it holds
+  in logs. `deploy.mjs resources` masks the IDs it looks up.
 - `.dev.vars.example` holds no secret. `.gitleaks.toml` adds rules for
   32-hex IDs and UUIDs, and CI scans the full history.
 

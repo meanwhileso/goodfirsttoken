@@ -151,7 +151,8 @@ test('the token is masked first, then handed to later steps through GITHUB_ENV',
   assert.equal(readFileSync(envFile, 'utf8'), 'CLOUDFLARE_API_TOKEN=short-lived\n');
 });
 
-// A Cloudflare API that keeps D1 databases and queues in memory.
+// A Cloudflare API that keeps D1 databases and queues in memory. Each one's ID
+// is made from its name, like db-id-site-db.
 function fakeCloudflare({ databases = [], queues = [] } = {}) {
   const state = { databases: new Set(databases), queues: new Set(queues), requests: [] };
   const fetch = async (url, init = {}) => {
@@ -164,19 +165,20 @@ function fakeCloudflare({ databases = [], queues = [] } = {}) {
     if (method === 'GET' && resource.startsWith('/d1/database/')) {
       const name = decodeURIComponent(resource.slice('/d1/database/'.length));
       if (!state.databases.has(name)) return json({ success: false, errors: [{ code: 7404, message: 'not found' }] }, 404);
-      return json({ success: true, result: { name } });
+      return json({ success: true, result: { name, uuid: `db-id-${name}` } });
     }
     if (method === 'POST' && resource === '/d1/database') {
       state.databases.add(body.name);
-      return json({ success: true, result: { name: body.name } });
+      return json({ success: true, result: { name: body.name, uuid: `db-id-${body.name}` } });
     }
     if (method === 'GET' && resource === '/queues') {
       const name = searchParams.get('name');
-      return json({ success: true, result: state.queues.has(name) ? [{ queue_name: name }] : [] });
+      const found = state.queues.has(name) ? [{ queue_name: name, queue_id: `queue-id-${name}` }] : [];
+      return json({ success: true, result: found });
     }
     if (method === 'POST' && resource === '/queues') {
       state.queues.add(body.queue_name);
-      return json({ success: true, result: { queue_name: body.queue_name } });
+      return json({ success: true, result: { queue_name: body.queue_name, queue_id: `queue-id-${body.queue_name}` } });
     }
     return json({ success: false, errors: [{ message: 'unexpected' }] }, 400);
   };
@@ -210,6 +212,44 @@ test('resources that exist are left alone, and a database with an ID is not look
   const second = fakeCloudflare({ queues: ['site-feed', 'site-feed-dlq'] });
   await ensureResources({ config: withId, token: 'cf-token', fetch: second.fetch, log: () => {} });
   assert.ok(second.state.requests.every((request) => !request.includes('/d1/')));
+});
+
+// With no DB_ID, the database's ID is only known once it is looked up, so the
+// config step can't mask it. A later Wrangler error prints it in its API path.
+test('the ID of each database and queue found or created is masked for the later steps of the job', async () => {
+  const logs = [];
+  const log = (line) => logs.push(line);
+  const masks = ['db-id-site-db', 'queue-id-site-feed', 'queue-id-site-feed-dlq'].map((id) => `::add-mask::${id}`);
+
+  await ensureResources({ config: withQueues, token: 'cf-token', fetch: fakeCloudflare().fetch, log });
+  assert.deepEqual(logs.filter((line) => line.startsWith('::add-mask::')).sort(), masks);
+
+  logs.length = 0;
+  const existing = fakeCloudflare({ databases: ['site-db'], queues: ['site-feed', 'site-feed-dlq'] });
+  await ensureResources({ config: withQueues, token: 'cf-token', fetch: existing.fetch, log });
+  assert.deepEqual(logs.filter((line) => line.startsWith('::add-mask::')).sort(), masks);
+});
+
+test('a database or queue Cloudflare answers with no ID stops the deploy, since its ID could not be masked', async () => {
+  const noId = (field) => {
+    const cloudflare = fakeCloudflare();
+    return async (url, init) => {
+      const res = await cloudflare.fetch(url, init);
+      const body = await res.json();
+      if (!body.result || Array.isArray(body.result)) return json(body, res.status);
+      const result = Object.fromEntries(Object.entries(body.result).filter(([key]) => key !== field));
+      return json({ ...body, result }, res.status);
+    };
+  };
+
+  await assert.rejects(
+    ensureResources({ config: withQueues, token: 'cf-token', fetch: noId('uuid'), log: () => {} }),
+    /no ID.*D1 database for DB/,
+  );
+  await assert.rejects(
+    ensureResources({ config: withQueues, token: 'cf-token', fetch: noId('queue_id'), log: () => {} }),
+    /no ID.*queue site-feed/,
+  );
 });
 
 test('a Cloudflare error stops the deploy with its message', async () => {
