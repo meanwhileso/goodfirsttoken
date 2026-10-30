@@ -3686,7 +3686,7 @@ The repo is public, so `wrangler.jsonc` holds bindings and settings only. The
 names of deployed resources, account IDs, resource IDs, custom domains, and
 secrets never go in a file. The deploy reads them from the GitHub environment
 and writes them into a config file that git ignores. Where an ID is left out,
-the deploy or Wrangler creates the resource on the first deploy.
+the deploy finds the resource by name, or creates it on the first deploy.
 
 Each secret the Worker reads goes by name under `secrets.required` in
 `wrangler.jsonc`, and the deploy puts it. There are three.
@@ -4500,9 +4500,9 @@ The job runs these steps. The scripts are in `scripts/`.
    `wrangler secret put`, one at a time, from the environment secret of the
    same name. The value reaches Wrangler on stdin only.
 9. `wrangler deploy`. Every KV namespace has an ID by now, so Wrangler
-   creates none. Its bindings table shows the masked ID. When Wrangler
-   creates a namespace itself, it prints the new ID there before anything
-   can mask it.
+   creates none. Its bindings table shows the masked ID. If Wrangler made
+   a namespace itself, it would print the new ID there before anything
+   could mask it.
 10. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
     workers.dev URL Wrangler reported, until it answers ok from the target
     environment. It fails at once if another environment answers, and after

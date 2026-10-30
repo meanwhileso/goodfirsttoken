@@ -120,11 +120,14 @@ function queueNames(config) {
   ].filter(Boolean);
 }
 
-// Every KV namespace in the account. The API has no lookup by title.
+// Every KV namespace in the account. The API has no lookup by title. Sorted
+// by title, as Wrangler lists them, so a namespace made during the listing
+// doesn't shift the pages.
 async function kvNamespaces(api) {
   const all = [];
   for (let page = 1; ; page++) {
-    const found = (await api('GET', '/storage/kv/namespaces', { query: { per_page: 100, page } })) ?? [];
+    const query = { per_page: 100, order: 'title', direction: 'asc', page };
+    const found = (await api('GET', '/storage/kv/namespaces', { query })) ?? [];
     all.push(...found);
     if (found.length < 100) return all;
   }

@@ -152,9 +152,10 @@ test('the token is masked first, then handed to later steps through GITHUB_ENV',
 });
 
 // A Cloudflare API that keeps D1 databases, queues, and KV namespaces in
-// memory. Each one's ID is made from its name, like db-id-site-db. `bound`
-// gives the Worker's KV bindings that already exist, as binding to ID.
-function fakeCloudflare({ databases = [], queues = [], namespaces = [], bound = {} } = {}) {
+// memory. Each one's ID is made from its name, like db-id-site-db. `worker`
+// is the deployed Worker's bindings, or null when there is no Worker yet.
+// `settingsStatus` makes the Worker's settings answer with that status.
+function fakeCloudflare({ databases = [], queues = [], namespaces = [], worker = null, settingsStatus } = {}) {
   const state = {
     databases: new Set(databases),
     queues: new Set(queues),
@@ -190,6 +191,7 @@ function fakeCloudflare({ databases = [], queues = [], namespaces = [], bound = 
     if (method === 'GET' && resource === '/storage/kv/namespaces') {
       const size = Number(searchParams.get('per_page') ?? 20);
       const page = Number(searchParams.get('page') ?? 1);
+      assert.equal(searchParams.get('order'), 'title', 'pages keep their order while a namespace is created');
       const all = [...state.namespaces].map((title) => ({ id: `kv-id-${title}`, title }));
       return json({ success: true, result: all.slice((page - 1) * size, page * size) });
     }
@@ -201,11 +203,9 @@ function fakeCloudflare({ databases = [], queues = [], namespaces = [], bound = 
       return json({ success: true, result: { id: `kv-id-${body.title}`, title: body.title } });
     }
     if (method === 'GET' && /^\/workers\/scripts\/[^/]+\/settings$/.test(resource)) {
-      if (!Object.keys(bound).length) {
-        return json({ success: false, errors: [{ code: 10007, message: 'script not found' }] }, 404);
-      }
-      const bindings = Object.entries(bound).map(([name, id]) => ({ type: 'kv_namespace', name, namespace_id: id }));
-      return json({ success: true, result: { bindings: [{ type: 'plain_text', name: 'ENVIRONMENT' }, ...bindings] } });
+      if (settingsStatus) return json({ success: false, errors: [{ message: 'internal error' }] }, settingsStatus);
+      if (!worker) return json({ success: false, errors: [{ code: 10007, message: 'script not found' }] }, 404);
+      return json({ success: true, result: { bindings: worker } });
     }
     return json({ success: false, errors: [{ message: 'unexpected' }] }, 400);
   };
@@ -348,7 +348,10 @@ test('a KV namespace of that name that exists is used, and found past the first 
 // name. Moving it to another would lose every grant agents hold.
 test('the KV namespace the Worker is already bound to is kept, whatever its name', async (t) => {
   const { root, built } = builtRoot(t, withKv);
-  const cloudflare = fakeCloudflare({ namespaces: ['hand-made', 'site-oauth-kv'], bound: { OAUTH_KV: 'kv-id-hand-made' } });
+  const cloudflare = fakeCloudflare({
+    namespaces: ['hand-made', 'site-oauth-kv'],
+    worker: [{ type: 'kv_namespace', name: 'OAUTH_KV', namespace_id: 'kv-id-hand-made' }],
+  });
   const logs = [];
 
   await ensureResources({ config: withKv, root, token: 'cf-token', fetch: cloudflare.fetch, log: (l) => logs.push(l) });
@@ -358,7 +361,37 @@ test('the KV namespace the Worker is already bound to is kept, whatever its name
   assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV', id: 'kv-id-hand-made' }]);
 });
 
-test('a KV namespace with an ID is not looked up, and no config is rewritten', async (t) => {
+// Only a KV binding counts. A Worker deployed before the binding existed
+// could have a variable of the same name.
+test('a Worker that exists with no KV binding of that name gets <WORKER_NAME>-oauth-kv', async (t) => {
+  const { root, built } = builtRoot(t, withKv);
+  const cloudflare = fakeCloudflare({
+    namespaces: ['hand-made'],
+    worker: [
+      { type: 'plain_text', name: 'OAUTH_KV', text: 'x' },
+      { type: 'kv_namespace', name: 'OTHER_KV', namespace_id: 'kv-id-hand-made' },
+    ],
+  });
+
+  await ensureResources({ config: withKv, root, token: 'cf-token', fetch: cloudflare.fetch, log: () => {} });
+
+  assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV', id: 'kv-id-site-oauth-kv' }]);
+});
+
+// Without the Worker's bindings, the deploy can't tell which namespace holds
+// the grants, so it stops before picking one.
+test("an error from the Worker's settings stops the deploy before any namespace is picked", async (t) => {
+  const { root, built } = builtRoot(t, withKv);
+  const cloudflare = fakeCloudflare({ namespaces: ['site-oauth-kv'], settingsStatus: 500 });
+
+  await assert.rejects(
+    ensureResources({ config: withKv, root, token: 'cf-token', fetch: cloudflare.fetch, log: () => {} }),
+    /500.*internal error/,
+  );
+  assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV' }]);
+});
+
+test('a KV namespace with an ID is not looked up', async (t) => {
   const config = { ...withKv, kv_namespaces: [{ binding: 'OAUTH_KV', id: 'b2'.repeat(16) }] };
   const { root, built } = builtRoot(t, config);
   const cloudflare = fakeCloudflare();

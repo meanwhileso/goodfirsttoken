@@ -73,7 +73,7 @@ test('every resource is named after WORKER_NAME, with its local name after a das
   assert.equal(config.d1_databases[0].migrations_dir, 'migrations');
 });
 
-test('an ID left empty is left out, so Wrangler can provision the resource', () => {
+test('an ID left empty is left out, so the deploy finds or creates the resource', () => {
   const empty = deployConfig(local, 'staging', withLimiter).config;
   assert.equal('database_id' in empty.d1_databases[0], false);
   assert.equal('id' in empty.kv_namespaces[0], false);
