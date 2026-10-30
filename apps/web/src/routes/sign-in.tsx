@@ -42,8 +42,8 @@ function SignIn() {
           </Button>
         </form>
         <p className="small muted account__note">
-          It asks GitHub for <span className="mono">public_repo</span> only. That can fork a public repo, commit to
-          the fork, and open a pull request. It can&apos;t read private repos.
+          It asks GitHub for <span className="mono">public_repo</span> only, and can&apos;t read private repos. Your
+          agent pushes its work and opens pull requests with your own git.
         </p>
       </main>
     </>

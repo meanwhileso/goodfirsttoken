@@ -44,29 +44,21 @@ offers another project. Then:
   again with `claConfirmed` set to that link. Never confirm it for them.
 - `budget_spent`: The session's budget is spent. Finish or release the
   claims in progress. To spend more, the donor starts a new session.
-- `no_changes`: The files leave the claim's branch as it is, so nothing was
-  committed. Send every file changed from the start commit, or from the
-  head `onto` named, with its full new text.
-- `file_mode`: The submit would change, delete, or put back an executable
-  file, a symbolic link, or a submodule, or add a path under a link or a
-  submodule. A commit through GitHub's API would break it, so nothing was
-  committed. Leave the path the message names out, and tell the donor to
-  make that change with Git themselves.
-- `path_conflict`: A path is a folder, goes under a file, or differs only
-  in case or accents from a path on the branch, so nothing was committed.
-  Fix the path the message names, then submit again.
-- `fork_not_ready`: GitHub is still making the donor's fork, so nothing was
-  committed. Wait a minute, then call `submit_work` again with the same
-  files.
-- `branch_moved`: Someone pushed to the claim's branch, so nothing was
-  committed. Follow step 5 of Submit. When the message says there is no
-  branch for `onto` to name, submit again without `onto`. From `open_pr`,
-  the pushed branch moved since its submit: submit it again, then open the
-  PR.
-- `github_refused`: GitHub refused the fork, the branch, the commit, or the
-  PR, and the message gives GitHub's reason. For a change under
-  .github/workflows/, leave it out, and tell the donor to make it on
-  GitHub. Otherwise tell the donor the reason. The claim stays as it was.
+- `no_changes`: The pushed branch changes no file from the default
+  branch, or a fix names the last submit's head. Commit the work, push the
+  branch, and submit its new head.
+- `file_mode`: Only a submit with files gets this. Push the claim's branch
+  and submit with `branch` instead.
+- `path_conflict`: Only a submit with files gets this. Push the claim's
+  branch and submit with `branch` instead.
+- `fork_not_ready`: Only a submit with files gets this. Push the claim's
+  branch and submit with `branch` instead.
+- `branch_moved`: From `open_pr`, the pushed branch moved since its
+  submit. Submit it again, then open the PR. From a submit with files,
+  push the claim's branch and submit with `branch` instead.
+- `github_refused`: GitHub refused a read, or a write a submit with files
+  made, and the message gives GitHub's reason. Tell the donor the reason.
+  The claim stays as it was.
 - `branch_not_found`: The pushed branch doesn't have the claim's name, or
   GitHub doesn't show it at the head you named. Push the branch
   `claim_issue` named, and submit with the head the message gives.
@@ -99,7 +91,7 @@ offers another project. Then:
 Other errors:
 
 - An error that names a field, like
-  `files.0.path: must be a path inside the repo, like src/index.ts, with no empty, ., or .. part`,
+  `branch.head: must be a full 40-character commit SHA`,
   means the call broke the tool's input rules. Fix that field, then call
   again.
 - `GitHub no longer accepts this connection's token`: reconnect the MCP

@@ -46,15 +46,14 @@ wrote there comes back to the donor as a follow-up. `start_session` and
 `my_work` list them under `followUps`, oldest first.
 
 1. Each names the claim, the issue, the PR, the reviewer, the file a
-   comment is on, its link on GitHub, when it was written, the claim's
-   `branch`, and `base`, the commit to send every changed file from.
+   comment is on, its link on GitHub, when it was written, and the claim's
+   `branch`.
 2. The `comment` is the reviewer's own words from GitHub. Show it to the
    donor as theirs, and decide with the donor what to change.
-3. To answer one, fetch the claim's branch, make the change, post as you
-   work, and call `submit_work` with the claim. Send every file changed
-   from `base`, which is the start commit, or the head a submit last named
-   with `onto`. The commit goes onto the PR. The follow-up clears once
-   that submit lands.
+3. To answer one, pull the claim's branch, make the change, post as you
+   work, commit with the trailer, push, and call `submit_work` with the
+   claim and the new head. The fix goes onto the PR. The follow-up clears
+   once that submit lands.
 4. `moreFollowUps` counts the follow-ups beyond the ones listed. They list
    as submits answer these.
 5. Once the PR merges or closes, its follow-ups go, and the claim takes no
