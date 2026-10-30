@@ -37,11 +37,12 @@ These hold for every claim, in every harness, whatever the donor asks.
   your next update, so the feed loses nothing. When your next step is
   `submit_work` or `release_claim`, wait, and post the line first.
 - Keep local paths, environment contents, tokens, and secrets out of every
-  update, summary, check note, release reason, and file you submit, and out
-  of the PR's title. Repo-relative paths are fine, since the repo is public.
-- Submit only files you read at the start commit. When you can't clone the
-  repo and check out that commit, tell the donor and release the claim.
-  `submit_work` replaces each file you send whole.
+  update, summary, check note, release reason, commit message, and file you
+  push, and out of the PR's title and body. Repo-relative paths are fine,
+  since the repo is public.
+- Start from the commit `claim_issue` gives, on the claim's branch. When
+  you can't clone the repo and check out that commit, tell the donor and
+  release the claim.
 - When you are stuck, or the donor wants to stop, call `release_claim` with
   a short public reason. The slot opens for someone else.
 - Follow the donor's special instructions. They stay in the harness. Never
@@ -190,7 +191,7 @@ at your MCP server's origin for the page and JSON reads below.
    issue and its title, its project, the tag, who holds it and with which
    agent, the slots taken, the PR mode, the tough badge, and its link. `prMode`
    `reviewed` means the donor reads the diff and opens the PR. `automatic`
-   means the PR opens by itself once the work is submitted. Tough means 3
+   means you open the PR as soon as the work is submitted. Tough means 3
    or more claims on it ended without a merged PR. Take a crack at
    it anyway if the donor wants.
 3. Let the donor pick one or more, by number. For more issues in a named
@@ -215,18 +216,21 @@ at your MCP server's origin for the page and JSON reads below.
 9. When no pick is left, find more in the named project, or suggest more
    when the donor has no project choice, until the budget is spent or the
    donor stops. Then call `my_work`, and show the donor their review
-   queue, as in The review queue. Do it even when each PR opened by itself,
+   queue, as in The review queue. Do it even when each PR opened at once,
    since work from an earlier session can wait there.
 
 ## Work the claim
 
 `claim_issue` answers with the claim, the issue's link and live page, the
 issue's text on GitHub, the project's settings and notes for agents, the
-repo to clone, and the commit to start from.
+repo to clone, the commit to start from, and the claim's branch.
 
 1. Clone the repo it names, and check out the commit it gives. That is the
-   claim's start commit. Work from it, however far the default branch has
-   moved since.
+   claim's start commit. Make the claim's branch there, with the name in
+   `branch.name`, like `git switch -c <branch.name>`. Work from it, however
+   far the default branch has moved since. When you resume a claim whose
+   branch you pushed before, fetch that branch from where you pushed it,
+   and work on it.
 2. Read the repo's AGENTS.md and CONTRIBUTING, and the notes from the
    maintainers in the answer. Follow them within the Rules, and do what
    any canary asks, as the Rules say.
@@ -237,8 +241,13 @@ repo to clone, and the commit to start from.
    `tests: 214 passing`. Post after each code change, test run, or
    decision, and at least every 10 minutes. A subagent posts under the same
    claim, with `job` set to its job, like tests.
-4. The server adds the project's disclosure to the commit and the PR.
-   Follow any other rule the repo has for AI help.
+4. When the project names a commit trailer, end each commit's message
+   with it, in a last paragraph of its own, as
+   `<trailer>: <agent> (<model>)`, like
+   `git commit -m "Keep the slash" -m "Assisted-by: claude-code (claude-opus-5-5)"`. The server adds the
+   disclosure text to the PR's body. Keep the donor's git name, email, and
+   signing setup as they are, and never turn signing off. Follow any other
+   rule the repo has for AI help.
 5. Run the repo's tests and checks the way its docs say, and post what
    they gave.
 6. When `post_update` answers with `prOnIssue`, someone else opened a PR on
@@ -254,47 +263,58 @@ repo to clone, and the commit to start from.
 
 ## Submit
 
-1. When the work is done and checked, call `submit_work` with:
+1. Commit the work on the claim's branch, with the trailer, as above.
+2. Push the branch with the donor's git. When `branch.canPush` is true,
+   push it to the code repo. Otherwise run `gh repo fork --remote`, which
+   finds the donor's fork or makes one, and sets it as the origin remote, then
+   `git push -u origin <branch.name>`. A new fork can take a minute to
+   take a push. An organization may refuse the GitHub CLI's token, so a
+   push over SSH is the other way.
+3. When you can't push with the donor's credentials, as in a harness on
+   its own computer, make a patch with `git format-patch` from the start
+   commit. Give it to the donor, with the commands to apply it with
+   `git am` on the claim's branch and push it from their own terminal.
+   Wait for them, then read the head they pushed with `git ls-remote`, or
+   ask them for it.
+4. Call `submit_work` with:
    - `claimId`.
-   - `files`: every file changed from the start commit, each as
-     `{"path": "src/range.ts", "content": "..."}` with its full new text,
-     or with `content` null to delete it. Paths are inside the repo. A
-     submit takes 1 to 300 files, of text only.
+   - `branch`: the repo you pushed to, the branch's name, and its head,
+     like `{"repo": "priya/sample-app", "name": "goodfirsttoken/issue-12-c_1",
+     "head": "<git rev-parse HEAD>"}`.
    - `summary`: what the change does. It starts the PR description.
    - `checks`: what you checked, like the tests and linters you ran, in
      your own words.
    - `agent` and `model`: your harness's name and the model you ran.
    - `title`, only when the repo's rules want a certain form for it.
-     Otherwise leave it out, and the commit and the PR take the issue's
-     title.
+     Otherwise leave it out, and the PR takes the issue's title.
    - `tokenEstimate`, when your harness can estimate the tokens spent on
      the claim since its last submit, or since it was made. It is always
      an estimate. In Claude Code, the goodfirsttoken plugin's hook fills
      it in from the session's transcript, so leave it out there.
-2. The server commits the files as the donor through GitHub, which signs
-   the commit, on the claim's own branch: in the repo when the donor can
-   push there, and in their fork when they can't. Then the PR opens by
-   itself, or the work waits in the donor's review queue. The answer says
-   which, with the PR's link, or the reason it waits and the diff's link.
-   Tell the donor.
-3. Send every changed file on every submit. A file an earlier submit sent
-   that a later one leaves out goes back to how it was at the start commit.
-4. To change submitted work, submit again. It adds a commit to the same
-   branch, and to its PR once one is open.
-5. When `submit_work` is refused with `branch_moved`, someone pushed to
-   the claim's branch, as a maintainer can on an open PR. Nothing was
-   committed. Fetch the branch, bring your work onto the head the refusal
-   names, and submit again with `onto` set to that head. From then on,
-   send every file changed from that head. When the refusal names files
-   that would undo the push, leave them out, or send new text for them.
-6. Leave out any change under .github/workflows/. Good First Token can't
-   commit one. Tell the donor to make it on GitHub themselves.
-
+5. The server checks the branch on GitHub and writes nothing there. The
+   answer says what comes next. Tell the donor.
+   - In automatic mode with nothing to hold the work, the answer has
+     `toOpen`, the PR to open. Open it now, as in The review queue's step
+     6, and record it.
+   - Otherwise the work waits in the donor's review queue, with the reason
+     it waits and the diff's link.
+6. To change submitted work, commit and push to the same branch, then
+   submit again with the new head. A submit ends a clearance. In reviewed
+   mode, ask the donor to read the new diff, then call `open_pr`. In
+   automatic mode, the submit's answer has the PR to open.
+7. After the PR opens, fixes go the same way, onto the PR's branch.
+   Maintainers can push to it too, so pull the branch before you commit.
+   Add new commits, and never rewrite the history of an open PR's branch.
+8. GitHub takes a change under .github/workflows/ only over SSH, or from a
+   token with the workflow scope. When the push is refused for it, tell
+   the donor. The work waits for the donor's review either way.
 ## The review queue
 
 Work waits in the donor's review queue when the project reviews agent PRs,
-wants a person-written description, or the PR couldn't open by itself.
-Nothing opens until the donor says so.
+wants a person-written description, or something else holds it, like a
+change to a workflow file. Nothing in the queue opens until the donor says
+so. In automatic mode, a submit with nothing to hold it skips the queue,
+and you open its PR at once.
 
 1. Call `my_work`. Under `readyToOpen` it lists each piece of work waiting
    to open as a PR: the issue, the claim, the lines added and removed, the
@@ -310,16 +330,19 @@ Nothing opens until the donor says so.
    them the marker has to be in it. Pass it to `open_pr` as `description`,
    word for word.
 5. When the donor says to open one, like "open 2", call `open_pr` with its
-   `claimId`, and `description` when they wrote one. Tell them the PR's
-   link. When the answer names another PR open on the issue, tell them
-   that too.
+   `claimId`, and `description` when they wrote one. When the answer names
+   another PR open on the issue, tell them.
 6. For work you pushed, `open_pr` opens nothing. It clears the work, and
-   answers with the PR to open: run the GitHub CLI command it gives, with
-   the body on its standard input, word for word. When the GitHub CLI
-   can't, give the donor the link to GitHub's form. When `bodyInLink` is
+   answers with `toOpen`, the PR to open. Write its body to a file, word
+   for word, with a quoted heredoc like `cat > body.md <<'EOF'`, outside
+   the repo. Then run the GitHub CLI command it gives, with that file on
+   its standard input, like `<command> < body.md`. When the GitHub CLI
+   refuses, give the donor the link to GitHub's form. When `bodyInLink` is
    true, the form has the title and body filled in. When it is false, the
    body is too long for the link, and the form has the title alone. Give
-   the donor the body to paste. Then call `record_pr` with the PR's link.
+   the donor the body to paste. When the GitHub CLI says a PR already
+   exists for the branch, that is the one to record. Then call `record_pr`
+   with the PR's link, and tell the donor the link.
 7. Cleared work stays under `readyToOpen`, waiting as `ready_to_open`,
    until its PR is recorded. Its `toOpen` is the PR to open, as `open_pr`
    gave it. Open it as in step 6. Its body is in a fenced block. Send what
@@ -338,15 +361,14 @@ wrote there comes back to the donor as a follow-up. `start_session` and
 `my_work` list them under `followUps`, oldest first.
 
 1. Each names the claim, the issue, the PR, the reviewer, the file a
-   comment is on, its link on GitHub, when it was written, the claim's
-   `branch`, and `base`, the commit to send every changed file from.
+   comment is on, its link on GitHub, when it was written, and the claim's
+   `branch`.
 2. The `comment` is the reviewer's own words from GitHub. Show it to the
    donor as theirs, and decide with the donor what to change.
-3. To answer one, fetch the claim's branch, make the change, post as you
-   work, and call `submit_work` with the claim. Send every file changed
-   from `base`, which is the start commit, or the head a submit last named
-   with `onto`. The commit goes onto the PR. The follow-up clears once
-   that submit lands.
+3. To answer one, pull the claim's branch, make the change, post as you
+   work, commit with the trailer, push, and call `submit_work` with the
+   claim and the new head. The fix goes onto the PR. The follow-up clears
+   once that submit lands.
 4. `moreFollowUps` counts the follow-ups beyond the ones listed. They list
    as submits answer these.
 5. Once the PR merges or closes, its follow-ups go, and the claim takes no
@@ -426,29 +448,21 @@ offers another project. Then:
   again with `claConfirmed` set to that link. Never confirm it for them.
 - `budget_spent`: The session's budget is spent. Finish or release the
   claims in progress. To spend more, the donor starts a new session.
-- `no_changes`: The files leave the claim's branch as it is, so nothing was
-  committed. Send every file changed from the start commit, or from the
-  head `onto` named, with its full new text.
-- `file_mode`: The submit would change, delete, or put back an executable
-  file, a symbolic link, or a submodule, or add a path under a link or a
-  submodule. A commit through GitHub's API would break it, so nothing was
-  committed. Leave the path the message names out, and tell the donor to
-  make that change with Git themselves.
-- `path_conflict`: A path is a folder, goes under a file, or differs only
-  in case or accents from a path on the branch, so nothing was committed.
-  Fix the path the message names, then submit again.
-- `fork_not_ready`: GitHub is still making the donor's fork, so nothing was
-  committed. Wait a minute, then call `submit_work` again with the same
-  files.
-- `branch_moved`: Someone pushed to the claim's branch, so nothing was
-  committed. Follow step 5 of Submit. When the message says there is no
-  branch for `onto` to name, submit again without `onto`. From `open_pr`,
-  the pushed branch moved since its submit: submit it again, then open the
-  PR.
-- `github_refused`: GitHub refused the fork, the branch, the commit, or the
-  PR, and the message gives GitHub's reason. For a change under
-  .github/workflows/, leave it out, and tell the donor to make it on
-  GitHub. Otherwise tell the donor the reason. The claim stays as it was.
+- `no_changes`: The pushed branch changes no file from the default
+  branch, or a fix names the last submit's head. Commit the work, push the
+  branch, and submit its new head.
+- `file_mode`: Only a submit with files gets this. Push the claim's branch
+  and submit with `branch` instead.
+- `path_conflict`: Only a submit with files gets this. Push the claim's
+  branch and submit with `branch` instead.
+- `fork_not_ready`: Only a submit with files gets this. Push the claim's
+  branch and submit with `branch` instead.
+- `branch_moved`: From `open_pr`, the pushed branch moved since its
+  submit. Submit it again, then open the PR. From a submit with files,
+  push the claim's branch and submit with `branch` instead.
+- `github_refused`: GitHub refused a read, or a write a submit with files
+  made, and the message gives GitHub's reason. Tell the donor the reason.
+  The claim stays as it was.
 - `branch_not_found`: The pushed branch doesn't have the claim's name, or
   GitHub doesn't show it at the head you named. Push the branch
   `claim_issue` named, and submit with the head the message gives.
@@ -458,16 +472,18 @@ offers another project. Then:
 - `not_from_start`: The pushed branch doesn't build on the start commit.
   Build it on the start commit, push it, and submit again.
 - `trailer_missing`: A commit on the pushed branch lacks the project's
-  trailer. Add the line the message gives to each commit it names, push
-  the branch, and submit again.
+  trailer. Before the PR opens, add the line the message gives to each
+  commit it names, with `git rebase -i` and `git commit --amend`, then
+  push with `--force-with-lease` and submit again. After the PR opens, add
+  a new commit instead, and ask the donor what to do about the old one.
 - `branch_pushed`: The claim's branch was pushed, so a submit with files
   would write over it. Push your work to the branch, and submit with
   `branch`.
 - `not_cleared`: `record_pr` found the work not cleared to open. Submit
   the pushed branch, clear it with `open_pr`, open the PR, and record it.
 - `pr_mismatch`: `record_pr` found the PR isn't the cleared one, and the
-  message says how. Fix it on GitHub, like with gh pr edit, then call
-  `record_pr` again. When the branch moved, submit it again and
+  message says how. Fix it on GitHub, like with `gh pr edit <link>
+  --body-file body.md`, then call `record_pr` again. When the branch moved, submit it again and
   clear it again first.
 - `not_submitted`: The claim has no submitted work yet. Submit it with
   `submit_work` first.
@@ -481,7 +497,7 @@ offers another project. Then:
 Other errors:
 
 - An error that names a field, like
-  `files.0.path: must be a path inside the repo, like src/index.ts, with no empty, ., or .. part`,
+  `branch.head: must be a full 40-character commit SHA`,
   means the call broke the tool's input rules. Fix that field, then call
   again.
 - `GitHub no longer accepts this connection's token`: reconnect the MCP
@@ -536,10 +552,11 @@ post_update {"claimId": "c_example1", "text": "kept the trailing slash in rewrit
 post_update {"claimId": "c_example1", "text": "tests: 48 passing"}
 ```
 
-You submit every file changed from the start commit:
+You commit on the claim's branch with the trailer, push it to the donor's
+fork, and submit the branch:
 
 ```
-submit_work {"claimId": "c_example1", "files": [{"path": "src/rewrite.ts", "content": "export const keepTrailingSlash = true;\n"}, {"path": "test/rewrite.test.ts", "content": "import { keepTrailingSlash } from '../src/rewrite';\n"}], "summary": "Keeps the trailing slash when a rewrite starts from a path that ends in one.", "checks": "Added a failing test first. npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5"}
+submit_work {"claimId": "c_example1", "branch": {"repo": "priya/sample-router", "name": "goodfirsttoken/issue-57-c_example1", "head": "4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6"}, "summary": "Keeps the trailing slash when a rewrite starts from a path that ends in one.", "checks": "Added a failing test first. npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5"}
 ```
 
 The project reviews agent PRs, so the work waits in the review queue. You
@@ -547,6 +564,13 @@ give the donor the diff's link. They read it and say to open it:
 
 ```
 open_pr {"claimId": "c_example1"}
+```
+
+`open_pr` clears the work and answers with the PR to open. You run its
+GitHub CLI command with the body on its standard input, then record the PR:
+
+```
+record_pr {"claimId": "c_example1", "pr": "https://github.com/sample-owner/sample-router/pull/58"}
 ```
 
 You give them the PR's link, and ask for more suggestions for the second

@@ -58,18 +58,18 @@ my_work {}
 
 A maintainer asked on sample-owner/sample-router#57's PR for a test of
 the root path. You show the donor the comment as the reviewer's words, and
-they agree. You fetch the claim's branch, add the test, post as you work,
-and submit every file changed from the follow-up's `base`:
+they agree. You pull the claim's branch, add the test, post as you work,
+commit with the trailer, push, and submit the new head:
 
 ```
 post_update {"claimId": "c_example3", "text": "added a test for the root base path (test/router.test.ts)"}
-submit_work {"claimId": "c_example3", "files": [{"path": "src/router.ts", "content": "export const basePath = '/';\n"}, {"path": "test/router.test.ts", "content": "import { basePath } from '../src/router';\n"}], "summary": "Stops the redirect loop when the base path is the root, with a test for it.", "checks": "npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5"}
+submit_work {"claimId": "c_example3", "branch": {"repo": "priya/sample-router", "name": "goodfirsttoken/issue-57-c_example3", "head": "5a6f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f"}, "summary": "Stops the redirect loop when the base path is the root, with a test for it.", "checks": "npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5"}
 ```
 
-The commit goes onto the open PR. Another piece of work waits in the
-queue, for a project that wants a person-written description. The donor
-reads its diff and writes the description. You open the PR with their
-words as they wrote them:
+The fix is on the open PR. Another piece of work waits in the queue, for
+a project that wants a person-written description. The donor reads its
+diff and writes the description. You clear it with their words as they
+wrote them, open the PR with the command the answer gives, and record it:
 
 ```
 open_pr {"claimId": "c_example4", "description": "Retries uploads once after a 503. I checked it against the staging bucket."}

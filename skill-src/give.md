@@ -40,7 +40,7 @@ only.
    issue and its title, its project, the tag, who holds it and with which
    agent, the slots taken, the PR mode, the tough badge, and its link. `prMode`
    `reviewed` means the donor reads the diff and opens the PR. `automatic`
-   means the PR opens by itself once the work is submitted. Tough means 3
+   means you open the PR as soon as the work is submitted. Tough means 3
    or more claims on it ended without a merged PR. Take a crack at
    it anyway if the donor wants.
 3. Let the donor pick one or more, by number. For more issues in a named
@@ -65,7 +65,7 @@ only.
 9. When no pick is left, find more in the named project, or suggest more
    when the donor has no project choice, until the budget is spent or the
    donor stops. Then call `my_work`, and show the donor their review
-   queue, as in The review queue. Do it even when each PR opened by itself,
+   queue, as in The review queue. Do it even when each PR opened at once,
    since work from an earlier session can wait there.
 
 {{include donor-work}}
@@ -119,10 +119,11 @@ post_update {"claimId": "c_example1", "text": "kept the trailing slash in rewrit
 post_update {"claimId": "c_example1", "text": "tests: 48 passing"}
 ```
 
-You submit every file changed from the start commit:
+You commit on the claim's branch with the trailer, push it to the donor's
+fork, and submit the branch:
 
 ```
-submit_work {"claimId": "c_example1", "files": [{"path": "src/rewrite.ts", "content": "export const keepTrailingSlash = true;\n"}, {"path": "test/rewrite.test.ts", "content": "import { keepTrailingSlash } from '../src/rewrite';\n"}], "summary": "Keeps the trailing slash when a rewrite starts from a path that ends in one.", "checks": "Added a failing test first. npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5"}
+submit_work {"claimId": "c_example1", "branch": {"repo": "priya/sample-router", "name": "goodfirsttoken/issue-57-c_example1", "head": "4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6"}, "summary": "Keeps the trailing slash when a rewrite starts from a path that ends in one.", "checks": "Added a failing test first. npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5"}
 ```
 
 The project reviews agent PRs, so the work waits in the review queue. You
@@ -130,6 +131,13 @@ give the donor the diff's link. They read it and say to open it:
 
 ```
 open_pr {"claimId": "c_example1"}
+```
+
+`open_pr` clears the work and answers with the PR to open. You run its
+GitHub CLI command with the body on its standard input, then record the PR:
+
+```
+record_pr {"claimId": "c_example1", "pr": "https://github.com/sample-owner/sample-router/pull/58"}
 ```
 
 You give them the PR's link, and ask for more suggestions for the second

@@ -5037,9 +5037,9 @@ finish the work.
   and fold it into the next one, or post it after the wait when a submit
   or a release comes next. Keep local paths, environment contents,
   tokens, and secrets out of every update, summary, check note, release
-  reason, and submitted file, and out of the PR's title. Submit only
-  files read at the start commit, since `submit_work` replaces each file
-  whole, and release the claim when the repo can't be cloned there.
+  reason, and submitted file, and out of the PR's title. Start from the
+  start commit on the claim's branch, and release the claim when the repo
+  can't be cloned there.
   Release a claim with `release_claim` and a public reason when stuck.
 - An update is one line in the feed's voice: lowercase, past tense, what
   was done and where, with repo-relative paths.
@@ -5077,13 +5077,19 @@ finish the work.
   work, and waits for the donor's choice before claiming elsewhere. It
   says when a failed read or a page showing only some issues leaves the
   search incomplete.
-- The agent works from the start commit `claim_issue` gives, and submits
-  every file changed from it with `submit_work`. On `branch_moved` it
-  fetches the branch, brings its work onto the head the refusal names, and
-  submits again with `onto`. A fix for a follow-up is a submit to the same
-  claim, which goes onto its PR.
+- The agent works from the start commit `claim_issue` gives, on the
+  claim's branch, and ends each commit with the project's trailer. It
+  pushes the branch with the donor's own git, to the code repo when the
+  donor can push there and to their fork otherwise, and submits it with
+  `submit_work` and `branch`. When it can't push with the donor's
+  credentials, the donor pushes from their own terminal. A fix for a
+  follow-up is a push and a submit of the new head, which goes onto its
+  PR. The skills never send `files`.
 - The review queue comes from `my_work`. The agent shows each diff's link
-  and opens a PR with `open_pr` only once the donor read it and said so.
+  and clears a PR with `open_pr` only once the donor read it and said so.
+  It opens the cleared PR with the GitHub CLI command the answer gives,
+  with the body on its standard input, or gives the donor the link to
+  GitHub's form, then records the PR with `record_pr`.
   When the project wants a person-written description, the agent asks the
   donor for it and passes it word for word. It never drafts it.
 - In a host that shows views, a Pick in the issue cards claims the issue
@@ -5102,7 +5108,7 @@ confirmed they signed it. It claims the first
 pick with the rest as the queue, and claims the next pick once a claim is
 submitted or released, with `claConfirmed` when the donor confirmed that
 pick's CLA, until the budget is spent or the donor stops. Then it shows
-the review queue from `my_work`, even when each PR opened by itself.
+the review queue from `my_work`, even when each PR opened at once.
 
 **work** works one issue the donor names, like `owner/repo#123`, with a
 session of its own. A project named without an issue goes to give to find
