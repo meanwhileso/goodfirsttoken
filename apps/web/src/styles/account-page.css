@@ -41,7 +41,7 @@
 .queue-item__checks { overflow-wrap: anywhere; }
 .queue-item .quote { font-size: 16px; overflow-wrap: anywhere; }
 .queue-item__warning { color: var(--attention); font-size: 15px; overflow-wrap: anywhere; }
-.queue-item__form { display: flex; flex-direction: column; gap: 14px; }
+.queue-item__form, .queue-item__cleared { display: flex; flex-direction: column; gap: 14px; }
 
 /* Form fields. */
 .account-field { display: flex; flex-direction: column; gap: 6px; max-width: 44em; }

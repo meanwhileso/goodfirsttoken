@@ -3,7 +3,7 @@ import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { Fragment, useId, type ReactNode } from 'react';
 import { noticeParams } from '../auth/notice-params';
 import { SiteNav } from '../auth/SiteNav';
-import { Button } from '../components/Button';
+import { Button, ButtonLink } from '../components/Button';
 import { Chip } from '../components/Chip';
 import { Footer } from '../components/Footer';
 import { Marker } from '../components/Marker';
@@ -20,7 +20,8 @@ import { routeHead } from '../readable/head';
 
 // The signed-in person's own page (brand/brief-website.md), which replaced
 // prototype/me.html: their review queue, with Open PR and, for a project
-// that asks for one, a description they write, their connected agents, each
+// that asks for one, a description they write, or for cleared work, the
+// link to GitHub's form for its PR, their connected agents, each
 // with Disconnect, their interests, and sign-out. Its forms post to /me and
 // go through the same rules as the MCP tools (src/me/page.ts). Disconnect
 // posts to /auth/agents/disconnect.
@@ -75,7 +76,7 @@ const WAITS_BECAUSE: Record<ReviewReason, string> = {
   person_written_description: 'The project asks you to write the PR description.',
   open_pr_cap: 'You had as many open PRs in the project as it allows.',
   pr_refused: "GitHub didn't open the PR when the work was submitted.",
-  ready_to_open: 'It is ready to open as a PR.',
+  ready_to_open: 'It is cleared to open as a PR.',
 };
 
 /**
@@ -119,6 +120,41 @@ function DescriptionField() {
   );
 }
 
+/**
+ * Pushed work cleared to open: the link to GitHub's form for its PR, which
+ * comes from the clearance. When the description is too long for the link,
+ * the form fills in the title alone, and the description is here to paste.
+ */
+function ClearedPr({ item, toOpen }: { item: ReviewItem; toOpen: NonNullable<ReviewItem['toOpen']> }) {
+  const id = useId();
+  return (
+    <div className="queue-item__cleared">
+      {toOpen.bodyInLink ? (
+        <p className="small">GitHub&apos;s form opens with the title and description filled in.</p>
+      ) : (
+        <div className="account-field">
+          <label htmlFor={id}>PR description to paste</label>
+          <textarea id={id} className="account-textarea account-input--mono" readOnly value={toOpen.body} />
+          <span className="mono small faint">
+            The description is too long to fill in from a link. GitHub&apos;s form opens with the title filled in.
+            Paste the description there.
+          </span>
+        </div>
+      )}
+      <p className="small muted">Good First Token records the PR once it is open.</p>
+      <div className="cluster">
+        <ButtonLink href={toOpen.compareUrl} variant="primary" size="sm" aria-label={`Open the PR for ${item.issue} on GitHub`}>
+          Open the PR on GitHub
+        </ButtonLink>
+        <div className="open-in">
+          <a href={item.diffUrl}>diff</a>
+          <a href={item.url}>issue on GitHub</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReadyItem({ item, now }: { item: ReviewItem; now: number }) {
   const titleId = useId();
   const size =
@@ -152,7 +188,9 @@ function ReadyItem({ item, now }: { item: ReviewItem; now: number }) {
           second one helps.
         </p>
       )}
-      {item.openable ? (
+      {item.toOpen !== null ? (
+        <ClearedPr item={item} toOpen={item.toOpen} />
+      ) : item.openable ? (
         <form method="post" action={ME_PATH} className="queue-item__form">
           <input type="hidden" name="action" value="open_pr" />
           <input type="hidden" name="claim" value={item.claimId} />

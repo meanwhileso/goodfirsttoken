@@ -14,6 +14,7 @@ import { expires, isObject, issueHead, link, listOf, notice } from './parts';
 type MyWork = ToolOutput<'my_work'>;
 type ReadyItem = MyWork['readyToOpen'][number];
 type WorkingClaim = MyWork['working'][number];
+type PrToOpen = NonNullable<ReadyItem['toOpen']>;
 
 function text(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
@@ -25,19 +26,49 @@ function section(title: string, items: HTMLElement[]): HTMLElement | null {
 }
 
 /**
+ * Pushed work cleared to open: the button that opens GitHub's form for its
+ * PR, from the clearance. When the description is too long for the link,
+ * the form fills in the title alone, and the description is here to paste.
+ */
+function clearedPart(host: Host, toOpen: PrToOpen): HTMLElement {
+  const paste = toOpen.bodyInLink
+    ? null
+    : h(
+        'label',
+        { class: 'view-label' },
+        h('span', null, "The description is too long to fill in from a link. GitHub's form opens with the title filled in. Paste the description there."),
+        h('textarea', { class: 'view-field', rows: 8, readonly: true, 'aria-label': 'PR description to paste' }, toOpen.body),
+      );
+  return h(
+    'div',
+    { class: 'view-cleared', role: 'status' },
+    toOpen.bodyInLink && h('p', { class: 'view-quiet' }, "GitHub's form opens with the title and description filled in."),
+    paste,
+    h('p', { class: 'view-quiet' }, 'Good First Token records the PR once it is open.'),
+    h('div', { class: 'cluster view-actions' }, link(host, toOpen.compareUrl, 'Open the PR on GitHub', 'btn btn--primary btn--sm')),
+  );
+}
+
+/**
  * An item waiting to open as a PR. `told` holds what the agent heard of each
  * PR the queue opened so far. A context update takes the place of the one
  * before it, so each one names them all.
  */
 function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
   const size = item.additions === null || item.deletions === null ? null : `+${String(item.additions)} -${String(item.deletions)}`;
-  const description = item.personWrittenDescription
-    ? h('textarea', { class: 'view-field', rows: 5, 'aria-label': 'Your PR description, in your own words' })
-    : null;
+  // Work open_pr cleared already waits only for its PR to open on GitHub.
+  const cleared = isObject(item.toOpen) ? item.toOpen : null;
+  const description =
+    item.personWrittenDescription && cleared === null
+      ? h('textarea', { class: 'view-field', rows: 5, 'aria-label': 'Your PR description, in your own words' })
+      : null;
   const open = h('button', { type: 'button', class: 'btn btn--primary btn--sm' }, 'Open PR');
-  const actions = h('div', { class: 'cluster view-actions' }, link(host, item.diffUrl, 'Read the diff', 'btn btn--sm'), open);
+  const diff = link(host, item.diffUrl, 'Read the diff', 'btn btn--sm');
+  const actions = h('div', { class: 'cluster view-actions' }, diff, cleared === null && open);
   const status = h('div', { class: 'view-status' });
-  if (!item.openable) {
+  if (cleared !== null) {
+    status.appendChild(clearedPart(host, cleared));
+  } else if (!item.openable) {
     open.disabled = true;
     status.appendChild(notice(`Can't open it now: ${item.reason ?? 'Release the claim with release_claim.'}`, 'note'));
   }
@@ -58,19 +89,12 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
       const opened = answer.data as ToolOutput<'open_pr'>;
       actions.remove();
       description?.closest('label')?.remove();
-      // Work the agent pushed opens on GitHub, from its form with the title and description filled in.
+      // Work the agent pushed is cleared, and the donor opens its PR on GitHub's form.
       if (opened.pr === null) {
-        status.appendChild(
-          h(
-            'p',
-            { class: 'view-notice view-notice--done', role: 'status' },
-            'Open the PR on GitHub: ',
-            link(host, opened.toOpen?.compareUrl ?? '', "GitHub's pull request form, filled in"),
-          ),
-        );
+        if (isObject(opened.toOpen)) status.appendChild(clearedPart(host, opened.toOpen));
         told.push(answer.text);
         await host.updateContext(told.join('\n')).catch(() => {
-          status.appendChild(notice(`Once the PR is open, tell your agent to record it for claim ${item.claimId}.`, 'note'));
+          status.appendChild(notice(`Tell your agent you cleared claim ${item.claimId} to open as a PR.`, 'note'));
         });
         return;
       }

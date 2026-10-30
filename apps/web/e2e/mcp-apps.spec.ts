@@ -226,6 +226,7 @@ const ready = {
   summary: 'Fixes the <em>parser</em> on empty input.',
   checks: 'pnpm test: 214 passing',
   reviewReason: 'reviewed_mode',
+  toOpen: null,
   prOnIssue: null,
   expiresAt: '2026-10-06T10:00:00.000Z',
   personWrittenDescription: false,
@@ -287,6 +288,53 @@ test('the review queue shows each piece of work with its notes and diff, and Ope
     { url: ready.diffUrl },
     { url: 'https://github.example/sample-owner/sample-app/pull/41' },
   ]);
+  expect(view.violations).toEqual([]);
+});
+
+const toOpen = {
+  repo: 'sample-owner/sample-app',
+  head: 'priya:goodfirsttoken/issue-7-c_e2eclaim3',
+  base: 'main',
+  title: 'Fix the parser',
+  body: 'Fixes the parser on empty input.\n\nCloses #7\n\nWritten with a coding agent through Good First Token.',
+  command: "gh pr create --repo sample-owner/sample-app --head priya:goodfirsttoken/issue-7-c_e2eclaim3 --base 'main' --title 'Fix the parser' --body-file -",
+  compareUrl: 'https://github.example/sample-owner/sample-app/compare/main...priya:goodfirsttoken/issue-7-c_e2eclaim3?quick_pull=1&title=Fix+the+parser&body=Fixes',
+  bodyInLink: true,
+};
+
+test("Open PR on pushed work shows the button to GitHub's form from the answer, and work cleared already shows it without Open PR", async ({ page }) => {
+  const long = { ...toOpen, compareUrl: 'https://github.example/sample-owner/sample-app/compare/main...priya:goodfirsttoken/issue-8-c_e2eclaim5?quick_pull=1&title=Fix+the+parser', bodyInLink: false };
+  const cleared = `Cleared claim c_e2eclaim3 to open as a PR.`;
+  const view = await openView(page, views['review-queue'], {
+    input: {},
+    result: work([
+      ready,
+      { ...ready, claimId: 'c_e2eclaim5', issue: 'sample-owner/sample-app#8', reviewReason: 'ready_to_open', personWrittenDescription: true, toOpen: long },
+    ]),
+    callTool: () =>
+      Promise.resolve({
+        content: text(cleared),
+        structuredContent: { claimId: 'c_e2eclaim3', issue: ISSUE, state: 'awaiting_review', pr: null, toOpen, prOnIssue: null },
+      }),
+  });
+  const [first, waiting] = [view.frame.locator('.view-ready').first(), view.frame.locator('.view-ready').nth(1)];
+
+  // Cleared already: the description it was cleared with is too long for the link, so it is here to paste.
+  await expect(waiting.getByRole('button', { name: 'Open PR' })).toHaveCount(0);
+  await expect(waiting.getByRole('textbox', { name: 'Your PR description, in your own words' })).toHaveCount(0);
+  await expect(waiting.getByRole('textbox', { name: 'PR description to paste' })).toHaveValue(long.body);
+  await expect(waiting).toContainText('Good First Token records the PR once it is open.');
+  await waiting.getByRole('button', { name: 'Open the PR on GitHub' }).click();
+
+  await first.getByRole('button', { name: 'Open PR' }).click();
+
+  await expect(first).toContainText("GitHub's form opens with the title and description filled in.");
+  await expect(first).toContainText('Good First Token records the PR once it is open.');
+  await expect(first.getByRole('button', { name: 'Open PR' })).toHaveCount(0);
+  await expect(first.getByRole('textbox')).toHaveCount(0);
+  await first.getByRole('button', { name: 'Open the PR on GitHub' }).click();
+  await expect.poll(async () => sent(await view.messages(), 'ui/open-link').map((m) => m.params)).toEqual([{ url: long.compareUrl }, { url: toOpen.compareUrl }]);
+  expect(sent(await view.messages(), 'ui/update-model-context').map((m) => m.params)).toEqual([{ content: text(cleared) }]);
   expect(view.violations).toEqual([]);
 });
 

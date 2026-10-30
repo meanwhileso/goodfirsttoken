@@ -2402,6 +2402,91 @@ describe('clearing pushed work, and recording its PR', () => {
     expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened', pr: prOf(APP, number) });
   });
 
+  test('my_work lists cleared work with its title, its compare page link, and ready_to_open, until a later submit ends the clearance', async () => {
+    const { priya, claimId, name, start } = await pushed(reviewed);
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+    const toOpen = (await call(priya, 'open_pr', { claimId })).structuredContent?.toOpen as ToOpen;
+
+    const cleared = await call(priya, 'my_work');
+
+    expect(waiting).toMatchObject([{ claimId, reviewReason: 'reviewed_mode', toOpen: null }]);
+    const [item] = cleared.structuredContent?.readyToOpen as Record<string, unknown>[];
+    expect(item).toMatchObject({ claimId, reviewReason: 'ready_to_open', openable: true });
+    expect(item?.toOpen).toEqual(toOpen);
+    expect(toOpen).toMatchObject({ title: 'Keep the trailing slash in rewrites', bodyInLink: true });
+    expect(textOf(cleared)).toContain(`Cleared to open as a PR, titled: ${toOpen.title}`);
+    expect(textOf(cleared)).toContain(toOpen.compareUrl);
+    expect(textOf(cleared)).toContain("Then call record_pr with the PR's link.");
+    expect(textOf(cleared)).toContain(`---\n${toOpen.body}\n---`);
+
+    const again = push('priya/sample-app', name, start, 'priya', { 'src/slash.ts': 'export const keepSlash = 1;\n' });
+    await call(priya, 'submit_work', { claimId, branch: { repo: 'priya/sample-app', name, head: again }, ...NOTES });
+    const resubmitted = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+    expect(resubmitted).toMatchObject([{ claimId, reviewReason: 'reviewed_mode', toOpen: null }]);
+  });
+
+  test('cleared work keeps its link after the maintainers relabel or assign the issue, as record_pr still takes its PR', async () => {
+    const { priya, claimId, issue } = await pushed(reviewed);
+    const toOpen = (await call(priya, 'open_pr', { claimId })).structuredContent?.toOpen as ToOpen;
+    github.unlabelIssue(APP, numberOf(issue), 'help wanted', BY);
+    github.assignIssue(APP, numberOf(issue), 'sample-maintainer', BY);
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    const number = await openAs('priya', toOpen);
+    const recorded = await call(priya, 'record_pr', { claimId, pr: prUrl(number) });
+
+    expect(waiting).toMatchObject([{ claimId, reviewReason: 'ready_to_open', openable: true, reason: null, toOpen }]);
+    expect(recorded.structuredContent).toMatchObject({ state: 'pr_opened' });
+  });
+
+  test('work not cleared yet still says it cannot open once the issue loses its tag', async () => {
+    const { priya, claimId, issue } = await pushed(reviewed);
+    github.unlabelIssue(APP, numberOf(issue), 'help wanted', BY);
+
+    const waiting = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    expect(waiting).toMatchObject([{ claimId, reviewReason: 'reviewed_mode', openable: false, toOpen: null }]);
+  });
+
+  test('cleared work in a paused project lists with no link, and says why it cannot open', async () => {
+    const { priya, claimId } = await pushed(reviewed);
+    await call(priya, 'open_pr', { claimId });
+    await setProjectStatus(env.DB, APP, { status: 'paused', reason: 'Taking a break.', changedBy: maintainer.githubId }, Date.now());
+
+    const paused = (await call(priya, 'my_work')).structuredContent?.readyToOpen as Record<string, unknown>[];
+
+    expect(paused).toMatchObject([{ claimId, reviewReason: 'ready_to_open', toOpen: null, openable: false }]);
+  });
+
+  test('a body that would make the compare page link longer than 8,000 characters is left out of the link, for the donor to paste', async () => {
+    const { priya, claimId } = await pushed({ ...reviewed, personWrittenDescription: true });
+    const clear = async (description: string) =>
+      (await call(priya, 'open_pr', { claimId, description })).structuredContent?.toOpen as ToOpen;
+    const short = 'Keeps the slash.';
+    const fits = await clear(short);
+    // Letters and spaces take one character each in a link, so this
+    // description makes the link with its body exactly 8,000 characters.
+    const room = 8000 - fits.compareUrl.length - 1;
+    const filler = Array.from({ length: room }, (_, i) => (i % 2 === 0 ? 'a' : ' ')).join('').replace(/ $/, 'b');
+    const atLimit = `${short} ${filler}`;
+
+    const longest = await clear(atLimit);
+    const tooLong = await clear(`${atLimit}c`);
+    const listed = (await call(priya, 'my_work')).structuredContent?.readyToOpen as { toOpen: ToOpen }[];
+
+    expect(fits).toMatchObject({ bodyInLink: true });
+    expect(new URL(fits.compareUrl).searchParams.get('body')).toBe(fits.body);
+    expect(longest).toMatchObject({ bodyInLink: true });
+    expect(longest.compareUrl).toHaveLength(8000);
+    expect(new URL(longest.compareUrl).searchParams.get('body')).toBe(longest.body);
+    // One character more, and the link fills in the title alone.
+    expect(tooLong).toMatchObject({ bodyInLink: false });
+    expect(tooLong.body).toContain(`${atLimit}c`);
+    expect(Object.fromEntries(new URL(tooLong.compareUrl).searchParams)).toEqual({ quick_pull: '1', title: tooLong.title });
+    expect(textOf(await call(priya, 'open_pr', { claimId, description: `${atLimit}c` }))).toContain('The body is too long for the link');
+    expect(listed[0]?.toOpen).toEqual(tooLong);
+  });
+
   test('a PR made before the work expired records after it expires, and one made after does not', async () => {
     const { priya, claimId, submitted } = await pushed();
     const toOpen = submitted.structuredContent?.toOpen as ToOpen;

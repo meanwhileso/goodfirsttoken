@@ -904,15 +904,27 @@ function shellWord(text: string): string {
 }
 
 /**
+ * The longest compare page link the server gives out, in characters. GitHub
+ * doesn't say how long a link it takes (open question 4 in
+ * docs/specs/agent-submits.md). Browsers take far longer ones, but web
+ * servers and the proxies in front of them commonly refuse a request line
+ * over 8 KB, so a link stays under that. A body that would make the link
+ * longer is left out of it, for the donor to paste.
+ */
+export const MAX_COMPARE_URL = 8000;
+
+/**
  * How the agent opens the PR for pushed work: its head and base, its title
  * and body, the GitHub CLI command, and GitHub's form for it with the title
- * and body filled in.
+ * filled in, and the body too when the link stays under MAX_COMPARE_URL.
  * https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/using-query-parameters-to-create-a-pull-request
  */
 function prToOpen(facts: RepoFacts & { defaultBranch: string }, submission: SubmissionRecord, body: string): PrToOpen {
   const owner = submission.repo.slice(0, submission.repo.indexOf('/'));
   const head = `${owner}:${submission.branch}`;
-  const query = new URLSearchParams({ quick_pull: '1', title: submission.title, body });
+  const form = `${gitHubUrls().web}/${facts.name}/compare/${encodePath(facts.defaultBranch)}...${owner}:${encodePath(submission.branch)}`;
+  const filled = `${form}?${new URLSearchParams({ quick_pull: '1', title: submission.title, body }).toString()}`;
+  const bodyInLink = filled.length <= MAX_COMPARE_URL;
   return {
     repo: facts.name,
     head,
@@ -920,7 +932,8 @@ function prToOpen(facts: RepoFacts & { defaultBranch: string }, submission: Subm
     title: submission.title,
     body,
     command: `gh pr create --repo ${facts.name} --head ${head} --base ${shellWord(facts.defaultBranch)} --title ${shellWord(submission.title)} --body-file -`,
-    compareUrl: `${gitHubUrls().web}/${facts.name}/compare/${encodePath(facts.defaultBranch)}...${owner}:${encodePath(submission.branch)}?${query.toString()}`,
+    compareUrl: bodyInLink ? filled : `${form}?${new URLSearchParams({ quick_pull: '1', title: submission.title }).toString()}`,
+    bodyInLink,
   };
 }
 
@@ -1142,8 +1155,10 @@ export type ReviewItem = ToolOutput<'my_work'>['readyToOpen'][number];
  * The donor's submitted work waiting for them to open its PR: their claims
  * awaiting review, as each one's room holds it now, with their latest
  * submits. Each names a PR open on the issue, from its room or, read with
- * the donor's token, from GitHub. One whose PR can't be opened now says why,
- * and nothing about it is read from GitHub. my_work lists it with the token
+ * the donor's token, from GitHub. Pushed work open_pr cleared waits as
+ * `ready_to_open`, with how to open its PR and the compare page link. One
+ * whose PR can't be opened now says why, and nothing about it is read from
+ * GitHub. my_work lists it with the token
  * of the donor's agent, and /me with the one from their sign-in on the site.
  */
 export async function readyToOpen(caller: Caller, origin: string, now: number): Promise<ReviewItem[]> {
@@ -1171,17 +1186,28 @@ export async function readyToOpen(caller: Caller, origin: string, now: number): 
     const project = await getProject(env.DB, claim.project);
     let closed = blocked ?? (await projectClosedRefusal(env.DB, project, claim.project));
     let prs = roomPrs;
+    let toOpen: PrToOpen | null = null;
     // The issue is checked on GitHub as open_pr checks it, so a failing one
     // says why it can't open. A read GitHub refuses leaves the item openable,
-    // with the PRs its room knows of. A refused token still ends the
-    // connection.
+    // with the PRs its room knows of, and cleared work without its link, so
+    // Open PR clears it again. A refused token still ends the connection.
     if (closed === null && project !== null) {
       try {
+        const cleared = submission.source === 'branch' && submission.clearance !== null;
         const checked = await checkIssueFacts(env.DB, writer.reader, project, claim.issue, ownIssue(donor, NOT_OPENED));
         if (checked.ok) {
           prs = await otherPrs(writer, { claim, project, donor, roomPrs }, checked.issue.repo === null ? [] : [checked.issue.repo]);
-        } else {
+        } else if (!cleared) {
+          // open_pr's check of the issue stands for cleared work, as record_pr
+          // takes its PR once maintainers relabel or assign the issue
+          // (docs/specs/agent-submits.md).
           closed = checked.refusal;
+        }
+        // Cleared work links GitHub's form, aimed at the code repo's default branch as it is now.
+        if (cleared && submission.clearance !== null) {
+          const facts = await codeRepo(writer, project);
+          if (isRefusal(facts)) closed = facts;
+          else toOpen = prToOpen(facts, submission, submission.clearance.body);
         }
       } catch (error) {
         if (error instanceof GitHubError && error.status === 401) throw error;
@@ -1203,7 +1229,9 @@ export async function readyToOpen(caller: Caller, origin: string, now: number): 
       model: submission.model,
       summary: submission.summary,
       checks: submission.checks,
-      reviewReason: submission.reviewReason ?? 'pr_refused',
+      // Work open_pr cleared waits for its PR to open, whatever held it before.
+      reviewReason: submission.clearance === null ? (submission.reviewReason ?? 'pr_refused') : 'ready_to_open',
+      toOpen,
       prOnIssue: prs[0] ?? null,
       expiresAt: new Date(expiresAt ?? now).toISOString(),
       personWrittenDescription: project?.settings.personWrittenDescription ?? false,

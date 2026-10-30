@@ -169,6 +169,49 @@ describe('what each result says', () => {
     expect(text).not.toMatch(/\+\d+ -\d+/);
   });
 
+  describe('cleared work', () => {
+    const body = 'Adds the NDJSON formatter.\n\n  Indented, as written.\n\nCloses #918\n\nWritten with a coding agent through Good First Token.';
+    const toOpen = {
+      repo: 'meanwhileso/goodfirsttoken',
+      head: 'priya:goodfirsttoken/issue-918-c_2',
+      base: 'main',
+      title: 'Format events as NDJSON',
+      body,
+      command: "gh pr create --repo meanwhileso/goodfirsttoken --head priya:goodfirsttoken/issue-918-c_2 --base 'main' --title 'Format events as NDJSON' --body-file -",
+      compareUrl: 'https://github.com/meanwhileso/goodfirsttoken/compare/main...priya:goodfirsttoken/issue-918-c_2?quick_pull=1&title=Format',
+      bodyInLink: true,
+    };
+    const cleared = (open: typeof toOpen) => {
+      const [item] = samples.my_work.output.readyToOpen;
+      if (!item) throw new Error('missing sample item');
+      return { ...samples.my_work.output, readyToOpen: [{ ...item, reviewReason: 'ready_to_open' as const, prOnIssue: null, toOpen: open }] };
+    };
+
+    test('in my_work names its title, its compare page link, and record_pr, and gives its body word for word below the list', () => {
+      const text = textOf(toolResult('my_work', cleared(toOpen)));
+
+      expect(text).toContain('waiting because the work is cleared to open as a PR, and no PR is recorded yet');
+      expect(text).toContain(`Cleared to open as a PR, titled: ${toOpen.title}`);
+      expect(text).toContain(toOpen.command);
+      expect(text).toContain(`give the donor GitHub's form, filled in: ${toOpen.compareUrl}`);
+      expect(text).toContain("Then call record_pr with the PR's link.");
+      // The list indents its items, so the body comes after it, with nothing added to its lines.
+      expect(text).toContain(`Body of the PR for claim c_2, between the lines:\n---\n${body}\n---`);
+      // The donor already wrote the description that is in the body.
+      expect(text).not.toContain('Ask the donor to write the PR description.');
+    });
+
+    test('with a body too long for the link, tells the agent the link fills in the title alone, and to give the donor the body', () => {
+      const text = textOf(toolResult('my_work', cleared({ ...toOpen, bodyInLink: false })));
+      const opened = textOf(toolResult('open_pr', { ...samples.open_pr.output, state: 'awaiting_review', pr: null, toOpen: { ...toOpen, bodyInLink: false } }));
+
+      for (const said of [text, opened]) {
+        expect(said).toMatch(/the title filled in: \S+\n *The body is too long for the link, so give the donor the body/);
+        expect(said).not.toMatch(/form,? filled in:/);
+      }
+    });
+  });
+
   test('a claim on a project that wants a person-written description tells the agent to ask the donor for it', () => {
     const output = samples.claim_issue.output;
     const text = textOf(

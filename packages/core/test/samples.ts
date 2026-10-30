@@ -205,6 +205,7 @@ export const samples: Samples = {
           summary: 'Adds the NDJSON formatter.',
           checks: 'pnpm test (412 passing)',
           reviewReason: 'pr_exists',
+          toOpen: null,
           prOnIssue: { ...pr, number: 960, url: `https://github.com/${repo}/pull/960` },
           expiresAt: later,
           personWrittenDescription: true,

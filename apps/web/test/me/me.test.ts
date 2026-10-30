@@ -357,6 +357,135 @@ describe('Open PR on /me', () => {
   });
 });
 
+describe('work the agent pushed, on /me', () => {
+  const TRAILED = 'Keep the trailing slash in rewrites\n\nAssisted-by: claude-code (claude-opus-5-5)';
+
+  /** The donor's agent claims the issue, pushes the claim's branch to their fork, and submits it. */
+  async function pushed(d: Donor, issue: string, login: Login = 'priya') {
+    const claimed = await tool(d, 'claim_issue', { sessionId: d.sessionId, issue });
+    const content = claimed.structuredContent as { claim: { claimId: string }; clone: { commit: string }; branch: { name: string } };
+    const { claimId } = content.claim;
+    const name = content.branch.name;
+    const fork = `${login}/sample-app`;
+    const branches = github.state.repos[fork]?.branches;
+    if (!branches) throw new Error(`the fake has no fork ${fork}`);
+    branches[name] ??= content.clone.commit;
+    const head = github.commitFiles(fork, { 'src/rewrite.ts': 'export const keepSlash = true;\n' }, login, { branch: name, message: TRAILED });
+    const result = await tool(d, 'submit_work', {
+      claimId,
+      branch: { repo: fork, name, head },
+      ...NOTES,
+      agent: 'claude-code',
+      model: 'claude-opus-5-5',
+    });
+    return { claimId, name, head, fork, result };
+  }
+
+  /** The link the page gives to open the PR on GitHub, from its href. */
+  function formLink(html: string, issue: string): string | null {
+    const label = `aria-label="Open the PR for ${issue} on GitHub"`;
+    const anchor = /<a\b[^>]*>/g;
+    for (const [tag] of html.matchAll(anchor)) {
+      if (!tag.includes(label)) continue;
+      return /href="([^"]*)"/.exec(tag)?.[1]?.replaceAll('&amp;', '&') ?? null;
+    }
+    return null;
+  }
+
+  async function clearance(claimId: string) {
+    return (await getSubmission(env.DB, claimId))?.clearance ?? null;
+  }
+
+  test('Open PR clears the work by open_pr\'s rules, opens nothing on GitHub, and links the form with its title and body from the clearance', async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const { claimId, name } = await pushed(priya, issue);
+    const browser = await site('priya');
+    const before = await (await browser.fetch('/me')).text();
+    const calls = github.calls.length;
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId)));
+
+    expect(before).toContain(`aria-label="Open PR for ${issue}"`);
+    expect(formLink(before, issue)).toBeNull();
+    expect(pulls()).toEqual([]);
+    expect(github.calls.slice(calls).filter((call) => call.operation === PR_CALL)).toEqual([]);
+    const cleared = await clearance(claimId);
+    expect(cleared).not.toBeNull();
+    expect(shown(answer)).toContain(`The PR for ${issue} is ready to open. Open it on GitHub from your queue.`);
+    expect(shown(answer)).not.toContain('/compare/');
+    const link = formLink(answer, issue);
+    if (link === null) throw new Error('no link to open the PR');
+    const form = new URL(link);
+    expect(`${form.origin}${form.pathname}`).toBe(`${github.webUrl}/${APP}/compare/main...priya:${name}`);
+    expect(Object.fromEntries(form.searchParams)).toEqual({ quick_pull: '1', title: 'Keep the trailing slash in rewrites', body: cleared?.body });
+    expect(answer).toContain('Good First Token records the PR once it is open.');
+    expect(answer).not.toContain(`aria-label="Open PR for ${issue}"`);
+    expect(await stateOf(issue, claimId)).toBe('awaiting_review');
+  });
+
+  test('work its submit cleared at once, in automatic mode, shows its link when the page loads, and in /me.md', async () => {
+    await project({ tags: ['help wanted'], prMode: 'automatic' });
+    const branchIssue = await tagged();
+    const priya = await agentOf('priya');
+    const { claimId, result } = await pushed(priya, branchIssue);
+    const browser = await site('priya');
+
+    const page = await (await browser.fetch('/me')).text();
+    const markdown = await (await browser.fetch('/me.md')).text();
+
+    expect(result.structuredContent).toMatchObject({ reviewReason: 'ready_to_open' });
+    const link = formLink(page, branchIssue);
+    expect(link).not.toBeNull();
+    expect(new URL(link ?? '').searchParams.get('body')).toBe((await clearance(claimId))?.body);
+    expect(page).toContain("GitHub&#x27;s form opens with the title and description filled in.");
+    expect(page).not.toContain(`aria-label="Open PR for ${branchIssue}"`);
+    const linked = /\[open the PR on GitHub\]\(([^)]*)\)/.exec(markdown)?.[1];
+    expect(linked).toBe(new URL(link ?? '').href);
+  });
+
+  test('a description too long for the link leaves the link with the title alone, and the page shows the description to paste', async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed', personWrittenDescription: true });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const { claimId } = await pushed(priya, issue);
+    const browser = await site('priya');
+    const words = `Rewrites keep the slash.\r\n\r\n${'I read every rewrite rule & its test. '.repeat(300)}`;
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId, { description: words })));
+
+    const cleared = await clearance(claimId);
+    expect(cleared?.body).toContain(words.replaceAll('\r\n', '\n').trim());
+    const link = formLink(answer, issue);
+    if (link === null) throw new Error('no link to open the PR');
+    expect(link.length).toBeLessThanOrEqual(8000);
+    expect(Object.fromEntries(new URL(link).searchParams)).toEqual({ quick_pull: '1', title: 'Keep the trailing slash in rewrites' });
+    const pasted = /<textarea[^>]*readOnly=""[^>]*>\n?([^<]*)<\/textarea>/.exec(answer)?.[1];
+    expect(pasted?.replaceAll('&amp;', '&')).toBe(cleared?.body);
+    expect(answer).toContain('PR description to paste');
+    expect(answer).toContain('Good First Token records the PR once it is open.');
+    const markdown = await (await browser.fetch('/me.md')).text();
+    expect(markdown).toContain('The description is too long for the link, so copy it from [this page]');
+  });
+
+  test("Open PR refuses as open_pr does, like a branch that moved since its submit, and clears nothing", async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const { claimId, name, fork } = await pushed(priya, issue);
+    github.commitFiles(fork, { 'b.txt': 'b\n' }, 'priya', { branch: name, message: TRAILED });
+    const browser = await site('priya');
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId)));
+
+    expect(shown(answer)).toContain(`No PR opened. ${fork}:${name} is at `);
+    expect(await clearance(claimId)).toBeNull();
+    expect(formLink(answer, issue)).toBeNull();
+    expect(answer).toContain(`aria-label="Open PR for ${issue}"`);
+  });
+});
+
 describe('the description a project asks the donor to write', () => {
   test("starts empty, never holding the agent's summary", async () => {
     await project({ tags: ['help wanted'], prMode: 'reviewed', personWrittenDescription: true });
