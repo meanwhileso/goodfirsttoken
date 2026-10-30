@@ -46,6 +46,20 @@ export const refusalCodes = [
   // GitHub refused a write the server made with the donor's token: the fork,
   // the branch, the commit, or the PR.
   'github_refused',
+  // A pushed branch: GitHub shows no such branch in the repo the agent
+  // named, or its head isn't the commit the agent named.
+  'branch_not_found',
+  // A pushed branch is in a repo other than the code repo or a fork of it,
+  // or other than the one the claim's branch is already in.
+  'branch_elsewhere',
+  // The claim's start commit isn't an ancestor of a pushed branch's head.
+  'not_from_start',
+  // A commit on a pushed branch lacks the disclosure trailer the project
+  // asks for.
+  'trailer_missing',
+  // A submit with files after the claim's branch was pushed, which would
+  // write over the pushed work.
+  'branch_pushed',
   // Maintainers and admins (spec sections 3 and 4).
   'not_maintainer',
   'repo_not_eligible',

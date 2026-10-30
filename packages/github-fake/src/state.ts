@@ -40,6 +40,10 @@ export interface Account {
   // GitHub names them MEMBER only to someone who is a member too. State
   // saved before the fake kept them has none.
   privateMembers?: string[];
+  // An organization that restricts OAuth apps, with the client IDs of the
+  // apps it approved. State saved before the fake kept it has none, and
+  // restricts no app.
+  oauthAppRestrictions?: { approved: string[] };
 }
 
 export interface LabelRecord {
@@ -292,6 +296,17 @@ export function permissions(role: Role) {
 
 export function requirePush(repo: RepoRecord, login: string | null): void {
   if (!canPush(roleOf(repo, login))) throw new FakeError('not_found', 'Not Found');
+}
+
+// An organization that restricts OAuth apps takes no write to its repos
+// from a token of an app it hasn't approved, public repos included, and
+// GitHub answers 403 with this message. Reads of public repos still work. A
+// token from no app, like a personal access token, isn't held back.
+// https://docs.github.com/en/organizations/managing-oauth-access-to-your-organizations-data/about-oauth-app-access-restrictions
+export function appRestriction(state: FakeState, repo: RepoRecord, clientId: string | null): string | null {
+  const restrictions = findAccount(state, repo.owner)?.oauthAppRestrictions;
+  if (clientId === null || restrictions === undefined || restrictions.approved.includes(clientId)) return null;
+  return `Although you appear to have the correct authorization credentials, the \`${repo.owner}\` organization has enabled OAuth App access restrictions, meaning that data access to third-parties is limited. For more information on these restrictions, including how to enable this app, visit https://docs.github.com/articles/restricting-access-to-your-organization-s-data/`;
 }
 
 // Whether the repo's git data is there at `now`. A fork isn't at first.

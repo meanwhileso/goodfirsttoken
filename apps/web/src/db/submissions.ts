@@ -14,6 +14,7 @@ import { fromJson } from './shared';
 
 interface SubmissionRow {
   claim_id: string;
+  source: string;
   repo: string;
   branch: string;
   commit_sha: string;
@@ -36,6 +37,7 @@ function toSubmission(row: SubmissionRow): SubmissionRecord {
     submissionRecordSchema,
     {
       claimId: row.claim_id,
+      source: row.source,
       repo: row.repo,
       branch: row.branch,
       commit: row.commit_sha,
@@ -65,11 +67,11 @@ export async function saveSubmission(db: D1Database, submission: SubmissionRecor
   const row = await db
     .prepare(
       `INSERT INTO submissions (claim_id, repo, branch, commit_sha, paths, title, summary, checks, agent, model,
-         additions, deletions, review_reason, submitted_at, base, diff_from)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         additions, deletions, review_reason, submitted_at, base, diff_from, source)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
        ON CONFLICT (claim_id) DO UPDATE SET repo = ?2, branch = ?3, commit_sha = ?4, paths = ?5, title = ?6,
          summary = ?7, checks = ?8, agent = ?9, model = ?10, additions = ?11, deletions = ?12,
-         review_reason = ?13, submitted_at = ?14, base = ?15, diff_from = ?16
+         review_reason = ?13, submitted_at = ?14, base = ?15, diff_from = ?16, source = ?17
        RETURNING *`,
     )
     .bind(
@@ -89,6 +91,7 @@ export async function saveSubmission(db: D1Database, submission: SubmissionRecor
       s.submittedAt,
       s.base,
       s.diffFrom,
+      s.source,
     )
     .first<SubmissionRow>();
   if (row === null) throw new Error(`Claim ${s.claimId}'s submission was not saved.`);

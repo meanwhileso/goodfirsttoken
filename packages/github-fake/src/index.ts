@@ -118,12 +118,13 @@ export interface GitHubFake {
   // Commits these files, path to text, to the repo's default branch as
   // `by`, or to `branch`, and returns the commit's ID. A file given null is
   // deleted. A file is 100644 unless `modes` gives it another mode. For a
-  // submodule, 160000, its text is the ID of the commit it names.
+  // submodule, 160000, its text is the ID of the commit it names. The
+  // commit's message is `message` when given, and else "Update files".
   commitFiles: (
     repo: string,
     files: Record<string, string | null>,
     by: string,
-    options?: { branch?: string; modes?: Record<string, FileMode> },
+    options?: { branch?: string; modes?: Record<string, FileMode>; message?: string },
   ) => string;
   // Clicks Update branch on a PR as `by`: the base branch merges into the
   // PR's branch. Returns the merge commit's ID.
@@ -204,6 +205,13 @@ const RATE_LIMIT_DOCS = 'https://docs.github.com/rest/using-the-rest-api/rate-li
 const USER_AGENT_REQUIRED =
   'Request forbidden by administrative rules. Please make sure your request has a User-Agent header (https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required). Check https://developer.github.com for other possible causes.';
 
+// A commit message as createCommitOnBranch takes it: its first line, and the rest.
+function messageParts(message: string): { headline: string; body: string | null } {
+  const [headline = '', ...rest] = message.split('\n');
+  const body = rest.join('\n').trim();
+  return { headline, body: body === '' ? null : body };
+}
+
 export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
   const api = new URL(options.apiUrl ?? DEFAULT_API_URL);
   const web = new URL(options.webUrl ?? DEFAULT_WEB_URL);
@@ -249,7 +257,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       return done(errorResponse(400, 'Problems parsing JSON', REST_DOCS), operation);
     }
     const at = now();
-    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [], now: at.toISOString() };
+    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [], clientId: grant?.clientId ?? null, now: at.toISOString() };
     const app = appCredentialsFrom(request.headers.get('authorization'));
     let name = operation;
     if (graphql) {
@@ -409,7 +417,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
         state,
         record,
         options.branch ?? record.defaultBranch,
-        { additions, deletions, headline: 'Update files', login: by },
+        { additions, deletions, ...messageParts(options.message ?? 'Update files'), login: by },
         now().toISOString(),
       );
     },

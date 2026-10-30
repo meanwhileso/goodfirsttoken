@@ -65,6 +65,20 @@ offers another project. Then:
   PR, and the message gives GitHub's reason. For a change under
   .github/workflows/, leave it out, and tell the donor to make it on
   GitHub. Otherwise tell the donor the reason. The claim stays as it was.
+- `branch_not_found`: The pushed branch doesn't have the claim's name, or
+  GitHub doesn't show it at the head you named. Push the branch
+  `claim_issue` named, and submit with the head the message gives.
+- `branch_elsewhere`: The pushed branch is in a repo that isn't the code
+  repo or a fork of it, or isn't where the claim's branch already is. Push
+  it to the repo the message names, and submit again.
+- `not_from_start`: The pushed branch doesn't build on the start commit.
+  Build it on the start commit, push it, and submit again.
+- `trailer_missing`: A commit on the pushed branch lacks the project's
+  trailer. Add the line the message gives to each commit it names, push
+  the branch, and submit again.
+- `branch_pushed`: The claim's branch was pushed, so a submit with files
+  would write over it. Push your work to the branch, and submit with
+  `branch`.
 - `not_submitted`: The claim has no submitted work yet. Submit it with
   `submit_work` first.
 - `pr_already_opened`: The claim already has a PR. Fixes go onto it with

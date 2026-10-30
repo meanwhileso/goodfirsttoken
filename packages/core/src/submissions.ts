@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName, trimmedText } from './primitives';
 
 // The work a claim submitted (spec section 7, steps 5 and 6). submit_work
-// commits it to a branch as the donor, then opens the PR or puts the work in
+// commits it to a branch as the donor, or takes a branch the donor's agent
+// pushed (docs/specs/agent-submits.md), then opens the PR or puts the work in
 // the donor's review queue, where open_pr opens it.
 
 /**
@@ -12,16 +13,18 @@ import { agentName, commitSha, count, epochMs, id, modelName, oneLine, repoName,
  * - `pr_exists`: a PR is already open on the issue, so a person decides
  *   whether a second one helps.
  * - `workflow_files`: the change touches a GitHub Actions workflow file.
- * - `too_many_files`: someone else pushed to the branch, and GitHub's
- *   comparison lists 300 files, its most, so it may leave a workflow file
- *   out.
- * - `comparison_unread`: someone else pushed to the branch, and GitHub gave
- *   no comparison to check for workflow files.
+ * - `too_many_files`: the branch holds commits the server didn't make, and
+ *   GitHub's comparison lists 300 files, its most, or fewer commits than the
+ *   branch has, so it may leave a workflow file or a commit out.
+ * - `comparison_unread`: the branch holds commits the server didn't make,
+ *   and GitHub gave no comparison to check.
  * - `reviewed_mode`: the project's PR mode is `reviewed`.
  * - `person_written_description`: the project wants the donor to write the
  *   PR description.
  * - `open_pr_cap`: the donor has as many open PRs in the project as it allows.
  * - `pr_refused`: the PR was to open by itself, and GitHub didn't open it.
+ * - `ready_to_open`: pushed work with no other reason to wait, which the
+ *   agent opens with open_pr.
  */
 export const reviewReasons = [
   'pr_exists',
@@ -32,6 +35,7 @@ export const reviewReasons = [
   'person_written_description',
   'open_pr_cap',
   'pr_refused',
+  'ready_to_open',
 ] as const;
 export const reviewReasonSchema = z.enum(reviewReasons);
 export type ReviewReason = z.infer<typeof reviewReasonSchema>;
@@ -49,19 +53,29 @@ export const MAX_PR_TITLE = 256;
 /** A PR title, and the commit's first line: one line of text. */
 export const prTitle = oneLine(MAX_PR_TITLE, `must be at most ${String(MAX_PR_TITLE)} characters, the GitHub limit`);
 
-/** A branch the server made, like `goodfirsttoken/issue-12-c_2x8Qm0vT4kLp9aZr1yWc`. */
+/** A claim's branch, like `goodfirsttoken/issue-12-c_2x8Qm0vT4kLp9aZr1yWc`. */
 export const branchName = z.string({ error: 'must be a branch name' }).min(1).max(255);
 
 /**
+ * How a claim's work reached its branch: `files`, which the server committed,
+ * or `branch`, which the donor's agent pushed.
+ */
+export const submissionSources = ['files', 'branch'] as const;
+export const submissionSourceSchema = z.enum(submissionSources);
+export type SubmissionSource = z.infer<typeof submissionSourceSchema>;
+
+/**
  * A claim's submitted work, as its latest submit left it. A claim has one
- * branch, and every submit adds a commit to it.
+ * branch, and every submit adds a commit to it, or names the head the agent
+ * pushed.
  */
 export const submissionRecordSchema = z.object({
   claimId: id,
+  source: submissionSourceSchema,
   /** Where the branch is: the project's code repo, or the donor's fork of it. */
   repo: repoName,
   branch: branchName,
-  /** The commit the latest submit made. */
+  /** The commit the latest submit made, or the head it named. */
   commit: commitSha,
   /**
    * The commit the submits' files are read against: the claim's start
@@ -75,7 +89,10 @@ export const submissionRecordSchema = z.object({
    * from it, as the PR's own change is.
    */
   diffFrom: commitSha,
-  /** The paths the latest submit sent, which the branch changes from `base`. */
+  /**
+   * The paths the latest submit sent, which the branch changes from `base`.
+   * For a pushed branch, the paths GitHub's comparison lists from `diffFrom`.
+   */
   paths: z.array(z.string().min(1)).max(300),
   title: prTitle,
   /** The agent's summary, with keys and tokens replaced. */

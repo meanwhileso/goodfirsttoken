@@ -26,6 +26,7 @@ function claimOn(claimId: string, number: number): ClaimRecord {
 function submission(claimId: string, rest: Partial<SubmissionRecord> = {}): SubmissionRecord {
   return {
     claimId,
+    source: 'files',
     repo: 'priya/sample-app',
     branch: `goodfirsttoken/issue-12-${claimId}`,
     commit: 'a'.repeat(40),

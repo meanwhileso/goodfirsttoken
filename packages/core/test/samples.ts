@@ -136,6 +136,7 @@ export const samples: Samples = {
       body: 'The live feed should also stream as NDJSON.',
       project: { repo, settings },
       clone: { url: `https://github.com/${repo}.git`, commit: sha },
+      branch: { name: 'goodfirsttoken/issue-918-c_1', canPush: false },
       resumed: false,
       skipped: [
         {
@@ -151,6 +152,7 @@ export const samples: Samples = {
       issue,
       sha,
       'Run pnpm test before submitting.',
+      `Commit on the branch goodfirsttoken/issue-918-c_1, and push it to the donor's fork of ${repo}.`,
       'Disclose AI use with the trailer Assisted-by on each commit.',
       'Disclose AI use with this in the PR body, word for word:\n  Written with a coding agent through Good First Token.',
       'NDJSON',
@@ -169,6 +171,7 @@ export const samples: Samples = {
       claimId: 'c_1',
       issue,
       state: 'pr_opened',
+      source: 'files',
       commit: { sha, url: `https://github.com/priya/goodfirsttoken/commit/${sha}` },
       branch: { repo: 'priya/goodfirsttoken', name: 'gft-918', url: 'https://github.com/priya/goodfirsttoken/tree/gft-918' },
       diffUrl: `https://github.com/priya/goodfirsttoken/compare/${sha}...gft-918`,

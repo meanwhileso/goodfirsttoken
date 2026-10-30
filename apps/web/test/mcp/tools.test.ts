@@ -64,7 +64,8 @@ test("a tools/list answers with the donor's tools and the maintainer's tools, ea
   expect(tool('start_session')?.outputSchema).toMatchObject({ required: expect.arrayContaining(['sessionId', 'login']) as string[] });
   expect(tool('claim_issue')?.inputSchema).toMatchObject({ required: ['sessionId'] });
   expect(tool('submit_work')?.inputSchema).toMatchObject({
-    required: ['claimId', 'files', 'summary', 'checks', 'agent', 'model'],
+    required: ['claimId', 'summary', 'checks', 'agent', 'model'],
+    properties: { branch: { required: ['repo', 'name', 'head'] }, files: { type: 'array' } },
   });
   expect(tool('open_pr')?.inputSchema).toMatchObject({ required: ['claimId'] });
   expect(tool('register_project')?.inputSchema).toMatchObject({ required: ['repo'] });

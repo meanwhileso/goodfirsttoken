@@ -544,7 +544,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
-| `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR |
+| `src/donor/writes.ts` | What `submit_work` and `open_pr` do on GitHub with the donor's token: fork, branch, read files, commit, compare, and open the PR, and the reads that check a pushed branch: the branch's repo and its fork parent, a comparison with its commits, and a PR's head |
 | `src/donor/work.ts` | The submitted work's rules as pure functions: workflow paths, the review reason, the branch name, and the words of the commit and the PR |
 | `src/donor/vouch.ts` | The vouch file's format |
 | `src/donor/pick.ts` | Ranking against interests, and the random order with weight toward the top |
@@ -817,6 +817,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   one of their text, the new branch, the commit, the comparison, the
   issue's closing references and timeline, and the PR. Each path put back
   adds a blob read.
+- **A pushed branch.** A submit of a branch the agent pushed makes only
+  reads, about eight: the code repo, the issue, the branch's repo when it is
+  a fork, the branch, a comparison with the start commit, one with the
+  default branch, the issue's closing references and timeline, and one read
+  of each PR on the issue, for the branch it comes from. A fix after the PR
+  opens adds a comparison with the last submit's head. GitHub's comparison
+  lists at most 250 commits and 300 files, so a longer one sends the work
+  to review. The fake lists every commit.
 
 ### The admin's tools and pages
 
@@ -1624,7 +1632,7 @@ in `people`.
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
 | `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the PR job's reads of its reviews covered, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
 | `follow_ups` | Review or comment on a line that a reviewer wrote on a claim's open PR, as the PR job read it: GitHub's ID for it, the reviewer, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
-| `submissions` | Claim's submitted work: the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
+| `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
@@ -3810,7 +3818,7 @@ and Playwright run it as a local HTTP server.
 - **Tests change it the way people change GitHub.** Besides merging,
   closing, reopening, and reviewing PRs, as a person or a bot, leaving a
   review pending, which only its author sees, and dismissing one, and
-  committing and deleting files, to any branch and with any mode, a test
+  committing and deleting files, to any branch, with any mode and message, a test
   can open, label, unlabel, assign, and close issues, make someone a
   member of an organization, in public or in private, give someone a role
   on a repo through a team, rename or move a repo, delete one, make a new
@@ -3827,7 +3835,12 @@ and Playwright run it as a local HTTP server.
   expected head, makes the caller the author, and GitHub signs the commit.
   It refuses a change to a file under `.github/workflows/` from a token
   without the `workflow` scope, unless another branch of the repo has the
-  same file, with the same path and content. It writes every file it adds
+  same file, with the same path and content. An organization a test sets
+  `oauthAppRestrictions` on takes no write to its repos, public ones
+  included, from a token of an OAuth app it hasn't approved: REST answers
+  403, and `createCommitOnBranch` a `FORBIDDEN` error, with GitHub's
+  message. Reads of public repos still work, and so does a token from no
+  app. It writes every file it adds
   as mode 100644, whatever the file was. A tree keeps each file's mode:
   100644, 100755 for an executable file, 120000 for a symbolic link, and
   160000 for a submodule, whose commit is in another repo, so
@@ -3872,6 +3885,11 @@ and Playwright run it as a local HTTP server.
     `previous_filename`, only when the file moved with its text as it was.
     GitHub also finds a rename with changed text.
   - An archived repo accepts writes.
+  - An organization that restricts OAuth apps lets an app it hasn't
+    approved fork its repos, since a fork goes in the person's own account,
+    and read its private ones. GitHub refuses those reads. What GitHub does
+    for a fork isn't checked, and the restriction's message is the one
+    people report from GitHub, which its docs don't give.
   - A folder's contents over REST, and a comparison, leave a submodule
     out. GitHub lists one in a folder with the type `submodule`.
   - Update branch merges with no check for conflicts, and has no REST
