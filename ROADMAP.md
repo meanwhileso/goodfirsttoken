@@ -152,7 +152,7 @@ Deploys, the static host, a security review, and the launch video.
 
 ## M9 Agent-side submits
 
-The proposed [agent-side submits spec](docs/specs/agent-submits.md) has the donor's agent push the
+The approved [agent-side submits spec](docs/specs/agent-submits.md) has the donor's agent push the
 claim's branch and open the PR with the donor's own tools. Good First Token checks the branch and the
 PR with GitHub reads, and records them. Once the spec is approved, each item below becomes an issue
 labeled `roadmap`, this list becomes a table, and the dependency graph gets the items.
@@ -162,7 +162,7 @@ labeled `roadmap`, this list becomes a table, and the dependency graph gets the 
 3. Find and record PRs from cleared claims' branches. Follows item 2.
 4. Show cleared work with its compare page link in `my_work`, on /me, and in MCP Apps. Follows item 2.
 5. Teach the skills and /start.md to push, open the PR, and record it. Follows items 3 and 4.
-6. Remove the server's write path for donors' work. Follows item 5 and the spec's open question 1.
+6. Remove the server's write path for donors' work. Follows item 5.
 
 ## Dependency graph
 

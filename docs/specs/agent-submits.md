@@ -1,6 +1,6 @@
 # Submit work with the donor's own tools
 
-Status: proposed on October 29, 2026. This changes how a donor's work
+Status: approved on October 29, 2026. This changes how a donor's work
 reaches GitHub. It replaces step 5 of
 [the donor's flow](v1.md#7-the-donors-flow) in v1, the Open PR step in
 step 6, and the reason
@@ -47,9 +47,9 @@ record it on the claim.
 
 There is one way to submit. A second path through the server, for
 organizations that approved the app, would double the rules and the tests.
-Whether a harness without the donor's GitHub credentials needs the server's
-path is [open question 1](#open-questions). The server's write path goes
-only once that is answered.
+The server's write path goes in the last build item. A harness without the
+donor's GitHub credentials has the donor push from their own terminal, as
+[open question 1](#open-questions) records.
 
 The donor's tools can meet limits of their own. GitHub CLI is an OAuth app
 too, so an organization that hasn't approved it may refuse its writes. An
@@ -227,7 +227,7 @@ What the server gives up:
    installed with `npx skills add` or from GitHub have no version to check,
    so the tool descriptions say to send `branch`, and the refusal in step 3
    names the update.
-3. Once open question 1 is answered, `files` goes. A submit with files is
+3. In item 6, `files` goes. A submit with files is
    then refused with a message that tells the agent to update the skill and
    push the branch.
 4. Claims submitted with `files` keep the branches the server made. Those
@@ -263,8 +263,7 @@ places them in their own milestone.
    the MCP Apps review queue. This follows item 2.
 5. Teach the skills and /start.md to commit with the trailer, push, open the
    PR, and record it. Raise the plugin's version. This follows items 3 and 4.
-6. Remove `files` and the server's write path. This follows item 5 and the
-   answer to open question 1.
+6. Remove `files` and the server's write path. This follows item 5.
 
 ## Done when
 
@@ -304,9 +303,10 @@ places them in their own milestone.
    Code, Codex, OpenCode, and Cursor usually run on the donor's machine,
    with the donor's git and GitHub CLI. Grok Bot runs on its own cloud
    computer, and cloud sessions of other harnesses push through their own
-   GitHub integrations. Check each before item 6. A harness that can't push
-   could keep the server's write path, or the donor could push from their
-   own terminal.
+   GitHub integrations. Answered when the spec was approved: the server's
+   write path goes without waiting for that check. In a harness that can't
+   push, the donor pushes the branch from their own terminal, and the
+   skill says so.
 2. Whether an organization that restricts OAuth apps refuses GitHub CLI's
    writes to its public repos, as it refuses the site's. Check on real
    GitHub with an organization that hasn't approved GitHub CLI.
