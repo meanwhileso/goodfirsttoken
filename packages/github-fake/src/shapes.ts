@@ -31,6 +31,9 @@ export interface Ctx {
   viewer: string | null;
   // The OAuth scopes of that token. A private repo needs `repo` to be seen.
   scopes: readonly string[];
+  // The client ID of the OAuth app that issued that token, or null for a
+  // token from no app.
+  clientId: string | null;
   // The fake's time for the call, as ISO 8601.
   now: string;
 }

@@ -23,6 +23,7 @@ import {
 } from './shapes.ts';
 import {
   FakeError,
+  appRestriction,
   canSee,
   findIssue,
   findRepo,
@@ -560,6 +561,10 @@ function match(route: Route, method: string, path: string): Params | null {
   return want.length === have.length ? params : null;
 }
 
+// Writes that change nothing in the repo they name. A fork goes in the
+// person's own account.
+const WRITE_FREE = new Set(['POST /repos/{owner}/{repo}/forks']);
+
 const STATUS = { not_found: 404, forbidden: 403, invalid: 422, stale: 409, empty: 409 };
 
 // The page GitHub's redirect answers name as documentation_url. It says to
@@ -610,6 +615,11 @@ export function handleRest(req: RestRequest, asked: string): { response: Respons
     if (route.auth && req.ctx.viewer === null) {
       return { response: errorResponse(401, 'Requires authentication', route.docs), operation };
     }
+    // A write to a repo of an organization that restricts OAuth apps.
+    const named = params.owner !== undefined && params.repo !== undefined ? findRepo(req.ctx.state, params.owner, params.repo) : null;
+    const writes = req.method !== 'GET' && req.method !== 'HEAD' && !WRITE_FREE.has(operation);
+    const restricted = named === null || !writes ? null : appRestriction(req.ctx.state, named, req.ctx.clientId);
+    if (restricted !== null) return { response: errorResponse(403, restricted, route.docs), operation };
     try {
       return { response: route.handle(req, params), operation };
     } catch (error) {

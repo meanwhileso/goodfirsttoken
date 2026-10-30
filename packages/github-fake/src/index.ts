@@ -249,7 +249,7 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
       return done(errorResponse(400, 'Problems parsing JSON', REST_DOCS), operation);
     }
     const at = now();
-    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [], now: at.toISOString() };
+    const ctx = { state, apiUrl, webUrl, viewer: login, scopes: grant?.scopes ?? [], clientId: grant?.clientId ?? null, now: at.toISOString() };
     const app = appCredentialsFrom(request.headers.get('authorization'));
     let name = operation;
     if (graphql) {

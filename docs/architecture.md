@@ -3827,7 +3827,12 @@ and Playwright run it as a local HTTP server.
   expected head, makes the caller the author, and GitHub signs the commit.
   It refuses a change to a file under `.github/workflows/` from a token
   without the `workflow` scope, unless another branch of the repo has the
-  same file, with the same path and content. It writes every file it adds
+  same file, with the same path and content. An organization a test sets
+  `oauthAppRestrictions` on takes no write to its repos, public ones
+  included, from a token of an OAuth app it hasn't approved: REST answers
+  403, and `createCommitOnBranch` a `FORBIDDEN` error, with GitHub's
+  message. Reads of public repos still work, and so does a token from no
+  app. It writes every file it adds
   as mode 100644, whatever the file was. A tree keeps each file's mode:
   100644, 100755 for an executable file, 120000 for a symbolic link, and
   160000 for a submodule, whose commit is in another repo, so
@@ -3872,6 +3877,11 @@ and Playwright run it as a local HTTP server.
     `previous_filename`, only when the file moved with its text as it was.
     GitHub also finds a rename with changed text.
   - An archived repo accepts writes.
+  - An organization that restricts OAuth apps lets an app it hasn't
+    approved fork its repos, since a fork goes in the person's own account,
+    and read its private ones. GitHub refuses those reads. What GitHub does
+    for a fork isn't checked, and the restriction's message is the one
+    people report from GitHub, which its docs don't give.
   - A folder's contents over REST, and a comparison, leave a submodule
     out. GitHub lists one in a folder with the type `submodule`.
   - Update branch merges with no check for conflicts, and has no REST

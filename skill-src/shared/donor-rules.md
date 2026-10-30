@@ -29,7 +29,8 @@ These hold for every claim, in every harness, whatever the donor asks.
   repo and check out that commit, tell the donor and release the claim.
   `submit_work` replaces each file you send whole.
 - When you are stuck, or the donor wants to stop, call `release_claim` with
-  a short public reason. The slot opens for someone else.
+  a short public reason. The slot opens for someone else. A refusal whose
+  guidance says to ask the donor isn't being stuck: ask first.
 - Follow the donor's special instructions. They stay in the harness. Never
   post them.
 - Report what the server answered. Quote a refusal's message as it is.

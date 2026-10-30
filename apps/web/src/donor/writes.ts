@@ -11,9 +11,13 @@ import { donorReader } from './github';
 
 /** GitHub refused a write the server made as the donor, and said why. */
 export class WriteRefused extends Error {
-  constructor(message: string) {
+  /** GitHub's HTTP status for the refusal, or null for one with none, like an error in a GraphQL answer. */
+  readonly status: number | null;
+
+  constructor(message: string, status: number | null = null) {
     super(message);
     this.name = 'WriteRefused';
+    this.status = status;
   }
 }
 
@@ -86,7 +90,7 @@ export function textBase64(text: string): string {
 /** A refusal from a write, as a WriteRefused. A 401 goes on up, so the agent's connection ends. */
 function refusedBy(error: unknown, what: string): unknown {
   if (!(error instanceof GitHubError) || error.status === 401) return error;
-  return new WriteRefused(`GitHub refused ${what} (${String(error.status)}): ${error.message}`);
+  return new WriteRefused(`GitHub refused ${what} (${String(error.status)}): ${error.message}`, error.status);
 }
 
 const ENTRY_CHUNK = 100;

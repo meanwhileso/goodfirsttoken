@@ -557,3 +557,62 @@ test("Update branch merges the base branch into a PR's branch, in a merge commit
   expect(fromBase64(await file('theirs.txt'))).toBe('From main.\n');
   expect(fromBase64(await file('mine.txt'))).toBe('Suggested.\n');
 });
+
+test("an organization that restricts OAuth apps takes no branch, commit, or PR from an app it didn't approve, and a fork all the same", async () => {
+  const restricted = fake.state.accounts.meanwhileso;
+  if (!restricted) throw new Error('no meanwhileso');
+  restricted.oauthAppRestrictions = { approved: ['approved-app'] };
+  const fromApp = (login: string, clientId: string) => {
+    const token = fake.tokenFor(login);
+    const grant = fake.state.tokens[token];
+    if (!grant) throw new Error('no token');
+    grant.clientId = clientId;
+    return token;
+  };
+  const kenji = fromApp('kenji', 'other-app');
+  const sha = await head('meanwhileso/goodfirsttoken', 'main');
+
+  const branch = await rest<{ message: string }>(fake, 'POST', `${UPSTREAM}/git/refs`, {
+    token: kenji,
+    body: { ref: 'refs/heads/kenji-19', sha },
+  });
+  const commit = await graphql<CommitReply>(fake, kenji, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'meanwhileso/goodfirsttoken', branchName: 'main' },
+      expectedHeadOid: sha,
+      message: { headline: 'Held back' },
+      fileChanges: { additions: [{ path: 'held.txt', contents: toBase64('held') }] },
+    },
+  });
+  const read = await rest(fake, 'GET', `${UPSTREAM}/branches/main`, { token: kenji });
+  const fork = await rest<{ full_name: string }>(fake, 'POST', `${UPSTREAM}/forks`, { token: kenji, body: {} });
+  forksFinish();
+  await rest(fake, 'POST', `/repos/kenji/goodfirsttoken/git/refs`, { token: kenji, body: { ref: 'refs/heads/kenji-19', sha } });
+  await commitFile(kenji, 'kenji/goodfirsttoken', 'kenji-19', 'fork.txt');
+  const pull = await rest(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: kenji,
+    body: { title: 'From the fork', head: 'kenji:kenji-19', base: 'main' },
+  });
+  const approved = await rest(fake, 'POST', `${UPSTREAM}/git/refs`, {
+    token: fromApp('kenji', 'approved-app'),
+    body: { ref: 'refs/heads/kenji-20', sha },
+  });
+  const noApp = await rest(fake, 'POST', `${UPSTREAM}/git/refs`, {
+    token: fake.tokenFor('kenji'),
+    body: { ref: 'refs/heads/kenji-21', sha },
+  });
+
+  expect(branch.status).toBe(403);
+  expect(branch.body.message).toContain('the `meanwhileso` organization has enabled OAuth App access restrictions');
+  expect(commit.body.data?.createCommitOnBranch).toBeNull();
+  expect(commit.body.errors).toEqual([
+    expect.objectContaining({ type: 'FORBIDDEN', message: expect.stringContaining('OAuth App access restrictions') as unknown }),
+  ]);
+  expect(await head('meanwhileso/goodfirsttoken', 'main')).toBe(sha);
+  expect(read.status).toBe(200);
+  expect(fork.body.full_name).toBe('kenji/goodfirsttoken');
+  expect(await head('kenji/goodfirsttoken', 'kenji-19')).not.toBe(sha);
+  expect(pull.status).toBe(403);
+  expect(approved.status).toBe(201);
+  expect(noApp.status).toBe(201);
+});

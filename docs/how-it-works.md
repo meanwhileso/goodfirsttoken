@@ -2487,6 +2487,12 @@ never reaches the tool.
   maintain, or admin on the repo. For a fork, GitHub gives back the one the
   donor has, or starts making one. Later submits use the branch where the
   first put it.
+- An organization that restricts OAuth apps answers 403 to a write from an
+  app it hasn't approved, though the donor can push. When GitHub refuses
+  the first submit's branch in the code repo with that 403, the branch goes
+  in the donor's fork. Any other 403, like a rate limit, refuses the submit.
+  The PR may still be refused, since GitHub takes no PR from that app
+  either.
 - The branch starts at the claim's start commit, however far the default
   branch has moved, so the files apply to the tree the agent worked on.
   Nothing is merged or rebased. GitHub shows the PR's change from where the
@@ -2651,7 +2657,11 @@ queue. Open PR on [/me](#your-queue-on-me) opens it by the same rules.
 - When GitHub says a PR from the branch is already open, as after a call
   that didn't hear back, that PR is the one recorded.
 - When GitHub refuses, `open_pr` refuses with `github_refused` and GitHub's
-  reason, and the work stays in the queue.
+  reason, and the work stays in the queue. When the reason is the
+  organization's restriction on OAuth apps, the refusal says an owner of
+  the organization can approve the app, and that the PR can open once
+  they do. A submit refused for that reason, as when an earlier submit put
+  the branch in the code repo, says so too.
 
 **The review queue.** `my_work` lists the donor's claims awaiting review,
 as each claim's room holds it now, with its latest submit: the diff on

@@ -439,6 +439,20 @@ async function commitWork(
   return refusal('github_refused', `${target}:${branch} kept moving while the commit was made, so nothing was committed. Submit again.`);
 }
 
+/**
+ * What a refusal adds when GitHub's reason is an organization's restriction
+ * on OAuth apps, which only an owner of the organization can lift.
+ * https://docs.github.com/en/organizations/managing-oauth-access-to-your-organizations-data/about-oauth-app-access-restrictions
+ */
+function appRestricted(message: string, repo: string): string {
+  if (!RESTRICTED.test(message)) return '';
+  const org = repo.slice(0, repo.indexOf('/'));
+  return ` ${org} hasn't approved Good First Token's OAuth app, so GitHub refuses its writes to ${repo}. An owner of ${org} can approve it in the organization's third-party access settings.`;
+}
+
+/** GitHub's words for that restriction, in its 403. */
+const RESTRICTED = /OAuth App access restrictions/i;
+
 /** Where a PR comes from: the branch in the repo, or `owner:branch` in the donor's fork. */
 function pullHead(submission: SubmissionRecord, upstream: string): string {
   if (lower(submission.repo) === lower(upstream)) return submission.branch;
@@ -476,8 +490,10 @@ async function openFor(
       base: facts.defaultBranch,
     });
   } catch (error) {
-    if (error instanceof WriteRefused) return refusal('github_refused', `${error.message} The work stays on its branch.`);
-    throw error;
+    if (!(error instanceof WriteRefused)) throw error;
+    const restricted = appRestricted(error.message, facts.name);
+    const then = restricted && ' Once they do, the PR can open.';
+    return refusal('github_refused', `${error.message} The work stays on its branch.${restricted}${then}`);
   }
   const room = issueRoom(env.ISSUE_ROOM, claim.issue);
   const opened = await room.openPr({ claimId: claim.id, githubId: claim.githubId, pr });
@@ -555,14 +571,8 @@ export async function submitWork(
   // submit built on with onto, after someone else pushed to the branch.
   const base = input.onto ?? earlier?.base ?? claim.startCommit;
 
-  let committed: { sha: string; recovered: boolean } | Refusal;
-  let target: string;
-  try {
-    // A claim's branch stays where its first submit put it. Otherwise it goes
-    // in the code repo when the donor can push there, and in their fork when
-    // they can't, each by their own permission.
-    target = earlier?.repo ?? (facts.writer ? facts.name : await writer.fork(facts.name));
-    committed = await commitWork(writer, {
+  const commitIn = (target: string) =>
+    commitWork(writer, {
       target,
       branch,
       // The code repo has the start commit. A head someone pushed is in the branch's repo.
@@ -586,12 +596,31 @@ export async function submitWork(
       putBack: (earlier?.paths ?? []).filter((path) => !submitted.has(path)),
       message: commitMessage({ title, summary, agent: input.agent, model, disclosure: project.settings.disclosure }),
     });
+
+  let committed: { sha: string; recovered: boolean } | Refusal;
+  let target: string;
+  try {
+    // A claim's branch stays where its first submit put it. Otherwise it goes
+    // in the code repo when the donor can push there, and in their fork when
+    // they can't, each by their own permission. An organization that
+    // restricts OAuth apps answers 403 to a write from an app it hasn't
+    // approved, though the donor can push, so the fork takes that branch.
+    // Any other 403, like a rate limit, refuses the submit.
+    target = earlier?.repo ?? (facts.writer ? facts.name : await writer.fork(facts.name));
+    try {
+      committed = await commitIn(target);
+    } catch (error) {
+      const restricted = error instanceof WriteRefused && error.status === 403 && RESTRICTED.test(error.message);
+      if (earlier !== null || target !== facts.name || !restricted) throw error;
+      target = await writer.fork(facts.name);
+      committed = await commitIn(target);
+    }
   } catch (error) {
     if (!(error instanceof WriteRefused)) throw error;
     const workflows = input.files.some((file) => isWorkflowPath(file.path))
       ? " GitHub takes a change to a file under .github/workflows/ only from a token with the workflow scope, which Good First Token doesn't ask for. Leave that change out, and tell the donor to make it on GitHub themselves."
       : '';
-    return refuse(refusal('github_refused', `${error.message} Nothing was committed.${workflows}`));
+    return refuse(refusal('github_refused', `${error.message} Nothing was committed.${workflows}${appRestricted(error.message, facts.name)}`));
   }
   if (isRefusal(committed)) return refuse(committed);
 

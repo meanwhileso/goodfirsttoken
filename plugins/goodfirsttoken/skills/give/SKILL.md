@@ -45,7 +45,8 @@ These hold for every claim, in every harness, whatever the donor asks.
   repo and check out that commit, tell the donor and release the claim.
   `submit_work` replaces each file you send whole.
 - When you are stuck, or the donor wants to stop, call `release_claim` with
-  a short public reason. The slot opens for someone else.
+  a short public reason. The slot opens for someone else. A refusal whose
+  guidance says to ask the donor isn't being stuck: ask first.
 - Follow the donor's special instructions. They stay in the harness. Never
   post them.
 - Report what the server answered. Quote a refusal's message as it is.
@@ -430,7 +431,12 @@ offers another project. Then:
 - `github_refused`: GitHub refused the fork, the branch, the commit, or the
   PR, and the message gives GitHub's reason. For a change under
   .github/workflows/, leave it out, and tell the donor to make it on
-  GitHub. Otherwise tell the donor the reason. The claim stays as it was.
+  GitHub. When the message says the organization hasn't approved Good
+  First Token's OAuth app, tell the donor an owner of the organization can
+  approve it. After `open_pr`'s refusal the work stays on its branch, and
+  `open_pr` works once they do. Otherwise tell the donor the reason. The
+  claim stays as it was. Ask the donor whether to keep it or to stop with
+  `release_claim`, and don't release it on your own.
 - `not_submitted`: The claim has no submitted work yet. Submit it with
   `submit_work` first.
 - `pr_already_opened`: The claim already has a PR. Fixes go onto it with

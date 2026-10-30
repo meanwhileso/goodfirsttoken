@@ -28,6 +28,7 @@ import { authorAssociation, avatarUrl, nodeId, type Ctx } from './shapes.ts';
 import { own } from './own.ts';
 import {
   FakeError,
+  appRestriction,
   canPush,
   canSee,
   closingPulls,
@@ -886,6 +887,8 @@ function rootValue(ctx: Ctx, now: string) {
       if (!canPush(roleOf(repo, login))) {
         throw fail('FORBIDDEN', `${login} does not have the correct permissions to execute \`CreateCommitOnBranch\``);
       }
+      const restricted = appRestriction(ctx.state, repo, ctx.clientId);
+      if (restricted !== null) throw fail('FORBIDDEN', restricted);
       const change = {
         additions: (input.fileChanges?.additions ?? []).map((a) => ({
           path: a.path,

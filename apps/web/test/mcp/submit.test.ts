@@ -15,7 +15,7 @@ import {
   setPrState,
   setProjectStatus,
 } from '../../src/db';
-import { DonorWriter } from '../../src/donor/writes';
+import { DonorWriter, WriteRefused } from '../../src/donor/writes';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -377,6 +377,88 @@ describe('where the work goes', () => {
       pr: prOf(APP, pull.number),
       reviewReason: null,
     });
+  });
+
+  test("a donor who can push to a repo whose organization hasn't approved the site's OAuth app gets the branch in their fork, and open_pr says why no PR opened", async () => {
+    await project(APP, automatic);
+    const [first, second] = [await tagged(APP), await tagged(APP)];
+    repoState(APP).collaborators.kenji = 'write';
+    const owner = github.state.accounts['sample-owner'];
+    if (!owner) throw new Error('no sample-owner');
+    owner.oauthAppRestrictions = { approved: [] };
+    const kenji = await donor('kenji');
+    const { claimId, start } = await claim(kenji, first);
+    const other = await claim(kenji, second);
+
+    const result = await submit(kenji, claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
+    const again = await submit(kenji, claimId, { 'src/rewrite.ts': 'export const keepSlash = false;\n' });
+    const opened = await call(kenji, 'open_pr', { claimId });
+    // The organization approves the app, and a new claim's branch goes in the repo.
+    owner.oauthAppRestrictions = { approved: [OAUTH_APP.clientId] };
+    const approved = await submit(kenji, other.claimId, { 'b.txt': 'b\n' });
+
+    const branch = branchOf(first, claimId);
+    const fork = repoState('kenji/sample-app');
+    expect(fork.forkOf).toBe(APP);
+    expect(repoState(APP).branches[branch]).toBeUndefined();
+    expect(result.structuredContent).toMatchObject({
+      state: 'awaiting_review',
+      branch: { repo: 'kenji/sample-app', name: branch },
+      pr: null,
+      reviewReason: 'pr_refused',
+    });
+    const firstSha = (result.structuredContent?.commit as { sha: string }).sha;
+    expect(commitAt(firstSha).parents).toEqual([start]);
+    expect(again.structuredContent).toMatchObject({ branch: { repo: 'kenji/sample-app', name: branch }, commit: { sha: fork.branches[branch] } });
+    expect(commitAt(fork.branches[branch]).parents).toEqual([firstSha]);
+    expect(filesAt('kenji/sample-app', branch).get('src/rewrite.ts')).toBe('export const keepSlash = false;\n');
+    expect(refusalOf(opened)).toBe('github_refused');
+    expect(textOf(opened)).toContain('the `sample-owner` organization has enabled OAuth App access restrictions');
+    expect(textOf(opened)).toContain(
+      "sample-owner hasn't approved Good First Token's OAuth app, so GitHub refuses its writes to sample-owner/sample-app. An owner of sample-owner can approve it in the organization's third-party access settings. Once they do, the PR can open.",
+    );
+    expect(pullsBy(APP, 'kenji').filter((p) => p.pull?.head.ref === branch)).toEqual([]);
+    expect(approved.structuredContent).toMatchObject({ state: 'pr_opened', branch: { repo: APP, name: branchOf(second, other.claimId) } });
+  });
+
+  test('a 403 for another reason, like a rate limit, refuses the submit, and makes no fork', async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const { claimId } = await claim(kenji, issue);
+    vi.spyOn(DonorWriter.prototype, 'createBranch').mockRejectedValue(
+      new WriteRefused('GitHub refused to make the branch (403): You have exceeded a secondary rate limit.', 403),
+    );
+
+    const refused = await submit(kenji, claimId, { 'a.txt': 'a\n' });
+
+    expect(refusalOf(refused)).toBe('github_refused');
+    expect(textOf(refused)).toContain('You have exceeded a secondary rate limit.');
+    expect(github.state.repos['kenji/sample-app']).toBeUndefined();
+    expect(await getSubmission(env.DB, claimId)).toBeNull();
+  });
+
+  test('a branch an earlier submit put in the code repo stays there, and a submit after the organization restricts OAuth apps says why it was refused', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const { claimId } = await claim(kenji, issue);
+    await submit(kenji, claimId, { 'a.txt': 'a\n' });
+    const owner = github.state.accounts['sample-owner'];
+    if (!owner) throw new Error('no sample-owner');
+    owner.oauthAppRestrictions = { approved: [] };
+
+    const refused = await submit(kenji, claimId, { 'a.txt': 'b\n' });
+
+    expect(refusalOf(refused)).toBe('github_refused');
+    expect(textOf(refused)).toContain('Nothing was committed.');
+    expect(textOf(refused)).toContain(
+      "sample-owner hasn't approved Good First Token's OAuth app, so GitHub refuses its writes to sample-owner/sample-app. An owner of sample-owner can approve it in the organization's third-party access settings.",
+    );
+    expect(github.state.repos['kenji/sample-app']).toBeUndefined();
+    expect(filesAt(APP, branchOf(issue, claimId)).get('a.txt')).toBe('a\n');
   });
 
   test('a donor who already has a fork gets the branch in it, and no second fork', async () => {
