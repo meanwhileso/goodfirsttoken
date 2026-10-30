@@ -66,6 +66,11 @@ export const STATIC_ORIGIN = 'STATIC_ORIGIN';
 // attached by hand once, as docs/self-hosting.md describes.
 export const STATIC_BUCKET = 'static';
 export const staticBucketName = (worker) => `${worker}-${STATIC_BUCKET}`;
+// A KV namespace with no ID is <WORKER_NAME>-<binding>, with the binding in
+// lowercase and dashes, like <WORKER_NAME>-oauth-kv. That is the name
+// Wrangler gives a namespace it creates, so the deploy finds the one Wrangler
+// made for an environment deployed before the deploy made its own.
+export const kvNamespaceName = (worker, binding) => `${worker}-${binding.toLowerCase().replaceAll('_', '-')}`;
 
 const ACCOUNT_ID = /^[0-9a-f]{32}$/i;
 const KV_ID = /^[0-9a-f]{32}$/i;
@@ -219,6 +224,7 @@ export function deployConfig(local, target, env) {
   if (local.kv_namespaces) {
     config.kv_namespaces = local.kv_namespaces.map(({ binding }) => {
       const id = valid(`${binding}_ID`, KV_ID, 'a KV namespace ID, 32 hex characters');
+      if (!id) mask(kvNamespaceName(worker, binding));
       return { binding, ...(id && { id }) };
     });
   }
@@ -306,30 +312,41 @@ export function writeDeployConfig({ target, env = process.env, root = REPO_ROOT,
   if (!gitIgnores(root, out)) {
     throw new Error(`git has to ignore ${DEPLOY_CONFIG}, because it holds deployed names and IDs. Add it to .gitignore.`);
   }
-  // A symlink here would carry the config into whatever file it points to,
-  // tracked or not.
-  const notAFile = new Error(`${DEPLOY_CONFIG} is a symlink or a folder. Delete it and run the deploy again.`);
-  if (lstatSync(out, { throwIfNoEntry: false })?.isFile() === false) throw notAFile;
+  refuseLink(out, DEPLOY_CONFIG);
   // Mask before anything else can print a value. Later steps' logs, including
   // Wrangler's, then show *** in its place.
   if (env.GITHUB_ACTIONS === 'true') {
     for (const value of masked) log(`::add-mask::${value}`);
   }
-  // O_NOFOLLOW also refuses a symlink made after the check above.
+  writeConfigFile(out, config, DEPLOY_CONFIG);
+  log(`Wrote ${DEPLOY_CONFIG} for ${target}.`);
+  return out;
+}
+
+// A symlink where a config goes would carry it into whatever file it points
+// to, tracked or not.
+function refuseLink(file, name) {
+  if (lstatSync(file, { throwIfNoEntry: false })?.isFile() === false) throw notAFile(name);
+}
+const notAFile = (name) => new Error(`${name} is a symlink or a folder. Delete it and run the deploy again.`);
+
+// Writes a config that holds deployed names and IDs, readable by its owner
+// only. It refuses a symlink there, and O_NOFOLLOW also refuses one made
+// after the check.
+export function writeConfigFile(file, config, name) {
+  refuseLink(file, name);
   const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
   let fd;
   try {
-    fd = openSync(out, flags, 0o600);
+    fd = openSync(file, flags, 0o600);
   } catch (error) {
-    throw error?.code === 'ELOOP' ? notAFile : error;
+    throw error?.code === 'ELOOP' ? notAFile(name) : error;
   }
   try {
     writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`);
   } finally {
     closeSync(fd);
   }
-  log(`Wrote ${DEPLOY_CONFIG} for ${target}.`);
-  return out;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

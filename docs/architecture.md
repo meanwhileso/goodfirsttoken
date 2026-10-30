@@ -4487,14 +4487,22 @@ The job runs these steps. The scripts are in `scripts/`.
    and queue it finds or creates, so later steps' logs don't show it. Step 2
    never had these IDs, and Wrangler prints a database's ID in the path of a
    failed API call. A resource Cloudflare answers with no ID stops the
-   deploy.
+   deploy. It also finds or creates each KV namespace that has no ID. That
+   is the namespace the Worker is already bound to, when it is bound to one,
+   so agents keep their grants. Otherwise it is `<WORKER_NAME>-oauth-kv`,
+   the name Wrangler gives a namespace it creates. It masks the namespace's
+   ID and writes it into `wrangler.deploy.json` and into the config the
+   build wrote, which is the one `wrangler deploy` reads. It stops the
+   deploy when there is no build to write it into.
 7. `deploy.mjs migrations` runs `wrangler d1 migrations apply --remote` for
    each database that has a migrations folder, and skips one that has none.
 8. `deploy.mjs secrets` puts each secret in `secrets.required` with
    `wrangler secret put`, one at a time, from the environment secret of the
    same name. The value reaches Wrangler on stdin only.
-9. `wrangler deploy`. On the first deploy, Wrangler creates the KV namespace
-   when `OAUTH_KV_ID` is empty, and reuses it after that.
+9. `wrangler deploy`. Every KV namespace has an ID by now, so Wrangler
+   creates none. Its bindings table shows the masked ID. When Wrangler
+   creates a namespace itself, it prints the new ID there before anything
+   can mask it.
 10. `deploy.mjs smoke-test` reads `/healthz` on the primary domain, or the
     workers.dev URL Wrangler reported, until it answers ok from the target
     environment. It fails at once if another environment answers, and after
@@ -4714,7 +4722,8 @@ not.
 - `scripts/deploy-config.mjs` refuses deployment keys, IDs, and unknown keys
   in the local config, writes the git-ignored `wrangler.deploy.json` with
   `O_NOFOLLOW` and mode `0600`, and masks every deployment value it holds
-  in logs. `deploy.mjs resources` masks the IDs it looks up.
+  in logs. `deploy.mjs resources` masks the IDs it looks up, the KV
+  namespace's included.
 - `.dev.vars.example` holds no secret. `.gitleaks.toml` adds rules for
   32-hex IDs and UUIDs, and CI scans the full history.
 

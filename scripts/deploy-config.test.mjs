@@ -18,6 +18,7 @@ import {
   LOCAL_CONFIG,
   REPO_ROOT,
   deployConfig,
+  kvNamespaceName,
   readLocalConfig,
   settingsFor,
   writeDeployConfig,
@@ -80,6 +81,14 @@ test('an ID left empty is left out, so Wrangler can provision the resource', () 
   const set = deployConfig(local, 'staging', { ...withLimiter, DB_ID: D1_ID, OAUTH_KV_ID: KV_ID }).config;
   assert.equal(set.d1_databases[0].database_id, D1_ID);
   assert.equal(set.kv_namespaces[0].id, KV_ID);
+});
+
+// The deploy looks a KV namespace with no ID up by this name, which is the
+// one Wrangler gives a namespace it creates.
+test('a KV namespace with no ID is named <WORKER_NAME>-oauth-kv, and the name is masked', () => {
+  const { masked } = deployConfig(local, 'staging', withLimiter);
+  assert.equal(kvNamespaceName('sample-site', 'OAUTH_KV'), 'sample-site-oauth-kv');
+  assert.ok(masked.includes('sample-site-oauth-kv'));
 });
 
 test('the Worker reports the environment it was deployed as, whatever the settings say', () => {

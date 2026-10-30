@@ -151,10 +151,16 @@ test('the token is masked first, then handed to later steps through GITHUB_ENV',
   assert.equal(readFileSync(envFile, 'utf8'), 'CLOUDFLARE_API_TOKEN=short-lived\n');
 });
 
-// A Cloudflare API that keeps D1 databases and queues in memory. Each one's ID
-// is made from its name, like db-id-site-db.
-function fakeCloudflare({ databases = [], queues = [] } = {}) {
-  const state = { databases: new Set(databases), queues: new Set(queues), requests: [] };
+// A Cloudflare API that keeps D1 databases, queues, and KV namespaces in
+// memory. Each one's ID is made from its name, like db-id-site-db. `bound`
+// gives the Worker's KV bindings that already exist, as binding to ID.
+function fakeCloudflare({ databases = [], queues = [], namespaces = [], bound = {} } = {}) {
+  const state = {
+    databases: new Set(databases),
+    queues: new Set(queues),
+    namespaces: new Set(namespaces),
+    requests: [],
+  };
   const fetch = async (url, init = {}) => {
     const { pathname, searchParams } = new URL(url);
     const method = init.method ?? 'GET';
@@ -179,6 +185,27 @@ function fakeCloudflare({ databases = [], queues = [] } = {}) {
     if (method === 'POST' && resource === '/queues') {
       state.queues.add(body.queue_name);
       return json({ success: true, result: { queue_name: body.queue_name, queue_id: `queue-id-${body.queue_name}` } });
+    }
+    // Pages of at most per_page namespaces. The API has no filter by title.
+    if (method === 'GET' && resource === '/storage/kv/namespaces') {
+      const size = Number(searchParams.get('per_page') ?? 20);
+      const page = Number(searchParams.get('page') ?? 1);
+      const all = [...state.namespaces].map((title) => ({ id: `kv-id-${title}`, title }));
+      return json({ success: true, result: all.slice((page - 1) * size, page * size) });
+    }
+    if (method === 'POST' && resource === '/storage/kv/namespaces') {
+      if (state.namespaces.has(body.title)) {
+        return json({ success: false, errors: [{ code: 10014, message: 'a namespace with this title already exists' }] }, 400);
+      }
+      state.namespaces.add(body.title);
+      return json({ success: true, result: { id: `kv-id-${body.title}`, title: body.title } });
+    }
+    if (method === 'GET' && /^\/workers\/scripts\/[^/]+\/settings$/.test(resource)) {
+      if (!Object.keys(bound).length) {
+        return json({ success: false, errors: [{ code: 10007, message: 'script not found' }] }, 404);
+      }
+      const bindings = Object.entries(bound).map(([name, id]) => ({ type: 'kv_namespace', name, namespace_id: id }));
+      return json({ success: true, result: { bindings: [{ type: 'plain_text', name: 'ENVIRONMENT' }, ...bindings] } });
     }
     return json({ success: false, errors: [{ message: 'unexpected' }] }, 400);
   };
@@ -258,6 +285,117 @@ test('a Cloudflare error stops the deploy with its message', async () => {
   await assert.rejects(
     ensureResources({ config: withQueues, token: 'cf-token', fetch, log: () => {} }),
     /403.*Authentication error/,
+  );
+});
+
+const withKv = { account_id: ACCOUNT_ID, name: 'site', kv_namespaces: [{ binding: 'OAUTH_KV' }] };
+
+// A repo root after the build: apps/web/wrangler.deploy.json, and the config
+// the build wrote, which Wrangler finds through .wrangler/deploy/config.json
+// and deploys from.
+function builtRoot(t, config) {
+  const root = tempDir(t);
+  const web = path.join(root, 'apps', 'web');
+  mkdirSync(path.join(web, '.wrangler', 'deploy'), { recursive: true });
+  mkdirSync(path.join(web, 'dist', 'server'), { recursive: true });
+  writeFileSync(path.join(web, 'wrangler.deploy.json'), JSON.stringify(config));
+  writeFileSync(
+    path.join(web, '.wrangler', 'deploy', 'config.json'),
+    JSON.stringify({ configPath: '../../dist/server/wrangler.json', auxiliaryWorkers: [] }),
+  );
+  writeFileSync(path.join(web, 'dist', 'server', 'wrangler.json'), JSON.stringify({ ...config, main: 'index.js' }));
+  const read = (file) => JSON.parse(readFileSync(path.join(web, file), 'utf8'));
+  return { root, deployConfig: () => read('wrangler.deploy.json'), built: () => read('dist/server/wrangler.json') };
+}
+
+// With no OAUTH_KV_ID, Wrangler would create the namespace on the first
+// deploy and print its ID in the bindings table, in a public log.
+test('a KV namespace with no ID is created as <WORKER_NAME>-oauth-kv, masked, and given to the config Wrangler deploys', async (t) => {
+  const { root, deployConfig, built } = builtRoot(t, withKv);
+  const cloudflare = fakeCloudflare();
+  const logs = [];
+
+  await ensureResources({ config: withKv, root, token: 'cf-token', fetch: cloudflare.fetch, log: (l) => logs.push(l) });
+
+  assert.deepEqual([...cloudflare.state.namespaces], ['site-oauth-kv']);
+  assert.deepEqual(
+    logs.filter((line) => line.startsWith('::add-mask::')),
+    ['::add-mask::kv-id-site-oauth-kv'],
+  );
+  assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV', id: 'kv-id-site-oauth-kv' }]);
+  assert.equal(built().main, 'index.js', 'the rest of the built config is kept');
+  assert.deepEqual(deployConfig().kv_namespaces, [{ binding: 'OAUTH_KV', id: 'kv-id-site-oauth-kv' }]);
+  assert.ok(!logs.some((line) => !line.startsWith('::add-mask::') && line.includes('kv-id-')), 'no other line shows the ID');
+});
+
+// Environments whose first deploy ran before this step have the namespace
+// Wrangler made, under the same name. Creating it again would fail, since
+// titles are unique.
+test('a KV namespace of that name that exists is used, and found past the first page', async (t) => {
+  const { root, built } = builtRoot(t, withKv);
+  const others = Array.from({ length: 150 }, (_, i) => `other-${i}`);
+  const cloudflare = fakeCloudflare({ namespaces: [...others, 'site-oauth-kv'] });
+  const logs = [];
+
+  await ensureResources({ config: withKv, root, token: 'cf-token', fetch: cloudflare.fetch, log: (l) => logs.push(l) });
+
+  assert.ok(cloudflare.state.requests.every((request) => request.startsWith('GET')));
+  assert.ok(logs.includes('::add-mask::kv-id-site-oauth-kv'));
+  assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV', id: 'kv-id-site-oauth-kv' }]);
+});
+
+// A Worker someone first deployed by hand can be bound to a namespace of any
+// name. Moving it to another would lose every grant agents hold.
+test('the KV namespace the Worker is already bound to is kept, whatever its name', async (t) => {
+  const { root, built } = builtRoot(t, withKv);
+  const cloudflare = fakeCloudflare({ namespaces: ['hand-made', 'site-oauth-kv'], bound: { OAUTH_KV: 'kv-id-hand-made' } });
+  const logs = [];
+
+  await ensureResources({ config: withKv, root, token: 'cf-token', fetch: cloudflare.fetch, log: (l) => logs.push(l) });
+
+  assert.ok(cloudflare.state.requests.every((request) => request.startsWith('GET')));
+  assert.ok(logs.includes('::add-mask::kv-id-hand-made'));
+  assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV', id: 'kv-id-hand-made' }]);
+});
+
+test('a KV namespace with an ID is not looked up, and no config is rewritten', async (t) => {
+  const config = { ...withKv, kv_namespaces: [{ binding: 'OAUTH_KV', id: 'b2'.repeat(16) }] };
+  const { root, built } = builtRoot(t, config);
+  const cloudflare = fakeCloudflare();
+
+  await ensureResources({ config, root, token: 'cf-token', fetch: cloudflare.fetch, log: () => {} });
+
+  assert.deepEqual(cloudflare.state.requests, []);
+  assert.deepEqual(built().kv_namespaces, config.kv_namespaces);
+});
+
+test('a KV namespace Cloudflare creates with no ID stops the deploy before any config changes', async (t) => {
+  const { root, built } = builtRoot(t, withKv);
+  const cloudflare = fakeCloudflare();
+  const fetch = async (url, init) => {
+    const res = await cloudflare.fetch(url, init);
+    if (init.method !== 'POST') return res;
+    const body = await res.json();
+    return json({ ...body, result: { title: body.result.title } }, res.status);
+  };
+
+  await assert.rejects(
+    ensureResources({ config: withKv, root, token: 'cf-token', fetch, log: () => {} }),
+    /no ID.*KV namespace for OAUTH_KV/,
+  );
+  assert.deepEqual(built().kv_namespaces, [{ binding: 'OAUTH_KV' }]);
+});
+
+// Without the built config there is nothing Wrangler would deploy the ID
+// from, so it would create the namespace and print its ID.
+test('a KV namespace with no ID and no build stops the deploy', async (t) => {
+  const root = tempDir(t);
+  mkdirSync(path.join(root, 'apps', 'web'), { recursive: true });
+  writeFileSync(path.join(root, 'apps', 'web', 'wrangler.deploy.json'), JSON.stringify(withKv));
+
+  await assert.rejects(
+    ensureResources({ config: withKv, root, token: 'cf-token', fetch: fakeCloudflare().fetch, log: () => {} }),
+    /Build the Worker first/,
   );
 });
 

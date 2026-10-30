@@ -4,7 +4,7 @@
 //
 //   node scripts/deploy.mjs credential           # CLOUDFLARE_API_TOKEN for later steps
 //   node scripts/deploy.mjs static-assets        # built files to the static host, then a check of it
-//   node scripts/deploy.mjs resources            # D1 database and queues, when missing
+//   node scripts/deploy.mjs resources            # D1 database, queues, and KV namespace, when missing
 //   node scripts/deploy.mjs migrations           # D1 migrations, when there are any
 //   node scripts/deploy.mjs secrets              # the Worker's secrets, one at a time
 //   node scripts/deploy.mjs smoke-test staging   # /healthz reports the right environment
@@ -13,7 +13,16 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { DEPLOY_CONFIG, REPO_ROOT, STATIC_BUCKET, STATIC_ORIGIN, TARGETS, staticBucketName } from './deploy-config.mjs';
+import {
+  DEPLOY_CONFIG,
+  REPO_ROOT,
+  STATIC_BUCKET,
+  STATIC_ORIGIN,
+  TARGETS,
+  kvNamespaceName,
+  staticBucketName,
+  writeConfigFile,
+} from './deploy-config.mjs';
 import { ASSETS_DIR, CLIENT_DIR, staticObjects } from './static-host.mjs';
 
 const API = 'https://api.cloudflare.com/client/v4';
@@ -111,13 +120,57 @@ function queueNames(config) {
   ].filter(Boolean);
 }
 
+// Every KV namespace in the account. The API has no lookup by title.
+async function kvNamespaces(api) {
+  const all = [];
+  for (let page = 1; ; page++) {
+    const found = (await api('GET', '/storage/kv/namespaces', { query: { per_page: 100, page } })) ?? [];
+    all.push(...found);
+    if (found.length < 100) return all;
+  }
+}
+
+// The config the build wrote, which `wrangler deploy` reads in place of
+// wrangler.deploy.json. It finds it through .wrangler/deploy/config.json next
+// to its own config. Null when there is no build.
+function builtConfig(root) {
+  const redirect = path.join(root, path.dirname(DEPLOY_CONFIG), '.wrangler', 'deploy', 'config.json');
+  if (!existsSync(redirect)) return null;
+  const { configPath } = JSON.parse(readFileSync(redirect, 'utf8'));
+  if (typeof configPath !== 'string') throw new Error(`${path.relative(root, redirect)} names no config.`);
+  return path.resolve(path.dirname(redirect), configPath);
+}
+
+// Sets the ID of each KV binding named in ids, in the config in file.
+function giveKvIds(file, name, ids) {
+  const config = JSON.parse(readFileSync(file, 'utf8'));
+  for (const binding of Object.keys(ids)) {
+    const kv = config.kv_namespaces?.find((each) => each.binding === binding);
+    if (!kv) throw new Error(`${name} has no KV binding ${binding}. Build the Worker again from ${DEPLOY_CONFIG}.`);
+    kv.id = ids[binding];
+  }
+  writeConfigFile(file, config, name);
+}
+
 // Creates the D1 databases that have no ID and the queues, when missing.
 // Wrangler creates a missing producer queue on its own, but not a dead-letter
 // queue. And migrations run before the deploy, so the database has to exist
 // first. Each ID found or made here is masked for the job's later steps, since
 // the config step never had it to mask and Wrangler prints it in errors.
-export async function ensureResources({ config, token, fetch, log }) {
+//
+// Each KV namespace with no ID is found or created here too, and its ID goes
+// into wrangler.deploy.json and the config the build wrote. Otherwise
+// Wrangler would create it on the first deploy and print its ID in the
+// bindings table before anything could mask it.
+export async function ensureResources({ config, root = REPO_ROOT, token, fetch, log }) {
   if (!token) throw new Error('CLOUDFLARE_API_TOKEN is not set. Run the credential step first.');
+  const kvs = (config.kv_namespaces ?? []).filter((kv) => !kv.id);
+  const built = kvs.length ? builtConfig(root) : null;
+  if (kvs.length && !built) {
+    throw new Error(
+      `${DEPLOY_CONFIG} has a KV namespace with no ID, and there is no built config for Wrangler to deploy it from. Build the Worker first.`,
+    );
+  }
   const api = cloudflare({ token, account: config.account_id, fetch });
   // A resource Cloudflare answers with no ID stops the deploy, since a later
   // error could print the ID unmasked.
@@ -149,6 +202,40 @@ export async function ensureResources({ config, token, fetch, log }) {
       log(`Created the queue ${queue}.`);
     }
   }
+  if (!kvs.length) return;
+
+  // The namespace a Worker is already bound to stays, whatever its name, so
+  // agents keep their grants. Otherwise it is the one Wrangler would have
+  // made, by name.
+  const settings = await api('GET', `/workers/scripts/${encodeURIComponent(config.name)}/settings`);
+  let all;
+  const ids = {};
+  for (const { binding } of kvs) {
+    const what = `KV namespace for ${binding}`;
+    const bound = settings?.bindings?.find((each) => each.type === 'kv_namespace' && each.name === binding);
+    if (bound) {
+      mask(bound.namespace_id, what);
+      ids[binding] = bound.namespace_id;
+      log(`The Worker already uses a KV namespace for ${binding}, so it keeps it.`);
+      continue;
+    }
+    const name = kvNamespaceName(config.name, binding);
+    all ??= await kvNamespaces(api);
+    const existing = all.find((each) => each.title === name);
+    if (existing) {
+      mask(existing.id, what);
+      ids[binding] = existing.id;
+      log(`The ${what} exists.`);
+    } else {
+      const created = await api('POST', '/storage/kv/namespaces', { body: { title: name } });
+      mask(created?.id, what);
+      ids[binding] = created.id;
+      log(`Created the ${what}.`);
+    }
+  }
+  giveKvIds(path.join(root, DEPLOY_CONFIG), DEPLOY_CONFIG, ids);
+  giveKvIds(built, path.relative(root, built), ids);
+  log(`Gave Wrangler the ID of each KV namespace, in ${DEPLOY_CONFIG} and the built config.`);
 }
 
 // Applies each D1 database's migrations, from migrations_dir or Wrangler's
@@ -374,7 +461,7 @@ async function main([step, target]) {
     case 'credential':
       return exportCredential({ env, fetch, envFile: env.GITHUB_ENV, log });
     case 'resources':
-      return ensureResources({ config: readDeployConfig(root), token: env.CLOUDFLARE_API_TOKEN, fetch, log });
+      return ensureResources({ config: readDeployConfig(root), root, token: env.CLOUDFLARE_API_TOKEN, fetch, log });
     case 'migrations':
       return applyMigrations({ config: readDeployConfig(root), root, wrangler: wranglerIn(root), log });
     case 'secrets':

@@ -128,7 +128,9 @@ jobs:
           STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
         run: node scripts/deploy.mjs static-assets
 
-      - name: Create the D1 database and queues when missing
+      # Run after the build, since it writes each KV namespace's ID into the
+      # config the build wrote, which is the one Wrangler deploys from.
+      - name: Create the D1 database, queues, and KV namespace when missing
         run: node scripts/deploy.mjs resources
 
       - name: Apply D1 migrations
