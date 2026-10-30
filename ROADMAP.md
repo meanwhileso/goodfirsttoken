@@ -159,7 +159,7 @@ PR with GitHub reads, and records them. The last item removes the server's write
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#124](https://github.com/meanwhileso/goodfirsttoken/issues/124) | Accept a pushed branch in submit_work | Nothing | |
+| [#124](https://github.com/meanwhileso/goodfirsttoken/issues/124) | Accept a pushed branch in submit_work | Nothing | [#130](https://github.com/meanwhileso/goodfirsttoken/pull/130) |
 | [#125](https://github.com/meanwhileso/goodfirsttoken/issues/125) | Clear work to open in open_pr, and add record_pr | #124 | |
 | [#126](https://github.com/meanwhileso/goodfirsttoken/issues/126) | Find and record PRs from cleared claims' branches | #125 | |
 | [#127](https://github.com/meanwhileso/goodfirsttoken/issues/127) | Show cleared work with its compare page link | #125 | |
