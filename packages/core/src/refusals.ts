@@ -34,7 +34,8 @@ export const refusalCodes = [
   // GitHub makes a new fork in the background, and hadn't finished it.
   'fork_not_ready',
   // Someone else pushed to the claim's branch since its last submit, so a
-  // commit would undo their work.
+  // commit would undo their work. For a pushed branch, open_pr found it
+  // moved from the head its submit checked.
   'branch_moved',
   // The submit changes an executable file, a symbolic link, or a submodule,
   // or a path under a link or a submodule, which a commit through GitHub's
@@ -46,6 +47,20 @@ export const refusalCodes = [
   // GitHub refused a write the server made with the donor's token: the fork,
   // the branch, the commit, or the PR.
   'github_refused',
+  // A pushed branch: GitHub shows no such branch in the repo the agent
+  // named, or its head isn't the commit the agent named.
+  'branch_not_found',
+  // A pushed branch is in a repo other than the code repo or a fork of it,
+  // or other than the one the claim's branch is already in.
+  'branch_elsewhere',
+  // The claim's start commit isn't an ancestor of a pushed branch's head.
+  'not_from_start',
+  // A commit on a pushed branch lacks the disclosure trailer the project
+  // asks for.
+  'trailer_missing',
+  // A submit with files after the claim's branch was pushed, which would
+  // write over the pushed work.
+  'branch_pushed',
   // Maintainers and admins (spec sections 3 and 4).
   'not_maintainer',
   'repo_not_eligible',

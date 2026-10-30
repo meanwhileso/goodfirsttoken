@@ -63,6 +63,7 @@ import {
 } from '../donor/github';
 import { rankIssues, weightedOrder, type Candidate } from '../donor/pick';
 import { blockedRefusal, claRefusal, openPrRefusal, vouchRefusal, type Donor } from '../donor/rules';
+import { branchFor } from '../donor/work';
 import { gitHubRest, gitHubUrls } from '../github';
 import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
@@ -550,6 +551,8 @@ interface Claimed {
   slots: number;
   project: ProjectRecord;
   issue: GitHubIssue | null;
+  /** The donor can push to the code repo, so the claim's branch goes there, and else in their fork. */
+  canPush: boolean;
 }
 
 type Attempt = Claimed | { ok: false; refusal: Refusal };
@@ -638,6 +641,7 @@ async function claimOne(context: ClaimContext, issue: string): Promise<Attempt> 
       slots: project.settings.claimsPerIssue,
       project,
       issue: await readIssue(context.reader, own.issue),
+      canPush: (await readRepoFacts(context.reader, project.repo))?.writer ?? false,
     };
   }
 
@@ -725,6 +729,7 @@ async function claimNew(
     slots: result.slots,
     project: (await getProject(env.DB, result.claim.project)) ?? project,
     issue: check.issue,
+    canPush: facts.writer,
   };
 }
 
@@ -821,6 +826,7 @@ export async function claimIssue(
       body: result.issue?.body ?? '',
       project: { repo: result.project.repo, settings: result.project.settings },
       clone: { url: `${gitHubUrls().web}/${result.project.repo}.git`, commit: claim.startCommit },
+      branch: { name: branchFor(claim), canPush: result.canPush },
       skipped,
       queued: queue,
       budget: { issuesLeft: left.issuesLeft, endsAt: iso(left.endsAt) },

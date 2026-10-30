@@ -154,19 +154,21 @@ Deploys, the static host, a security review, and the launch video.
 
 The approved [agent-side submits spec](docs/specs/agent-submits.md) has the donor's agent push the
 claim's branch and open the PR with the donor's own tools. Good First Token checks the branch and the
-PR with GitHub reads, and records them. Once the spec is approved, each item below becomes an issue
-labeled `roadmap`, this list becomes a table, and the dependency graph gets the items.
+PR with GitHub reads, and records them. The last item removes the server's write path, and closes
+[#121](https://github.com/meanwhileso/goodfirsttoken/issues/121).
 
-1. Accept a pushed branch in `submit_work`, and return the branch name from `claim_issue`.
-2. Clear work to open in `open_pr`, return the PR's text, and add `record_pr`. Follows item 1.
-3. Find and record PRs from cleared claims' branches. Follows item 2.
-4. Show cleared work with its compare page link in `my_work`, on /me, and in MCP Apps. Follows item 2.
-5. Teach the skills and /start.md to push, open the PR, and record it. Follows items 3 and 4.
-6. Remove the server's write path for donors' work. Follows item 5.
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#124](https://github.com/meanwhileso/goodfirsttoken/issues/124) | Accept a pushed branch in submit_work | Nothing | [#130](https://github.com/meanwhileso/goodfirsttoken/pull/130) |
+| [#125](https://github.com/meanwhileso/goodfirsttoken/issues/125) | Clear work to open in open_pr, and add record_pr | #124 | |
+| [#126](https://github.com/meanwhileso/goodfirsttoken/issues/126) | Find and record PRs from cleared claims' branches | #125 | |
+| [#127](https://github.com/meanwhileso/goodfirsttoken/issues/127) | Show cleared work with its compare page link | #125 | |
+| [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | |
+| [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | |
 
 ## Dependency graph
 
-An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
+An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
 
 ```mermaid
 flowchart TD
@@ -178,6 +180,7 @@ flowchart TD
   classDef m6 fill:#FFF8C5,stroke:#57606A,color:#0E1116
   classDef m7 fill:#FFEBE9,stroke:#57606A,color:#0E1116
   classDef m8 fill:#EEF1F4,stroke:#57606A,color:#0E1116
+  classDef m9 fill:#E7F5F2,stroke:#57606A,color:#0E1116
   classDef done stroke:#1A7F37,stroke-width:3px
   n3["#3 Workspace, app, and CI"]:::m1
   n4["#4 Core schemas"]:::m1
@@ -228,6 +231,12 @@ flowchart TD
   n91["#91 Fold titles, fast update fold"]:::m8
   n92["#92 Repo IDs"]:::m8
   n93["#93 Cap admin queue reads"]:::m8
+  n124["#124 Pushed branches"]:::m9
+  n125["#125 Clearance and record_pr"]:::m9
+  n126["#126 Find unrecorded PRs"]:::m9
+  n127["#127 Compare page links"]:::m9
+  n128["#128 Skills push and open"]:::m9
+  n129["#129 Remove server writes"]:::m9
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -294,6 +303,12 @@ flowchart TD
   n31 --> n98
   n76 --> n77
   n32 --> n33
+  n124 --> n125
+  n125 --> n126
+  n125 --> n127
+  n126 --> n128
+  n127 --> n128
+  n128 --> n129
   n33 --> n34
   class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34 done
 ```

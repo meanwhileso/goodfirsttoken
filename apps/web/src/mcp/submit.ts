@@ -36,7 +36,7 @@ import {
 import { checkIssueFacts, linkedPrs, readIssue, readRepoFacts, type GitHubIssue, type IssueRules, type RepoFacts } from '../donor/github';
 import { GitHubError } from '../github';
 import { blockedRefusal, openPrRefusal, projectClosedRefusal, type Donor } from '../donor/rules';
-import { branchFor, commitMessage, isWorkflowPath, prBody, redacted, reviewReason } from '../donor/work';
+import { branchFor, commitMessage, hasTrailer, isWorkflowPath, prBody, redacted, reviewReason } from '../donor/work';
 import {
   DonorWriter,
   NOT_READY,
@@ -549,8 +549,21 @@ export async function submitWork(
   const summary = redacted(input.summary);
   const checks = redacted(input.checks);
   const model = redacted(input.model, 100);
+  const notes = { title, summary, checks, model };
+  if (input.branch !== undefined) return submitPushed(writer, work, facts, issue, earlier, input, input.branch, notes, now);
+  // A submit with files after a push would write over the pushed work.
+  if (earlier?.source === 'branch') {
+    return refuse(
+      refusal(
+        'branch_pushed',
+        `Claim ${claim.id}'s branch, ${earlier.repo}:${earlier.branch}, was pushed, so files would write over that work, and nothing was committed. Push your work to the branch, and submit with branch.`,
+      ),
+    );
+  }
+  const files = input.files;
+  if (files === undefined) throw new Error('submit_work takes branch or files.');
   // Paths in a repo compare with case, as Git compares them.
-  const submitted = new Set(input.files.map((file) => file.path));
+  const submitted = new Set(files.map((file) => file.path));
   // The files are read against the start commit, or against the head a
   // submit built on with onto, after someone else pushed to the branch.
   const base = input.onto ?? earlier?.base ?? claim.startCommit;
@@ -581,14 +594,14 @@ export async function submitWork(
             ? { repo: facts.name, rev: claim.startCommit }
             : { repo: target, rev: earlier.commit },
       donor: donor.login,
-      files: input.files,
+      files,
       // A file goes back to the base. After onto, that is the head the branch is at.
       putBack: (earlier?.paths ?? []).filter((path) => !submitted.has(path)),
       message: commitMessage({ title, summary, agent: input.agent, model, disclosure: project.settings.disclosure }),
     });
   } catch (error) {
     if (!(error instanceof WriteRefused)) throw error;
-    const workflows = input.files.some((file) => isWorkflowPath(file.path))
+    const workflows = files.some((file) => isWorkflowPath(file.path))
       ? " GitHub takes a change to a file under .github/workflows/ only from a token with the workflow scope, which Good First Token doesn't ask for. Leave that change out, and tell the donor to make it on GitHub themselves."
       : '';
     return refuse(refusal('github_refused', `${error.message} Nothing was committed.${workflows}`));
@@ -625,7 +638,7 @@ export async function submitWork(
       ? null
       : reviewReason({
           prOnIssue: prs.length > 0,
-          workflowFiles: input.files.some((file) => isWorkflowPath(file.path)) || (lines?.paths.some(isWorkflowPath) ?? false),
+          workflowFiles: files.some((file) => isWorkflowPath(file.path)) || (lines?.paths.some(isWorkflowPath) ?? false),
           unchecked,
           prMode: project.settings.prMode,
           personWrittenDescription: project.settings.personWrittenDescription,
@@ -633,12 +646,13 @@ export async function submitWork(
         });
   const submission = await saveSubmission(env.DB, {
     claimId: claim.id,
+    source: 'files',
     repo: target,
     branch,
     commit: committed.sha,
     base,
     diffFrom,
-    paths: input.files.map((file) => file.path),
+    paths: files.map((file) => file.path),
     title,
     summary,
     checks,
@@ -657,6 +671,7 @@ export async function submitWork(
         claimId: claim.id,
         issue: claim.issue,
         state,
+        source: 'files',
         commit: { sha: committed.sha, url: commitUrl(target, committed.sha) },
         branch: { repo: target, name: branch, url: urls.branch },
         diffUrl: urls.diff,
@@ -676,6 +691,177 @@ export async function submitWork(
   console.warn(`Claim ${claim.id}'s PR didn't open by itself.`, opened.message);
   await setReviewReason(env.DB, claim.id, 'pr_refused');
   return result(recorded.claim.state, null, 'pr_refused');
+}
+
+/** The submit's notes, with keys and tokens replaced. */
+interface Notes {
+  title: string;
+  summary: string;
+  checks: string;
+  model: string;
+}
+
+/**
+ * Takes a branch the donor's agent pushed with the donor's own tools
+ * (docs/specs/agent-submits.md), checked with GitHub reads alone: it is the
+ * claim's branch, in the code repo or a fork of it, at the head the agent
+ * named, it comes from the start commit, it has commits past the default
+ * branch, and each commit of the donor's but a merge carries the project's
+ * trailer. Then the work goes to the review queue, or onto the claim's PR
+ * when one is open. Nothing is written to GitHub.
+ */
+async function submitPushed(
+  writer: DonorWriter,
+  work: Work,
+  facts: RepoFacts & { defaultBranch: string },
+  issue: GitHubIssue | null,
+  earlier: SubmissionRecord | null,
+  input: ToolInput<'submit_work'>,
+  pushed: { repo: string; name: string; head: string },
+  notes: Notes,
+  now: number,
+): Promise<Answer> {
+  const { claim, project, donor } = work;
+  const branch = earlier?.branch ?? branchFor(claim);
+  if (pushed.name !== branch) {
+    return refuse(
+      refusal('branch_not_found', `Claim ${claim.id}'s branch is ${branch}, and ${pushed.name} isn't it, so nothing was taken. Push your work to ${branch}, and submit again.`),
+    );
+  }
+  // A claim's branch stays in the repo its first submit named.
+  if (earlier !== null && lower(earlier.repo) !== lower(pushed.repo)) {
+    return refuse(
+      refusal('branch_elsewhere', `Claim ${claim.id}'s branch is in ${earlier.repo}, so nothing was taken from ${pushed.repo}. Push your work to ${earlier.repo}:${branch}, and submit again.`),
+    );
+  }
+  let repo = facts.name;
+  if (lower(pushed.repo) !== lower(facts.name)) {
+    const found = await writer.repoOf(pushed.repo);
+    // The code repo's old name, after a rename, finds the code repo itself.
+    const forked =
+      found !== null && [found.name, found.parent, found.source].some((from) => from !== null && lower(from) === lower(facts.name));
+    if (found === null || !forked) {
+      return refuse(
+        refusal('branch_elsewhere', `GitHub shows ${pushed.repo} as no fork of ${facts.name}, so nothing was taken. Push the branch to ${facts.name}, or to the donor's fork of it, and submit again.`),
+      );
+    }
+    repo = found.name;
+  }
+  const head = await writer.branchHead(repo, branch);
+  if (typeof head !== 'string') {
+    return refuse(refusal('branch_not_found', `GitHub shows no branch ${branch} in ${repo}, so nothing was taken. Push it, and submit again.`));
+  }
+  if (head !== pushed.head) {
+    return refuse(
+      refusal('branch_not_found', `${repo}:${branch} is at ${head}, and not at ${pushed.head}, so nothing was taken. Push your work, and submit with the head GitHub shows.`),
+    );
+  }
+  if (claim.pr !== null && earlier?.commit === head) {
+    return refuse(refusal('no_changes', `${repo}:${branch} is still at ${head}, the last submit's head, so nothing was taken. Push the fixes, and submit again.`));
+  }
+  const fromStart = await writer.comparison(repo, claim.startCommit, head);
+  if (fromStart === null) {
+    return refuse(refusal('github_refused', `GitHub gave no comparison of ${repo}:${branch} with the start commit, so nothing was taken. Submit again.`));
+  }
+  if (fromStart.status !== 'ahead' && fromStart.status !== 'identical') {
+    return refuse(
+      refusal('not_from_start', `The start commit, ${claim.startCommit}, isn't an ancestor of ${repo}:${branch}, so nothing was taken. Build the branch on the start commit, or on the default branch, push it, and submit again.`),
+    );
+  }
+  // The PR's own change: from where the branch parts from the default
+  // branch, so main's changes merged into it don't count.
+  const diffFrom = facts.head ?? claim.startCommit;
+  const own = await writer.comparison(repo, diffFrom, head);
+  // A fix after the PR opens is checked against the last submit's head.
+  const fixing = claim.pr !== null && earlier !== null;
+  const since = fixing ? await writer.comparison(repo, earlier.commit, head) : own;
+  if (own === null || since === null) {
+    return refuse(refusal('github_refused', `GitHub gave no comparison of ${repo}:${branch}, so its commits couldn't be checked, and nothing was taken. Submit again.`));
+  }
+  if (own.aheadBy === 0 || own.files === 0) {
+    return refuse(refusal('no_changes', `${repo}:${branch} changes no file from ${facts.defaultBranch}, so nothing was taken. Commit your work on the branch, push it, and submit again.`));
+  }
+  // Until the PR opens, every commit of the branch's own change. After it,
+  // the commits since the last submit, apart from those GitHub names
+  // another person as the author of, since maintainers may push to it.
+  const trailer = project.settings.disclosure.trailer;
+  if (trailer !== null) {
+    const mine = fixing
+      ? since.commits.filter((commit) => commit.author === null || lower(commit.author) === lower(donor.login))
+      : since.commits;
+    const missing = mine.filter((commit) => commit.parents < 2 && !hasTrailer(commit.message, trailer));
+    if (missing.length > 0) {
+      const named = missing.map((commit) => commit.sha.slice(0, 7)).join(', ');
+      return refuse(
+        refusal('trailer_missing', `${project.repo} asks for the trailer ${trailer} on each commit, and ${named} on ${repo}:${branch} ${missing.length === 1 ? 'lacks' : 'lack'} it, so nothing was taken. Add "${trailer}: ${input.agent} (${notes.model})" to each commit's message, push the branch, and submit again.`),
+      );
+    }
+  }
+
+  // Every read comes before the room records the submit. A PR already open
+  // from the claim's own branch isn't another PR on the issue.
+  const others: PrRef[] = [];
+  if (claim.pr === null) {
+    for (const pr of await otherPrs(writer, work, issue?.repo ? [facts.name, issue.repo] : [facts.name])) {
+      const from = await writer.pullHead(pr.repo, pr.number);
+      if (from?.ref === branch && from.repo !== null && lower(from.repo) === lower(repo)) continue;
+      others.push(pr);
+    }
+  }
+  const openPrs = (await countOpenPrsByProject(env.DB, donor.githubId)).get(lower(project.repo)) ?? 0;
+  const room = issueRoom(env.ISSUE_ROOM, claim.issue);
+  const recorded = await room.submit({ claimId: claim.id, githubId: donor.githubId, tokenEstimate: input.tokenEstimate ?? null });
+  if (!recorded.ok) return refuse(recorded.refusal);
+  const listed = own.commits.length >= own.aheadBy && own.files < COMPARE_FILES;
+  const reason =
+    recorded.claim.state === 'pr_opened'
+      ? null
+      : (reviewReason({
+          prOnIssue: others.length > 0,
+          workflowFiles: own.paths.some(isWorkflowPath),
+          unchecked: listed ? null : 'too_many_files',
+          prMode: project.settings.prMode,
+          personWrittenDescription: project.settings.personWrittenDescription,
+          atOpenPrCap: openPrRefusal(project, openPrs) !== null,
+        }) ?? 'ready_to_open');
+  await saveSubmission(env.DB, {
+    claimId: claim.id,
+    source: 'branch',
+    repo,
+    branch,
+    commit: head,
+    base: claim.startCommit,
+    diffFrom,
+    paths: own.paths.slice(0, COMPARE_FILES),
+    ...notes,
+    agent: input.agent,
+    additions: own.additions,
+    deletions: own.deletions,
+    reviewReason: reason,
+    submittedAt: now,
+  });
+  const urls = branchUrls(repo, branch, diffFrom);
+  const result = (state: ClaimRecord['state'], pr: PrRef | null, why: ReviewReason | null) =>
+    answer(
+      toolResult('submit_work', {
+        claimId: claim.id,
+        issue: claim.issue,
+        state,
+        source: 'branch',
+        commit: { sha: head, url: commitUrl(repo, head) },
+        branch: { repo, name: branch, url: urls.branch },
+        diffUrl: urls.diff,
+        pr,
+        reviewReason: why,
+      }),
+    );
+  // A claim whose PR is open takes the fixes on that PR's branch, which
+  // answers the follow-ups on it a tool showed before this submit.
+  if (recorded.claim.state === 'pr_opened') {
+    await answerFollowUps(env.DB, claim.id, now);
+    return result('pr_opened', recorded.claim.pr, null);
+  }
+  return result(recorded.claim.state, null, reason);
 }
 
 /** What opening a claim's PR did: the PR, as open_pr answers with it, or why none opened. */
@@ -724,6 +910,16 @@ export async function openPrAs(caller: Caller, input: ToolInput<'open_pr'>, now:
   // The PR is public, so a key or token in the donor's words goes to it only
   // as [redacted], as in the rest of the PR's body.
   const description = input.description === undefined ? undefined : stripSecretsFromText(input.description);
+  // A pushed branch opens only at the head its submit checked.
+  if (submission.source === 'branch') {
+    const head = await writer.branchHead(submission.repo, submission.branch);
+    if (head !== submission.commit) {
+      const at = typeof head === 'string' ? `is at ${head}` : 'is gone';
+      return refused(
+        refusal('branch_moved', `${submission.repo}:${submission.branch} ${at}, and its submit checked ${submission.commit}, so no PR opened. Submit the branch again, then open the PR.`),
+      );
+    }
+  }
   const opened = await openFor(writer, work, facts, submission, description);
   if (isRefusal(opened)) return refused(opened);
   return { ok: true, value: { claimId: claim.id, issue: claim.issue, state: opened.claim.state, pr: opened.pr, prOnIssue } };

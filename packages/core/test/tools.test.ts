@@ -782,6 +782,21 @@ describe('tool inputs', () => {
       model: 'claude-opus-5-5',
     });
 
+  test('a submit sends a pushed branch or files, not both and not neither, and onto goes with files only', () => {
+    const notes = { claimId: 'c_1', summary: 'Adds the NDJSON formatter.', checks: 'pnpm test', agent: 'claude-code', model: 'claude-opus-5-5' };
+    const branch = { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-918-c_1', head: 'a'.repeat(40) };
+    const files = [{ path: 'a.txt', content: 'a\n' }];
+
+    expect(validate(tools.submit_work.input, { ...notes, branch }).ok).toBe(true);
+    expect(validate(tools.submit_work.input, { ...notes, files, onto: 'b'.repeat(40) }).ok).toBe(true);
+    expect(problemFields(validate(tools.submit_work.input, { ...notes, branch, files }))).toEqual(['branch']);
+    expect(problemFields(validate(tools.submit_work.input, notes))).toEqual(['branch']);
+    expect(problemFields(validate(tools.submit_work.input, { ...notes, branch, onto: 'b'.repeat(40) }))).toEqual(['onto']);
+    expect(problemFields(validate(tools.submit_work.input, { ...notes, branch: { ...branch, head: 'main' } }))).toEqual([
+      'branch.head',
+    ]);
+  });
+
   test('a submitted file holds at most 1 MiB of UTF-8, counted in bytes', () => {
     const oneFile = (content: string) => submitFiles([{ path: 'a.txt', content }]);
     expect(oneFile('x'.repeat(1_048_576)).ok).toBe(true);
@@ -813,7 +828,7 @@ describe('tool inputs', () => {
   test("a file's text is taken as it was sent, spaces and line endings included", () => {
     const content = '  indented\r\nline two\t\n\n';
     const result = submitFiles([{ path: 'a.txt', content }]);
-    expect(result.ok && result.value.files[0]?.content).toBe(content);
+    expect(result.ok && result.value.files?.[0]?.content).toBe(content);
   });
 
   test('a PR title and a model name are one line, and a title is at most 256 characters', () => {

@@ -69,13 +69,13 @@ function timeLeft(expiresAt: string, now: number): string {
 const WAITS_BECAUSE: Record<ReviewReason, string> = {
   pr_exists: 'A PR was already open on the issue when it was submitted.',
   workflow_files: 'It changes a GitHub Actions workflow file.',
-  too_many_files:
-    "Someone else pushed to the branch. GitHub listed too many changed files to check for workflow changes.",
-  comparison_unread: "Someone else pushed to the branch. GitHub did not return a diff to check for workflow changes.",
+  too_many_files: 'GitHub listed too many changed files or commits on the branch to check them all.',
+  comparison_unread: 'GitHub did not return a diff of the branch to check.',
   reviewed_mode: 'The project asks you to read the diff before its PR opens.',
   person_written_description: 'The project asks you to write the PR description.',
   open_pr_cap: 'You had as many open PRs in the project as it allows.',
   pr_refused: "GitHub didn't open the PR when the work was submitted.",
+  ready_to_open: 'It is ready to open as a PR.',
 };
 
 /**

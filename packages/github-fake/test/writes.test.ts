@@ -436,6 +436,34 @@ test('a comparison lists the files a branch changed since a commit, with lines a
   expect(unknown.status).toBe(404);
 });
 
+test('a comparison of a branch with the base merged in lists only the commits the base lacks, each once, oldest first', async () => {
+  const { sha } = await forkWithBranch('sam', 'merged-in');
+  const first = fake.commitFiles('sam/goodfirsttoken', { 'a.txt': 'a\n' }, 'sam', { branch: 'merged-in', message: 'Add a' });
+  const main = fake.commitFiles('meanwhileso/goodfirsttoken', { 'z.txt': 'z\n' }, 'octo-maintainer');
+  const pull = await rest<{ number: number }>(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: fake.tokenFor('sam'),
+    body: { title: 'Merge me', head: 'sam:merged-in', base: 'main' },
+  });
+  const merge = fake.updatePullRequestBranch('meanwhileso/goodfirsttoken', pull.body.number, 'sam');
+
+  const own = await rest<{ status: string; ahead_by: number; commits: { sha: string }[] }>(
+    fake,
+    'GET',
+    `/repos/sam/goodfirsttoken/compare/${main}...${merge}`,
+  );
+  const fromStart = await rest<{ ahead_by: number; commits: { sha: string }[] }>(
+    fake,
+    'GET',
+    `/repos/sam/goodfirsttoken/compare/${sha}...${merge}`,
+  );
+
+  expect(own.body).toMatchObject({ status: 'ahead', ahead_by: 2 });
+  expect(own.body.commits.map((c) => c.sha)).toEqual([first, merge]);
+  expect(fromStart.body.ahead_by).toBe(3);
+  expect(new Set(fromStart.body.commits.map((c) => c.sha))).toEqual(new Set([first, main, merge]));
+  expect(fromStart.body.commits.at(-1)?.sha).toBe(merge);
+});
+
 test('a comparison lists a file moved with the same text as renamed, with its old name, and commitFiles deletes a file given null', async () => {
   const before = await head('meanwhileso/goodfirsttoken', 'main');
   const after = fake.commitFiles(
@@ -556,4 +584,63 @@ test("Update branch merges the base branch into a PR's branch, in a merge commit
     (await rest<{ content: string }>(fake, 'GET', `/repos/sam/goodfirsttoken/contents/${path}?ref=behind`)).body.content;
   expect(fromBase64(await file('theirs.txt'))).toBe('From main.\n');
   expect(fromBase64(await file('mine.txt'))).toBe('Suggested.\n');
+});
+
+test("an organization that restricts OAuth apps takes no branch, commit, or PR from an app it didn't approve, and a fork all the same", async () => {
+  const restricted = fake.state.accounts.meanwhileso;
+  if (!restricted) throw new Error('no meanwhileso');
+  restricted.oauthAppRestrictions = { approved: ['approved-app'] };
+  const fromApp = (login: string, clientId: string) => {
+    const token = fake.tokenFor(login);
+    const grant = fake.state.tokens[token];
+    if (!grant) throw new Error('no token');
+    grant.clientId = clientId;
+    return token;
+  };
+  const kenji = fromApp('kenji', 'other-app');
+  const sha = await head('meanwhileso/goodfirsttoken', 'main');
+
+  const branch = await rest<{ message: string }>(fake, 'POST', `${UPSTREAM}/git/refs`, {
+    token: kenji,
+    body: { ref: 'refs/heads/kenji-19', sha },
+  });
+  const commit = await graphql<CommitReply>(fake, kenji, COMMIT, {
+    input: {
+      branch: { repositoryNameWithOwner: 'meanwhileso/goodfirsttoken', branchName: 'main' },
+      expectedHeadOid: sha,
+      message: { headline: 'Held back' },
+      fileChanges: { additions: [{ path: 'held.txt', contents: toBase64('held') }] },
+    },
+  });
+  const read = await rest(fake, 'GET', `${UPSTREAM}/branches/main`, { token: kenji });
+  const fork = await rest<{ full_name: string }>(fake, 'POST', `${UPSTREAM}/forks`, { token: kenji, body: {} });
+  forksFinish();
+  await rest(fake, 'POST', `/repos/kenji/goodfirsttoken/git/refs`, { token: kenji, body: { ref: 'refs/heads/kenji-19', sha } });
+  await commitFile(kenji, 'kenji/goodfirsttoken', 'kenji-19', 'fork.txt');
+  const pull = await rest(fake, 'POST', `${UPSTREAM}/pulls`, {
+    token: kenji,
+    body: { title: 'From the fork', head: 'kenji:kenji-19', base: 'main' },
+  });
+  const approved = await rest(fake, 'POST', `${UPSTREAM}/git/refs`, {
+    token: fromApp('kenji', 'approved-app'),
+    body: { ref: 'refs/heads/kenji-20', sha },
+  });
+  const noApp = await rest(fake, 'POST', `${UPSTREAM}/git/refs`, {
+    token: fake.tokenFor('kenji'),
+    body: { ref: 'refs/heads/kenji-21', sha },
+  });
+
+  expect(branch.status).toBe(403);
+  expect(branch.body.message).toContain('the `meanwhileso` organization has enabled OAuth App access restrictions');
+  expect(commit.body.data?.createCommitOnBranch).toBeNull();
+  expect(commit.body.errors).toEqual([
+    expect.objectContaining({ type: 'FORBIDDEN', message: expect.stringContaining('OAuth App access restrictions') as unknown }),
+  ]);
+  expect(await head('meanwhileso/goodfirsttoken', 'main')).toBe(sha);
+  expect(read.status).toBe(200);
+  expect(fork.body.full_name).toBe('kenji/goodfirsttoken');
+  expect(await head('kenji/goodfirsttoken', 'kenji-19')).not.toBe(sha);
+  expect(pull.status).toBe(403);
+  expect(approved.status).toBe(201);
+  expect(noApp.status).toBe(201);
 });

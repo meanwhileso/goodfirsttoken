@@ -24,6 +24,7 @@ import { refusalCodeSchema } from '../refusals';
 import { budgetSchema, queueSchema, type Budget } from '../sessions';
 import {
   branchName,
+  submissionSourceSchema,
   MAX_SUBMIT_NOTES,
   prTitle,
   reviewReasonSchema,
@@ -261,6 +262,8 @@ export const claimIssue = defineTool({
     body: z.string(),
     project: z.object({ repo: repoName, settings: projectSettingsSchema }),
     clone: z.object({ url: webUrl, commit: commitSha }),
+    /** The claim's branch, and whether the donor can push to the code repo, where it goes then, or else to their fork. */
+    branch: z.object({ name: branchName, canPush: z.boolean() }),
     /** Queued picks passed over on the way to this one: they filled up, got a PR, or no longer take claims. */
     skipped: z.array(skippedPickSchema),
     /** The picks still waiting in the session, in order. */
@@ -284,6 +287,7 @@ export const claimIssue = defineTool({
       `Live: ${out.claim.liveUrl}`,
       '',
       `Clone ${out.clone.url} and start from commit ${out.clone.commit}.`,
+      `Commit on the branch ${out.branch.name}, and push it to ${out.branch.canPush ? out.project.repo : `the donor's fork of ${out.project.repo}`}.`,
       "Follow the repo's AGENTS.md and CONTRIBUTING. If either asks for a marker of unreviewed agent work, tell the donor and leave it in place.",
       `PRs: ${settings.prMode}.`,
       settings.disclosure.trailer !== null &&
@@ -486,6 +490,29 @@ const changedFile = z.object({
   content: fileText.nullable().describe("The file's full new text, or null to delete it."),
 });
 
+const changedFiles = z
+  .array(changedFile)
+  .min(1, 'must list at least one changed file')
+  .max(300, 'must list at most 300 files')
+  .superRefine((files, ctx) => {
+    const clash = firstClash(files.map((file) => file.path));
+    if (clash) ctx.addIssue({ code: 'custom', message: clash });
+    const bytes = files.reduce((sum, file) => sum + (file.content === null ? 0 : utf8Length(file.content)), 0);
+    if (bytes > MAX_SUBMIT_BYTES) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `must hold at most ${MAX_SUBMIT_BYTES.toLocaleString('en-US')} bytes of UTF-8 in all, and these hold ${bytes.toLocaleString('en-US')}`,
+      });
+    }
+  });
+
+/** A claim's branch as the donor's agent pushed it (docs/specs/agent-submits.md). */
+const pushedBranch = z.object({
+  repo: repoName.describe("The repo you pushed the branch to: the project's code repo, or the donor's fork of it."),
+  name: branchName.describe("The claim's branch, as claim_issue named it."),
+  head: commitSha.describe("The commit at the branch's head, as you pushed it."),
+});
+
 function describeReviewReason(reason: ReviewReason): string {
   switch (reason) {
     case 'pr_exists':
@@ -493,9 +520,9 @@ function describeReviewReason(reason: ReviewReason): string {
     case 'workflow_files':
       return 'the change touches GitHub Actions workflow files';
     case 'too_many_files':
-      return "the branch holds someone else's push, and GitHub's comparison of it lists 300 files, its most, too many to check every file for workflow files";
+      return "GitHub's comparison of the branch lists 300 files, its most, or leaves commits out, so not every file and commit could be checked";
     case 'comparison_unread':
-      return "the branch holds someone else's push, and GitHub gave no comparison of it, so its files couldn't be checked for workflow files";
+      return "GitHub gave no comparison of the branch, so its files and commits couldn't be checked";
     case 'reviewed_mode':
       return 'the project reviews agent PRs';
     case 'person_written_description':
@@ -504,6 +531,8 @@ function describeReviewReason(reason: ReviewReason): string {
       return 'the donor has as many open PRs in the project as it allows';
     case 'pr_refused':
       return "GitHub didn't open the PR";
+    case 'ready_to_open':
+      return 'the work is ready to open as a PR';
   }
 }
 
@@ -516,6 +545,8 @@ function nextStep(reason: ReviewReason): string {
       return 'Ask the donor to read the diff. Open the PR with open_pr once one of their PRs in the project merges or closes.';
     case 'pr_refused':
       return 'Ask the donor to read the diff, then try open_pr.';
+    case 'ready_to_open':
+      return 'Open the PR with open_pr.';
     default:
       return 'Ask the donor to read the diff, then open the PR with open_pr.';
   }
@@ -524,7 +555,7 @@ function nextStep(reason: ReviewReason): string {
 export const submitWork = defineTool({
   audience: 'donor',
   description:
-    "Submit the finished work: every file changed from the start commit, each with its full new text or null to delete it, a summary, what you checked, and the agent and model used. Send every changed file each time: a file an earlier submit changed that this one leaves out goes back to the start commit. The server commits it as the donor, on a branch in the repo when the donor can push there, or else in their fork. Then it opens the PR, or puts the work in the donor's review queue. Submitting again adds a commit to the same branch, and to its PR once one is open. When someone else pushed to the branch, the submit is refused with branch_moved: fetch the branch, bring your work onto its head, and submit with onto set to that head. From then on, send every file changed from that commit.",
+    "Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open. An older way is files: every file changed from the start commit, each with its full new text or null to delete it, which the server commits as the donor and opens the PR from. Send one or the other. Once a claim's branch was pushed, send branch. With files, when someone else pushed to the branch, the submit is refused with branch_moved: fetch the branch, bring your work onto its head, and submit with onto set to that head.",
   // not_found, not_claim_owner, and the claim's own refusals come from the
   // claims table, the permission, or the claim's room. A PR that doesn't
   // open by itself sends the work to the review queue, with no refusal.
@@ -543,46 +574,51 @@ export const submitWork = defineTool({
     'fork_not_ready',
     'branch_moved',
     'github_refused',
+    'branch_not_found',
+    'branch_elsewhere',
+    'not_from_start',
+    'trailer_missing',
+    'branch_pushed',
   ],
-  input: z.object({
-    claimId: id,
-    files: z
-      .array(changedFile)
-      .min(1, 'must list at least one changed file')
-      .max(300, 'must list at most 300 files')
-      .superRefine((files, ctx) => {
-        const clash = firstClash(files.map((file) => file.path));
-        if (clash) ctx.addIssue({ code: 'custom', message: clash });
-        const bytes = files.reduce((sum, file) => sum + (file.content === null ? 0 : utf8Length(file.content)), 0);
-        if (bytes > MAX_SUBMIT_BYTES) {
-          ctx.addIssue({
-            code: 'custom',
-            message: `must hold at most ${MAX_SUBMIT_BYTES.toLocaleString('en-US')} bytes of UTF-8 in all, and these hold ${bytes.toLocaleString('en-US')}`,
-          });
-        }
-      }),
-    title: prTitle
-      .optional()
-      .describe("The PR's title and the commit's first line, as the repo's own rules want them. Leave it out to use the issue's title."),
-    summary: trimmedText(MAX_SUBMIT_NOTES).describe('What the change does. It starts the PR description.'),
-    checks: trimmedText(MAX_SUBMIT_NOTES).describe('What you checked, like tests and lint runs, in your own words.'),
-    agent: agentName,
-    model: modelName,
-    tokenEstimate: count
-      .optional()
-      .describe(
-        'Tokens spent on this claim since its last submit, or since it was made, when the harness can estimate them. The server adds up the estimates of every submit.',
-      ),
-    onto: commitSha
-      .optional()
-      .describe(
-        "The head of the claim's branch that your files build on, after a branch_moved refusal named it. The files are then every file changed from it, on this submit and the later ones.",
-      ),
-  }),
+  input: z
+    .object({
+      claimId: id,
+      branch: pushedBranch.optional().describe("The claim's branch as you pushed it. Send this or files."),
+      files: changedFiles
+        .optional()
+        .describe('Every file changed from the start commit, for the server to commit. Send this or branch.'),
+      title: prTitle
+        .optional()
+        .describe("The PR's title and the commit's first line, as the repo's own rules want them. Leave it out to use the issue's title."),
+      summary: trimmedText(MAX_SUBMIT_NOTES).describe('What the change does. It starts the PR description.'),
+      checks: trimmedText(MAX_SUBMIT_NOTES).describe('What you checked, like tests and lint runs, in your own words.'),
+      agent: agentName,
+      model: modelName,
+      tokenEstimate: count
+        .optional()
+        .describe(
+          'Tokens spent on this claim since its last submit, or since it was made, when the harness can estimate them. The server adds up the estimates of every submit.',
+        ),
+      onto: commitSha
+        .optional()
+        .describe(
+          "With files: the head of the claim's branch that your files build on, after a branch_moved refusal named it. The files are then every file changed from it, on this submit and the later ones.",
+        ),
+    })
+    .superRefine((input, ctx) => {
+      if ((input.branch === undefined) === (input.files === undefined)) {
+        ctx.addIssue({ code: 'custom', path: ['branch'], message: 'send branch or files, and not both' });
+      }
+      if (input.onto !== undefined && input.files === undefined) {
+        ctx.addIssue({ code: 'custom', path: ['onto'], message: 'goes with files only' });
+      }
+    }),
   output: z.object({
     claimId: id,
     issue: issueRef,
     state: claimStateSchema,
+    /** How the work reached the branch: the server committed files, or the agent pushed it. */
+    source: submissionSourceSchema,
     commit: z.object({ sha: commitSha, url: webUrl }),
     branch: z.object({ repo: repoName, name: branchName, url: webUrl }),
     /** The change from the start commit, on GitHub. */
@@ -593,7 +629,10 @@ export const submitWork = defineTool({
     reviewReason: reviewReasonSchema.nullable(),
   }),
   text: (out) => {
-    const committed = `Committed ${out.commit.sha.slice(0, 7)} to ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`;
+    const committed =
+      out.source === 'branch'
+        ? `Took ${out.commit.sha.slice(0, 7)} on ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`
+        : `Committed ${out.commit.sha.slice(0, 7)} to ${out.branch.repo}:${out.branch.name} for claim ${out.claimId}.`;
     if (out.pr) return lines(committed, `PR #${String(out.pr.number)}: ${out.pr.url}`);
     const reason = out.reviewReason ?? 'pr_refused';
     return lines(
@@ -735,6 +774,7 @@ export const openPr = defineTool({
     'open_pr_cap',
     'issue_not_eligible',
     'github_refused',
+    'branch_moved',
   ],
   input: z.object({
     claimId: id,

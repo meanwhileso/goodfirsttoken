@@ -40,6 +40,28 @@ export interface Entry {
   mode: number;
 }
 
+/** A commit in a comparison: its message, how many parents it has, and its author's login, or null when GitHub names no user. */
+export interface ComparedCommit {
+  sha: string;
+  message: string;
+  parents: number;
+  author: string | null;
+}
+
+/** GitHub's comparison of two commits, as `DonorWriter.comparison` reads it. */
+export interface Comparison {
+  /** `ahead`, `behind`, `diverged`, or `identical`, as GitHub says. */
+  status: string;
+  aheadBy: number;
+  /** The commits `head` has that `base` doesn't, oldest first, as GitHub lists at most 250. */
+  commits: ComparedCommit[];
+  additions: number;
+  deletions: number;
+  /** How many files GitHub listed, at most 300. */
+  files: number;
+  paths: string[];
+}
+
 /** What a path is at a commit, found by reading each folder on the way to it from the root. */
 export interface PathFacts {
   /** What is at the path, or null for nothing. */
@@ -335,18 +357,35 @@ export class DonorWriter {
    * with its new one, with the lines added and removed and the number of
    * files, as GitHub lists them in a comparison, which names at most 300
    * files, or null when GitHub doesn't say.
-   * https://docs.github.com/en/rest/commits/commits#compare-two-commits
    */
   async lineCounts(
     repo: string,
     base: string,
     head: string,
   ): Promise<{ additions: number; deletions: number; files: number; paths: string[] } | null> {
+    const compared = await this.comparison(repo, base, head);
+    return compared === null
+      ? null
+      : { additions: compared.additions, deletions: compared.deletions, files: compared.files, paths: compared.paths };
+  }
+
+  /**
+   * GitHub's comparison of `head` with `base`: whether `head` is ahead of it,
+   * the commits it has that `base` doesn't, and the files they change, as
+   * `lineCounts` gives them. GitHub lists at most 250 commits and 300 files
+   * in one. Null when GitHub doesn't say.
+   * https://docs.github.com/en/rest/commits/commits#compare-two-commits
+   */
+  async comparison(repo: string, base: string, head: string): Promise<Comparison | null> {
     try {
       const { data } = await this.reader.read<{
+        status?: unknown;
+        ahead_by?: unknown;
+        commits?: { sha?: unknown; commit?: { message?: unknown }; parents?: unknown[]; author?: { login?: unknown } | null }[];
         files?: { filename?: unknown; previous_filename?: unknown; additions?: unknown; deletions?: unknown }[];
       }>(`/repos/${repo}/compare/${base}...${head}`);
-      if (!Array.isArray(data.files)) return null;
+      if (typeof data.status !== 'string' || typeof data.ahead_by !== 'number') return null;
+      if (!Array.isArray(data.files) || !Array.isArray(data.commits)) return null;
       let additions = 0;
       let deletions = 0;
       const paths: string[] = [];
@@ -360,7 +399,63 @@ export class DonorWriter {
         // A file renamed was at its old path too.
         if (typeof file.previous_filename === 'string') paths.push(file.previous_filename);
       }
-      return { additions, deletions, files: data.files.length, paths };
+      const commits: ComparedCommit[] = [];
+      for (const commit of data.commits) {
+        if (typeof commit.sha !== 'string' || typeof commit.commit?.message !== 'string') return null;
+        const login = commit.author?.login;
+        commits.push({
+          sha: commit.sha,
+          message: commit.commit.message,
+          parents: Array.isArray(commit.parents) ? commit.parents.length : 0,
+          author: typeof login === 'string' ? login : null,
+        });
+      }
+      return { status: data.status, aheadBy: data.ahead_by, commits, additions, deletions, files: data.files.length, paths };
+    } catch (error) {
+      if (error instanceof GitHubError && error.status !== 401) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * A repo as GitHub names it, with the repo it was forked from and the one
+   * at the root of its fork network, or null when GitHub shows no such repo.
+   * https://docs.github.com/en/rest/repos/repos#get-a-repository
+   */
+  async repoOf(repo: string): Promise<{ name: string; parent: string | null; source: string | null } | null> {
+    try {
+      const { data } = await this.reader.read<{
+        full_name?: unknown;
+        parent?: { full_name?: unknown } | null;
+        source?: { full_name?: unknown } | null;
+      }>(`/repos/${repo}`);
+      if (typeof data.full_name !== 'string') return null;
+      const parent = data.parent?.full_name;
+      const source = data.source?.full_name;
+      return {
+        name: data.full_name,
+        parent: typeof parent === 'string' ? parent : null,
+        source: typeof source === 'string' ? source : null,
+      };
+    } catch (error) {
+      if (error instanceof GitHubError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * The branch a PR comes from, and the repo it is in, or null when GitHub
+   * doesn't say. The repo is null when its fork was deleted.
+   * https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request
+   */
+  async pullHead(repo: string, number: number): Promise<{ ref: string; repo: string | null } | null> {
+    try {
+      const { data } = await this.reader.read<{ head?: { ref?: unknown; repo?: { full_name?: unknown } | null } }>(
+        `/repos/${repo}/pulls/${String(number)}`,
+      );
+      if (typeof data.head?.ref !== 'string') return null;
+      const name = data.head.repo?.full_name;
+      return { ref: data.head.ref, repo: typeof name === 'string' ? name : null };
     } catch (error) {
       if (error instanceof GitHubError && error.status !== 401) return null;
       throw error;

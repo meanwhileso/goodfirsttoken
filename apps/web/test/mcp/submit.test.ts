@@ -838,7 +838,7 @@ describe('workflow files', () => {
     expect(checked.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
     expect(tooMany.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null, reviewReason: 'too_many_files' });
     expect(textOf(tooMany)).toContain(
-      "because the branch holds someone else's push, and GitHub's comparison of it lists 300 files, its most, too many to check every file for workflow files.",
+      "because GitHub's comparison of the branch lists 300 files, its most, or leaves commits out, so not every file and commit could be checked.",
     );
     expect(own.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
   });
@@ -855,7 +855,7 @@ describe('workflow files', () => {
     const own = await submit(kenji, plain.claimId, { 'src/rewrite.ts': 'export const keepSlash = true;\n' });
 
     expect(unread.structuredContent).toMatchObject({ state: 'awaiting_review', pr: null, reviewReason: 'comparison_unread' });
-    expect(textOf(unread)).toContain("GitHub gave no comparison of it, so its files couldn't be checked for workflow files");
+    expect(textOf(unread)).toContain("GitHub gave no comparison of the branch, so its files and commits couldn't be checked");
     expect(own.structuredContent).toMatchObject({ state: 'pr_opened', reviewReason: null });
   });
 
@@ -1794,5 +1794,377 @@ describe('who can submit and open a PR', () => {
     expect(textOf(binary)).toContain('files.0.content: must be text');
     expect(pathCalls.flatMap((p) => p.calls)).toEqual([]);
     expect((await issueRoom(env.ISSUE_ROOM, issue).snapshot()).claims[0]?.state).toBe('active');
+  });
+});
+
+describe('a branch the agent pushed', () => {
+  const TRAILED = 'Keep the trailing slash in rewrites\n\nAssisted-by: claude-code (claude-opus-5-5)';
+
+  /**
+   * Commits to the branch as the donor's own git would push it, starting it
+   * at `from` when it isn't there yet. No token of the site's is used.
+   */
+  function push(repo: string, branch: string, from: string, by: string, files: Record<string, string | null>, message = TRAILED): string {
+    const state = repoState(repo);
+    state.branches[branch] ??= from;
+    return github.commitFiles(repo, files, by, { branch, message });
+  }
+
+  function submitBranch(d: Donor, claimId: string, branch: { repo: string; name: string; head: string }, extra: Record<string, unknown> = {}) {
+    return call(d, 'submit_work', { claimId, branch, ...NOTES, ...extra });
+  }
+
+  test("claim_issue names the claim's branch and whether the donor can push to the code repo", async () => {
+    await project(APP, reviewed);
+    const [first, second] = [await tagged(APP), await tagged(APP)];
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const priya = await donor('priya');
+
+    const pusher = await call(kenji, 'claim_issue', { sessionId: kenji.sessionId, issue: first });
+    const forker = await call(priya, 'claim_issue', { sessionId: priya.sessionId, issue: second });
+    const resumed = await call(priya, 'claim_issue', { sessionId: priya.sessionId, issue: second });
+
+    const idOf = (result: Result) => (result.structuredContent as { claim: { claimId: string } }).claim.claimId;
+    expect(pusher.structuredContent).toMatchObject({ branch: { name: branchOf(first, idOf(pusher)), canPush: true } });
+    expect(forker.structuredContent).toMatchObject({ branch: { name: branchOf(second, idOf(forker)), canPush: false } });
+    expect(resumed.structuredContent).toMatchObject({ resumed: true, branch: { name: branchOf(second, idOf(forker)), canPush: false } });
+    expect(textOf(forker)).toContain(`Commit on the branch ${branchOf(second, idOf(forker))}, and push it to the donor's fork of ${APP}.`);
+  });
+
+  test("a branch pushed to the donor's fork is taken with GitHub reads alone, and waits for open_pr", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'src/slash.ts': 'export const keepSlash = true;\n' });
+
+    const result = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+
+    expect(result.structuredContent).toMatchObject({
+      state: 'awaiting_review',
+      source: 'branch',
+      commit: { sha: head },
+      branch: { repo: 'priya/sample-app', name },
+      pr: null,
+      reviewReason: 'ready_to_open',
+    });
+    expect(textOf(result)).toContain('ready to open as a PR. Open the PR with open_pr.');
+    expect(writes(lastCalls())).toEqual([]);
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({
+      source: 'branch',
+      repo: 'priya/sample-app',
+      commit: head,
+      base: start,
+      paths: ['src/slash.ts'],
+      additions: 1,
+      deletions: 0,
+    });
+    expect(pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === name)).toEqual([]);
+  });
+
+  test('a donor who can push gets their branch in the code repo, and its review reasons hold', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    repoState(APP).collaborators.kenji = 'write';
+    const kenji = await donor('kenji');
+    const { claimId, start } = await claim(kenji, issue);
+    const name = branchOf(issue, claimId);
+    const head = push(APP, name, start, 'kenji', { '.github/workflows/ci.yml': 'name: CI\n' });
+
+    const result = await submitBranch(kenji, claimId, { repo: APP, name, head });
+
+    expect(result.structuredContent).toMatchObject({ source: 'branch', branch: { repo: APP, name }, reviewReason: 'workflow_files' });
+    expect(writes(lastCalls())).toEqual([]);
+  });
+
+  test('a branch with the wrong name, at another head, or not on GitHub is refused, and nothing is taken', async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+
+    const misnamed = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name: 'fix-slash', head });
+    const elsewhere = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: start });
+    const missing = await submitBranch(priya, claimId, { repo: APP, name, head });
+
+    expect(refusalOf(misnamed)).toBe('branch_not_found');
+    expect(textOf(misnamed)).toContain(`Push your work to ${name}, and submit again.`);
+    expect(refusalOf(elsewhere)).toBe('branch_not_found');
+    expect(textOf(elsewhere)).toContain(`priya/sample-app:${name} is at ${head}, and not at ${start}`);
+    expect(refusalOf(missing)).toBe('branch_not_found');
+    expect(textOf(missing)).toContain(`GitHub shows no branch ${name} in ${APP}`);
+    expect(await getSubmission(env.DB, claimId)).toBeNull();
+    expect((await issueRoom(env.ISSUE_ROOM, issue).snapshot()).claims[0]?.state).toBe('active');
+  });
+
+  test("a branch in a repo that isn't the code repo or a fork of it, or in another repo than the claim's branch, is refused", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    repoState(TOOLS).collaborators.priya = 'write';
+    const other = push(TOOLS, name, repoState(TOOLS).branches.main ?? '', 'priya', { 'a.txt': 'a\n' });
+
+    const unforked = await submitBranch(priya, claimId, { repo: TOOLS, name, head: other });
+    await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+    repoState(APP).collaborators.priya = 'write';
+    const upstream = push(APP, name, start, 'priya', { 'a.txt': 'a\n' });
+    const moved = await submitBranch(priya, claimId, { repo: APP, name, head: upstream });
+
+    expect(refusalOf(unforked)).toBe('branch_elsewhere');
+    expect(textOf(unforked)).toContain(`GitHub shows ${TOOLS} as no fork of ${APP}`);
+    expect(refusalOf(moved)).toBe('branch_elsewhere');
+    expect(textOf(moved)).toContain(`Claim ${claimId}'s branch is in priya/sample-app`);
+  });
+
+  test('a branch not built on the start commit, or with nothing past the default branch, is refused', async () => {
+    await project(APP, automatic);
+    const [first, second] = [await tagged(APP), await tagged(APP)];
+    const priya = await donor('priya');
+    const lena = await donor('lena');
+    const one = await claim(priya, first);
+    const two = await claim(lena, second);
+    const before = commitAt(one.start).parents[0];
+    if (before === undefined) throw new Error('the start commit has no parent');
+    const older = push('priya/sample-app', branchOf(first, one.claimId), before, 'priya', { 'a.txt': 'a\n' });
+    await asGitHub(agentToken('lena'), 'POST', `/repos/${APP}/forks`, {});
+    repoState('lena/sample-app').gitReadyAt = null;
+    repoState('lena/sample-app').branches[branchOf(second, two.claimId)] = two.start;
+
+    const notFromStart = await submitBranch(priya, one.claimId, { repo: 'priya/sample-app', name: branchOf(first, one.claimId), head: older });
+    const empty = await submitBranch(lena, two.claimId, { repo: 'lena/sample-app', name: branchOf(second, two.claimId), head: two.start });
+
+    expect(refusalOf(notFromStart)).toBe('not_from_start');
+    expect(textOf(notFromStart)).toContain(`The start commit, ${one.start}, isn't an ancestor of priya/sample-app:${branchOf(first, one.claimId)}`);
+    expect(refusalOf(empty)).toBe('no_changes');
+    expect(textOf(empty)).toContain('changes no file from main');
+  });
+
+  test("a commit missing the project's trailer is refused, and a project with no trailer takes it", async () => {
+    await project(APP, automatic);
+    await project(TOOLS, { ...automatic, disclosure: { trailer: null, prBody: 'Written with an agent.' } });
+    const issue = await tagged(APP);
+    const tool = await tagged(TOOLS);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    const bare = push('priya/sample-app', name, start, 'priya', { 'b.txt': 'b\n' }, 'Add b');
+    repoState(TOOLS).collaborators.priya = 'write';
+    const other = await claim(priya, tool);
+    const toolBranch = branchOf(tool, other.claimId);
+    const untrailed = push(TOOLS, toolBranch, other.start, 'priya', { 'a.txt': 'a\n' }, 'Add a');
+
+    const refused = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: bare });
+    const taken = await submitBranch(priya, other.claimId, { repo: TOOLS, name: toolBranch, head: untrailed });
+
+    expect(refusalOf(refused)).toBe('trailer_missing');
+    expect(textOf(refused)).toContain(`${APP} asks for the trailer Assisted-by on each commit, and ${bare.slice(0, 7)} on priya/sample-app:${name} lacks it`);
+    expect(textOf(refused)).toContain('Add "Assisted-by: claude-code (claude-opus-5-5)" to each commit\'s message');
+    expect(taken.structuredContent).toMatchObject({ source: 'branch', reviewReason: 'ready_to_open' });
+  });
+
+  test("a PR already open from the claim's own branch isn't another PR on the issue, and a merge from the default branch needs no trailer", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    await asGitHub(agentToken('priya'), 'POST', `/repos/${APP}/pulls`, {
+      title: 'Keep the trailing slash in rewrites',
+      body: `Closes #${String(numberOf(issue))}`,
+      head: `priya:${name}`,
+      base: 'main',
+    });
+    const [pull] = pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === name);
+    if (!pull) throw new Error('no PR');
+    github.commitFiles(APP, { 'z.txt': 'z\n' }, BY);
+    const merged = github.updatePullRequestBranch(APP, pull.number, 'priya');
+
+    const result = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: merged });
+
+    expect(commitAt(merged).parents).toHaveLength(2);
+    expect(result.structuredContent).toMatchObject({ source: 'branch', commit: { sha: merged }, reviewReason: 'ready_to_open' });
+  });
+
+  test("before the PR opens, every commit of the branch's own change needs the trailer, whoever GitHub names as its author", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    const theirs = push('priya/sample-app', name, start, BY, { 'b.txt': 'b\n' }, 'Add b');
+
+    const refused = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: theirs });
+
+    expect(refusalOf(refused)).toBe('trailer_missing');
+    expect(textOf(refused)).toContain(theirs.slice(0, 7));
+  });
+
+  test('a trailer counts only below the first line of the message', async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' }, 'Assisted-by: claude-code (claude-opus-5-5)');
+
+    const refused = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+
+    expect(refusalOf(refused)).toBe('trailer_missing');
+  });
+
+  test('a branch whose new commits change no file has nothing to take', async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    const back = push('priya/sample-app', name, start, 'priya', { 'a.txt': null });
+
+    const refused = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: back });
+
+    expect(refusalOf(refused)).toBe('no_changes');
+  });
+
+  test("a comparison GitHub doesn't give refuses the submit, before the PR and after it, and the room records nothing", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the writer as this
+    const comparison = DonorWriter.prototype.comparison;
+    // The first comparison, with the start commit, comes back. The second, the branch's own change, doesn't.
+    let compared = 0;
+    const spy = vi.spyOn(DonorWriter.prototype, 'comparison').mockImplementation(async function (this: DonorWriter, repo, base, to) {
+      compared += 1;
+      return compared === 1 ? comparison.call(this, repo, base, to) : null;
+    });
+
+    const before = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+    spy.mockRestore();
+    await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+    await call(priya, 'open_pr', { claimId });
+    const fix = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'b\n' });
+    vi.spyOn(DonorWriter.prototype, 'comparison').mockImplementation(async function (this: DonorWriter, repo, base, to) {
+      return base === head ? null : comparison.call(this, repo, base, to);
+    });
+    const after = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: fix });
+
+    expect(refusalOf(before)).toBe('github_refused');
+    expect(refusalOf(after)).toBe('github_refused');
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({ commit: head });
+  });
+
+  test("another donor's PR on the issue sends the work to review", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    repoState(APP).collaborators.priya = 'write';
+    const head = push(APP, name, start, 'priya', { 'a.txt': 'a\n' });
+    const number = github.openPullRequest(APP, { title: 'Another try', body: `Closes #${String(numberOf(issue))}`, by: 'sam' });
+
+    const result = await submitBranch(priya, claimId, { repo: APP, name, head });
+
+    expect(number).toBeGreaterThan(0);
+    expect(result.structuredContent).toMatchObject({ source: 'branch', reviewReason: 'pr_exists' });
+  });
+
+  test("a branch pushed to the code repo by its old name, after a rename, is taken", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    repoState(APP).collaborators.priya = 'write';
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    github.renameRepo(APP, `${APP}-next`);
+    const head = push(`${APP}-next`, name, start, 'priya', { 'a.txt': 'a\n' });
+
+    const result = await submitBranch(priya, claimId, { repo: APP, name, head });
+
+    expect(result.structuredContent).toMatchObject({ source: 'branch', branch: { repo: `${APP}-next`, name } });
+  });
+
+  test("in an organization that hasn't approved the site's OAuth app, a pushed branch is taken, since the server writes nothing", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const owner = github.state.accounts['sample-owner'];
+    if (!owner) throw new Error('no sample-owner');
+    owner.oauthAppRestrictions = { approved: [] };
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+
+    const result = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+
+    expect(result.structuredContent).toMatchObject({ source: 'branch', reviewReason: 'ready_to_open' });
+    expect(lastCalls().filter((c) => c.status === 403)).toEqual([]);
+  });
+
+  test('open_pr opens a pushed branch only at the head its submit checked', async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+    const later = push('priya/sample-app', name, start, 'priya', { '.github/workflows/ci.yml': 'name: CI\n' }, 'Add CI');
+
+    const refused = await call(priya, 'open_pr', { claimId });
+
+    expect(refusalOf(refused)).toBe('branch_moved');
+    expect(textOf(refused)).toContain(`priya/sample-app:${name} is at ${later}`);
+    expect(pullsBy(APP, 'priya').filter((p) => p.pull?.head.ref === name)).toEqual([]);
+  });
+
+  test('a submit with files after the branch was pushed is refused, so the pushed work stays', async () => {
+    await project(APP, reviewed);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+
+    const refused = await submit(priya, claimId, { 'b.txt': 'b\n' });
+
+    expect(refusalOf(refused)).toBe('branch_pushed');
+    expect(repoState('priya/sample-app').branches[name]).toBe(head);
+  });
+
+  test("fixes pushed onto the claim's open PR are taken, and a maintainer's commit there needs no trailer", async () => {
+    await project(APP, automatic);
+    const issue = await tagged(APP);
+    const priya = await donor('priya');
+    const { claimId, start } = await claim(priya, issue);
+    const name = branchOf(issue, claimId);
+    const head = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'a\n' });
+    await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+    const opened = await call(priya, 'open_pr', { claimId });
+    const same = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head });
+    push('priya/sample-app', name, start, BY, { 'm.txt': 'm\n' }, 'Tidy up');
+    const fix = push('priya/sample-app', name, start, 'priya', { 'a.txt': 'b\n' });
+
+    const fixed = await submitBranch(priya, claimId, { repo: 'priya/sample-app', name, head: fix });
+
+    expect(opened.structuredContent).toMatchObject({ state: 'pr_opened' });
+    expect(refusalOf(same)).toBe('no_changes');
+    expect(fixed.structuredContent).toMatchObject({ state: 'pr_opened', source: 'branch', commit: { sha: fix } });
+    expect(await getSubmission(env.DB, claimId)).toMatchObject({ commit: fix });
   });
 });

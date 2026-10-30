@@ -2363,8 +2363,10 @@ the donor's tools use the one rule, so they agree.
 - The answer has the claim, with the issue's link on GitHub, its live page,
   and when the claim expires, the slots taken, the issue's text on GitHub,
   the project's repo and settings with its notes for agents, the repo to
-  clone, the commit to start from, the queued picks passed over, the picks
-  still waiting, and what is left of the budget.
+  clone, the commit to start from, the claim's branch with whether the
+  donor can push to the code repo, the queued picks passed over, the picks
+  still waiting, and what is left of the budget. Whether they can push is
+  GitHub's answer for the donor's token, read again when a claim resumes.
 
 **The CLA.** A claim on a project with a CLA is refused with `cla_required`
 and the CLA's link until the donor confirms they signed it. The agent then
@@ -2448,12 +2450,18 @@ since it started.
 - Both work on a claim whose project is on the do-not-list, or one the
   sync delisted, so the donor can say they are stopping and let it go.
 
-**Submitting.** `submit_work` takes the claim, every file changed from the
-claim's start commit, each with its full new text or null to delete it, a
-summary, what the agent checked, the agent and model, a title if the agent
-gives one, and a token estimate if the harness has one. The files follow the
-rules under Inputs in [MCP tools](#mcp-tools), and a submit that breaks them
-never reaches the tool.
+**Submitting.** `submit_work` takes the claim, the work, a summary, what
+the agent checked, the agent and model, a title if the agent gives one, and
+a token estimate if the harness has one. The work is one of two things. It
+is a branch the agent pushed with the donor's own tools, as its repo, its
+name, and its head commit, which the server checks with reads, under
+[Submitting a pushed branch](#submitting-a-pushed-branch). Or it is every
+file changed from the claim's start commit, each with its full new text or
+null to delete it, which the server commits. The files follow the rules
+under Inputs in [MCP tools](#mcp-tools), and a submit that breaks them, or
+that sends both or neither, never reaches the tool. The rest of this part is
+about files, apart from the checks before anything goes to GitHub, which
+both take.
 
 - Before anything goes to GitHub, it refuses a claim the claims table
   doesn't have with `not_found`, someone else's claim with
@@ -2622,6 +2630,63 @@ never reaches the tool.
   into the commit, the PR, and the database with their keys and tokens
   replaced, as a posted line's are under [The issue room](#the-issue-room).
   The files, and a description the donor wrote, go as they are.
+
+**Submitting a pushed branch.** The agent commits on the claim's branch,
+`goodfirsttoken/issue-<number>-<claim ID>`, which `claim_issue` names, with
+whether the donor can push to the code repo. It pushes the branch to the
+code repo when the donor can push there, and to a fork of it otherwise.
+[The agent-side submits spec](specs/agent-submits.md) has the rest of the
+plan.
+
+- The checks before anything goes to GitHub, and the issue's, are the ones
+  files get, above. Then the server reads, with the donor's token, and
+  writes nothing to GitHub.
+- The branch must have the claim's name, or the submit is refused with
+  `branch_not_found`. Its repo must be the code repo, or a repo GitHub names
+  as forked from it, directly or at the root of its fork network, or the
+  code repo's old name after a rename, or the submit is refused with
+  `branch_elsewhere`. Once a submit took a branch, a
+  later one must name the same repo.
+- GitHub must show the branch in that repo at the head the agent named, or
+  the submit is refused with `branch_not_found`, which names the head
+  GitHub shows.
+- The start commit must be an ancestor of the head, by GitHub's comparison
+  of the two, or the submit is refused with `not_from_start`. So the branch
+  may have the default branch merged in, or be rebased onto it.
+- The branch's own change is GitHub's comparison of its head with the code
+  repo's default branch head. A branch whose own change has no commit, or
+  changes no file, is refused with `no_changes`. When GitHub gives no
+  comparison, the submit is refused with `github_refused`, and nothing is
+  taken.
+- When the project names a commit trailer, each of those commits carries
+  it, on a line below the first that starts with its name, compared
+  without case, a colon, and some text. A merge commit doesn't need it.
+  Before the PR opens, every commit of the branch's own change is checked,
+  whoever wrote it. On a fix after the PR opens, only the commits since the
+  last submit are checked. Maintainers may push to the branch then, so a
+  commit GitHub names another person as the author of is left out. A commit
+  without the trailer is refused with `trailer_missing`, which names each
+  one and the line to add.
+- A fix after the PR opens must move the head. A submit at the last
+  submit's head is refused with `no_changes`.
+- A submit with files after a pushed branch is refused with
+  `branch_pushed`, since the server's commit would write over the pushed
+  work.
+- The review reasons are the ones files get, from the comparison's paths.
+  A PR open on the issue from the claim's own branch, in the branch's repo,
+  doesn't count as another PR. A comparison that lists 300 files, or fewer
+  commits than the branch has, sends the work to review with
+  `too_many_files`. GitHub lists at most 250 commits in one. Every read
+  comes before the claim's room records the submit.
+- `open_pr` opens a pushed branch only at the head its submit checked. A
+  branch that moved since is refused with `branch_moved`, and the agent
+  submits it again.
+- With no reason to wait, the work waits with `ready_to_open`, for the
+  agent to open with `open_pr`. Nothing opens by itself.
+- The submissions table records the source, `branch`, the head as the
+  commit, the start commit as the base, and the comparison's paths and
+  lines. A claim whose PR is open takes the fix, and answers its follow-ups,
+  as with files.
 
 **Opening the PR.** `open_pr` opens the PR for work in the donor's review
 queue. Open PR on [/me](#your-queue-on-me) opens it by the same rules.
@@ -3618,8 +3683,9 @@ return `not_maintainer`, `repo_not_eligible`, `already_registered`,
 tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `project_not_open`, `issue_not_eligible`, `open_pr_cap`, `cla_required`,
 `not_vouched`, `pr_closed`, `description_required`, `no_changes`,
-`file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, and
-`github_refused`.
+`file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`,
+`github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`,
+`trailer_missing`, and `branch_pushed`.
 
 Every tool lists the refusals an agent can get from it, in its spec in
 `packages/core`, and answers an agent with no other. The skills that use a
@@ -3646,8 +3712,8 @@ tool say what to do with each one on its list, under
 | `post_update` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_closed` |
 | `release_claim` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_already_opened` |
 | `my_work` | None |
-| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused` |
-| `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused` |
+| `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `no_changes`, `file_mode`, `path_conflict`, `fork_not_ready`, `branch_moved`, `github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`, `trailer_missing`, `branch_pushed` |
+| `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `github_refused`, `branch_moved` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
@@ -3692,12 +3758,17 @@ tool say what to do with each one on its list, under
 | `budget_spent` | The session's budget of issues or time is spent |
 | `not_claim_owner` | Someone other than the claimant used the claim |
 | `description_required` | The project wants a person-written PR description, and none came |
-| `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit |
+| `no_changes` | The submitted files leave the claim's branch as it is, so there is nothing to commit, or a pushed branch has no commits past the default branch, or a fix names the last submit's head |
 | `file_mode` | The submit would change, delete, or put back an executable file, a symbolic link, or a submodule, which a commit through GitHub's API would make a plain file, or add a path under a link or a submodule, so nothing was committed |
 | `path_conflict` | A submitted path is a folder, goes under a file, or differs only in case or accents from a path the branch has, so nothing was committed |
 | `fork_not_ready` | GitHub was still making the donor's fork, so nothing was committed. The same submit works once it is done |
-| `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, or there is no branch for `onto` to name, or the files would undo the push `onto` builds on, so nothing was committed. The refusal names the head to build on, or the files |
-| `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow |
+| `branch_moved` | Someone pushed to the claim's branch since its last submit, or its head isn't the one `onto` named, or there is no branch for `onto` to name, or the files would undo the push `onto` builds on, so nothing was committed. The refusal names the head to build on, or the files. From `open_pr`, a pushed branch moved from the head its submit checked |
+| `github_refused` | GitHub refused a write made with the donor's token, the fork, the branch, the commit, or the PR, and its reason follows, as for a change to a workflow file the token's scopes don't allow. For a pushed branch, GitHub gave no comparison of it with the start commit |
+| `branch_not_found` | A pushed branch doesn't have the claim's name, or GitHub shows no such branch in the repo named, or its head isn't the commit the agent named |
+| `branch_elsewhere` | A pushed branch is in a repo that isn't the code repo or a fork of it, or isn't the repo an earlier submit took the branch from |
+| `not_from_start` | The claim's start commit isn't an ancestor of a pushed branch's head |
+| `trailer_missing` | A commit on a pushed branch, other than a merge, lacks the trailer the project names |
+| `branch_pushed` | A submit with files after the claim's branch was pushed, which would write over the pushed work |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo, as GitHub says, or GitHub doesn't show them the repo or blocked access to it |
 | `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy or the crawler's seed list, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting |
 | `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |
@@ -5263,6 +5334,12 @@ A deployment can serve them from a static host, on a hostname of its own.
   `open_pr`, and `submit_work` when the PR opens by itself, read the code
   repo and the issue's linked PRs, then open the PR. `my_work` reads the
   linked PRs of each issue whose work waits in the review queue.
+- A submit of a pushed branch only reads: the code repo, the issue, the
+  branch's repo when it is a fork, the branch, comparisons of its head with
+  the start commit and with the default branch, the issue's linked PRs,
+  and the branch each of those PRs comes from. `open_pr` on that work reads
+  the branch's head first. Resuming a claim with `claim_issue` reads the
+  code repo, for whether the donor can push to it.
 - `/me`'s review queue and its Open PR make the calls `my_work` and
   `open_pr` make, with the token from the person's own sign-in on the site.
 - The admin queue reads the repo and its owner's account for each
