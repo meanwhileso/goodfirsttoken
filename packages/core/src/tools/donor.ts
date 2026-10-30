@@ -520,24 +520,40 @@ const prToOpenSchema = z.object({
   body: z.string().min(1),
   /** The GitHub CLI command, which reads the body on standard input. */
   command: z.string().min(1),
-  /** GitHub's form for the PR, with its title and body filled in. */
+  /** GitHub's form for the PR, with its title filled in, and its body too when `bodyInLink`. */
   compareUrl: webUrl,
+  /**
+   * False when the body would make the link longer than GitHub takes. The
+   * link then fills in the title alone, and the donor pastes the body.
+   */
+  bodyInLink: z.boolean(),
 });
 type PrToOpen = z.infer<typeof prToOpenSchema>;
 
 /** How the agent opens a cleared PR, and records it. */
 function toOpenText(claimId: string, open: PrToOpen): string {
+  const form = open.bodyInLink
+    ? `When gh can't open it, give the donor this link, which opens GitHub's form filled in: ${open.compareUrl}`
+    : `When gh can't open it, give the donor this link, which opens GitHub's form with the title filled in: ${open.compareUrl}\nThe body is too long for the link, so give the donor the body below to paste.`;
   return lines(
     `Cleared claim ${claimId} to open as a PR. Run this, with the body below on its standard input, word for word:`,
     indent(open.command, 2),
-    `When gh can't open it, give the donor this link, which opens GitHub's form filled in: ${open.compareUrl}`,
+    form,
     `Then call record_pr with the PR's link.`,
     `Title: ${open.title}`,
-    'Body, between the lines:',
-    '---',
-    open.body,
-    '---',
+    `Body, in the fenced block. The fence lines aren't part of it:`,
+    fenced(open.body),
   );
+}
+
+/**
+ * Text in a fenced block whose fence of backticks is longer than any run of
+ * backticks in it, so no line of the text can end the block.
+ */
+function fenced(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return lines(fence, text, fence);
 }
 
 /** A claim's branch as the donor's agent pushed it (docs/specs/agent-submits.md). */
@@ -566,7 +582,7 @@ function describeReviewReason(reason: ReviewReason): string {
     case 'pr_refused':
       return "GitHub didn't open the PR";
     case 'ready_to_open':
-      return 'the work is ready to open as a PR';
+      return 'the work is cleared to open as a PR, and no PR is recorded yet';
   }
 }
 
@@ -706,9 +722,21 @@ const reviewItemSchema = z.object({
   model: z.string(),
   summary: z.string(),
   checks: z.string(),
-  /** Why the work is waiting for the donor. */
+  /** Why the work is waiting for the donor. Cleared work waits as `ready_to_open`. */
   reviewReason: reviewReasonSchema,
-  /** A PR already open on the issue, from anyone. The donor decides whether a second one helps. */
+  /**
+   * For pushed work open_pr cleared, with no PR recorded yet: how to open its
+   * PR, with the compare page link. Null for work that isn't cleared, for
+   * cleared work that can't open now, which `reason` explains, and for
+   * cleared work whose PR is open already, in `prFromBranch`.
+   */
+  toOpen: prToOpenSchema.nullable(),
+  /**
+   * For cleared work, a PR open on GitHub from the claim's own branch that
+   * isn't recorded yet: the donor's own PR, which record_pr records.
+   */
+  prFromBranch: prRefSchema.nullable(),
+  /** A PR already open on the issue, from anyone else. The donor decides whether a second one helps. */
   prOnIssue: prRefSchema.nullable(),
   /** When the work expires unless its PR is opened. */
   expiresAt: isoTime,
@@ -726,18 +754,45 @@ function renderReviewItem(item: ReviewItem): string {
     item.additions === null || item.deletions === null
       ? ''
       : ` · +${String(item.additions)} -${String(item.deletions)}`;
+  // Cleared work says it is cleared only while it has a PR to open.
+  const cleared = item.reviewReason === 'ready_to_open';
   return lines(
     `${item.issue}  ${item.title}`,
     `claim ${item.claimId}${size} · ${item.agent} (${item.model}) · expires ${when(item.expiresAt)}`,
-    `waiting because ${describeReviewReason(item.reviewReason)}`,
+    !(cleared && !item.openable) && `waiting because ${describeReviewReason(item.reviewReason)}`,
     `summary: ${item.summary}`,
     `checked: ${item.checks}`,
     `diff: ${item.diffUrl}`,
     item.prOnIssue &&
       `A PR is already open on the issue: ${item.prOnIssue.url}. Ask the donor whether a second PR helps.`,
-    item.personWrittenDescription && 'Ask the donor to write the PR description.',
+    !cleared && item.personWrittenDescription && 'Ask the donor to write the PR description.',
     !item.openable && `Can't open it now: ${item.reason ?? 'Release the claim with release_claim.'}`,
+    item.prFromBranch &&
+      `Its PR is open on GitHub from the claim's branch: ${item.prFromBranch.url}. Call record_pr with that link. Open no other.`,
+    item.toOpen && clearedText(item.toOpen),
   );
+}
+
+/** How the agent opens work in the queue that open_pr cleared. Its body follows the list, as it is. */
+function clearedText(open: PrToOpen): string {
+  const form = open.bodyInLink
+    ? `When gh can't open it, give the donor GitHub's form, filled in: ${open.compareUrl}`
+    : `When gh can't open it, give the donor GitHub's form, which has the title filled in: ${open.compareUrl}\nThe body is too long for the link, so give the donor the body to paste.`;
+  return lines(
+    `Cleared to open as a PR, titled: ${open.title}`,
+    `Open it with this, with its body from below this list on standard input, word for word: ${open.command}`,
+    form,
+    "Then call record_pr with the PR's link.",
+  );
+}
+
+/** The bodies of the cleared PRs in the queue, each word for word. */
+function clearedBodies(items: readonly ReviewItem[]): string | false {
+  const cleared = items.flatMap((item) => (item.toOpen ? [{ claimId: item.claimId, body: item.toOpen.body }] : []));
+  if (cleared.length === 0) return false;
+  return cleared
+    .map(({ claimId, body }) => lines(`Body of the PR for claim ${claimId}, in the fenced block. The fence lines aren't part of it:`, fenced(body)))
+    .join('\n');
 }
 
 /** A claim in progress, as my_work lists it, with whether the agent can go on with it. */
@@ -759,7 +814,7 @@ function renderWorkingClaim(claim: WorkingClaim): string {
 export const myWork = defineTool({
   audience: 'donor',
   description:
-    "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, and claims in progress. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+    "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, and claims in progress. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
   refusals: [],
   input: z.object({}),
   output: z.object({
@@ -780,7 +835,8 @@ export const myWork = defineTool({
           out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
           out.readInPart.length > 0 && renderReadInPart(out.readInPart),
           out.readyToOpen.length > 0 &&
-            `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
+            `Ready to open as a PR (${String(out.readyToOpen.length)}). Open one with open_pr after the donor reads its diff. One that is cleared already says how to open it:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
+          clearedBodies(out.readyToOpen),
           out.working.length > 0 &&
             `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
         ),

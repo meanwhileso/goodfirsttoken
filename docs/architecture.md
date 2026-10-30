@@ -540,7 +540,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 | File | What it does |
 |---|---|
 | `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
-| `src/mcp/submit.ts` | `submit_work` and `open_pr`, and the review queue that `my_work` lists. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
+| `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
 | `src/donor/github.ts` | What the tools read from GitHub with the donor's token: the donor's reader, a project's code repo, and an issue with its linked PRs |
@@ -960,10 +960,10 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
 
 | File | What it does |
 |---|---|
-| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR and the interests |
+| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR, which opens a PR or clears pushed work, and the interests |
 | `src/me/data.ts` | `getMePage`, the server function the route's loader calls |
 | `src/me/paths.ts` | The page's path, with no imports, so pages can use it |
-| `src/routes/me.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler |
+| `src/routes/me.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler. `ClearedPr` links cleared work to GitHub's form from the queue item's `toOpen` |
 | `src/styles/account-page.css` | The page's layout and its form fields, beside `/sign-in`'s |
 | `src/auth/notice.ts` | Signs the notice a form sends a person back to a page with, and checks it, for `/admin` and `/me` |
 | `src/auth/notice-params.ts` | The notice and its signature as they ride in the address, with no imports, so pages can use them |
@@ -1022,7 +1022,7 @@ The rules are in [how-it-works.md](how-it-works.md#views-in-mcp-apps-hosts).
 | `src/mcp/apps.ts` | Which tools have a view, each view's resource and `_meta.ui`, its page, and `registerViews`, which `buildServer` calls |
 | `src/mcp/views/main.ts` | The views' one script: it picks the view from `<body data-view>`, waits for the answer, and draws it |
 | `src/mcp/views/bridge.ts` | The view's side of the extension: JSON-RPC over `postMessage` with the host |
-| `src/mcp/views/cards.ts`, `live.ts`, `review.ts` | The issue cards, the live feed, and the review queue |
+| `src/mcp/views/cards.ts`, `live.ts`, `review.ts` | The issue cards, the live feed, and the review queue, whose cleared work links GitHub's form for its PR |
 | `src/mcp/views/parts.ts`, `dom.ts` | The pieces the three share, and the one function that makes elements |
 | `src/mcp/views/view.css` | The card, and the dark colors |
 | `scripts/mcp-views.ts` | The Vite plugin that builds the script and styles for the Worker |
@@ -4191,9 +4191,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   depends on `skills`. Both specs read the views with `connectAgent` from
   `scripts/skill-run.ts`.
   `me.spec.ts` connects a sample donor's agent with the MCP client SDK,
-  through `scripts/skill-run.ts`, which claims and submits work on two
-  sample issues. Then it opens their PRs from `/me`, and disconnects the
-  agent there. The other pages would show those PRs, so it runs last, in
+  through `scripts/skill-run.ts`, which claims two sample issues. It
+  submits work with files to one. For the other, it pushes the claim's
+  branch to the donor's fork on the GitHub fake with a GitHub token her
+  agent's calls used, and submits the branch. Then it clears the pushed
+  work from `/me`, opens the other PR there, and disconnects the agent.
+  The other pages would show that PR, so it runs last, in
   the `me` project, which depends on `apps`. `mcp-apps-flow.spec.ts` leaves
   out the issue `me.spec.ts` claims, so neither finds the other's PR on it.
 - **The preview's own data.** `vite.config.ts` and
@@ -4290,8 +4293,8 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   anywhere else, so a lint rule allows them only in `cookies.spec.ts`.
 - **Screenshot tests** compare `/design` at 360, 390, 768, 1024, and 1280px
   with the baselines in `apps/web/e2e/design.spec.ts-snapshots/`, with the
-  clock paused so the live wall holds still. `/me`, with two pieces of work
-  in the queue and an agent connected, and `/maintainers` are compared at
+  clock paused so the live wall holds still. `/me`, with cleared work and
+  work to open in the queue and an agent connected, and `/maintainers` are compared at
   390 and 1280px with the baselines in `me.spec.ts-snapshots/`, with the
   times the agent connected and last called a tool masked. The homepage's, in
   `home.spec.ts-snapshots/`, show it with the sample work seeded, its ranks

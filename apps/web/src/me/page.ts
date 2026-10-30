@@ -123,12 +123,12 @@ function refusalText(refusal: Refusal): string {
 }
 
 function openedText(opened: Extract<Opened, { ok: true }>['value']): string {
-  const { pr, toOpen, issue, prOnIssue } = opened;
+  const { pr, issue, prOnIssue } = opened;
   const also = prOnIssue === null ? '' : ` Another PR is open on the issue too: ${prOnIssue.url}`;
-  if (pr === null) {
-    // Work the agent pushed opens on GitHub, from its form, and is recorded once it is open.
-    return `Open the PR for ${issue} on GitHub, where its title and description are filled in: ${toOpen?.compareUrl ?? ''}${also}`;
-  }
+  // Work the agent pushed is cleared, and the donor opens its PR on GitHub.
+  // The queue item links GitHub's form from the clearance itself, since a
+  // notice is cut short and the link can run to thousands of characters.
+  if (pr === null) return `The PR for ${issue} is ready to open. Open it on GitHub from your queue.${also}`;
   return `Opened PR #${String(pr.number)} on ${pr.repo} for ${issue}: ${pr.url}${also}`;
 }
 

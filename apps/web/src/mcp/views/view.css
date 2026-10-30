@@ -54,7 +54,7 @@ body { padding: 1px; }
 }
 
 .view-status:empty { display: none; }
-.view-status { display: flex; flex-direction: column; gap: 10px; }
+.view-status, .view-cleared { display: flex; flex-direction: column; gap: 10px; }
 .view-notice { padding: 10px 12px; border-radius: var(--r-md); font-size: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .view-notice--refused { background: var(--attention-tint); color: var(--attention); }
 .view-notice--done { background: var(--accent-tint); color: var(--ink); }

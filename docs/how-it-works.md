@@ -2742,12 +2742,16 @@ with the donor's own tools, under
   submit ends the clearance.
 - The answer has the PR's repo, its head as `<owner>:<branch>`, its base,
   title, and body, the GitHub CLI command that opens it, which reads the
-  body on standard input, and a link to GitHub's form for it, with
-  `quick_pull=1` and the title and body filled in.
+  body on standard input, and a link to GitHub's compare page, whose form
+  opens with `quick_pull=1` and the title and body filled in.
+- A link with the body in it can run longer than GitHub takes. GitHub
+  names no limit, so the link stays at most 8,000 characters, under
+  [Limits](#limits). When the body would make it longer, the link fills in
+  the title alone, `bodyInLink` is false, and the donor pastes the body.
 - In automatic mode, a submit of a pushed branch with nothing to hold it
   clears the work at once, and its answer has the same.
-- Open PR on /me and in the MCP Apps review queue clears pushed work the
-  same way, and shows the link to GitHub's form.
+- Open PR on [/me](#your-queue-on-me) and in the MCP Apps review queue
+  clears pushed work the same way, and shows the link to GitHub's form.
 
 **Recording the PR.** `record_pr` takes the claim and the PR's link, reads
 the PR with the donor's token, and checks it against the clearance.
@@ -2801,6 +2805,34 @@ the donor is blocked or the project isn't open, and then nothing about it
 is read from GitHub, or the issue fails the check `open_pr` makes on
 GitHub. [/me](#your-queue-on-me) shows the same queue.
 
+- Cleared work stays in the queue until its PR is recorded, waiting as
+  `ready_to_open`, whatever held it before. Its `toOpen` is the PR to open,
+  as `open_pr` answered: the title, the body from the clearance, the
+  command, and the compare page link, aimed at the code repo's default
+  branch as GitHub shows it now. The text names the title, the command,
+  and the link, and tells the agent to call `record_pr` once the PR is
+  open. The bodies follow the list, since the list indents its items. Each
+  is in a fenced block whose fence of backticks is longer than any run of
+  backticks in it, as in `open_pr`'s text.
+- For cleared work, the issue's labels and assignees aren't checked
+  again, as `record_pr` still takes its PR once maintainers relabel or
+  assign the issue. The issue must still be one GitHub shows, and open.
+  The PRs on the issue are read as for other work.
+- The branch is read once. When its head moved from the cleared commit,
+  the work shows no link and says to submit the branch again, since
+  `record_pr` and the job would refuse that PR.
+- A PR on the issue from the claim's own branch, in the repo its submit
+  named, is the donor's own PR, opened and not recorded yet. It is
+  `prFromBranch`, and no other PR on the issue. The work then has no
+  `toOpen`, and the text tells the agent to call `record_pr` with that
+  PR's link.
+- `toOpen` is null for work that isn't cleared, and for cleared work that
+  can't open now: the donor is blocked, the project isn't open, the issue
+  is closed or gone, or the branch moved. `openable` is false then, with
+  the reason, and the text doesn't say the work is cleared. When GitHub
+  can't be read for cleared work, it is `openable: false` too, and the
+  reason says to try again in a minute.
+
 ## Your queue on /me
 
 `/me` is the signed-in person's own page: their review queue, their
@@ -2841,6 +2873,20 @@ sign-in on the site. The PR is theirs, as when their agent opens it.
   changes.
 - The page's notice names the PR it opened, or says why none opened, in
   the words of `open_pr`'s refusal.
+- For work the agent pushed, Open PR clears it, and opens nothing on
+  GitHub, under Clearing pushed work in
+  [The donor's tools](#the-donors-tools). The notice says the PR is ready
+  to open.
+- Cleared work has no Open PR. It has a button to GitHub's form for its
+  PR, from the queue's `toOpen`, named for its issue. The notice is cut
+  short, so the link never rides in it. The item says it is cleared, and
+  that Good First Token records the PR once it is open. When the
+  description is too long for the link, the form fills in the title
+  alone, and the item shows the description to paste.
+- Once the donor opened the PR, and before it is recorded, the item links
+  it as theirs, says Good First Token records it, and has no button.
+- Cleared work that can't open now says why, as other work does, and not
+  that it is cleared.
 - When GitHub no longer takes the token from the person's sign-in on the
   site, the notice says to sign out and in again. When GitHub answers with
   another error, as when the person's rate limit is spent or GitHub is
@@ -3967,6 +4013,14 @@ Apps shows each tool's text, as a terminal harness does.
   agent, for its next turn, every PR it opened so far, since each thing a
   view tells it takes the place of the last. When the host won't tell the
   agent, the item asks the donor to.
+- For pushed work, Open PR clears it, and the item shows a button to
+  GitHub's form from the answer's `toOpen`, and says Good First Token
+  records the PR once it is open. Work cleared already shows the same, and
+  no Open PR. When the description is too long for the link, the item
+  shows it to paste. Only the short line about the form is a status. The
+  diff's link stays after Open PR. The view tells the agent what it
+  cleared. The donor's own PR, open and not recorded yet, shows as theirs,
+  with no Open PR.
 - The follow-ups come before that work, and the claims in progress after
   it, as `my_work` lists them. With nothing at all, the view shows the
   tool's text.
@@ -4901,6 +4955,7 @@ Each limit the schemas enforce, other than those under project settings:
 | A submitted file | 1 MiB (1,048,576 bytes) of UTF-8 | Us, at the size GitHub recommends |
 | The files of one submit | 2 MiB (2,097,152 bytes) of UTF-8 | Us, under the MCP server's 4 MiB request |
 | Submit summary, and what was checked | 1,000 characters each | Us |
+| A compare page link with the PR's body in it | 8,000 characters. A longer one leaves the body out | Us, under the 8 KB request line that web servers and proxies commonly take, since GitHub names no limit |
 | Policy quote | 2,000 characters | Us |
 | Pause, reject, block, and do-not-list reasons | 500 characters | Us |
 | A reason to be removed | 500 characters once folded, and 2,000 before | Us |
@@ -5224,7 +5279,9 @@ to, as `/start.md` names its server.
 - `/me.md` and `/admin.md` follow their pages: someone signed out is sent to
   sign in, with `307`, and `/admin.md` is `404` for someone who isn't an
   admin. For the person signed in, `/me.md` lists their queue with its diff
-  links and time left, their connected agents, and their interests, and
+  links, time left, the donor's own PR when it is open and not recorded
+  yet, and, for cleared work, the link to open its PR on
+  GitHub, their connected agents, and their interests, and
   `/admin.md` lists what waits, by kind and repo, the projects listed from a
   policy, and the blocked donors. Their forms stay on the pages. Both are
   sent with `Cache-Control: no-store`.

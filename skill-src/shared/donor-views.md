@@ -17,6 +17,11 @@ text, and these steps don't come up.
   donor typed in the view, word for word. At your next turn the view tells
   you each PR it opened. Open none of them again. Tell the donor each PR's
   link, and go on with what waits.
+- For work you pushed, Open PR clears the work, and the view gives the
+  donor a button to GitHub's form for its PR. At your next turn the view
+  tells you each one it cleared. Ask the donor whether they opened the PR
+  there before you run the GitHub CLI command. Once it is open, call
+  `record_pr` with its link.
 - When a view says to tell you, the donor may say they picked an issue or
   opened a PR themselves. Check with `my_work`, then go on as above.
 

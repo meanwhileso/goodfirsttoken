@@ -314,4 +314,8 @@ places them in their own milestone.
    `public_repo` when they register a project. A GitHub OAuth app can ask
    for more scopes in a later sign-in.
 4. How long a compare page link GitHub takes, and what the link should do
-   with a body that is longer.
+   with a body that is longer. Answered in the build: GitHub names no
+   limit, and web servers and proxies commonly refuse a request line over
+   8 KB. So a link with the body in it stays at most 8,000 characters. A
+   longer one fills in the title alone, and the pages show the body for the
+   donor to paste.

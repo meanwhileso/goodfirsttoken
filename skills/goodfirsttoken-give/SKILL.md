@@ -313,15 +313,23 @@ Nothing opens until the donor says so.
    `claimId`, and `description` when they wrote one. Tell them the PR's
    link. When the answer names another PR open on the issue, tell them
    that too.
-6. For work you pushed, `open_pr` opens nothing. It answers with the PR to
-   open: run the GitHub CLI command it gives, with the body on its standard
-   input, word for word. When the GitHub CLI can't, give the donor the link
-   to GitHub's form, which has the title and body filled in. Then call `record_pr`
-   with the PR's link.
-7. When `openable` is false, the PR can't open now. Its `reason` says why, and
+6. For work you pushed, `open_pr` opens nothing. It clears the work, and
+   answers with the PR to open: run the GitHub CLI command it gives, with
+   the body on its standard input, word for word. When the GitHub CLI
+   can't, give the donor the link to GitHub's form. When `bodyInLink` is
+   true, the form has the title and body filled in. When it is false, the
+   body is too long for the link, and the form has the title alone. Give
+   the donor the body to paste. Then call `record_pr` with the PR's link.
+7. Cleared work stays under `readyToOpen`, waiting as `ready_to_open`,
+   until its PR is recorded. Its `toOpen` is the PR to open, as `open_pr`
+   gave it. Open it as in step 6. Its body is in a fenced block. Send what
+   is between the fence lines.
+8. When `prFromBranch` names a PR, the donor opened it from the claim's
+   branch already. Call `record_pr` with its link, and open no other.
+9. When `openable` is false, the PR can't open now. Its `reason` says why, and
    what to do.
-8. Work in the queue expires 7 days after its first submit, unless its PR
-   opens.
+10. Work in the queue expires 7 days after its first submit, unless its PR
+    opens.
 
 ## Follow-ups
 
@@ -364,6 +372,11 @@ text, and these steps don't come up.
   donor typed in the view, word for word. At your next turn the view tells
   you each PR it opened. Open none of them again. Tell the donor each PR's
   link, and go on with what waits.
+- For work you pushed, Open PR clears the work, and the view gives the
+  donor a button to GitHub's form for its PR. At your next turn the view
+  tells you each one it cleared. Ask the donor whether they opened the PR
+  there before you run the GitHub CLI command. Once it is open, call
+  `record_pr` with its link.
 - When a view says to tell you, the donor may say they picked an issue or
   opened a PR themselves. Check with `my_work`, then go on as above.
 
