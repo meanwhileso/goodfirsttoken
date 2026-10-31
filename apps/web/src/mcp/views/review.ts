@@ -14,6 +14,7 @@ import { expires, isObject, issueHead, link, listOf, notice } from './parts';
 type MyWork = ToolOutput<'my_work'>;
 type ReadyItem = MyWork['readyToOpen'][number];
 type WorkingClaim = MyWork['working'][number];
+type ReadInPart = MyWork['readInPart'][number];
 type PrToOpen = NonNullable<ReadyItem['toOpen']>;
 
 function text(value: unknown): string | null {
@@ -134,17 +135,36 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
   );
 }
 
-/** A maintainer asked for changes. Each field is read with care, since follow-ups are still taking shape. */
+/** A review or a comment on a line, with the reviewer's words kept as text. */
 function followUpItem(host: Host, followUp: Record<string, unknown>): HTMLElement {
   const pr = isObject(followUp.pr) ? followUp.pr : {};
-  const ref = text(pr.repo) && typeof pr.number === 'number' ? `${String(pr.repo)}#${String(pr.number)}` : text(followUp.issue);
-  const comment = text(followUp.comment)?.split('\n')[0];
+  const ref = text(pr.repo) && typeof pr.number === 'number' ? `${String(pr.repo)}#${String(pr.number)}` : '';
+  const path = text(followUp.path);
   return h(
     'article',
     { class: 'view-item' },
-    issueHead(ref ?? '', text(followUp.title) ?? ''),
-    h('p', { class: 'view-quiet' }, [text(followUp.reviewer) && `@${String(followUp.reviewer)} asked for changes`, comment].filter(Boolean).join(': ')),
+    issueHead(text(followUp.issue) ?? '', text(followUp.title) ?? ''),
+    h('p', { class: 'view-meta' }, 'PR ', link(host, pr.url, ref)),
+    h('p', { class: 'view-quiet' }, [
+      text(followUp.reviewer) && `@${String(followUp.reviewer)}`,
+      path === null ? 'reviewed the PR' : `commented on the file ${JSON.stringify(path)}`,
+    ].filter(Boolean).join(' ')),
+    text(followUp.comment) && h('blockquote', { class: 'quote view-summary view-quiet' }, followUp.comment as string),
     text(followUp.commentUrl) && h('p', { class: 'view-links' }, link(host, followUp.commentUrl, 'the comment on GitHub')),
+  );
+}
+
+function readInPartItem(host: Host, item: ReadInPart): HTMLElement {
+  return h(
+    'article',
+    { class: 'view-item' },
+    h('p', { class: 'view-meta' }, `${item.issue} · claim ${item.claimId} · PR ${item.pr.repo}#${String(item.pr.number)}`),
+    h('p', { class: 'view-quiet' },
+      `Good First Token read ${String(item.reviewsRead)} of the PR's ${plural(item.reviews, 'review')}${
+        item.commentsLeftOut > 0 ? ` and left out ${plural(item.commentsLeftOut, 'comment')} on lines` : ''
+      }.`,
+    ),
+    h('p', { class: 'view-links' }, link(host, item.pr.url, 'Read the rest on GitHub')),
   );
 }
 
@@ -164,12 +184,16 @@ export function renderReview(host: Host, data: Record<string, unknown>, answerTe
   const ready = listOf<ReadyItem>(data.readyToOpen);
   const followUps = listOf<Record<string, unknown>>(data.followUps);
   const working = listOf<WorkingClaim>(data.working);
-  if (ready.length + followUps.length + working.length === 0) {
+  const readInPart = listOf<ReadInPart>(data.readInPart);
+  const more = typeof data.moreFollowUps === 'number' ? data.moreFollowUps : 0;
+  if (ready.length + followUps.length + working.length + readInPart.length === 0 && more === 0) {
     return [h('p', { class: 'view-quiet view-item' }, answerText || 'Nothing waiting.')];
   }
   const told: string[] = [];
   return [
-    section(`Maintainers asked for changes (${String(followUps.length)})`, followUps.map((f) => followUpItem(host, f))),
+    section(`Follow-ups (${String(followUps.length)})`, followUps.map((f) => followUpItem(host, f))),
+    more > 0 ? h('p', { class: 'view-quiet view-item' }, `${plural(more, 'more follow-up')} wait. They list here as submits answer the ones above.`) : null,
+    section(`PRs read in part (${String(readInPart.length)})`, readInPart.map((item) => readInPartItem(host, item))),
     ready.length === 0
       ? h('p', { class: 'view-quiet view-item' }, 'No work waits to open as a PR.')
       : section(`Ready to open as a PR (${String(ready.length)})`, ready.map((item) => readyItem(host, item, told))),

@@ -641,3 +641,63 @@ test("when the host won't start the view, it says so", async ({ page }) => {
   await expect(view.frame.getByRole('alert')).toHaveText("The host didn't start the view: The host refused ui/initialize.");
   await expect(view.frame.getByText('Waiting for the answer.')).toHaveCount(0);
 });
+
+const followUp = {
+  claimId: 'c_e2efollowup', issue: ISSUE, title: TITLE,
+  pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' },
+  reviewer: 'kenji', comment: `Thanks for explaining the <b>parser</b>. https://example.test/${'x'.repeat(250)}`, path: null,
+  commentUrl: 'https://github.example/sample-owner/sample-app/pull/41#review-1',
+  writtenAt: '2026-09-29T10:00:00.000Z',
+  branch: { repo: 'priya/sample-app', name: 'fix-parser' }, base: 'a'.repeat(40),
+};
+const partialReview = { claimId: followUp.claimId, issue: ISSUE, pr: followUp.pr, reviews: 15, reviewsRead: 10, commentsLeftOut: 3 };
+
+for (const width of [390, 1280]) {
+  test(`the review queue shows reviews, files, unread reviews and remaining follow-ups at ${String(width)}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const path = 'src/<img src=x onerror=alert(1)>.ts';
+    const followUps = Array.from({ length: 20 }, (_, i) => ({
+      ...followUp,
+      ...(i === 1 ? { reviewer: 'priya', path, comment: 'Please check <em>empty input</em>.', commentUrl: `${followUp.pr.url}#discussion-2` } : {}),
+    }));
+    const view = await openView(page, views['review-queue'], {
+      input: {}, result: { content: text('Follow-ups wait.'), structuredContent: {
+        followUps, readInPart: [partialReview], moreFollowUps: 4, readyToOpen: [], working: [],
+      } },
+    });
+    await page.locator('iframe').evaluate((frame, width) => { frame.style.width = `${String(width - 16)}px`; }, width);
+    await expect(view.frame.getByRole('heading', { name: 'Follow-ups (20)', exact: true })).toBeVisible();
+    const items = view.frame.locator('article');
+    await expect(items.first().locator('.view-issue__ref')).toHaveText(ISSUE);
+    await expect(items.first().locator('.view-issue__title')).toHaveText(TITLE);
+    await expect(items.first()).toContainText('@kenji reviewed the PR');
+    await expect(items.first()).toContainText(followUp.comment);
+    const quote = items.first().locator('blockquote');
+    expect(await quote.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(items.nth(1)).toContainText(`@priya commented on the file ${JSON.stringify(path)}`);
+    await expect(items.nth(1)).toContainText('Please check <em>empty input</em>.');
+    await expect(view.frame.locator('.view')).not.toContainText('asked for changes');
+    await expect(view.frame.locator('.view')).toContainText('4 more follow-ups wait.');
+    await expect(view.frame.locator('.view')).toContainText("Good First Token read 10 of the PR's 15 reviews and left out 3 comments on lines.");
+    await expect(view.frame.locator('img, b, em')).toHaveCount(0);
+    await items.nth(1).getByRole('button', { name: 'the comment on GitHub' }).click();
+    await view.frame.getByRole('button', { name: 'Read the rest on GitHub' }).click();
+    await expect.poll(async () => sent(await view.messages(), 'ui/open-link').map((m) => m.params)).toEqual([
+      { url: `${followUp.pr.url}#discussion-2` }, { url: followUp.pr.url },
+    ]);
+    expect(view.violations).toEqual([]);
+    await testInfo.attach(`follow-ups-${String(width)}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+  });
+}
+
+test('a PR read in part shows its counts and link even when no follow-ups wait', async ({ page }) => {
+  const view = await openView(page, views['review-queue'], {
+    input: {}, result: { content: text('Read the remaining reviews.'), structuredContent: {
+      followUps: [], readInPart: [{ ...partialReview, commentsLeftOut: 0 }], moreFollowUps: 0, readyToOpen: [], working: [],
+    } },
+  });
+  await expect(view.frame.locator('.view')).toContainText("Good First Token read 10 of the PR's 15 reviews.");
+  await expect(view.frame.getByRole('button', { name: 'Read the rest on GitHub' })).toBeVisible();
+  await expect(view.frame.locator('.view')).not.toContainText('more follow-ups');
+  await expect(view.frame.locator('.view')).not.toContainText('left out');
+});
