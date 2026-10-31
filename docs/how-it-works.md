@@ -2740,8 +2740,11 @@ opens nothing there. The donor opens the PR on GitHub's form.
   claim that isn't the person's is refused, as `open_pr` refuses it with
   `not_claim_owner`, before anything is read from GitHub, and nothing
   changes.
-- The page's notice says the PR is ready to open, or says why not, in the
-  words of `open_pr`'s refusal.
+- The page's notice says the PR is ready to open, or says why not. The
+  tool's refusals are written for an agent, so each refusal `open_pr` lists
+  has words on the page for the person. They say what happened, and what
+  the person can do on the site or ask their agent to do. A refusal with a
+  code `open_pr` doesn't list shows as the tool says it.
 - Cleared work has no Open PR. It has a button to GitHub's form for its
   PR, from the queue's `toOpen`, named for its issue. The notice is cut
   short, so the link never rides in it. The item says it is cleared, and

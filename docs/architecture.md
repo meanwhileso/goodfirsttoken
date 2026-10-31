@@ -915,6 +915,7 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
 | File | What it does |
 |---|---|
 | `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR, which clears the work to open as a PR and opens nothing on GitHub, and the interests |
+| `src/me/refusals.ts` | The page's words for each refusal `open_pr` lists, in one place |
 | `src/me/data.ts` | `getMePage`, the server function the route's loader calls |
 | `src/me/paths.ts` | The page's path, with no imports, so pages can use it |
 | `src/routes/me.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler. `ClearedPr` links cleared work to GitHub's form from the queue item's `toOpen` |
@@ -934,6 +935,12 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   `src/auth/session.ts`, whose token is the one from the person's sign-in
   on the site, decrypted only when a call asks GitHub something. The MCP
   tools run the same code with the agent's grant.
+- **Refusals in the page's words.** `openPrRefusalText` in
+  `src/me/refusals.ts` maps each code `open_pr` lists to words for the
+  person, and the notice uses them for a `Refusal` and a
+  `PermissionRefused` alike. A code `open_pr` doesn't list falls back to
+  the tool's message. A test fails when a code `open_pr` lists has none.
+  The tool's messages don't change.
 - **A claim that isn't theirs** throws `PermissionRefused` from `ownClaim`,
   as it does for the tool, before a `BranchReader` exists, so nothing reads
   GitHub. The form's answer turns it into the page's notice, and a
