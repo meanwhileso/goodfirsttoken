@@ -73,12 +73,22 @@ repo to clone, the commit to start from, and the claim's branch.
      an estimate. In Claude Code, the goodfirsttoken plugin's hook fills
      it in from the session's transcript, so leave it out there.
 5. The server checks the branch on GitHub and writes nothing there. The
-   answer says what comes next. Tell the donor.
+   answer says what comes next. Tell the donor. The submit is done once
+   its PR is open and recorded, so go on to that now.
    - In automatic mode with nothing to hold the work, the answer has
      `toOpen`, the PR to open. Open it now, as in The review queue's step
-     6, and record it.
+     6, and record it with `record_pr`.
    - Otherwise the work waits in the donor's review queue, with the reason
-     it waits and the diff's link.
+     it waits and the diff's link. Show the donor the diff's link in the
+     same turn, and ask them to read it and say whether to open the PR.
+     When they say to, go on as in The review queue's steps 4 to 6:
+     `open_pr`, the GitHub CLI command it gives, then `record_pr`. When
+     they want to read it later, tell them it waits in their review queue
+     until it expires, and that `my_work` lists it.
+   - When the PR can't open, as when `open_pr` refuses or the GitHub CLI
+     fails, try that step once more. Then tell the donor why, quoting the
+     answer, and give them the step left, like GitHub's form and then
+     `record_pr`.
 6. To change submitted work, commit and push to the same branch, then
    submit again with the new head. A submit ends a clearance. In reviewed
    mode, ask the donor to read the new diff, then call `open_pr`. In
