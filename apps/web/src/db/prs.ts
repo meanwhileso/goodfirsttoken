@@ -343,6 +343,27 @@ export async function countOpenPrsByProject(db: D1Database, person: number): Pro
   return new Map(results.map((row) => [row.project.toLowerCase(), mustParse(count, row.n, 'n')]));
 }
 
+/**
+ * The links of a person's open PRs, oldest first, by each claim's project,
+ * keyed by the project in lower case, as countOpenPrsByProject counts them.
+ * A project with none is left out.
+ */
+export async function listOpenPrLinksByProject(db: D1Database, person: number): Promise<Map<string, string[]>> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.project AS project, p.url AS url FROM prs p JOIN claims c ON c.id = p.claim_id
+       WHERE c.github_id = ? AND p.state = 'open' ORDER BY p.opened_at, p.repo, p.number`,
+    )
+    .bind(mustParse(githubId, person, 'githubId'))
+    .all<{ project: string; url: string }>();
+  const links = new Map<string, string[]>();
+  for (const row of results) {
+    const key = row.project.toLowerCase();
+    links.set(key, [...(links.get(key) ?? []), row.url]);
+  }
+  return links;
+}
+
 const DAY = 24 * 60 * 60 * 1000;
 
 /**

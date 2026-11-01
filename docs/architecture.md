@@ -2491,9 +2491,10 @@ under The projects list and The project page.
 |---|---|
 | `src/routes/projects.tsx` | The projects list, with its filter and search |
 | `src/routes/$owner.$repo.index.tsx` | A project's page, built from the components in `src/components/`, with its issue rows, merged PRs, rules, and live wall |
-| `src/project/data.ts` | `getProjectsList` and `getProjectPage`, the server functions the routes' loaders call |
+| `src/project/data.ts` | `getProjectsList`, `getProjectPage`, and `getOwnOpenPrs`, the server functions the routes' loaders call |
 | `src/project/load.ts` | `loadProjectsList` and `loadProject`, which read what the pages show, on the server only |
 | `src/project/list.ts` | The list's filter and search |
+| `src/project/mine.ts` | `loadOwnOpenPrs`, the signed-in person's open PRs in a project against its open-PR cap, with their links, for that person's view of the page alone |
 | `src/project/rules.ts` | A project's settings as split badges |
 | `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims. `readDelisting`, why the sync delisted a project that could have a page, from its mark and the do-not-list, for `project_status` and `admin_pause_project`, through `delistingOf`, which `hasPage` reads the mark through too |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |

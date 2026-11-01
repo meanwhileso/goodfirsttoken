@@ -19,6 +19,7 @@ import {
   type SessionRecord,
   type Suggestion,
   type ToolInput,
+  type ToolOutput,
   type ToolRefusal,
   type ToolResult,
 } from '@goodfirsttoken/core';
@@ -38,6 +39,7 @@ import {
   getProject,
   getSession,
   listClaimsOn,
+  listOpenPrLinksByProject,
   listEndedToOffer,
   listPersonClaims,
   listReadInPart,
@@ -426,6 +428,8 @@ function tagOf(labels: readonly string[], project: ProjectRecord): string {
   return project.settings.tags.find((tag) => carried.has(lower(tag))) ?? project.settings.tags[0] ?? '';
 }
 
+type Suggestions = ToolOutput<'suggest_issues'>;
+
 export async function suggestIssues(
   caller: Caller,
   input: ToolInput<'suggest_issues'>,
@@ -443,7 +447,7 @@ export async function suggestIssues(
   const [waiting, mine, openPrs] = await Promise.all([
     listWaitingIssues(env.DB, now),
     listPersonClaims(env.DB, caller.githubId),
-    countOpenPrsByProject(env.DB, caller.githubId),
+    listOpenPrLinksByProject(env.DB, caller.githubId),
   ]);
   // Left out: the issues already shown, the picks waiting in the session,
   // and the issues the donor holds, which start_session offers to resume.
@@ -455,11 +459,21 @@ export async function suggestIssues(
   // An issue two projects keep goes to the older project, as a claim does.
   const seen = new Set<string>();
   const candidates: (Candidate & { entry: WaitingIssue })[] = [];
+  // The projects left out for the open-PR cap, which the answer names with
+  // the donor's open PRs there, so an empty list says why.
+  const atCap = new Map<string, Suggestions['atCap'][number]>();
   for (const entry of waiting) {
     const key = lower(entry.copy.issue);
     if (leftOut.has(key) || seen.has(key)) continue;
     seen.add(key);
-    if (openPrRefusal(entry.project, openPrs.get(lower(entry.project.repo)) ?? 0) !== null) continue;
+    const repo = lower(entry.project.repo);
+    const prs = openPrs.get(repo) ?? [];
+    if (openPrRefusal(entry.project, prs.length) !== null) {
+      if (!atCap.has(repo)) {
+        atCap.set(repo, { project: entry.project.repo, openPrs: prs.length, cap: entry.project.settings.openPrsPerDonor, prs });
+      }
+      continue;
+    }
     candidates.push({
       issue: entry.copy.issue,
       project: entry.project.repo,
@@ -536,7 +550,7 @@ export async function suggestIssues(
       tough: isTough(onIssue, now),
     };
   });
-  return answer(toolResult('suggest_issues', { suggestions }));
+  return answer(toolResult('suggest_issues', { suggestions, atCap: [...atCap.values()] }));
 }
 
 // claim_issue

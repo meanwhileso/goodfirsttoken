@@ -197,16 +197,44 @@ export const suggestIssues = defineTool({
       .default(() => [])
       .describe('Issues already shown, to leave out.'),
   }),
-  output: z.object({ suggestions: z.array(suggestionSchema).max(3) }),
+  output: z.object({
+    suggestions: z.array(suggestionSchema).max(3),
+    /**
+     * The projects with issues waiting that were left out because the donor
+     * has as many open PRs there as the project allows, with the count, the
+     * cap, and the links of those PRs, oldest first. Their issues take the
+     * donor's claim again once one of those PRs merges or closes.
+     */
+    atCap: z
+      .array(
+        z.object({
+          project: repoName,
+          openPrs: count,
+          cap: z.int().min(1),
+          prs: z.array(webUrl),
+        }),
+      )
+      .default(() => []),
+  }),
   text: (out) =>
-    out.suggestions.length === 0
-      ? 'No eligible issues right now.'
-      : lines(
-          `Issues maintainers tagged for outside help (${String(out.suggestions.length)}):`,
-          numbered(out.suggestions, renderSuggestion),
-          'Pick one or more by number, or ask for more.',
-        ),
+    lines(
+      out.suggestions.length === 0
+        ? 'No eligible issues right now.'
+        : lines(
+            `Issues maintainers tagged for outside help (${String(out.suggestions.length)}):`,
+            numbered(out.suggestions, renderSuggestion),
+            'Pick one or more by number, or ask for more.',
+          ),
+      ...out.atCap.map(renderAtCap),
+    ),
 });
+
+function renderAtCap(at: { project: string; openPrs: number; cap: number; prs: string[] }): string {
+  return lines(
+    `Left out: ${at.project}. You have ${plural(at.openPrs, 'open PR')} in ${at.project}, and it allows ${String(at.cap)} per donor. Its issues take your claim again once one of these merges or closes:`,
+    ...at.prs.map((pr) => `- ${pr}`),
+  );
+}
 
 /** A queued pick claim_issue passed over, and why. */
 const skippedPickSchema = z.object({

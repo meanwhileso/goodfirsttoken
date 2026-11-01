@@ -1,8 +1,10 @@
 import { createServerFn } from '@tanstack/react-start';
-import { getRequest, setResponseHeader } from '@tanstack/react-start/server';
+import { appendResponseHeader, getRequest, setResponseHeader } from '@tanstack/react-start/server';
 import { PAGE_STATUS_HEADER } from '../mcp/paths';
 import { loadProject, loadProjectsList, type ProjectPageResult, type ProjectsListResult } from './load';
+import { loadOwnOpenPrs, type OwnOpenPrs } from './mine';
 
+export type { OwnOpenPrs } from './mine';
 export type { ListedProject, MergedRow, ProjectIssueRow, ProjectPage, ProjectPageResult, ProjectsListResult } from './load';
 
 export interface ProjectPath {
@@ -34,4 +36,18 @@ export const getProjectPage = createServerFn({ method: 'GET' })
     const page = await loadProject(getRequest(), data.owner, data.repo);
     if (page.state === 'unavailable') setResponseHeader(PAGE_STATUS_HEADER, '503');
     return page;
+  });
+
+// Runs on the server when a signed-in person loads a project's page. It
+// answers on its own URL under /_serverFn/ too, which anyone can call, so
+// loadOwnOpenPrs reads the session first, and reads nothing for someone
+// signed out. The answer is the person's own, so no browser or cache keeps
+// it, or the page it is part of.
+export const getOwnOpenPrs = createServerFn({ method: 'GET' })
+  .validator((path: unknown): ProjectPath => (isProjectPath(path) ? path : { owner: '', repo: '' }))
+  .handler(async ({ data }): Promise<OwnOpenPrs | null> => {
+    const { own, setCookies } = await loadOwnOpenPrs(getRequest(), data.owner, data.repo);
+    for (const cookie of setCookies) appendResponseHeader('set-cookie', cookie);
+    setResponseHeader('cache-control', 'no-store');
+    return own;
   });

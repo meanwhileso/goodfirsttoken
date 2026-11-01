@@ -115,7 +115,16 @@ export function renderCards(host: Host, data: Record<string, unknown>, text: str
   const suggestions = listOf<Suggestion>(data.suggestions);
   if (suggestions.length === 0) return [h('p', { class: 'view-quiet view-item' }, text || 'No eligible issues right now.')];
   const context: CardsContext = { host, sessionId, picks: [] };
-  return suggestions.map((s) => card(context, s));
+  // A project left out for the donor's open-PR cap gets a line under the
+  // cards, as the answer's text names it.
+  const atCap = listOf<{ project: string; openPrs: number; cap: number }>(data.atCap).map((at) =>
+    h(
+      'p',
+      { class: 'view-quiet view-item' },
+      `Left out: ${at.project}. You have ${plural(at.openPrs, 'open PR')} there, and it allows ${String(at.cap)} per donor.`,
+    ),
+  );
+  return [...suggestions.map((s) => card(context, s)), ...atCap];
 }
 
 /** The frame's title for the cards. */

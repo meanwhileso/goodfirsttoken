@@ -31,6 +31,7 @@ import { SAMPLE_PROJECTS } from '../../src/dev/sample-work';
 import { loadIssue } from '../../src/issue/load';
 import { filterProjects } from '../../src/project/list';
 import { loadProject, loadProjectsList, type ProjectPage, type ProjectPageResult } from '../../src/project/load';
+import { loadOwnOpenPrs, ownOpenPrs } from '../../src/project/mine';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { repoFeed } from '../../src/rooms/feed';
 import {
@@ -545,6 +546,31 @@ describe('merged work and top helpers', () => {
 
     expect([page.merged.total, page.merged.rows, page.helpers, page.working]).toEqual([0, [], [], 1]);
     expect(JSON.stringify(page)).not.toContain('kenji');
+  });
+});
+
+describe("the signed-in donor's open PRs against the project's cap", () => {
+  test('a donor sees how many open PRs they have in the project, the cap, and their links, oldest first', async () => {
+    await registeredProject({ tags: ['help wanted'], openPrsPerDonor: 2 });
+    await openedPr(`${repo}#11`, priya, 101, { at: t0 });
+    await openedPr(`${repo}#12`, priya, 102, { at: t0 + MINUTE });
+    await openedPr(`${repo}#13`, kenji, 103);
+    const merged = await openedPr(`${repo}#14`, priya, 104);
+    await setPrState(db, merged.id, 'merged', t0 + HOUR);
+
+    expect(await ownOpenPrs(priya.githubId, repo)).toEqual({
+      openPrs: 2,
+      cap: 2,
+      prs: [prRef(repo, 101).url, prRef(repo, 102).url],
+    });
+    expect(await ownOpenPrs(sam.githubId, repo)).toEqual({ openPrs: 0, cap: 2, prs: [] });
+  });
+
+  test('a project with no page has no count, and someone signed out is read nothing', async () => {
+    await registeredProject();
+
+    expect(await ownOpenPrs(priya.githubId, 'sample-owner/not-listed')).toBeNull();
+    expect(await loadOwnOpenPrs(request, 'sample-owner', 'sample-app')).toEqual({ own: null, setCookies: [] });
   });
 });
 

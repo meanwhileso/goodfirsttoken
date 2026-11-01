@@ -321,6 +321,23 @@ test("a project that asks for the donor's own description starts the form empty,
   expect(made).toHaveLength(1);
 });
 
+test("a project's page shows priya her open PRs there against its cap, with their links, and shows no one signed out", async ({ page }, testInfo) => {
+  await page.goto('/sample-owner/sample-bundler');
+  await expect(page.getByTestId('own-open-prs')).toHaveCount(0);
+
+  await devSignIn(page, 'priya');
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/sample-owner/sample-bundler');
+    const own = page.getByTestId('own-open-prs');
+    await expect(own).toContainText(/you have 1 of \d+ open PRs? here\./);
+    await expect(own.getByRole('link')).toHaveCount(1);
+    await expect(own.getByRole('link')).toHaveAttribute('href', /\/sample-owner\/sample-bundler\/pull\/\d+$/);
+    expect(await scrollsSideways(page)).toBe(false);
+    await testInfo.attach(`project page at ${String(width)}px`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+  }
+});
+
 test('Disconnect on /me cuts the agent off, and its next tool call fails', async ({ page }) => {
   await devSignIn(page, 'priya');
   const disconnect = page.getByRole('button', { name: `Disconnect ${AGENT}` });

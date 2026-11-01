@@ -16,7 +16,7 @@ import { useWallFeed } from '../feed/useWallFeed';
 import { WALL_LINES } from '../home/live';
 import { repoFromPath } from '../issue/path';
 import { prUrl, refName } from '../issue/view';
-import { getProjectPage, type MergedRow, type ProjectIssueRow, type ProjectPage } from '../project/data';
+import { getOwnOpenPrs, getProjectPage, type MergedRow, type OwnOpenPrs, type ProjectIssueRow, type ProjectPage } from '../project/data';
 import { ruleBadges } from '../project/rules';
 import projectCss from '../styles/project-page.css?url';
 import { routeHead } from '../readable/head';
@@ -27,10 +27,15 @@ import { routeHead } from '../readable/head';
 // feed's newest lines, then follows the feed over the live socket on the
 // project's .ndjson stream, starting after the newest line it shows.
 export const Route = createFileRoute('/$owner/$repo/')({
-  loader: async ({ params }) => {
-    const page = await getProjectPage({ data: params });
+  loader: async ({ params, context }) => {
+    // The signed-in person's own open PRs here are read beside the page,
+    // and only for them.
+    const [page, own] = await Promise.all([
+      getProjectPage({ data: params }),
+      context.viewer ? getOwnOpenPrs({ data: params }) : Promise.resolve(null),
+    ]);
     if (page.state === 'not_found') throw notFound();
-    return page;
+    return page.state === 'ready' ? { ...page, own } : page;
   },
   head: ({ loaderData, params, matches }) => {
     const name = loaderData?.state === 'ready' ? loaderData.repo : `${params.owner}/${params.repo}`;
@@ -112,7 +117,7 @@ function day(time: string): string {
   return new Date(time).toISOString().slice(0, 10);
 }
 
-function Project({ page }: { page: ProjectPage }) {
+function Project({ page }: { page: ProjectPage & { own: OwnOpenPrs | null } }) {
   const lines = useWallFeed(`/${page.repo}/live.ndjson`, page.live, WALL_LINES);
   const slash = page.repo.indexOf('/');
   const { settings } = page;
@@ -222,6 +227,7 @@ function Project({ page }: { page: ProjectPage }) {
                 <SplitBadge key={`${badge.rule}:${badge.value}`} rule={badge.rule} value={badge.value} strict={badge.strict} />
               ))}
             </SplitBadges>
+            {page.own && <OwnPrs own={page.own} />}
             {(settings.disclosure.prBody !== null || settings.claUrl !== null || settings.agentNotes !== '') && (
               <dl className="project-rules">
                 {settings.disclosure.prBody !== null && (
@@ -372,6 +378,34 @@ function PolicyListing({ policy }: { policy: Policy | null }) {
       <p className="project-note">
         listed from its AI policy · maintainer? <a href="/maintainers">take it over or remove it</a>
       </p>
+    </div>
+  );
+}
+
+/**
+ * The signed-in person's open PRs here against the project's cap. At the
+ * cap, their agent gets no suggestions or claims here until one of them
+ * merges or closes, so the page says so, with the PRs to land first.
+ */
+function OwnPrs({ own }: { own: OwnOpenPrs }) {
+  const atCap = own.openPrs >= own.cap;
+  return (
+    <div className="project-note" data-testid="own-open-prs">
+      <p>
+        you have {own.openPrs.toLocaleString('en-US')} of {own.cap.toLocaleString('en-US')} open {own.cap === 1 ? 'PR' : 'PRs'} here.
+        {atCap && ' New claims here wait until one of them merges or closes.'}
+      </p>
+      {own.prs.length > 0 && (
+        <ul>
+          {own.prs.map((pr) => (
+            <li key={pr}>
+              <a className="mono small" href={pr}>
+                {pr.replace(/^https?:\/\/github\.com\//, '')}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

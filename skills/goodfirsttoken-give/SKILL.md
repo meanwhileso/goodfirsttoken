@@ -186,7 +186,11 @@ at your MCP server's origin for the page and JSON reads below.
    It gives up to three issues that maintainers tagged for outside help,
    ranked against the donor's
    interests. `No eligible issues right now.` means nothing takes the
-   donor's claim now. Tell them, and stop.
+   donor's claim now. Tell them, and stop. When `atCap` names a project,
+   the donor has as many open PRs there as it allows, so its issues were
+   left out. Tell the donor the project, `openPrs` against `cap`, and the
+   links in `prs`, the PRs to land first. Its issues take their claim again
+   once one of them merges or closes.
 2. For suggestions, show the donor each issue as the answer lists it: the
    issue and its title, its project, the tag, who holds it and with which
    agent, the slots taken, the PR mode, the tough badge, and its link. `prMode`
