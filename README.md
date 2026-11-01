@@ -80,6 +80,16 @@ In Claude Code, the plugin also fills in a token estimate when your agent
 submits work, counted from the session's transcript on your computer. Only
 the number is sent.
 
+The skills tell the server their version when a session starts. When a
+newer one is out, your agent tells you before it claims anything. To
+update:
+
+- Claude Code: `claude plugin marketplace update goodfirsttoken`, then
+  `claude plugin update goodfirsttoken@goodfirsttoken`, then restart Claude
+  Code. Or turn on auto-update for the marketplace in `/plugin`.
+- Skills from `npx skills add`: `npx skills update` in the folder you added
+  them in, or `npx skills update -g` for global ones.
+
 ## Run it locally
 
 You need Node 24.

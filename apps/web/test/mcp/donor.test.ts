@@ -21,6 +21,7 @@ import {
 } from '../../src/db';
 import { adminRemoveProject } from '../../src/admin/actions';
 import { setInterests } from '../../src/mcp/donor';
+import plugins from '../../../../skill-src/plugins.json';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -233,6 +234,46 @@ describe('start_session and set_interests', () => {
       issuesClaimed: 0,
       queue: [],
     });
+  });
+
+  test('a session from a skill older than the published one, or one that sends no version, is told to update before any work, with the commands for each harness', async () => {
+    const latest = plugins.goodfirsttoken.version;
+    const agent = await connectAgent(github, 'priya');
+
+    const unnamed = await call(agent, 'start_session', { agent: 'claude-code', budget: { kind: 'until_limit' } });
+    const older = await call(agent, 'start_session', { agent: 'codex', budget: { kind: 'until_limit' }, skillVersion: '0.0.1' });
+
+    expect(unnamed.structuredContent?.skillUpdate).toEqual({ latest, yours: null });
+    expect(older.structuredContent?.skillUpdate).toEqual({ latest, yours: '0.0.1' });
+    expect(textOf(older)).toContain(`A newer Good First Token skill is out: ${latest}. This one is 0.0.1.`);
+    for (const said of [
+      'Tell the donor before you claim anything.',
+      'claude plugin marketplace update goodfirsttoken',
+      'claude plugin update goodfirsttoken@goodfirsttoken',
+      'npx skills update',
+    ]) {
+      expect(textOf(unnamed)).toContain(said);
+    }
+  });
+
+  test('a session from the published skill, or a newer one, is told nothing about updating', async () => {
+    const [major = 0, minor = 0, patch = 0] = plugins.goodfirsttoken.version.split('.').map(Number);
+    const agent = await connectAgent(github, 'priya');
+
+    const current = await call(agent, 'start_session', {
+      agent: 'claude-code',
+      budget: { kind: 'until_limit' },
+      skillVersion: plugins.goodfirsttoken.version,
+    });
+    const newer = await call(agent, 'start_session', {
+      agent: 'claude-code',
+      budget: { kind: 'until_limit' },
+      skillVersion: `${String(major)}.${String(minor)}.${String(patch + 1)}`,
+    });
+
+    expect(current.structuredContent?.skillUpdate).toBeNull();
+    expect(newer.structuredContent?.skillUpdate).toBeNull();
+    expect(textOf(current)).not.toContain('newer Good First Token skill');
   });
 
   test('set_interests for a caller Good First Token has no record of is refused with not_found, which its spec lists, and says to start a session first', async () => {

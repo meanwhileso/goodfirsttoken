@@ -5,7 +5,9 @@
 //   node scripts/skills.mjs check [--base <ref>]   # pnpm skills:check, part of pnpm check
 //
 // skill-src/<name>.md becomes, with each {{include <part>}} line replaced by
-// skill-src/shared/<part>.md, so text several skills share has one source:
+// skill-src/shared/<part>.md, so text several skills share has one source,
+// {{MCP_URL}} replaced by the server's address, and {{PLUGIN_VERSION}} by the
+// version of the skill's plugin:
 //   skills/goodfirsttoken-<name>/SKILL.md          for npx skills add
 //   plugins/<plugin>/skills/<name>/SKILL.md        for the Claude Code plugin
 // The build also writes each plugin's .claude-plugin/plugin.json and the
@@ -221,7 +223,12 @@ export async function build(root, { mcpUrl = PRODUCTION_MCP_URL } = {}) {
   const files = new Map();
 
   for (const source of sources) {
-    const body = (await expandIncludes(root, source)).replaceAll('{{MCP_URL}}', mcpUrl);
+    // {{PLUGIN_VERSION}} is the version of the plugin the skill is in, which
+    // the donor skills send to start_session, so the server can say when a
+    // newer one is out.
+    const body = (await expandIncludes(root, source))
+      .replaceAll('{{MCP_URL}}', mcpUrl)
+      .replaceAll('{{PLUGIN_VERSION}}', settings[source.plugin].version);
     files.set(`plugins/${source.plugin}/skills/${source.name}/SKILL.md`, renderSkill(source, source.name, body, { internal: true }));
     if (PLUGINS[source.plugin].standalone) {
       const name = `${PREFIX}-${source.name}`;
