@@ -2462,8 +2462,11 @@ donor's own tools, to the code repo when the donor can push there, and to a
 fork of it otherwise. `submit_work` takes the claim, the branch as its
 repo, its name, and its head commit, a summary, what the agent checked, the
 agent and model, a title if the agent gives one, and a token estimate if
-the harness has one. The server checks the branch with reads alone, and
-writes nothing to GitHub for a donor's work.
+the harness has one. The summary and what was checked take at most 1,000
+characters each, which the tool's description, its fields, and the skills
+say. A longer one is refused with the limit and the length it had. The
+server checks the branch with reads alone, and writes nothing to GitHub for
+a donor's work.
 [The agent-side submits spec](specs/agent-submits.md) has the plan.
 
 - A submit with `files`, as skills before 0.6.5 sent, is refused with
