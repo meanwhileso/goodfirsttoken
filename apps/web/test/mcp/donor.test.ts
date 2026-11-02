@@ -594,6 +594,39 @@ describe('claim_issue', () => {
     expect(claimed.isError).toBeFalsy();
   });
 
+  test('a donor at the open-PR cap is told why suggest_issues offers nothing there: the cap, their open PRs, and their links', async () => {
+    await project(APP, { tags: ['help wanted'], openPrsPerDonor: 2 });
+    const first = await claimWithOpenPr('priya', await tagged(APP), APP);
+    const second = await claimWithOpenPr('priya', await tagged(APP), APP);
+    await tagged(APP);
+    const { agent, sessionId } = await donor('priya');
+
+    const offered = await call(agent, 'suggest_issues', { sessionId });
+
+    expect(suggested(offered)).toEqual([]);
+    expect(offered.structuredContent?.atCap).toEqual([
+      { project: APP, openPrs: 2, cap: 2, prs: [first.pr.url, second.pr.url] },
+    ]);
+    expect(textOf(offered)).toContain('No eligible issues right now.');
+    expect(textOf(offered)).toContain(`You have 2 open PRs in ${APP}, and it allows 2 per donor`);
+    expect(textOf(offered)).toContain(first.pr.url);
+    expect(textOf(offered)).toContain(second.pr.url);
+  });
+
+  test("a project under the donor's open-PR cap, or with no issue waiting, isn't named as at the cap", async () => {
+    await project(APP, { tags: ['help wanted'], openPrsPerDonor: 2 });
+    await project(DESKTOP, { tags: ['help wanted'], openPrsPerDonor: 1 });
+    await claimWithOpenPr('priya', await tagged(APP), APP);
+    const waiting = await tagged(APP);
+    await claimWithOpenPr('priya', await tagged(DESKTOP), DESKTOP);
+    const { agent, sessionId } = await donor('priya');
+
+    const offered = await call(agent, 'suggest_issues', { sessionId });
+
+    expect(suggested(offered)).toEqual([waiting]);
+    expect(offered.structuredContent?.atCap).toEqual([]);
+  });
+
   test("a project's CLA is confirmed once per project, and asked again when its link changes", async () => {
     await project(TOOLS, { tags: ['help wanted'], claUrl: 'https://sample-owner.test/cla' });
     const first = await tagged(TOOLS);

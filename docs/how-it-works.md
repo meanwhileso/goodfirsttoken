@@ -2292,6 +2292,12 @@ the donor's tools use the one rule, so they agree.
   holds a slot on, which `start_session` offers to resume, and the projects
   where the donor reached the open-PR cap. An issue two projects keep counts
   once, for the project a claim would go to.
+- Its answer names each project it left out for the open-PR cap that had
+  issues waiting, under `atCap`: the project, the donor's open PRs there,
+  the cap, and those PRs' links, oldest first. So an empty list says why,
+  and the donor knows which PRs to land first. A project's page shows the
+  signed-in person the same count against the cap, with the links, and
+  that the project takes no new claims from them while they are at it.
 - It ranks them against the donor's interests. An issue scores 4 when the
   donor named its project, by `owner/name`, by the owner or the name alone,
   or by the issue's own repo. It scores 2 when the donor named its
