@@ -87,6 +87,21 @@ function renderEndedPr(ended: EndedPr): string {
       );
 }
 
+/** A skill's version, its plugin's, like 0.6.7. */
+const skillVersion = z.string().regex(/^\d+\.\d+\.\d+$/, 'must be a version like 0.6.7');
+
+/** What start_session says when a newer skill is out, and how to update it in each harness. */
+function renderSkillUpdate(update: { latest: string; yours: string | null }): string {
+  return lines(
+    `A newer Good First Token skill is out: ${update.latest}. ${
+      update.yours === null ? 'This one is older and sent no version.' : `This one is ${update.yours}.`
+    } Tell the donor before you claim anything. Work submitted with an old skill can be refused.`,
+    'To update in Claude Code, run `claude plugin marketplace update goodfirsttoken`, then `claude plugin update goodfirsttoken@goodfirsttoken`, then restart Claude Code.',
+    'For skills added with npx skills, as in Codex, run `npx skills update` in the folder they were added in, or `npx skills update -g` for global ones.',
+    'Then start a new session. Go on with this one only when the donor says to.',
+  );
+}
+
 export const startSession = defineTool({
   audience: 'donor',
   description:
@@ -95,6 +110,9 @@ export const startSession = defineTool({
   input: z.object({
     agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
     budget: budgetSchema,
+    skillVersion: skillVersion
+      .optional()
+      .describe("This skill's version, which it names. The answer says when a newer one is out."),
   }),
   output: z.object({
     sessionId: id,
@@ -112,10 +130,17 @@ export const startSession = defineTool({
     unfinishedClaims: z.array(claimSummarySchema),
     /** The donor's PRs that merged, or closed without merging, since a session last offered them, each offered once. */
     endedPrs: z.array(endedPrSchema),
+    /**
+     * Set when the skill is older than the one Good First Token publishes,
+     * or sent no version, as skills before this field did: the latest
+     * version, and the skill's own. Null when the skill is up to date.
+     */
+    skillUpdate: z.object({ latest: skillVersion, yours: skillVersion.nullable() }).nullable(),
   }),
   text: (out) =>
     lines(
       `Signed in as @${out.login}. Session ${out.sessionId}. Budget: ${describeBudget(out.budget)}.`,
+      out.skillUpdate !== null && renderSkillUpdate(out.skillUpdate),
       out.interests
         ? `Interests: ${describeInterests(out.interests)}.`
         : 'No saved interests. Ask the donor which languages, projects, and kinds of work they like, then call set_interests.',

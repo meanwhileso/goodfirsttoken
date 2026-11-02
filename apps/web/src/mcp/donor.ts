@@ -70,6 +70,7 @@ import { gitHubRest, gitHubUrls } from '../github';
 import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
 import type { GitHubReader } from '../sync/github';
+import plugins from '../../../../skill-src/plugins.json';
 import { readyToOpen } from './submit';
 
 // The donor's tools: start_session, set_interests, suggest_issues,
@@ -235,6 +236,7 @@ export async function startSession(
       readInPart,
       unfinishedClaims,
       endedPrs: offered.map(endedPrOf),
+      skillUpdate: skillUpdateFor(input.skillVersion),
     });
   const result = resultWith(ended);
   // Marked only once the answer is made, so an answer that fails leaves the
@@ -248,6 +250,27 @@ export async function startSession(
   );
   // A session that started at the same moment marked the others first, and offers them.
   return answer(taken.size === ended.length ? result : resultWith(ended.filter((pr) => taken.has(pr.claimId))));
+}
+
+/**
+ * Whether a newer donor skill is out than the one that started the session,
+ * against the version this server was built with, from skill-src/. A skill
+ * that sends no version is older than the field, so it is told too.
+ */
+function skillUpdateFor(yours: string | undefined): ToolOutput<'start_session'>['skillUpdate'] {
+  const latest = plugins.goodfirsttoken.version;
+  if (yours === undefined) return { latest, yours: null };
+  return compareVersions(yours, latest) < 0 ? { latest, yours } : null;
+}
+
+/** Compares two versions like 0.6.7, part by part. */
+function compareVersions(a: string, b: string): number {
+  const [pa, pb] = [a, b].map((v) => v.split('.').map(Number));
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa?.[i] ?? 0) - (pb?.[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 /**

@@ -2149,6 +2149,15 @@ maintainer's token or other donor's ever does their work.
   the session's ID, the donor's saved interests, and their unfinished
   claims. The interests are null on the first run, and the answer asks the
   agent to ask the donor for them and save them with `set_interests`.
+- The skill sends its own version as `skillVersion`, its plugin's version,
+  which the build writes into it. When it is older than the donor plugin's
+  version this server was built with, or missing, as from skills before
+  the field, the answer has `skillUpdate`, with the latest version and the
+  skill's own, and its text tells the agent to tell the donor before it
+  claims anything, with the commands to update in Claude Code and with
+  `npx skills`. So a donor hears of an update before any work, not from a
+  refused submit after it. It is a notice, not a refusal: the session
+  starts either way.
 - The unfinished claims are the donor's claims working or paused now, from
   any session: the paused ones first, then the rest, newest first. The
   claims table lists them, and each claim's room gives its state now. The
@@ -3597,7 +3606,8 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
 **Inputs**
 
 - `start_session` takes the harness name and the session's budget: a number
-  of issues, a number of minutes, or `until_limit`.
+  of issues, a number of minutes, or `until_limit`, and the skill's version,
+  like 0.6.7, when the skill sends it.
 - `suggest_issues` returns at most 3 issues, and takes the ones already shown
   to leave out.
 - `claim_issue` takes an issue, or none to claim the next pick waiting in

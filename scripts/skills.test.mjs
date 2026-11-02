@@ -140,6 +140,18 @@ test('the MCP server URL is set once and reaches the plugin config and the skill
   }
 });
 
+test("a skill names its own plugin's version, so the server can tell it a newer one is out", async () => {
+  const body = 'This skill is {{PLUGIN_VERSION}}.\n';
+  const root = await makeSources({ give: skillSource('goodfirsttoken', body), admin: skillSource('goodfirsttoken-admin', body) });
+  await setPlugins(root, { goodfirsttoken: { version: '1.2.3', description: 'Donor plugin.' }, 'goodfirsttoken-admin': { version: '0.4.0', description: 'Admin plugin.' } });
+  await buildAndWrite(root);
+
+  for (const file of ['skills/goodfirsttoken-give/SKILL.md', 'plugins/goodfirsttoken/skills/give/SKILL.md']) {
+    assert.ok((await read(root, file)).endsWith('This skill is 1.2.3.\n'), file);
+  }
+  assert.ok((await read(root, 'plugins/goodfirsttoken-admin/skills/admin/SKILL.md')).endsWith('This skill is 0.4.0.\n'));
+});
+
 test('the server URL must be a URL', async () => {
   const root = await makeSources();
   await assert.rejects(build(root, { mcpUrl: 'localhost 5173' }), /GOODFIRSTTOKEN_MCP_URL must be a URL/);

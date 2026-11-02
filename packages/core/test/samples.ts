@@ -65,9 +65,12 @@ export const samples: Samples = {
         { issue, title, pr, outcome: 'merged', shareUrl: 'https://x.com/intent/tweet?text=merged' },
         { issue: `${repo}#912`, title, pr: { ...pr, number: 958, url: `https://github.com/${repo}/pull/958` }, outcome: 'closed', shareUrl: null },
       ],
+      skillUpdate: { latest: '0.6.10', yours: '0.6.5' },
     },
     mentions: [
       '@priya',
+      'A newer Good First Token skill is out: 0.6.10. This one is 0.6.5. Tell the donor before you claim anything.',
+      'claude plugin update goodfirsttoken@goodfirsttoken',
       '3 issues',
       'typescript',
       '@octo-maintainer on the file "apps/web/src/feed/format.ts"',

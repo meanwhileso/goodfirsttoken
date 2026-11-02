@@ -91,7 +91,7 @@ The repo is made up. The donor says: spend some of my tokens on open
 source, two issues. You start a session:
 
 ```
-start_session {"agent": "claude-code", "budget": {"kind": "issues", "count": 2}}
+start_session {"agent": "claude-code", "skillVersion": "{{PLUGIN_VERSION}}", "budget": {"kind": "issues", "count": 2}}
 ```
 
 It has no saved interests, so you ask. The donor likes TypeScript and

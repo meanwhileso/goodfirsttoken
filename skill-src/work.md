@@ -63,7 +63,7 @@ The repo is made up. The donor says:
 for this one issue:
 
 ```
-start_session {"agent": "codex", "budget": {"kind": "issues", "count": 1}}
+start_session {"agent": "codex", "skillVersion": "{{PLUGIN_VERSION}}", "budget": {"kind": "issues", "count": 1}}
 ```
 
 Nothing waits, and the donor saved interests before. You claim the issue:
