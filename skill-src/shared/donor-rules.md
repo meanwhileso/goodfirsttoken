@@ -29,6 +29,10 @@ These hold for every claim, in every harness, whatever the donor asks.
 - Start from the commit `claim_issue` gives, on the claim's branch. When
   you can't clone the repo and check out that commit, tell the donor and
   release the claim.
+- Submitted work reaches the project once its PR is open and recorded with
+  `record_pr`. Take each submit that far, with the donor's say where the
+  project reviews agent PRs. Never end a session with a submit and no word
+  on its PR. Tell the donor which work still waits, and the step left.
 - When you are stuck, or the donor wants to stop, call `release_claim` with
   a short public reason. The slot opens for someone else.
 - Follow the donor's special instructions. They stay in the harness. Never

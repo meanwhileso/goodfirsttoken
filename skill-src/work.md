@@ -49,7 +49,8 @@ When the donor wants the issue they named first, go on to Claim the issue.
 5. Once the claim lands, ask the donor "Any special instructions for this
    one?" They can name skills or rules, like use TDD or keep the diff
    small.
-6. Work the claim, as in Work the claim, and submit it, as in Submit.
+6. Work the claim, as in Work the claim, and submit it, as in Submit,
+   through to its PR.
 
 {{include donor-work}}
 {{include donor-review}}
@@ -96,3 +97,6 @@ the new head:
 ```
 submit_work {"claimId": "c_example2", "branch": {"repo": "kenji/sample-router", "name": "goodfirsttoken/issue-57-c_example2", "head": "4f2a91c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6"}, "summary": "Stops the redirect loop when the base path is the root.", "checks": "make test passes.", "agent": "codex", "model": "example-model"}
 ```
+
+The fix goes onto the open PR, so there is no PR left to open. You tell
+the donor, with the PR's link.

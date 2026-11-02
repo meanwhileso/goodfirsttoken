@@ -406,6 +406,10 @@ const DONOR_CONTRACT: Record<string, string[]> = {
   ],
   'release with a public reason when stuck': ['call `release_claim` with a short public reason'],
   "never post the donor's special instructions": ["Follow the donor's special instructions. They stay in the harness. Never post them."],
+  'see submitted work through to a recorded PR': [
+    'Submitted work reaches the project once its PR is open and recorded with `record_pr`.',
+    'Never end a session with a submit and no word on its PR.',
+  ],
 };
 
 test.each(['give', 'work', 'review'])("the %s skill's Rules hold the whole donor contract", (skill) => {
@@ -419,3 +423,16 @@ test.each(['give', 'work', 'review'])("the %s skill's Rules hold the whole donor
 
   expect(missing).toEqual([]);
 });
+
+test.each(['give', 'work', 'review'])(
+  'the %s skill goes from a submit that waits for review to the PR in the same turn, and reports a PR that fails to open',
+  (skill) => {
+    const text = skills[skill];
+    if (text === undefined) throw new Error(`The ${skill} skill is missing. Run pnpm skills:build.`);
+    const submit = (sections(text).get('Submit') ?? '').replace(/\s+/g, ' ');
+
+    expect(submit).toContain("Show the donor the diff's link in the same turn");
+    expect(submit).toContain('`open_pr`, the GitHub CLI command it gives, then `record_pr`');
+    expect(submit).toContain('try that step once more. Then tell the donor why');
+  },
+);
