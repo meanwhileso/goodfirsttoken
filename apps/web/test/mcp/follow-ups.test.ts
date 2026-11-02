@@ -889,4 +889,36 @@ describe('checking a PR on request', () => {
     expect(serviceCalls()).toBe(0);
     expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'open' });
   });
+
+  test('a PR closed more than 14 days ago is no longer followed, so it is not read, and the answer says so', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId } = await openedPr(priya);
+    const closedAt = Date.now() - 15 * 24 * 60 * 60 * 1000;
+    await env.DB.prepare("UPDATE prs SET state = 'closed', opened_at = ?1 - 1000, closed_at = ?1, offered_at = ?1 WHERE claim_id = ?2")
+      .bind(closedAt, claimId)
+      .run();
+
+    const checked = await check(priya, claimId);
+
+    expect(checked.structuredContent).toMatchObject({ state: 'closed', read: 'final', endedPr: null });
+    expect(textOf(checked)).toContain('closed without merging more than 14 days ago');
+    expect(serviceCalls()).toBe(0);
+  });
+
+  test("new follow-ups count only those my_work would show, so a merged PR's old ones aren't counted", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'One nit.' });
+    await runPrJob();
+    github.mergePullRequest(APP, pr.number, BY);
+
+    const checked = await check(priya, claimId);
+    const listed = await call(priya, 'my_work');
+
+    expect(checked.structuredContent).toMatchObject({ state: 'merged', newFollowUps: 0 });
+    expect(textOf(checked)).not.toContain('follow-up');
+    expect(listed.structuredContent?.followUps).toEqual([]);
+  });
 });

@@ -253,7 +253,7 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
  * first, the comments on lines of a maintainer's review it left out.
  * setReviewsRead adds it to what earlier reads covered.
  */
-function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId'> {
+function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId' | 'readAt'> {
   const read = (pull.reviews?.nodes ?? []).filter((review) => review !== null);
   const prAuthor = pull.author?.login ?? '';
   const leftOut = read
@@ -287,6 +287,16 @@ async function recordEnd(deps: PrJobDeps, record: PrRecord, issue: string, outco
   return true;
 }
 
+/**
+ * Whether the PR job still reads the PR: open, or recorded closed without
+ * merging in the last 14 days. A merged PR never changes, and one closed
+ * longer ago is no longer read.
+ */
+export function isFollowed(record: PrRecord, now: number): boolean {
+  if (record.state === 'open') return true;
+  return record.state === 'closed' && record.closedAt !== null && record.closedAt >= now - REOPEN_WINDOW_MS;
+}
+
 /** A run's count of what it did, with nothing done yet. */
 function newPrRun(): PrRun {
   return {
@@ -309,6 +319,9 @@ function newPrRun(): PrRun {
  * PR GitHub no longer shows is left as the table has it.
  */
 async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun): Promise<Set<string>> {
+  // A check and the PR job can read the same PR at once, so the counts
+  // carry when the read was made, and an older read's counts change nothing.
+  const readAt = deps.now();
   const pulls = await readStates(deps.github, batch);
   const read = new Set<string>();
   const covered: ReviewsRead[] = [];
@@ -330,7 +343,7 @@ async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun):
     if (outcome === null) {
       run.followUps += await saveFollowUps(deps.db, record.claimId, followUpsOf(pull), deps.now());
       run.withoutPush += withoutPushOf(pull);
-      covered.push({ claimId: record.claimId, ...reviewsReadOf(pull) });
+      covered.push({ claimId: record.claimId, ...reviewsReadOf(pull), readAt });
       continue;
     }
     const claim = await getClaim(deps.db, record.claimId);
@@ -414,12 +427,9 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
  */
 export async function checkClaimPrs(deps: PrJobDeps, records: readonly PrRecord[]): Promise<{ read: Set<string>; run: PrRun }> {
   const run = newPrRun();
-  const since = deps.now() - REOPEN_WINDOW_MS;
-  const reads: Read[] = records.flatMap((record): Read[] => {
-    if (record.state === 'open') return [{ record, open: true }];
-    if (record.state === 'closed' && record.closedAt !== null && record.closedAt >= since) return [{ record, open: false }];
-    return [];
-  });
+  const reads: Read[] = records
+    .filter((record) => isFollowed(record, deps.now()))
+    .map((record) => ({ record, open: record.state === 'open' }));
   const read = new Set<string>();
   try {
     if (reads.length > 0) await deps.github.checkGitHub();

@@ -840,7 +840,7 @@ export const prCheckReads = ['now', 'recently', 'later', 'final'] as const;
 export const checkPr = defineTool({
   audience: 'donor',
   description:
-    "Ask Good First Token to read a claim's PR on GitHub now. Call it only when your own read of the PR on GitHub, with the donor's account, shows what openPrs from start_session or my_work doesn't: it merged, it closed, or it has more reviews than counted there. The server reads the PR itself and records only what GitHub shows. It reads a PR at most once in 30 seconds, and when it is busy it leaves the read to its own read of every open PR, twice an hour.",
+    "Ask Good First Token to read a claim's PR on GitHub now. Call it only when your own read of the PR on GitHub, with the donor's account, shows what openPrs from start_session or my_work doesn't: it merged, it closed, or it has more reviews than counted there. The server reads the PR itself and records only what GitHub shows. It reads a PR at most once in 30 seconds, takes at most 30 checks an hour from one donor, and when it is busy it leaves the read to its own read of every open PR, twice an hour.",
   refusals: ['not_found', 'not_claim_owner', 'donor_blocked'],
   input: z.object({ claimId: id }),
   output: z.object({
@@ -852,7 +852,8 @@ export const checkPr = defineTool({
     /**
      * `now`: read now. `recently`: read in the last 30 seconds, so not read
      * again. `later`: not read now, since checks are busy, and read within
-     * 30 minutes. `final`: merged, which never changes, so not read.
+     * 30 minutes. `final`: not read, since it merged, which never changes,
+     * or closed more than 14 days ago, which is no longer read.
      */
     read: z.enum(prCheckReads),
     /** Reviewers' reviews and comments the read found that no tool showed yet. my_work lists them. */
@@ -865,7 +866,9 @@ export const checkPr = defineTool({
       out.read === 'later'
         ? `Good First Token couldn't read PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}, now, since checks are busy. It reads every open PR twice an hour, so it reads this one within 30 minutes.`
         : out.read === 'final'
-          ? `PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}, merged. Nothing changes once a PR merges.`
+          ? out.state === 'merged'
+            ? `PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}, merged. Nothing changes once a PR merges.`
+            : `PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}, closed without merging more than 14 days ago, so Good First Token no longer reads it.`
           : `${out.read === 'now' ? 'Read' : 'Read in the last 30 seconds'}: PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}, is ${out.state === 'closed' ? 'closed without merging' : out.state}.`,
       out.endedPr && renderEndedPr(out.endedPr),
       out.endedPr?.shareUrl && 'Tell the donor, and give them the link to post on X if they want to. Post nothing for them.',

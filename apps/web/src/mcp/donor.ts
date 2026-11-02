@@ -28,6 +28,7 @@ import { env } from 'cloudflare:workers';
 import { requirePermission, type Caller } from '../auth/permissions';
 import {
   blockedAmong,
+  countUnshownFollowUps,
   countOpenPrsByProject,
   createSession,
   delistedProjects,
@@ -39,7 +40,6 @@ import {
   getPr,
   getProject,
   getSession,
-  listClaimFollowUps,
   listClaimsOn,
   listOpenPrLinksByProject,
   listEndedToOffer,
@@ -73,6 +73,7 @@ import { gitHubRest, gitHubUrls } from '../github';
 import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
 import { prChecker } from '../sync/pr-checker';
+import { isFollowed } from '../sync/prs';
 import type { GitHubReader } from '../sync/github';
 import plugins from '../../../../skill-src/plugins.json';
 import { readyToOpen } from './submit';
@@ -384,8 +385,10 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
  * The agent's word decides only that a read is worth making. What is
  * recorded is what the read finds, through the one checker for the whole
  * site (src/sync/pr-checker.ts), which holds the global limits. A merged PR
- * never changes, so it isn't read. A PR that merged or closed and that no
- * session offered yet is offered here, once.
+ * never changes, and one closed more than 14 days ago is no longer read, so
+ * neither is read. A PR that merged or closed and that no session offered
+ * yet is offered here, once. The follow-ups it counts are those my_work
+ * would list that no tool showed yet.
  */
 export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now: () => number = Date.now): Promise<Answer> {
   const claim = await ownClaim(caller, input.claimId);
@@ -398,11 +401,11 @@ export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now:
       refusal('not_found', `Claim ${claim.id} has no PR recorded. Once its PR is open on GitHub, record it with record_pr.`),
     );
   }
-  const read = before.state === 'merged' ? 'final' : await prChecker(env.PR_CHECKER).check(claim.id);
+  // A merged PR never changes, and one closed more than 14 days ago is no
+  // longer read, so neither is read now.
+  const read = isFollowed(before, now()) ? await prChecker(env.PR_CHECKER).check(claim.id, caller.githubId) : 'final';
   const after = (await getPr(env.DB, claim.id)) ?? before;
-  const newFollowUps = (await listClaimFollowUps(env.DB, claim.id)).filter(
-    (followUp) => followUp.shownAt === null && followUp.answeredAt === null,
-  ).length;
+  const newFollowUps = await countUnshownFollowUps(env.DB, claim.id);
   const ended = after.state === 'open' ? [] : (await listEndedToOffer(env.DB, caller.githubId)).filter((pr) => pr.claimId === claim.id);
   const result = (offered: readonly EndedToOffer[]) =>
     toolResult('check_pr', {

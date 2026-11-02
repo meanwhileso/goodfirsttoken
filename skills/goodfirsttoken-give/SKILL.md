@@ -156,6 +156,8 @@ GitHub only for a PR that changed.
    - When `read` is `later`, Good First Token is busy, and reads the PR
      within 30 minutes. When it is `recently`, the PR was read in the last
      30 seconds. Either way, don't check that PR again this session.
+   - When `read` is `final`, the PR merged, or closed more than 14 days
+     ago, and Good First Token no longer reads it.
 5. When the gh CLI isn't installed or signed in, skip this, and don't ask
    the donor to install it for this. Good First Token still reads every open
    PR twice an hour.

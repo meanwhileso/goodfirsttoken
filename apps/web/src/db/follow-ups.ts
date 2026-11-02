@@ -114,6 +114,26 @@ const SHOWS = `pr.state = 'open' AND ${ASKING_FOR_HELP}
   AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = c.github_id)`;
 
 /**
+ * How many follow-ups on the claim's PR wait that no tool has shown yet,
+ * counting only those listWaitingFollowUps would list, for check_pr to say
+ * my_work has new ones.
+ */
+export async function countUnshownFollowUps(db: D1Database, claimId: string): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM claims c
+       JOIN follow_ups f ON f.claim_id = c.id
+       JOIN prs pr ON pr.claim_id = c.id
+       JOIN submissions sub ON sub.claim_id = c.id
+       JOIN projects p ON p.repo = c.project
+       WHERE c.id = ? AND f.answered_at IS NULL AND f.shown_at IS NULL AND ${SHOWS}`,
+    )
+    .bind(mustParse(id, claimId, 'claimId'))
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
  * The donor's follow-ups no submit answered yet, at most `limit` of them,
  * taken in turn from each claim, its oldest first: the oldest of each,
  * then the next of each, and so on. So a PR with many follow-ups hides no
