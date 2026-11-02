@@ -1,4 +1,4 @@
-import { tools, type Audience, type ToolName } from '@goodfirsttoken/core';
+import { MAX_SUBMIT_NOTES, tools, type Audience, type ToolName } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -351,6 +351,23 @@ test.each(['give', 'work', 'review'])('the %s skill submits a pushed branch, and
   expect(submits.length).toBeGreaterThan(0);
   expect(submits.filter((args) => 'files' in args || 'onto' in args || !('branch' in args))).toEqual([]);
 });
+
+test.each(['give', 'work', 'review'])(
+  "the %s skill tells the agent the character limit on submit_work's summary and checks before it submits",
+  (skill) => {
+    const text = skills[skill];
+    if (text === undefined) throw new Error(`The ${skill} skill is missing. Run pnpm skills:build.`);
+    const submit = (sections(text).get('Submit') ?? '').replace(/\s+/g, ' ');
+    const limit = `at most ${MAX_SUBMIT_NOTES.toLocaleString('en-US')} characters`;
+    const said = (field: string) => {
+      const at = submit.indexOf(`\`${field}\`:`);
+      const next = submit.indexOf(' - `', at + 1);
+      return at >= 0 && submit.slice(at, next < 0 ? undefined : next).includes(limit);
+    };
+
+    expect({ summary: said('summary'), checks: said('checks') }).toEqual({ summary: true, checks: true });
+  },
+);
 
 test('every sentence a skill quotes from the server is among the strings the MCP tools answer with, and some are checked', () => {
   const quoted = Object.entries(skills)

@@ -766,6 +766,33 @@ describe('tool inputs', () => {
     ]);
   });
 
+  test('a summary or a checks note over 1,000 characters is refused with the limit and the length it had', () => {
+    const submit = (summary: string, checks: string) =>
+      validate(tools.submit_work.input, {
+        claimId: 'c_1',
+        branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-918-c_1', head: 'a'.repeat(40) },
+        summary,
+        checks,
+        agent: 'claude-code',
+        model: 'claude-opus-5-5',
+      });
+    expect(submit('x'.repeat(1000), 'y'.repeat(1000)).ok).toBe(true);
+    const refused = submit('x'.repeat(1240), 'y'.repeat(1001));
+    expect(refused.ok ? [] : refused.problems).toEqual([
+      { field: 'summary', message: 'must be at most 1,000 characters, and it has 1,240. Shorten it and submit again' },
+      { field: 'checks', message: 'must be at most 1,000 characters, and it has 1,001. Shorten it and submit again' },
+    ]);
+  });
+
+  test("submit_work's tool description and its summary and checks fields tell the agent their 1,000-character limit", () => {
+    const schema = z.toJSONSchema(tools.submit_work.input, { io: 'input' }) as {
+      properties: Record<string, { description?: string }>;
+    };
+    expect(tools.submit_work.description).toContain('at most 1,000 characters');
+    expect(schema.properties.summary?.description).toContain('At most 1,000 characters');
+    expect(schema.properties.checks?.description).toContain('At most 1,000 characters');
+  });
+
   test('a PR title and a model name are one line, and a title is at most 256 characters', () => {
     const withTitle = (title: string) =>
       validate(tools.submit_work.input, {

@@ -25,6 +25,7 @@ import { budgetSchema, queueSchema, type Budget } from '../sessions';
 import {
   branchName,
   MAX_SUBMIT_NOTES,
+  submitNote,
   prTitle,
   reviewReasonSchema,
   type ReviewReason,
@@ -435,10 +436,13 @@ function nextStep(reason: ReviewReason): string {
   }
 }
 
+/** The summary's and the checks note's limit, as the agent reads it, like 1,000. */
+const NOTES_LIMIT = MAX_SUBMIT_NOTES.toLocaleString('en-US');
+
 export const submitWork = defineTool({
   audience: 'donor',
   description:
-    "Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open.",
+    `Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The summary and the checks note are each at most ${NOTES_LIMIT} characters. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open.`,
   // not_found, not_claim_owner, and the claim's own refusals come from the
   // claims table, the permission, or the claim's room.
   refusals: [
@@ -472,8 +476,12 @@ export const submitWork = defineTool({
       title: prTitle
         .optional()
         .describe("The PR's title, as the repo's own rules want it. Leave it out to use the issue's title."),
-      summary: trimmedText(MAX_SUBMIT_NOTES).describe('What the change does. It starts the PR description.'),
-      checks: trimmedText(MAX_SUBMIT_NOTES).describe('What you checked, like tests and lint runs, in your own words.'),
+      summary: submitNote().describe(
+        `What the change does, in a few sentences. It starts the PR description. At most ${NOTES_LIMIT} characters.`,
+      ),
+      checks: submitNote().describe(
+        `What you checked, like tests and lint runs, in your own words. At most ${NOTES_LIMIT} characters.`,
+      ),
       agent: agentName,
       model: modelName,
       tokenEstimate: count

@@ -48,6 +48,23 @@ export type ReviewReason = z.infer<typeof reviewReasonSchema>;
  */
 export const MAX_SUBMIT_NOTES = 1000;
 
+/**
+ * A summary or a note on what was checked, as submit_work takes it: at most
+ * MAX_SUBMIT_NOTES characters once trimmed. A longer one is refused with the
+ * limit and the length it had, so the agent knows how much to cut.
+ */
+export function submitNote() {
+  const limit = MAX_SUBMIT_NOTES.toLocaleString('en-US');
+  return z
+    .string({ error: 'must be text' })
+    .trim()
+    .min(1, 'must not be empty')
+    .max(MAX_SUBMIT_NOTES, {
+      error: (issue) =>
+        `must be at most ${limit} characters, and it has ${(typeof issue.input === 'string' ? issue.input.length : 0).toLocaleString('en-US')}. Shorten it and submit again`,
+    });
+}
+
 /** The longest PR title GitHub takes. */
 export const MAX_PR_TITLE = 256;
 
