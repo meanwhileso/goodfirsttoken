@@ -3873,6 +3873,15 @@ Apps shows each tool's text, as a terminal harness does.
   far, since each thing a view tells it takes the place of the last, so
   the agent records the PR. When the host won't tell the agent, the item
   asks the donor to.
+- Each follow-up pairs the issue's reference with its title and names the
+  PR separately. It shows the reviewer and their text, with a link to the
+  comment on GitHub. A review says "reviewed the PR". A comment on a line
+  says "commented on the file" with the quoted file path. A review that only
+  comments is a follow-up too.
+- The queue says how many more follow-ups wait beyond the 20 listed. It
+  also names PRs read in part, with the number of reviews read, the total,
+  comments on lines left out, and a link to read the rest on GitHub. These
+  notices show even when no follow-ups or other work wait.
 - The follow-ups come before that work, and the claims in progress after
   it, as `my_work` lists them. With nothing at all, the view shows the
   tool's text.
