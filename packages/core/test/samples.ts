@@ -48,6 +48,8 @@ const followUp = {
 
 const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3 };
 
+const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2 };
+
 const counts = { taggedIssues: 3, working: 2, openPrs: 1, merged: 14 };
 
 export const samples: Samples = {
@@ -65,6 +67,7 @@ export const samples: Samples = {
         { issue, title, pr, outcome: 'merged', shareUrl: 'https://x.com/intent/tweet?text=merged' },
         { issue: `${repo}#912`, title, pr: { ...pr, number: 958, url: `https://github.com/${repo}/pull/958` }, outcome: 'closed', shareUrl: null },
       ],
+      openPrs: [openPr],
       skillUpdate: { latest: '0.6.10', yours: '0.6.5' },
     },
     mentions: [
@@ -83,6 +86,8 @@ export const samples: Samples = {
       'Offer the follow-ups and paused claims first',
       "Good First Token read 10 of the PR's 12 reviews and left out 3 comments on lines. Read the rest on GitHub",
       'Resume a claim with claim_issue and its issue.',
+      "Open PRs (1). Read each one on GitHub with the donor's own account. Call check_pr only for one that merged",
+      'claim c_0 · reviews counted: 2',
     ],
   },
   suggest_issues: {
@@ -216,6 +221,7 @@ export const samples: Samples = {
         },
       ],
       working: [{ ...claim, resumable: true, reason: null }],
+      openPrs: [openPr],
     },
     mentions: [
       '> Can the formatter skip events with an empty text field?',
@@ -229,6 +235,8 @@ export const samples: Samples = {
       `pull/960. Ask the donor whether a second PR helps.`,
       'Ask the donor to write the PR description.',
       'working',
+      `${repo}#912  PR #957: ${pr.url}`,
+      'Call check_pr only for one that merged, closed, or has more reviews than counted here',
     ],
   },
   open_pr: {
@@ -253,6 +261,18 @@ export const samples: Samples = {
   record_pr: {
     output: { claimId: 'c_2', issue, state: 'pr_opened', pr },
     mentions: ['Recorded PR #957', pr.url],
+  },
+  check_pr: {
+    output: {
+      claimId: 'c_2',
+      issue,
+      pr,
+      state: 'merged',
+      read: 'now',
+      newFollowUps: 0,
+      endedPr: { issue, title, pr, outcome: 'merged', shareUrl: 'https://x.com/intent/tweet?text=merged' },
+    },
+    mentions: [`Read: PR #957 on ${repo} for ${issue}, claim c_2, is merged.`, `PR #957 merged: ${pr.url}`, 'Share it', 'Post nothing for them.'],
   },
   set_interests: {
     output: { interests: { languages: ['rust'], projects: [repo], kinds: ['docs'] } },

@@ -36,11 +36,14 @@ import {
   getClaim,
   getIssue,
   getPerson,
+  getPr,
   getProject,
   getSession,
+  listClaimFollowUps,
   listClaimsOn,
   listOpenPrLinksByProject,
   listEndedToOffer,
+  listOpenPrsOf,
   listPersonClaims,
   listReadInPart,
   listWaitingFollowUps,
@@ -69,6 +72,7 @@ import { branchFor } from '../donor/work';
 import { gitHubRest, gitHubUrls } from '../github';
 import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
+import { prChecker } from '../sync/pr-checker';
 import type { GitHubReader } from '../sync/github';
 import plugins from '../../../../skill-src/plugins.json';
 import { readyToOpen } from './submit';
@@ -225,6 +229,7 @@ export async function startSession(
   const readInPart = await listReadInPart(env.DB, caller.githubId);
   const unfinishedClaims = await offeredToResume(caller.githubId, origin, now);
   const ended = await listEndedToOffer(env.DB, caller.githubId);
+  const openPrs = await listOpenPrsOf(env.DB, caller.githubId);
   const resultWith = (offered: readonly EndedToOffer[]) =>
     toolResult('start_session', {
       sessionId: session.id,
@@ -236,6 +241,7 @@ export async function startSession(
       readInPart,
       unfinishedClaims,
       endedPrs: offered.map(endedPrOf),
+      openPrs,
       skillUpdate: skillUpdateFor(input.skillVersion),
     });
   const result = resultWith(ended);
@@ -366,9 +372,57 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
     readInPart: await listReadInPart(env.DB, caller.githubId),
     readyToOpen: await readyToOpen(caller, origin, now),
     working,
+    openPrs: await listOpenPrsOf(env.DB, caller.githubId),
   });
   await followUps.markShown(now);
   return answer(result);
+}
+
+/**
+ * Reads a claim's PR on GitHub now, with the service token, when the
+ * donor's agent read on GitHub with the donor's account that it changed.
+ * The agent's word decides only that a read is worth making. What is
+ * recorded is what the read finds, through the one checker for the whole
+ * site (src/sync/pr-checker.ts), which holds the global limits. A merged PR
+ * never changes, so it isn't read. A PR that merged or closed and that no
+ * session offered yet is offered here, once.
+ */
+export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now: () => number = Date.now): Promise<Answer> {
+  const claim = await ownClaim(caller, input.claimId);
+  if (isRefusal(claim)) return refuse(claim);
+  const blocked = await blockedRefusal(env.DB, await donorOf(caller));
+  if (blocked) return refuse(blocked);
+  const before = await getPr(env.DB, claim.id);
+  if (before === null) {
+    return refuse(
+      refusal('not_found', `Claim ${claim.id} has no PR recorded. Once its PR is open on GitHub, record it with record_pr.`),
+    );
+  }
+  const read = before.state === 'merged' ? 'final' : await prChecker(env.PR_CHECKER).check(claim.id);
+  const after = (await getPr(env.DB, claim.id)) ?? before;
+  const newFollowUps = (await listClaimFollowUps(env.DB, claim.id)).filter(
+    (followUp) => followUp.shownAt === null && followUp.answeredAt === null,
+  ).length;
+  const ended = after.state === 'open' ? [] : (await listEndedToOffer(env.DB, caller.githubId)).filter((pr) => pr.claimId === claim.id);
+  const result = (offered: readonly EndedToOffer[]) =>
+    toolResult('check_pr', {
+      claimId: claim.id,
+      issue: claim.issue,
+      pr: after.pr,
+      state: after.state,
+      read,
+      newFollowUps,
+      endedPr: offered.length > 0 ? endedPrOf(offered[0] as EndedToOffer) : null,
+    });
+  const answered = result(ended);
+  // Marked once the answer is made, as start_session marks them. A session
+  // that marked it first offers it there instead.
+  const taken = await markEndedOffered(
+    env.DB,
+    ended.map((pr) => pr.claimId),
+    now(),
+  );
+  return answer(taken.size === ended.length ? answered : result([]));
 }
 
 /** The claim, found by its ID in the claims table, once the caller is the one who made it. */

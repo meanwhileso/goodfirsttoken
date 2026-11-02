@@ -20,6 +20,7 @@ import {
 import { issueTitle } from '../issues';
 import { interestsSchema, type Interests } from '../people';
 import { prModes, projectSettingsSchema } from '../projects';
+import { prStateSchema } from '../prs';
 import { refusalCodeSchema } from '../refusals';
 import { budgetSchema, queueSchema, type Budget } from '../sessions';
 import {
@@ -87,6 +88,35 @@ function renderEndedPr(ended: EndedPr): string {
       );
 }
 
+/**
+ * A donor's PR that Good First Token has open, with GitHub's count of its
+ * reviews at the server's last read, so the agent can read the PR on GitHub
+ * with the donor's own account and ask for a check only when it changed.
+ */
+const openPrSchema = z.object({
+  claimId: id,
+  issue: issueRef,
+  pr: prRefSchema,
+  /** The reviews GitHub counted on the PR at the last read, pending and dismissed ones left out. */
+  reviews: count,
+});
+type OpenPr = z.infer<typeof openPrSchema>;
+
+/** The most open PRs start_session and my_work list. */
+export const MAX_OPEN_PRS = 50;
+
+function renderOpenPrs(prs: readonly OpenPr[]): string {
+  return lines(
+    `Open PRs (${String(prs.length)}). Read each one on GitHub with the donor's own account. Call check_pr only for one that merged, closed, or has more reviews than counted here, not counting pending or dismissed ones. Good First Token reads every open PR on its own twice an hour:`,
+    indent(
+      numbered(prs, (open) =>
+        lines(`${open.issue}  PR #${String(open.pr.number)}: ${open.pr.url}`, `claim ${open.claimId} · reviews counted: ${String(open.reviews)}`),
+      ),
+      2,
+    ),
+  );
+}
+
 /** A skill's version, its plugin's, like 0.6.7. */
 const skillVersion = z.string().regex(/^\d+\.\d+\.\d+$/, 'must be a version like 0.6.7');
 
@@ -105,7 +135,7 @@ function renderSkillUpdate(update: { latest: string; yours: string | null }): st
 export const startSession = defineTool({
   audience: 'donor',
   description:
-    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers on the donor's open PRs, unfinished claims, and PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers on the donor's open PRs, unfinished claims, PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X, and the donor's open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
   refusals: [],
   input: z.object({
     agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
@@ -130,6 +160,8 @@ export const startSession = defineTool({
     unfinishedClaims: z.array(claimSummarySchema),
     /** The donor's PRs that merged, or closed without merging, since a session last offered them, each offered once. */
     endedPrs: z.array(endedPrSchema),
+    /** The donor's PRs Good First Token has open, oldest first, for the agent to read on GitHub with the donor's account. */
+    openPrs: z.array(openPrSchema).max(MAX_OPEN_PRS),
     /**
      * Set when the skill is older than the one Good First Token publishes,
      * or sent no version, as skills before this field did: the latest
@@ -152,6 +184,7 @@ export const startSession = defineTool({
         `Merged or closed since the last session (${String(out.endedPrs.length)}):\n${indent(numbered(out.endedPrs, renderEndedPr), 2)}`,
       out.endedPrs.some((ended) => ended.shareUrl !== null) &&
         'Tell the donor, and give them each link to post on X if they want to. Post nothing for them.',
+      out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
         'Offer the follow-ups and paused claims first, then the other unfinished claims, before new issues.',
       out.unfinishedClaims.length > 0 && 'Resume a claim with claim_issue and its issue.',
@@ -694,7 +727,7 @@ function renderWorkingClaim(claim: WorkingClaim): string {
 export const myWork = defineTool({
   audience: 'donor',
   description:
-    "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, and claims in progress. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+    "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, claims in progress, and open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
   refusals: [],
   input: z.object({}),
   output: z.object({
@@ -707,10 +740,12 @@ export const myWork = defineTool({
     readyToOpen: z.array(reviewItemSchema),
     /** Active and paused claims. */
     working: z.array(workingClaimSchema),
+    /** The donor's PRs Good First Token has open, oldest first, for the agent to read on GitHub with the donor's account. */
+    openPrs: z.array(openPrSchema).max(MAX_OPEN_PRS),
   }),
   text: (out) =>
-    out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length === 0
-      ? 'Nothing waiting: no follow-ups, no work to open, and no claims in progress.'
+    out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length + out.openPrs.length === 0
+      ? 'Nothing waiting: no follow-ups, no work to open, no claims in progress, and no open PRs.'
       : lines(
           out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
           out.readInPart.length > 0 && renderReadInPart(out.readInPart),
@@ -719,6 +754,7 @@ export const myWork = defineTool({
           clearedBodies(out.readyToOpen),
           out.working.length > 0 &&
             `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
+          out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
         ),
 });
 
@@ -796,4 +832,48 @@ export const recordPr = defineTool({
     pr: prRefSchema,
   }),
   text: (out) => `Recorded PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
+});
+
+/** How a check_pr read went. */
+export const prCheckReads = ['now', 'recently', 'later', 'final'] as const;
+
+export const checkPr = defineTool({
+  audience: 'donor',
+  description:
+    "Ask Good First Token to read a claim's PR on GitHub now. Call it only when your own read of the PR on GitHub, with the donor's account, shows what openPrs from start_session or my_work doesn't: it merged, it closed, or it has more reviews than counted there. The server reads the PR itself and records only what GitHub shows. It reads a PR at most once in 30 seconds, and when it is busy it leaves the read to its own read of every open PR, twice an hour.",
+  refusals: ['not_found', 'not_claim_owner', 'donor_blocked'],
+  input: z.object({ claimId: id }),
+  output: z.object({
+    claimId: id,
+    issue: issueRef,
+    pr: prRefSchema,
+    /** The PR's state as Good First Token records it after the check. */
+    state: prStateSchema,
+    /**
+     * `now`: read now. `recently`: read in the last 30 seconds, so not read
+     * again. `later`: not read now, since checks are busy, and read within
+     * 30 minutes. `final`: merged, which never changes, so not read.
+     */
+    read: z.enum(prCheckReads),
+    /** Reviewers' reviews and comments the read found that no tool showed yet. my_work lists them. */
+    newFollowUps: count,
+    /** The PR, when it merged or closed and no session offered it yet. Offered here, once. */
+    endedPr: endedPrSchema.nullable(),
+  }),
+  text: (out) =>
+    lines(
+      out.read === 'later'
+        ? `Good First Token couldn't read PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}, now, since checks are busy. It reads every open PR twice an hour, so it reads this one within 30 minutes.`
+        : out.read === 'final'
+          ? `PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}, merged. Nothing changes once a PR merges.`
+          : `${out.read === 'now' ? 'Read' : 'Read in the last 30 seconds'}: PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}, is ${out.state === 'closed' ? 'closed without merging' : out.state}.`,
+      out.endedPr && renderEndedPr(out.endedPr),
+      out.endedPr?.shareUrl && 'Tell the donor, and give them the link to post on X if they want to. Post nothing for them.',
+      out.newFollowUps > 0 &&
+        `${plural(out.newFollowUps, 'new follow-up')} from reviewers. Call my_work to read them.`,
+      out.read === 'now' &&
+        out.state === 'open' &&
+        out.newFollowUps === 0 &&
+        "GitHub shows it open, with nothing new from a maintainer. A review from someone who can't push to the repo isn't a follow-up.",
+    ),
 });

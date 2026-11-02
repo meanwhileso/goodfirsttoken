@@ -539,7 +539,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 
 | File | What it does |
 |---|---|
-| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, and `my_work` |
+| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, and `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list |
 | `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
@@ -1545,6 +1545,7 @@ that leaves their settings empty gives them empty strings, and
 | `STREAM_LIMITER` | Rate limiter: 300 opens of a live text stream or a page's live socket a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/feed/streams.ts`, through `src/auth/rate-limit.ts` |
 | `ISSUE_ROOM` | Durable Object namespace of `IssueRoom`, one per issue | Now, by the issue's text stream and page, the scheduled jobs, and the donor's tools |
 | `FEED` | Durable Object namespace of `Feed`: the homepage's, one per project, and one per person | Now, by the feed queue's consumer and the text streams |
+| `PR_CHECKER` | Durable Object namespace of `PrChecker`, one for the whole site, which holds the global limits on the reads `check_pr` asks for | Now, by `check_pr` in `src/mcp/donor.ts` |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer. The Worker also consumes the queue, with `feed-dlq` as its dead-letter queue | Now, by the issue room and `src/feed/queue.ts` |
 | `CRAWL_QUEUE` | Queue producer. The Worker also consumes the queue, one batch at a time, with `crawl-dlq` as its dead-letter queue | Now, by the crawler's search and `src/crawl/queue.ts` |
@@ -1555,8 +1556,9 @@ binding, since the Worker never reads it.
 [The static host](#the-static-host) covers it.
 
 A Durable Object class gets its storage from an entry under `migrations` in
-`wrangler.jsonc`. `IssueRoom`, at tag `v1`, and `Feed`, at `v2`, are under
-`new_sqlite_classes`, so their storage is SQLite. A migration that has run
+`wrangler.jsonc`. `IssueRoom`, at tag `v1`, `Feed`, at `v2`, and
+`PrChecker`, at `v3`, are under `new_sqlite_classes`, so their storage is
+SQLite. A migration that has run
 on a deploy never changes, and a new class is a new entry with the next
 tag. Class and binding names are code, so
 they are in the file. Cloudflare keeps each class's objects under the
@@ -2875,7 +2877,12 @@ Each public page's Open Graph image. The rules are in
 ## The sync
 
 The tagged-issue sync and the PR job read GitHub on a schedule, with the
-read-only service token. The rules are in
+read-only service token. A donor's `check_pr` reads their PR with the same
+token, outside the schedule, through `PrChecker`, which keeps those reads
+under one global limit. Why one object: a Cloudflare rate limiter counts
+per location and per key, and can't hold checks back to share a read. One
+object sees every check, so it can make one query of the checks that wait,
+and count the hour's reads in one place. The rules are in
 [how-it-works.md](how-it-works.md#tagged-issues), under Tagged issues and
 [PRs](how-it-works.md#prs).
 
@@ -2883,7 +2890,8 @@ read-only service token. The rules are in
 |---|---|
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
-| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged |
+| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged. `checkClaimPrs` reads the PRs of the claims a check names the same way, a batch at a time |
+| `src/sync/pr-checker.ts` | `PrChecker`, the one Durable Object for the whole site that reads the PRs `check_pr` asks for. It holds the global limits: one read at a time, at most one every 2 seconds and 300 an hour, with the hour's reads in its own SQLite table, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, and half the service token's budget left for the scheduled jobs |
 | `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |

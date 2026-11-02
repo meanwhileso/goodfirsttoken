@@ -25,7 +25,7 @@ import { followPrs } from '../../src/sync/prs';
 import { ALLOWANCES } from '../../src/sync/scheduled';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
-import { freshNumbers, jobDeps, SERVICE_LOGIN } from '../sync/helpers';
+import { freshNumbers, jobDeps, knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 
 // The review loop, end to end, through the MCP client SDK against the whole
@@ -768,5 +768,125 @@ describe('a PR reopened on GitHub after the job recorded it closed', () => {
     expect(room.prs).toEqual([pr]);
     expect(merged.structuredContent?.endedPrs).toEqual([expect.objectContaining({ pr, outcome: 'merged' })]);
     expect(again.structuredContent?.endedPrs).toEqual([]);
+  });
+});
+
+describe('checking a PR on request', () => {
+  // The donor's agent reads the PRs start_session and my_work list on
+  // GitHub with the donor's own account, and calls check_pr only for one
+  // that changed. check_pr's read goes through the one checker for the
+  // site, with the service token, so its calls are the job's here.
+  const check = (d: Donor, claimId: string) => {
+    knowServiceToken(github);
+    return asJob(() => call(d, 'check_pr', { claimId }));
+  };
+  const serviceCalls = () => github.calls.filter((c) => c.login === SERVICE_LOGIN).length;
+
+  test("start_session and my_work list the donor's open PRs, with the reviews GitHub counted at the last read, and no longer once a PR merged", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { issue, claimId, pr } = await openedPr(priya);
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'Looks close.' });
+    await runPrJob();
+
+    const session = await startSession(priya);
+    const listed = await call(priya, 'my_work');
+    github.mergePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    const after = await call(priya, 'my_work');
+
+    expect(session.structuredContent?.openPrs).toEqual([{ claimId, issue, pr, reviews: 1 }]);
+    expect(listed.structuredContent?.openPrs).toEqual([{ claimId, issue, pr, reviews: 1 }]);
+    expect(textOf(listed)).toContain(`claim ${claimId} · reviews counted: 1`);
+    expect(textOf(listed)).toContain('Call check_pr only for one that merged, closed, or has more reviews than counted here');
+    expect(after.structuredContent?.openPrs).toEqual([]);
+  });
+
+  test("a merge the donor's agent saw on GitHub is recorded at once, with the service token, and told once with its link to share", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { issue, claimId, pr } = await openedPr(priya);
+    github.mergePullRequest(APP, pr.number, BY);
+
+    const checked = await check(priya, claimId);
+    const next = await startSession(priya);
+
+    expect(refusalOf(checked)).toBeNull();
+    expect(checked.structuredContent).toMatchObject({
+      claimId,
+      issue,
+      pr,
+      state: 'merged',
+      read: 'now',
+      endedPr: { issue, pr, outcome: 'merged', shareUrl: expect.stringMatching(/^https:\/\/x\.com\/intent\/tweet\?/) as unknown },
+    });
+    expect(textOf(checked)).toContain(`claim ${claimId}, is merged.`);
+    expect(textOf(checked)).toContain('Post nothing for them.');
+    expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'merged' });
+    expect(await countProjectPrs(env.DB, APP)).toMatchObject({ merged: 1 });
+    expect(next.structuredContent).toMatchObject({ endedPrs: [], openPrs: [] });
+  });
+
+  test('a review the agent saw on GitHub comes back as a follow-up, and the PR stays open', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'CHANGES_REQUESTED', body: 'Keep the hash too.' });
+
+    const checked = await check(priya, claimId);
+    const listed = await call(priya, 'my_work');
+
+    expect(checked.structuredContent).toMatchObject({ state: 'open', read: 'now', newFollowUps: 1, endedPr: null });
+    expect(textOf(checked)).toContain('1 new follow-up from reviewers. Call my_work to read them.');
+    expect(listed.structuredContent?.followUps).toEqual([expect.objectContaining({ claimId, reviewer: BY, comment: 'Keep the hash too.' })]);
+  });
+
+  test('a merged PR is never read again, since nothing changes once it merges', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    github.mergePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    const before = serviceCalls();
+
+    const checked = await check(priya, claimId);
+
+    expect(checked.structuredContent).toMatchObject({ state: 'merged', read: 'final' });
+    expect(serviceCalls()).toBe(before);
+  });
+
+  test("another donor's claim, and a claim with no PR, are refused, and nothing is read", async () => {
+    await project();
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const { claimId } = await openedPr(priya);
+    const issue = await tagged();
+    const claimed = await call(priya, 'claim_issue', { sessionId: priya.sessionId, issue });
+    const { claim } = claimed.structuredContent as { claim: { claimId: string } };
+
+    const notTheirs = await check(kenji, claimId);
+    const noPr = await check(priya, claim.claimId);
+
+    expect(refusalOf(notTheirs)).toBe('not_claim_owner');
+    expect(refusalOf(noPr)).toBe('not_found');
+    expect(textOf(noPr)).toContain('has no PR recorded');
+    expect(serviceCalls()).toBe(0);
+  });
+
+  test("a blocked donor's check is refused, and nothing is read", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    github.mergePullRequest(APP, pr.number, BY);
+    await savePerson(env.DB, admin, Date.now());
+    // priya's GitHub ID in the fake.
+    await blockDonor(env.DB, { githubId: 1001, reason: null, blockedBy: admin.githubId }, Date.now());
+
+    const checked = await check(priya, claimId);
+    await unblockDonor(env.DB, 1001);
+
+    expect(refusalOf(checked)).toBe('donor_blocked');
+    expect(serviceCalls()).toBe(0);
+    expect(await getPr(env.DB, claimId)).toMatchObject({ state: 'open' });
   });
 });

@@ -49,19 +49,23 @@
   "triggers": { "crons": ["*/15 * * * *", "7,37 * * * *", "52 * * * *", "23 4 * * *"] },
   "d1_databases": [{ "binding": "DB", "database_name": "db" }],
   // One issue room per issue, named by the issue (src/rooms/issue-room.ts),
-  // and one feed each for the homepage, each project, and each person
-  // (src/rooms/feed.ts). Class names are code, so they may be here. Each
+  // one feed each for the homepage, each project, and each person
+  // (src/rooms/feed.ts), and one checker of PRs for the whole site, which
+  // holds the global limits on the checks donors ask for
+  // (src/sync/pr-checker.ts). Class names are code, so they may be here. Each
   // class gets its storage from a migration, which is never edited once it
   // has run on a deploy. A new class is a new migration with the next tag.
   "durable_objects": {
     "bindings": [
       { "name": "ISSUE_ROOM", "class_name": "IssueRoom" },
-      { "name": "FEED", "class_name": "Feed" }
+      { "name": "FEED", "class_name": "Feed" },
+      { "name": "PR_CHECKER", "class_name": "PrChecker" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["IssueRoom"] },
-    { "tag": "v2", "new_sqlite_classes": ["Feed"] }
+    { "tag": "v2", "new_sqlite_classes": ["Feed"] },
+    { "tag": "v3", "new_sqlite_classes": ["PrChecker"] }
   ],
   // The OAuth library's clients, grants, and token hashes, for the MCP
   // server (src/mcp/provider.ts).

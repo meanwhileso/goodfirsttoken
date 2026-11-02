@@ -114,6 +114,7 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
   server.registerTool('open_pr', specOf(tools.open_pr), (input) => run(() => openPr(caller, input, Date.now())));
   server.registerTool('record_pr', specOf(tools.record_pr), (input) => run(() => recordPr(caller, input)));
   server.registerTool('my_work', specOf(tools.my_work), () => run(() => donor.myWork(caller, origin, Date.now())));
+  server.registerTool('check_pr', specOf(tools.check_pr), (input) => run(() => donor.checkPr(caller, input)));
   // The maintainer's tools. Each asks GitHub for the caller's permission on
   // the repo, with their own token, on every call.
   server.registerTool('register_project', specOf(tools.register_project), (input) =>

@@ -10,6 +10,7 @@ import {
   adminSeedRepo,
 } from './admin';
 import {
+  checkPr,
   claimIssue,
   myWork,
   openPr,
@@ -35,6 +36,7 @@ export const tools = {
   my_work: myWork,
   open_pr: openPr,
   record_pr: recordPr,
+  check_pr: checkPr,
   set_interests: setInterests,
   register_project: registerProject,
   update_project: updateProject,

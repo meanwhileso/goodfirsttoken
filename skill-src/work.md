@@ -28,6 +28,7 @@ signs in with GitHub, which gives Good First Token access to public repos
 only.
 
 {{include donor-start}}
+{{include donor-check}}
 {{include donor-project}}
 When the donor wants the issue they named first, go on to Claim the issue.
 

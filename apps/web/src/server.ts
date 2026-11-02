@@ -59,6 +59,7 @@ function varyByAccept(response: Response): Response {
 
 export { Feed } from './rooms/feed';
 export { IssueRoom } from './rooms/issue-room';
+export { PrChecker } from './sync/pr-checker';
 
 async function answer(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const early = redirectToPrimaryDomain(request, env) ?? (await limitAgentSignIn(request));
