@@ -1,4 +1,4 @@
-import { REVIEW_WINDOW_MS, type ProjectSettingsInput } from '@goodfirsttoken/core';
+import { REVIEW_WINDOW_MS, tools, type ProjectSettingsInput } from '@goodfirsttoken/core';
 import type { FakeState, GitHubFake } from '@goodfirsttoken/github-fake';
 import { symmetricDecrypt } from 'better-auth/crypto';
 import { env } from 'cloudflare:workers';
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { signNotice } from '../../src/auth/notice';
 import { createProject, getPerson, getSubmission, saveIssues, savePerson, setProjectStatus } from '../../src/db';
 import { loadMePage } from '../../src/me/page';
+import { openPrRefusalText } from '../../src/me/refusals';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { Browser, ORIGIN, location, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -296,7 +297,7 @@ describe('Open PR on /me', () => {
 
     const answer = await back(kenji, await kenji.post('/me', openPr(claimId)));
 
-    expect(shown(answer)).toContain('No PR opened. Only the person who made the claim can do this.');
+    expect(shown(answer)).toContain('No PR opened. Only the person who made the claim can open its PR.');
     expect(github.calls.slice(before).filter((call) => call.url.startsWith(github.apiUrl))).toEqual([]);
     expect(pulls()).toEqual([]);
     expect(await stateOf(issue, claimId)).toBe('awaiting_review');
@@ -372,7 +373,7 @@ describe('Open PR on /me', () => {
     expect(await stateOf(issue, claimId)).toBe('awaiting_review');
   });
 
-  test("the refusals open_pr gives come back in the page's notice, like an Open PR on work whose PR is recorded", async () => {
+  test("a second Open PR on work whose PR is open says so in the page's words, and opens no second PR", async () => {
     await project({ tags: ['help wanted'], prMode: 'reviewed' });
     const issue = await tagged();
     const priya = await agentOf('priya');
@@ -391,9 +392,52 @@ describe('Open PR on /me', () => {
 
     const again = await back(browser, await browser.post('/me', openPr(claimId)));
 
-    expect(shown(again)).toContain('No PR opened.');
-    expect(shown(again)).toContain('already');
+    expect(shown(again)).toContain('No PR opened. This work already has a PR. Find it on the issue on GitHub.');
     expect(pulls('priya')).toHaveLength(1);
+  });
+
+  test("work its agent released since the page loaded is refused in words for the person, naming no tool", async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const claimId = await submitted(priya, issue);
+    const browser = await site('priya');
+    await tool(priya, 'release_claim', { claimId, reason: 'Stopped for the day' });
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId)));
+
+    expect(shown(answer)).toContain(
+      'No PR opened. The claim was released, so this work can&#x27;t open as a PR. Ask your agent to claim the issue again.',
+    );
+    expect(shown(answer)).not.toContain('release_claim');
+    expect(await clearance(claimId)).toBeNull();
+  });
+
+  test('work in a project paused since the page loaded is refused with what the person can do, and clears nothing', async () => {
+    await project({ tags: ['help wanted'], prMode: 'reviewed' });
+    const issue = await tagged();
+    const priya = await agentOf('priya');
+    const { claimId } = await pushed(priya, issue);
+    const browser = await site('priya');
+    await setProjectStatus(env.DB, APP, { status: 'paused', reason: 'Taking a break.', changedBy: maintainer.githubId }, Date.now());
+
+    const answer = await back(browser, await browser.post('/me', openPr(claimId)));
+
+    expect(shown(answer)).toContain('No PR opened. The project doesn&#x27;t take work through Good First Token now');
+    expect(shown(answer)).toContain('If the project is paused, open the PR once it resumes.');
+    expect(shown(answer)).not.toContain('release_claim');
+    expect(await clearance(claimId)).toBeNull();
+  });
+
+  test("every refusal open_pr lists has words on the page for the person, naming none of the tools", () => {
+    const codes = tools.open_pr.refusals ?? [];
+    expect(codes.length).toBeGreaterThan(0);
+    const toolNames = Object.keys(tools);
+    for (const code of codes) {
+      const words = openPrRefusalText({ code });
+      expect(words, `no words on /me for ${code}`).toMatch(/\S/);
+      for (const name of toolNames) expect(words, `the words for ${code} name ${name}`).not.toContain(name);
+    }
   });
 });
 
@@ -553,7 +597,10 @@ describe('cleared work, on /me', () => {
 
     const answer = await back(browser, await browser.post('/me', openPr(claimId)));
 
-    expect(shown(answer)).toContain(`No PR opened. ${fork}:${name} is at `);
+    expect(shown(answer)).toContain(
+      "No PR opened. The claim&#x27;s branch changed or is gone since your agent submitted it, so the work wasn&#x27;t cleared. Ask your agent to push the branch and submit it again, then read the new diff and open the PR.",
+    );
+    expect(shown(answer)).not.toContain('open_pr');
     expect(await clearance(claimId)).toBeNull();
     expect(formLink(answer, issue)).toBeNull();
     expect(answer).toContain(`aria-label="Open PR for ${issue}"`);

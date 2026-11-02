@@ -11,6 +11,7 @@ import { GitHubError } from '../github';
 import { endLapsedConnections, listConnections, type Connection } from '../mcp/connections';
 import { openPrAs, readyToOpen, type Opened, type ReviewItem } from '../mcp/submit';
 import { ME_PATH } from './paths';
+import { openPrRefusalText } from './refusals';
 
 // /me on the server: what the page reads, and the answer to its forms. The
 // page's data and its forms both start from the signed-in person's web
@@ -114,12 +115,9 @@ function problemsText(problems: readonly FieldProblem[]): string {
   return `${describeProblems(problems).split('\n').join('. ')}.`;
 }
 
-/** A refusal in the page's words, for the one the page itself can cause, or as the tool says it. */
+/** A refusal in the page's words, from src/me/refusals.ts, or as the tool says it for a code open_pr doesn't list. */
 function refusalText(refusal: Refusal): string {
-  if (refusal.code === 'description_required') {
-    return 'This project asks you to write the PR description yourself. Write it, then open the PR.';
-  }
-  return refusal.message;
+  return openPrRefusalText(refusal) ?? refusal.message;
 }
 
 function openedText(opened: Extract<Opened, { ok: true }>['value']): string {
@@ -151,7 +149,7 @@ async function openPrForm(caller: Caller, form: FormData, now: number): Promise<
     opened = await openPrAs(caller, input.value, now);
   } catch (error) {
     // Someone else's claim is refused before anything is read or written.
-    if (error instanceof PermissionRefused) return `No PR opened. ${error.message}`;
+    if (error instanceof PermissionRefused) return `No PR opened. ${openPrRefusalText(error) ?? error.message}`;
     if (!(error instanceof GitHubError)) throw error;
     if (error.status === 401) return `No PR opened. ${SIGN_IN_AGAIN}`;
     // A spent rate limit, or GitHub down, as the queue's read says it.
