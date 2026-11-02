@@ -64,7 +64,7 @@ export interface PrRun {
 }
 
 /** PRs one GraphQL query reads. */
-const BATCH = 50;
+export const BATCH = 50;
 /** How long after a PR closed without merging the job reads its state, for a reopen or a merge since. */
 export const REOPEN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 /** The newest reviews read on each PR. */
@@ -253,7 +253,7 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
  * first, the comments on lines of a maintainer's review it left out.
  * setReviewsRead adds it to what earlier reads covered.
  */
-function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId'> {
+function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId' | 'readAt'> {
   const read = (pull.reviews?.nodes ?? []).filter((review) => review !== null);
   const prAuthor = pull.author?.login ?? '';
   const leftOut = read
@@ -288,6 +288,87 @@ async function recordEnd(deps: PrJobDeps, record: PrRecord, issue: string, outco
 }
 
 /**
+ * Whether the PR job still reads the PR: open, or recorded closed without
+ * merging in the last 14 days. A merged PR never changes, and one closed
+ * longer ago is no longer read.
+ */
+export function isFollowed(record: PrRecord, now: number): boolean {
+  if (record.state === 'open') return true;
+  return record.state === 'closed' && record.closedAt !== null && record.closedAt >= now - REOPEN_WINDOW_MS;
+}
+
+/** A run's count of what it did, with nothing done yet. */
+function newPrRun(): PrRun {
+  return {
+    checked: 0,
+    closedChecked: 0,
+    reopened: 0,
+    merged: 0,
+    closed: 0,
+    followUps: 0,
+    withoutPush: 0,
+    reread: 0,
+    calls: 0,
+    stopped: null,
+  };
+}
+
+/**
+ * Reads one batch of PRs in one query, and records what GitHub shows for
+ * each, as followPrs describes. Gives the claims whose PR GitHub gave. A
+ * PR GitHub no longer shows is left as the table has it.
+ */
+async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun): Promise<Set<string>> {
+  // A check and the PR job can read the same PR at once, so the counts
+  // carry when the read was made, and an older read's counts change nothing.
+  const readAt = deps.now();
+  const pulls = await readStates(deps.github, batch);
+  const read = new Set<string>();
+  const covered: ReviewsRead[] = [];
+  for (const [i, { record, open: followed }] of batch.entries()) {
+    const pull = pulls[`p${String(i)}`]?.pullRequest;
+    if (pull == null) continue;
+    read.add(record.claimId);
+    const outcome = outcomeOf(pull, deps.now());
+    if (!followed) {
+      run.closedChecked += 1;
+      if (outcome?.state === 'closed') continue;
+      const claim = await getClaim(deps.db, record.claimId);
+      if (claim === null || !(await reopenClaimPr(deps, { claimId: claim.id, issue: claim.issue, pr: record.pr }))) continue;
+      run.reopened += 1;
+      if (outcome?.state === 'merged' && (await recordEnd(deps, record, claim.issue, outcome))) run.merged += 1;
+      continue;
+    }
+    run.checked += 1;
+    if (outcome === null) {
+      run.followUps += await saveFollowUps(deps.db, record.claimId, followUpsOf(pull), deps.now());
+      run.withoutPush += withoutPushOf(pull);
+      covered.push({ claimId: record.claimId, ...reviewsReadOf(pull), readAt });
+      continue;
+    }
+    const claim = await getClaim(deps.db, record.claimId);
+    if (claim === null || !(await recordEnd(deps, record, claim.issue, outcome))) continue;
+    if (outcome.state === 'merged') run.merged += 1;
+    else run.closed += 1;
+  }
+  await setReviewsRead(deps.db, covered);
+  return read;
+}
+
+/** Records why a run stopped, for a stop GitHub caused. Any other error goes on up. */
+function stoppedBy(run: PrRun, error: unknown, job: string): void {
+  if (error instanceof SyncStopped) {
+    run.stopped = error.reason;
+    console.warn(`${job} stopped. ${error.message}`);
+  } else if (error instanceof GitHubError) {
+    run.stopped = 'github_error';
+    console.warn(`${job} stopped. GitHub answered ${String(error.status)}: ${error.message}`);
+  } else {
+    throw error;
+  }
+}
+
+/**
  * Reads every open PR in the prs table, oldest first, then the state of
  * each PR recorded closed without merging in the last 14 days, oldest close
  * first, in the same queries, until they are done or the run has to stop.
@@ -301,18 +382,7 @@ async function recordEnd(deps: PrJobDeps, record: PrRecord, issue: string, outco
  * refusal from GitHub stops the run, which ends without an error.
  */
 export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
-  const run: PrRun = {
-    checked: 0,
-    closedChecked: 0,
-    reopened: 0,
-    merged: 0,
-    closed: 0,
-    followUps: 0,
-    withoutPush: 0,
-    reread: 0,
-    calls: 0,
-    stopped: null,
-  };
+  const run = newPrRun();
   const [open, closed, due] = await Promise.all([
     listOpenPrs(deps.db),
     listClosedPrsSince(deps.db, deps.now() - REOPEN_WINDOW_MS),
@@ -322,35 +392,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
   try {
     if (reads.length > 0 || due.length > 0) await deps.github.checkGitHub();
     for (let start = 0; start < reads.length; start += BATCH) {
-      const batch = reads.slice(start, start + BATCH);
-      const pulls = await readStates(deps.github, batch);
-      const covered: ReviewsRead[] = [];
-      for (const [i, { record, open: followed }] of batch.entries()) {
-        const pull = pulls[`p${String(i)}`]?.pullRequest;
-        if (pull == null) continue;
-        const outcome = outcomeOf(pull, deps.now());
-        if (!followed) {
-          run.closedChecked += 1;
-          if (outcome?.state === 'closed') continue;
-          const claim = await getClaim(deps.db, record.claimId);
-          if (claim === null || !(await reopenClaimPr(deps, { claimId: claim.id, issue: claim.issue, pr: record.pr }))) continue;
-          run.reopened += 1;
-          if (outcome?.state === 'merged' && (await recordEnd(deps, record, claim.issue, outcome))) run.merged += 1;
-          continue;
-        }
-        run.checked += 1;
-        if (outcome === null) {
-          run.followUps += await saveFollowUps(deps.db, record.claimId, followUpsOf(pull), deps.now());
-          run.withoutPush += withoutPushOf(pull);
-          covered.push({ claimId: record.claimId, ...reviewsReadOf(pull) });
-          continue;
-        }
-        const claim = await getClaim(deps.db, record.claimId);
-        if (claim === null || !(await recordEnd(deps, record, claim.issue, outcome))) continue;
-        if (outcome.state === 'merged') run.merged += 1;
-        else run.closed += 1;
-      }
-      await setReviewsRead(deps.db, covered);
+      await followBatch(deps, reads.slice(start, start + BATCH), run);
     }
     // A read that can't run now, as when another run holds the project,
     // stays due for the next run, behind the reads that never failed. One
@@ -364,19 +406,42 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
       run.reread += 1;
     }
   } catch (error) {
-    if (error instanceof SyncStopped) {
-      run.stopped = error.reason;
-      console.warn(`The PR job stopped. ${error.message}`);
-    } else if (error instanceof GitHubError) {
-      run.stopped = 'github_error';
-      console.warn(`The PR job stopped. GitHub answered ${String(error.status)}: ${error.message}`);
-    } else {
-      throw error;
-    }
+    stoppedBy(run, error, 'The PR job');
   }
   run.calls = deps.github.calls;
   console.log(
     `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, PRs closed in the last 14 days: ${String(run.closedChecked)} of ${String(closed.length)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, issues read again: ${String(run.reread)}, new follow-ups: ${String(run.followUps)}, reviews left out for no push access: ${String(run.withoutPush)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
+}
+
+/**
+ * Reads the PRs of the claims named, now, for donors who asked with
+ * check_pr, and records what GitHub shows the way followPrs does: an open
+ * PR in full, and one recorded closed without merging in the last 14 days
+ * for its state alone. A merged PR stays merged, so it isn't read. The
+ * issue of a PR this read finds closed without merging is due to be read
+ * again, and the PR job's next run reads it. Gives the claims whose PR
+ * GitHub gave, and the run. A refusal from GitHub stops the read, which
+ * ends without an error. src/sync/pr-checker.ts decides when it runs.
+ */
+export async function checkClaimPrs(deps: PrJobDeps, records: readonly PrRecord[]): Promise<{ read: Set<string>; run: PrRun }> {
+  const run = newPrRun();
+  const reads: Read[] = records
+    .filter((record) => isFollowed(record, deps.now()))
+    .map((record) => ({ record, open: record.state === 'open' }));
+  const read = new Set<string>();
+  try {
+    if (reads.length > 0) await deps.github.checkGitHub();
+    for (let start = 0; start < reads.length; start += BATCH) {
+      for (const claimId of await followBatch(deps, reads.slice(start, start + BATCH), run)) read.add(claimId);
+    }
+  } catch (error) {
+    stoppedBy(run, error, 'A check of PRs');
+  }
+  run.calls = deps.github.calls;
+  console.log(
+    `A check of PRs asked for ${String(records.length)}, read ${String(read.size)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, new follow-ups: ${String(run.followUps)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+  );
+  return { read, run };
 }

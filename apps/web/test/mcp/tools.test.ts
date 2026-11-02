@@ -55,6 +55,7 @@ test("a tools/list answers with the donor's tools and the maintainer's tools, ea
     'open_pr',
     'record_pr',
     'my_work',
+    'check_pr',
     'register_project',
     'update_project',
     'project_status',

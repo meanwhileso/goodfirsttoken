@@ -27,6 +27,7 @@ signs in with GitHub, which gives Good First Token access to public repos
 only.
 
 {{include donor-start}}
+{{include donor-check}}
 {{include donor-project}}
 ## Pick an issue
 

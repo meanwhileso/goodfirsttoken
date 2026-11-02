@@ -10,7 +10,9 @@ import {
   createSession,
   getPr,
   listOpenPrs,
+  listOpenPrsOf,
   saveClaim,
+  setReviewsRead,
   listEndedToOffer,
   listReopenedClaimPrs,
   markEndedOffered,
@@ -260,5 +262,51 @@ describe('merged and closed PRs offered to their donor', () => {
 
     expect(writes).toHaveLength(1);
     expect(await takeEndedToOffer(priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_3' }]);
+  });
+});
+
+describe("a PR's reviews as reads covered them", () => {
+  const reviewsOf = async (claimId: string) =>
+    db.prepare('SELECT reviews, reviews_read, comments_left_out FROM prs WHERE claim_id = ?').bind(claimId).first();
+
+  test('a read made before the one stored changes nothing, so two reads that land out of order never count the same reviews twice', async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    // A check read 3 reviews and saved first. The PR job's read, made before it, lands after it with 1.
+    await setReviewsRead(db, [{ claimId: 'c_1', reviews: 3, leftOut: [0, 0, 2], readAt: t0 + 2 * HOUR }]);
+    await setReviewsRead(db, [{ claimId: 'c_1', reviews: 1, leftOut: [0], readAt: t0 + HOUR }]);
+
+    expect(await reviewsOf('c_1')).toEqual({ reviews: 3, reviews_read: 3, comments_left_out: 2 });
+
+    await setReviewsRead(db, [{ claimId: 'c_1', reviews: 4, leftOut: [0], readAt: t0 + 3 * HOUR }]);
+
+    expect(await reviewsOf('c_1')).toEqual({ reviews: 4, reviews_read: 4, comments_left_out: 2 });
+  });
+});
+
+describe("a donor's open PRs", () => {
+  test("lists the donor's open PRs, oldest first, with the reviews counted at the last read, and no merged one", async () => {
+    await addPr(db, { claimId: 'c_2', pr: prRef(58), openedAt: t0 + HOUR });
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    await setReviewsRead(db, [{ claimId: 'c_2', reviews: 2, leftOut: [0, 0], readAt: t0 + 2 * HOUR }]);
+    await setPrState(db, 'c_1', 'merged', t0 + 3 * HOUR);
+
+    expect(await listOpenPrsOf(db, priya.githubId)).toEqual([
+      { claimId: 'c_2', issue: `${repo}#18`, pr: prRef(58), reviews: 2 },
+    ]);
+  });
+
+  test('a blocked donor, and a PR the do-not-list names, list none, as every listing of their PRs leaves them out', async () => {
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    await signIn(admin);
+    await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, t0);
+    const whileBlocked = await listOpenPrsOf(db, priya.githubId);
+    await unblockDonor(db, priya.githubId);
+    await addToDoNotList(db, { repo, reason: 'Asked to be removed.', addedBy: admin.githubId }, t0);
+    const whileListed = await listOpenPrsOf(db, priya.githubId);
+    await takeOffDoNotList(repo);
+
+    expect(whileBlocked).toEqual([]);
+    expect(whileListed).toEqual([]);
+    expect(await listOpenPrsOf(db, priya.githubId)).toHaveLength(1);
   });
 });

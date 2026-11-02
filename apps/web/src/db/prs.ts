@@ -221,6 +221,8 @@ export interface ReviewsRead {
    * lines the read left out: 0 for a review that isn't a maintainer's.
    */
   leftOut: number[];
+  /** When the read was made, before its query went to GitHub. */
+  readAt: number;
 }
 
 /**
@@ -239,19 +241,24 @@ export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[
     claimId: mustParse(id, row.claimId, 'claimId'),
     reviews: mustParse(count, row.reviews, 'reviews'),
     leftOut: row.leftOut.map((n) => mustParse(count, n, 'leftOut')),
+    readAt: checkTime(row.readAt, 'readAt'),
   }));
   // SET reads the row as it was, so prs.reviews is the last read's count.
+  // The PR job and a check can read the same PR at once, so a read made
+  // before the one stored changes nothing.
   await db
     .prepare(
       `UPDATE prs SET
          reviews = r.reviews,
          reviews_read = MIN(r.reviews, prs.reviews_read + MIN(r.took, MAX(0, r.reviews - prs.reviews))),
          comments_left_out = prs.comments_left_out
-           + COALESCE((SELECT SUM(e.value) FROM json_each(r.left_out) e WHERE e.key < MAX(0, r.reviews - prs.reviews)), 0)
+           + COALESCE((SELECT SUM(e.value) FROM json_each(r.left_out) e WHERE e.key < MAX(0, r.reviews - prs.reviews)), 0),
+         reviews_read_at = r.read_at
        FROM (SELECT json_extract(j.value, '$.claimId') AS claim_id, json_extract(j.value, '$.reviews') AS reviews,
-               json_array_length(j.value, '$.leftOut') AS took, json_extract(j.value, '$.leftOut') AS left_out
+               json_array_length(j.value, '$.leftOut') AS took, json_extract(j.value, '$.leftOut') AS left_out,
+               json_extract(j.value, '$.readAt') AS read_at
              FROM json_each(?) j) r
-       WHERE prs.claim_id = r.claim_id`,
+       WHERE prs.claim_id = r.claim_id AND (prs.reviews_read_at IS NULL OR prs.reviews_read_at <= r.read_at)`,
     )
     .bind(JSON.stringify(rows))
     .run();
@@ -312,6 +319,44 @@ export async function listOpenPrs(db: D1Database): Promise<PrRecord[]> {
     .prepare("SELECT * FROM prs WHERE state = 'open' ORDER BY opened_at, claim_id")
     .all<PrRow>();
   return results.map(toPr);
+}
+
+/** The most of a person's open PRs listOpenPrsOf gives. */
+export const OPEN_PRS_LISTED = 50;
+
+/** A person's PR that the prs table has open, with GitHub's count of its reviews at the last read. */
+export interface OpenPrOf {
+  claimId: string;
+  issue: string;
+  pr: PrRef;
+  /** The reviews GitHub counted on the PR at the last read, pending and dismissed ones left out. */
+  reviews: number;
+}
+
+/**
+ * The person's PRs the prs table has open, oldest first, up to 50, for
+ * start_session and my_work to list, so the donor's agent can read each on
+ * GitHub with the donor's own account and ask for a check only when one
+ * changed. Left out, as for listEndedToOffer: a blocked donor's, one the
+ * do-not-list names, and one on a project the sync delisted.
+ */
+export async function listOpenPrsOf(db: D1Database, person: number): Promise<OpenPrOf[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews
+       FROM prs p JOIN claims c ON c.id = p.claim_id
+       WHERE c.github_id = ? AND p.state = 'open' AND ${SHOWN}
+         AND NOT EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = c.project AND u.delisted IS NOT NULL)
+       ORDER BY p.opened_at, p.claim_id LIMIT ?`,
+    )
+    .bind(mustParse(githubId, person, 'githubId'), OPEN_PRS_LISTED)
+    .all<{ claim_id: string; issue_repo: string; issue_number: number; repo: string; number: number; url: string; reviews: number }>();
+  return results.map((row) => ({
+    claimId: mustParse(id, row.claim_id, 'claimId'),
+    issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
+    pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
+    reviews: mustParse(count, row.reviews, 'reviews'),
+  }));
 }
 
 /** How many PRs opened for a project's claims are open, and how many merged. */

@@ -47,6 +47,7 @@ describe('the tool list', () => {
         'my_work',
         'open_pr',
         'record_pr',
+        'check_pr',
         'set_interests',
         'register_project',
         'update_project',

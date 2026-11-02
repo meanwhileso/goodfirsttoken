@@ -38,4 +38,5 @@
    project. Resume or answer that work only when the donor chooses it.
 7. When `readInPart` names a PR, read its reviews on GitHub at its link
    before you answer them. Good First Token read only some of them.
+8. When `openPrs` lists a PR, check it as in Check open PRs.
 

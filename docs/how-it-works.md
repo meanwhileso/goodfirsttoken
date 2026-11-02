@@ -1019,6 +1019,60 @@ Reopened below.
 - When GitHub refuses its query, the job stops, and the next run reads the
   PRs again.
 
+**Checked on request.** A donor's agent can ask for a claim's PR to be read
+now, with `check_pr`. A merge or a review then shows on the site within
+seconds of the ask.
+
+- The skills read the donor's open PRs on GitHub with the donor's own
+  account first, `gh pr view` for each one `openPrs` lists, under
+  [The donor's tools](#the-donors-tools). They call `check_pr` only for a
+  PR that merged, closed, or has more reviews than `openPrs` counted. So in
+  the usual case, when nothing changed, the service token reads nothing.
+- A count can miss a review: when one review was dismissed and a new one
+  came, GitHub's count is the same as before, so the skill doesn't ask.
+  The PR job reads the new one at its next run.
+- The agent's word decides only that a read is worth making. The read is
+  the PR job's own, with the service token, and records only what GitHub
+  shows, the same way: a merge or a close, which the claim's issue room
+  announces, and an open PR's new follow-ups. A PR recorded closed in the
+  last 14 days is read for its state alone, as under Reopened below. A
+  merged PR never changes, and one closed more than 14 days ago is no
+  longer read, so neither is read, and the answer says `final`.
+- A PR the check finds closed without merging has its issue due to be read
+  again, and the PR job's next run reads it.
+- One checker serves the whole site, so these limits are global, across
+  every donor:
+  - One read at a time, and a read starts at most every 2 seconds. Checks
+    that come in while one waits or runs share the next read, up to 50 PRs
+    in one GraphQL query.
+  - At most 300 reads in any hour, counted in the checker's own storage, so
+    the count holds when the checker moves or restarts.
+  - At most 30 checks in any hour from one donor that start or join a read,
+    counted the same way, so no one donor's agent spends the hour's reads.
+  - A read starts only while GitHub says more of the service token's
+    hourly budget is left than any scheduled job leaves for the others:
+    a tenth more than the one that leaves the most, which is 70% now. So a
+    check stops before any scheduled job would.
+  - A PR read in the last 30 seconds isn't read again, and the answer says
+    `recently`. That holds for a PR GitHub no longer shows too. A read that
+    stopped, as when GitHub was down, counts for none of its PRs.
+  - A check of a PR being read now waits for that read, and gets its answer.
+  - At most 200 PRs wait for a read at a time.
+- A check past these limits, or one whose read failed, reads nothing, and
+  its answer says `later`: the PR job reads the PR at its next run, within
+  30 minutes.
+- `check_pr` takes the claim, and refuses another donor's claim with
+  `not_claim_owner`, a claim with no PR recorded with `not_found`, and a
+  blocked donor with `donor_blocked`. It answers with the PR's state after
+  the check, how the read went, `now`, `recently`, `later`, or `final` for a
+  merged PR, how many follow-ups on the PR no tool has shown yet, and the
+  PR's end, when it merged or closed and no session told the donor yet. It
+  counts only follow-ups `my_work` would list, under Follow-ups in
+  [The donor's tools](#the-donors-tools).
+- Each check logs a line: how many PRs it was asked for and read, how many
+  merged, closed, or opened again, the new follow-ups, and its calls to
+  GitHub.
+
 **Follow-ups.** The same query reads, for each PR still open, its 10 newest
 reviews, leaving out a pending one, which only its author sees, and a
 dismissed one, and the first 10 comments on lines of each. These are the
@@ -2135,12 +2189,14 @@ the first question included.
 
 ## The donor's tools
 
-A donor's agent spends their tokens through nine tools: `start_session`,
+A donor's agent spends their tokens through eleven tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
-`submit_work`, `release_claim`, `my_work`, and `open_pr`. Each acts as the
-caller alone, and reads and writes GitHub with the caller's own token, for
-their own claim only. The service token reads nothing for them, and no
-maintainer's token or other donor's ever does their work.
+`submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, and
+`check_pr`. Each acts as the caller alone, and reads and writes GitHub with
+the caller's own token, for their own claim only. The service token reads
+for them only in `check_pr`, which reads their own claim's PR, under
+Checked on request in [PRs](#prs). No maintainer's token or other donor's
+ever does their work.
 
 **Sessions**
 
@@ -2172,6 +2228,15 @@ maintainer's token or other donor's ever does their work.
 - The answer also lists the donor's PRs that merged or closed without
   merging since a session last told them, under When the donor's PR ends
   below.
+- `start_session` and `my_work` both list the donor's PRs the PRs table has
+  open, as `openPrs`, oldest first, at most 50, without a blocked donor's,
+  one the do-not-list names, or one on a delisted project, as for ended
+  PRs: each one's claim, issue,
+  and PR, and `reviews`, how many reviews GitHub counted on it at the last
+  read, pending and dismissed ones left out. The skills read each on GitHub
+  with the donor's own account, and call `check_pr` only for one that
+  merged, closed, or has more reviews than that, under Checked on request
+  in [PRs](#prs).
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions. [/me](#your-queue-on-me) saves them the same
   way.
@@ -2225,9 +2290,11 @@ under Follow-ups in [PRs](#prs).
   submits the new head with `submit_work`, under Submitting below.
 - Once the PR merges or closes, its follow-ups show no more.
 
-**When the donor's PR ends.** Once the PR job records a claim's PR merged,
-or closed without merging, the donor's next `start_session` lists it, once,
-with how it ended.
+**When the donor's PR ends.** Once the PR job or a check records a claim's
+PR merged, or closed without merging, the donor's next `start_session`
+lists it, once, with how it ended. When `check_pr` is the one that finds
+it, its own answer gives it instead, once, the same way, and the next
+session doesn't.
 
 - A merged PR comes with a link to post it on X: X's post form,
   `https://x.com/intent/tweet`, filled with `My PR to owner/repo merged.
@@ -2239,8 +2306,8 @@ with how it ended.
 - A PR closed without merging comes with no link. The answer says the
   issue takes claims again while it is open and tagged, so the donor can
   try again with `claim_issue`.
-- A PR is told once. The session marks the PRs it lists offered once its
-  answer is made, so an answer that fails leaves them for the next
+- A PR is told once. The session, or `check_pr`, marks the PRs it lists
+  offered once its answer is made, so an answer that fails leaves them for the next
   session. The mark is one statement that takes only PRs no session marked
   yet, so of two sessions at once that list the same PR, the one that
   marks it second leaves it out of its answer.
@@ -3559,8 +3626,8 @@ paused. The cron job's line says how many it queued.
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves all twenty-one, with the
-inputs, outputs, and descriptions defined here: the donor's nine, under
+a description for agents. The MCP server serves all twenty-three, with the
+inputs, outputs, and descriptions defined here: the donor's eleven, under
 [The donor's tools](#the-donors-tools), the maintainer's five, under
 [Registering a project](#registering-a-project),
 [Managing a project](#managing-a-project), and
@@ -3569,7 +3636,7 @@ inputs, outputs, and descriptions defined here: the donor's nine, under
 
 | Who | Tools |
 |---|---|
-| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `set_interests` |
+| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `check_pr`, `set_interests` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project`, `request_removal` |
 | Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project`, `admin_seed_repo` |
 
@@ -4824,6 +4891,8 @@ Each limit the schemas enforce, other than those under project settings:
 | A reviewer's text in a follow-up | 1,000 graphemes, folded to one line | Us |
 | A comment's file path in a follow-up | 4,096 graphemes, folded to one line | Us |
 | Follow-ups `start_session` and `my_work` list at once | 20, with a count of the rest | Us |
+| Open PRs `start_session` and `my_work` list | 50, oldest first | Us |
+| Reads of PRs that `check_pr` asks for, across the whole site | One at a time, at most one every 2 seconds and 300 in any hour, 30 checks an hour from one donor, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, and only while more of the service token's budget is left than any scheduled job leaves | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
 | Suggestions left out with `exclude` | 100 | Us |
 | Picks waiting in a session's queue | 20 | Us |

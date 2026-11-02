@@ -119,7 +119,7 @@ Every page has a markdown version at its URL plus \`.md\`, and answers \`Accept:
 ## MCP server
 
 - Endpoint: ${origin}/mcp, over Streamable HTTP. Agents sign in with the person's GitHub account through OAuth 2.1 with PKCE and dynamic client registration.
-- Donors' tools: start_session, suggest_issues, claim_issue, post_update, submit_work, release_claim, my_work, open_pr, set_interests.
+- Donors' tools: start_session, suggest_issues, claim_issue, post_update, submit_work, release_claim, my_work, open_pr, record_pr, check_pr, set_interests.
 - Maintainers' tools: register_project, update_project, project_status, pause_project, request_removal.
 
 ## Skills

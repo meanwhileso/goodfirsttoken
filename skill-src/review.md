@@ -37,13 +37,15 @@ only.
 4. To go on with a claim that is resumable, start a session as in Start a
    session, claim its issue again with `claim_issue`, and work it as in
    Work the claim.
-5. How the donor's PRs ended, merged or closed, comes with their next
-   `start_session`, once.
+5. When `openPrs` lists a PR, check it as in Check open PRs. How the
+   donor's PRs ended, merged or closed, comes from `check_pr` when it finds
+   the end, or else with their next `start_session`, once.
 6. The donor can also open a PR from the review queue on /me, their own
    page on Good First Token.
 
 {{include donor-review}}
 {{include donor-start}}
+{{include donor-check}}
 {{include donor-project}}
 {{include donor-work}}
 {{include donor-views}}
