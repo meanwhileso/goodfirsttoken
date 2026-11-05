@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { checkPostLink, maintainerPostInputSchema, maintainerPostSchema } from './maintainer-post';
 import { epochMs, githubId, httpsUrl, labelName, repoName, trimmedText, wholeNumber } from './primitives';
 import type { Refusal } from './refusals';
 import { describeProblems, validate, type FieldProblem, type Validated } from './validation';
@@ -32,12 +33,28 @@ export type PolicyTier = z.infer<typeof policyTierSchema>;
 /** The longest policy quote. */
 export const MAX_POLICY_QUOTE = 2000;
 
-export const policySchema = z.object({
+const policyFields = {
   quote: trimmedText(MAX_POLICY_QUOTE),
   url: httpsUrl,
   tier: policyTierSchema,
-});
+};
+
+/**
+ * The policy a project was listed from: words that welcome AI help, their
+ * link, and the tier. Most come from the repo's own docs. One an admin listed
+ * from a maintainer's post on X carries `maintainerPost`, the evidence for
+ * it, and links to the post.
+ */
+export const policySchema = z
+  .object({ ...policyFields, maintainerPost: maintainerPostSchema.optional() })
+  .superRefine(checkPostLink);
 export type Policy = z.infer<typeof policySchema>;
+
+/** The policy admin_add_project takes. The server stamps who verified a maintainer's post. */
+export const policyInputSchema = z
+  .object({ ...policyFields, maintainerPost: maintainerPostInputSchema.optional() })
+  .superRefine(checkPostLink);
+export type PolicyInput = z.input<typeof policyInputSchema>;
 
 export const MAX_TAGS = 20;
 export const MAX_AGENT_NOTES = 2000;

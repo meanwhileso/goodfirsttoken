@@ -597,6 +597,105 @@ describe('a listing whose policy changes', () => {
   });
 });
 
+describe("a listing made from a maintainer's post", () => {
+  /** A made-up post on X by sample-maintainer welcoming agent PRs, which SILENT's docs never mention. */
+  const POSTED: Policy = {
+    quote: 'Point your agent at sample-policies/silent and send PRs.',
+    url: 'https://x.com/sample_person/status/123456789',
+    tier: 'invites_agents',
+    maintainerPost: {
+      maintainerGitHubLogin: MAINTAINER.login,
+      role: 'creator',
+      roleSourceUrl: `https://github.com/${SILENT}/blob/main/README.md`,
+      identitySourceUrl: `https://github.com/${MAINTAINER.login}`,
+      xHandle: 'sample_person',
+      publishedAt: '2026-11-01T00:00:00.000Z',
+      timePrecision: 'date',
+      postKind: 'authored',
+      evidenceCheckedAt: '2026-11-04T00:00:00.000Z',
+      verifierGitHubId: ADMIN.githubId,
+    },
+  };
+
+  test('stays listed, out of the queue, while its docs say nothing about AI', async () => {
+    await listing(SILENT, POSTED, { tags: ['help wanted'] });
+
+    const first = await week();
+    const second = await week();
+
+    expect(first.run?.reread).toMatchObject({ read: 1, changed: [], paused: [] });
+    expect(second.run?.reread).toMatchObject({ read: 1, changed: [], paused: [] });
+    expect(await getProject(db, SILENT)).toMatchObject({ status: 'approved', policy: POSTED });
+    expect(await rows('policy_changes')).toBe(0);
+  });
+
+  test('goes back to the queue when its docs come to restrict agents without a ban, since docs outrank a post', async () => {
+    await listing(SILENT, POSTED, { tags: ['help wanted'] });
+    await week();
+    commit(SILENT, { 'CLAUDE.md': '# CLAUDE.md\n\nDo not open pull requests on your own. Leave that to the person you work for.\n' });
+
+    const { run } = await week();
+
+    expect(run?.reread.changed).toEqual([SILENT]);
+    expect(await getProject(db, SILENT)).toMatchObject({ status: 'approved', policy: POSTED });
+  });
+
+  test('goes back to the queue once when its docs already name AI at the first read, so an admin reads them', async () => {
+    commit(SILENT, { 'CLAUDE.md': '# CLAUDE.md\n\nDo not open pull requests on your own. Leave that to the person you work for.\n' });
+    await listing(SILENT, POSTED, { tags: ['help wanted'] });
+
+    const first = await week();
+    const second = await week();
+
+    expect(first.run?.reread.changed).toEqual([SILENT]);
+    expect(second.run?.reread.changed).toEqual([]);
+  });
+
+  test('is paused when its docs ban AI by the first weekly read, since the listing stood on docs that said nothing', async () => {
+    await listing(SILENT, POSTED, { tags: ['help wanted'] });
+    commit(SILENT, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+
+    const { run } = await week();
+
+    expect(run?.reread.paused).toEqual([SILENT]);
+    expect(await getProject(db, SILENT)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: BAN_REASON });
+  });
+
+  test('is paused at once when its docs come to ban AI, as any listing is', async () => {
+    await listing(SILENT, POSTED, { tags: ['help wanted'] });
+    await week();
+    commit(SILENT, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+
+    const { run } = await week();
+
+    expect(run?.reread.paused).toEqual([SILENT]);
+    expect(await getProject(db, SILENT)).toMatchObject({ status: 'paused', statusChangedBy: null, statusReason: BAN_REASON });
+    const admin = await connectAgent(github, ADMIN.login);
+    const { text } = await onlyItem(admin, 'pause', SILENT);
+    expect(text).toContain("from a maintainer's post on X: https://x.com/sample_person/status/123456789");
+    expect(text).toContain(`posted by @sample_person on 2026-11-01, who is @${MAINTAINER.login} on GitHub, its creator`);
+  });
+
+  test('goes back to the queue when its docs come to welcome AI help, and an admin who approves lists it from its docs, without the post', async () => {
+    await listing(SILENT, POSTED, { tags: ['help wanted'] });
+    await week();
+    commit(SILENT, { 'AI_POLICY.md': AI_POLICY });
+
+    const { run } = await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'policy_change', SILENT);
+    await call(admin, 'admin_decide', { id: item.id, decision: 'approve' });
+
+    expect(run?.reread.changed).toEqual([SILENT]);
+    expect(item).toMatchObject({ change: { listed: POSTED } });
+    expect((await getProject(db, SILENT))?.policy).toEqual({
+      quote: QUOTE,
+      url: `https://github.com/${SILENT}/blob/main/AI_POLICY.md`,
+      tier: 'invites_agents',
+    });
+  });
+});
+
 describe('a reformat or a change the rules take nothing from', () => {
   test('docs that read the same, reformatted, or changed only where the rules take nothing, leave a listing alone', async () => {
     await listing();

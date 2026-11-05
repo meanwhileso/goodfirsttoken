@@ -9,6 +9,7 @@ import {
   MIN_CLAIMS_PER_ISSUE,
   MIN_OPEN_PRS_PER_DONOR,
   type FeedEvent,
+  type OpenMaintainerPost,
 } from '@goodfirsttoken/core';
 import type { AdminPage } from '../admin/page';
 import { REPO_URL } from '../components/Nav';
@@ -34,6 +35,7 @@ import type { MePage } from '../me/page';
 import type { PersonPage, WorkRow, WorkStatus } from '../person/load';
 import type { ListedProject, ProjectPage } from '../project/load';
 import { ruleBadges } from '../project/rules';
+import { sourceWords } from '../project/source';
 import { code, doc, link, list, numbered, text } from './markdown';
 
 // The markdown version of each page, from the data its loader gives the
@@ -125,8 +127,7 @@ export function homeMarkdown(origin: string, data: HomeData): string {
 }
 
 function projectRow(origin: string, project: Omit<ListedProject, 'source'> & { source?: ListedProject['source'] }): string {
-  const got =
-    project.source === undefined ? '' : project.source === 'policy' ? ', listed from its AI policy' : ', registered by its maintainers';
+  const got = project.source === undefined ? '' : `, ${sourceWords(project.source, project.fromPost)}`;
   return `${link(project.repo, `${origin}/${project.repo}`)}: tagged ${project.tags.map(text).join(', ')}, ${plural(project.waiting, 'issue', 'issues')} waiting, ${text(project.prMode)} PRs${got}`;
 }
 
@@ -148,6 +149,17 @@ export function projectsMarkdown(
     `Maintainers add theirs from ${link('their agent', `${origin}/maintainers.md`)}.`,
     more(origin),
   ]);
+}
+
+/** Who posted the words a project was listed from, each fact linked to its source. */
+function postListing(post: OpenMaintainerPost): string {
+  const handle = `@${post.xHandle}`;
+  const login = `@${post.maintainerGitHubLogin}`;
+  return [
+    `Listed from ${link(handle, `https://x.com/${post.xHandle}`)}'s post on X.`,
+    `${link(`${handle} is ${login} on GitHub`, post.identitySourceUrl)}.`,
+    `${link(`${login} is its ${post.role}`, post.roleSourceUrl)}.`,
+  ].join(' ');
 }
 
 /** A policy link's words: its file and section, like CONTRIBUTING.md#ai, or its host, as the project page writes it. */
@@ -194,8 +206,8 @@ export function projectMarkdown(origin: string, page: ProjectPage): string {
   const how =
     page.source === 'policy'
       ? [
-          policy && `> “${text(policy.quote)}” ${link(policyFile(policy.url), policy.url)}`,
-          `Listed from its AI policy. Maintainer? ${link('Take it over or remove it', `${origin}/maintainers.md`)}.`,
+          policy && `> “${text(policy.quote)}” ${link(policy.maintainerPost ? 'post on X' : policyFile(policy.url), policy.url)}`,
+          `${policy?.maintainerPost ? postListing(policy.maintainerPost) : 'Listed from its AI policy.'} Maintainer? ${link('Take it over or remove it', `${origin}/maintainers.md`)}.`,
         ]
       : [`Registered by ${page.addedBy === null ? 'its maintainers' : personLink(origin, page.addedBy)}.`];
 

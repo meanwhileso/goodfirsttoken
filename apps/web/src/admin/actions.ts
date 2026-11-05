@@ -7,6 +7,8 @@ import {
   validate,
   qualifyCrawlPriority,
   verifyCrawlPriority,
+  verifyMaintainerPost,
+  FuturePostTime,
   type QueuePlace,
   type CrawlCandidate,
   type Policy,
@@ -607,7 +609,18 @@ export async function adminAddProject(
   now: number,
 ): Promise<Outcome<'admin_add_project'>> {
   await requirePermission(caller, 'list_from_policy');
-  return listFromPolicy(caller, input.repo, input.policy, input.settings, now);
+  const { maintainerPost, ...words } = input.policy;
+  let policy: Policy = words;
+  if (maintainerPost !== undefined) {
+    // The server stamps who verified the post, and refuses a time after now.
+    try {
+      policy = { ...words, maintainerPost: verifyMaintainerPost(maintainerPost, caller.githubId, now) };
+    } catch (error) {
+      if (!(error instanceof FuturePostTime)) throw error;
+      return refuse('invalid_input', `${error.message}. Fix it, then call again.`);
+    }
+  }
+  return listFromPolicy(caller, input.repo, policy, input.settings, now);
 }
 
 function nothingWaits(id: string): { ok: false; refusal: Refusal } {

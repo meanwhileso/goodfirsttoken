@@ -202,11 +202,17 @@ export const projectStatus = defineTool({
      * when the project isn't paused.
      */
     resumableBy: z.enum(resumers).nullable().default(null),
+    /** True when an admin listed it from a maintainer's post on X rather than its docs. */
+    fromPost: z.boolean().default(false),
   }),
   text: (out) =>
     lines(
       `${out.repo}: ${out.status}. ${
-        out.source === 'registered' ? 'Registered by its maintainers.' : 'Listed from its AI policy.'
+        out.source === 'registered'
+          ? 'Registered by its maintainers.'
+          : out.fromPost
+            ? "Listed from a maintainer's post on X."
+            : 'Listed from its AI policy.'
       }`,
       out.statusReason !== null && `Reason: ${out.statusReason}`,
       out.resumableBy !== null &&

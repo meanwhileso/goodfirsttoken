@@ -1,6 +1,7 @@
 import {
   OPEN_DATA_LICENSE,
   OPEN_DATA_LICENSE_URL,
+  openPolicy,
   openProjectFileSchema,
   openProjectsFileSchema,
   PROJECTS_JSON_PAGE,
@@ -32,7 +33,7 @@ export function openProject(origin: string, project: ProjectRecord): OpenProject
     status: project.status === 'paused' ? 'paused' : 'approved',
     source: project.source,
     // The page shows the quote and its link, and nothing else of the policy.
-    policy: project.source === 'policy' && project.policy ? { quote: project.policy.quote, url: project.policy.url } : null,
+    policy: project.source === 'policy' && project.policy ? openPolicy(project.policy) : null,
     settings: project.settings,
     links: {
       page,

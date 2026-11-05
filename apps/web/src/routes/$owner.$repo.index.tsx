@@ -1,4 +1,4 @@
-import { productName, type Policy } from '@goodfirsttoken/core';
+import { productName, type OpenMaintainerPost, type OpenPolicy } from '@goodfirsttoken/core';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { SiteNav } from '../auth/SiteNav';
 import { cardMeta } from '../cards/meta';
@@ -364,21 +364,39 @@ function policyFile(url: string): string {
   }
 }
 
-function PolicyListing({ policy }: { policy: Policy | null }) {
+function PolicyListing({ policy }: { policy: OpenPolicy | null }) {
+  const post = policy?.maintainerPost;
   return (
     <div className="project-policy">
       {policy && (
         <Quote>
           <div className="project-policy__text">{policy.quote}</div>
           <a className="mono small" href={policy.url}>
-            {policyFile(policy.url)} ↗
+            {post ? 'post on X' : policyFile(policy.url)} ↗
           </a>
         </Quote>
       )}
       <p className="project-note">
-        listed from its AI policy · maintainer? <a href="/maintainers">take it over or remove it</a>
+        {post ? <PostSource post={post} /> : 'listed from its AI policy'} · maintainer?{' '}
+        <a href="/maintainers">take it over or remove it</a>
       </p>
     </div>
+  );
+}
+
+/** Who posted the words a listing stands on, each fact linked to its source. */
+function PostSource({ post }: { post: OpenMaintainerPost }) {
+  return (
+    <>
+      listed from <a href={`https://x.com/${post.xHandle}`}>@{post.xHandle}</a>&apos;s post on X ·{' '}
+      <a href={post.identitySourceUrl}>
+        @{post.xHandle} is @{post.maintainerGitHubLogin} on GitHub
+      </a>{' '}
+      ·{' '}
+      <a href={post.roleSourceUrl}>
+        @{post.maintainerGitHubLogin} is its {post.role}
+      </a>
+    </>
   );
 }
 

@@ -94,7 +94,7 @@ only.
    of issues, a number of minutes, or until their harness stops.
 2. Call `start_session` with `agent`, your harness's name, like
    claude-code, codex, opencode, cursor, or grok, `skillVersion`, which is
-   `0.6.11` for this skill, and `budget`:
+   `0.6.12` for this skill, and `budget`:
    `{"kind": "issues", "count": 2}`, `{"kind": "time", "minutes": 90}`,
    or `{"kind": "until_limit"}`. Keep the `sessionId` it gives for the
    calls after it.
@@ -570,7 +570,7 @@ The repo is made up. The donor says: spend some of my tokens on open
 source, two issues. You start a session:
 
 ```
-start_session {"agent": "claude-code", "skillVersion": "0.6.11", "budget": {"kind": "issues", "count": 2}}
+start_session {"agent": "claude-code", "skillVersion": "0.6.12", "budget": {"kind": "issues", "count": 2}}
 ```
 
 It has no saved interests, so you ask. The donor likes TypeScript and

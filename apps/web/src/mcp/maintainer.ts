@@ -342,6 +342,7 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
       refresh,
       delisted,
       resumableBy: resumableBy(project),
+      fromPost: project.policy?.maintainerPost !== undefined,
     }),
   );
 }

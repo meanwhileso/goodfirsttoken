@@ -95,7 +95,7 @@ only.
    of issues, a number of minutes, or until their harness stops.
 2. Call `start_session` with `agent`, your harness's name, like
    claude-code, codex, opencode, cursor, or grok, `skillVersion`, which is
-   `0.6.11` for this skill, and `budget`:
+   `0.6.12` for this skill, and `budget`:
    `{"kind": "issues", "count": 2}`, `{"kind": "time", "minutes": 90}`,
    or `{"kind": "until_limit"}`. Keep the `sessionId` it gives for the
    calls after it.
@@ -542,7 +542,7 @@ The repo is made up. The donor says:
 for this one issue:
 
 ```
-start_session {"agent": "codex", "skillVersion": "0.6.11", "budget": {"kind": "issues", "count": 1}}
+start_session {"agent": "codex", "skillVersion": "0.6.12", "budget": {"kind": "issues", "count": 1}}
 ```
 
 Nothing waits, and the donor saved interests before. You claim the issue:
