@@ -11,121 +11,153 @@ one from a donor's agent:
   `/request`, or by asking their agent, which calls a new tool,
   `request_repo`.
 
-It changes goal 2 of [v1](v1.md#goals), which has maintainers register
-"entirely from their own agent". The agent path stays, and the form is a
-second way in. The [principles](v1.md#principles) stay as they are: a
-request lists nothing, and a project still needs its maintainers' yes in
-writing and an admin's approval.
+## What it changes in v1
+
+- [Goal 2](v1.md#goals) has maintainers register "entirely from their own
+  agent". The agent path stays, and the form is a second way in.
+- [The principles](v1.md#principles) say the crawler finds projects "among
+  popular GitHub projects", and [section 5](v1.md#5-the-policy-crawler)
+  has "an admin-kept seed list". Requested repos are a second list the
+  crawler reads, whatever their stars, kept by donors' requests.
+
+Consent stays as it is. A request lists nothing. A project still needs its
+maintainers' yes, in their docs or by registering, and an admin's approval.
 
 ## Why
 
-Today the only way in is a maintainer's agent with the MCP server
-connected, or the crawler finding a popular repo whose docs welcome AI
-help. That leaves out two groups:
+Today the only ways in are a maintainer's agent with the MCP server
+connected, and the crawler finding a repo with 1,000 stars or more whose
+docs welcome AI help. That leaves out two groups:
 
 - Maintainers who would say yes but haven't set up an agent with the
   server. `/maintainers` gives them install commands and a prompt, and no
   way to finish on the page.
 - Donors who want to spend tokens on a repo that isn't listed. The give
-  skill tells them it couldn't find the project, and the request ends
-  there. The crawler reads only repos with at least 1,000 stars, so a
-  smaller project a donor cares about is never read at all.
+  skill tells them it couldn't find the project, and stops there. The
+  crawler doesn't read a repo under 1,000 stars.
 
 ## Choices
 
-**A request lists nothing.** It records who asked for which repo, and puts
-the repo on the crawler's seed list, so the crawler reads its docs whatever
-its stars. From there the rules are the ones that exist now:
+**A request lists nothing.** It records who asked for which repo. The
+crawler reads requested repos after the admins' seeds, so a requested
+repo's docs get read whatever its stars. From there the rules are the ones
+that exist now. When the docs welcome AI help, the repo waits in the admin
+queue as a find, and an admin decides. When they don't, it stays out, and
+its maintainers can still register it.
 
-- When the repo's docs welcome AI help, the crawler puts it in the admin
-  queue as a find, and an admin decides.
-- When they don't, it stays out. Its maintainers can still register it.
+**A request says only what the site already shows.** Its status is whether
+the repo has a project page. Crawl results, admin decisions, pending
+registrations, and the do-not-list stay private, as
+[v1's non-goals](v1.md#non-goals-for-v1) and
+[the project page](../how-it-works.md#the-project-page) keep them now.
 
-**Requests stay private.** No public page lists requested repos or their
-counts, and Good First Token writes nothing to GitHub for a request: no
+**Requests stay private.** No public page or feed lists requested repos or
+their counts. Good First Token writes nothing to GitHub for a request: no
 issue, comment, or label. Maintainers are pushing back on unwanted AI pull
-requests, and a public "most wanted" list would push them too. The count
-shows only to admins, and to a maintainer who registers the repo, as "12
-people asked for this repo."
+requests, and a public list of wanted repos would add to that pressure.
+Admins see who asked. A maintainer registering the repo sees how many.
 
-**One rule each, two doors.** The site and the MCP server call the same
-code. The form on `/maintainers` runs `register_project`'s proposal and
-save. `/request`, the homepage form, and `request_repo` run one request
-action. The site's words for each refusal are written for the person
-reading them, as `/me` does for `open_pr`.
+**The site and the agent share each rule.** The form on `/maintainers`
+calls `register_project`'s proposal and save. `/request`, the homepage
+form, and `request_repo` call one request action. The site words each
+refusal for the person reading it, as `/me` does for `open_pr`.
+
+**Reads use the person's own token.** Under
+[Calls to GitHub](../how-it-works.md#calls-to-github), a call made for a
+person runs with their token. A request reads the repo with the requester's
+token. A signed-out visitor's page reads nothing.
 
 **Sign-in comes back to the form.** Sign-in lands on `/me` today. It gains
-a return path, limited to the two new forms, so someone signed out who
-starts a request or a registration finishes it after GitHub sends them
-back.
+a return path, limited to the two new forms.
 
 ## Requesting a repo
 
 **Who.** Anyone signed in, on the site or through their agent. A blocked
-donor is refused with `donor_blocked`.
+donor is refused with `donor_blocked`, and their earlier requests leave
+every count.
 
 **Which repos.** `owner/repo`, a GitHub repo URL, or a Good First Token
 project URL, read as `owner/repo`. The request reads the repo from GitHub
-with the service token, and refuses with `repo_not_eligible`, naming the
-reason, a repo that:
+with the requester's token, and refuses with `repo_not_eligible`, naming
+the reason, a repo that:
 
 - GitHub doesn't show, or shows as private,
 - is archived,
 - has pull requests turned off, or
 - lets only collaborators open pull requests.
 
-These are the checks `register_project` makes, read with the service token
-since the person asking isn't a maintainer. The request is saved under the
-name GitHub gives, and its GitHub repo ID, under
-[Repo IDs](../how-it-works.md#repo-ids).
+A repo GitHub says nothing about on pull requests passes. A request lists
+nothing, and `register_project` and the crawler check again before
+anything is listed.
 
-**What it records.** One request per person per repo, compared without case.
-Asking again changes nothing and answers with the status. A request keeps
-the person's GitHub ID and when they asked. The person can withdraw it,
-from `/me` or with `request_repo` and `withdraw: true`.
+The request keeps the repo by its GitHub repo ID, under
+[Repo IDs](../how-it-works.md#repo-ids), with the name GitHub gives at the
+time. A renamed repo is the same request.
 
-**The seed list.** A new request adds the repo to the crawler's seed list
-as a seed from requests, which names no admin. The seed list's rules apply
-as they are: a repo that is a project already, or that the crawler put in
-the admin queue before, isn't added. The crawler reads admin seeds first,
-then seeds from requests, oldest first, at most 5 of them a run, so
-requests can't crowd out admin seeds or the search.
-
-**Status.** A request's status is worked out when it is read, from what
-Good First Token already keeps. Nothing stores it.
+**Status.** Worked out when read, by the rule
+[the project page](../how-it-works.md#the-project-page) uses for which
+projects have a page. A project matches when its code repo or its issue
+repo has the request's repo ID.
 
 | Status | When | Words for the person |
 |---|---|---|
-| `listed` | An approved project has the repo | "Listed. Find its issues on its project page." |
-| `paused` | The repo's project is paused | "Listed, and paused. It takes no claims right now." |
-| `waiting` | The crawler hasn't read the repo yet, its find waits in the admin queue, or its registration waits for review | "Waiting. Good First Token reads its docs, and an admin decides." |
-| `not_listed` | The crawler read the repo and its docs don't welcome AI help, or an admin rejected its find or its registration | "Not listed. Its docs don't welcome AI help yet. Its maintainers can register it at /maintainers." |
-| `removed` | The repo is on the do-not-list | "Its maintainers asked Good First Token not to list it." |
+| `listed` | A matching project has a page and is approved | "Listed. Find its issues on its project page." |
+| `paused` | A matching project has a page and is paused | "Listed and paused. It takes no claims right now." |
+| `not_listed` | No matching project has a page | "Not listed on Good First Token yet. Its maintainers can register it at /maintainers." |
 
-A repo that is already `listed`, `paused`, or `removed` when someone asks
-records no request, and answers with that status.
+**What it records.** One live request per person per repo. Asking again
+while it's live records nothing and answers with the status. A request
+keeps the person's GitHub ID and when they asked. The person can withdraw
+it any time, from `/me` or with `request_repo` and `withdraw: true`, and
+ask again later.
 
-`not_listed` needs the crawler to keep the tier its rules read for a seed
-from requests, as it keeps a hash of a rejected find. The crawler reads
-the repo again on each pass, so a project whose docs change later can
-still be found.
+- A repo that is `listed` or `paused` when asked records nothing, and
+  answers with the status and the project page.
+- A repo that is `not_listed` records the request, whatever the reason.
+  A repo on the do-not-list records one too, so the answer is the same
+  for every unlisted repo.
+- Every route that records or withdraws is a POST that checks the
+  `Origin`, as `/me`'s forms do. A GET never records.
 
 **Limits**, our choice, so they can change:
 
 | What | Limit |
 |---|---|
-| New requests from one person | 10 a UTC day |
-| Requests one person has waiting | 50 |
-| Seeds from requests the crawler reads | 5 a run, after admin seeds |
-| Requests the admin queue lists on an item | 5 logins, and a count of the rest |
+| New requests from one person, withdrawn ones included | 10 a UTC day |
+| Live requests one person has | 50 |
+| Requested repos the crawler reads | 5 a run, after the admins' seeds |
+| Requesters an admin queue item lists | 5 logins, and a count of the rest |
 
-**The admin queue.** A crawler find or a registration says how many people
-asked for its repo, with the first five logins. Admins weigh it. It
-approves nothing.
+A request over a limit is refused with `rate_limited`, a new refusal, which
+names the limit and when the next request can go in.
 
-**The maintainer.** `register_project`'s proposal, `project_status`, and
-the form on `/maintainers` say how many people asked for the repo. They
-name no one.
+### The crawler
+
+The crawler reads requested repos the way it reads seeds, from their own
+list, after the admins' seeds in each run.
+
+- A repo is on the list while it has at least one live request from a
+  donor who isn't blocked.
+- Each run reads at most 5. Repos never read come first, oldest request
+  first. Then each pass reads the rest again once, longest since read
+  first.
+- The seed list's rules for what it leaves out apply as they are: a repo
+  on the do-not-list, a project already, or a find waiting or approved.
+- `admin_seed_repo` on a requested repo adds an admin seed as it does
+  today. The requested repo stays on its own list.
+
+### The admin queue
+
+A crawler find or a registration lists who asked for its repo: the first 5
+logins and a count of the rest. An admin weighs it with the rest of the
+item. A request approves nothing.
+
+### The maintainer
+
+`register_project`'s proposal answers `requests`, how many donors have a
+live request for the repo. The form on `/maintainers` shows it. Neither
+names anyone. A count can come from accounts made to raise it, so admins
+see the logins and maintainers see a number.
 
 ### `request_repo`
 
@@ -136,14 +168,11 @@ A donor tool, listed for every signed-in agent.
 | `repo` | string | `owner/repo`, a GitHub repo URL, or a Good First Token project URL |
 | `withdraw` | boolean, optional | Withdraws the person's request |
 
-It answers with `repo` as GitHub names it, `status` from the table above,
-`requested` (whether this person has a request on it now), `projectUrl`
-when there is a project page, and `message`, the words in the table.
-Refusals: `donor_blocked`, `repo_not_eligible`, `rate_limited`,
-`invalid_input`.
-
-`rate_limited` is new. It names the limit that was hit and when the next
-request can go in.
+It answers with `repo` as GitHub names it now, `status`, `requested`
+(whether this person has a live request), `projectUrl` when there is a
+page, and `message`, the words in the status table. Refusals:
+`donor_blocked`, `repo_not_eligible`, `rate_limited`, and `invalid_input`.
+When GitHub doesn't answer, it says so the way the other donor tools do.
 
 ### The give skill
 
@@ -157,42 +186,53 @@ owner/repo" reaches the skill.
 
 ## Registering from the site
 
-`/maintainers` gets a form at the top, beside the prompt, for a maintainer
-who'd rather not set up an agent first. It goes to `/maintainers/add`.
+`/maintainers` gets a form at the top, beside the prompt. It goes to
+`/maintainers/add`.
 
-1. **The repo.** The maintainer types `owner/repo`. Signed out, the button
-   reads "Sign in with GitHub to continue", and sign-in comes back to
+1. **The repo.** The maintainer types `owner/repo`. Signed out, the page
+   reads nothing, and its button starts sign-in that comes back to
    `/maintainers/add?repo=owner/repo`.
-2. **The proposal.** `/maintainers/add?repo=owner/repo` runs
-   `register_project` with no settings, with the token from the person's
-   sign-in on the site. A refusal shows in words for the person, with what
-   to do next. Otherwise the page shows the proposed settings as a form,
-   each with the proposal's reason under it, and how many people asked for
-   the repo.
-3. **Saving.** The form sends every setting to `register_project` with
-   settings. A setting that fails its check shows its problem under the
-   field, with the person's values kept. A saved registration shows "Sent
-   for review", whether the `goodfirsttoken` label was created, and a link
-   to the person's projects on `/me`.
+2. **The proposal.** `/maintainers/add?repo=owner/repo` calls
+   `registerProject` with no settings, as the person, with the token from
+   their sign-in on the site, the way `/me` calls `open_pr`. A refusal
+   shows in words for the person, with what to do next. Otherwise the page
+   shows the proposed settings as a form, each with the proposal's reason
+   under it.
+3. **Saving.** The form posts every setting. The site runs the tool's
+   input schema first, as `/me` does, so a malformed value shows under its
+   field. Then it calls `registerProject` with settings. A setting that
+   fails its check shows its problem under the field, with the person's
+   values kept. A saved registration shows "Sent for review", whether the
+   `goodfirsttoken` label was created, and a link to `/me`.
 
-Taking over a policy listing and registering a rejected repo again work on
-the form as they do from the agent, and the page says which is happening
-before the save. A repo that is already a registered project shows its
-status, and says to change its settings from the agent with
-`update_project`. Changing settings on the site is outside this spec.
+The proposal answers `replaces`: `listing` for a policy listing the save
+would take over, `rejected` for a rejected registration it would register
+again, or null. The page says which before the save. A repo that is
+already a registered project shows its status, and says to change its
+settings from the agent with `update_project`. Changing settings on the
+site is outside this spec.
 
-The form is a plain form. It posts to its own route, checks the `Origin` as
-the site's other forms do, and works without JavaScript.
+The tags field shows the proposal's suggested tags, checked, and a text
+input for others. It doesn't list every label in the repo.
+
+The form works without JavaScript, and `/maintainers/add` is sent with
+`Cache-Control: no-store`, as `/me` is.
 
 ## Signing in and coming back
 
-`POST /auth/sign-in` takes an optional `next`. It is used only when it is
-exactly `/request?repo=<owner>/<repo>` or `/maintainers/add?repo=<owner>/<repo>`,
-where owner and repo are GitHub names: letters, digits, hyphens, and for
-the repo also dots and underscores. Anything else, including other paths,
-other hosts, encoded slashes, and backslashes, lands on `/me` as today.
-The state that ties sign-in to the browser carries `next`, so GitHub never
-sees it.
+`POST /auth/sign-in` and `/sign-in` take an optional `next`. It is used
+only when, as sent, it is exactly `/request?repo=<owner>/<repo>` or
+`/maintainers/add?repo=<owner>/<repo>`. Owner is 1 to 39 letters, digits,
+and hyphens. Repo is 1 to 100 letters, digits, hyphens, dots, and
+underscores, and isn't `.` or `..`. Anything else lands on `/me` as today.
+
+- The page that offers sign-in builds `next` from the repo it already
+  checked, with a plain slash, so a homepage form that sent `owner%2Frepo`
+  still works. A `next` with an encoded slash is refused.
+- `next` rides in Better Auth's `callbackURL`, kept in the state row that
+  ties sign-in to the browser. GitHub never sees it.
+- A sign-in that fails goes back to `/sign-in` with the same `next`, so
+  trying again still comes back.
 
 ## Pages
 
@@ -212,13 +252,13 @@ link for maintainers. The prompt stays first.
  open in: claude code · codex · cursor · t3 code      ▸ set up your agent
 
  ┌─ ● request a repo ──────────────────────┐ ┌─ ● maintainers ────────────┐
- │ Want your agent on a repo that isn't     │ │ Get agent help on your     │
- │ listed? Ask for it.                      │ │ issues. You pick the       │
+ │ Name a repo you want your agent to work  │ │ Get agent help on your     │
+ │ on. Good First Token reads its docs.     │ │ issues. You pick the       │
  │ ┌───────────────────────────┐ ┌───────┐ │ │ issues and set the rules.  │
  │ │ owner/repo                │ │request│ │ │                            │
  │ └───────────────────────────┘ └───────┘ │ │ [ add your repo ↗ ]        │
- │ It's listed once its docs welcome AI     │ │                            │
- │ help or its maintainers register it.     │ │                            │
+ │ An admin lists it when its docs welcome  │ │                            │
+ │ AI help or its maintainers register it.  │ │                            │
  └──────────────────────────────────────────┘ └────────────────────────────┘
 
  ● live ──────────── curl -N goodfirsttoken.org/live.txt
@@ -227,16 +267,19 @@ link for maintainers. The prompt stays first.
 - Two cards side by side at 880px and up. Under 880px they stack, request
   first.
 - Each card's title is a `Marker`. The input is mono, with the placeholder
-  `owner/repo` and an accessible label "Repo to request". The button is the
-  design system's `Button`, size `sm`.
+  `owner/repo` and the accessible label "Repo to request". The button is
+  `Button size="sm"`.
 - The form is `GET /request` with `repo`, so the homepage still sets no
   cookie and writes nothing.
 - "add your repo" is a `ButtonLink` with no variant, the white secondary
-  button, linking to `/maintainers#add`.
+  button, linking to `/maintainers`. The `/maintainers` form item changes
+  it to `/maintainers#add`.
 - In "projects asking for help", the head keeps "add yours ↗" and adds
   "request one ↗", which links to `/request`.
 
 ### `/request`
+
+Signed in, with a repo:
 
 ```
  Request a repo
@@ -246,42 +289,49 @@ link for maintainers. The prompt stays first.
  └───────────────────────────┘ └───────┘
 
  sample-owner/tiny-lib                              ★ 312 · pushed 2 days ago
- Good First Token reads its docs. It's listed once its docs welcome
- AI help, or its maintainers register it.
+ Not listed on Good First Token yet. Good First Token reads its docs. An admin
+ lists it when its docs welcome AI help, or when its maintainers register it.
 
- [ Request sample-owner/tiny-lib ]            signed out: [ Sign in with GitHub to request it ]
+ [ Request sample-owner/tiny-lib ]
 
  or ask your agent:
- ┌──────────────────────────────────────────────┐
- │ > Ask Good First Token to add sample-owner/tiny-lib.         ⧉ │
- └──────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────────┐
+ │ > Ask Good First Token to add sample-owner/tiny-lib.       ⧉ │
+ └──────────────────────────────────────────────────────────────┘
 ```
 
-After the request, the page shows a notice styled as `/me`'s
-`.account__notice`, with the status words, and a link to "your requests" on `/me`.
+Signed out, it reads nothing from GitHub and shows the repo as typed:
+
+```
+ Request a repo
+
+ sample-owner/tiny-lib
+ [ Sign in with GitHub to request it ]
+```
 
 | State | What shows |
 |---|---|
 | No `repo` | The input and check button only |
-| `repo` can't be read as owner/repo | "Type a repo as owner/repo, or paste its GitHub link." |
+| `repo` isn't owner/repo or a GitHub link | "Type a repo as owner/repo, or paste its GitHub link." |
 | Not eligible | The reason, like "This repo lets only collaborators open pull requests, so agents can't send PRs to it." No request button |
-| Already listed or paused | The status words and a link to the project page. No request button |
-| On the do-not-list | "Its maintainers asked Good First Token not to list it." No request button |
-| Already requested by this person | The status, and "You asked for it on Nov 3." with Withdraw |
+| `listed` or `paused` | The status words and a link to the project page. No request button |
+| Requested by this person | The status, and "You asked for it on Nov 3." with Withdraw |
 | Rate limited | "You've sent 10 requests today. Try again tomorrow." |
 | GitHub didn't answer | "GitHub didn't answer. Try again in a minute." |
+| Blocked donor | "Your account can't make requests." |
+| Recorded | A notice styled as `/me`'s `.account__notice`, with the status words and a link to "your requests" on `/me` |
 
 ### `/maintainers`
 
-The start section gets the form beside the prompt. At 880px and up, the
-prompt is on the left and the form on the right. Under 880px the form
-comes first, since it needs nothing installed.
+The start section gets the form beside the prompt, with `id="add"`. At
+880px and up, the prompt is on the left and the form on the right. Under
+880px the form comes first, since it needs nothing installed.
 
 ```
  Get agent help on your [issues]
  You pick the issues and set the rules.
 
- ┌─ ● from your agent ───────────────────┐ ┌─ ● on this page ─────────────┐ id="add"
+ ┌─ ● from your agent ───────────────────┐ ┌─ ● on this page ─────────────┐
  │ > Put my repo on Good First Token.  ⧉ │ │ ┌───────────────────┐ ┌────┐ │
  │ open in: claude code · codex · ...    │ │ │ owner/repo        │ │next│ │
  │ already set up? in claude code, run   │ │ └───────────────────┘ └────┘ │
@@ -299,16 +349,16 @@ comes first, since it needs nothing installed.
  12 people asked for this repo on Good First Token.
 
  ● which issues
-   Tags            [x] help wanted   [ ] good first issue   [x] goodfirsttoken
-                   Your labels that mean ready for outside help. goodfirsttoken
-                   is added to your repo with your GitHub account if it's missing.
+   Tags            [x] help wanted   [x] goodfirsttoken   other [            ]
+                   Good First Token adds the goodfirsttoken label to your repo
+                   using your GitHub account if it's missing.
    Excluded tags   [ good first issue                     ]
    Issue repo      [ same as the code repo                ]
 
  ● pull requests
    PR mode         (•) reviewed   ( ) automatic
    Disclosure      trailer [ Assisted-by ]   PR body [ Written with a coding agent... ]
-                   Your CONTRIBUTING.md asks for "Assisted-by:".   ← proposal's reason
+                   Your CONTRIBUTING.md asks for "Assisted-by:".   ← the proposal's reason
    Person-written description  [ ]
    CLA             [ https://                              ]
 
@@ -324,22 +374,23 @@ comes first, since it needs nothing installed.
 ```
 
 - Sections use `Marker` and the rule rows of the current `/maintainers`
-  page. Defaults show as the same `SplitBadge`s.
-- A proposal reason shows under its field in muted small text.
-- A field error shows under its field in `--danger`, and the field
-  gets `aria-invalid` and `aria-describedby`.
-- Takeover of a policy listing shows a notice above the form: "An admin
-  listed this repo from its AI policy. Your settings replace the
-  listing's."
+  page. Defaults show as the same `SplitBadge`s, and ranges come from
+  `@goodfirsttoken/core`.
+- A proposal's reason shows under its field in muted small text.
+- A field error shows under its field in `--danger`, and the field gets
+  `aria-invalid` and `aria-describedby`.
 
 | State | What shows |
 |---|---|
-| Signed out | The repo, and "Sign in with GitHub to continue" |
+| Signed out | The repo, and "Sign in with GitHub to continue". Nothing is read |
 | `not_maintainer` | "GitHub doesn't show you as an admin or maintainer of owner/repo. Ask someone who is to add it." |
 | `repo_not_eligible` | The reason, and what to change on GitHub, like "Turn on pull requests in the repo's settings." |
-| `already_registered` | The project's status, a link to its page, and "Ask your agent to change its settings with update_project." |
+| `already_registered` | The project's status, a link to its page when it has one, and "Ask your agent to change its settings with update_project." |
 | `label_not_created` | GitHub's message, and "Create the goodfirsttoken label on GitHub, or pick another tag." |
-| Saved | "Sent for review." The label, when created. A link to your projects on `/me` |
+| `replaces: listing` | "An admin listed this repo from its AI policy. Your settings replace the listing's." above the form |
+| `replaces: rejected` | "An admin rejected this repo before. Registering again sends it back for review." above the form |
+| GitHub didn't answer, or the token stopped working | As `/me` says it: try again in a minute, or sign out and in again |
+| Saved | "Sent for review." The label, when created. A link to `/me` |
 
 ### `/me`
 
@@ -347,40 +398,47 @@ Two new sections, after the review queue:
 
 ```
  ● your projects
-   sample-owner/tiny-lib     waiting for review     registered Nov 5
-   sample-owner/other        rejected               "No tagged issues yet."  Nov 1
+   sample-owner/tiny-lib     waiting for review                     registered Nov 5
+   sample-owner/other        rejected   "No tagged issues yet."     Nov 1
+                             Register it again ↗
+   sample-owner/app ↗        approved                               Oct 12
 
  ● your requests
-   acme/widgets              waiting                asked Nov 3        [withdraw]
-   acme/gizmo                listed ↗               asked Oct 28
-   acme/legacy               not listed             asked Oct 20       [withdraw]
+   acme/widgets              not listed yet         asked Nov 3     [withdraw]
+   acme/gizmo ↗              listed                 asked Oct 28    [withdraw]
 ```
 
-- Your projects lists the projects the person registered, with their
-  status and reason, as `project_status` gives them. With none, the
-  section doesn't show.
-- Your requests lists the person's requests, newest first, with the status
-  words on hover and on small screens under the row. With none: "No
-  requests yet." and a link to `/request`.
+- Your projects lists the projects whose current "added by" is the person,
+  newest first, with the status and its reason, from the database alone.
+  These are the person's own registrations, so the reasons were written to
+  them. It asks GitHub nothing. With none, the section doesn't show.
+- Your requests lists the person's live requests, newest first, with the
+  status words under each row. With none: "No requests yet." and a link
+  to `/request`.
 
 ## Build items
 
-| # | Item | Blocked by |
+| Issue | Item | Blocked by |
 |---|---|---|
-| 1 | Come back to the form after signing in | This spec |
-| 2 | Record repo requests, and add `request_repo` | This spec |
-| 3 | Request a repo from the homepage and `/request` | 1, 2 |
-| 4 | Show a person's requests on `/me` | 2 |
-| 5 | Offer to request a repo in the give skill | 2 |
-| 6 | Register a repo from `/maintainers` | 1 |
-| 7 | Show a person's projects on `/me` | 6 |
+| [#152](https://github.com/meanwhileso/goodfirsttoken/issues/152) | Come back to the form after signing in | This spec |
+| [#153](https://github.com/meanwhileso/goodfirsttoken/issues/153) | Record repo requests, and add `request_repo` | This spec |
+| [#154](https://github.com/meanwhileso/goodfirsttoken/issues/154) | Read requested repos in the crawler | #153 |
+| [#155](https://github.com/meanwhileso/goodfirsttoken/issues/155) | Show requesters to admins, and the count to maintainers | #153, #159 |
+| [#156](https://github.com/meanwhileso/goodfirsttoken/issues/156) | Request a repo from the homepage and `/request` | #152, #153 |
+| [#157](https://github.com/meanwhileso/goodfirsttoken/issues/157) | Show a person's requests on `/me` | #153 |
+| [#158](https://github.com/meanwhileso/goodfirsttoken/issues/158) | Offer to request a repo in the give skill | #153 |
+| [#159](https://github.com/meanwhileso/goodfirsttoken/issues/159) | Register a repo from `/maintainers` | #152 |
+| [#160](https://github.com/meanwhileso/goodfirsttoken/issues/160) | Show a person's projects on `/me` | This spec |
+
+Each item updates `docs/how-it-works.md` for the rules it builds, and
+`brand/brief-website.md` for the pages it changes.
 
 ## Open questions
 
-1. Should `removed` tell the person that the maintainers asked not to be
-   listed? It saves a donor from asking again, or asking the maintainer.
-   It also says something the do-not-list doesn't say anywhere public
-   today. This spec says it. An admin can change the words.
-2. Should a maintainer change settings on the site too? This spec leaves
+1. Should a maintainer change settings on the site too? This spec leaves
    it to the agent, so the form stays one page. A settings page is the
    next step if maintainers ask for it.
+2. Should a request tell the donor more, like that a repo's maintainers
+   asked to be removed? This spec says nothing beyond the project page,
+   since the do-not-list, crawl results, and admin decisions are private
+   today.
