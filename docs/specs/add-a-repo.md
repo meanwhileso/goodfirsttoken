@@ -13,8 +13,10 @@ one from a donor's agent:
 
 ## What it changes in v1
 
-- [Goal 2](v1.md#goals) has maintainers register "entirely from their own
-  agent". The agent path stays, and the form is a second way in.
+- [Goal 2](v1.md#goals) has maintainers register and manage a project
+  "entirely from their own agent". The agent path stays. The site becomes a
+  second way to do both: register, change settings, pause and resume, read
+  tagged issues now, and ask to be removed.
 - [The principles](v1.md#principles) say the crawler finds projects "among
   popular GitHub projects", and [section 5](v1.md#5-the-policy-crawler)
   has "an admin-kept seed list". Requested repos are a second list the
@@ -156,8 +158,7 @@ item. A request approves nothing.
 
 `register_project`'s proposal answers `requests`, how many donors have a
 live request for the repo. The form on `/maintainers` shows it. Neither
-names anyone. A count can come from accounts made to raise it, so admins
-see the logins and maintainers see a number.
+names anyone.
 
 ### `request_repo`
 
@@ -208,9 +209,8 @@ owner/repo" reaches the skill.
 The proposal answers `replaces`: `listing` for a policy listing the save
 would take over, `rejected` for a rejected registration it would register
 again, or null. The page says which before the save. A repo that is
-already a registered project shows its status, and says to change its
-settings from the agent with `update_project`. Changing settings on the
-site is outside this spec.
+already a registered project shows its status, and links to its settings
+page.
 
 The tags field shows the proposal's suggested tags, checked, and a text
 input for others. It doesn't list every label in the repo.
@@ -218,11 +218,104 @@ input for others. It doesn't list every label in the repo.
 The form works without JavaScript, and `/maintainers/add` is sent with
 `Cache-Control: no-store`, as `/me` is.
 
+## Managing from the site
+
+Every maintainer's tool gets a place on the site, at
+`/<owner>/<repo>/settings`. The page calls the same functions the tools
+call, as the person, with `siteCaller` and the token from their sign-in on
+the site, so each rule in [Managing a project](../how-it-works.md#managing-a-project)
+and [Asking to be removed](../how-it-works.md#asking-to-be-removed) holds as
+it does from the agent.
+
+| On the page | Calls |
+|---|---|
+| The status panel | `project_status` |
+| Save changes | `update_project` |
+| Pause and Resume | `pause_project` |
+| Read issues now | `project_status` with `refresh` |
+| Ask to be removed, and Withdraw | `request_removal` |
+
+- **Who.** The page asks GitHub for the person's role on the repo on every
+  load and every post, as the tools do. Signed out, the page reads nothing
+  and offers sign-in that comes back to it. Someone who isn't an admin or
+  maintainer of the repo sees "GitHub doesn't show you as an admin or
+  maintainer of owner/repo." and nothing else about the project, since a
+  pending or rejected project is private.
+- **Which projects.** Any status: pending, approved, rejected, or paused.
+  A repo that isn't a project links to `/maintainers/add?repo=<owner>/<repo>`.
+- **The settings form** is the one `/maintainers/add` shows, filled with
+  the project's settings. It sends only the settings the person changed
+  from what the page loaded, so two maintainers changing different settings
+  at once both keep their change, as `update_project` promises. A field
+  error shows under its field, with the person's values kept.
+- **A listing made from a policy** shows its settings read-only, with
+  "An admin listed this repo from its AI policy. Take it over to change its
+  settings." and a link to `/maintainers/add?repo=<owner>/<repo>`, since
+  `update_project` refuses it with `listed_from_policy`.
+- **Pause and resume** follow `pause_project`. A pause takes an optional
+  reason. A pause only an admin can lift shows who paused it and no Resume.
+- **Read issues now** follows `refresh`'s rules: at most once every 10
+  minutes a project, and nothing while the sync reads it. The page shows
+  what the read did, as the tool's answer says it.
+- **Asking to be removed** takes a reason, shows a waiting request with who
+  asked and when, and has Withdraw. While a request waits, the page offers
+  to pause the project, as the maintain skill does.
+- **Links.** The project page shows "settings" in its head to everyone,
+  since the settings page checks the role. `/me`'s "your projects" links
+  each row there, and `/maintainers/add` links a registered repo there.
+- Every post checks the `Origin`. The page is sent with
+  `Cache-Control: no-store`, works without JavaScript, and has no markdown
+  version, since agents use the tools.
+
+```
+ sample-owner/tiny-lib · settings                         project page ↗
+
+ ● status
+   approved · registered by @owner on Oct 12
+   14 tagged issues · 3 claims holding a slot · 2 open PRs · 9 merged
+   The sync read every tagged issue 12 minutes ago.      [ read issues now ]
+   [ pause ]  reason (optional) [                                  ]
+
+ ● which issues
+   Tags            [x] help wanted   [x] goodfirsttoken   other [            ]
+   Excluded tags   [ good first issue                     ]
+   Issue repo      [ same as the code repo                ]
+
+ ● pull requests ... ● who and how many ... ● notes for agents
+   (the /maintainers/add form, filled with the current settings)
+
+ [ Save changes ]
+ Saved. Your project page shows the change, with who made it.
+
+ ● remove from Good First Token
+   Ask Good First Token's admins to remove this repo. They remove it, and it
+   stays off until a maintainer registers it again.
+   reason [                                                   ]
+   [ Ask to be removed ]
+```
+
+| State | What shows |
+|---|---|
+| Signed out | "Sign in with GitHub to manage owner/repo." Nothing is read |
+| Not an admin or maintainer | "GitHub doesn't show you as an admin or maintainer of owner/repo." Nothing else |
+| Not a project | "owner/repo isn't on Good First Token." and a link to add it |
+| Pending | "Waiting for review." Settings can change, and the admin sees the change |
+| Rejected | The reason, and a link to register it again |
+| Listed from a policy | Settings read-only, with the takeover link |
+| Paused by its maintainers | Who paused it, the reason, and Resume |
+| Paused by an admin or Good First Token | Who paused it, the reason, and "Only an admin can resume it." |
+| Delisted by the sync | The delisting text `project_status` gives |
+| Read issues now within 10 minutes | "Issues were read 4 minutes ago. Try again in 6 minutes." |
+| A removal request waits | Who asked and when, Withdraw, and the offer to pause |
+| `invalid_settings` | Each problem under its field |
+| `label_not_created` | GitHub's message, and "Create the goodfirsttoken label on GitHub, or pick another tag." |
+| GitHub didn't answer, or the token stopped working | As `/me` says it: try again in a minute, or sign out and in again |
+
 ## Signing in and coming back
 
 `POST /auth/sign-in` and `/sign-in` take an optional `next`. It is used
-only when, as sent, it is exactly `/request?repo=<owner>/<repo>` or
-`/maintainers/add?repo=<owner>/<repo>`. Owner is 1 to 39 letters, digits,
+only when, as sent, it is exactly `/request?repo=<owner>/<repo>`,
+`/maintainers/add?repo=<owner>/<repo>`, or `/<owner>/<repo>/settings`. Owner is 1 to 39 letters, digits,
 and hyphens. Repo is 1 to 100 letters, digits, hyphens, dots, and
 underscores, and isn't `.` or `..`. Anything else lands on `/me` as today.
 
@@ -385,7 +478,7 @@ The start section gets the form beside the prompt, with `id="add"`. At
 | Signed out | The repo, and "Sign in with GitHub to continue". Nothing is read |
 | `not_maintainer` | "GitHub doesn't show you as an admin or maintainer of owner/repo. Ask someone who is to add it." |
 | `repo_not_eligible` | The reason, and what to change on GitHub, like "Turn on pull requests in the repo's settings." |
-| `already_registered` | The project's status, a link to its page when it has one, and "Ask your agent to change its settings with update_project." |
+| `already_registered` | The project's status, a link to its page when it has one, and a link to its settings page |
 | `label_not_created` | GitHub's message, and "Create the goodfirsttoken label on GitHub, or pick another tag." |
 | `replaces: listing` | "An admin listed this repo from its AI policy. Your settings replace the listing's." above the form |
 | `replaces: rejected` | "An admin rejected this repo before. Registering again sends it back for review." above the form |
@@ -401,7 +494,7 @@ Two new sections, after the review queue:
    sample-owner/tiny-lib     waiting for review                     registered Nov 5
    sample-owner/other        rejected   "No tagged issues yet."     Nov 1
                              Register it again ↗
-   sample-owner/app ↗        approved                               Oct 12
+   sample-owner/app ↗        approved                               Oct 12    settings ↗
 
  ● your requests
    acme/widgets              not listed yet         asked Nov 3     [withdraw]
@@ -411,7 +504,8 @@ Two new sections, after the review queue:
 - Your projects lists the projects whose current "added by" is the person,
   newest first, with the status and its reason, from the database alone.
   These are the person's own registrations, so the reasons were written to
-  them. It asks GitHub nothing. With none, the section doesn't show.
+  them. It asks GitHub nothing. Each row links to its settings page. With
+  none, the section doesn't show.
 - Your requests lists the person's live requests, newest first, with the
   status words under each row. With none: "No requests yet." and a link
   to `/request`.
@@ -420,7 +514,7 @@ Two new sections, after the review queue:
 
 | Issue | Item | Blocked by |
 |---|---|---|
-| [#152](https://github.com/meanwhileso/goodfirsttoken/issues/152) | Come back to the form after signing in | This spec |
+| [#152](https://github.com/meanwhileso/goodfirsttoken/issues/152) | Come back to the page after signing in | This spec |
 | [#153](https://github.com/meanwhileso/goodfirsttoken/issues/153) | Record repo requests, and add `request_repo` | This spec |
 | [#154](https://github.com/meanwhileso/goodfirsttoken/issues/154) | Read requested repos in the crawler | #153 |
 | [#155](https://github.com/meanwhileso/goodfirsttoken/issues/155) | Show requesters to admins, and the count to maintainers | #153, #159 |
@@ -429,16 +523,16 @@ Two new sections, after the review queue:
 | [#158](https://github.com/meanwhileso/goodfirsttoken/issues/158) | Offer to request a repo in the give skill | #153 |
 | [#159](https://github.com/meanwhileso/goodfirsttoken/issues/159) | Register a repo from `/maintainers` | #152 |
 | [#160](https://github.com/meanwhileso/goodfirsttoken/issues/160) | Show a person's projects on `/me` | This spec |
+| [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 |
+| [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 |
+| [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 |
 
 Each item updates `docs/how-it-works.md` for the rules it builds, and
 `brand/brief-website.md` for the pages it changes.
 
 ## Open questions
 
-1. Should a maintainer change settings on the site too? This spec leaves
-   it to the agent, so the form stays one page. A settings page is the
-   next step if maintainers ask for it.
-2. Should a request tell the donor more, like that a repo's maintainers
+1. Should a request tell the donor more, like that a repo's maintainers
    asked to be removed? This spec says nothing beyond the project page,
    since the do-not-list, crawl results, and admin decisions are private
    today.

@@ -169,13 +169,13 @@ PR with GitHub reads, and records them. The last item removes the server's write
 ## M10 Adding repos
 
 The [add a repo spec](docs/specs/add-a-repo.md) lets a maintainer register from a form on
-`/maintainers`, and lets a donor ask for a repo from the homepage, from `/request`, or through their
-agent with `request_repo`. A request lists nothing. The crawler reads requested repos after the admins'
-seeds, and the listing rules stay as they are.
+`/maintainers` and manage the project from its settings page, and lets a donor ask for a repo from the
+homepage, from `/request`, or through their agent with `request_repo`. A request lists nothing. The
+crawler reads requested repos after the admins' seeds, and the listing rules stay as they are.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
-| [#152](https://github.com/meanwhileso/goodfirsttoken/issues/152) | Come back to the form after signing in | Nothing | |
+| [#152](https://github.com/meanwhileso/goodfirsttoken/issues/152) | Come back to the page after signing in | Nothing | |
 | [#153](https://github.com/meanwhileso/goodfirsttoken/issues/153) | Record repo requests, and add request_repo | Nothing | |
 | [#154](https://github.com/meanwhileso/goodfirsttoken/issues/154) | Read requested repos in the crawler | #153 | |
 | [#155](https://github.com/meanwhileso/goodfirsttoken/issues/155) | Show requesters to admins, and the count to maintainers | #153, #159 | |
@@ -184,6 +184,9 @@ seeds, and the listing rules stay as they are.
 | [#158](https://github.com/meanwhileso/goodfirsttoken/issues/158) | Offer to request a repo in the give skill | #153 | |
 | [#159](https://github.com/meanwhileso/goodfirsttoken/issues/159) | Register a repo from /maintainers | #152 | |
 | [#160](https://github.com/meanwhileso/goodfirsttoken/issues/160) | Show a person's projects on /me | Nothing | |
+| [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 | |
+| [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 | |
+| [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 | |
 
 ## Dependency graph
 
@@ -266,6 +269,9 @@ flowchart TD
   n158["#158 Requests in the give skill"]:::m10
   n159["#159 Register from /maintainers"]:::m10
   n160["#160 Projects on /me"]:::m10
+  n162["#162 Settings on the site"]:::m10
+  n163["#163 Pause and refresh on the site"]:::m10
+  n164["#164 Removal on the site"]:::m10
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -347,6 +353,10 @@ flowchart TD
   n153 --> n157
   n153 --> n158
   n159 --> n155
+  n152 --> n162
+  n159 --> n162
+  n162 --> n163
+  n162 --> n164
   class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34 done
 ```
 
