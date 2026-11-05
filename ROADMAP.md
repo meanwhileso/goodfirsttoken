@@ -166,9 +166,26 @@ PR with GitHub reads, and records them. The last item removes the server's write
 | [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | [#134](https://github.com/meanwhileso/goodfirsttoken/pull/134) |
 | [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | [#135](https://github.com/meanwhileso/goodfirsttoken/pull/135) |
 
+## M10 Adding repos
+
+The [add a repo spec](docs/specs/add-a-repo.md) lets a maintainer register from a form on
+`/maintainers`, and lets a donor ask for a repo from the homepage, from `/request`, or through their
+agent with `request_repo`. A request lists nothing. It puts the repo on the crawler's seed list, and the
+listing rules stay as they are.
+
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#X1](https://github.com/meanwhileso/goodfirsttoken/issues/X1) | Come back to the form after signing in | Nothing | |
+| [#X2](https://github.com/meanwhileso/goodfirsttoken/issues/X2) | Record repo requests, and add request_repo | Nothing | |
+| [#X3](https://github.com/meanwhileso/goodfirsttoken/issues/X3) | Request a repo from the homepage and /request | #X1, #X2 | |
+| [#X4](https://github.com/meanwhileso/goodfirsttoken/issues/X4) | Show a person's requests on /me | #X2 | |
+| [#X5](https://github.com/meanwhileso/goodfirsttoken/issues/X5) | Offer to request a repo in the give skill | #X2 | |
+| [#X6](https://github.com/meanwhileso/goodfirsttoken/issues/X6) | Register a repo from /maintainers | #X1 | |
+| [#X7](https://github.com/meanwhileso/goodfirsttoken/issues/X7) | Show a person's projects on /me | #X6 | |
+
 ## Dependency graph
 
-An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
+An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits, M10 Adding repos. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
 
 ```mermaid
 flowchart TD
@@ -181,6 +198,7 @@ flowchart TD
   classDef m7 fill:#FFEBE9,stroke:#57606A,color:#0E1116
   classDef m8 fill:#EEF1F4,stroke:#57606A,color:#0E1116
   classDef m9 fill:#E7F5F2,stroke:#57606A,color:#0E1116
+  classDef m10 fill:#F6F8FA,stroke:#57606A,color:#0E1116
   classDef done stroke:#1A7F37,stroke-width:3px
   n3["#3 Workspace, app, and CI"]:::m1
   n4["#4 Core schemas"]:::m1
@@ -237,6 +255,13 @@ flowchart TD
   n127["#127 Compare page links"]:::m9
   n128["#128 Skills push and open"]:::m9
   n129["#129 Remove server writes"]:::m9
+  nX1["#X1 Sign-in return path"]:::m10
+  nX2["#X2 Repo requests"]:::m10
+  nX3["#X3 Request from the homepage"]:::m10
+  nX4["#X4 Requests on /me"]:::m10
+  nX5["#X5 Requests in the give skill"]:::m10
+  nX6["#X6 Register from /maintainers"]:::m10
+  nX7["#X7 Projects on /me"]:::m10
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -310,6 +335,12 @@ flowchart TD
   n127 --> n128
   n128 --> n129
   n33 --> n34
+  nX1 --> nX3
+  nX2 --> nX3
+  nX2 --> nX4
+  nX2 --> nX5
+  nX1 --> nX6
+  nX6 --> nX7
   class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34 done
 ```
 
