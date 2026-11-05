@@ -171,7 +171,8 @@ PR with GitHub reads, and records them. The last item removes the server's write
 The [add a repo spec](docs/specs/add-a-repo.md) lets a maintainer register from a form on
 `/maintainers` and manage the project from its settings page, and lets a donor ask for a repo from the
 homepage, from `/request`, or through their agent with `request_repo`. A request lists nothing. The
-crawler reads requested repos after the admins' seeds, and the listing rules stay as they are.
+crawler reads requested repos after the admins' seeds. A requested repo with 100 stars or more whose
+docs welcome AI help is listed without waiting for an admin, and an admin reviews it afterward.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
@@ -187,6 +188,7 @@ crawler reads requested repos after the admins' seeds, and the listing rules sta
 | [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 | |
 | [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 | |
 | [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 | |
+| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154 | |
 
 ## Dependency graph
 
@@ -272,6 +274,7 @@ flowchart TD
   n162["#162 Settings on the site"]:::m10
   n163["#163 Pause and refresh on the site"]:::m10
   n164["#164 Removal on the site"]:::m10
+  n165["#165 List requested repos"]:::m10
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -357,6 +360,7 @@ flowchart TD
   n159 --> n162
   n162 --> n163
   n162 --> n164
+  n154 --> n165
   class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34 done
 ```
 

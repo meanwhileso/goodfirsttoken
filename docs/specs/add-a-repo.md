@@ -21,9 +21,14 @@ one from a donor's agent:
   popular GitHub projects", and [section 5](v1.md#5-the-policy-crawler)
   has "an admin-kept seed list". Requested repos are a second list the
   crawler reads, whatever their stars, kept by donors' requests.
+- The principles say "a Good First Token admin approves each project before
+  it goes live". A requested repo with 100 stars or more, whose docs
+  welcome AI help, is listed without waiting for an admin, under
+  [Listing a requested repo](#listing-a-requested-repo). An admin reviews
+  it afterward and can pause it.
 
-Consent stays as it is. A request lists nothing. A project still needs its
-maintainers' yes, in their docs or by registering, and an admin's approval.
+Consent stays as it is. A request alone lists nothing. A project still
+needs its maintainers' yes, in their docs or by registering.
 
 ## Why
 
@@ -43,9 +48,11 @@ docs welcome AI help. That leaves out two groups:
 **A request lists nothing.** It records who asked for which repo. The
 crawler reads requested repos after the admins' seeds, so a requested
 repo's docs get read whatever its stars. From there the rules are the ones
-that exist now. When the docs welcome AI help, the repo waits in the admin
-queue as a find, and an admin decides. When they don't, it stays out, and
-its maintainers can still register it.
+that exist now, with one change. When the docs welcome AI help and the
+repo has 100 stars or more, Good First Token lists it at once, and an
+admin reviews it afterward. Under 100 stars, it waits in the admin queue
+as a find, and an admin decides. When the docs don't welcome AI help, it
+stays out, and its maintainers can still register it.
 
 **A request says only what the site already shows.** Its status is whether
 the repo has a project page. Crawl results, admin decisions, pending
@@ -148,11 +155,47 @@ list, after the admins' seeds in each run.
 - `admin_seed_repo` on a requested repo adds an admin seed as it does
   today. The requested repo stays on its own list.
 
+### Listing a requested repo
+
+When the crawler reads a requested repo, its rules read the docs as they
+do for every repo. Good First Token lists it from its policy at once, with
+no admin, when all of these hold:
+
+- The tier is `invites_agents` or `allows_with_conditions`.
+- GitHub shows 100 stars or more when the crawler reads it. The number is
+  our choice, so it can change, and it lives in one constant in core.
+- Every check `admin_add_project` makes passes: public, not archived, pull
+  requests open to everyone, off the do-not-list, no removal request
+  waiting, and not a project already.
+- The rules suggest at least one tag, so the listing has issues to offer.
+- The rules found no canary, and no line that keeps agents from working on
+  their own. Either sends the repo to an admin, since each changes what an
+  agent may do there.
+
+The listing takes the crawler's suggested settings, with PR mode
+`reviewed` whatever the tier, so a person reads each diff until an admin
+or a maintainer chooses `automatic`. Its status change names no person,
+as Good First Token's own pauses do, and says it was listed from a
+request. The project page says "listed from its AI policy", with the
+quote, as for any policy listing, and maintainers can take it over or ask
+to be removed.
+
+The find goes to the admin queue anyway, marked as listed already. An
+admin who approves it leaves the listing as it is. An admin who rejects it
+pauses the project with the admin's reason, which only an admin can lift.
+The weekly re-read under
+[Keeping listings current](../how-it-works.md#keeping-listings-current)
+applies from the first week.
+
+A repo that misses any condition waits in the admin queue as a find, as
+today.
+
 ### The admin queue
 
 A crawler find or a registration lists who asked for its repo: the first 5
 logins and a count of the rest. An admin weighs it with the rest of the
-item. A request approves nothing.
+item. A find listed already says so, under
+[Listing a requested repo](#listing-a-requested-repo).
 
 ### The maintainer
 
@@ -350,7 +393,7 @@ link for maintainers. The prompt stays first.
  │ ┌───────────────────────────┐ ┌───────┐ │ │ issues and set the rules.  │
  │ │ owner/repo                │ │request│ │ │                            │
  │ └───────────────────────────┘ └───────┘ │ │ [ add your repo ↗ ]        │
- │ An admin lists it when its docs welcome  │ │                            │
+ │ It can be listed when its docs welcome   │ │                            │
  │ AI help or its maintainers register it.  │ │                            │
  └──────────────────────────────────────────┘ └────────────────────────────┘
 
@@ -382,8 +425,8 @@ Signed in, with a repo:
  └───────────────────────────┘ └───────┘
 
  sample-owner/tiny-lib                              ★ 312 · pushed 2 days ago
- Not listed on Good First Token yet. Good First Token reads its docs. An admin
- lists it when its docs welcome AI help, or when its maintainers register it.
+ Not listed on Good First Token yet. Good First Token reads its docs. It can
+ be listed when its docs welcome AI help, or when its maintainers register it.
 
  [ Request sample-owner/tiny-lib ]
 
@@ -526,6 +569,7 @@ Two new sections, after the review queue:
 | [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 |
 | [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 |
 | [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 |
+| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154 |
 
 Each item updates `docs/how-it-works.md` for the rules it builds, and
 `brand/brief-website.md` for the pages it changes.
