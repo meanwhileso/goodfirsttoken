@@ -17,6 +17,7 @@
     "typecheck": "wrangler types --strict-vars=false --check && tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.6.0",
     "@cloudflare/workers-oauth-provider": "1.1.0",
     "@goodfirsttoken/core": "workspace:*",
     "@modelcontextprotocol/server": "2.4.0",

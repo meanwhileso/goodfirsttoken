@@ -3253,6 +3253,7 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
 | `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue |
 | `src/crawl/fingerprint.ts` | The hash of what the rules read in a repo's docs, which a weekly read and a crawler find keep |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
+| `src/crawl/reader/` | The model policy reader's core, which nothing in the Worker calls yet: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, and the price table. It makes no network calls |
 
 - **A cron fills a queue, and the queue's consumer reads.** The cron job,
   at 52 minutes past each hour, reads only D1 and sends to the queue. The
@@ -3473,6 +3474,17 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   wording six reviews found, 93, all read as bans, 38 made-up welcoming
   policies written alongside the rules, of which the rules read 4 as bans,
   and 12 held out from the rules, of which they read 9 as bans.
+- **The corpus is shared.** The cases live in `test/crawl/corpus/`, and
+  `rules.test.ts` holds the rules to what they read today. Each case also
+  says what a model reading must find, and cases written for the model
+  join them. `pnpm eval:policy` runs every case three times through
+  `src/crawl/reader/` with the Message Batches API, scores the runs
+  against the pass bar in
+  [the model policy reader spec](specs/model-policy-reader.md#the-pass-bar),
+  and writes a summary to `apps/web/evals/policy-reader.json`. Its full
+  results go to `apps/web/.eval/`, which git ignores, since they hold real repos'
+  text. `apps/web/scripts/ts-resolve.mjs` lets Node run the Worker's
+  TypeScript, whose imports leave out the extension.
 - **The safe forms are whole sentences.** `judge` in `src/crawl/rules.ts`
   reads a sentence that names AI and says no as a ban unless all of it,
   but for a list mark in front, matches one of the forms: fixed words with

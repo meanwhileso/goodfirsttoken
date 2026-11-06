@@ -15,3 +15,5 @@ playwright-report/
 worker-configuration.d.ts
 # Written by scripts/deploy-config.mjs, with deployed names and IDs.
 wrangler.deploy.json
+# Full results of the policy reader's eval, which hold real repos' text.
+.eval/
