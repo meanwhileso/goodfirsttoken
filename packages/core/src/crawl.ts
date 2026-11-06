@@ -189,7 +189,7 @@ export const modelReadingSchema = z.object({
       tags: z.array(labelName).max(MAX_TAGS),
       /** Those and the labels it reads as kept for people, each with its open issue count, for the admin to pick from. */
       suggestedTags: z.array(suggestedTagSchema).max(MAX_TAGS),
-      /** How many labels the model named that the repo doesn't have, or that rest on a statement it wasn't sent, which were dropped. */
+      /** How many labels the model named that it wasn't sent, as the repo doesn't have them, or that rest on a statement it wasn't sent, which were dropped. */
       dropped: count,
     })
     .nullable()

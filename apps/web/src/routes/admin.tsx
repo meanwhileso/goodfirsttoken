@@ -300,7 +300,8 @@ function ModelTags({ item }: { item: QueueItem }) {
       <p className="small muted">the tags it would set: {labels.tags.length === 0 ? 'none' : labels.tags.join(', ')}</p>
       {labels.dropped > 0 && (
         <p className="small muted">
-          {labels.dropped.toLocaleString('en-US')} of the labels the model named aren&apos;t the repo&apos;s, and were dropped.
+          {labels.dropped.toLocaleString('en-US')} of the labels the model named weren&apos;t ones it was sent, or rested on a statement it
+          wasn&apos;t sent, and were dropped.
         </p>
       )}
     </Block>

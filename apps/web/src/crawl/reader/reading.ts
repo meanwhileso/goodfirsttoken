@@ -99,7 +99,7 @@ function readingOf(files: readonly PolicyFile[], output: PolicyOutput): ModelRea
  * model that says bans_or_restricts with no ban line that checks out never
  * makes a find.
  */
-export function findTier(reading: ModelReading): CrawlTier | null {
+export function findTier(reading: Pick<ModelReading, 'tier' | 'modelTier' | 'agree'>): CrawlTier | null {
   if (!LISTING.includes(reading.tier) || !LISTING.includes(reading.modelTier)) return null;
   return reading.agree ? reading.tier : 'allows_with_conditions';
 }

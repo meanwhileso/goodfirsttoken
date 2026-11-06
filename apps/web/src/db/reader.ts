@@ -31,6 +31,8 @@ export interface KeptReading {
   reading: ModelReading;
   fingerprint: string;
   readAt: number;
+  /** The model's policy reading as JSON, which a label check reads its statements from, or null for a reading kept before. */
+  output: unknown;
 }
 
 interface ReadingRow {
@@ -40,6 +42,7 @@ interface ReadingRow {
   reading: string;
   fingerprint: string;
   read_at: number;
+  output: string | null;
 }
 
 function toKept(row: ReadingRow): KeptReading {
@@ -50,6 +53,7 @@ function toKept(row: ReadingRow): KeptReading {
     reading: mustParse(modelReadingSchema, fromJson(row.reading), 'reading'),
     fingerprint: mustParse(policyFingerprintSchema, row.fingerprint, 'fingerprint'),
     readAt: row.read_at,
+    output: row.output === null ? null : fromJson(row.output),
   };
 }
 
@@ -72,14 +76,14 @@ export async function getModelReadingOf(db: D1Database, repo: string, hash: Docs
 /** Keeps the model's reading of the repo's docs, in place of the last one. */
 export async function keepModelReading(
   db: D1Database,
-  read: { repo: string; reading: ModelReading; fingerprint: string },
+  read: { repo: string; reading: ModelReading; fingerprint: string; output?: unknown },
   now: number,
 ): Promise<void> {
   const reading = mustParse(modelReadingSchema, read.reading, 'reading');
   await db
     .prepare(
-      `INSERT INTO model_readings (repo, docs_hash, reader_version, reading, fingerprint, read_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-       ON CONFLICT (repo) DO UPDATE SET docs_hash = ?2, reader_version = ?3, reading = ?4, fingerprint = ?5, read_at = ?6`,
+      `INSERT INTO model_readings (repo, docs_hash, reader_version, reading, fingerprint, read_at, output) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT (repo) DO UPDATE SET docs_hash = ?2, reader_version = ?3, reading = ?4, fingerprint = ?5, read_at = ?6, output = ?7`,
     )
     .bind(
       mustParse(repoName, read.repo, 'repo'),
@@ -88,6 +92,7 @@ export async function keepModelReading(
       JSON.stringify(reading),
       mustParse(policyFingerprintSchema, read.fingerprint, 'fingerprint'),
       checkTime(now),
+      read.output === undefined || read.output === null ? null : JSON.stringify(read.output),
     )
     .run();
 }
@@ -129,9 +134,11 @@ export interface NewPending {
   vouch: string | null;
   labels: RepoLabel[];
   files: readonly PolicyFile[];
+  /** A label check staged on its own, for docs whose kept reading would make a find, with that reading's output. */
+  labelsFor?: { readingOutput: unknown };
 }
 
-export interface Pending extends Omit<NewPending, 'files'> {
+export interface Pending extends Omit<NewPending, 'files' | 'labelsFor'> {
   id: string;
   stagedAt: number;
   batchId: string | null;
@@ -236,8 +243,8 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
     db.prepare('UPDATE model_pending SET replaced = 1 WHERE repo = ?1').bind(repo),
     db
       .prepare(
-        `INSERT INTO model_pending (id, repo, purpose, share, docs_hash, rules_tier, commit_sha, branch, facts, vouch, labels, staged_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+        `INSERT INTO model_pending (id, repo, purpose, share, docs_hash, rules_tier, commit_sha, branch, facts, vouch, labels, staged_at, step, reading_output)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
       )
       .bind(
         id,
@@ -252,6 +259,8 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
         pending.vouch,
         JSON.stringify(labels),
         checkTime(now),
+        pending.labelsFor === undefined ? 'reading' : 'labels',
+        pending.labelsFor === undefined ? null : JSON.stringify(pending.labelsFor.readingOutput),
       ),
     ...pending.files.map((file, position) =>
       db

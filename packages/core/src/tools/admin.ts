@@ -461,7 +461,7 @@ function describeModelTags(labels: NonNullable<ModelReading['labels']>): string 
   const dropped =
     labels.dropped === 0
       ? ''
-      : ` ${plural(labels.dropped, 'label')} the model named ${labels.dropped === 1 ? "isn't" : "aren't"} the repo's, or ${labels.dropped === 1 ? 'rests' : 'rest'} on a statement it wasn't sent, and ${labels.dropped === 1 ? 'was' : 'were'} dropped.`;
+      : ` ${plural(labels.dropped, 'label')} the model named ${labels.dropped === 1 ? "wasn't one" : "weren't ones"} it was sent, or rested on a statement it wasn't sent, and ${labels.dropped === 1 ? 'was' : 'were'} dropped.`;
   return `the model reader's suggested tags from the same labels, in shadow, each name in quotes as the repo spells it: ${suggested}. The tags it would set: ${names(labels.tags)}.${dropped}`;
 }
 

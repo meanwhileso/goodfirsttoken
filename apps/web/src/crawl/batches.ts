@@ -283,15 +283,16 @@ async function noVerdict(deps: BatchDeps, run: BatchRun, pending: Pending, why: 
  * Keeps a reading that counted, and what it would do. Returns true when it
  * is a seed's reading that would make a find, so its label check follows.
  */
-async function counted(deps: BatchDeps, run: BatchRun, pending: Pending, reading: ModelReading): Promise<boolean> {
+async function counted(deps: BatchDeps, run: BatchRun, pending: Pending, reading: ModelReading, output: unknown): Promise<boolean> {
   const files = await stagedFiles(deps.db, pending.id);
   const fingerprint = await readerFingerprint(files, reading, pending.vouch);
   const stored = storedReading(reading, pending.docsHash);
-  if (new TextEncoder().encode(JSON.stringify(stored)).length > MAX_KEPT_BYTES) {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+  if (bytes(stored) + bytes(output) > MAX_KEPT_BYTES) {
     await noVerdict(deps, run, pending, 'a reading too large to keep');
     return false;
   }
-  await keepModelReading(deps.db, { repo: pending.repo, reading: stored, fingerprint }, deps.now());
+  await keepModelReading(deps.db, { repo: pending.repo, reading: stored, fingerprint, output }, deps.now());
   run.read += 1;
   countAgreement(run, pending.rulesTier, reading);
   if (pending.purpose === 'seed') return findTier(reading) !== null;
@@ -337,7 +338,8 @@ async function labelCheckOf(deps: BatchDeps, pending: Pending): Promise<LabelChe
  * doesn't have, keeps good first issue out of the tags, and keeps an only
  * label the only tag (readerSettings), then keeps the tags and suggested
  * tags on the kept reading of the same docs. With no verdict the reading
- * stays without them. Either way the find is written then.
+ * stays without them. Either way the find is written then, by the caller,
+ * once the check is settled.
  */
 async function collectLabels(deps: BatchDeps, run: BatchRun, pending: Pending, message: Anthropic.Messages.Message): Promise<void> {
   const json = jsonOf(message);
@@ -355,7 +357,6 @@ async function collectLabels(deps: BatchDeps, run: BatchRun, pending: Pending, m
       else run.replaced += 1;
     }
   }
-  findWritten(run, pending);
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +384,7 @@ async function collectOne(deps: BatchDeps, run: BatchRun, pending: Pending, resu
       if (pending.step === 'labels') {
         await collectLabels(deps, run, pending, result.message);
         await settlePending(deps.db, pending, cost, { retry: false });
+        findWritten(run, pending);
         return;
       }
       const json = jsonOf(result.message);
@@ -391,7 +393,7 @@ async function collectOne(deps: BatchDeps, run: BatchRun, pending: Pending, resu
       else {
         const files = await stagedFiles(deps.db, pending.id);
         const read = readPolicyOutput(files, json.json);
-        if (read.ok) labelsNext = await counted(deps, run, pending, read.reading);
+        if (read.ok) labelsNext = await counted(deps, run, pending, read.reading, json.json);
         else await noVerdict(deps, run, pending, `output that fails the checks (${read.reason})`);
       }
       // A reading that would make a find waits for its label check, in the next batch.
@@ -405,6 +407,8 @@ async function collectOne(deps: BatchDeps, run: BatchRun, pending: Pending, resu
       if (type === 'invalid_request_error' || type === 'not_found_error') {
         await noVerdict(deps, run, pending, `an error in the result, ${type}`);
         await settlePending(deps.db, pending, 0, { retry: false });
+        // A label check that won't run again: the find is written without the model's suggested tags.
+        if (pending.step === 'labels') findWritten(run, pending);
       } else {
         run.retried += 1;
         await settlePending(deps.db, pending, 0, { retry: true });
@@ -443,13 +447,21 @@ async function collect(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<
         } catch (error) {
           // One result the Worker fails on can't hold back the rest, or every later run.
           if (error instanceof Anthropic.APIError) throw error;
-          console.error(`The policy reader couldn't keep its reading of ${pending.repo}, so it is no verdict.`, error);
-          run.noVerdict['an error keeping it'] = (run.noVerdict['an error keeping it'] ?? 0) + 1;
+          const labels = pending.step === 'labels';
+          console.error(
+            labels
+              ? `The policy reader couldn't keep its label check of ${pending.repo}, so its labels are no verdict.`
+              : `The policy reader couldn't keep its reading of ${pending.repo}, so it is no verdict.`,
+            error,
+          );
+          const key = labels ? 'labels: an error keeping it' : 'an error keeping it';
+          run.noVerdict[key] = (run.noVerdict[key] ?? 0) + 1;
           try {
             await settlePending(deps.db, pending, 0, { retry: false });
           } catch (settling) {
-            console.error(`The policy reader couldn't drop its reading of ${pending.repo}.`, settling);
+            console.error(`The policy reader couldn't drop its ${labels ? 'label check' : 'reading'} of ${pending.repo}.`, settling);
           }
+          if (labels) findWritten(run, pending);
         }
       }
       for (const pending of held.values()) {

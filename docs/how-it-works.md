@@ -3721,8 +3721,9 @@ project's files as before, and the rules read them. Then, for the model:
   queue can show the model's reading of the same docs.
 - **The same docs cost nothing.** The last reading of each repo is kept
   with its docs hash and the reader version, which names the model, the
-  prompt, and the output schema. When both match, the model isn't called
-  again.
+  prompt, and the output schema. When both match, the model doesn't read
+  them again. A seed's reading that would make a find still gets a fresh
+  label check, under [The label check](#the-model-policy-reader).
 - **A weekly read of the same docs decides nothing.** When the docs hash
   and reader version are the last weekly read's, the model's half does
   nothing more.
@@ -3769,8 +3770,10 @@ lines. The model says which labels mean an issue is ready for outside
 help, which are kept for people, and which are for agents only. Then the
 Worker:
 
-- drops a name that isn't one of the repo's labels, compared without case,
-  and one whose evidence is a statement it didn't send;
+- drops a name that isn't one of the labels it sent, compared without
+  case, and one whose evidence is a statement it didn't send. Every label
+  a kept statement names is sent, so a name the repo doesn't have is
+  dropped;
 - makes the tags from the labels that mean ready for outside help or are
   for agents only, leaving out excluded ones, up to 20;
 - keeps `good first issue` out of the tags and in the suggested tags, even
@@ -3784,7 +3787,12 @@ In shadow that means its tags and suggested tags are kept on its reading of
 the same docs, and the log names a seed the model would have found that
 the rules didn't. A weekly read makes no label check, since a policy
 change shows no suggested tags. A label check that comes back after newer
-docs were staged for the repo is dropped.
+docs were staged for the repo is dropped. A seed read again with docs the
+model read before gets no new reading, but when that reading would make a
+find, it gets a fresh label check, from the model's reading kept beside
+it, unless the seed stays out. A label check that errors as an invalid
+request, or that the Worker fails to keep, is no verdict on the labels,
+and the find is written without the model's suggested tags.
 
 **The budget.** The model may spend `MODEL_DAILY_BUDGET_USD` in a UTC day.
 Before it sends a request, the Worker reserves the most it could cost: its

@@ -11,3 +11,8 @@
 -- description too.
 ALTER TABLE model_pending ADD COLUMN step TEXT NOT NULL DEFAULT 'reading' CHECK (step IN ('reading', 'labels'));
 ALTER TABLE model_pending ADD COLUMN reading_output TEXT CHECK (reading_output IS NULL OR json_valid(reading_output));
+
+-- The model's policy reading as JSON, beside the kept reading, so a seed
+-- read again with the same docs gets a fresh label check from it, with no
+-- new reading. Null for a reading kept before.
+ALTER TABLE model_readings ADD COLUMN output TEXT CHECK (output IS NULL OR json_valid(output));

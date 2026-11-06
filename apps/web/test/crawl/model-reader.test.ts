@@ -17,6 +17,7 @@ import {
   getModelRead,
   getModelReading,
   getProject,
+  keepModelLabels,
   listCandidates,
   listPending,
   listPolicyChanges,
@@ -1041,18 +1042,38 @@ describe('in shadow, the label check', () => {
     expect(sentNames.at(-1)).toBe('zz agents only');
   });
 
-  test("spends from the seeds' share", async () => {
-    await crawlSeed(INVITES);
-    await sendAndCollect();
+  test("spends from the seeds' share: the reading's cost settles when the check is sent, and the check's when it comes back", async () => {
     const day = new Date(clock).toISOString().slice(0, 10);
+    const spend = async () => (await db.prepare('SELECT share, spent_usd, reserved_usd FROM model_spend WHERE day = ?').bind(day).all()).results;
+    await crawlSeed(INVITES);
+    await hourly();
+    const reading = (await listPending(db))[0];
+    clock += HOUR;
+    await hourly();
+    const check = (await listPending(db))[0];
+    const afterReading = await spend();
+    clock += HOUR;
+    await hourly();
 
-    const use = await dayUse(db, day);
-    const [pending] = await listPending(db);
-
-    expect(pending).toMatchObject({ step: 'labels', share: 'seeds' });
-    expect(pending?.reservedUsd).toBeGreaterThan(0);
-    expect(use.weekly).toBe(0);
-    expect(use.seeds).toBeGreaterThan(pending?.reservedUsd ?? 0);
+    // What the fake bills each call, at batch prices.
+    const costs = anthropic.requests.map((r) => r.kind);
+    expect(costs).toEqual(['reading', 'labels']);
+    expect(check).toMatchObject({ step: 'labels', share: 'seeds' });
+    expect(reading?.reservedUsd).toBeGreaterThan(0);
+    expect(check?.reservedUsd).toBeGreaterThan(0);
+    expect(check?.reservedUsd).not.toBe(reading?.reservedUsd);
+    // Only the check is reserved, and the reading's cost is spent.
+    expect(afterReading).toHaveLength(1);
+    expect(afterReading[0]).toMatchObject({ share: 'seeds' });
+    expect(afterReading[0]?.reserved_usd).toBeCloseTo(check?.reservedUsd ?? -1, 10);
+    const readingCost = afterReading[0]?.spent_usd as number;
+    expect(readingCost).toBeGreaterThan(0);
+    // Then nothing is reserved, and both costs are spent.
+    const after = await spend();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.reserved_usd).toBe(0);
+    expect(after[0]?.spent_usd as number).toBeGreaterThan(readingCost);
+    expect(await dayUse(db, day)).toMatchObject({ weekly: 0, requests: 0, register: 0 });
   });
 
   test('with no verdict keeps the reading without suggested tags, and the log says why', async () => {
@@ -1064,6 +1085,60 @@ describe('in shadow, the label check', () => {
     expect(await listPending(db)).toEqual([]);
     expect(await getModelReading(db, INVITES)).toMatchObject({ reading: { tier: 'invites_agents', labels: null } });
     expect(logged.some((line) => line.includes(`The policy reader gave ${INVITES}'s labels no verdict: stop reason refusal.`))).toBe(true);
+  });
+
+  test('that errored as an invalid request is no verdict, and the find is still written', async () => {
+    welcomeOn(BANS_AI);
+    anthropic.answer({ kind: 'labels' }, { error: 'invalid_request_error' });
+
+    const { third } = await readSeed(BANS_AI);
+
+    expect(third?.noVerdict).toEqual({ 'labels: an error in the result, invalid_request_error': 1 });
+    expect(third?.wouldFind).toEqual([BANS_AI]);
+    expect(await listPending(db)).toEqual([]);
+  });
+
+  test('that the Worker fails to keep is no verdict on the labels, and the find is still written', async () => {
+    welcomeOn(BANS_AI);
+    await crawlSeed(BANS_AI);
+    await sendAndCollect();
+    // A kept reading the Worker can't read back, so keeping the tags on it throws.
+    clock += HOUR;
+    await db.prepare("UPDATE model_readings SET reading = '{}' WHERE repo = ?").bind(BANS_AI).run();
+
+    const run = await hourly();
+
+    expect(run?.noVerdict).toEqual({ 'labels: an error keeping it': 1 });
+    expect(run?.wouldFind).toEqual([BANS_AI]);
+    expect(logged.some((line) => line.includes(`The policy reader couldn't keep its label check of ${BANS_AI}, so its labels are no verdict.`))).toBe(true);
+    expect(await listPending(db)).toEqual([]);
+  });
+
+  test('read again with the same docs, a reading that would make a find gets a fresh label check and no new reading', async () => {
+    welcomeOn(BANS_AI);
+    anthropic.answer({ kind: 'labels' }, { stop: 'refusal' });
+    await readSeed(BANS_AI);
+    expect((await getModelReading(db, BANS_AI))?.reading.labels).toBeNull();
+
+    const again = await consume([BANS_AI]);
+    const { second } = await sendAndCollect();
+
+    expect(again.reader).toMatchObject({ staged: 1, cacheHits: 1 });
+    expect(kinds()).toEqual(['reading', 'labels', 'labels']);
+    expect(second).toMatchObject({ labelsRead: 1 });
+    expect((await getModelReading(db, BANS_AI))?.reading.labels?.tags).toEqual(['help wanted']);
+    expect(await listPending(db)).toEqual([]);
+  });
+
+  test("keeps its tags only on the kept reading of the same docs", async () => {
+    await readSeed(INVITES);
+    const kept = await getModelReading(db, INVITES);
+    const labels = { tags: ['bug'], suggestedTags: [{ name: 'bug', openIssues: 0 }], dropped: 0 };
+
+    expect(await keepModelLabels(db, INVITES, `docs-v1:${'0'.repeat(64)}`, labels)).toBe(false);
+    expect((await getModelReading(db, INVITES))?.reading.labels?.tags).toEqual(['agent ready']);
+    expect(await keepModelLabels(db, INVITES, kept?.docsHash ?? '', labels)).toBe(true);
+    expect((await getModelReading(db, INVITES))?.reading.labels?.tags).toEqual(['bug']);
   });
 
   test('that expired goes in a later batch', async () => {
