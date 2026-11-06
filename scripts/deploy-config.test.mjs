@@ -23,6 +23,7 @@ import {
   settingsFor,
   writeDeployConfig,
 } from './deploy-config.mjs';
+import { LOCAL_URL as ANTHROPIC_FAKE_URL } from '../packages/anthropic-fake/src/local.ts';
 
 // Sample IDs are built at run time, so no ID-shaped string sits in this file
 // for the leak scan to flag.
@@ -433,6 +434,19 @@ test("a deploy's Anthropic URL comes from the setting or is empty, and never fro
   assert.equal(set.vars.ANTHROPIC_API_URL, 'https://anthropic-proxy.example');
 });
 
+test('the Anthropic URL is the base the SDK adds /v1 to, so one that ends in /v1 is refused', () => {
+  const real = realLocal();
+  for (const bad of ['https://api.anthropic.com/v1', 'https://proxy.example/anthropic/v1/']) {
+    assert.throws(() => deployConfig(real, 'production', { ...withLimiter, ANTHROPIC_API_URL: bad }), /ANTHROPIC_API_URL .*\/v1/, bad);
+  }
+  const { config } = deployConfig(real, 'production', { ...withLimiter, ANTHROPIC_API_URL: 'https://proxy.example/anthropic' });
+  assert.equal(config.vars.ANTHROPIC_API_URL, 'https://proxy.example/anthropic');
+});
+
+test("the local config points the Worker at the Anthropic fake's own port", () => {
+  assert.equal(realLocal().vars.ANTHROPIC_API_URL, ANTHROPIC_FAKE_URL);
+});
+
 test("the policy reader's mode is rules, shadow, or model, and empty means rules", () => {
   const real = realLocal();
   assert.equal(deployConfig(real, 'production', withLimiter).config.vars.POLICY_READER, '');
@@ -467,7 +481,7 @@ test('the Anthropic key is not a required secret, so a deploy goes ahead without
   assert.equal(JSON.stringify(config.vars).includes('ANTHROPIC_API_KEY'), false, 'the key is no variable either');
 });
 
-test('a GitHub or Anthropic URL setting has to be an https URL, so a deploy never points at a machine of its own', () => {
+test('a GitHub or Anthropic URL setting has to be an https URL, so a deploy never calls them in plain http', () => {
   const withGitHub = { ...local, vars: { ...local.vars, GH_API_URL: '', GH_WEB_URL: '', ANTHROPIC_API_URL: '' } };
 
   const { config } = deployConfig(withGitHub, 'production', {

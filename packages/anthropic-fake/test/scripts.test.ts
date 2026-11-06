@@ -87,6 +87,19 @@ test('a test can make a call that never answers, which ends when its caller give
   expect(fake.calls).toEqual([expect.objectContaining({ endpoint: 'messages', status: 0 })]);
 });
 
+test('a streamed call that never answers ends when its caller gives up', async () => {
+  const fake = createAnthropicFake();
+  fake.answer({ via: 'messages' }, { hang: true });
+  const sdk = new Anthropic({ apiKey: 'k', baseURL: fake.url, fetch: fake.fetch, maxRetries: 0, timeout: 200 });
+
+  const error = await sdk.messages
+    .stream(labelRequest(['help wanted']))
+    .finalMessage()
+    .catch((e: unknown) => e);
+
+  expect(error).toBeInstanceOf(Anthropic.APIConnectionTimeoutError);
+});
+
 test.each([
   [400, Anthropic.BadRequestError],
   [401, Anthropic.AuthenticationError],

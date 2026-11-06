@@ -10,6 +10,7 @@ export const ERROR_STATUS = {
   request_too_large: 413,
   rate_limit_error: 429,
   api_error: 500,
+  timeout_error: 504,
   overloaded_error: 529,
 } as const;
 
@@ -79,6 +80,8 @@ function defaultMessage(type: ErrorType): string {
       return 'Request exceeds the maximum allowed number of bytes.';
     case 'api_error':
       return 'Internal server error';
+    case 'timeout_error':
+      return 'Request timed out';
     case 'invalid_request_error':
       return 'Invalid request';
   }

@@ -48,16 +48,20 @@ test('a request of the wrong shape in a batch errors as an invalid request, and 
       { custom_id: 'good', params: good },
       { custom_id: 'fallback', params: { ...good, fallbacks: 'default' } as typeof good },
       { custom_id: 'prefill', params: { ...good, messages: [...good.messages, { role: 'assistant', content: '{' }] } },
+      { custom_id: 'streamed', params: { ...good, stream: true } as unknown as typeof good },
     ],
   });
   const results = new Map((await resultsOf(sdk, batch.id)).map((result) => [result.custom_id, result.result]));
 
-  expect(batch.request_counts).toMatchObject({ succeeded: 1, errored: 2 });
+  expect(batch.request_counts).toMatchObject({ succeeded: 1, errored: 3 });
   expect(results.get('good')?.type).toBe('succeeded');
   const fallback = results.get('fallback');
   expect(fallback).toMatchObject({ type: 'errored', error: { type: 'error', error: { type: 'invalid_request_error' } } });
   expect(fallback?.type === 'errored' ? fallback.error.error.message : '').toMatch(/not supported in the Message Batches API/);
   expect(results.get('prefill')).toMatchObject({ type: 'errored', error: { error: { type: 'invalid_request_error' } } });
+  expect(results.get('streamed')).toMatchObject({ type: 'errored', error: { error: { type: 'invalid_request_error' } } });
+  const fallbackRequestId = fallback?.type === 'errored' ? fallback.error.request_id : null;
+  expect(fallbackRequestId).toMatch(/^req_/);
 });
 
 test('a held batch stays in progress, has no results yet, and ends when the test says', async () => {

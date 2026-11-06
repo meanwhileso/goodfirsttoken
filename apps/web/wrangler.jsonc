@@ -36,9 +36,9 @@
     // starts (packages/anthropic-fake). A deploy that leaves it empty calls
     // https://api.anthropic.com (src/anthropic.ts).
     "ANTHROPIC_API_URL": "http://127.0.0.1:8945",
-    // How the policy crawler reads a repo's AI policy: rules, shadow, or
-    // model, as docs/specs/model-policy-reader.md describes. Empty means
-    // rules.
+    // How the policy crawler will read a repo's AI policy once the model
+    // reader ships: rules, shadow, or model, as
+    // docs/specs/model-policy-reader.md describes. Empty means rules.
     "POLICY_READER": "rules",
     // The most the model may spend in a UTC day, in US dollars. Empty means
     // 0, which reads nothing with the model. The fake charges nothing.
@@ -52,7 +52,7 @@
   // the jobs below read public GitHub data with. Without it they read
   // nothing. ANTHROPIC_API_KEY is optional, so it isn't listed here: a
   // deploy puts it when the environment has it (scripts/deploy.mjs), and
-  // src/anthropic.ts declares it.
+  // src/optional-secrets.d.ts declares it.
   "secrets": { "required": ["OAUTH_CLIENT_SECRET", "AUTH_SECRET", "GH_SERVICE_TOKEN"] },
   // The cron triggers. Each names one job in src/sync/scheduled.ts: the
   // tagged-issue sync every 15 minutes, the PR job twice an hour, apart

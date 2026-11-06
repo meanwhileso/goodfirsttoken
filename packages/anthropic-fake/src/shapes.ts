@@ -11,20 +11,22 @@
 //     followed by an assistant message.
 //   - Every object in an output_config.format schema sets
 //     additionalProperties to false.
-//   - The Batches API takes no `fallbacks`.
+//   - At most 4 cache_control breakpoints.
+//   - The Batches API takes no `fallbacks`, and no `stream`.
 //
 // The reader's own rules, from docs/specs/model-policy-reader.md, which a
 // message names as the fake's:
 //   - Every request names the model, claude-opus-5-5.
 //   - Every request sets output_config.effort, since Opus 5.5 defaults to
 //     medium, and output_config.format, since the reader reads only JSON.
-//   - No tools, no `fallbacks`, and no streaming.
+//   - No tools and no `fallbacks`.
 
 import { ERROR_STATUS, type ApiError } from './http.ts';
 
 export const MODEL = 'claude-opus-5-5';
 export const MAX_OUTPUT_TOKENS = 128_000;
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+const MAX_BREAKPOINTS = 4;
 
 // The API versions the fake takes in the anthropic-version header: the
 // first, and the one the SDK sends from 1.0.
@@ -181,7 +183,8 @@ export function checkRequest(body: unknown, { inBatch = false }: { inBatch?: boo
       return invalid('thinking.type.enabled is not supported for this model. Use thinking.type.adaptive and output_config.effort to control thinking.');
     }
     if (thinking.type !== 'adaptive') return invalid("thinking.type: Input should be 'adaptive'");
-    if (thinking.display !== undefined && (typeof thinking.display !== 'string' || !['summarized', 'omitted', 'updates'].includes(thinking.display))) {
+    // "updates" needs a beta the reader doesn't send.
+    if (thinking.display !== undefined && (typeof thinking.display !== 'string' || !['summarized', 'omitted'].includes(thinking.display))) {
       return invalid("thinking.display: Input should be 'summarized' or 'omitted'");
     }
   }
@@ -198,6 +201,9 @@ export function checkRequest(body: unknown, { inBatch = false }: { inBatch?: boo
 
   const cache = checkCacheControl(body.cache_control, 'cache_control');
   if (cache) return cache;
+
+  if (body.stream !== undefined && typeof body.stream !== 'boolean') return invalid('stream: Input should be a valid boolean');
+  if (inBatch && body.stream === true) return invalid('stream: is not supported in the Message Batches API.');
 
   if (body.system !== undefined) {
     const system = checkContent(body.system, 'system');
@@ -248,11 +254,20 @@ export function checkRequest(body: unknown, { inBatch = false }: { inBatch?: boo
     if (schema) return schema;
   }
 
+  const blocks: unknown[] = [body];
+  if (Array.isArray(body.system)) blocks.push(...(body.system as unknown[]));
+  for (const message of messages as Record<string, unknown>[]) {
+    if (Array.isArray(message.content)) blocks.push(...(message.content as unknown[]));
+  }
+  const breakpoints = blocks.filter((block) => isObject(block) && block.cache_control !== undefined).length;
+  if (breakpoints > MAX_BREAKPOINTS) {
+    return invalid(`A maximum of ${String(MAX_BREAKPOINTS)} blocks with cache_control may be provided. Found ${String(breakpoints)}.`);
+  }
+
   // The rest are the reader's, not the API's.
   if (effort === undefined) return ours('every request sets output_config.effort, since Opus 5.5 defaults to medium.');
   if (format === undefined) return ours('every request asks for structured output with output_config.format.');
   if (body.tools !== undefined) return ours('the reader gives the model no tools.');
-  if (body.stream === true) return ours('the reader does not stream, and the fake answers whole messages only.');
 
   return null;
 }

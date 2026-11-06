@@ -1548,7 +1548,7 @@ Anthropic API itself when it is empty.
 | `ANTHROPIC_API_URL` | Variable: the Anthropic API. The Anthropic fake locally. Empty means `https://api.anthropic.com` | Later, by the policy reader, through `src/anthropic.ts` |
 | `POLICY_READER` | Variable: `rules`, `shadow`, or `model`. Empty means `rules` | Later, by the policy reader, through `src/anthropic.ts` |
 | `MODEL_DAILY_BUDGET_USD` | Variable: the most the model may spend in a UTC day, in US dollars. Empty means 0 | Later, by the policy reader, through `src/anthropic.ts` |
-| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/anthropic.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | Later, by the policy reader, through `src/anthropic.ts` |
+| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/optional-secrets.d.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | Later, by the policy reader, through `src/anthropic.ts` |
 | `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, the scheduled jobs, and the crawler |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |

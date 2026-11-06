@@ -29,6 +29,30 @@ test("a policy reading through the SDK gets the sample repo's recorded reading, 
     summary: 'Refuses AI-generated pull requests.',
   });
   expect(fake.requests).toEqual([expect.objectContaining({ via: 'messages', kind: 'reading', refused: null })]);
+  expect(message.usage).toMatchObject({ output_tokens_details: { thinking_tokens: 400 }, inference_geo: 'global', server_tool_use: null });
+  expect(message).toMatchObject({ container: null, diagnostics: null });
+});
+
+test('a streamed label check, as register_project sends it, gets the recorded answer as server-sent events', async () => {
+  const fake = createAnthropicFake();
+
+  const streamed = await client(fake).messages.stream(labelRequest(['help wanted', 'bug'])).finalMessage();
+  const whole = await client(fake).messages.create(labelRequest(['help wanted', 'bug']));
+
+  expect(streamed.stop_reason).toBe('end_turn');
+  expect(streamed.content[0]).toMatchObject({ type: 'thinking', thinking: '' });
+  expect(JSON.parse(outputOf(streamed))).toEqual(JSON.parse(outputOf(whole)));
+  expect(streamed.usage).toMatchObject({ output_tokens: whole.usage.output_tokens, output_tokens_details: { thinking_tokens: 400 } });
+});
+
+test('a streamed refusal says so, with its category', async () => {
+  const fake = createAnthropicFake();
+  fake.answer({}, { stop: 'refusal', category: 'cyber' });
+
+  const refused = await client(fake).messages.stream(labelRequest(['help wanted'])).finalMessage();
+
+  expect(refused).toMatchObject({ stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } });
+  expect(outputOf(refused)).toBe('');
 });
 
 test('docs the fake has no recording for get a no_policy reading', async () => {
@@ -77,6 +101,30 @@ const wrongShapes: [string, (request: Record<string, unknown>) => void, RegExp, 
   ['forced tool use', (r) => (r.tool_choice = { type: 'any' }), /tool_choice: type "tool" and "any" are not supported/],
   ['a forced tool', (r) => (r.tool_choice = { type: 'tool', name: 'read' }), /tool_choice: type "tool" and "any" are not supported/],
   ['a temperature', (r) => (r.temperature = 0), /temperature: is not supported/],
+  ['a top_p', (r) => (r.top_p = 0.9), /top_p: is not supported/],
+  ['a top_k', (r) => (r.top_k = 5), /top_k: is not supported/],
+  ['thinking shown as updates, a beta the reader lacks', (r) => (r.thinking = { type: 'adaptive', display: 'updates' }), /thinking\.display/],
+  [
+    'a system message before a user message',
+    (r) => (r.messages = [...(r.messages as unknown[]), { role: 'user', content: 'More.' }]),
+    /a system message must be the last message or be followed by an assistant message/,
+  ],
+  [
+    'a cache lifetime the API lacks',
+    (r) => (r.system = [{ type: 'text', text: 'Read this.', cache_control: { type: 'ephemeral', ttl: '10m' } }]),
+    /cache_control\.ttl/,
+  ],
+  [
+    'five cache breakpoints',
+    (r) => (r.system = Array.from({ length: 5 }, (_, i) => ({ type: 'text', text: `Part ${String(i)}.`, cache_control: { type: 'ephemeral' } }))),
+    /A maximum of 4 blocks with cache_control may be provided\. Found 5\./,
+  ],
+  [
+    'an image',
+    (r) => (r.messages = [{ role: 'user', content: [{ type: 'image', source: { type: 'url', url: 'https://example.com/a.png' } }] }]),
+    /The reader sends text blocks only/,
+  ],
+  ['empty content', (r) => (r.messages = [{ role: 'user', content: '' }]), /text content blocks must be non-empty/],
   ['no effort', (r) => (r.output_config = { format: (r.output_config as { format: unknown }).format }), /output_config\.effort/],
   ['an effort the API lacks', (r) => (r.output_config = { ...(r.output_config as object), effort: 'extreme' }), /output_config\.effort: Input should be/],
   ['no structured output', (r) => (r.output_config = { effort: 'high' }), /output_config\.format/],

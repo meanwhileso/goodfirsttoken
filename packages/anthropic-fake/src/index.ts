@@ -2,8 +2,9 @@
 // tests and local development. It checks each request's shape the way the
 // API does for Claude Opus 5.5 (shapes.ts), and answers the policy reader's
 // two calls, a policy reading and a label check, from readings recorded for
-// the GitHub fake's sample repos (recordings.ts). A batch ends as soon as it
-// is sent, unless a test holds it.
+// the GitHub fake's sample repos (recordings.ts). A Messages call that asks
+// to stream gets server-sent events, as the API sends them. A batch ends as
+// soon as it is sent, unless a test holds it.
 //
 // A test can script what the fake answers, for one request or many: any
 // reading, output that doesn't parse, a refusal, a cut-off answer, an
@@ -58,10 +59,15 @@ const BATCH_EXPIRES_MS = 24 * 60 * 60 * 1000;
 export interface Usage {
   input_tokens: number;
   output_tokens: number;
+  // How many of the output tokens were thinking.
+  output_tokens_details: { thinking_tokens: number };
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   cache_creation: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number };
+  server_tool_use: null;
   service_tier: 'standard' | 'batch';
+  inference_geo: string;
+  speed: 'standard';
 }
 
 export interface Message {
@@ -73,12 +79,14 @@ export interface Message {
   stop_reason: 'end_turn' | 'max_tokens' | 'refusal';
   stop_sequence: null;
   stop_details: { type: 'refusal'; category: string | null; explanation: string | null } | null;
+  container: null;
+  diagnostics: null;
   usage: Usage;
 }
 
 export type BatchResult =
   | { type: 'succeeded'; message: Message }
-  | { type: 'errored'; error: { type: 'error'; error: ApiError } }
+  | { type: 'errored'; error: { type: 'error'; error: ApiError; request_id: string } }
   | { type: 'expired' }
   | { type: 'canceled' };
 
@@ -267,6 +275,52 @@ function route(method: string, path: string): { endpoint: Endpoint; id: string |
   return null;
 }
 
+// A message as the API streams it: server-sent events that start it, open,
+// fill, and close each block, then give its stop reason and usage.
+// https://platform.claude.com/docs/en/build-with-claude/streaming
+function eventStream(message: Message): Response {
+  const events: [string, unknown][] = [
+    [
+      'message_start',
+      {
+        type: 'message_start',
+        message: { ...message, content: [], stop_reason: null, stop_details: null, usage: { ...message.usage, output_tokens: 1 } },
+      },
+    ],
+  ];
+  for (const [index, block] of message.content.entries()) {
+    if (block.type === 'thinking') {
+      events.push(['content_block_start', { type: 'content_block_start', index, content_block: { type: 'thinking', thinking: '', signature: '' } }]);
+      events.push(['content_block_delta', { type: 'content_block_delta', index, delta: { type: 'signature_delta', signature: block.signature } }]);
+    } else {
+      events.push(['content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } }]);
+      for (let at = 0; at < block.text.length; at += 64) {
+        events.push(['content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text.slice(at, at + 64) } }]);
+      }
+    }
+    events.push(['content_block_stop', { type: 'content_block_stop', index }]);
+  }
+  const { usage } = message;
+  events.push([
+    'message_delta',
+    {
+      type: 'message_delta',
+      delta: { stop_reason: message.stop_reason, stop_sequence: null, stop_details: message.stop_details, container: null },
+      usage: {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        output_tokens_details: usage.output_tokens_details,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        server_tool_use: null,
+      },
+    },
+  ]);
+  events.push(['message_stop', { type: 'message_stop' }]);
+  const text = events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+  return new Response(text, { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'request-id': newId('req_') } });
+}
+
 const usesMessages = (answer: Answer) => !('result' in answer);
 const usesBatches = (answer: Answer) => !('hang' in answer);
 
@@ -283,7 +337,7 @@ export function createAnthropicFake(options: AnthropicFakeOptions = {}): Anthrop
   let failures: FailScript[] = [];
   let holdBatches = false;
 
-  function usage(request: MessageRequest, outputTokens: number, via: 'messages' | 'batch'): Usage {
+  function usage(request: MessageRequest, outputTokens: number, thinkingTokens: number, via: 'messages' | 'batch'): Usage {
     const system = systemText(request);
     const blocks = Array.isArray(request.system) ? request.system : [];
     const breakpoint = blocks.find((block) => block.cache_control)?.cache_control ?? request.cache_control;
@@ -304,10 +358,14 @@ export function createAnthropicFake(options: AnthropicFakeOptions = {}): Anthrop
     return {
       input_tokens: input,
       output_tokens: outputTokens,
+      output_tokens_details: { thinking_tokens: thinkingTokens },
       cache_creation_input_tokens: created,
       cache_read_input_tokens: read,
       cache_creation: { ephemeral_5m_input_tokens: oneHour ? 0 : created, ephemeral_1h_input_tokens: oneHour ? created : 0 },
+      server_tool_use: null,
       service_tier: via === 'batch' ? 'batch' : 'standard',
+      inference_geo: 'global',
+      speed: 'standard',
     };
   }
 
@@ -319,6 +377,7 @@ export function createAnthropicFake(options: AnthropicFakeOptions = {}): Anthrop
     details: Message['stop_details'] = null,
   ): Message {
     const outputTokens = stop === 'max_tokens' ? request.max_tokens : THINKING_TOKENS + tokens(text ?? '');
+    const thinkingTokens = Math.min(THINKING_TOKENS, outputTokens);
     return {
       id: newId('msg_'),
       type: 'message',
@@ -330,7 +389,9 @@ export function createAnthropicFake(options: AnthropicFakeOptions = {}): Anthrop
       stop_reason: stop,
       stop_sequence: null,
       stop_details: details,
-      usage: usage(request, outputTokens, via),
+      container: null,
+      diagnostics: null,
+      usage: usage(request, outputTokens, thinkingTokens, via),
     };
   }
 
@@ -394,7 +455,7 @@ export function createAnthropicFake(options: AnthropicFakeOptions = {}): Anthrop
       case 'message':
         return { type: 'succeeded', message: outcome.message };
       case 'error':
-        return { type: 'errored', error: { type: 'error', error: outcome.error } };
+        return { type: 'errored', error: { type: 'error', error: outcome.error, request_id: newId('req_') } };
       case 'expired':
         return { type: 'expired' };
       case 'canceled':
@@ -537,7 +598,7 @@ export function createAnthropicFake(options: AnthropicFakeOptions = {}): Anthrop
         });
       }
       if (outcome.kind === 'error') return errorResponse(outcome.status, outcome.error);
-      if (outcome.kind === 'message') return json(outcome.message);
+      if (outcome.kind === 'message') return (body as { stream?: unknown }).stream === true ? eventStream(outcome.message) : json(outcome.message);
       return errorResponse(500, { message: 'The Anthropic fake: an expired or canceled answer applies only in a batch.' });
     }
     if (found.endpoint === 'createBatch') return createBatch(body, now());

@@ -65,6 +65,11 @@ test('the fake takes only the test key, so a test sees a call made with another'
   expect(response.status).toBe(401);
 });
 
+test('a test that starts no fake reaches no host at all', async () => {
+  await expect(fetch('https://api.anthropic.com/v1/messages', { method: 'POST' })).rejects.toThrow(/Nothing in a test reaches the network/);
+  await expect(fetch('https://example.com/')).rejects.toThrow(/Nothing in a test reaches the network/);
+});
+
 test('a call to any host but the two fakes fails the test', async () => {
   const github = createGitHubFake({ apiUrl: env.GH_API_URL, webUrl: env.GH_WEB_URL });
   startAnthropic(github);

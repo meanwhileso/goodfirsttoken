@@ -146,42 +146,6 @@ The jobs ask what is left of the budget, and stop early when it runs low, as
 the token, because it expired or was revoked, the jobs stop, pause nothing,
 and the Worker's log says so.
 
-### The key for reading policies
-
-The policy crawler can read each repo's AI policy and labels with Claude
-Opus 5.5, through the Anthropic API. It does that with an API key,
-`ANTHROPIC_API_KEY`, one of [the Worker's secrets](#the-workers-secrets). The
-key is optional.
-
-The model reader is still being built, as
-[the spec](specs/model-policy-reader.md) plans it. Until it ships, the crawler
-reads with the rules whatever the key and these settings say. Setting them
-up now does no harm.
-
-Without the key, the crawler reads no policies with the model. Seeds wait for
-an admin, the weekly read of a listed project runs only its pull request
-check, and `register_project` proposes tags from the label names. Admins list
-projects by hand with `admin_add_project`.
-
-For each environment that reads policies:
-
-1. In the [Anthropic Console](https://console.anthropic.com), make a
-   workspace for the environment, like one for staging and one for
-   production. Each one then has its own spend and rate limits, so staging
-   can't spend production's budget.
-2. In the workspace's limits, set a monthly spend limit. It stops the
-   spending if the Worker's own daily budget fails. With a $20 daily budget,
-   about $620 a month is enough.
-3. Make an API key in that workspace, for `ANTHROPIC_API_KEY`.
-4. Set `MODEL_DAILY_BUDGET_USD` and `POLICY_READER` in
-   [the settings](#settings).
-
-To stop an environment from reading with the model, set `POLICY_READER` to
-`rules`, or `MODEL_DAILY_BUDGET_USD` to `0`. Removing the secret from GitHub
-leaves the key on the Worker, since a deploy puts the key only when the
-environment has one. To remove it from the Worker too, run
-`wrangler secret delete ANTHROPIC_API_KEY` against the environment's Worker.
-
 ## 4. Create the GitHub environments
 
 In your repo's settings, go to Environments and create `staging` and
@@ -223,8 +187,8 @@ variables. In a private repo, either works.
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
 | `GH_WEB_URL` | No | github.com itself, which sign-in sends people to, as an `https` URL. Leave it empty, and the Worker uses `https://github.com`. |
 | `ANTHROPIC_API_URL` | No | The Anthropic API, as an `https` URL. Leave it empty, and the Worker calls `https://api.anthropic.com`. |
-| `POLICY_READER` | No | How the policy crawler reads a repo's AI policy: `rules`, `shadow`, or `model`. With `rules`, the word rules decide. With `shadow`, the rules decide, and the admin queue shows the model's reading beside theirs. With `model`, the model decides. When it's empty, the crawler uses `rules`. The model reads only with [the key](#the-key-for-reading-policies). |
-| `MODEL_DAILY_BUDGET_USD` | No | The most the model may spend in a UTC day, in US dollars, like `20`. When it's empty, the budget is 0, and the model reads nothing. |
+| `POLICY_READER` | No | How the policy crawler will read a repo's AI policy once [the model reader](#the-key-for-reading-policies) ships: `rules`, `shadow`, or `model`. With `rules`, the word rules decide. With `shadow`, the rules decide, and the admin queue shows the model's reading beside theirs. With `model`, the model decides. When it's empty, the crawler uses `rules`. |
+| `MODEL_DAILY_BUDGET_USD` | No | The most the model may spend in a UTC day once [the model reader](#the-key-for-reading-policies) ships, in US dollars, like `20`. When it's empty, the budget is 0, and the model reads nothing. |
 
 ### Credential
 
@@ -313,6 +277,42 @@ time you choose, its agents with valid tokens included, and hosted agents
 can share one address. So pick a number well above the few `401`s an agent
 meets when its access token runs out. Counting by response status needs a
 Cloudflare plan that offers it. The Worker runs the same without the rule.
+
+## The key for reading policies
+
+The model reader is still being built, as
+[the spec](specs/model-policy-reader.md) plans it. Until it ships, the policy
+crawler reads every policy with its word rules, and reads none of the
+settings below. The key and these settings can be set ahead of it.
+
+Once the reader ships, the crawler reads each repo's AI policy and labels
+with Claude Opus 5.5, through the Anthropic API, with an API key,
+`ANTHROPIC_API_KEY`. It is one of [the Worker's secrets](#the-workers-secrets),
+and it is optional. Without the key, the crawler will read no policies with
+the model. Seeds will wait for an admin, the weekly read of a listed project
+will run only its pull request check, and `register_project` will propose
+tags from the label names. Admins list projects by hand with
+`admin_add_project`.
+
+For each environment that will read policies with the model:
+
+1. In the [Anthropic Console](https://console.anthropic.com), make a
+   workspace for the environment, like one for staging and one for
+   production. Each one then has its own spend and rate limits, so staging
+   can't spend production's budget.
+2. In the workspace's limits, set a monthly spend limit, as a backstop for
+   the Worker's own daily budget. With a $20 daily budget, about $620 a
+   month is enough.
+3. Make an API key in that workspace, and add it to the GitHub environment
+   as `ANTHROPIC_API_KEY`.
+4. Set `MODEL_DAILY_BUDGET_USD` and `POLICY_READER` in
+   [the settings](#settings).
+
+Setting `POLICY_READER` to `rules`, or `MODEL_DAILY_BUDGET_USD` to `0`, will
+keep an environment from reading with the model. A deploy puts the key only
+when the GitHub environment has one, so removing the secret from GitHub
+leaves the key on the Worker. To remove it from the Worker too, run
+`wrangler secret delete ANTHROPIC_API_KEY` against the environment's Worker.
 
 ## The static host
 

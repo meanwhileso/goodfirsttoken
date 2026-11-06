@@ -221,6 +221,10 @@ export function deployConfig(local, target, env) {
     } else if (name in URL_VARS) {
       const url = read(name).replace(/\/+$/, '');
       if (url && !HTTPS_URL.test(url)) problems.push(`${name} is not an https URL, like ${URL_VARS[name]}.`);
+      // The SDK adds /v1 itself, so a URL with it would call /v1/v1.
+      else if (name === 'ANTHROPIC_API_URL' && /\/v1$/.test(url)) {
+        problems.push(`${name} ends in /v1, which the SDK adds itself. Leave it off, like ${URL_VARS[name]}.`);
+      }
       config.vars[name] = mask(url);
     } else if (name in CHOICE_VARS) {
       const value = read(name);
