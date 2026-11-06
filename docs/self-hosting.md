@@ -187,8 +187,8 @@ variables. In a private repo, either works.
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
 | `GH_WEB_URL` | No | github.com itself, which sign-in sends people to, as an `https` URL. Leave it empty, and the Worker uses `https://github.com`. |
 | `ANTHROPIC_API_URL` | No | The Anthropic API, as an `https` URL. Leave it empty, and the Worker calls `https://api.anthropic.com`. |
-| `POLICY_READER` | No | How the policy crawler will read a repo's AI policy once [the model reader](#the-key-for-reading-policies) ships: `rules`, `shadow`, or `model`. With `rules`, the word rules decide. With `shadow`, the rules decide, and the admin queue shows the model's reading beside theirs. With `model`, the model decides. When it's empty, the crawler uses `rules`. |
-| `MODEL_DAILY_BUDGET_USD` | No | The most the model may spend in a UTC day once [the model reader](#the-key-for-reading-policies) ships, in US dollars, like `20`. When it's empty, the budget is 0, and the model reads nothing. |
+| `POLICY_READER` | No | How the policy crawler reads a repo's AI policy, with [the model reader](#the-key-for-reading-policies): `rules`, `shadow`, or `model`. With `rules`, the word rules decide and the model reads nothing. With `shadow`, the rules decide, and the model reads too, and the admin queue shows its reading beside theirs. `model` reads as `shadow` does until the model may decide, in a later release. When it's empty, the crawler uses `rules`. |
+| `MODEL_DAILY_BUDGET_USD` | No | The most the model may spend in a UTC day, in US dollars, like `20`. Admin seeds get half of it, and weekly reads of listed projects a fifth, and from 18:00 UTC what the seeds left. When it's empty, the budget is 0, and the model reads nothing. |
 
 ### Credential
 

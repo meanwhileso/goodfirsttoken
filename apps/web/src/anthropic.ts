@@ -2,8 +2,9 @@ import { env } from 'cloudflare:workers';
 
 // The settings the policy reader reads to call the Anthropic API, all from
 // the environment, read on each call so a test can change them.
-// docs/specs/model-policy-reader.md says what each one does. Nothing reads
-// them yet. The reader that does comes in its own issues.
+// docs/specs/model-policy-reader.md says what each one does. The crawl
+// consumer's half of the reader (src/crawl/model.ts) and its hourly run
+// (src/crawl/batches.ts) read them.
 //
 // ANTHROPIC_API_URL is the API's base URL. Local development and tests point
 // it at the fake in packages/anthropic-fake. A deploy that leaves it unset

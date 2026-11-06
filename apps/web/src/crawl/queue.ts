@@ -3,6 +3,8 @@ import { addCandidate, crawlerSkips, lastRejectedFind, setFindFingerprint, type 
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
 import { ALLOWANCES, serviceToken } from '../sync/allowances';
 import { comparable, policyFingerprint } from './fingerprint';
+import { newReaderRun, readerStatus, sharedReads, stageSeed, type ReaderRun } from './model';
+import { docsHash } from './reader/docs';
 import { fileUrl, readFiles, readLabels, readRepos, RepoFailed, whyNotListable, type FoundRepo } from './reads';
 import { newRereadRun, rereadRepos, type RereadRun } from './reread';
 import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type PolicyReading } from './rules';
@@ -51,6 +53,8 @@ export interface CrawlRun {
   failed: string[];
   /** What the weekly reads of listed projects did. */
   reread: RereadRun;
+  /** What the model policy reader's staging did. */
+  reader: ReaderRun;
   calls: number;
   stopped: StopReason | null;
 }
@@ -70,7 +74,7 @@ export interface CrawlProgress {
 }
 
 export function newCrawlRun(): CrawlRun {
-  return { messages: 0, repos: 0, skipped: {}, tiers: {}, proposed: [], failed: [], reread: newRereadRun(), calls: 0, stopped: null };
+  return { messages: 0, repos: 0, skipped: {}, tiers: {}, proposed: [], failed: [], reread: newRereadRun(), reader: newReaderRun(), calls: 0, stopped: null };
 }
 
 export function newCrawlProgress(): CrawlProgress {
@@ -168,7 +172,12 @@ export async function crawlRepos(
   });
 
   const files = await readFiles(github, readable);
-  const welcoming: { repo: FoundRepo; reading: PolicyReading; files: PolicyFile[]; fingerprint: string }[] = [];
+  // The rules' find and the model's staging both ask who can open pull
+  // requests and read the labels, once for both.
+  const reads = sharedReads({ listable: (name) => whyNotListable(github, name), labels: (name) => readLabels(github, name) });
+  const reader = await readerStatus(db, deps.now());
+  const toStage: { repo: FoundRepo; files: PolicyFile[]; hash: string; tier: CrawlTier }[] = [];
+  const welcoming: { repo: FoundRepo; reading: PolicyReading; files: PolicyFile[]; fingerprint: string; hash: string }[] = [];
   for (const repo of readable) {
     const result = files.get(repo) ?? { failed: `GitHub gave nothing for ${repo.name}.` };
     if ('failed' in result) {
@@ -181,10 +190,38 @@ export async function crawlRepos(
     }
     const reading = readPolicy(result.files);
     run.tiers[reading.tier] = (run.tiers[reading.tier] ?? 0) + 1;
+    const hash = await docsHash(result.files, repo.vouch);
+    if (reader.reads) toStage.push({ repo, files: result.files, hash, tier: reading.tier });
     if (listed(reading.tier) && reading.welcome !== null) {
-      welcoming.push({ repo, reading, files: result.files, fingerprint: await policyFingerprint(reading, result.files, repo.vouch) });
+      welcoming.push({ repo, reading, files: result.files, fingerprint: await policyFingerprint(reading, result.files, repo.vouch), hash });
     } else progress.done.add(repo.asked);
   }
+  const leftAlone = new Set<FoundRepo>();
+  await findWelcoming(deps, welcoming, reads, run, progress, skip, fail, leftAlone);
+  // The model reads after the rules' finds are written, from the same files.
+  const stage = { db, now: deps.now, calls: () => github.calls };
+  for (const { repo, files: read, hash, tier } of toStage) {
+    if (leftAlone.has(repo)) continue;
+    await stageSeed(stage, run.reader, reads, { repo, files: read, hash, rulesTier: tier });
+  }
+}
+
+/**
+ * Puts the repos whose docs the rules read as a welcome in the admin queue,
+ * after checking each again, as crawlRepos says. `leftAlone` gets the ones
+ * the check leaves alone.
+ */
+async function findWelcoming(
+  deps: CrawlDeps,
+  welcoming: { repo: FoundRepo; reading: PolicyReading; files: PolicyFile[]; fingerprint: string; hash: string }[],
+  reads: ReturnType<typeof sharedReads>,
+  run: CrawlRun,
+  progress: CrawlProgress,
+  skip: (asked: string, why: Skip) => void,
+  fail: (asked: string, why: string) => void,
+  leftAlone: Set<FoundRepo>,
+): Promise<void> {
+  const { db } = deps;
   if (welcoming.length === 0) return;
 
   // Checked again under the names GitHub gives now, which differ after a
@@ -194,9 +231,10 @@ export async function crawlRepos(
     welcoming.map(({ repo }) => repo.name),
     { readRejected: true },
   );
-  for (const { repo, reading, files: read, fingerprint } of welcoming) {
+  for (const { repo, reading, files: read, fingerprint, hash } of welcoming) {
     const why = now.get(repo.name.toLowerCase());
     if (why !== undefined) {
+      leftAlone.add(repo);
       skip(repo.asked, why);
       continue;
     }
@@ -205,17 +243,17 @@ export async function crawlRepos(
     // under an older version, takes what they read now, and stays out.
     const rejected = await lastRejectedFind(db, repo.name);
     if (rejected !== null && (!comparable(rejected.fingerprint) || rejected.fingerprint === fingerprint)) {
-      if (rejected.fingerprint !== fingerprint) await setFindFingerprint(db, rejected.id, fingerprint);
+      if (rejected.fingerprint !== fingerprint) await setFindFingerprint(db, rejected.id, fingerprint, hash);
       skip(repo.asked, 'rejected_before');
       continue;
     }
-    if ((await whyNotListable(github, repo.name)) !== null) {
+    if ((await reads.listable(repo.name)) !== null) {
       skip(repo.asked, 'not_listable');
       continue;
     }
     let labels;
     try {
-      labels = await readLabels(github, repo.name);
+      labels = await reads.labels(repo.name);
     } catch (error) {
       if (!(error instanceof RepoFailed)) throw error;
       fail(repo.asked, error.message);
@@ -246,6 +284,7 @@ export async function crawlRepos(
           aiSentences,
           moreAiSentences: reading.moreAiSentences,
           fingerprint,
+          docsHash: hash,
         },
         deps.now(),
       );
@@ -380,8 +419,13 @@ export async function readCrawlBatch(
     reread.read === 0 && Object.keys(reread.skipped).length === 0
       ? ''
       : ` Listed projects read again: ${String(reread.read)}, left alone: ${JSON.stringify(reread.skipped)}, whose policy changed: ${reread.changed.length === 0 ? 'none' : reread.changed.join(', ')}, paused: ${reread.paused.length === 0 ? 'none' : reread.paused.join(', ')}.`;
+  const { reader } = run;
+  const model =
+    reader.staged + reader.cacheHits + reader.same + reader.rejectedSame + reader.notListable + reader.tooBig.length + reader.noLabels.length + reader.wouldPause.length + reader.wouldChange.length === 0
+      ? ''
+      : ` The policy reader staged for the model: ${String(reader.staged)}, read before with no model call: ${String(reader.cacheHits)}, weekly reads of the same docs: ${String(reader.same)}, seeds whose rejected find has the same docs: ${String(reader.rejectedSame)}, seeds that take no outside pull requests: ${String(reader.notListable)}, past the size cap: ${reader.tooBig.length === 0 ? 'none' : reader.tooBig.join(', ')}, with no labels from GitHub: ${reader.noLabels.length === 0 ? 'none' : reader.noLabels.join(', ')}, calls to GitHub for the model: ${String(reader.githubCalls)}.${reader.wouldPause.length + reader.wouldChange.length === 0 ? '' : ` Listings whose kept reading the model reads as moved into a ban: ${reader.wouldPause.join(', ') || 'none'}, as changed: ${reader.wouldChange.join(', ') || 'none'}.`}`;
   console.log(
-    `The crawler read ${String(run.messages)} of ${String(batch.messages.length)} messages, with repos: ${String(run.repos)}, skipped: ${JSON.stringify(run.skipped)}, tiers: ${JSON.stringify(run.tiers)}, put in the admin queue: ${run.proposed.length === 0 ? 'none' : run.proposed.join(', ')}, sent back alone after GitHub failed on them: ${run.failed.length === 0 ? 'none' : run.failed.join(', ')}, calls to GitHub: ${String(run.calls)}.${rereads} Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The crawler read ${String(run.messages)} of ${String(batch.messages.length)} messages, with repos: ${String(run.repos)}, skipped: ${JSON.stringify(run.skipped)}, tiers: ${JSON.stringify(run.tiers)}, put in the admin queue: ${run.proposed.length === 0 ? 'none' : run.proposed.join(', ')}, sent back alone after GitHub failed on them: ${run.failed.length === 0 ? 'none' : run.failed.join(', ')}, calls to GitHub: ${String(run.calls)}.${rereads}${model} Left: ${JSON.stringify(github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }

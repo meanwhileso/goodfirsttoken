@@ -208,6 +208,73 @@ function AiSentences({ item }: { item: QueueItem }) {
   );
 }
 
+const READING_TIERS: Record<NonNullable<QueueItem['modelReading']>['tier'], string> = {
+  invites_agents: 'invites agents',
+  allows_with_conditions: 'allows with conditions',
+  bans_or_restricts: 'bans or restricts',
+  no_policy: 'no policy',
+};
+
+/** Where lines in a file are, like `AGENTS.md, line 12`. */
+function placeOf(pointer: { path: string; startLine: number; endLine: number }): string {
+  const span = pointer.startLine === pointer.endLine ? `line ${String(pointer.startLine)}` : `lines ${String(pointer.startLine)} to ${String(pointer.endLine)}`;
+  return `${pointer.path}, ${span}`;
+}
+
+/** Lines in the repo's docs that try to steer a reader, as the model reader found them, quoted from the files. */
+function Steering({ item }: { item: QueueItem }) {
+  const reading = item.modelReading;
+  if (!reading || reading.steering.length === 0) return null;
+  return (
+    <Block label="lines in its docs that try to steer a reader, as the model reader found them">
+      {reading.steering.map((line) => (
+        <div key={placeOf(line)} className="stack" style={{ '--gap': '6px' } as CSSProperties}>
+          <span className="mono small muted">{placeOf(line)}</span>
+          <Quote>{line.lines}</Quote>
+        </div>
+      ))}
+    </Block>
+  );
+}
+
+/**
+ * What the model policy reader read in the same docs, beside the rules'
+ * reading, while it runs in shadow and decides nothing: the tiers, each
+ * statement with its lines quoted from the files and the model's note on
+ * it, and the model's summary. The notes are text the model wrote from the
+ * repo's docs.
+ */
+function ModelReading({ item }: { item: QueueItem }) {
+  const reading = item.modelReading;
+  if (!reading) return null;
+  return (
+    <Block label={`the model reader's reading of the same docs, in shadow. It decides nothing, and the rules' reading is the one acted on`}>
+      <SplitBadges>
+        <SplitBadge rule="from its statements" value={READING_TIERS[reading.tier]} />
+        <SplitBadge rule="the model said" value={READING_TIERS[reading.modelTier]} />
+      </SplitBadges>
+      {!reading.agree && <p className="small">The two tiers disagree.</p>}
+      {reading.dropped > 0 && (
+        <p className="small muted">
+          {reading.dropped.toLocaleString('en-US')} of the model&apos;s statements failed the check against the files, and were dropped.
+        </p>
+      )}
+      {reading.statements.map((statement, i) => (
+        <div key={`${String(i)} ${placeOf(statement)}`} className="stack" style={{ '--gap': '6px' } as CSSProperties}>
+          <span className="mono small muted">
+            {statement.about}
+            {statement.label !== null && ` · ${statement.label}`}
+            {statement.value !== null && ` · ${statement.value}`} · {placeOf(statement)}
+          </span>
+          <Quote>{statement.lines}</Quote>
+          {statement.why !== '' && <p className="small muted">the model&apos;s note: {statement.why}</p>}
+        </div>
+      ))}
+      {reading.summary !== '' && <p className="small muted">the model&apos;s summary: {reading.summary}</p>}
+    </Block>
+  );
+}
+
 function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
@@ -279,6 +346,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
         <span className="mono small muted">found {span(item.requestedAt, now)} ago</span>
       </div>
       <Facts item={item} now={now} signInAgain={signInAgain} />
+      <Steering item={item} />
       <DiscoveryEvidence item={item} />
       {policy && (
         <Quote>
@@ -296,6 +364,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
       </Block>
       <Sources item={item} />
       <AiSentences item={item} />
+      <ModelReading item={item} />
       {item.suggestedTags.length > 0 && (
         <Block label="labels that could mean ready for help">
           <div className="admin-item__labels">

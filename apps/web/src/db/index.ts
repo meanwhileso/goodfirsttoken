@@ -13,6 +13,7 @@ export * from './leaderboard';
 export * from './people';
 export * from './projects';
 export * from './prs';
+export * from './reader';
 export * from './removals';
 export * from './rereads';
 export * from './seeds';

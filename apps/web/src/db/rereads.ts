@@ -143,6 +143,7 @@ interface ChangeRow {
   decided_by: number | null;
   decided_at: number | null;
   reason: string | null;
+  docs_hash: string | null;
 }
 
 function toChange(row: ChangeRow): PolicyChange {
@@ -157,6 +158,7 @@ function toChange(row: ChangeRow): PolicyChange {
       sources: fromJson(row.sources),
       aiSentences: fromJson(row.ai_sentences),
       moreAiSentences: row.more_ai_sentences,
+      docsHash: row.docs_hash,
       status: row.status,
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
@@ -173,6 +175,8 @@ export interface NewPolicyChange {
   sources: CandidateSource[];
   aiSentences: AiSentence[];
   moreAiSentences: number;
+  /** What the crawler read in the docs, as a docs hash. None when left out. */
+  docsHash?: string;
 }
 
 /**
@@ -192,8 +196,8 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
     db
       .prepare(
         `INSERT INTO policy_changes (id, project, found_at, facts, policy, sources, ai_sentences, more_ai_sentences,
-           status, decided_by, decided_at, reason)
-         SELECT ?1, p.repo, ?3, ?4, ?5, ?6, ?7, ?8, 'waiting', NULL, NULL, NULL FROM projects p WHERE p.repo = ?2`,
+           status, decided_by, decided_at, reason, docs_hash)
+         SELECT ?1, p.repo, ?3, ?4, ?5, ?6, ?7, ?8, 'waiting', NULL, NULL, NULL, ?9 FROM projects p WHERE p.repo = ?2`,
       )
       .bind(
         c.id,
@@ -204,6 +208,7 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
         JSON.stringify(c.sources),
         JSON.stringify(c.aiSentences),
         c.moreAiSentences,
+        c.docsHash,
       ),
   ]);
   return inserted?.meta.changes === 1 ? c : null;
