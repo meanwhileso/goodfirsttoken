@@ -515,8 +515,8 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after the one with ID `since`, oldest first, without blocked
-   * donors' events, and none while the do-not-list covers the issue's repo.
-   * With no `since`, or one this room never sent, every event. Throws when D1
+   * donors' events, and none while the do-not-list covers the issue's repo,
+   * or names the project of the event's claim. With no `since`, or one this room never sent, every event. Throws when D1
    * can't say what to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
@@ -567,8 +567,9 @@ export class IssueRoom extends DurableObject<Env> {
    * after that one first, then every new event as it happens. Without it, the
    * whole history comes first. Each message is one feed event as JSON. A
    * blocked donor's events are left out, and every event while the
-   * do-not-list covers the issue's repo. The socket uses the hibernation API,
-   * so a quiet room can sleep with watchers connected.
+   * do-not-list covers the issue's repo, or names its claim's project. The
+   * socket uses the hibernation API, so a quiet room can sleep with watchers
+   * connected.
    */
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -786,20 +787,28 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after a place, oldest first, each with its claimant's GitHub
-   * ID and the repo its issue is in, in lower case, which the watchers'
-   * checks need. Every event is about a claim the room holds.
+   * ID, the repo its issue is in, and its claim's project, both in lower
+   * case, which the watchers' checks need. Every event is about a claim the
+   * room holds, and the claim names its project.
    */
   private storedAfter(seq: number): StoredEvent[] {
     return this.sql
-      .exec<{ seq: number; event: string; github_id: number; issue: string }>(
+      .exec<{ seq: number; event: string; github_id: number; issue: string; project: string; claim: string }>(
         `SELECT e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id,
-           json_extract(e.event, '$.issue') AS issue
+           json_extract(e.event, '$.issue') AS issue, json_extract(c.record, '$.project') AS project, c.id AS claim
          FROM events e JOIN claims c ON c.id = json_extract(e.event, '$.claim')
          WHERE e.seq > ? ORDER BY e.seq`,
         seq,
       )
       .toArray()
-      .map((row) => ({ seq: row.seq, githubId: row.github_id, repo: repoOfIssue(row.issue), json: row.event }));
+      .map((row) => ({
+        seq: row.seq,
+        githubId: row.github_id,
+        repo: repoOfIssue(row.issue),
+        project: row.project.toLowerCase(),
+        claim: row.claim,
+        json: row.event,
+      }));
   }
 
   private readClaims(): StoredClaim[] {

@@ -616,8 +616,8 @@ describe("a project's live feed", () => {
     await registeredProject({ tags: ['help wanted'] }, name);
     const lines = Array.from({ length: 8 }, (_, i) => event(name, priya, `line ${String(i)}`));
     await repoFeed(env.FEED, name).deliver([
-      ...lines.map((e) => ({ event: e, githubId: priya.githubId })),
-      { event: event(name, kenji, 'a line nobody should see'), githubId: kenji.githubId },
+      ...lines.map((e) => ({ event: e, githubId: priya.githubId, project: name })),
+      { event: event(name, kenji, 'a line nobody should see'), githubId: kenji.githubId, project: name },
     ]);
     await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0);
 

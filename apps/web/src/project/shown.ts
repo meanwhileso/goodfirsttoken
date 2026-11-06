@@ -85,7 +85,8 @@ export async function readDelisting(db: D1Database, project: ProjectRecord, sync
  * the project is approved or paused, off the list, and keeps its issues
  * there. It reads every repo as an issue repo, so asking it about the code
  * repo would let a project on the list that kept its issues there take this
- * page away.
+ * page away. doNotListedProjectsAmong, which they hide events by their
+ * claim's project with, reads the same two entries.
  */
 export async function hasPage(db: D1Database, project: ProjectRecord): Promise<boolean> {
   if (!couldHavePage(project)) return false;

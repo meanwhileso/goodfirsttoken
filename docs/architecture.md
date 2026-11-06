@@ -2117,18 +2117,18 @@ streams' in [Text streams](how-it-works.md#text-streams).
   for D1's `donor_blocks` and `do_not_list` in between, so calls can finish
   out of order. Each send reads the events after the lowest place among the
   sockets, asks D1 which of their claimants are blocked and which of their
-  issues' repos the do-not-list covers, and sends each socket what it hasn't
+  issues' repos and claims' projects the do-not-list covers, and sends each socket what it hasn't
   had, up to the last event it read before the await. An event stored
   during the await goes out with the send of the call that stored it. So
   each watcher gets each event once, in order. A send returns the lowest
   place a watcher is at once it is done, so a room can tell whether it
   reached the last event stored.
 - **A new watcher's history.** The feed or room is told which donors are
-  known to be blocked and which repos the do-not-list is known to cover,
-  and reads only the events it will send: a feed with no `since` reads its
-  newest 100 of the others, in one query. D1 is asked about any claimant or
-  repo in them not yet asked about, and the read repeats until none is
-  new. Then the socket is accepted, sent its history, and given its
+  known to be blocked and which repos and projects the do-not-list is known
+  to cover, and reads only the events it will send: a feed with no `since`
+  reads its newest 100 of the others, in one query. D1 is asked about any
+  claimant, repo, or project in them not yet asked about, and the read
+  repeats until none is new. Then the socket is accepted, sent its history, and given its
   place, with no await in between, so no event falls between its history
   and the live ones.
 - **When D1 can't say who is blocked,** a feed sets its alarm a minute
@@ -2140,21 +2140,39 @@ streams' in [Text streams](how-it-works.md#text-streams).
   `blockedAmong` passes the IDs as one JSON array, since D1 binds at most
   100 values in a statement.
 - **The do-not-list check runs beside it,** in `src/rooms/watchers.ts`,
-  with `doNotListedAmong` in `src/db/do-not-list.ts`, which takes the repos
-  as one JSON array the same way. An event names its issue, and a feed
-  reads the issue's repo from the event's JSON in SQL, so no stored event
-  needed rewriting. A repo on the list is covered whole, the issues of
-  other projects that keep them there included, as the homepage's query
-  and the issue page leave those projects out. The do-not-list names code
-  repos, so the query also covers the issue repo of a project on the list,
-  unless an approved or paused project off the list keeps its issues there
-  too, since only those have claims. That keeps an approved or paused
-  project's events on a shared issue repo shown. Judging each event by its
-  claim's project would also hide a removed project's own events there, but
-  would change how every feed and room reads its history, since they skip
-  hidden repos in SQL. The `history()` RPC
-  of a room and of a feed leaves blocked donors out too, and throws when D1
-  can't say who they are.
+  by the event's issue repo and by its claim's project, each a JSON array
+  in one query the same way.
+  - By issue repo, with `doNotListedAmong` in `src/db/do-not-list.ts`. An
+    event names its issue, and a feed reads the issue's repo from the
+    event's JSON in SQL. A repo on the list is covered whole, the issues of
+    other projects that keep them there included, as the homepage's query
+    and the issue page leave those projects out. The do-not-list names code
+    repos, so the query also covers the issue repo of a project on the
+    list, unless an approved or paused project off the list keeps its
+    issues there too, since only those have claims.
+  - By project, with `doNotListedProjectsAmong`, which reads a project as
+    named when its code repo or the repo it keeps its issues in now has an
+    entry, as `CLAIM_SHOWN` in `src/db/shown.ts` does. The issue repo
+    alone missed a project that moved its issues before it was removed:
+    the events on its old issues matched no project on the list. A room
+    reads each event's project from the claim it holds. A feed keeps it in
+    a `project` column, from the feed queue's message. That keeps an
+    approved or paused project's events on a shared issue repo shown, and
+    hides the removed project's own events there.
+  - A feed made before the column gains it in its constructor, and its
+    events stored before then have a null project. Those are judged by
+    their claim instead, with `doNotListedClaimsAmong`, which reads the
+    claim's project from D1's `claims`, which keeps every claim. That is a
+    join at read time, not a backfill, so nothing has to run once per feed,
+    a feed that never wakes needs nothing, and when D1 can't say, the event
+    waits like any other. A claim D1 doesn't hold yet is judged by its
+    repo alone. A feed keeps its newest 1,000 events, so these age out as new ones
+    arrive.
+  - A feed with no `since` skips hidden repos, projects, and claims in SQL,
+    so its newest 100 are ones it sends.
+
+  The `history()` RPC of a room and of a feed leaves blocked donors out
+  too, and throws when D1 can't say who they are.
   Tests read what is stored straight from the object's SQLite.
 - **The Worker holds each stream.** It connects to the feed or room over the
   WebSocket a page uses, accepts it, and keeps each message it gets as a
@@ -2551,11 +2569,14 @@ under The projects list and The project page.
   whether the sync delisted it, and whether its repo or its issue repo has
   an entry of its own on the do-not-list, as the homepage's query checks.
   For a project that could have a page, that agrees with
-  `doNotListedAmong`, the rule the rooms and feeds hide events by, on its
-  issue repo, since the project keeps its issues there and is off the
-  list. `doNotListedAmong` reads every repo as an issue repo, so `hasPage`
-  doesn't ask it about the code repo, where a project on the list that
-  kept its issues there would take the page away. Who paused it doesn't
+  `doNotListedAmong`, the rule the rooms and feeds hide events by issue
+  repo, on its issue repo, since the project keeps its issues there and is
+  off the list. `doNotListedAmong` reads every repo as an issue repo, so
+  `hasPage` doesn't ask it about the code repo, where a project on the
+  list that kept its issues there would take the page away.
+  `doNotListedProjectsAmong`, which they hide events by project with,
+  reads the same two entries. A repo's text stream and live socket open
+  only when `hasPage` is true, so a removed project has no stream. Who paused it doesn't
   count. The mark in
   `issue_syncs.delisted` hides what the site cached from the repos,
   whatever the status, and `DELISTED` in `src/db/waiting.ts` reads the same
@@ -4876,6 +4897,7 @@ Notes, with nothing to fix now:
 | S1 | The daily job deleted a lapsed connection before it revoked the token, so a GitHub failure at 04:23 left the token live with nothing to retry | Fixed. The job revokes first, counts a `404` as done, and keeps the row when GitHub fails. Tests: in `test/mcp/disconnect.test.ts`, "when GitHub fails to revoke, the daily job keeps the connection and its token for the next run" and "a token GitHub no longer knows counts as revoked" |
 | S3 | One address could hold thousands of sockets on the homepage's feed, which walks every socket on each event | Fixed. Each address holds at most 100 on a feed or room. Test: in `test/feed/streams.test.ts`, "the 101st from one address is refused with 429" |
 | S4 | 60 opens a minute was low enough for an office or a reconnect wave from one address to meet | Fixed. 300 a minute, with S3 bounding what an address holds |
+| Q2 | The feeds and rooms hid an event only by its issue's repo. A project that moved its issues back to its code repo with `update_project`, then was removed, left the events on its old issues shown in the homepage's, its own, and people's feeds, in the old issues' rooms, and on its `/<owner>/<repo>/live.txt`, which opened for a project in any status | Fixed. Each event is also hidden by its claim's project, as the public pages hide a claim: a room reads it from the claim, a feed keeps it beside the event, and a feed's events stored before then are judged by their claim in D1. A repo's stream needs the project to have a page. Tests: in `test/feed/streams.test.ts`, "has the events on its old issues hidden everywhere they were shown", and in `test/feed/feed.test.ts`, "is hidden by its claim's project, which D1 holds, after the project moved its issues and was removed". Kept: an event a feed stored before then, on a claim D1 doesn't hold, is judged by its repo alone |
 
 Notes the review made, with nothing to fix now:
 

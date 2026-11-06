@@ -1,15 +1,16 @@
 import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import type { ClaimRecord, FeedEvent } from '@goodfirsttoken/core';
+import { utcDay, type ClaimRecord, type FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, saveIssues, savePerson } from '../../src/db';
+import { adminRemoveProject } from '../../src/admin/actions';
+import { blockDonor, changeSettings, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
-import { homeFeed, personFeed } from '../../src/rooms/feed';
+import { homeFeed, personFeed, repoFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
 import { inOneLimitWindow, randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
-import { feedEvent, fields, liveSocket, readStream, storedEvents } from './helpers';
+import { feedEvent, fields, liveSocket, readStream, storedEvents, watchSocket } from './helpers';
 
 // The live text streams, read through the Worker the way `curl -N` reads
 // them, while the issue room, the feed queue, and the feeds run as they do in
@@ -147,7 +148,7 @@ describe('a text stream', () => {
   /** Delivers an event with this text and job to priya's feed, as a feed kept it. */
   async function keptEvent(text: string, job: string | null = null): Promise<void> {
     const event = feedEvent({ time: new Date().toISOString(), user: priya.login, issue, text, job });
-    await personFeed(env.FEED, priya.githubId).deliver([{ event, githubId: priya.githubId }]);
+    await personFeed(env.FEED, priya.githubId).deliver([{ event, githubId: priya.githubId, project: repo }]);
   }
 
   test('keeps a text with tabs, line breaks, carriage returns, and terminal controls on one line', async () => {
@@ -281,7 +282,7 @@ describe('a text stream', () => {
     const reader = { githubId: 3303, login: 'sample-hour-reader' };
     await signIn(reader);
     const feed = personFeed(env.FEED, reader.githubId);
-    const entry = (text: string) => ({ event: feedEvent({ user: reader.login, text }), githubId: reader.githubId });
+    const entry = (text: string) => ({ event: feedEvent({ user: reader.login, text }), githubId: reader.githubId, project: repo });
     // Far ahead of the real clock. Only Date is fake, which the Worker's own
     // request reads too.
     const opened = Date.UTC(2100, 0, 4, 12, 0, 0);
@@ -344,7 +345,7 @@ describe('a text stream', () => {
     const request = new Request(`http://localhost/@${slow.login}/live.txt`);
     const res = await handleStream(request, { readerWaitMs: 100 });
     expect(res.status).toBe(200);
-    const entry = () => ({ event: feedEvent({ user: slow.login }), githubId: slow.githubId });
+    const entry = () => ({ event: feedEvent({ user: slow.login }), githubId: slow.githubId, project: repo });
 
     await feed.deliver([entry()]);
     expect(await sockets(feed)).toBe(1);
@@ -721,4 +722,76 @@ describe('the sockets one address holds', () => {
     },
     90_000,
   );
+});
+
+describe('a project removed after it moved its issues back to its code repo', () => {
+  const code = 'sample-owner/sample-moved';
+  const elsewhere = 'sample-owner/sample-moved-issues';
+
+  /** An admin removes the project at its maintainers' request, which lists its repo and rejects it. */
+  async function remove(name: string): Promise<void> {
+    const configured = env.ADMIN_GITHUB_IDS;
+    env.ADMIN_GITHUB_IDS = String(admin.githubId);
+    try {
+      const removed = await adminRemoveProject({ ...admin, gitHubToken: () => Promise.resolve(null) }, { repo: name }, Date.now());
+      if (!removed.ok) throw new Error(removed.refusal.message);
+    } finally {
+      env.ADMIN_GITHUB_IDS = configured;
+    }
+  }
+
+  test('has the events on its old issues hidden everywhere they were shown', async () => {
+    await registeredProject({ tags: ['help wanted'], issueRepo: elsewhere }, code);
+    const old = `${elsewhere}#${String(issueNumber)}`;
+    const room = issueRoom(env.ISSUE_ROOM, old);
+    const claimed = await room.claim({
+      issue: old,
+      project: code,
+      githubId: priya.githubId,
+      login: priya.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!claimed.ok) throw new Error(claimed.refusal.message);
+    const text = `work on the old issue #${String(issueNumber)}`;
+    const posted = await room.postUpdate({ claimId: claimed.claim.id, githubId: priya.githubId, text });
+    if (!posted.ok || !posted.posted) throw new Error('The post was not stored.');
+    const feeds = [homeFeed(env.FEED), repoFeed(env.FEED, code), personFeed(env.FEED, priya.githubId)];
+    for (const feed of feeds) await delivered(feed, text);
+
+    // The maintainers move the issues back to the code repo, then ask to be removed.
+    const moved = await changeSettings(db, code, { issueRepo: null }, maintainer.githubId, Date.now());
+    if (moved === null || !moved.ok) throw new Error('The issue repo did not move.');
+    await remove(code);
+
+    const day = utcDay(Date.now());
+    for (const feed of feeds) {
+      expect((await feed.history()).map((e) => e.text)).not.toContain(text);
+      expect((await feed.glance({ count: 100, day }))?.events.map((e) => e.text)).not.toContain(text);
+    }
+    expect((await room.history()).map((e) => e.text)).not.toContain(text);
+    const glance = await room.glance();
+    expect(glance?.events.map((e) => e.text)).not.toContain(text);
+
+    // A new socket on each gets nothing of it. A line on another project's
+    // issue marks when the feeds' history has gone out.
+    const sockets = await Promise.all(feeds.map((feed) => watchSocket(feed)));
+    const roomSocket = await watchSocket(room);
+    const marker = `a line elsewhere #${String(issueNumber)}`;
+    for (const feed of feeds) {
+      await feed.deliver([{ event: feedEvent({ issue, text: marker }), githubId: kenji.githubId, project: repo }]);
+    }
+    for (const socket of sockets) {
+      await socket.event(marker);
+      expect(socket.events.map((e) => e.text)).not.toContain(text);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(roomSocket.events.map((e) => e.text)).not.toContain(text);
+
+    // The removed project has no stream of its own.
+    const stream = await readStream(`/${code}/live.txt`);
+    expect(stream.res.status).toBe(404);
+  });
 });

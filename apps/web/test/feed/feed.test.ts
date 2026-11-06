@@ -1,9 +1,19 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { addToDoNotList, blockDonor, createProject, listProjectsAskingForHelp, setProjectStatus, unblockDonor } from '../../src/db';
+import { newClaim, type ClaimRecord, type FeedEvent } from '@goodfirsttoken/core';
+import {
+  addToDoNotList,
+  blockDonor,
+  changeSettings,
+  createProject,
+  listProjectsAskingForHelp,
+  saveClaim,
+  setProjectStatus,
+  unblockDonor,
+} from '../../src/db';
 import { repoFeed, type Feed, type FeedEntry } from '../../src/rooms/feed';
-import { admin, DAY, db, emptyDatabase, kenji, priya, signIn, t0, takeOffDoNotList } from '../db/helpers';
+import { admin, DAY, db, emptyDatabase, kenji, priya, sha, signIn, t0, takeOffDoNotList } from '../db/helpers';
 import { feedEvent, storedEvents, watchSocket } from './helpers';
 
 // A feed on its own, as the queue's consumer calls it. Every person, repo,
@@ -32,7 +42,7 @@ const downDb = {
 } as unknown as D1Database;
 
 function by(person: { githubId: number; login: string }, text?: string): FeedEntry {
-  return { event: feedEvent({ user: person.login, ...(text && { text }) }), githubId: person.githubId };
+  return { event: feedEvent({ user: person.login, ...(text && { text }) }), githubId: person.githubId, project: 'sample-owner/sample-app' };
 }
 
 async function texts(since?: string): Promise<string[]> {
@@ -71,7 +81,7 @@ describe('a feed', () => {
     await evictDurableObject(feed);
 
     expect(await feed.history()).toEqual(before);
-    expect(await feed.deliver([{ event: before[0] as FeedEntry['event'], githubId: priya.githubId }])).toEqual({
+    expect(await feed.deliver([{ event: before[0] as FeedEntry['event'], githubId: priya.githubId, project: 'sample-owner/sample-app' }])).toEqual({
       stored: 0,
     });
     const watcher = await watchSocket(feed);
@@ -233,8 +243,10 @@ describe('a blocked donor', () => {
 });
 
 describe('a repo on the do-not-list', () => {
-  function on(issue: string, text: string): FeedEntry {
-    return { event: feedEvent({ issue, text }), githubId: kenji.githubId };
+  // An event on the issue, on a claim of `project`, which is the repo the
+  // issue is in unless the test says otherwise.
+  function on(issue: string, text: string, project = issue.slice(0, issue.indexOf('#'))): FeedEntry {
+    return { event: feedEvent({ issue, text }), githubId: kenji.githubId, project };
   }
 
   test("has the events on its issues hidden from the feed's watchers, the history stored before included, and they stay stored", async () => {
@@ -270,7 +282,7 @@ describe('a repo on the do-not-list', () => {
       Date.now(),
     );
     await addToDoNotList(db, { repo: 'sample-owner/sample-code', reason: null, addedBy: admin.githubId }, Date.now());
-    await feed.deliver([on('sample-owner/sample-issues#5', 'elsewhere'), on('sample-owner/sample-tools#6', 'tools')]);
+    await feed.deliver([on('sample-owner/sample-issues#5', 'elsewhere', 'sample-owner/sample-code'), on('sample-owner/sample-tools#6', 'tools')]);
 
     const watcher = await watchSocket(feed);
 
@@ -292,7 +304,7 @@ describe('a repo on the do-not-list', () => {
     // As admin_remove_project leaves it: on the list, and rejected.
     await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, Date.now());
     await setProjectStatus(db, removed, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
-    await feed.deliver([on(`${shared}#5`, 'removed project work')]);
+    await feed.deliver([on(`${shared}#5`, 'removed project work', removed)]);
 
     const watcher = await watchSocket(feed);
     await feed.deliver([on('sample-owner/sample-tools#1', 'marker')]);
@@ -320,7 +332,7 @@ describe('a repo on the do-not-list', () => {
     const before = await listProjectsAskingForHelp(db, 10, Date.now());
     await addToDoNotList(db, { repo: main, reason: null, addedBy: admin.githubId }, Date.now());
     await setProjectStatus(db, main, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
-    await feed.deliver([on(`${main}#7`, 'plugin work')]);
+    await feed.deliver([on(`${main}#7`, 'plugin work', plugin)]);
 
     const watcher = await watchSocket(feed);
     await feed.deliver([on('sample-owner/sample-tools#1', 'marker')]);
@@ -331,7 +343,7 @@ describe('a repo on the do-not-list', () => {
     expect(await watcher.received(1)).toEqual(['marker']);
   });
 
-  test("leaves the events on an issue repo another project shares in that project's feed, when one project is removed", async () => {
+  test("leaves another project's events on an issue repo they share shown when one project is removed, and hides the removed project's", async () => {
     const shared = 'sample-owner/sample-issues';
     const removed = 'sample-owner/sample-code';
     const stays = 'sample-owner/sample-other';
@@ -352,13 +364,14 @@ describe('a repo on the do-not-list', () => {
     // As admin_remove_project leaves it: on the list, and rejected.
     await addToDoNotList(db, { repo: removed, reason: null, addedBy: admin.githubId }, Date.now());
     await setProjectStatus(db, removed, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
-    await feed.deliver([on(`${shared}#5`, 'still listed')]);
+    await feed.deliver([on(`${shared}#5`, 'still listed', stays), on(`${shared}#6`, 'removed project work', removed)]);
 
     const watcher = await watchSocket(feed);
     const listed = await listProjectsAskingForHelp(db, 10, Date.now());
 
     expect(listed.projects.map(({ project }) => project.repo)).toContain(stays);
     expect(await watcher.received(1)).toEqual(['still listed']);
+    expect(await texts()).toEqual(['still listed']);
   });
 
   test('a watcher who gives no last event ID still gets the newest events it may see, and a glance leaves them out', async () => {
@@ -375,6 +388,66 @@ describe('a repo on the do-not-list', () => {
   });
 });
 
+describe('an event a feed stored before it kept each event\'s project', () => {
+  const code = 'sample-owner/sample-moved';
+  const elsewhere = 'sample-owner/sample-moved-issues';
+
+  // Makes the feed as it was before feeds kept each event's project, stores
+  // the entries the way it stored them then, and restarts it.
+  async function storedTheOldWay(entries: { event: FeedEvent; githubId: number }[]): Promise<void> {
+    await runInDurableObject(feed, (_, state) => {
+      state.storage.sql.exec('ALTER TABLE events DROP COLUMN project');
+      for (const { event, githubId } of entries) {
+        state.storage.sql.exec('INSERT INTO seen (id, at) VALUES (?, ?)', event.id, Date.now());
+        state.storage.sql.exec('INSERT INTO events (id, github_id, event) VALUES (?, ?, ?)', event.id, githubId, JSON.stringify(event));
+      }
+    });
+    await evictDurableObject(feed);
+  }
+
+  test("is hidden by its claim's project, which D1 holds, after the project moved its issues and was removed", async () => {
+    await createProject(
+      db,
+      { repo: code, status: 'approved', source: 'registered', policy: null, settings: { tags: ['help wanted'], issueRepo: elsewhere }, addedBy: kenji.githubId },
+      Date.now(),
+    );
+    const claim: ClaimRecord = {
+      id: 'c_feed_old_way_0000001',
+      issue: `${elsewhere}#3`,
+      project: code,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      tokenEstimate: null,
+      ...newClaim(Date.now()),
+    };
+    await saveClaim(db, claim, 1);
+    const old = { event: feedEvent({ issue: claim.issue, claim: claim.id, text: 'stored the old way' }), githubId: kenji.githubId };
+    // A claim D1 doesn't hold, on a repo nothing lists, stays shown.
+    const unknown = { event: feedEvent({ issue: 'sample-owner/sample-tools#1', claim: 'c_feed_old_way_0000002', text: 'unknown claim' }), githubId: priya.githubId };
+    await storedTheOldWay([old, unknown]);
+
+    expect(await texts()).toEqual(['stored the old way', 'unknown claim']);
+    const moved = await changeSettings(db, code, { issueRepo: null }, kenji.githubId, Date.now());
+    if (moved === null || !moved.ok) throw new Error('The issue repo did not move.');
+    await addToDoNotList(db, { repo: code, reason: null, addedBy: admin.githubId }, Date.now());
+    await setProjectStatus(db, code, { status: 'rejected', reason: "Removed at its maintainers' request.", changedBy: admin.githubId }, Date.now());
+
+    expect(await texts()).toEqual(['unknown claim']);
+    expect((await feed.glance({ count: 100, day: '2100-01-04' }))?.events.map((e) => e.text)).toEqual(['unknown claim']);
+    const watcher = await watchSocket(feed);
+    await feed.deliver([{ ...by(priya, 'new'), project: 'sample-owner/sample-tools' }]);
+    expect(await watcher.received(2)).toEqual(['unknown claim', 'new']);
+    // The feed gained the column, and keeps the new event's project.
+    const projects = await runInDurableObject(feed, (_, state) =>
+      state.storage.sql.exec<{ project: string | null }>('SELECT project FROM events ORDER BY seq').toArray(),
+    );
+    expect(projects.map((row) => row.project)).toEqual([null, null, 'sample-owner/sample-tools']);
+  });
+});
+
 describe('a glance at a feed, which a page shows first', () => {
   // The day feedEvent's times fall on.
   const day = '2100-01-04';
@@ -387,7 +460,7 @@ describe('a glance at a feed, which a page shows first', () => {
 
   test('gives the newest events a watcher may see, oldest first, and how many happened on a UTC day', async () => {
     const entries = ['one', 'two', 'three', 'four'].map((text) => by(priya, text));
-    const late = { event: feedEvent({ time: '2100-01-03T23:59:59.999Z', text: 'late' }), githubId: kenji.githubId };
+    const late = { event: feedEvent({ time: '2100-01-03T23:59:59.999Z', text: 'late' }), githubId: kenji.githubId, project: 'sample-owner/sample-app' };
     await feed.deliver([...entries, late]);
 
     const glance = await glanceAt(3);
@@ -410,7 +483,7 @@ describe('a glance at a feed, which a page shows first', () => {
     const now = Date.UTC(2100, 0, 20, 12);
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(now);
-    const at = (time: string, person = priya) => ({ event: feedEvent({ time }), githubId: person.githubId });
+    const at = (time: string, person = priya) => ({ event: feedEvent({ time }), githubId: person.githubId, project: 'sample-owner/sample-app' });
     await feed.deliver([at('2100-01-12T23:59:59.999Z'), at('2100-01-13T00:00:00.000Z')]);
 
     await feed.deliver([at(new Date(now).toISOString(), kenji)]);

@@ -910,7 +910,8 @@ survives a restart.
   `since`, and first gets every event after that one. With no `since`, or
   one the room never sent, it first gets the whole history.
 - A blocked donor's events are left out, and every event while the
-  do-not-list covers the issue's repo, as [Live feeds](#live-feeds) says.
+  do-not-list covers the issue's repo or names its claim's project, as
+  [Live feeds](#live-feeds) says.
 - A room can sleep with watchers connected. They stay connected, and get the
   next event.
 - Watchers only listen. A watcher that sends anything has its socket closed,
@@ -1905,8 +1906,8 @@ how they asked, and only admins see it.
   taken over, and a removed registration is registered again, and either
   waits in the queue as `pending`, still on the list. Approving it takes
   the repo off the list, and rejecting it leaves it on.
-- The events on its issues leave the live feeds, as
-  [Live feeds](#live-feeds) says.
+- The events on its issues, and of its claims wherever their issues were,
+  leave the live feeds, as [Live feeds](#live-feeds) says.
 
 **The seed list.** `admin_seed_repo` adds a repo to the crawler's seed
 list, for the [policy crawler](#the-policy-crawler) to read whatever its
@@ -4110,21 +4111,31 @@ out of what they send watchers, and so of every stream.
   tries again a minute later, and with each new event.
 
 **The do-not-list.** Every event on an issue in a repo the
-[do-not-list](#crawl-candidates) covers is hidden the same way: feeds and
-rooms leave it out of what they send watchers, and so of every stream and
-live socket, and of a room's or feed's history read directly.
+[do-not-list](#crawl-candidates) covers, and every event on a claim of a
+project the list names, is hidden the same way: feeds and rooms leave it
+out of what they send watchers, and so of every stream and live socket,
+and of a room's or feed's history read directly.
 
 - What the list covers is read from the database each time events go out,
   and each time a watcher connects, with who is blocked. So removing a
   project hides the events already stored on its issues, and new ones, from
   then on. Feeds and rooms still store them, and a watcher that connects
   after the repo comes off the list gets them again.
-- An event is judged by the repo its issue is in, as the event names it.
-  So while an approved or paused project off the list keeps its issues in
-  the same issue repo as a removed one, the events on both projects' issues
-  there show. When the repo on the list is the removed project's own code
-  repo, the events on it are hidden, those of other projects that keep
-  their issues there included.
+- An event is judged by the repo its issue is in, as the event names it,
+  and by its claim's project. A project the list names, by its code repo
+  or by the repo it keeps its issues in now, has every event of its claims
+  hidden, wherever the issues were. So a project that moved its issues to
+  another repo before it was removed leaves none of its events on the old
+  issues shown, as the public pages show none of its claims.
+- While an approved or paused project off the list keeps its issues in the
+  same issue repo as a removed one, the events of its own claims there
+  show, and the removed project's are hidden. When the repo on the list is
+  the removed project's own code repo, the events on it are hidden, those
+  of other projects that keep their issues there included.
+- A feed keeps each event's project from the time this rule began. An
+  event it stored before then is judged by its claim, whose project the
+  database holds. One whose claim the database doesn't hold is judged by
+  its repo alone.
 - A feed counts its events by day and claimant, so a day's count still
   counts events on issues the list covers.
 - When the database can't say what the list covers, nothing goes out, as
@@ -4191,6 +4202,9 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   GitHub couldn't have, are `404`. So a request never makes a feed or room
   that nothing could fill. A `since` that isn't an event ID is `400`. When
   the database or the feed can't answer, it is `503`.
+- A repo whose project has no [page](#the-project-page), as a pending,
+  rejected, or delisted project has none, is `404` too, with the same words
+  as for a repo that isn't a project.
 - A blocked donor's stream is `404` too, as their
   [page](#a-persons-page) is. It says `@<user> has no stream on Good First
   Token.`, the same words as for a login no one has signed in with, so it
