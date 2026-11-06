@@ -677,7 +677,7 @@ export const adminRemoveProject = defineTool({
 export const adminSeedRepo = defineTool({
   audience: 'admin',
   description:
-    "Add a repo to the policy crawler's seed list. The crawler reads its docs whatever its stars or last push. Optionally save verified maintainer activity in evidence, or clear it with evidence: null. The server stamps the verifier and fetches no source URLs. Evidence can update a waiting find without another policy read. It keeps seed handling history. Projects and previously decided finds keep their skips. A repo on the do-not-list is refused. Discovery priority never changes AI policy or listing decisions.",
+    "Add a repo to the policy crawler's seed list, or seed it again. The crawler reads its docs at its next run whatever its stars or last push, and again 30 days after each read. Seeding a repo on the list already, or one whose find an admin rejected, makes it due at the next run. A rejected find goes back in the admin queue only when its docs read differently. A repo on the do-not-list is refused. A project, or a repo whose find waits in the admin queue or was approved, is left alone. Optionally save verified maintainer activity in evidence, or clear it with evidence: null. The server stamps the verifier and fetches no source URLs. Evidence can update a waiting find without another policy read, and keeps its seed handling history. Discovery priority never changes AI policy or listing decisions.",
   refusals: ['repo_not_eligible', 'invalid_input'],
   input: z.object({ repo: repoName, evidence: crawlPriorityInputSchema.nullable().optional() }),
   output: z.object({
@@ -687,8 +687,10 @@ export const adminSeedRepo = defineTool({
     evidenceChanged: z.boolean().default(false),
     evidence: crawlPrioritySchema.nullable().default(null),
     priority: crawlPriorityStatusSchema.nullable().default(null),
-    /** Why the crawler leaves the repo alone: a project already, or proposed before. Null when it doesn't. */
+    /** Why the crawler leaves the repo alone: a project already, or a find of it waits in the admin queue. Null when it doesn't. */
     leftAlone: z.enum(['project', 'proposed']).nullable(),
+    /** True when an admin rejected a find of the repo before, so its find comes back only when its docs read differently. */
+    rejectedBefore: z.boolean().default(false),
   }),
   text: (out) => {
     const changed = out.evidenceChanged
@@ -698,10 +700,12 @@ export const adminSeedRepo = defineTool({
       : out.leftAlone === 'proposed' ? (out.evidenceChanged || out.added
         ? `${changed || `Added ${out.repo} as a handled seed.`} Its find keeps waiting in the admin queue. No policy read was queued.`
         : `The crawler put ${out.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`)
+      : out.added && out.rejectedBefore ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs.`
       : out.added ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`
-      : out.evidenceChanged ? `${changed} Its seed keeps its handling history.`
-      : `${out.repo} is on the crawler's seed list already. Nothing changed.`;
-    return lines(result, out.evidence && describeCrawlPriority(out.evidence, out.priority));
+      : `${changed} ${out.repo} is on the crawler's seed list already. The crawler's next run reads it again.`.trim();
+    const rejected = out.leftAlone === null && out.rejectedBefore
+      && `An admin rejected a find of ${out.repo} before, so it goes back in the admin queue only when its docs read differently.`;
+    return lines(result, rejected, out.evidence && describeCrawlPriority(out.evidence, out.priority));
   },
 });
 

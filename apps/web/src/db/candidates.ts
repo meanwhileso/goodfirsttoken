@@ -158,8 +158,8 @@ export type CrawlerSkip =
  * in lower case. The do-not-list comes first, then projects, then earlier
  * finds. Names compare without case. The repos go in as one JSON array, so
  * any number of them takes one query. With `readRejected`, a repo whose
- * finds were all rejected isn't left alone, so the search's monthly pass
- * reads it again, and it comes back when its docs read differently.
+ * finds were all rejected isn't left alone, so its seed is read again each
+ * month, and it comes back when its docs read differently.
  */
 export async function crawlerSkips(
   db: D1Database,

@@ -82,8 +82,8 @@ test('every cron trigger in wrangler.jsonc runs one job, and each job has a cron
   await db.prepare('UPDATE connected_agents SET renewed_at = ?1').bind(long).run();
   const connections = () => db.prepare('SELECT COUNT(*) AS n FROM connected_agents').first<number>('n');
   const ran: string[][] = [];
-  // The crawler's search fills a stand-in for the crawl queue, so no
-  // consumer reads what it finds while the other jobs run.
+  // The crawler's cron job fills a stand-in for the crawl queue, so no
+  // consumer reads what it queues while the other jobs run.
   const queued: unknown[] = [];
   const bindings = { ...env, CRAWL_QUEUE: { sendBatch: (messages: unknown[]) => void queued.push(...messages) } } as unknown as Env;
 
