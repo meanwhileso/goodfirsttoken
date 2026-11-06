@@ -167,6 +167,16 @@ function bansWithoutNaming(text: string): boolean {
   return (GENERATED_WORK.test(text) && REFUSAL.test(text)) || (HUMAN_ONLY.test(text) && !ABOUT_DESCRIPTION.test(text)) || AI_FREE.test(text);
 }
 
+/**
+ * Whether a text names AI by the word list, in any file, or bans it with no
+ * word for it. The model reader's fingerprint keeps the passages that do,
+ * and leaves out the ones the rules keep only because they talk about
+ * contributing in a file for agents.
+ */
+export function namesAiByWordList(text: string): boolean {
+  return namesAiItself(text) || AGENT_WORDS.test(text) || bansWithoutNaming(text);
+}
+
 // ---------------------------------------------------------------------------
 // The forms known to say no to something else. Each is tested both ways.
 //
@@ -184,8 +194,8 @@ const MARKS_BEFORE = /^(?:-\s+label:\s*|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]?\]\s*)?|#
 const COMMENT_OPEN = '<!--';
 const COMMENT_CLOSES = ['-->', '--!>'];
 
-/** The sentence without the marks around it. */
-function bare(text: string): string {
+/** The sentence without the marks around it. Exported for the model reader's checks. */
+export function bare(text: string): string {
   let rest = text;
   if (rest.startsWith(COMMENT_OPEN)) rest = rest.slice(COMMENT_OPEN.length).trimStart();
   rest = rest.replace(MARKS_BEFORE, '');
@@ -494,7 +504,7 @@ const PRONOUN = /\b(?:it|its|that|them|these|those|they|such)\b/i;
  * strike marks left out, curly quotes straightened, and space folded, with
  * where it is in the file.
  */
-interface Sentence {
+export interface Sentence {
   text: string;
   start: number;
   end: number;
@@ -520,8 +530,8 @@ const SENTENCE_END = /[.!?](?=\s)/g;
 // out of the text the admin sees: this is for matching alone.
 const EMPHASIS_TAGS = /<\/?(?:strong|em|b|i|u|s|del|ins|mark|strike)>/gi;
 
-/** Text for matching: emphasis gone, curly quotes straight, and space folded. */
-function plain(text: string): string {
+/** Text for matching: emphasis gone, curly quotes straight, and space folded. Exported for the model reader's checks. */
+export function plain(text: string): string {
   return text
     .replace(EMPHASIS_TAGS, ' ')
     .replace(/[’‘]/g, "'")
@@ -532,8 +542,8 @@ function plain(text: string): string {
     .trim();
 }
 
-/** The file's paragraphs, runs of lines with no blank line between them, and its sentences. */
-function scan(text: string): { paragraphs: { start: number; end: number }[]; sentences: Sentence[] } {
+/** The file's paragraphs, runs of lines with no blank line between them, and its sentences. Exported for the model reader's checks. */
+export function scan(text: string): { paragraphs: { start: number; end: number }[]; sentences: Sentence[] } {
   const paragraphs: { start: number; end: number }[] = [];
   const sentences: Sentence[] = [];
   const headings: { level: number; ai: boolean }[] = [];
@@ -606,7 +616,7 @@ export function sentencesOf(text: string): { text: string; choice: boolean }[] {
  * after it too when its own is a Markdown heading. When that is longer than
  * a quote may be, the sentence alone, as the file has it, cut at the limit.
  */
-function quoteOf(text: string, paragraphs: readonly { start: number; end: number }[], sentence: Sentence): string {
+export function quoteOf(text: string, paragraphs: readonly { start: number; end: number }[], sentence: Sentence): string {
   const alone = () => text.slice(sentence.start, sentence.end).slice(0, MAX_POLICY_QUOTE).trim();
   const own = paragraphs[sentence.paragraph];
   if (!own) return alone();
@@ -668,7 +678,7 @@ function passageOf(text: string, paragraph: { start: number; end: number }, cent
  * MAX_SOURCE_LINE characters. Each file's lines are found once, and each
  * line is cut once, however many positions are asked about.
  */
-function linesOf(file: PolicyFile): (index: number) => SourceLine {
+export function linesOf(file: PolicyFile): (index: number) => SourceLine {
   const starts = [0];
   for (let i = file.text.indexOf('\n'); i !== -1; i = file.text.indexOf('\n', i + 1)) starts.push(i + 1);
   const cut = new Map<number, SourceLine>();

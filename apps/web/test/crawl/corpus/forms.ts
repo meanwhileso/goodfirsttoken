@@ -38,9 +38,9 @@ export interface FormGroup {
   bans: FormSide[];
 }
 
-const allows = 'allows_with_conditions';
-const invites = 'invites_agents';
-const ban = 'bans_or_restricts';
+const allows: CrawlTier = 'allows_with_conditions';
+const invites: CrawlTier = 'invites_agents';
+const ban: CrawlTier = 'bans_or_restricts';
 
 const welcome = contributing('AI help is fine.');
 /** The docs when CONTRIBUTING.md welcomes AI help and another file says what it says. */

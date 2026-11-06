@@ -27,6 +27,10 @@ describe the code as it is.
   migration named for the UTC time, `YYYYMMDDHHMMSS_name.sql`. Never use
   `wrangler d1 migrations create`, and never rename a migration that has
   shipped. `pnpm lint` fails a new file with a number.
+- `pnpm eval:policy --dry-run` prints every request the model policy
+  reader's eval would send, and its estimated cost, and sends nothing. A
+  real run, with no `--dry-run`, needs `ANTHROPIC_API_KEY` and costs about
+  $60 to $100. Don't start one without the owner's OK.
 - `pnpm prototype` serves prototype/ at http://localhost:8943.
 - `pnpm video:render` re-renders the launch video. It needs ffmpeg and cwebp.
 

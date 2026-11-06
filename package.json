@@ -22,6 +22,7 @@
     "skills:build": "node scripts/skills.mjs build",
     "skills:check": "node scripts/skills.mjs check",
     "skills:run": "node apps/web/scripts/skill-run.ts",
+    "eval:policy": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./apps/web/scripts/ts-resolve.mjs apps/web/scripts/eval-policy.ts",
     "apps:host": "node apps/web/scripts/apps-host-proxy.ts",
     "video:stills": "node video/capture.mjs stills",
     "video:render": "node video/capture.mjs render"
