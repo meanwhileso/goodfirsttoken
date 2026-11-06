@@ -13,6 +13,7 @@ The repo is a pnpm workspace.
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, the share cards, the live text streams and sockets, each page's markdown version, `/llms.txt`, `/robots.txt`, `/sitemap.xml`, and the JSON data at `/projects.json` and `/<owner>/<repo>.json`, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, the schema of the JSON data the site publishes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
+| `packages/anthropic-fake` | A fake of the Anthropic Messages API and Message Batches API for tests and local development. It checks each request's shape as the API does for Claude Opus 5.5, answers from policy readings recorded for the GitHub fake's sample repos, and lets a test script any answer or failure. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, the parts several skills share in `skill-src/shared/`, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
@@ -714,7 +715,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   again, which can take several runs. `readIssue` in
   `src/donor/github.ts` folds the title GitHub gives the donor's token.
   The donor tools' answers take a title only through `issueTitle`, which
-  refuses one that isn't folded, the way `followUpText` does.
+  refuses one that isn't folded, the way `followUpText` does. `readIssue`
+  folds the issue's body with `foldUntrustedLines`, which drops the same hidden
+  characters and keeps the lines, and `claim_issue`'s answer takes a body
+  only through `issueBody`, which refuses one that isn't folded.
   `cutGraphemes` gives back text no longer than its cap in UTF-16 units
   without counting graphemes, since a text has at least as many units as
   graphemes, so cutting a title that fits costs next to nothing.
@@ -1529,7 +1533,9 @@ production are not in the repo. The deploy writes their config from the
 GitHub environment, as [Deploys](#deploys) describes.
 `GH_API_URL` and `GH_WEB_URL` hold the GitHub fake's URLs locally. A deploy
 that leaves their settings empty gives them empty strings, and
-`src/github.ts` then calls GitHub itself.
+`src/github.ts` then calls GitHub itself. `ANTHROPIC_API_URL` holds the
+Anthropic fake's URL locally the same way, and `src/anthropic.ts` calls the
+Anthropic API itself when it is empty.
 
 | Binding | Kind | Used from |
 |---|---|---|
@@ -1539,6 +1545,10 @@ that leaves their settings empty gives them empty strings, and
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
+| `ANTHROPIC_API_URL` | Variable: the Anthropic API. The Anthropic fake locally. Empty means `https://api.anthropic.com` | Later, by the policy reader, through `src/anthropic.ts` |
+| `POLICY_READER` | Variable: `rules`, `shadow`, or `model`. Empty means `rules` | Later, by the policy reader, through `src/anthropic.ts` |
+| `MODEL_DAILY_BUDGET_USD` | Variable: the most the model may spend in a UTC day, in US dollars. Empty means 0 | Later, by the policy reader, through `src/anthropic.ts` |
+| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/optional-secrets.d.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | Later, by the policy reader, through `src/anthropic.ts` |
 | `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, the scheduled jobs, and the crawler |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
@@ -1549,7 +1559,7 @@ that leaves their settings empty gives them empty strings, and
 | `PR_CHECKER` | Durable Object namespace of `PrChecker`, one for the whole site, which holds the global limits on the reads `check_pr` asks for | Now, by `check_pr` in `src/mcp/donor.ts` |
 | `OAUTH_KV` | KV: the OAuth library's clients, grants, token hashes, and sign-ins in progress | Now, by `@cloudflare/workers-oauth-provider`, through `src/mcp/` |
 | `FEED_QUEUE` | Queue producer. The Worker also consumes the queue, with `feed-dlq` as its dead-letter queue | Now, by the issue room and `src/feed/queue.ts` |
-| `CRAWL_QUEUE` | Queue producer. The Worker also consumes the queue, one batch at a time, with `crawl-dlq` as its dead-letter queue | Now, by the crawler's search and `src/crawl/queue.ts` |
+| `CRAWL_QUEUE` | Queue producer. The Worker also consumes the queue, one batch at a time, with `crawl-dlq` as its dead-letter queue | Now, by the crawler's cron job in `src/crawl/producer.ts` and `src/crawl/queue.ts` |
 
 The cron triggers are in `wrangler.jsonc` too, under `triggers`, and
 [The sync](#the-sync) lists them, the crawler's included. The static host's R2 bucket is not a
@@ -1571,7 +1581,7 @@ D1, bound as `DB`, holds the structured records that search and the
 leaderboard read: people, projects with their settings and status changes,
 the tagged-issue cache, claims, their submitted work, PRs, donor sessions,
 blocks, the do-not-list, requests to be removed, crawl candidates, the
-crawler's seed list and passes, and its weekly reads of listed projects
+crawler's seed list, and its weekly reads of listed projects
 with the policy changes they found. GitHub is the source of truth for
 issues and PRs, and the issue room is for claims, so those tables are
 caches and mirrors. None of these tables holds a GitHub token. The rules
@@ -1612,9 +1622,6 @@ in `people`.
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
-| `crawl_passes` | Pass of the crawler's broad search over the pool: when it started, the push date it looks after, the pool's size, the band and page it reads next, how many repos it queued, and when it finished | `started_at` |
-| `popular_crawl_passes` | Monthly popular sample: start and push date, total results at its first page, next page, queued count, and finish time | `started_at` |
-| `crawl_queued_repos` | Successful seed, broad, and popular sends recorded for a broad pass, with repo names compared without case | `broad_started_at, repo` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read and whether they read a ban, and why the crawler last paused it | `project` |
 | `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, status, and the admin's decision | `id` |
@@ -1683,19 +1690,15 @@ that break the rules, so it returns the problems for the caller to show.
   work whose PR was to open by itself. `my_work` reads the rows of a
   donor's claims awaiting review by key.
 - **The crawler's tables** came with migration `0008_crawl.sql`: the seed
-  list in `crawl_seeds`, owned by `src/db/seeds.ts`, the passes in
-  `crawl_passes`, owned by `src/db/crawls.ts`, the index
+  list in `crawl_seeds`, owned by `src/db/seeds.ts`, the index
   `crawl_candidates_by_repo`, and `crawl_candidates.sources`, JSON text
   that a find stored before it reads as an empty list, and
   `crawl_candidates.ai_sentences` and `more_ai_sentences`, the sentences
   that name AI with their paragraphs, which a find stored before has none
   of. A kept paragraph stored without `cutBefore` or `cutAfter` reads as
-  uncut. `crawl_passes.open`
-  is 1 or 0. A seed's `handled_at` and `outcome` are null until the cron
-  job handles it, and set together. A pass keeps
-  where it stands in its own row, and moves on only with a compare-and-set
-  on the band and page it read, so two runs never both move it.
-  `crawlerSkips` in `src/db/candidates.ts` asks the do-not-list, the
+  uncut. A seed's `handled_at` and `outcome` are null until the cron
+  job handles it, and set together. Seeding a repo again sets both back to
+  null. `crawlerSkips` in `src/db/candidates.ts` asks the do-not-list, the
   projects, and the crawl candidates about any number of repos in one
   query.
 - **Migration `0009_removal_requests.sql`** makes `removal_requests`. A
@@ -1739,14 +1742,18 @@ that break the rules, so it returns the problems for the caller to show.
   and `issue_repo`, under [Repo IDs](#repo-ids). A project from before it
   gets none, and the first read of each repo fills it in, since the
   migration can't ask GitHub.
+- **Migration `20261106032539_drop_crawl_search.sql`** drops
+  `crawl_passes`, made in `0008_crawl.sql`, and `popular_crawl_passes` and
+  `crawl_queued_repos`, made in `0014_popular_crawls.sql`, once the crawler
+  stopped searching. `crawl_queued_repos` goes first, since it names
+  `crawl_passes`.
 
 ### Who sees what
 
 The spec says everything the site shows is public GitHub data or the public
 live feed. It says crawl results stay in the deployment's database, and only
-listed projects and their policy quotes are public, so `crawl_candidates`,
-`crawl_seeds`, `crawl_passes`, `popular_crawl_passes`, and
-`crawl_queued_repos` stay private, a rejection's reason
+listed projects and their policy quotes are public, so `crawl_candidates`
+and `crawl_seeds` stay private, a rejection's reason
 included. The crawler keeps no verdict on a repo it doesn't propose. Its log
 names the repos it proposed, a repo it couldn't read whole or GitHub failed
 on, with no verdict on it, and a find it couldn't write. The reason an admin gives for
@@ -1961,7 +1968,7 @@ it fails.
 | `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, when the last try started, the time before which no try is made, until when a call's try is out, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
 | `pr_outcomes` | Claim whose own PR merged or closed, as the PR job told the room, with which |
-| `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
+| `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. Once the room has held more than `ROOM_RESUME` events, each post deletes the lines that are neither among its newest `ROOM_RESUME`, blocked donors' included, nor among their claim's newest `LANE_LINES` (`pruneLines`). Changes of state all stay. The `outbox` keeps its own copy of each message, so a line deleted while the queue is down still reaches the feeds. A watcher kept behind by D1 for over 1,000 events can miss lines. |
 | `outbox` | Event not yet sent to the feed queue, by its place in `events`: the message to send, the failed tries, and the time before which no try is made |
 
 The tables are made with `CREATE TABLE IF NOT EXISTS` when the object starts.
@@ -2125,8 +2132,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   reached the last event stored.
 - **A new watcher's history.** The feed or room is told which donors are
   known to be blocked and which repos the do-not-list is known to cover,
-  and reads only the events it will send: a feed with no `since` reads its
-  newest 100 of the others, in one query. D1 is asked about any claimant or
+  and reads only the events it will send: a feed or room with no `since`
+  reads its newest 100 of the others, in one query. A room with one reads
+  the newest 1,000 after it (`ROOM_RESUME`). D1 is asked about any claimant or
   repo in them not yet asked about, and the read repeats until none is
   new. Then the socket is accepted, sent its history, and given its
   place, with no await in between, so no event falls between its history
@@ -2194,8 +2202,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   `findIssue` makes, under [The issue page](#the-issue-page). Then twice for
   each round of the block check, once for blocked donors and once for the
   do-not-list, at the same time. It
-  sends at most 100 events from a feed with no `since`, at most 1,000 with
-  one, and an issue room's whole history. Each line costs the feed or room
+  sends at most 100 events from a feed or an issue room with no `since`,
+  and at most 1,000 with one (`FEED_TAIL` and `FEED_KEEPS` in
+  `src/rooms/feed.ts`, `ROOM_TAIL` and `ROOM_RESUME` in
+  `src/rooms/issue-room.ts`). Each read is one query that stops at that
+  many, by the table's key. Each line costs the feed or room
   two D1 reads per batch it sends, shared by its watchers, and each stream a
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
@@ -2486,11 +2497,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `issue_syncs` and the do-not-list for its repo and its issue repo, all at
   once. That one answer decides the breadcrumb, the cached copy, and
   whether the project takes claims.
-  Then the room's glance, which reads its whole history and asks D1 which
-  donors are blocked and whether the do-not-list covers the issue's repo,
-  two queries at once, and a socket on the room for as long as the page is
-  open. Each lane keeps its newest 20 lines, so the page carries at most
-  that many per claim. Nothing caches any of it yet.
+  Then the room's glance, which reads every change of state and each
+  claim's newest 20 lines, `LANE_LINES`, all a lane shows, and asks D1
+  which donors are blocked and whether the do-not-list covers the issue's
+  repo, two queries at once, and a socket on the room for as long as the
+  page is open. The page folds those to the view the whole history would
+  give. The room deletes older lines as new ones come, so the glance reads
+  at most every change of state, 20 lines a claim, and 1,000 events
+  besides. Nothing caches any of it yet.
 
 ## The project pages
 
@@ -2890,7 +2904,7 @@ and count the hour's reads in one place. The rules are in
 
 | File | What it does |
 |---|---|
-| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
+| `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget, though no job searches now. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
 | `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged. `checkClaimPrs` reads the PRs of the claims a check names the same way, a batch at a time |
 | `src/sync/pr-checker.ts` | `PrChecker`, the one Durable Object for the whole site that reads the PRs `check_pr` asks for. It holds the global limits: one read at a time, at most one every 2 seconds and 300 an hour, 30 checks an hour from one donor, with both counts in its own SQLite tables, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, a check of a PR being read joining that read, and `CHECK_ALLOWANCE`, which leaves a tenth more of the budget than the scheduled job in `ALLOWANCES` that leaves the most. `prs.reviews_read_at` keeps when the last saved read of a PR's reviews was made, so the PR job's read and a check's that land out of order never count the same reviews twice |
@@ -2904,7 +2918,7 @@ and count the hour's reads in one place. The rules are in
 
 - **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync,
   `7,37 * * * *` for the PR job, `52 * * * *` for the policy crawler's
-  search, under [The policy crawler](#the-policy-crawler), and `23 4 * * *`
+  cron job, under [The policy crawler](#the-policy-crawler), and `23 4 * * *`
   for ending the agents' connections whose grants ran out, so no two start
   in the same minute. The Worker's `scheduled` handler in `src/server.ts` hands the cron
   to `runScheduled`, which runs its job, and logs an error for a cron no job
@@ -3293,28 +3307,26 @@ measured on real GitHub yet. The run logs are how to measure it.
 
 ## The policy crawler
 
-The crawler finds repos whose docs welcome AI help, and puts them in the
-admin queue as crawl candidates. The rules are in
+The crawler reads the repos admins seed, and puts the ones whose docs
+welcome AI help in the admin queue as crawl candidates. The rules are in
 [how-it-works.md](how-it-works.md#the-policy-crawler).
 
 | File | What it does |
 |---|---|
-| `src/crawl/search.ts` | The cron job: queues seeds and weekly reads, then schedules the broad search and a bounded popular sample with independent checkpoints |
+| `src/crawl/producer.ts` | The cron job: queues the seeds that are due and the listed projects due for their weekly read. It makes no call to GitHub |
 | `src/crawl/queue.ts` | The crawl queue's consumer: reads each batch, sorts each repo, and writes the finds |
 | `src/crawl/reads.ts` | What the consumer reads from GitHub: each repo's facts and folders, its files, its labels, and its pull request settings |
 | `src/crawl/rules.ts` | The tiers and the suggestions, as pure functions of the files and labels |
 | `src/db/seeds.ts` | The `crawl_seeds` table, the seed list |
 | `packages/core/src/crawl-priority.ts` | Strict input and stored evidence schemas, action-clock validation, and pure qualification rules |
-| `src/db/crawls.ts` | The `crawl_passes` table, where each broad pass stands |
-| `src/db/popular-crawls.ts` | The `popular_crawl_passes` checkpoint and `crawl_queued_repos` records of successful sends |
 | `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue |
 | `src/crawl/fingerprint.ts` | The hash of what the rules read in a repo's docs, which a weekly read and a crawler find keep |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
 
 - **A cron fills a queue, and the queue's consumer reads.** The cron job,
-  at 52 minutes past each hour, makes only searches, and the consumer only
-  GraphQL and REST reads, so each spends a budget of its own. Each has its
-  own `ServiceGitHub`, with its allowance in `ALLOWANCES` in
+  at 52 minutes past each hour, reads only D1 and sends to the queue. The
+  consumer makes the GraphQL and REST reads, with its own `ServiceGitHub`
+  and its allowance, `crawlRead`, in `ALLOWANCES` in
   `src/sync/allowances.ts`. A batch holds 10 repos, which keeps its GraphQL
   queries small. The consumer's `max_concurrency` of 1 keeps it to one
   batch at a time, since GitHub asks a client not to make concurrent
@@ -3322,8 +3334,10 @@ admin queue as crawl candidates. The rules are in
 - **Verified seed evidence.** Migration `0015_crawl_priority.sql` adds nullable
   JSON to existing seeds. `admin_seed_repo` validates research facts and
   stamps the authenticated admin's GitHub ID. It fetches no arbitrary URL.
-  `saveSeedEvidence` upserts or clears only that JSON, preserving all handling
-  history. Its SQL write checks the do-not-list too. A waiting candidate with
+  `saveSeedEvidence` upserts or clears that JSON. It keeps the handling
+  history unless `due` asks for the seed to be due, as `admin_seed_repo`
+  does for any seed but a waiting find's. Its SQL write checks the
+  do-not-list too. A waiting candidate with
   no seed gets a handled `proposed` seed, so saving evidence queues no read.
 - **Qualification before the limit.** `listSeedsToHandle` receives the
   producer's clock. SQL ranks qualifying evidence before `LIMIT`, then
@@ -3341,65 +3355,18 @@ admin queue as crawl candidates. The rules are in
   less than three fifths of an hourly budget is left, 500 above where a
   maintainer's refresh stops. Its cap of 60 calls covers a run of 5
   batches, about 3 queries each and 2 calls for each find, with room left.
-  The search's cap of 20 calls a run keeps each run under GitHub's 30
-  searches a minute, and so sets the pace of the whole crawl: at most 1,900
-  repos an hour, whose reads cost about 570 GraphQL points. The weekly
-  reads add at most 500 listed projects a run of the cron job, about 150
-  GraphQL points and 500 REST calls. Its share of a
-  tenth only keeps it from running the minute's searches to the end, since
-  no other job searches.
-- **Bands of stars.** Search serves the first 1,000 results of a query, so
-  each band is small enough to serve whole, and its pages come with
-  `sort=stars&order=asc`, so they don't overlap while no repo's stars
-  change. The pass's first search is the band with no upper end from 1,000
-  stars, whose `total_count` is the size of the pool, kept in
-  `crawl_passes.pool`. The push date is set when the pass starts.
-- **A popular sample.** `popularSearchOnce` asks for `stars:>=10000`,
-  `archived:false`, `is:public`, and the push date fixed at the sample's
-  start. It sorts by stars descending and requests 100 results per page.
-  It reads at most ten pages. `pool` keeps the first page's total count.
-  The log reports that count and the 1,000-result cap separately, so it
-  does not claim full coverage above 10,000 stars. The sample starts on
-  the next cron even when the broad pass is unfinished or finished. It
-  starts again only after finishing and 30 days after its own start.
-- **Search scheduling.** Seeds and weekly reads come first. One search call
-  advances the broad pass, up to four advance the popular sample, and the
-  remaining calls advance broad search. Both share one `ServiceGitHub`
-  and the existing 20-call allowance, including the rate-limit check.
-  A small allowance therefore advances broad search first. Popular pages
-  cannot consume all the calls while broad work remains.
-- **Independent checkpoints.** Migration `0014_popular_crawls.sql` adds
-  `popular_crawl_passes` and `crawl_queued_repos`. The local
-  `PopularCrawlPass` interface keeps start time, push date, pool count,
-  page, queued count, and finish time. `startPopularCrawlPass` atomically
-  excludes an unfinished sample or any sample started in the previous
-  30 days. A delayed producer cannot restart a sample another run just
-  finished. `movePopularCrawlPass` compares the saved page,
-  count, and pool before updating it. Incomplete or malformed searches,
-  rate limits, and failed sends leave that checkpoint unchanged. A broad
-  page saved earlier in the run stays saved. Starting a sample never
-  resets a broad pass.
-- **Recorded sends across paths.** `send` checks the existing crawler skips
-  and `crawl_queued_repos` for seeds and both searches. The latest broad
-  pass's `startedAt` scopes every path in a run, even after the pass
-  finishes. A successful queue send is recorded afterward. Subsequent
-  paths count those names as seen, without case. The ledger is private.
-  It excludes weekly reads, which have their own schedule. A new broad
-  pass changes the scope for subsequent popular pages without changing
-  the sample's cursor or push date. Completed older scopes can then be
-  retired. The latest scope stays available between passes.
-  `seedsQueuedSince` also protects seeds handled before the ledger was
-  added. Earlier non-seed sends cannot be reconstructed, so rollout may
-  queue those repos again in the first sample. A crash before recording,
-  or concurrent sends before either records, can also duplicate delivery.
-  The consumer still inserts a candidate once and rechecks its skips.
-  Saved queued counts cover committed successful pages. A crash between
-  recording a send and saving its checkpoint can leave that count lower
-  than physical deliveries. The run's counters count successful sends.
-- **Queue order.** The queue is FIFO. This schedule changes new messages'
-  entry order. Existing messages keep their place. A time estimate for a
-  newly prioritized repo needs the current backlog. GitHub's changing
-  search index can still repeat or omit results between pages.
+  The cron job queues at most 500 seeds a run, about 150 GraphQL points of
+  reads, and at most 500 listed projects for their weekly reads, about 150
+  GraphQL points and 500 REST calls.
+- **Seeds, monthly.** `listSeedsToHandle` gives the seeds never handled,
+  and the ones handled `SEED_EVERY_MS`, 30 days, ago or more whose repo is
+  no project and has no find waiting, in one query. `markSeedsHandled`
+  writes the time and outcome only for a seed that is due at that time, so
+  two runs at once keep the first one's. The cron job sends a run's seeds,
+  then marks them handled, so a crash between the two queues them again.
+  The consumer inserts a candidate once and checks its skips again.
+- **Queue order.** The queue is FIFO. Existing messages keep their place.
+  A time estimate for a newly seeded repo needs the current backlog.
 - **What a batch reads.** One GraphQL query for all its repos: each one's
   `nameWithOwner`, whether it is archived or private, its stars, when it
   was made and last pushed, its default branch and the commit it points
@@ -3548,20 +3515,12 @@ admin queue as crawl candidates. The rules are in
   listing over. Approving one calls `listFromPolicy` in
   `src/admin/actions.ts`, the path of `admin_add_project`, which reads the
   repo on GitHub with the admin's token and keeps the project's status.
-- **A pass a month.** `fillCrawlQueue` starts a pass when the last one is
-  done and started `CRAWL_PASS_EVERY_MS`, 30 days, ago. `crawlerSkips`
-  takes `readRejected`, which the search and the consumer pass, so a repo
+- **Rejected finds, read again.** `crawlerSkips` takes `readRejected`,
+  which the cron job, the consumer, and `admin_seed_repo` pass, so a repo
   whose finds were all rejected is read, and `lastRejectedFind` gives the
   hash to compare. A find with no hash, or one of another version, takes
-  the new one through `setFindFingerprint`. The cron job starts the pass
-  before it reads the seeds, and passes its start as `since` to
-  `listSeedsToHandle` and `markSeedsHandled`, so each pass reads every
-  seed once, with `readRejected` as for both searches. Each search marks
-  seeds it queues handled with `markSeedsHandled`. The shared send ledger
-  and `seedsQueuedSince` prevent recorded paths from queuing those names
-  again in that broad pass. `admin_seed_repo` doesn't pass
-  `readRejected`, so adding a seed for a repo with any find adds nothing,
-  as before.
+  the new one through `setFindFingerprint`. `admin_seed_repo` on such a
+  repo adds the seed, or makes it due, and answers `rejectedBefore`.
 - **The link** is on `https://github.com`, as the sample data's are,
   whatever `GH_WEB_URL` says, since the policy schema takes https links
   only and the GitHub fake serves plain http locally. The branch and each
@@ -3627,19 +3586,15 @@ budget for a monthly crawl, and how many repos clear the 1,000-star and
 30-day bar. This is what the build spends and how it counts, from GitHub's
 docs and the GitHub fake. Neither number is measured on GitHub yet.
 
-- **How many repos.** The first search of each pass counts them: public
-  repos with at least 1,000 stars, a push in the last 30 days, not archived,
-  and not forks. The count is kept in `crawl_passes.pool`, and every run's
-  log line gives it, so staging's first pass answers the question.
+- **How many repos.** The crawler stopped searching GitHub under
+  [the model policy reader spec](specs/model-policy-reader.md#where-new-repos-come-from),
+  so it reads the seeds admins add, and no pool.
 - **What GitHub gives the service token's account.** 5,000 REST calls and
-  5,000 GraphQL points an hour, and 30 searches a minute. A GraphQL query
+  5,000 GraphQL points an hour. A GraphQL query
   costs at least a point. One that asks for many connections costs more:
   GitHub adds up the requests each connection needs at its `first` or
   `last`, and divides by 100.
-- **What a crawl costs, for every 10,000 repos in the pool.**
-  - Search: 100 pages of 100 repos, plus a few searches for each band that
-    has to be split, and one for each band that tries the rest of the pool
-    with no upper end.
+- **What a crawl costs, for every 10,000 seeds.**
   - GraphQL: 1,000 batches, each one query for its facts and folders and
     about two for its files and the checks on its folders, none asking for
     a connection, so about 3,000 points. A test counts 3 queries for a
@@ -3647,16 +3602,10 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   - Each repo whose docs welcome AI help: one REST call, and a GraphQL query
     for each 100 of its labels, which asks for 100 labels and a count on
     each, about a point.
-- **Per run and per day.**
-  - The search runs once an hour, with at most 20 calls, the free first
-    question included: at most 19 searches, 1,900 repos, and 190 batches an
-    hour, and 456 searches and 45,600 repos a day. It stops before a search
-    when fewer than 3 of the minute's 30 are left.
-  - The consumer reads a batch soon after it is queued, and spends about 3
-    points for each batch of 10 repos: about 570 points in an hour of
-    searches at most, and about 13,700 in a day, plus 2 calls for each find.
-  - So a pass takes about an hour for each 1,900 repos in the pool, and a
-    pool of 10,000 about 6 hourly runs.
+- **Per run.** The cron job runs once an hour and queues at most 500 seeds,
+  50 batches. The consumer reads a batch soon after it is queued, and
+  spends about 3 points for each batch of 10 repos: about 150 points for a
+  run's seeds, plus 2 calls for each find.
 - **How it shares the hour with the other jobs.** Each job stops at its own
   share of what is left, so the jobs that matter most get the last of it.
 
@@ -3667,19 +3616,16 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   | A maintainer's refresh | REST | 2,500 of 5,000 |
   | A read on approval | REST | 1,000 of 5,000 |
   | The crawler's consumer, crawls and weekly reads | GraphQL, and REST for weekly reads | 3,000 of 5,000 |
-  | The crawler's search | Search | 3 of 30 a minute |
 
   The daily job that ends lapsed connections, under [The sync](#the-sync),
   spends none of this. It revokes tokens as the OAuth app, at most
   `LAPSED_PER_RUN`, 200, a day.
 
   The consumer spends only the top 2,000 of either hourly budget, and about
-  870 GraphQL points and 500 REST calls an hour at most: about 570 points
-  for the 1,900 repos the search queues at most in an hour, about 150
-  points for the 500 seeds the cron job queues at most in a run, which a
-  pass reads once, mostly in its first hour, and about 150 points and 500
-  REST calls for the 500 listed projects the cron job queues at most for
-  their weekly reads. Each find costs a REST call and about a point more.
+  300 GraphQL points and 500 REST calls an hour at most: about 150 points
+  for the 500 seeds the cron job queues at most in a run, and about 150
+  points and 500 REST calls for the 500 listed projects the cron job queues
+  at most for their weekly reads. Each find costs a REST call and about a point more.
   All are well inside its 2,000. A maintainer's refresh always
   has 500 more than the crawl leaves. The sync spends mostly REST, on timelines and on its checks of
   the repos of the projects it reads no issues for, up to about 101 calls a
@@ -3691,14 +3637,12 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   under The PR job in [The sync](#the-sync), and an issue again, a few
   REST calls, for each claim's PR that closed without merging. It leaves the
   least for the others, so it still reads after they stop.
-- **A monthly crawl.** A pass reads the pool once, and the next starts 30
-  days after it started. At these rates a pass spends about 3,000 GraphQL
-  points for each 10,000 repos, well under a tenth of a percent of the 3.6
-  million points in a 30-day month, and takes about an hour of runs for
-  each 1,900 repos. The search's cap on calls sets how long a pass takes,
-  and GitHub's budget has room to spare. A find an admin rejected costs its
-  share of a batch again when the search finds it, about 0.3 points, and
-  its REST call and labels only when its docs read differently.
+- **A monthly crawl.** Each seed is read again 30 days after the last
+  read. At these rates a month of seeds costs about 3,000 GraphQL points
+  for each 10,000 seeds, well under a tenth of a percent of the 3.6
+  million points in a 30-day month. A find an admin rejected costs its
+  share of a batch again each month, about 0.3 points, and its REST call
+  and labels only when its docs read differently.
 - **What a week of weekly reads costs, for N listed projects.** A batch of
   10 costs a GraphQL query for the facts and folders, about two for the
   files and the checks on the folders, and a REST call for each project:
@@ -3714,8 +3658,8 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
 ## Sample data in development
 
 `POST /dev/seed` and `POST /dev/work` are paths for local development only.
-`pnpm seed` resets the GitHub fake, then calls `/dev/seed` when `pnpm dev`
-is running. `/dev/work` takes one action at a time, from `curl` or the
+`pnpm seed` resets the GitHub fake and the Anthropic fake, then calls
+`/dev/seed` when `pnpm dev` is running. `/dev/work` takes one action at a time, from `curl` or the
 end-to-end tests. The rules are in
 [how-it-works.md](how-it-works.md#sample-data-in-development).
 
@@ -3782,7 +3726,10 @@ Each secret the Worker reads goes by name under `secrets.required` in
 also encrypts the copy of each connected agent's GitHub token.
 `GH_SERVICE_TOKEN` is the read-only token the scheduled jobs that read
 GitHub and the policy crawler use, under [The sync](#the-sync). The OAuth library needs no secret of its
-own. GitHub reserves names that start with `GITHUB_` for its own variables
+own. `ANTHROPIC_API_KEY` is optional, so it isn't under `secrets.required`.
+`scripts/deploy.mjs` lists it in `OPTIONAL_SECRETS`, and the deploy puts it
+only when the environment has it. Without it, the policy reader will read
+nothing with the model. GitHub reserves names that start with `GITHUB_` for its own variables
 and secrets, so no variable or secret of the Worker can start with it.
 
 The rate limiters' namespace IDs are the only IDs `wrangler.jsonc` has to
@@ -3794,8 +3741,10 @@ that local development simulates, and a deploy replaces them with the
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
 binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. It
-also starts the GitHub fake at `http://127.0.0.1:8944`, which
-`wrangler.jsonc` points the Worker at. The variables the app reads, with
+also starts the GitHub fake at `http://127.0.0.1:8944`, and the Anthropic
+fake at `http://127.0.0.1:8945`, which `wrangler.jsonc` points the Worker
+at. With no `ANTHROPIC_API_KEY` set, `src/anthropic.ts` gives the fake a
+stand-in key, only in development and only with the fake on this machine. The variables the app reads, with
 safe local defaults, are listed in `apps/web/.dev.vars.example`. With no
 secrets set, sign-in uses the stand-ins in `src/auth/settings.ts`, and only
 in development. Wrangler warns that the secrets are missing, and locally
@@ -4306,13 +4255,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   on a row from before it.
 - **Crawler tests** are in `apps/web/test/crawl/`. The rules' tests call
   them directly on made-up files, for every tier and condition. The rest
-  run the search against the GitHub fake with a stand-in for the crawl
-  queue that records each batch, then hand the batches to the consumer the
+  seed the GitHub fake's repos and run the cron job with a stand-in for the
+  crawl queue that records each batch, then hand the batches to the consumer the
   way Queues does, with a stand-in for `CRAWL_QUEUE` that records what the
   consumer sends back, with D1 as it runs deployed, and read the admin
   queue. They use the fake's made-up `sample-policies` repos, commit
-  made-up files to them, and add made-up repos to its state to fill bands
-  of stars. A stand-in for `fetch` records every request, so a test shows
+  made-up files to them, and add made-up repos to its state. A stand-in for `fetch` records every request, so a test shows
   which repos the crawler read, or changes GitHub's answer, to stand in for
   a symbolic link, a binary file, a push while the crawler reads, or an
   error GitHub gives for one repo. They set the clock with a fake `Date`,
@@ -4957,6 +4905,8 @@ Notes, with nothing to fix now:
 | S1 | The daily job deleted a lapsed connection before it revoked the token, so a GitHub failure at 04:23 left the token live with nothing to retry | Fixed. The job revokes first, counts a `404` as done, and keeps the row when GitHub fails. Tests: in `test/mcp/disconnect.test.ts`, "when GitHub fails to revoke, the daily job keeps the connection and its token for the next run" and "a token GitHub no longer knows counts as revoked" |
 | S3 | One address could hold thousands of sockets on the homepage's feed, which walks every socket on each event | Fixed. Each address holds at most 100 on a feed or room. Test: in `test/feed/streams.test.ts`, "the 101st from one address is refused with 429" |
 | S4 | 60 opens a minute was low enough for an office or a reconnect wave from one address to meet | Fixed. 300 a minute, with S3 bounding what an address holds |
+| Q1 | `claim_issue` sent an issue's body as GitHub gave it. Unicode tag characters, zero-width characters, and marks that reorder text in it reached the donor's agent, though neither the maintainer nor the donor could see them. The title was already folded | Fixed. `readIssue` folds the body with `foldUntrustedLines` (`packages/core/src/characters.ts`). It drops every hidden character, makes every line break `\n`, and makes any other control character but a tab a space. New claims, resumed claims, and submits all read the body through it, and `claim_issue`'s answer takes only a folded body. Tests: in `test/mcp/donor.test.ts`, "reaches the donor's agent with only what a person can see, its line breaks kept", and in `packages/core/test/fold.test.ts`, under "an issue's body". Kept: the agent isn't told when characters were dropped, so an issue about a zero-width character reads without it. The answer links the issue on GitHub. Markdown that GitHub's page hides, like an HTML comment, still reaches the agent. The raw text shows it |
+| R1 | An issue room kept and sent its whole history. One donor posting every 10 seconds, on a claim whose PR opened and so never expires, grew it without end, and every anonymous open of the issue's `live.txt` or `live.ndjson`, and every issue page view, read and sent all of it | Fixed. A watcher with no `since` gets the newest 100 events, and one with `since` at most the newest 1,000 after it, as a feed does, with blocked donors' events not counted. The glance reads every change of state and each claim's newest 20 lines. Each post deletes the lines older than the newest 1,000 events, blocked donors' included, that aren't among their lane's newest 20. Tests: in `test/feed/streams.test.ts`, "with no since, or one the room never sent, sends only the newest events, the newest last", "with since, sends at most the newest events after it", and "fills the newest 100 with events it may send, past a blocked donor's newer posts". In `test/issue/issue.test.ts`, "holds every change of state and only the lines each lane shows, so the page folds to what the whole history would". In `test/rooms/issue-room.test.ts`, "keeps the newest events, each lane's newest lines, and every change of state, and deletes the other lines". Kept: changes of state all stay, and the page shows every one. A donor can add one with each `submit_work`, under `MCP_LIMITER`. Before the PR opens, a claim awaiting review can submit the same head again. After it opens, each submit needs a newly pushed head. A blocked donor's flood, before the block, still counts toward the newest 1,000, so it can leave a stream fewer of the others' lines, though every lane keeps its 20 |
 
 Notes the review made, with nothing to fix now:
 

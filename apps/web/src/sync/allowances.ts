@@ -11,9 +11,8 @@ import type { Allowance } from './github';
  * projects it reads no issues for, and how long a read on approval reads.
  * docs/how-it-works.md gives the rule, under Tagged issues, and
  * docs/architecture.md, under The sync and The policy crawler, why these
- * numbers. The crawler's search spends the search
- * budget, which only it uses, and each run of its queue's consumer spends
- * from the others.
+ * numbers. The crawler's cron job makes no call, and each run of its
+ * queue's consumer spends from the token's budget.
  */
 export const ALLOWANCES = {
   sync: { leave: 0.2, maxCalls: 1000, checkCalls: 100 },
@@ -21,7 +20,6 @@ export const ALLOWANCES = {
   cleared: { leave: 0.1, maxCalls: 100 },
   refresh: { leave: 0.5, maxCalls: 60 },
   approval: { leave: 0.2, maxCalls: 200, maxMs: 20_000 },
-  crawlSearch: { leave: 0.1, maxCalls: 20 },
   crawlRead: { leave: 0.6, maxCalls: 60 },
 } satisfies Record<string, Allowance>;
 

@@ -10,9 +10,12 @@ import { mcpViews } from './scripts/mcp-views.ts';
 // bindings from wrangler.jsonc. ENVIRONMENT, the domains, and the OAuth app
 // are pinned to values local development never uses, so a test can tell a
 // value read from the binding from a hard-coded one, and a local .dev.vars
-// can't change the result. The secrets are set, as a deploy sets them. GitHub's
-// URLs are under .test, a domain that never resolves. Tests answer them with
-// the in-process GitHub fake. The D1 migrations are read here, in Node, and a
+// can't change the result. The secrets are set, as a deploy sets them, with
+// a test-only Anthropic key. GitHub's and the Anthropic API's URLs are under
+// .test, a domain that never resolves. Tests answer them with the in-process
+// GitHub fake and Anthropic fake (test/anthropic.ts). Every test starts with
+// a fetch that refuses every URL (test/no-network.ts), so a call to any other
+// host fails the test. The D1 migrations are read here, in Node, and a
 // setup file applies them to the test database. So are the cron triggers in
 // wrangler.jsonc, so a test can run each one's job, and the skills as the
 // plugins carry them with the text of the tools' answers, so a test can check what
@@ -82,6 +85,10 @@ export default defineConfig(async () => {
             ADMIN_GITHUB_IDS: '',
             GH_API_URL: 'https://api.github.test',
             GH_WEB_URL: 'https://github.test',
+            ANTHROPIC_API_KEY: 'test-only-anthropic-key',
+            ANTHROPIC_API_URL: 'https://api.anthropic.test',
+            POLICY_READER: 'rules',
+            MODEL_DAILY_BUDGET_USD: '5',
             TEST_MIGRATIONS: migrations,
             TEST_CRONS: crons,
             TEST_SKILLS: skills,
@@ -92,7 +99,7 @@ export default defineConfig(async () => {
     ],
     test: {
       include: ['test/**/*.test.ts'],
-      setupFiles: ['./test/apply-migrations.ts', './test/settle.ts'],
+      setupFiles: ['./test/apply-migrations.ts', './test/no-network.ts', './test/settle.ts'],
       // The first request in each test file compiles the Worker's routes, which
       // takes seconds on a busy machine.
       testTimeout: 20_000,

@@ -17,7 +17,7 @@ import {
   trimmedText,
   webUrl,
 } from '../primitives';
-import { issueTitle } from '../issues';
+import { issueBody, issueTitle } from '../issues';
 import { interestsSchema, type Interests } from '../people';
 import { prModes, projectSettingsSchema } from '../projects';
 import { prStateSchema } from '../prs';
@@ -344,8 +344,8 @@ export const claimIssue = defineTool({
     /** Slots taken on the issue, this claim's included. */
     slotsTaken: z.int().min(1),
     slots: z.int().min(1),
-    /** The issue's text on GitHub. */
-    body: z.string(),
+    /** The issue's text on GitHub, folded by foldUntrustedLines. */
+    body: issueBody,
     project: z.object({ repo: repoName, settings: projectSettingsSchema }),
     clone: z.object({ url: webUrl, commit: commitSha }),
     /** The claim's branch, and whether the donor can push to the code repo, where it goes then, or else to their fork. */

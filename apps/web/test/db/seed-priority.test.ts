@@ -17,21 +17,21 @@ test('priority is applied before the limit, then oldest added time and repo name
   await saveSeedEvidence(db, { repo: 'sample-owner/z-priority', addedBy: admin.githubId, evidence: evidence() }, t0);
   await saveSeedEvidence(db, { repo: 'sample-owner/a-priority', addedBy: admin.githubId, evidence: evidence() }, t0);
   await saveSeedEvidence(db, { repo: 'sample-owner/low-stars', addedBy: admin.githubId, evidence: evidence({ stars: 9999 }) }, t0 - 1);
-  expect((await listSeedsToHandle(db, 1, null, t0)).map((seed) => seed.repo)).toEqual(['sample-owner/a-priority']);
-  expect((await listSeedsToHandle(db, 4, null, t0)).map((seed) => seed.repo)).toEqual(['sample-owner/a-priority', 'sample-owner/z-priority', 'sample-owner/ordinary', 'sample-owner/low-stars']);
-  expect((await listSeedsToHandle(db, 1, null, t0 + 30 * DAY + 1)).map((seed) => seed.repo)).toEqual(['sample-owner/ordinary']);
+  expect((await listSeedsToHandle(db, 1, t0)).map((seed) => seed.repo)).toEqual(['sample-owner/a-priority']);
+  expect((await listSeedsToHandle(db, 4, t0)).map((seed) => seed.repo)).toEqual(['sample-owner/a-priority', 'sample-owner/z-priority', 'sample-owner/ordinary', 'sample-owner/low-stars']);
+  expect((await listSeedsToHandle(db, 1, t0 + 30 * DAY + 1)).map((seed) => seed.repo)).toEqual(['sample-owner/ordinary']);
 });
 
-test('saving, expiring, and clearing evidence preserve seed handling history and do not requeue it in this pass', async () => {
+test('saving, expiring, and clearing evidence preserve seed handling history and do not make it due before its month is up', async () => {
   const { seed } = await addSeed(db, { repo: 'sample-owner/handled', addedBy: maintainer.githubId }, t0 - HOUR);
   await markSeedsHandled(db, [{ repo: seed.repo, outcome: 'queued' }], t0);
   await saveSeedEvidence(db, { repo: seed.repo, addedBy: admin.githubId, evidence: evidence() }, t0 + HOUR);
   expect(await getSeed(db, seed.repo)).toMatchObject({ ...seed, handledAt: t0, outcome: 'queued', evidence: evidence() });
-  expect(await listSeedsToHandle(db, 10, t0, t0 + HOUR)).toEqual([]);
-  const cleared = await saveSeedEvidence(db, { repo: seed.repo, addedBy: admin.githubId, evidence: null }, t0 + 31 * DAY);
+  expect(await listSeedsToHandle(db, 10, t0 + HOUR)).toEqual([]);
+  const cleared = await saveSeedEvidence(db, { repo: seed.repo, addedBy: admin.githubId, evidence: null }, t0 + 29 * DAY);
   expect(cleared?.seed).toEqual({ ...seed, handledAt: t0, outcome: 'queued', evidence: null });
-  expect(await listSeedsToHandle(db, 10, t0, t0 + 31 * DAY)).toEqual([]);
-  expect(await listSeedsToHandle(db, 10, t0 + 1, t0 + 31 * DAY)).toEqual([cleared?.seed]);
+  expect(await listSeedsToHandle(db, 10, t0 + 29 * DAY)).toEqual([]);
+  expect(await listSeedsToHandle(db, 10, t0 + 30 * DAY)).toEqual([cleared?.seed]);
 });
 
 test('evidence for a waiting candidate creates a handled proposed seed, and later updates preserve it', async () => {
@@ -39,7 +39,7 @@ test('evidence for a waiting candidate creates a handled proposed seed, and late
   expect(first).toMatchObject({ added: true, evidenceChanged: true, seed: { handledAt: t0, outcome: 'proposed' } });
   const next = await saveSeedEvidence(db, { repo: 'sample-owner/proposed', addedBy: maintainer.githubId, evidence: null, proposed: true }, t0 + HOUR);
   expect(next).toMatchObject({ added: false, evidenceChanged: true, seed: { addedBy: admin.githubId, addedAt: t0, handledAt: t0, outcome: 'proposed', evidence: null } });
-  expect(await listSeedsToHandle(db, 10, t0, t0 + HOUR)).toEqual([]);
+  expect(await listSeedsToHandle(db, 10, t0 + HOUR)).toEqual([]);
 });
 
 test('the evidence write itself refuses a do-not-list repo without altering its ordinary seed', async () => {

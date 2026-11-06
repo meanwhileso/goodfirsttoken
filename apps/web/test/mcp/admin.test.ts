@@ -1001,14 +1001,29 @@ describe('admin_seed_repo', () => {
     expect(await getSeed(env.DB, candidate.repo)).toBeNull();
   });
 
-  test('listed projects and finds with only a decided candidate keep their evidence-write skips', async () => {
+  test('a listed project keeps its evidence-write skip, and a rejected find takes evidence and is due at the next run', async () => {
     await registerHarbor();
     const candidate = await crawlerFind();
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_decide', { id: candidate.id, decision: 'reject', reason: 'Read the policy again later.' });
     expect((await call(admin, 'admin_seed_repo', { repo: HARBOR, evidence: priorityEvidence() })).structuredContent).toMatchObject({ leftAlone: 'project', evidenceChanged: false });
-    expect((await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() })).structuredContent).toMatchObject({ leftAlone: 'proposed', evidenceChanged: false });
-    expect(await getSeed(env.DB, candidate.repo)).toBeNull();
+    expect(await getSeed(env.DB, HARBOR)).toBeNull();
+
+    const saved = await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() });
+
+    expect(saved.structuredContent).toMatchObject({ leftAlone: null, added: true, evidenceChanged: true, rejectedBefore: true });
+    expect((await listSeedsToHandle(env.DB, 10)).map((seed) => seed.repo)).toEqual([candidate.repo]);
+  });
+
+  test('evidence on a seed the crawler handled makes it due at the next run', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const at = Date.now() - 5000;
+    await addSeed(env.DB, { repo: TOOLS, addedBy: ADMIN.githubId }, at);
+    await markSeedsHandled(env.DB, [{ repo: TOOLS, outcome: 'queued' }], at + 1);
+
+    await call(admin, 'admin_seed_repo', { repo: TOOLS, evidence: priorityEvidence() });
+
+    expect(await getSeed(env.DB, TOOLS)).toMatchObject({ handledAt: null, outcome: null, evidence: { verifierGitHubId: ADMIN.githubId } });
   });
 
   test('future evidence and forged verifier IDs are refused without saving a seed', async () => {
@@ -1039,7 +1054,8 @@ describe('admin_seed_repo', () => {
 
     expect(added.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: true, leftAlone: null, evidence: null });
     expect(textOf(added)).toContain("Added sample-policies/small-seed to the crawler's seed list.");
-    expect(again.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: false, leftAlone: null, evidence: null });
+    expect(again.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: false, leftAlone: null, evidence: null, rejectedBefore: false });
+    expect(textOf(again)).toBe("sample-policies/small-seed is on the crawler's seed list already. The crawler's next run reads it again.");
     expect(await listSeedsToHandle(env.DB, 10)).toEqual([
       {
         repo: 'sample-policies/small-seed',
@@ -1051,6 +1067,22 @@ describe('admin_seed_repo', () => {
       },
     ]);
     expect(github.calls.slice(reads)).toEqual([]);
+  });
+
+  test('seeding a repo the crawler handled makes it due at the next run, and keeps who added it and when', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const at = Date.now() - 5000;
+    await addSeed(env.DB, { repo: TOOLS, addedBy: ADMIN.githubId }, at);
+    await markSeedsHandled(env.DB, [{ repo: TOOLS, outcome: 'queued' }], at + 1);
+    const handled = await listSeedsToHandle(env.DB, 10);
+
+    const again = await call(admin, 'admin_seed_repo', { repo: TOOLS });
+
+    expect(handled).toEqual([]);
+    expect(again.structuredContent).toMatchObject({ repo: TOOLS, added: false, leftAlone: null });
+    expect(await listSeedsToHandle(env.DB, 10)).toEqual([
+      { repo: TOOLS, addedBy: ADMIN.githubId, addedAt: at, handledAt: null, outcome: null, evidence: null },
+    ]);
   });
 
   test('a repo that is a project already, or that the crawler proposed before, is not added, and the answer says why', async () => {

@@ -20,7 +20,7 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 // Keeping listings current (spec section 5): the crawl queue's consumer
 // reads each listed project's docs again every week, with the same reads and
 // the same rules as a crawl, and compares what the rules read with the last
-// read. The crawler's cron job queues them (src/crawl/search.ts).
+// read. The crawler's cron job queues them (src/crawl/producer.ts).
 //
 // - Docs that move into a ban on AI help, from a last read that wasn't one,
 //   pause the project at once. A ban the docs had at the first read of a

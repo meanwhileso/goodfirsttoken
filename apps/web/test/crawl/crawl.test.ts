@@ -3,13 +3,12 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { crawlRepos, newCrawlRun, readCrawlBatch } from '../../src/crawl/queue';
-import { fillCrawlQueue } from '../../src/crawl/search';
+import { fillCrawlQueue } from '../../src/crawl/producer';
 import {
   addCandidate,
   addSeed,
   addToDoNotList,
   getSeed,
-  latestCrawlPass,
   listCandidates,
   saveSeedEvidence,
 } from '../../src/db';
@@ -21,9 +20,10 @@ import { admin, db, emptyDatabase, maintainer, registeredProject, signIn } from 
 import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { priorityEvidence } from '../priority-evidence';
 
-// The policy crawler end to end: its search fills the crawl queue, and the
-// queue's consumer reads each repo from the GitHub fake and puts the ones
-// whose docs welcome AI help in the admin queue. The repos are the fake's
+// The policy crawler end to end: its cron job fills the crawl queue with the
+// seeds admins added, and the queue's consumer reads each repo from the
+// GitHub fake and puts the ones whose docs welcome AI help in the admin
+// queue. The repos are the fake's
 // made-up sample-policies repos, and its sample-owner ones. Every line of
 // policy text is made up, and says nothing about a real project.
 
@@ -78,9 +78,23 @@ function later(ms: number): void {
   vi.setSystemTime(Date.now() + ms);
 }
 
-/** One run of the crawler's cron job, with the search's allowance unless another is given. */
-function fill(allowance: Allowance = ALLOWANCES.crawlSearch) {
-  return fillCrawlQueue({ db, queue, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, allowance), now: () => Date.now() });
+/** One run of the crawler's cron job. */
+function fill() {
+  return fillCrawlQueue({ db, queue, now: () => Date.now() });
+}
+
+/**
+ * Adds each of the fake's sample repos with 1,000 stars or more and a push
+ * in the last 30 days to the seed list, as an admin would. Public,
+ * unarchived, and no fork.
+ */
+async function seedSamples(): Promise<string[]> {
+  const repos = Object.values(github.state.repos)
+    .filter((repo) => repo.stars >= 1000 && !repo.archived && repo.private !== true && repo.forkOf === null)
+    .filter((repo) => Date.now() - Date.parse(repo.pushedAt) <= 30 * 24 * HOUR)
+    .map((repo) => `${repo.owner}/${repo.name}`);
+  for (const repo of repos) await addSeed(db, { repo, addedBy: admin.githubId }, Date.now());
+  return repos;
 }
 
 /** The crawl queue, as the consumer sends repos back to it. */
@@ -118,8 +132,9 @@ async function consume(
   return { acked, retried, run, ids: messages.map((m) => m.id) };
 }
 
-/** A whole crawl: the search fills the queue, and the consumer reads what it queued. */
+/** A whole crawl: the sample repos are seeds, the cron job fills the queue, and the consumer reads what it queued. */
 async function crawl() {
+  await seedSamples();
   await fill();
   return consume(sent.splice(0));
 }
@@ -268,8 +283,9 @@ describe('a crawl', () => {
 });
 
 describe('what the crawler skips', () => {
-  test('a repo on the do-not-list never goes in the crawl queue, whether the search or a seed names it', async () => {
+  test('a seed on the do-not-list never goes in the crawl queue', async () => {
     await addSeed(db, { repo: INVITES, addedBy: admin.githubId }, start);
+    await addSeed(db, { repo: CONDITIONS, addedBy: admin.githubId }, start);
     await addToDoNotList(db, { repo: 'Sample-Policies/Invites-Agents', reason: null, addedBy: admin.githubId }, start);
 
     const run = await fill();
@@ -277,10 +293,11 @@ describe('what the crawler skips', () => {
     const queued = sent.flatMap((m) => m.repos);
     expect(queued).toContain(CONDITIONS);
     expect(queued).not.toContain(INVITES);
-    expect(run.seeds).toBe(0);
+    expect(run.seeds).toBe(1);
   });
 
   test('a repo put on the do-not-list after it was queued is never read beyond the check, and never queued for an admin', async () => {
+    await seedSamples();
     await fill();
     await addToDoNotList(db, { repo: INVITES, reason: null, addedBy: admin.githubId }, start);
     const requests = recordRequests();
@@ -293,7 +310,7 @@ describe('what the crawler skips', () => {
     expect(requests.some((request) => request.includes('with-conditions'))).toBe(true);
   });
 
-  test('an archived repo is never queued for an admin, whether the search or a seed names it', async () => {
+  test('an archived repo a seed names is never queued for an admin', async () => {
     await addSeed(db, { repo: ARCHIVED, addedBy: admin.githubId }, start);
 
     const { run } = await crawl();
@@ -350,21 +367,24 @@ describe('the seed list', () => {
     await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start - 1000);
     await saveSeedEvidence(db, { repo: INVITES, addedBy: admin.githubId, evidence: verifyCrawlPriority(priorityEvidence(start), admin.githubId, start) }, start);
     const clock = start + 31 * 86400000;
-    const run = await fillCrawlQueue({ db, queue, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, ALLOWANCES.crawlSearch), now: () => clock });
+    const run = await fillCrawlQueue({ db, queue, now: () => clock });
     expect(sent[0]).toEqual({ repos: [SEED, INVITES] });
     expect(run.seeds).toBe(2);
   });
-  test('adds a repo the search never finds, queued once, and read like any other', async () => {
+  test('reads a repo whatever its stars, queued once a month, and read like any other', async () => {
     await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
 
     await fill();
     const first = sent.splice(0);
     later(HOUR);
     await fill();
+    const nextHour = sent.splice(0);
+    later(30 * 24 * HOUR - HOUR);
+    await fill();
 
-    expect(first[0]).toEqual({ repos: [SEED] });
-    expect(first.slice(1).flatMap((m) => m.repos)).not.toContain(SEED);
-    expect(sent.flatMap((m) => m.repos)).not.toContain(SEED);
+    expect(first).toEqual([{ repos: [SEED] }]);
+    expect(nextHour).toEqual([]);
+    expect(sent).toEqual([{ repos: [SEED] }]);
     await consume(first);
     expect((await waiting()).get(SEED)).toMatchObject({
       facts: { stars: 40 },
@@ -378,104 +398,40 @@ describe('the seed list', () => {
   });
 });
 
-describe('the search', () => {
-  /** Adds `count` made-up repos with `stars` each, pushed an hour ago, that the search finds. */
-  function bulk(prefix: string, count: number, stars: (n: number) => number): string[] {
-    const template = github.state.repos['sample-policies/silent'];
-    if (!template) throw new Error('missing sample repo');
-    const names: string[] = [];
-    for (let n = 0; n < count; n++) {
-      const name = `${prefix}${String(n)}`;
-      github.state.repos[`sample-bulk/${name}`] = {
-        ...template,
-        id: 9_000_000 + n,
-        owner: 'sample-bulk',
-        name,
-        stars: stars(n),
-        pushedAt: new Date(start - HOUR).toISOString(),
-      };
-      names.push(`sample-bulk/${name}`);
-    }
-    return names;
-  }
+describe('the cron job', () => {
+  test('makes no call to GitHub, and still queues the seeds and the listed projects due for their weekly read', async () => {
+    await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
+    await registeredProject({ tags: ['help wanted'] }, INVITES);
+    const requests = recordRequests();
+    const calls = github.calls.length;
 
-  const bands = () =>
-    github.calls
-      .filter((call) => call.operation === 'GET /search/repositories')
-      .map((call) => /stars:(\S+)/.exec(new URL(call.url).searchParams.get('q') ?? '')?.[1]);
+    const run = await fill();
 
-  test("reads the pool in star bands, splits a band search can't serve whole before queuing any of it, and queues each repo once", async () => {
-    const names = bulk('r', 1200, (n) => 1000 + (n % 5));
-
-    const run = await fill({ leave: 0.1, maxCalls: 100 });
-
-    const queued = sent.flatMap((m) => m.repos);
-    expect(bands()).toEqual([
-      '>=1000',
-      '>=10000',
-      '1000..1009',
-      '1000..1004',
-      ...Array<string>(5).fill('1000..1001'),
-      ...Array<string>(5).fill('1002..1003'),
-      ...Array<string>(3).fill('1004..1005'),
-      '>=1006',
-    ]);
-    expect(new Set(queued).size).toBe(queued.length);
-    for (const name of names) expect(queued).toContain(name);
-    expect(queued).toContain(INVITES);
-    expect(queued).not.toContain(SEED);
-    expect(queued).not.toContain(ARCHIVED);
-    expect(sent.every((m) => m.repos.length <= 10)).toBe(true);
-    expect(run.pass).toMatchObject({ pool: queued.length, queued: queued.length - (run.popularPass?.queued ?? 0), finishedAt: start });
+    expect(requests).toEqual([]);
+    expect(github.calls.slice(calls)).toEqual([]);
+    expect(sent).toEqual([{ repos: [SEED] }, { repos: [INVITES], reread: true }]);
+    expect(run).toEqual({ seeds: 1, rereads: 1 });
+    expect(logged).toContain('The crawler queued seeds: 1, listed projects to read again: 1.');
   });
 
-  test('stops when a run has made its calls, and the next run picks up where it stopped', async () => {
-    const names = bulk('r', 450, (n) => 1000 + (n % 3));
+  test('a send the queue refuses fails the run, and its seeds stay due for the next run', async () => {
+    await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
+    const refusing = { sendBatch: () => Promise.reject(new Error('The queue is down.')) };
 
-    const runs = [];
-    for (let i = 0; i < 20 && (await latestCrawlPass(db))?.finishedAt == null; i++) {
-      runs.push(await fill({ leave: 0.1, maxCalls: 3 }));
-      later(HOUR);
-    }
+    await expect(fillCrawlQueue({ db, queue: refusing, now: () => Date.now() })).rejects.toThrow('The queue is down.');
+    const after = await getSeed(db, SEED);
+    later(HOUR);
+    await fill();
 
-    const queued = sent.flatMap((m) => m.repos);
-    expect(runs.length).toBeGreaterThan(2);
-    expect(runs.slice(0, -1).every((run) => run.stopped === 'calls' && run.calls === 3)).toBe(true);
-    expect(new Set(queued).size).toBe(queued.length);
-    for (const name of names) expect(queued).toContain(name);
-    expect(await latestCrawlPass(db)).toMatchObject({ finishedAt: expect.any(Number) as unknown, queued: queued.length - (runs.at(-1)?.popularPass?.queued ?? 0) });
+    expect(after).toMatchObject({ handledAt: null, outcome: null });
+    expect(sent).toEqual([{ repos: [SEED] }]);
   });
 
-  test("stops before a search when too little of the search budget is left, and reads on once it starts over", async () => {
-    github.spendRateLimit(SERVICE_LOGIN, 'search', 28);
+  test('queues nothing when no seed is due and no listed project is due for its weekly read', async () => {
+    const run = await fill();
 
-    const stopped = await fill();
-    later(MINUTE + 1000);
-    const resumed = await fill();
-
-    expect(stopped).toMatchObject({ stopped: 'budget', searches: 0, queued: 0 });
-    expect(stopped.pass).toMatchObject({ low: 1000, open: true, page: 1, finishedAt: null });
-    expect(resumed).toMatchObject({ stopped: null, searches: 2 });
-    expect(resumed.pass?.finishedAt).not.toBeNull();
-  });
-
-  test('a pass that is done stays done for a month from when it started, and the next pass reads the pool again then', async () => {
-    const first = await fill();
-    const queued = sent.length;
-    later(30 * 24 * HOUR - MINUTE);
-    const soon = await fill();
-    later(MINUTE);
-    // Pushed within the 30 days before the new pass, so its search finds it.
-    github.commitFiles(CONDITIONS, { 'CHANGELOG.md': 'A change.\n' }, 'sample-maintainer');
-
-    const month = await fill();
-
-    expect(queued).toBeGreaterThan(0);
-    expect(soon.searches).toBe(0);
-    expect(month.searches).toBeGreaterThan(0);
-    expect(month.pass).toMatchObject({ startedAt: start + 30 * 24 * HOUR, finishedAt: expect.any(Number) as unknown });
-    expect(month.pass?.startedAt).not.toBe(first.pass?.startedAt);
-    expect(sent.slice(queued).flatMap((m) => m.repos)).toContain(CONDITIONS);
+    expect(sent).toEqual([]);
+    expect(run).toEqual({ seeds: 0, rereads: 0 });
   });
 });
 
@@ -566,14 +522,12 @@ describe('the consumer', () => {
   test('a seed delivered twice after a producer fails to record its send creates one candidate', async () => {
     await addSeed(db, { repo: INVITES, addedBy: admin.githubId }, start);
     const broken: D1Database = {
-      prepare: (sql) => {
-        if (/INSERT INTO crawl_queued_repos/.test(sql)) throw new Error('Lost after send.');
-        return db.prepare(sql);
-      },
-      batch: db.batch.bind(db), exec: db.exec.bind(db),
+      prepare: db.prepare.bind(db),
+      batch: () => Promise.reject(new Error('Lost after send.')),
+      exec: db.exec.bind(db),
       withSession: db.withSession.bind(db), dump: () => Promise.reject(new Error('No database export in this test.')),
     };
-    await expect(fillCrawlQueue({ db: broken, queue, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, ALLOWANCES.crawlSearch), now: Date.now })).rejects.toThrow('Lost after send.');
+    await expect(fillCrawlQueue({ db: broken, queue, now: Date.now })).rejects.toThrow('Lost after send.');
     await fill();
     const duplicated = sent.filter((message) => message.repos.includes(INVITES));
     expect(duplicated).toHaveLength(2);
@@ -1041,26 +995,7 @@ describe("the second review's pipeline cases, and the files named for AI", () =>
   });
 });
 
-describe('the search and the seeds, told truly', () => {
-  test('a search that ran out of time queues nothing and leaves the pass where it was, for the next run to ask again', async () => {
-    const answer = github.fetch;
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = new Request(input, init);
-      const response = await answer(request);
-      if (!new URL(request.url).pathname.startsWith('/search/')) return response;
-      const body = await response.json<Record<string, unknown>>();
-      return new Response(JSON.stringify({ ...body, incomplete_results: true }), { status: response.status, headers: response.headers });
-    });
-
-    const run = await fill();
-
-    expect(run).toMatchObject({ stopped: 'github_error', searches: 1, queued: 0 });
-    expect(sent).toEqual([]);
-    expect(await latestCrawlPass(db)).toMatchObject({ low: 1000, open: true, page: 1, queued: 0, finishedAt: null });
-    vi.stubGlobal('fetch', github.fetch);
-    expect((await fill()).stopped).toBeNull();
-  });
-
+describe('the seeds, told truly', () => {
   test('records what it did with each seed: queued it, or left it alone and why', async () => {
     await registeredProject({ tags: ['help wanted'] }, INVITES);
     await addCandidate(

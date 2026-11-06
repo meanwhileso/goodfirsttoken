@@ -50,6 +50,7 @@ import {
   getRemoval,
   getSelfPausedProject,
   getWaitingCandidate,
+  lastRejectedFind,
   getWaitingRemoval,
   leaveDoNotListWhenApproved,
   listCandidates,
@@ -893,12 +894,15 @@ export async function adminPauseProject(
 }
 
 /**
- * Adds a repo to the crawler's seed list, for the crawler to read whatever
- * its stars or last push. A repo on the do-not-list is refused, since the
- * crawler never reads one. Ordinary calls skip projects and earlier finds.
- * Evidence calls can update a waiting find, keeping seed handling history
- * and queuing no policy read. The server stamps the verifier and validates
- * timestamps against this action's clock. No source URL is fetched.
+ * Adds a repo to the crawler's seed list, or seeds it again, for the crawler
+ * to read at its next run whatever its stars or last push. A seed on the list
+ * already, or a repo whose finds an admin rejected, is due at the next run,
+ * and a rejected find comes back only when its docs read differently. A repo
+ * on the do-not-list is refused, since the crawler never reads one. Projects
+ * and finds that wait or were approved are left alone. Evidence calls can
+ * update a waiting find, keeping seed handling history and queuing no policy
+ * read. The server stamps the verifier and validates timestamps against this
+ * action's clock. No source URL is fetched.
  */
 export async function adminSeedRepo(
   caller: Caller,
@@ -912,26 +916,32 @@ export async function adminSeedRepo(
   } catch (error) {
     return refuse('invalid_input', error instanceof Error ? error.message : 'Invalid priority evidence.');
   }
-  const skip = (await crawlerSkips(env.DB, [input.repo])).get(input.repo.toLowerCase());
+  // A rejected find doesn't keep a repo off the list: the consumer reads it, and it comes back only when its docs read differently.
+  const skip = (await crawlerSkips(env.DB, [input.repo], { readRejected: true })).get(input.repo.toLowerCase());
   if (skip === 'do_not_list') {
     return refuse(
       'repo_not_eligible',
       `${input.repo} is on the do-not-list, because its maintainers asked to be removed, so the crawler never reads it.`,
     );
   }
+  const rejectedBefore = skip === undefined && (await lastRejectedFind(env.DB, input.repo)) !== null;
   if (evidence !== undefined && (skip === undefined || (skip === 'proposed' && await getWaitingCandidate(env.DB, input.repo) !== null))) {
-    const saved = await saveSeedEvidence(env.DB, { repo: input.repo, addedBy: caller.githubId, evidence, proposed: skip === 'proposed' }, now);
+    const saved = await saveSeedEvidence(
+      env.DB,
+      { repo: input.repo, addedBy: caller.githubId, evidence, proposed: skip === 'proposed', due: skip === undefined },
+      now,
+    );
     if (saved === null) return refuse('repo_not_eligible', `${input.repo} is on the do-not-list, so discovery evidence was not saved.`);
     return { ok: true, value: { repo: saved.seed.repo, added: saved.added, evidenceChanged: saved.evidenceChanged, leftAlone: skip ?? null,
-      evidence: saved.seed.evidence, priority: qualifyCrawlPriority(saved.seed.evidence, now) } };
+      rejectedBefore, evidence: saved.seed.evidence, priority: qualifyCrawlPriority(saved.seed.evidence, now) } };
   }
   if (skip !== undefined) {
     const seed = await getSeed(env.DB, input.repo);
-    return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip, evidenceChanged: false,
+    return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip, evidenceChanged: false, rejectedBefore,
       evidence: seed?.evidence ?? null, priority: qualifyCrawlPriority(seed?.evidence ?? null, now) } };
   }
   const { seed, added } = await addSeed(env.DB, { repo: input.repo, addedBy: caller.githubId }, now);
-  return { ok: true, value: { repo: seed.repo, added, leftAlone: null, evidenceChanged: false,
+  return { ok: true, value: { repo: seed.repo, added, leftAlone: null, evidenceChanged: false, rejectedBefore,
     evidence: seed.evidence, priority: qualifyCrawlPriority(seed.evidence, now) } };
 }
 

@@ -30,6 +30,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@goodfirsttoken/anthropic-fake": "workspace:*",
     "@goodfirsttoken/github-fake": "workspace:*",
     "@modelcontextprotocol/client": "2.4.0",
     "@playwright/test": "^1.63.0",

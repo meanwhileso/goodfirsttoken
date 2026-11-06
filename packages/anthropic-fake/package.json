@@ -1,0 +1,30 @@
+{
+  "name": "@goodfirsttoken/anthropic-fake",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A fake of the Anthropic Messages and Message Batches APIs for tests and local development, answering from readings recorded for the GitHub fake's sample repos.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./local": "./src/local.ts",
+    "./recordings": "./src/recordings.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "start": "node src/serve.ts",
+    "dev": "node src/serve.ts --state ../../apps/web/.wrangler/anthropic-fake/state.json",
+    "seed": "node src/seed.ts --state ../../apps/web/.wrangler/anthropic-fake/state.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@goodfirsttoken/github-fake": "workspace:*"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "1.1.0",
+    "@types/node": "^24.19.0",
+    "typescript": "~6.0.3",
+    "vitest": "~4.1.12"
+  }
+}

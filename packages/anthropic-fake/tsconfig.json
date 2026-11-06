@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    // Node runs the local server straight from these files, so imports name
+    // their .ts files and the code uses only syntax Node can strip.
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src", "test", "*.config.ts"]
+}

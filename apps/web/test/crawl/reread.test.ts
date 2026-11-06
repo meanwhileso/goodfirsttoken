@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { FINGERPRINT_VERSION } from '../../src/crawl/fingerprint';
 import { readCrawlBatch } from '../../src/crawl/queue';
 import { BAN_REASON } from '../../src/crawl/reread';
-import { fillCrawlQueue } from '../../src/crawl/search';
+import { fillCrawlQueue } from '../../src/crawl/producer';
 import {
   addCandidate,
   addSeed,
@@ -24,8 +24,6 @@ import {
   storedRepoIds,
 } from '../../src/db';
 import { syncTaggedIssues } from '../../src/sync/issues';
-import { ServiceGitHub } from '../../src/sync/github';
-import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';
@@ -36,8 +34,8 @@ import { jobDeps, knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 // from the GitHub fake with the same reads and rules as a crawl. A ban or
 // pull requests limited to collaborators pause it at once, a listing whose
 // policy changed goes back to the admin queue, and the admins see both in
-// admin_queue. The search reads the wider pool again each month, when a
-// rejected find comes back only once its docs read differently. The repos
+// admin_queue. The cron job reads each seed again a month after it last
+// did, when a rejected find comes back only once its docs read differently. The repos
 // are the fake's made-up sample-policies and sample-owner repos, and every
 // line of policy text is made up. sample-admin is the admin here, and
 // sample-maintainer an admin of every repo the tests use.
@@ -179,7 +177,7 @@ function commit(repo: string, files: Record<string, string | null>): void {
 
 /** One run of the crawler's cron job at the test's clock. */
 function fill() {
-  return fillCrawlQueue({ db, queue, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, ALLOWANCES.crawlSearch), now: () => clock });
+  return fillCrawlQueue({ db, queue, now: () => clock });
 }
 
 /** Runs the consumer on a batch at the test's clock, as Queues delivers it, and says what it did with each message. */
@@ -201,8 +199,8 @@ async function consume(bodies: unknown[], attempts = 1) {
 
 /**
  * A week on: the cron job queues the listed projects due for their weekly
- * read, and the consumer reads the weekly reads it queued. What the search
- * queued is dropped.
+ * read, and the consumer reads the weekly reads it queued. Any seeds it
+ * queued are dropped.
  */
 async function week() {
   clock += WEEK;
@@ -1157,7 +1155,7 @@ describe('another repo under the name', () => {
   });
 });
 
-describe('the monthly pass', () => {
+describe('the monthly read', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(clock);
@@ -1169,41 +1167,63 @@ describe('the monthly pass', () => {
     vi.setSystemTime(clock);
   }
 
-  test('brings back a find an admin rejected only once its docs read differently, and never a find that waits or a repo on the do-not-list', async () => {
-    await fill();
-    await consume(sent.splice(0));
-    const found = new Map((await listCandidates(db, 'waiting')).map((c) => [c.repo, c]));
-    await decideCandidate(db, found.get(CONDITIONS)?.id ?? '', { status: 'rejected', decidedBy: ADMIN.githubId, reason: 'Not now.' }, clock);
-    await addToDoNotList(db, { repo: 'sample-policies/no-autonomous-agents', reason: null, addedBy: ADMIN.githubId }, clock);
-    // A push in the month before each pass, so its search finds the repos.
-    const pushAll = () => {
-      for (const repo of [CONDITIONS, INVITES, 'sample-policies/no-autonomous-agents']) commit(repo, { 'CHANGELOG.md': `Pushed at ${String(clock)}.\n` });
-    };
+  test('admin_seed_repo on a rejected find makes it due, and its find comes back only once its docs read differently', async () => {
+    await consume([{ repos: [CONDITIONS] }]);
+    const rejected = (await listCandidates(db, 'waiting')).find((c) => c.repo === CONDITIONS);
+    await decideCandidate(db, rejected?.id ?? '', { status: 'rejected', decidedBy: ADMIN.githubId, reason: 'Not now.' }, clock);
+    const admin = await connectAgent(github, ADMIN.login);
 
-    advance(30 * DAY);
-    pushAll();
+    const seeded = await call(admin, 'admin_seed_repo', { repo: CONDITIONS });
     await fill();
-    const month = sent.splice(0).flatMap((m) => m.repos);
-    const same = await consume([{ repos: month }]);
-    const waitingAfterSame = (await listCandidates(db, 'waiting')).map((c) => c.repo);
-    advance(30 * DAY);
+    const first = sent.splice(0).flatMap((m) => m.repos);
+    const same = await consume([{ repos: first }]);
+    advance(HOUR);
+    await fill();
+    const nextHour = sent.splice(0).flatMap((m) => m.repos);
+    const again = await call(admin, 'admin_seed_repo', { repo: CONDITIONS });
+    await fill();
+    const seededAgain = sent.splice(0).flatMap((m) => m.repos);
+    const sameAgain = await consume([{ repos: seededAgain }]);
     commit(CONDITIONS, { 'CONTRIBUTING.md': '# Contributing\n\n## AI help\n\nAI help is welcome. Disclose it with an Assisted-by: trailer.\n' });
-    pushAll();
+    await call(admin, 'admin_seed_repo', { repo: CONDITIONS });
     await fill();
     const changed = await consume(sent.splice(0));
 
-    expect(month).toContain(CONDITIONS);
-    expect(month).not.toContain(INVITES);
-    expect(month).not.toContain('sample-policies/no-autonomous-agents');
+    expect(seeded.structuredContent).toMatchObject({ repo: CONDITIONS, added: true, leftAlone: null, rejectedBefore: true });
+    expect(textOf(seeded)).toContain('only when its docs read differently');
+    expect(again.structuredContent).toMatchObject({ added: false, leftAlone: null, rejectedBefore: true });
+    expect(textOf(again)).toContain("The crawler's next run reads it again");
+    expect([first, nextHour, seededAgain]).toEqual([[CONDITIONS], [], [CONDITIONS]]);
     expect(same.run?.skipped).toMatchObject({ rejected_before: 1 });
-    expect(waitingAfterSame).not.toContain(CONDITIONS);
+    expect(sameAgain.run?.skipped).toMatchObject({ rejected_before: 1 });
     expect(changed.run?.proposed).toEqual([CONDITIONS]);
     expect((await listCandidates(db, 'waiting')).find((c) => c.repo === CONDITIONS)?.policy.quote).toBe(
       'AI help is welcome. Disclose it with an Assisted-by: trailer.',
     );
   });
 
-  test('reads each seed again in every pass, whatever its stars, and never one that is a project, has a find waiting, or is on the do-not-list', async () => {
+  test('a seed whose find an admin rejected comes back a month on only once its docs read differently', async () => {
+    await addSeed(db, { repo: CONDITIONS, addedBy: ADMIN.githubId }, clock);
+    await fill();
+    await consume(sent.splice(0));
+    const found = (await listCandidates(db, 'waiting')).find((c) => c.repo === CONDITIONS);
+    await decideCandidate(db, found?.id ?? '', { status: 'rejected', decidedBy: ADMIN.githubId, reason: 'Not now.' }, clock);
+
+    advance(30 * DAY);
+    await fill();
+    const month = sent.splice(0).flatMap((m) => m.repos);
+    const same = await consume([{ repos: month }]);
+    advance(30 * DAY);
+    commit(CONDITIONS, { 'CONTRIBUTING.md': '# Contributing\n\n## AI help\n\nAI help is welcome. Disclose it with an Assisted-by: trailer.\n' });
+    await fill();
+    const changed = await consume(sent.splice(0));
+
+    expect(month).toEqual([CONDITIONS]);
+    expect(same.run?.skipped).toMatchObject({ rejected_before: 1 });
+    expect(changed.run?.proposed).toEqual([CONDITIONS]);
+  });
+
+  test('reads each seed again 30 days after it was handled, whatever its stars, and never one that is a project, has a find waiting, or is on the do-not-list', async () => {
     const SMALL = 'sample-policies/small-seed';
     await registered(INVITES);
     await addCandidate(
@@ -1219,61 +1239,26 @@ describe('the monthly pass', () => {
     );
     await addToDoNotList(db, { repo: NO_AUTONOMY, reason: null, addedBy: ADMIN.githubId }, clock);
     for (const repo of [SMALL, INVITES, CONDITIONS, NO_AUTONOMY]) await addSeed(db, { repo, addedBy: ADMIN.githubId }, clock);
-    const seedsSent = () => {
-      const repos = sent.splice(0).flatMap((m) => m.repos);
-      return [SMALL, INVITES, CONDITIONS, NO_AUTONOMY].filter((repo) => repos.includes(repo) && repo !== INVITES);
-    };
+    const seedsSent = () => sent.splice(0).filter((m) => m.reread !== true).flatMap((m) => m.repos);
 
     await fill();
-    const firstPass = seedsSent();
-    advance(DAY);
+    const first = seedsSent();
+    const handledAt = clock;
+    advance(30 * DAY - 1);
     await fill();
-    const samePass = seedsSent();
-    advance(30 * DAY);
+    const dayBefore = seedsSent();
+    advance(1);
     await fill();
-    const nextPass = seedsSent();
+    const month = seedsSent();
 
-    expect([firstPass, samePass, nextPass]).toEqual([[SMALL], [], [SMALL]]);
-    const outcomes = await Promise.all([SMALL, INVITES, CONDITIONS, NO_AUTONOMY].map(async (repo) => (await getSeed(db, repo))?.outcome));
-    expect(outcomes).toEqual(['queued', 'project', 'proposed', 'do_not_list']);
-    expect((await getSeed(db, SMALL))?.handledAt).toBe(clock);
-  });
-
-  test('a seed the search finds too is queued once in a pass', async () => {
-    await addSeed(db, { repo: SILENT, addedBy: ADMIN.githubId }, clock);
-
-    const run = await fill();
-
-    const repos = sent.splice(0).flatMap((m) => m.repos);
-    expect(run.searches).toBeGreaterThan(0);
-    expect(repos.filter((repo) => repo === SILENT)).toEqual([SILENT]);
-  });
-
-  test('a seed the search queues before the seed step reaches it is read once in that pass, and once in the next', async () => {
-    // More seeds than one run queues, all older than SILENT, so the search finds SILENT before the seed step does.
-    const fillers = Array.from({ length: 500 }, (_, i) => `sample-owner/filler-${String(i).padStart(3, '0')}`);
-    await db
-      .prepare('INSERT INTO crawl_seeds (repo, added_by, added_at) SELECT value, ?, ? FROM json_each(?)')
-      .bind(ADMIN.githubId, clock - DAY, JSON.stringify(fillers))
-      .run();
-    await addSeed(db, { repo: SILENT, addedBy: ADMIN.githubId }, clock);
-    const silentSent = () => sent.splice(0).flatMap((m) => m.repos).filter((repo) => repo === SILENT).length;
-
-    const first = await fill();
-    const firstRun = silentSent();
-    advance(DAY);
-    await fill();
-    const laterRun = silentSent();
-    advance(30 * DAY);
-    commit(SILENT, { 'CHANGELOG.md': `Pushed at ${String(clock)}.\n` });
-    const next = await fill();
-    const nextPass = silentSent();
-    advance(DAY);
-    await fill();
-    const laterInNextPass = silentSent();
-
-    expect([first.seeds, first.searches > 0, next.seeds, next.searches > 0]).toEqual([500, true, 500, true]);
-    expect([firstRun, laterRun, nextPass, laterInNextPass]).toEqual([1, 0, 1, 0]);
+    expect([first, dayBefore, month]).toEqual([[SMALL], [], [SMALL]]);
+    const seeds = await Promise.all([SMALL, INVITES, CONDITIONS, NO_AUTONOMY].map((repo) => getSeed(db, repo)));
+    expect(seeds.map((seed) => [seed?.outcome, seed?.handledAt])).toEqual([
+      ['queued', clock],
+      ['project', handledAt],
+      ['proposed', handledAt],
+      ['do_not_list', clock],
+    ]);
   });
 
   test('a rejected find stored before finds kept what their docs read takes what they read now, and stays out', async () => {

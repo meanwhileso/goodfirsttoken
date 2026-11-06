@@ -1,5 +1,5 @@
 import { authSecret, oauthApp, SignInNotSetUp } from '../auth/settings';
-import { fillCrawlQueue } from '../crawl/search';
+import { fillCrawlQueue } from '../crawl/producer';
 import { endEveryLapsedConnection } from '../mcp/connections';
 import { ALLOWANCES, serviceToken } from './allowances';
 import { ServiceGitHub } from './github';
@@ -22,7 +22,7 @@ export const ISSUE_SYNC_CRON = '*/15 * * * *';
  * the job that records cleared PRs nobody recorded (src/sync/cleared.ts).
  */
 export const PR_JOB_CRON = '7,37 * * * *';
-/** Once an hour, apart from both: the policy crawler's search (src/crawl/search.ts). */
+/** Once an hour, apart from both: the policy crawler's cron job (src/crawl/producer.ts), which queues its seeds and weekly reads. */
 export const CRAWL_CRON = '52 * * * *';
 /** Once a day, apart from the others: ending lapsed connections (src/mcp/connections.ts). */
 export const LAPSED_CONNECTIONS_CRON = '23 4 * * *';
@@ -81,7 +81,7 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       await recordClearedPrs({ db: env.DB, github: new ServiceGitHub(token, ALLOWANCES.cleared), now });
       return;
     case CRAWL_CRON:
-      await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, github: new ServiceGitHub(token, ALLOWANCES.crawlSearch), now });
+      await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, now });
       return;
     default:
       console.error(`No job runs on the cron ${cron}. Each cron trigger in wrangler.jsonc needs one in src/sync/scheduled.ts.`);

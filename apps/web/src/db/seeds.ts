@@ -17,6 +17,9 @@ import { checkTime, fromJson } from './shared';
 // The crawl_seeds table: repos an admin asked the policy crawler to read,
 // whatever their stars or last push (src/crawl/).
 
+/** How long after the cron job handled a seed it is due again. */
+export const SEED_EVERY_MS = 30 * 86_400_000;
+
 interface SeedRow {
   repo: string;
   added_by: number;
@@ -36,9 +39,9 @@ function toSeed(row: SeedRow): CrawlSeed {
 }
 
 /**
- * Puts a repo on the seed list, added by the admin `addedBy` at `now`. A repo
- * on it already, whatever the case of its name, keeps its first entry, and
- * `added` is false.
+ * Puts a repo on the seed list, added by the admin `addedBy` at `now`, due at
+ * the cron job's next run. A repo on it already, whatever the case of its
+ * name, keeps who added it and when, is due again, and `added` is false.
  */
 export async function addSeed(
   db: D1Database,
@@ -55,9 +58,12 @@ export async function addSeed(
     .bind(repo, mustParse(githubId, seed.addedBy, 'addedBy'), checkTime(now))
     .first<SeedRow>();
   if (row !== null) return { seed: toSeed(row), added: true };
-  const stored = await getSeed(db, repo);
+  const stored = await db
+    .prepare('UPDATE crawl_seeds SET handled_at = NULL, outcome = NULL WHERE repo = ? RETURNING *')
+    .bind(repo)
+    .first<SeedRow>();
   if (stored === null) throw new Error(`${repo} was not added to the seed list.`);
-  return { seed: stored, added: false };
+  return { seed: toSeed(stored), added: false };
 }
 
 /** The repo's entry on the seed list, compared without case, or null. */
@@ -69,10 +75,14 @@ export async function getSeed(db: D1Database, repo: string): Promise<CrawlSeed |
   return row === null ? null : toSeed(row);
 }
 
-/** Save or clear evidence alone. An existing seed keeps all its handling history. */
+/**
+ * Save or clear evidence. An existing seed keeps all its handling history,
+ * unless `due` asks for it to be due at the cron job's next run. A `proposed`
+ * seed, for a find that waits, is recorded as handled.
+ */
 export async function saveSeedEvidence(
   db: D1Database,
-  input: { repo: string; addedBy: number; evidence: CrawlPriority | null; proposed?: boolean },
+  input: { repo: string; addedBy: number; evidence: CrawlPriority | null; proposed?: boolean; due?: boolean },
   now: number,
 ): Promise<{ seed: CrawlSeed; added: boolean; evidenceChanged: boolean } | null> {
   const repo = mustParse(repoName, input.repo, 'repo');
@@ -82,25 +92,32 @@ export async function saveSeedEvidence(
   const row = await db.prepare(
     `INSERT INTO crawl_seeds (repo, added_by, added_at, handled_at, outcome, priority_evidence)
      SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)
-     ON CONFLICT (repo) DO UPDATE SET priority_evidence = excluded.priority_evidence
+     ON CONFLICT (repo) DO UPDATE SET priority_evidence = excluded.priority_evidence,
+       handled_at = CASE WHEN ?7 THEN NULL ELSE handled_at END,
+       outcome = CASE WHEN ?7 THEN NULL ELSE outcome END
        WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?1)
      RETURNING *`,
   ).bind(repo, mustParse(githubId, input.addedBy, 'addedBy'), at, input.proposed ? at : null,
-    input.proposed ? 'proposed' : null, evidence === null ? null : JSON.stringify(evidence)).first<SeedRow>();
+    input.proposed ? 'proposed' : null, evidence === null ? null : JSON.stringify(evidence),
+    input.due === true && input.proposed !== true ? 1 : 0).first<SeedRow>();
   if (row === null) return null;
   return { seed: toSeed(row), added: before === null, evidenceChanged: JSON.stringify(before?.evidence ?? null) !== JSON.stringify(evidence) };
 }
 
 /**
- * Up to `limit` due seeds, qualifying evidence first, then oldest first.
- * Qualification uses the producer's clock, before the limit. With `since`, a seed it
- * handled before that is due again.
+ * Up to `limit` seeds due at `now`, qualifying evidence first, then oldest
+ * added first. Qualification uses the producer's clock, before the limit. A
+ * seed is due until the cron job handles it, and again SEED_EVERY_MS after,
+ * unless its repo is a project or a find of it waits in the admin queue.
  */
-export async function listSeedsToHandle(db: D1Database, limit: number, since: number | null = null, now: number = Date.now()): Promise<CrawlSeed[]> {
+export async function listSeedsToHandle(db: D1Database, limit: number, now: number = Date.now()): Promise<CrawlSeed[]> {
   const at = checkTime(now);
   const iso = (time: number) => new Date(Math.max(0, time)).toISOString();
   const { results } = await db
-    .prepare(`SELECT * FROM crawl_seeds WHERE handled_at IS NULL OR handled_at < ?1
+    .prepare(`SELECT * FROM crawl_seeds s WHERE s.handled_at IS NULL
+        OR (s.handled_at <= ?1
+          AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.repo = s.repo)
+          AND NOT EXISTS (SELECT 1 FROM crawl_candidates c WHERE c.repo = s.repo AND c.status = 'waiting'))
       ORDER BY CASE WHEN priority_evidence IS NOT NULL
         AND json_extract(priority_evidence, '$.stars') >= 10000
         AND json_extract(priority_evidence, '$.public') = 1
@@ -112,39 +129,21 @@ export async function listSeedsToHandle(db: D1Database, limit: number, since: nu
         AND json_extract(priority_evidence, '$.evidenceCheckedAt') BETWEEN ?2 AND ?3
         AND json_extract(priority_evidence, '$.publishedAt') BETWEEN ?4 AND ?3
         THEN 0 ELSE 1 END, added_at, repo LIMIT ?5`)
-    .bind(since === null ? null : checkTime(since, 'since'), iso(at - CRAWL_METADATA_DAYS * 86_400_000),
+    .bind(at - SEED_EVERY_MS, iso(at - CRAWL_METADATA_DAYS * 86_400_000),
       iso(at), iso(at - CRAWL_POST_DAYS * 86_400_000), mustParse(count, limit, 'limit'))
     .all<SeedRow>();
   return results.map(toSeed);
 }
 
 /**
- * Which of these repos are seeds the cron job queued at `since` or after, as
- * in the pass that started then, by name in lower case. The repos go in as
- * one JSON array, so any number of them takes one query.
- */
-export async function seedsQueuedSince(db: D1Database, repos: readonly string[], since: number): Promise<Set<string>> {
-  if (repos.length === 0) return new Set();
-  const { results } = await db
-    .prepare(
-      `SELECT repo FROM crawl_seeds
-       WHERE outcome = 'queued' AND handled_at >= ? AND repo IN (SELECT value FROM json_each(?))`,
-    )
-    .bind(checkTime(since, 'since'), JSON.stringify(repos.map((repo) => mustParse(repoName, repo, 'repo'))))
-    .all<{ repo: string }>();
-  return new Set(results.map((row) => row.repo.toLowerCase()));
-}
-
-/**
  * Records what the cron job did with each seed at `now`: queued it, or left
- * it alone, and why. A seed handled before keeps its time and outcome, unless
- * it was handled before `since`, as for listSeedsToHandle.
+ * it alone, and why. A seed handled less than SEED_EVERY_MS before keeps its
+ * time and outcome, as when two runs handle it at once.
  */
 export async function markSeedsHandled(
   db: D1Database,
   handled: readonly { repo: string; outcome: CrawlSeedOutcome }[],
   now: number,
-  since: number | null = null,
 ): Promise<void> {
   const byOutcome = new Map<CrawlSeedOutcome, string[]>();
   for (const { repo, outcome } of handled) {
@@ -153,15 +152,14 @@ export async function markSeedsHandled(
   }
   if (byOutcome.size === 0) return;
   const at = checkTime(now);
-  const before = since === null ? null : checkTime(since, 'since');
   await db.batch(
     [...byOutcome].map(([outcome, repos]) =>
       db
         .prepare(
           `UPDATE crawl_seeds SET handled_at = ?, outcome = ?
-           WHERE (handled_at IS NULL OR handled_at < ?) AND repo IN (SELECT value FROM json_each(?))`,
+           WHERE (handled_at IS NULL OR handled_at <= ?) AND repo IN (SELECT value FROM json_each(?))`,
         )
-        .bind(at, outcome, before, JSON.stringify(repos)),
+        .bind(at, outcome, at - SEED_EVERY_MS, JSON.stringify(repos)),
     ),
   );
 }
