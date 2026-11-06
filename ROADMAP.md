@@ -181,7 +181,7 @@ requests. #171, #172, and #173 can run at the same time.
 | [#171](https://github.com/meanwhileso/goodfirsttoken/issues/171) | Stop the crawler's searches, and read seeds monthly | Nothing | [#180](https://github.com/meanwhileso/goodfirsttoken/pull/180) |
 | [#172](https://github.com/meanwhileso/goodfirsttoken/issues/172) | Move the policy corpus into shared cases, and build the reader's core and the eval | Nothing | [#182](https://github.com/meanwhileso/goodfirsttoken/pull/182) |
 | [#173](https://github.com/meanwhileso/goodfirsttoken/issues/173) | Add the optional Anthropic key, the reader's variables, and the Anthropic API fake | Nothing | [#181](https://github.com/meanwhileso/goodfirsttoken/pull/181) |
-| [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | |
+| [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | [#183](https://github.com/meanwhileso/goodfirsttoken/pull/183) |
 | [#175](https://github.com/meanwhileso/goodfirsttoken/issues/175) | Check labels with the model, in shadow | #174 | |
 | [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | |
 | [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | |
