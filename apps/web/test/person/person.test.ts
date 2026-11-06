@@ -226,7 +226,7 @@ describe("a person's page", () => {
 
   test('starts with their feed’s newest lines, newest first', async () => {
     await personFeed(env.FEED, sam.githubId).deliver(
-      Array.from({ length: 8 }, (_, i) => ({ event: event(sam, `line ${String(i)}`), githubId: sam.githubId })),
+      Array.from({ length: 8 }, (_, i) => ({ event: event(sam, `line ${String(i)}`), githubId: sam.githubId, project: 'sample-owner/sample-app' })),
     );
 
     const person = ready(await loadPerson(request, 'sam', now));
@@ -389,8 +389,8 @@ describe('/live', () => {
   test("shows the homepage feed's newest lines, a blocked donor's left out, with the stream's command, and sets no cookie", async () => {
     await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0);
     await homeFeed(env.FEED).deliver([
-      { event: event(priya, 'wrote a failing test for the rewrite'), githubId: priya.githubId },
-      { event: event(kenji, 'a line nobody should see'), githubId: kenji.githubId },
+      { event: event(priya, 'wrote a failing test for the rewrite'), githubId: priya.githubId, project: 'sample-owner/sample-app' },
+      { event: event(kenji, 'a line nobody should see'), githubId: kenji.githubId, project: 'sample-owner/sample-app' },
     ]);
 
     const res = await page('/live');

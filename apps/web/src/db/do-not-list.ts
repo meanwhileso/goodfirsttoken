@@ -1,4 +1,4 @@
-import { doNotListEntrySchema, githubId, mustParse, repoName, type DoNotListEntry } from '@goodfirsttoken/core';
+import { doNotListEntrySchema, githubId, id, mustParse, repoName, type DoNotListEntry } from '@goodfirsttoken/core';
 import { checkTime } from './shared';
 
 // The do_not_list table: repos whose maintainers asked to be removed.
@@ -105,6 +105,45 @@ export async function doNotListedAmong(db: D1Database, repos: Iterable<string>):
     .bind(JSON.stringify(checked))
     .all<{ repo: string }>();
   return new Set(results.map((row) => row.repo.toLowerCase()));
+}
+
+// True when the do-not-list names the project `code`, a code repo: by its
+// own entry, or by the repo it keeps its issues in now. The rule CLAIM_SHOWN
+// in src/db/shown.ts hides a claim by.
+const NAMES_PROJECT = (code: string) => `EXISTS (SELECT 1 FROM do_not_list d
+  WHERE d.repo = ${code} OR d.repo = (SELECT p.issue_repo FROM projects p WHERE p.repo = ${code}))`;
+
+/**
+ * Which of these projects, by code repo, the do-not-list names: by an entry
+ * of their own, or by the repo they keep their issues in now. The rooms and
+ * feeds hide an event by its claim's project this way, as the public pages
+ * hide a claim, so moving a project's issues to another repo before it is
+ * removed leaves none of its events shown. Each comes back in lower case.
+ */
+export async function doNotListedProjectsAmong(db: D1Database, projects: Iterable<string>): Promise<Set<string>> {
+  const checked = [...new Set([...projects].map((repo) => mustParse(repoName, repo, 'project').toLowerCase()))];
+  if (checked.length === 0) return new Set();
+  const { results } = await db
+    .prepare(`SELECT j.value AS repo FROM json_each(?) j WHERE ${NAMES_PROJECT('j.value')}`)
+    .bind(JSON.stringify(checked))
+    .all<{ repo: string }>();
+  return new Set(results.map((row) => row.repo.toLowerCase()));
+}
+
+/**
+ * Which of these claims, by ID, are on a project the do-not-list names, as
+ * doNotListedProjectsAmong reads it, with each claim's project read from
+ * D1. For a feed's events stored before feeds kept each event's project. A
+ * claim D1 doesn't hold yet is left out.
+ */
+export async function doNotListedClaimsAmong(db: D1Database, claims: Iterable<string>): Promise<Set<string>> {
+  const checked = [...new Set([...claims].map((claim) => mustParse(id, claim, 'claim')))];
+  if (checked.length === 0) return new Set();
+  const { results } = await db
+    .prepare(`SELECT c.id FROM json_each(?) j JOIN claims c ON c.id = j.value WHERE ${NAMES_PROJECT('c.project')}`)
+    .bind(JSON.stringify(checked))
+    .all<{ id: string }>();
+  return new Set(results.map((row) => row.id));
 }
 
 /** The repo's entry on the do-not-list, compared without case, or null. */

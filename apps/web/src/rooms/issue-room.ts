@@ -187,16 +187,26 @@ const SCHEMA = `
   ) STRICT;
 `;
 
-// An event as the watchers' checks read it, with its claimant's GitHub ID
-// and its issue, from which they take its repo.
+// An event as the watchers' checks read it, with its claimant's GitHub ID,
+// its issue, from which they take its repo, and its claim's ID and project.
+// The project is the claim's code repo in lower case. Repo names are ASCII,
+// which SQLite's lower() folds.
+const STORED_PROJECT = `lower(json_extract(c.record, '$.project'))`;
 const STORED_COLUMNS = `e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id,
-  json_extract(e.event, '$.issue') AS issue`;
+  json_extract(e.event, '$.issue') AS issue, ${STORED_PROJECT} AS project, c.id AS claim`;
 const STORED_FROM = `events e JOIN claims c ON c.id = json_extract(e.event, '$.claim')`;
 
-type StoredRow = { seq: number; event: string; github_id: number; issue: string };
+type StoredRow = { seq: number; event: string; github_id: number; issue: string; project: string; claim: string };
 
 function toStoredEvent(row: StoredRow): StoredEvent {
-  return { seq: row.seq, githubId: row.github_id, repo: repoOfIssue(row.issue), json: row.event };
+  return {
+    seq: row.seq,
+    githubId: row.github_id,
+    repo: repoOfIssue(row.issue),
+    project: row.project,
+    claim: row.claim,
+    json: row.event,
+  };
 }
 
 const CLAIM_COLUMNS = `id, record, revision, mirrored, last_post_at, save_failures, save_after, failing_since,
@@ -536,9 +546,10 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after the one with ID `since`, oldest first, without blocked
-   * donors' events, and none while the do-not-list covers the issue's repo.
-   * With no `since`, or one this room doesn't keep, every event it keeps. Throws when D1
-   * can't say what to hide.
+   * donors' events, and none while the do-not-list covers the issue's repo,
+   * or names the project of the event's claim. With no `since`, or one this
+   * room doesn't keep, every event it keeps. Throws when D1 can't say what
+   * to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;
@@ -592,8 +603,9 @@ export class IssueRoom extends DurableObject<Env> {
    * them, then every new event as it happens. Without it, or with any other
    * ID, the newest 100 come first. Each message is one feed event as JSON. A
    * blocked donor's events are left out, and every event while the
-   * do-not-list covers the issue's repo. The socket uses the hibernation API,
-   * so a quiet room can sleep with watchers connected.
+   * do-not-list covers the issue's repo, or names its claim's project. The
+   * socket uses the hibernation API, so a quiet room can sleep with watchers
+   * connected.
    */
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -815,8 +827,9 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after a place, oldest first, each with its claimant's GitHub
-   * ID and the repo its issue is in, in lower case, which the watchers'
-   * checks need. Every event is about a claim the room holds.
+   * ID, the repo its issue is in, and its claim's project, both in lower
+   * case, which the watchers' checks need. Every event is about a claim the
+   * room holds, and the claim names its project.
    */
   private storedAfter(seq: number): StoredEvent[] {
     return this.sql
@@ -827,17 +840,19 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The newest `count` events after a place, oldest first, leaving out the
-   * donors in `skip`, so a hidden donor's posts never push out the events a
-   * watcher may see.
+   * donors and projects in `skip`, so a hidden donor's or project's posts
+   * never push out the events a watcher may see.
    */
   private newestAfter(seq: number, count: number, skip: Hidden): StoredEvent[] {
     return this.sql
       .exec<StoredRow>(
         `SELECT ${STORED_COLUMNS} FROM ${STORED_FROM}
          WHERE e.seq > ? AND json_extract(c.record, '$.githubId') NOT IN (SELECT value FROM json_each(?))
+           AND ${STORED_PROJECT} NOT IN (SELECT value FROM json_each(?))
          ORDER BY e.seq DESC LIMIT ?`,
         seq,
         JSON.stringify([...skip.donors]),
+        JSON.stringify([...skip.projects]),
         count,
       )
       .toArray()
@@ -853,7 +868,7 @@ export class IssueRoom extends DurableObject<Env> {
   private storedForPage(): StoredEvent[] {
     return this.sql
       .exec<StoredRow>(
-        `SELECT seq, event, github_id, issue FROM (
+        `SELECT seq, event, github_id, issue, project, claim FROM (
            SELECT ${STORED_COLUMNS}, json_extract(e.event, '$.kind') AS kind,
              ROW_NUMBER() OVER (
                PARTITION BY json_extract(e.event, '$.claim'), json_extract(e.event, '$.kind') = 'update'
