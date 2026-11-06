@@ -182,8 +182,8 @@ function parseEvent(data: unknown): FeedEvent | null {
 /**
  * Answers a WebSocket upgrade on a stream's .ndjson URL by handing it to the
  * feed or room, whose hibernating socket then sends the browser each event
- * as one JSON message: first every event after `since`, or the ones a
- * watcher with no `since` gets, then each new one. Blocked donors' events
+ * as one JSON message: first the events after `since`, up to 1,000, or the
+ * ones a watcher with no `since` gets, then each new one. Blocked donors' events
  * are left out, as for every watcher. The socket is public and read-only.
  * The feed or room closes a socket the browser sends anything on. No cookie
  * is read or set.

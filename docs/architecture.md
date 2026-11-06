@@ -1964,7 +1964,7 @@ it fails.
 | `claims` | Claim, as JSON, with its revision, its last post time for the 10-second rule, and where its save to D1 stands: the highest revision D1 is known to hold, the failed tries since the last save that landed, when the first of them was, when the last try started, the time before which no try is made, until when a call's try is out, and the revision the room gave up at |
 | `issue_prs` | Open PR linked to the issue |
 | `pr_outcomes` | Claim whose own PR merged or closed, as the PR job told the room, with which |
-| `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. |
+| `events` | Feed event, as JSON, in the order made. A watcher resumes by an event's ID. Once the room has held more than `ROOM_RESUME` events, each post deletes the lines that are neither among its newest `ROOM_RESUME`, blocked donors' included, nor among their claim's newest `LANE_LINES` (`pruneLines`). Changes of state all stay. The `outbox` keeps its own copy of each message, so a line deleted while the queue is down still reaches the feeds. A watcher kept behind by D1 for over 1,000 events can miss lines. |
 | `outbox` | Event not yet sent to the feed queue, by its place in `events`: the message to send, the failed tries, and the time before which no try is made |
 
 The tables are made with `CREATE TABLE IF NOT EXISTS` when the object starts.
@@ -2128,8 +2128,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
   whether it reached the last event stored.
 - **A new watcher's history.** The feed or room is told which donors are
   known to be blocked and which repos and projects the do-not-list is known
-  to cover, and reads only the events it will send: a feed with no `since`
-  reads its newest 100 of the others, in one query. D1 is asked about any
+  to cover, and reads only the events it will send: a feed or room with no
+  `since` reads its newest 100 of the others, in one query. A room with one
+  reads the newest 1,000 after it (`ROOM_RESUME`). D1 is asked about any
   claimant, repo, or project in them not yet asked about, and the read
   repeats until none is new. Then the socket is accepted, sent its
   history, and given its place, with no await in between, so no event
@@ -2170,7 +2171,9 @@ streams' in [Text streams](how-it-works.md#text-streams).
     any other. A claim D1 doesn't hold yet is judged by its repo alone.
     These events leave as a feed drops its oldest past 1,000.
   - A feed with no `since` skips hidden repos, projects, and claims in SQL,
-    so its newest 100 are ones it sends.
+    so its newest 100 are ones it sends. A room skips hidden donors and
+    projects in SQL the same way, in its newest 100 and in the newest 1,000
+    after a `since`.
 
   The `history()` RPC of a room and of a feed leaves blocked donors out
   too, and throws when D1 can't say who they are.
@@ -2213,8 +2216,11 @@ streams' in [Text streams](how-it-works.md#text-streams).
   `findIssue` makes, under [The issue page](#the-issue-page). Then twice for
   each round of the block check, once for blocked donors and once for the
   do-not-list, at the same time. It
-  sends at most 100 events from a feed with no `since`, at most 1,000 with
-  one, and an issue room's whole history. Each line costs the feed or room
+  sends at most 100 events from a feed or an issue room with no `since`,
+  and at most 1,000 with one (`FEED_TAIL` and `FEED_KEEPS` in
+  `src/rooms/feed.ts`, `ROOM_TAIL` and `ROOM_RESUME` in
+  `src/rooms/issue-room.ts`). Each read is one query that stops at that
+  many, by the table's key. Each line costs the feed or room
   two D1 reads per batch it sends, shared by its watchers, and each stream a
   schema check. A stalled reader holds up to a minute of lines in memory,
   and a reader that went away holds its socket until the minute rule or the
@@ -2505,11 +2511,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-issue-page).
   `issue_syncs` and the do-not-list for its repo and its issue repo, all at
   once. That one answer decides the breadcrumb, the cached copy, and
   whether the project takes claims.
-  Then the room's glance, which reads its whole history and asks D1 which
-  donors are blocked and whether the do-not-list covers the issue's repo,
-  two queries at once, and a socket on the room for as long as the page is
-  open. Each lane keeps its newest 20 lines, so the page carries at most
-  that many per claim. Nothing caches any of it yet.
+  Then the room's glance, which reads every change of state and each
+  claim's newest 20 lines, `LANE_LINES`, all a lane shows, and asks D1
+  which donors are blocked and whether the do-not-list covers the issue's
+  repo, two queries at once, and a socket on the room for as long as the
+  page is open. The page folds those to the view the whole history would
+  give. The room deletes older lines as new ones come, so the glance reads
+  at most every change of state, 20 lines a claim, and 1,000 events
+  besides. Nothing caches any of it yet.
 
 ## The project pages
 
@@ -4898,6 +4907,7 @@ Notes, with nothing to fix now:
 | S3 | One address could hold thousands of sockets on the homepage's feed, which walks every socket on each event | Fixed. Each address holds at most 100 on a feed or room. Test: in `test/feed/streams.test.ts`, "the 101st from one address is refused with 429" |
 | S4 | 60 opens a minute was low enough for an office or a reconnect wave from one address to meet | Fixed. 300 a minute, with S3 bounding what an address holds |
 | Q1 | `claim_issue` sent an issue's body as GitHub gave it. Unicode tag characters, zero-width characters, and marks that reorder text in it reached the donor's agent, though neither the maintainer nor the donor could see them. The title was already folded | Fixed. `readIssue` folds the body with `foldUntrustedLines` (`packages/core/src/characters.ts`). It drops every hidden character, makes every line break `\n`, and makes any other control character but a tab a space. New claims, resumed claims, and submits all read the body through it, and `claim_issue`'s answer takes only a folded body. Tests: in `test/mcp/donor.test.ts`, "reaches the donor's agent with only what a person can see, its line breaks kept", and in `packages/core/test/fold.test.ts`, under "an issue's body". Kept: the agent isn't told when characters were dropped, so an issue about a zero-width character reads without it. The answer links the issue on GitHub. Markdown that GitHub's page hides, like an HTML comment, still reaches the agent. The raw text shows it |
+| R1 | An issue room kept and sent its whole history. One donor posting every 10 seconds, on a claim whose PR opened and so never expires, grew it without end, and every anonymous open of the issue's `live.txt` or `live.ndjson`, and every issue page view, read and sent all of it | Fixed. A watcher with no `since` gets the newest 100 events, and one with `since` at most the newest 1,000 after it, as a feed does, with blocked donors' events not counted. The glance reads every change of state and each claim's newest 20 lines. Each post deletes the lines older than the newest 1,000 events, blocked donors' included, that aren't among their lane's newest 20. Tests: in `test/feed/streams.test.ts`, "with no since, or one the room never sent, sends only the newest events, the newest last", "with since, sends at most the newest events after it", and "fills the newest 100 with events it may send, past a blocked donor's newer posts". In `test/issue/issue.test.ts`, "holds every change of state and only the lines each lane shows, so the page folds to what the whole history would". In `test/rooms/issue-room.test.ts`, "keeps the newest events, each lane's newest lines, and every change of state, and deletes the other lines". Kept: changes of state all stay, and the page shows every one. A donor can add one with each `submit_work`, under `MCP_LIMITER`. Before the PR opens, a claim awaiting review can submit the same head again. After it opens, each submit needs a newly pushed head. A blocked donor's flood, before the block, still counts toward the newest 1,000, so it can leave a stream fewer of the others' lines, though every lane keeps its 20 |
 | Q2 | The feeds and rooms hid an event only by its issue's repo. A project that moved its issues back to its code repo with `update_project`, then was removed, left the events on its old issues shown in the homepage's, its own, and people's feeds, in the old issues' rooms, and on its `/<owner>/<repo>/live.txt`, which opened for a project in any status | Fixed. Each event is also hidden by its claim's project, as the public pages hide a claim: a room reads it from the claim, a feed keeps it beside the event, and a feed's events stored before then are judged by their claim in D1. A repo's stream needs the project to have a page. Tests: in `test/feed/streams.test.ts`, "has the events on its old issues hidden everywhere they were shown", and in `test/feed/feed.test.ts`, "is hidden by its claim's project, which D1 holds, after the project moved its issues and was removed". Kept: an event a feed stored before then, on a claim D1 doesn't hold, is judged by its repo alone |
 
 Notes the review made, with nothing to fix now:

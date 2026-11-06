@@ -6,7 +6,7 @@ import { adminRemoveProject } from '../../src/admin/actions';
 import { blockDonor, changeSettings, createProject, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed, repoFeed } from '../../src/rooms/feed';
-import { issueRoom } from '../../src/rooms/issue-room';
+import { issueRoom, ROOM_RESUME, ROOM_TAIL } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
 import { inOneLimitWindow, randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
@@ -31,6 +31,18 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/** An admin removes the project at its maintainers' request, which lists its repo and rejects it. */
+async function remove(name: string): Promise<void> {
+  const configured = env.ADMIN_GITHUB_IDS;
+  env.ADMIN_GITHUB_IDS = String(admin.githubId);
+  try {
+    const removed = await adminRemoveProject({ ...admin, gitHubToken: () => Promise.resolve(null) }, { repo: name }, Date.now());
+    if (!removed.ok) throw new Error(removed.refusal.message);
+  } finally {
+    env.ADMIN_GITHUB_IDS = configured;
+  }
+}
 
 async function claim(person: { githubId: number; login: string }, agent = 'claude-code'): Promise<ClaimRecord> {
   const result = await issueRoom(env.ISSUE_ROOM, issue).claim({
@@ -639,6 +651,114 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
   });
 });
 
+describe("an issue's live socket on a long history", () => {
+  const issueSocket = () => `/${repo}/issues/${String(issueNumber)}/live.ndjson`;
+
+  /** Posts `<text> 1` to `<text> <count>`, each 10 seconds after the last, as soon as a claim may post again. */
+  async function postMany(claimed: ClaimRecord, count: number, text = 'update'): Promise<void> {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    for (let i = 1; i <= count; i += 1) {
+      vi.setSystemTime(Date.now() + 10_000);
+      await post(claimed, `${text} ${String(i)}`);
+    }
+  }
+
+  /** The texts `update <from>` to `update <to>`. */
+  function updates(from: number, to: number): string[] {
+    return Array.from({ length: to - from + 1 }, (_, i) => `update ${String(from + i)}`);
+  }
+
+  test('with no since, or one the room never sent, sends only the newest events, the newest last', async () => {
+    const priyas = await claim(priya);
+    await postMany(priyas, 2 * ROOM_TAIL);
+    const newest = `update ${String(2 * ROOM_TAIL)}`;
+
+    for (const path of [issueSocket(), `${issueSocket()}?since=e_never-sent`]) {
+      const socket = await liveSocket(path);
+      await socket.event(newest);
+      expect(socket.events.map((e) => e.text), path).toEqual(updates(ROOM_TAIL + 1, 2 * ROOM_TAIL));
+      socket.socket.close(1000);
+    }
+  });
+
+  test('with since, sends at most the newest events after it', async () => {
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const priyas = await claim(priya);
+    const [claimed] = await room.history();
+    // Priya's lane keeps its lines, and her claim pauses while kenji posts,
+    // so the room keeps more than ROOM_RESUME events after her claim.
+    await postMany(priyas, 20, 'priya');
+    const kenjis = await claim(kenji);
+    await postMany(kenjis, ROOM_RESUME + 5, 'kenji');
+    const kept = await storedEvents(room);
+    expect(kept.length - 1).toBeGreaterThan(ROOM_RESUME);
+
+    const socket = await liveSocket(`${issueSocket()}?since=${String(claimed?.id)}`);
+
+    await socket.event(`kenji ${String(ROOM_RESUME + 5)}`);
+    expect(socket.events.map((e) => e.id)).toEqual(kept.slice(-ROOM_RESUME).map((e) => e.id));
+    socket.socket.close(1000);
+  }, 120_000);
+
+  test("fills the newest 100 with events it may send, past a blocked donor's newer posts", async () => {
+    const priyas = await claim(priya);
+    await postMany(priyas, 3);
+    const kenjis = await claim(kenji);
+    await postMany(kenjis, ROOM_TAIL);
+    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
+
+    const socket = await liveSocket(issueSocket());
+
+    await socket.event('update 3');
+    expect(socket.events.map((e) => [e.user, e.text])).toEqual([
+      ['priya', 'claimed the issue'],
+      ['priya', 'update 1'],
+      ['priya', 'update 2'],
+      ['priya', 'update 3'],
+    ]);
+    socket.socket.close(1000);
+  });
+
+  test("fills the newest 100 past a removed project's newer posts, and its glance leaves them out", async () => {
+    // Another project keeps its issues in this repo, and kenji's claim on the
+    // issue is on it. Removing it leaves the repo shown, since this repo's own
+    // project is approved and off the list, so only the project hides his.
+    const removed = 'sample-owner/sample-removed';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, removed);
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const priyas = await claim(priya);
+    await postMany(priyas, 3);
+    const kenjis = await room.claim({
+      issue,
+      project: removed,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!kenjis.ok) throw new Error(kenjis.refusal.message);
+    await postMany(kenjis.claim, ROOM_TAIL, 'kenji');
+    await remove(removed);
+
+    const socket = await liveSocket(issueSocket());
+    const glance = await room.glance();
+
+    await socket.event('update 3');
+    const priyas4 = [
+      ['priya', 'claimed the issue'],
+      ['priya', 'update 1'],
+      ['priya', 'update 2'],
+      ['priya', 'update 3'],
+    ];
+    expect(socket.events.map((e) => [e.user, e.text])).toEqual(priyas4);
+    expect(glance?.events.map((e) => [e.user, e.text])).toEqual(priyas4);
+    expect((await room.history()).map((e) => [e.user, e.text])).toEqual(priyas4);
+    socket.socket.close(1000);
+  }, 60_000);
+});
+
 describe('the stream limit', () => {
   // wrangler.jsonc gives the stream limiter 300 opens a minute for each
   // client. The Workers runtime counts them in the tests too.
@@ -745,18 +865,6 @@ describe('the sockets one address holds', () => {
 describe('a project removed after it moved its issues back to its code repo', () => {
   const code = 'sample-owner/sample-moved';
   const elsewhere = 'sample-owner/sample-moved-issues';
-
-  /** An admin removes the project at its maintainers' request, which lists its repo and rejects it. */
-  async function remove(name: string): Promise<void> {
-    const configured = env.ADMIN_GITHUB_IDS;
-    env.ADMIN_GITHUB_IDS = String(admin.githubId);
-    try {
-      const removed = await adminRemoveProject({ ...admin, gitHubToken: () => Promise.resolve(null) }, { repo: name }, Date.now());
-      if (!removed.ok) throw new Error(removed.refusal.message);
-    } finally {
-      env.ADMIN_GITHUB_IDS = configured;
-    }
-  }
 
   test('has the events on its old issues hidden everywhere they were shown', async () => {
     await registeredProject({ tags: ['help wanted'], issueRepo: elsewhere }, code);
