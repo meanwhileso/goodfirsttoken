@@ -7,7 +7,7 @@
 export const MODEL = 'claude-opus-5-5';
 
 /** Which prompts the reader sends. Raise it with any change to a prompt. */
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 /** Which output schemas the reader asks for. Raise it with any change to a schema. */
 export const SCHEMA_VERSION = 1;

@@ -441,10 +441,10 @@ describe('the outcome fingerprint', () => {
   test('is one version past the rules for each reader version, and names the reader version it came from', async () => {
     const fingerprint = await readerFingerprint(agents(base), welcome(agents(base), 3, 'Agents may open pull requests here.'), null);
 
-    // p1 was one past the rules, and p2 is two. Raise both together.
-    expect(READER_FINGERPRINT_VERSION).toBe(FINGERPRINT_VERSION + 2);
+    // p1 was one past the rules, p2 two, and p3 three. Raise both together.
+    expect(READER_FINGERPRINT_VERSION).toBe(FINGERPRINT_VERSION + 3);
     expect(fingerprint).toMatch(new RegExp(`^v${String(READER_FINGERPRINT_VERSION)}:[0-9a-f]{64}$`));
-    expect(READER_VERSION).toBe('claude-opus-5-5/p2/s1');
+    expect(READER_VERSION).toBe('claude-opus-5-5/p3/s1');
   });
 
   test('reads the same for a build step added to AGENTS.md, even one that says no, and for a welcome cited on other lines', async () => {
