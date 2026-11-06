@@ -714,7 +714,10 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   again, which can take several runs. `readIssue` in
   `src/donor/github.ts` folds the title GitHub gives the donor's token.
   The donor tools' answers take a title only through `issueTitle`, which
-  refuses one that isn't folded, the way `followUpText` does.
+  refuses one that isn't folded, the way `followUpText` does. `readIssue`
+  folds the issue's body with `foldUntrustedLines`, which drops the same hidden
+  characters and keeps the lines, and `claim_issue`'s answer takes a body
+  only through `issueBody`, which refuses one that isn't folded.
   `cutGraphemes` gives back text no longer than its cap in UTF-16 units
   without counting graphemes, since a text has at least as many units as
   graphemes, so cutting a title that fits costs next to nothing.
@@ -4876,6 +4879,7 @@ Notes, with nothing to fix now:
 | S1 | The daily job deleted a lapsed connection before it revoked the token, so a GitHub failure at 04:23 left the token live with nothing to retry | Fixed. The job revokes first, counts a `404` as done, and keeps the row when GitHub fails. Tests: in `test/mcp/disconnect.test.ts`, "when GitHub fails to revoke, the daily job keeps the connection and its token for the next run" and "a token GitHub no longer knows counts as revoked" |
 | S3 | One address could hold thousands of sockets on the homepage's feed, which walks every socket on each event | Fixed. Each address holds at most 100 on a feed or room. Test: in `test/feed/streams.test.ts`, "the 101st from one address is refused with 429" |
 | S4 | 60 opens a minute was low enough for an office or a reconnect wave from one address to meet | Fixed. 300 a minute, with S3 bounding what an address holds |
+| Q1 | `claim_issue` sent an issue's body as GitHub gave it. Unicode tag characters, zero-width characters, and marks that reorder text in it reached the donor's agent, though neither the maintainer nor the donor could see them. The title was already folded | Fixed. `readIssue` folds the body with `foldUntrustedLines` (`packages/core/src/characters.ts`). It drops every hidden character, makes every line break `\n`, and makes any other control character but a tab a space. New claims, resumed claims, and submits all read the body through it, and `claim_issue`'s answer takes only a folded body. Tests: in `test/mcp/donor.test.ts`, "reaches the donor's agent with only what a person can see, its line breaks kept", and in `packages/core/test/fold.test.ts`, under "an issue's body". Kept: the agent isn't told when characters were dropped, so an issue about a zero-width character reads without it. The answer links the issue on GitHub. Markdown that GitHub's page hides, like an HTML comment, still reaches the agent. The raw text shows it |
 
 Notes the review made, with nothing to fix now:
 
