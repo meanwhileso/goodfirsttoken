@@ -57,7 +57,8 @@ const beside = (other: PolicyFile): PolicyFile[] => [welcome, other];
 /** A second CONTRIBUTING.md, so no two files share a path. */
 const second = (text: string) => file('contributing', text, 'docs/CONTRIBUTING.md');
 
-const PUSH_NOTE = 'A rule about pushing to the repo\'s own branches, which outside contributors push to forks instead of. The owner may relabel it.';
+const PUSH_RELABEL =
+  "A rule about pushing or committing to the repo's own branches. Outside contributors push to and commit in their forks, and only a rule against opening pull requests keeps them out.";
 
 /** A side whose only file is an AI policy that says `AI help is fine.` and the sentence. */
 const inPolicy = (sentence: string, rules: CrawlTier, extra: Partial<FormSide> = {}): FormSide => ({
@@ -304,14 +305,16 @@ export const FORM_GROUPS: FormGroup[] = [
       ['Do not open a PR to master.'],
       ['Do not open pull requests against the protected branches.'],
       ['Do not open pull requests against develop.'],
-      ['Agents should not push to any branch.', PUSH_NOTE],
+      ['Agents should not push to any branch.', undefined, PUSH_RELABEL],
       ['Do not open pull requests against every branch.'],
-      ['Do not commit code to all branches.', PUSH_NOTE],
+      ['Do not commit code to all branches.', undefined, PUSH_RELABEL],
       ['Agents must not open pull requests on each branch.'],
-      ['AI agents must not push to our branches.', PUSH_NOTE],
-      ['Do not push to main or any other branch.', PUSH_NOTE],
+      ['AI agents must not push to our branches.', undefined, PUSH_RELABEL],
+      ['Do not push to main or any other branch.', undefined, PUSH_RELABEL],
       ['Do not open pull requests against the branches of this repository.'],
-    ].map(([sentence = '', note]) => inPolicy(sentence, ban, note === undefined ? {} : { note })),
+    ].map(([sentence = '', note, relabel]) =>
+      inPolicy(sentence, ban, { ...(note === undefined ? {} : { note }), ...(relabel === undefined ? {} : { relabel }) }),
+    ),
   },
   {
     key: 'f11-names',

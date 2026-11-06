@@ -148,9 +148,15 @@ export const BAN_CORPUS: { review: string; key: string; cases: [PolicyFileKind, 
 
 /**
  * Wordings the owner relabeled as no ban on 2026-11-06, since they are rules
- * for how to work. The rules tests still read them as bans.
+ * for how to work, with why. The rules tests still read them as bans.
  */
-const RELABELED = new Set(['Please do not commit generated files.']);
+const PUSH_WHY = "A rule about pushing or committing to the repo's own branches. Outside contributors push to and commit in their forks, and only a rule against opening pull requests keeps them out.";
+const RELABELED = new Map([
+  ['Please do not commit generated files.', 'A rule about build output.'],
+  ['Please do not commit code to any branch.', PUSH_WHY],
+  ['Coding agents must not push to the main branch or any other branch.', PUSH_WHY],
+  ['AI agents must not push to our branches.', PUSH_WHY],
+]);
 
 /** What sits beside each ban: a welcome, then an invitation. */
 export const BAN_PLACEMENTS = [
@@ -182,7 +188,7 @@ export const BAN_CASES: PolicyCase[] = BAN_WORDINGS.flatMap((wording) =>
       ...(RELABELED.has(wording.text)
         ? {
             expect: { tier: LISTING_TIERS },
-            relabeled: { on: '2026-11-06', why: 'A rule about build output.', was: banned },
+            relabeled: { on: '2026-11-06', why: RELABELED.get(wording.text) ?? '', was: banned },
           }
         : { expect: banned }),
       rules: 'bans_or_restricts',
