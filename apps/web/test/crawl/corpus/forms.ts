@@ -58,7 +58,6 @@ const beside = (other: PolicyFile): PolicyFile[] => [welcome, other];
 const second = (text: string) => file('contributing', text, 'docs/CONTRIBUTING.md');
 
 const PUSH_NOTE = 'A rule about pushing to the repo\'s own branches, which outside contributors push to forks instead of. The owner may relabel it.';
-const RULE_NOTE = 'A rule for how to work that the rules read as a ban for a word added. The owner may relabel it.';
 
 /** A side whose only file is an AI policy that says `AI help is fine.` and the sentence. */
 const inPolicy = (sentence: string, rules: CrawlTier, extra: Partial<FormSide> = {}): FormSide => ({
