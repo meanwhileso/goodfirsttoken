@@ -32,6 +32,7 @@ import {
 } from '@goodfirsttoken/core';
 import { saveClaim } from '../db/claims';
 import { newId } from '../db/shared';
+import { LANE_LINES } from '../issue/view';
 import {
   answerClose,
   closeSender,
@@ -68,6 +69,13 @@ const DAY = 24 * HOUR;
 
 /** The shortest time between two posts on one claim. */
 export const POST_INTERVAL_MS = 10_000;
+/** How many of its newest events a room sends a watcher who gives no `since`, as a feed does. */
+export const ROOM_TAIL = 100;
+/**
+ * The most events a room sends a watcher who resumes with `since`: the
+ * newest of those after it. A feed keeps this many.
+ */
+export const ROOM_RESUME = 1000;
 /** How soon a save to D1 that failed is first tried again. Each later wait is twice as long. */
 export const SAVE_RETRY_FIRST_MS = MINUTE;
 /** The longest wait between two tries of a save. */
@@ -178,6 +186,28 @@ const SCHEMA = `
     next_try_at INTEGER NOT NULL DEFAULT 0
   ) STRICT;
 `;
+
+// An event as the watchers' checks read it, with its claimant's GitHub ID,
+// its issue, from which they take its repo, and its claim's ID and project.
+// The project is the claim's code repo in lower case. Repo names are ASCII,
+// which SQLite's lower() folds.
+const STORED_PROJECT = `lower(json_extract(c.record, '$.project'))`;
+const STORED_COLUMNS = `e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id,
+  json_extract(e.event, '$.issue') AS issue, ${STORED_PROJECT} AS project, c.id AS claim`;
+const STORED_FROM = `events e JOIN claims c ON c.id = json_extract(e.event, '$.claim')`;
+
+type StoredRow = { seq: number; event: string; github_id: number; issue: string; project: string; claim: string };
+
+function toStoredEvent(row: StoredRow): StoredEvent {
+  return {
+    seq: row.seq,
+    githubId: row.github_id,
+    repo: repoOfIssue(row.issue),
+    project: row.project,
+    claim: row.claim,
+    json: row.event,
+  };
+}
 
 const CLAIM_COLUMNS = `id, record, revision, mirrored, last_post_at, save_failures, save_after, failing_since,
   gave_up, saving_until, last_try_at`;
@@ -364,6 +394,7 @@ export class IssueRoom extends DurableObject<Env> {
     }
     this.save(result.claim, { postedAt: now });
     this.emit(result.claim, 'update', text, job, now);
+    this.pruneLines();
     return this.done(now, { ok: true, posted: true, waitSeconds: null, claimId, state: result.claim.state, prOnIssue });
   }
 
@@ -515,9 +546,10 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after the one with ID `since`, oldest first, without blocked
-   * donors' events, and none while the do-not-list covers the issue's repo.
-   * With no `since`, or one this room never sent, every event. Throws when D1
-   * can't say what to hide.
+   * donors' events, and none while the do-not-list covers the issue's repo,
+   * or names the project of the event's claim. With no `since`, or one this
+   * room doesn't keep, every event it keeps. Throws when D1 can't say what
+   * to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;
@@ -531,7 +563,10 @@ export class IssueRoom extends DurableObject<Env> {
   /**
    * What the issue page loads with, as of one moment: its issue, every
    * claim in the order made, blocked donors' included, the open PRs on the
-   * issue, and every event a watcher may see, oldest first. The timers that
+   * issue, and of the events a watcher may see, every change of state and
+   * the newest lines of each claim, as many as its lane shows, oldest
+   * first. The page folds those to the view the whole history would give,
+   * and reads no more of a long history than that. The timers that
    * are due apply first. The claims, the PRs, and the events are read with
    * no await between them, so no call lands in between, and a PR is in the
    * PRs exactly when its event is in the events. Null when D1 can't say what
@@ -545,7 +580,7 @@ export class IssueRoom extends DurableObject<Env> {
       claims: this.readClaims().map((c) => c.record),
       prs: this.issuePrs(),
     };
-    const stored = this.storedAfter(0);
+    const stored = this.storedForPage();
     await this.done(now, undefined);
     let hidden: Hidden;
     try {
@@ -563,20 +598,26 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * Opens a WebSocket for a watcher. `?since=<event ID>` sends the events
-   * after that one first, then every new event as it happens. Without it, the
-   * whole history comes first. Each message is one feed event as JSON. A
+   * Opens a WebSocket for a watcher. `?since=<event ID>` of an event the room
+   * keeps sends the events after that one first, up to the newest 1,000 of
+   * them, then every new event as it happens. Without it, or with any other
+   * ID, the newest 100 come first. Each message is one feed event as JSON. A
    * blocked donor's events are left out, and every event while the
-   * do-not-list covers the issue's repo. The socket uses the hibernation API,
-   * so a quiet room can sleep with watchers connected.
+   * do-not-list covers the issue's repo, or names its claim's project. The
+   * socket uses the hibernation API, so a quiet room can sleep with watchers
+   * connected.
    */
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Connect with a WebSocket.\n', { status: 426, headers: { Upgrade: 'websocket' } });
     }
     const since = new URL(request.url).searchParams.get('since');
+    const from = since === null ? null : this.placeOf(since);
     return openWatcher(this.ctx, this.env.DB, request, {
-      history: () => this.storedAfter(since === null ? 0 : (this.placeOf(since) ?? 0)),
+      // Only the events it sends are read: the newest 1,000 after `since`,
+      // or the newest 100, of those not known to be hidden.
+      history: (hidden) =>
+        from === null ? this.newestAfter(0, ROOM_TAIL, hidden) : this.newestAfter(from, ROOM_RESUME, hidden),
       last: () => this.lastPlace(),
     });
   }
@@ -786,20 +827,81 @@ export class IssueRoom extends DurableObject<Env> {
 
   /**
    * The events after a place, oldest first, each with its claimant's GitHub
-   * ID and the repo its issue is in, in lower case, which the watchers'
-   * checks need. Every event is about a claim the room holds.
+   * ID, the repo its issue is in, and its claim's project, both in lower
+   * case, which the watchers' checks need. Every event is about a claim the
+   * room holds, and the claim names its project.
    */
   private storedAfter(seq: number): StoredEvent[] {
     return this.sql
-      .exec<{ seq: number; event: string; github_id: number; issue: string }>(
-        `SELECT e.seq, e.event, json_extract(c.record, '$.githubId') AS github_id,
-           json_extract(e.event, '$.issue') AS issue
-         FROM events e JOIN claims c ON c.id = json_extract(e.event, '$.claim')
-         WHERE e.seq > ? ORDER BY e.seq`,
+      .exec<StoredRow>(`SELECT ${STORED_COLUMNS} FROM ${STORED_FROM} WHERE e.seq > ? ORDER BY e.seq`, seq)
+      .toArray()
+      .map(toStoredEvent);
+  }
+
+  /**
+   * The newest `count` events after a place, oldest first, leaving out the
+   * donors and projects in `skip`, so a hidden donor's or project's posts
+   * never push out the events a watcher may see.
+   */
+  private newestAfter(seq: number, count: number, skip: Hidden): StoredEvent[] {
+    return this.sql
+      .exec<StoredRow>(
+        `SELECT ${STORED_COLUMNS} FROM ${STORED_FROM}
+         WHERE e.seq > ? AND json_extract(c.record, '$.githubId') NOT IN (SELECT value FROM json_each(?))
+           AND ${STORED_PROJECT} NOT IN (SELECT value FROM json_each(?))
+         ORDER BY e.seq DESC LIMIT ?`,
         seq,
+        JSON.stringify([...skip.donors]),
+        JSON.stringify([...skip.projects]),
+        count,
       )
       .toArray()
-      .map((row) => ({ seq: row.seq, githubId: row.github_id, repo: repoOfIssue(row.issue), json: row.event }));
+      .map(toStoredEvent)
+      .reverse();
+  }
+
+  /**
+   * What the issue page folds its view from, oldest first: every change of
+   * state, and the newest lines of each claim, as many as a lane shows. The
+   * page folds these to the view the whole history would give.
+   */
+  private storedForPage(): StoredEvent[] {
+    return this.sql
+      .exec<StoredRow>(
+        `SELECT seq, event, github_id, issue, project, claim FROM (
+           SELECT ${STORED_COLUMNS}, json_extract(e.event, '$.kind') AS kind,
+             ROW_NUMBER() OVER (
+               PARTITION BY json_extract(e.event, '$.claim'), json_extract(e.event, '$.kind') = 'update'
+               ORDER BY e.seq DESC
+             ) AS back
+           FROM ${STORED_FROM}
+         ) WHERE kind <> 'update' OR back <= ? ORDER BY seq`,
+        LANE_LINES,
+      )
+      .toArray()
+      .map(toStoredEvent);
+  }
+
+  /**
+   * Deletes the lines older than the room's newest ROOM_RESUME events,
+   * blocked donors' included, that are not among the newest lines of their
+   * claim's lane. Every change of state stays, and so does each lane. A room
+   * that has never held more than ROOM_RESUME events has nothing to delete.
+   */
+  private pruneLines(): void {
+    if (this.lastPlace() <= ROOM_RESUME) return;
+    this.sql.exec(
+      `DELETE FROM events
+       WHERE seq < (SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET ?)
+         AND seq IN (
+           SELECT seq FROM (
+             SELECT seq, ROW_NUMBER() OVER (PARTITION BY json_extract(event, '$.claim') ORDER BY seq DESC) AS back
+             FROM events WHERE json_extract(event, '$.kind') = 'update'
+           ) WHERE back > ?
+         )`,
+      ROOM_RESUME - 1,
+      LANE_LINES,
+    );
   }
 
   private readClaims(): StoredClaim[] {

@@ -49,8 +49,8 @@ import { reopenClaimPr } from './reopen';
 // A pass reads each of a project's issues once, and can take several runs.
 // A run that stops early, for the GitHub budget or its limit on calls,
 // leaves the pass in progress, and the next run skips the issues it read.
-// One run at a time holds a project while it reads it, a scheduled run or a
-// maintainer's refresh.
+// One run at a time holds a project while it reads it, a scheduled run, a
+// maintainer's refresh, or the read an admin's approval starts.
 
 /** How long a run holds a project: the most a scheduled run lasts. */
 export const HOLD_MS = 15 * 60_000;

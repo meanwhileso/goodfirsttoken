@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { limiterKey, underStreamLimit } from '../auth/rate-limit';
 import { findPersonByLogin, getBlock, getProject } from '../db';
 import { findIssue } from '../issue/find';
+import { hasPage } from '../project/shown';
 import { homeFeed, personFeed, repoFeed } from '../rooms/feed';
 import { issueRoom } from '../rooms/issue-room';
 import { WATCHER_ADDRESS_HEADER } from '../rooms/watchers';
@@ -115,7 +116,9 @@ export function isStreamPath(request: Request): boolean {
 
 /**
  * The feed or room a source reads from, or a text answer saying why there is
- * none. A repo's stream needs the repo to be a project. An issue's needs a
+ * none. A repo's stream needs the repo to be a project with a page, so a
+ * project that is pending, rejected, delisted, or on the do-not-list has
+ * none, as it has no page. An issue's needs a
  * claim on the issue, or the issue among the tagged issues of a project that
  * keeps its issues in that repo. So a request never makes a feed or room
  * that nothing could fill. A person's stream finds them by their login now,
@@ -127,7 +130,9 @@ async function sourceFor(source: Source): Promise<DurableObjectStub | Response> 
       return homeFeed(env.FEED);
     case 'repo': {
       const project = await getProject(env.DB, source.repo);
-      if (!project) return text(404, `${source.repo} is not a project on Good First Token.`);
+      if (project === null || !(await hasPage(env.DB, project))) {
+        return text(404, `${source.repo} is not a project on Good First Token.`);
+      }
       return repoFeed(env.FEED, project.repo);
     }
     case 'issue': {
@@ -177,8 +182,8 @@ function parseEvent(data: unknown): FeedEvent | null {
 /**
  * Answers a WebSocket upgrade on a stream's .ndjson URL by handing it to the
  * feed or room, whose hibernating socket then sends the browser each event
- * as one JSON message: first every event after `since`, or the ones a
- * watcher with no `since` gets, then each new one. Blocked donors' events
+ * as one JSON message: first the events after `since`, up to 1,000, or the
+ * ones a watcher with no `since` gets, then each new one. Blocked donors' events
  * are left out, as for every watcher. The socket is public and read-only.
  * The feed or room closes a socket the browser sends anything on. No cookie
  * is read or set.

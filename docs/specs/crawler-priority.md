@@ -1,7 +1,8 @@
 # Prioritize popular projects with maintainers active on X
 
 Status: approved on October 7, 2026. This changes discovery order. The policy and listing rules
-in [v1](v1.md) still apply.
+in [v1](v1.md) still apply. The proposed [model policy reader](model-policy-reader.md) stops the
+broad search and the popular sample. The seed order here still holds.
 
 ## Why
 

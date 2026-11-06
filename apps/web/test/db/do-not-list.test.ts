@@ -1,15 +1,19 @@
+import { newClaim, type ClaimRecord } from '@goodfirsttoken/core';
 import { beforeEach, describe, expect, test } from 'vitest';
 import {
   addToDoNotList,
   createProject,
   doNotListedAmong,
+  doNotListedClaimsAmong,
+  doNotListedProjectsAmong,
   getDoNotListEntry,
   getProject,
   leaveDoNotListWhenApproved,
+  saveClaim,
   setProjectStatus,
   setProjectStatusFrom,
 } from '../../src/db';
-import { admin, db, emptyDatabase, HOUR, maintainer, repo, signIn, t0 } from './helpers';
+import { admin, db, emptyDatabase, HOUR, kenji, maintainer, repo, sha, signIn, t0 } from './helpers';
 
 beforeEach(async () => {
   await emptyDatabase();
@@ -158,5 +162,65 @@ describe('the do-not-list', () => {
     await addToDoNotList(db, { repo: 'sample-owner/sample-main', reason: null, addedBy: admin.githubId }, t0);
 
     expect(await doNotListedAmong(db, ['sample-owner/sample-main'])).toEqual(new Set(['sample-owner/sample-main']));
+  });
+});
+
+describe('the projects and claims the do-not-list names', () => {
+  // Three projects: one whose code repo goes on the list, one whose issue
+  // repo is a repo on the list, and one off it.
+  const listed = 'sample-owner/sample-code';
+  const keepsIssuesInListed = 'sample-owner/sample-plugin';
+  const off = 'sample-owner/sample-tools';
+
+  beforeEach(async () => {
+    await signIn(maintainer, kenji);
+    const base = { status: 'approved' as const, source: 'registered' as const, policy: null, addedBy: maintainer.githubId };
+    await createProject(db, { ...base, repo: listed, settings: { tags: ['help wanted'], issueRepo: 'sample-owner/sample-issues' } }, t0);
+    await createProject(db, { ...base, repo: keepsIssuesInListed, settings: { tags: ['help wanted'], issueRepo: listed } }, t0);
+    await createProject(db, { ...base, repo: off, settings: { tags: ['help wanted'] } }, t0);
+    await addToDoNotList(db, { repo: 'Sample-Owner/Sample-Code', reason: null, addedBy: admin.githubId }, t0);
+  });
+
+  test('names a project by its own entry, or by the repo it keeps its issues in now, whatever the case, and in lower case', async () => {
+    const named = await doNotListedProjectsAmong(db, [
+      'SAMPLE-OWNER/sample-code',
+      'sample-owner/Sample-Plugin',
+      off,
+      'sample-owner/sample-issues',
+    ]);
+
+    expect(named).toEqual(new Set([listed, keepsIssuesInListed]));
+    expect(await doNotListedProjectsAmong(db, [])).toEqual(new Set());
+  });
+
+  test("names a repo that isn't a project only by its own entry", async () => {
+    await addToDoNotList(db, { repo: 'sample-owner/not-a-project', reason: null, addedBy: admin.githubId }, t0);
+
+    expect(await doNotListedProjectsAmong(db, ['sample-owner/not-a-project', 'sample-owner/also-not-one'])).toEqual(
+      new Set(['sample-owner/not-a-project']),
+    );
+  });
+
+  test("names a claim by its project as D1 holds it, and leaves out a claim D1 doesn't hold", async () => {
+    const claims = [listed, keepsIssuesInListed, off].map(
+      (project, i): ClaimRecord => ({
+        id: `c_do_not_list_0000000${String(i)}`,
+        issue: `${project}#${String(i + 1)}`,
+        project,
+        githubId: kenji.githubId,
+        login: kenji.login,
+        agent: 'claude-code',
+        ownProject: false,
+        startCommit: sha,
+        tokenEstimate: null,
+        ...newClaim(t0),
+      }),
+    );
+    for (const claim of claims) await saveClaim(db, claim, 1);
+
+    const named = await doNotListedClaimsAmong(db, [...claims.map((claim) => claim.id), 'c_do_not_list_unknown']);
+
+    expect(named).toEqual(new Set([claims[0]?.id, claims[1]?.id]));
+    expect(await doNotListedClaimsAmong(db, [])).toEqual(new Set());
   });
 });

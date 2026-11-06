@@ -120,7 +120,7 @@ test("a text stream's lines come through the runtime to two readers, each in a r
   expect([first.res.status, second.res.status]).toEqual([200, 200]);
 
   await personFeed(env.FEED, reader.githubId).deliver([
-    { event: feedEvent({ user: reader.login, text: 'read through the runtime' }), githubId: reader.githubId },
+    { event: feedEvent({ user: reader.login, text: 'read through the runtime' }), githubId: reader.githubId, project: 'sample-owner/sample-app' },
   ]);
 
   for (const stream of [first, second]) {

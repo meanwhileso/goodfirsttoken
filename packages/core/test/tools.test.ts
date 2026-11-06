@@ -435,7 +435,25 @@ describe('what each result says', () => {
     expect(seed({ added: false, leftAlone: 'proposed' })).toBe(
       `The crawler put ${repoName} in the admin queue before, so a seed adds nothing. Nothing changed.`,
     );
-    expect(seed({ added: false })).toBe(`${repoName} is on the crawler's seed list already. Nothing changed.`);
+    expect(seed({ added: false })).toBe(`${repoName} is on the crawler's seed list already. The crawler's next run reads it again.`);
+  });
+
+  test('a seed whose find an admin rejected says its find comes back only when its docs read differently', () => {
+    const seed = (output: Partial<ToolOutput<'admin_seed_repo'>>) =>
+      textOf(toolResult('admin_seed_repo', { ...samples.admin_seed_repo.output, ...output }));
+    const note = `An admin rejected a find of ${repoName} before, so it goes back in the admin queue only when its docs read differently.`;
+    expect(seed({ added: true, rejectedBefore: true })).toContain(note);
+    expect(seed({ added: false, rejectedBefore: true })).toContain(note);
+    expect(seed({ added: true, rejectedBefore: true })).not.toContain('if they welcome AI help');
+    expect(seed({ added: true, rejectedBefore: false })).not.toContain('rejected');
+  });
+
+  test("admin_seed_repo's description says seeding a repo again makes it due, and what still refuses it", () => {
+    const description = tools.admin_seed_repo.description;
+    expect(description).toContain('Seeding a repo on the list already, or one whose find an admin rejected, makes it due at the next run.');
+    expect(description).toContain('A rejected find goes back in the admin queue only when its docs read differently.');
+    expect(description).toContain('A repo on the do-not-list is refused. A project');
+    expect(description).not.toContain('previously decided finds keep their skips');
   });
 
   test("a registration with no facts says whether GitHub showed no public repo or didn't answer", () => {

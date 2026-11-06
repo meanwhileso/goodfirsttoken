@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 import { createProject, getClaim, getPr, getSubmission, saveIssues, savePerson } from '../../src/db';
 import { recordClearedPrs } from '../../src/sync/cleared';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { APP as OAUTH_APP, Browser, location, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';

@@ -15,6 +15,8 @@ export type StopReason =
   | 'budget'
   /** The run made as many calls as one run may. */
   | 'calls'
+  /** The run read for as long as one run may. */
+  | 'time'
   /** GitHub refused a call because the budget ran out, or asked to slow down. */
   | 'rate_limited'
   /** GitHub refused the service token. */
@@ -47,6 +49,12 @@ export interface Allowance {
   leave: number;
   /** The most calls one run makes, which keeps it inside Cloudflare's limit on subrequests. */
   maxCalls: number;
+  /**
+   * The longest one run reads, in milliseconds from when its reader was
+   * made. Before each call, the run stops once this much time has passed.
+   * Left out, a run reads for as long as its calls last.
+   */
+  maxMs?: number;
   /**
    * The tagged-issue sync's alone: the most calls of `maxCalls` its checks
    * of the repos of the projects it reads no issues for make, before its
@@ -93,11 +101,14 @@ export class ServiceGitHub implements GitHubReader {
   /** What the job may spend. */
   readonly allowance: Allowance;
   private readonly now: () => number;
+  /** When the reader was made, which `maxMs` counts from. */
+  private readonly startedAt: number;
 
   constructor(token: string, allowance: Allowance, now: () => number = Date.now) {
     this.token = token;
     this.allowance = allowance;
     this.now = now;
+    this.startedAt = now();
   }
 
   /** What GitHub last said is left of each budget the run used, by resource. */
@@ -129,8 +140,8 @@ export class ServiceGitHub implements GitHubReader {
     if (budgets.some((budget) => budget === null)) {
       throw new SyncStopped('github_error', "GitHub's API answered its rate limit in a form GitHub doesn't use.");
     }
-    // Only the crawler searches, so a job reads on when GitHub leaves the
-    // search budget out, and the first search's headers give it.
+    // No job searches now, so a job reads on when GitHub leaves the search
+    // budget out, and a search's headers would give it.
     for (const budget of [...budgets, budgetOf(SEARCH)]) this.note(budget);
   }
 
@@ -170,6 +181,10 @@ export class ServiceGitHub implements GitHubReader {
   private before(resource: string): void {
     if (this.calls >= this.allowance.maxCalls) {
       throw new SyncStopped('calls', `The run made ${String(this.calls)} calls to GitHub, as many as one run makes.`);
+    }
+    const { maxMs } = this.allowance;
+    if (maxMs !== undefined && this.now() - this.startedAt >= maxMs) {
+      throw new SyncStopped('time', `The run read GitHub for ${String(Math.round(maxMs / 1000))} seconds, as long as one run reads.`);
     }
     const budget = this.budgets.get(resource);
     // A budget whose time is up has started again.

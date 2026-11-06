@@ -6,7 +6,7 @@ import type { FeedEvent, FeedEventKind } from '@goodfirsttoken/core';
 // sends after that, with the same function, so the two always agree. It
 // imports only types, so it runs the same on the server and in the page.
 
-/** How many of a lane's newest lines it keeps. The text stream has them all. */
+/** How many of a lane's newest lines it keeps, and the room keeps for it. */
 export const LANE_LINES = 20;
 
 /** A claim's state, as the page follows it from the room's events. */

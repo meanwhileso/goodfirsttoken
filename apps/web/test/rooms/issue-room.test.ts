@@ -11,7 +11,15 @@ import {
   savePerson,
   unblockDonor,
 } from '../../src/db';
-import { issueRoom, type ClaimRequest, type ClaimResult, type IssueRoom } from '../../src/rooms/issue-room';
+import { LANE_LINES } from '../../src/issue/view';
+import {
+  issueRoom,
+  POST_INTERVAL_MS,
+  ROOM_RESUME,
+  type ClaimRequest,
+  type ClaimResult,
+  type IssueRoom,
+} from '../../src/rooms/issue-room';
 import { db, repo, sha, takeOffDoNotList } from '../db/helpers';
 import { storedEvents } from '../feed/helpers';
 
@@ -435,6 +443,42 @@ describe('posting updates', () => {
     expect(await post(made, 'back on it')).toMatchObject({ posted: true, state: 'active' });
     expect((await getClaim(db, made.id))?.state).toBe('active');
   });
+
+  test("keeps the newest events, each lane's newest lines, and every change of state, and deletes the other lines", async () => {
+    const quiet = await claim(kenji);
+    let now = t0;
+    const postAs = async (claimed: ClaimRecord, text: string) => {
+      now += POST_INTERVAL_MS;
+      at(now);
+      expect(await post(claimed, text)).toMatchObject({ posted: true });
+    };
+    for (let i = 1; i <= LANE_LINES + 2; i += 1) await postAs(quiet, `kenji ${String(i)}`);
+    const busy = await claim(priya);
+    for (let i = 1; i <= ROOM_RESUME + 50; i += 1) await postAs(busy, `priya ${String(i)}`);
+
+    const kept = await storedEvents(room);
+
+    const range = (who: string, from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => `${who} ${String(from + i)}`);
+    // Kenji's claim paused while priya posted, so the newest events are
+    // that pause and priya's newest lines but one.
+    expect(kept.filter((e) => e.kind === 'update').map((e) => e.text)).toEqual([
+      ...range('kenji', 3, LANE_LINES + 2),
+      ...range('priya', 52, ROOM_RESUME + 50),
+    ]);
+    expect(kept.filter((e) => e.kind !== 'update').map((e) => [e.user, e.text])).toEqual([
+      ['kenji', 'claimed the issue'],
+      ['priya', 'claimed the issue'],
+      ['kenji', 'paused: no update for 30 minutes'],
+    ]);
+    // The glance still has kenji's lane, though priya posted after it.
+    const glance = await room.glance();
+    expect(glance?.events.filter((e) => e.user === 'kenji').map((e) => e.text)).toEqual([
+      'claimed the issue',
+      ...range('kenji', 3, LANE_LINES + 2),
+      'paused: no update for 30 minutes',
+    ]);
+  }, 120_000);
 });
 
 describe('expiry', () => {
@@ -742,7 +786,7 @@ describe('watchers', () => {
     expect((await watcher.received(3))[2]).toEqual(['update', 'four']);
   });
 
-  test('a watcher with no last event ID gets the whole history first', async () => {
+  test('a watcher with no last event ID gets the history first', async () => {
     const made = await claim(priya);
     at(t0 + MINUTE);
     await post(made, 'one');

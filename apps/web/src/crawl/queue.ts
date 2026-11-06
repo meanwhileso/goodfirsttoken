@@ -1,14 +1,14 @@
 import { crawlMessageSchema, describeProblems, validate, type CrawlMessage, type PolicyTier } from '@goodfirsttoken/core';
 import { addCandidate, crawlerSkips, lastRejectedFind, setFindFingerprint, type CrawlerSkip } from '../db';
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
-import { ALLOWANCES, serviceToken } from '../sync/scheduled';
+import { ALLOWANCES, serviceToken } from '../sync/allowances';
 import { comparable, policyFingerprint } from './fingerprint';
 import { fileUrl, readFiles, readLabels, readRepos, RepoFailed, whyNotListable, type FoundRepo } from './reads';
 import { newRereadRun, rereadRepos, type RereadRun } from './reread';
 import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type PolicyReading } from './rules';
 
 // The crawl queue's consumer (spec section 5). Each message holds a batch of
-// repos, from the crawler's search or its seed list (src/crawl/search.ts).
+// repos from the crawler's seed list (src/crawl/producer.ts).
 // It reads each repo's docs from GitHub with the read-only service token,
 // sorts it with the rules in src/crawl/rules.ts, and puts the repos whose
 // docs welcome AI help in the admin queue as crawl candidates. It writes

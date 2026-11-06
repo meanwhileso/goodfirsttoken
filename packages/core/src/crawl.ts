@@ -157,34 +157,6 @@ export const crawlSeedSchema = z.object({
 });
 export type CrawlSeed = z.infer<typeof crawlSeedSchema>;
 
-/** GitHub's search serves 100 results a page, and 10 pages of any query. */
-export const SEARCH_PAGES = 10;
-
-/**
- * Where the crawler's search stands in one pass over the pool of repos. The
- * search reads the pool in bands of star counts, each small enough for
- * GitHub's search to serve whole.
- */
-export const crawlPassSchema = z.object({
-  startedAt: epochMs,
-  /** The pass looks for repos pushed on or after this time. */
-  pushedSince: epochMs,
-  /** How many repos GitHub's search counted in the whole pool, once the pass asked. */
-  pool: count.nullable(),
-  /** The fewest stars in the band the pass reads now. */
-  low: count,
-  /** How many star counts the band spans, when it has an upper end. */
-  width: z.int().min(1),
-  /** True while the band has no upper end. */
-  open: z.boolean(),
-  /** The page of the band to read next. */
-  page: z.int().min(1).max(SEARCH_PAGES),
-  /** Repos the pass has put in the queue so far. */
-  queued: count,
-  finishedAt: epochMs.nullable(),
-});
-export type CrawlPass = z.infer<typeof crawlPassSchema>;
-
 /** The most repos one message in the crawl queue holds. */
 export const MAX_CRAWL_BATCH = 25;
 

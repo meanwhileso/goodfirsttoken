@@ -255,21 +255,39 @@ export function applyMigrations({ config, root, wrangler, log }) {
   }
 }
 
+// Secrets the Worker runs without, which a deploy puts only when the
+// environment has them. They stay out of secrets.required, since Wrangler
+// and the deploy refuse to go ahead without a secret listed there. Without
+// ANTHROPIC_API_KEY the crawler reads no policies with the model, and admins
+// list projects by hand (docs/self-hosting.md).
+export const OPTIONAL_SECRETS = ['ANTHROPIC_API_KEY'];
+
 // Puts every secret the Worker declares in secrets.required, one at a time,
-// each from the environment variable of the same name. Nothing is put unless
-// all of them are set. A value goes to Wrangler on stdin and is never logged.
-export function putSecrets({ config, env, wrangler, log }) {
-  const names = config.secrets?.required ?? [];
-  const missing = names.filter((name) => !env[name]);
+// each from the environment variable of the same name, then each optional
+// secret the environment has. Nothing is put unless all the required ones
+// are set. An optional secret that isn't set is left as it is on the Worker.
+// A value goes to Wrangler on stdin and is never logged.
+export function putSecrets({ config, env, wrangler, log, optional = OPTIONAL_SECRETS }) {
+  const required = config.secrets?.required ?? [];
+  const missing = required.filter((name) => !env[name]);
   if (missing.length) {
     throw new Error(
       `Missing secrets: ${missing.join(', ')}. Add each to the GitHub environment, and pass it to the step that puts secrets in the deploy workflow.`,
     );
   }
+  const extra = optional.filter((name) => !required.includes(name));
+  const set = extra.filter((name) => env[name]);
+  const names = [...required, ...set];
   if (!names.length) log('The Worker reads no secrets yet.');
   for (const name of names) {
-    wrangler(['secret', 'put', name, '--config', path.basename(DEPLOY_CONFIG)], { input: env[name], hide: names });
+    wrangler(['secret', 'put', name, '--config', path.basename(DEPLOY_CONFIG)], {
+      input: env[name],
+      hide: [...required, ...extra],
+    });
     log(`Put ${name}.`);
+  }
+  for (const name of extra.filter((name) => !set.includes(name))) {
+    log(`${name} is not set, so the deploy left it as it is. It is optional.`);
   }
 }
 

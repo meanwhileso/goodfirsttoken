@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getIssueSync, getProject, listIssues, listWaitingIssues, savePerson, setProjectStatus, statusHistory } from '../../src/db';
 import { syncTaggedIssues } from '../../src/sync/issues';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, maintainer, registeredProject, signIn, t0 } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';

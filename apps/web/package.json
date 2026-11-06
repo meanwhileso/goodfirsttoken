@@ -17,6 +17,7 @@
     "typecheck": "wrangler types --strict-vars=false --check && tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.6.0",
     "@cloudflare/workers-oauth-provider": "1.1.0",
     "@goodfirsttoken/core": "workspace:*",
     "@modelcontextprotocol/server": "2.4.0",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@goodfirsttoken/anthropic-fake": "workspace:*",
     "@goodfirsttoken/github-fake": "workspace:*",
     "@modelcontextprotocol/client": "2.4.0",
     "@playwright/test": "^1.63.0",
