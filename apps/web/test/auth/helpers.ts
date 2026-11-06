@@ -20,7 +20,17 @@ export const APP = {
 /** Where the GitHub fake runs for `pnpm dev`, on this machine. */
 export const LOCAL_FAKE = { web: 'http://127.0.0.1:8944', api: 'http://127.0.0.1:8944/api' };
 
-type Setting = 'ENVIRONMENT' | 'GH_WEB_URL' | 'GH_API_URL' | 'OAUTH_CLIENT_ID' | 'OAUTH_CLIENT_SECRET' | 'AUTH_SECRET';
+type Setting =
+  | 'ENVIRONMENT'
+  | 'GH_WEB_URL'
+  | 'GH_API_URL'
+  | 'OAUTH_CLIENT_ID'
+  | 'OAUTH_CLIENT_SECRET'
+  | 'AUTH_SECRET'
+  | 'ANTHROPIC_API_KEY'
+  | 'ANTHROPIC_API_URL'
+  | 'POLICY_READER'
+  | 'MODEL_DAILY_BUDGET_USD';
 
 /**
  * Changes settings for one test, with undefined removing one, and returns a

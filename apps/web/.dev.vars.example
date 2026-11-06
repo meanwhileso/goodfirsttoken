@@ -43,3 +43,23 @@ ADMIN_GITHUB_IDS=
 # deploy gets when its GitHub environment doesn't set them.
 GH_API_URL=http://127.0.0.1:8944/api
 GH_WEB_URL=http://127.0.0.1:8944
+
+# The Anthropic API, which the policy crawler will read repos' AI policies
+# with once the model reader ships. The default points at the Anthropic fake
+# that `pnpm dev` starts.
+# Left empty, the app calls https://api.anthropic.com.
+ANTHROPIC_API_URL=http://127.0.0.1:8945
+
+# How the crawler will read a repo's AI policy: rules, shadow, or model, as
+# docs/self-hosting.md describes. Empty means rules.
+POLICY_READER=rules
+
+# The most the model may spend in a UTC day, in US dollars. Empty means 0,
+# which reads nothing. The fake charges nothing.
+MODEL_DAILY_BUDGET_USD=20
+
+# The Anthropic API key. Leave it out. With no key, and the URL above on this
+# machine, the app sends the fake a stand-in key (src/anthropic.ts). A real
+# key goes only with a real ANTHROPIC_API_URL, and never in a file git
+# tracks.
+# ANTHROPIC_API_KEY=
