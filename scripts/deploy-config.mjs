@@ -45,10 +45,24 @@ const DEPLOYMENT_ONLY = new Set(['account_id', 'routes', 'route', 'workers_dev',
 // attaches to the Worker as custom domains.
 const DOMAIN_VARS = ['PRIMARY_DOMAIN', 'REDIRECT_DOMAINS'];
 
-// Settings that hold GitHub's base URLs. Empty means GitHub itself, which
-// the Worker falls back to. A value has to be an https URL.
-const GITHUB_URL_VARS = ['GH_API_URL', 'GH_WEB_URL'];
+// Settings that hold the base URLs of GitHub and the Anthropic API, each
+// with the URL the Worker falls back to when it is empty. A value has to be
+// an https URL.
+const URL_VARS = {
+  GH_API_URL: 'https://api.github.com',
+  GH_WEB_URL: 'https://github.com',
+  ANTHROPIC_API_URL: 'https://api.anthropic.com',
+};
 const HTTPS_URL = /^https:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/;
+
+// Settings that take one of a few values, or a number. Empty is allowed for
+// each, and means what the Worker says it means: rules for POLICY_READER,
+// and 0 for MODEL_DAILY_BUDGET_USD, which reads nothing with the model.
+// Neither names anything of a deployment's, and masking a value like 20
+// would hide every 20 in the log, so neither is masked.
+const CHOICE_VARS = { POLICY_READER: ['rules', 'shadow', 'model'] };
+const DOLLAR_VARS = ['MODEL_DAILY_BUDGET_USD'];
+const DOLLARS = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$/;
 
 // Variables a deploy can't go without, and what each is. The Worker's
 // secrets are required the same way, when the deploy puts them.
@@ -204,10 +218,20 @@ export function deployConfig(local, target, env) {
         else problems.push(`ADMIN_GITHUB_IDS has "${id}", which is not a numeric GitHub ID.`);
       }
       config.vars[name] = mask(ids.join(','));
-    } else if (GITHUB_URL_VARS.includes(name)) {
+    } else if (name in URL_VARS) {
       const url = read(name).replace(/\/+$/, '');
-      if (url && !HTTPS_URL.test(url)) problems.push(`${name} is not an https URL, like https://api.github.com.`);
+      if (url && !HTTPS_URL.test(url)) problems.push(`${name} is not an https URL, like ${URL_VARS[name]}.`);
       config.vars[name] = mask(url);
+    } else if (name in CHOICE_VARS) {
+      const value = read(name);
+      if (value && !CHOICE_VARS[name].includes(value)) {
+        problems.push(`${name} is "${value}". It has to be ${CHOICE_VARS[name].join(', ')}, or empty.`);
+      }
+      config.vars[name] = value;
+    } else if (DOLLAR_VARS.includes(name)) {
+      const value = read(name);
+      if (value && !DOLLARS.test(value)) problems.push(`${name} is "${value}". It has to be a number of US dollars, like 20, or empty.`);
+      config.vars[name] = value;
     } else {
       const value = read(name);
       if (!value && name in REQUIRED_VARS) problems.push(`${name} is not set. It is ${REQUIRED_VARS[name]}.`);

@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { LOCAL_CONFIG, REPO_ROOT, readLocalConfig, settingsFor } from './deploy-config.mjs';
+import { OPTIONAL_SECRETS } from './deploy.mjs';
 
 const read = (file) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
 const WORKFLOWS = ['.github/workflows/deploy.yml', '.github/workflows/deploy-environment.yml'];
@@ -24,7 +25,7 @@ test('the deploy workflow passes every setting and secret the deploy reads, unde
     const line = `${name}: \${{ secrets.${name} || vars.${name} }}`;
     assert.ok(workflow.includes(line), `the config step passes ${name} as a variable or a secret`);
   }
-  for (const name of local.secrets?.required ?? []) {
+  for (const name of [...(local.secrets?.required ?? []), ...OPTIONAL_SECRETS]) {
     const line = `${name}: \${{ secrets.${name} }}`;
     assert.ok(workflow.includes(line), `the secrets step passes ${name}`);
   }

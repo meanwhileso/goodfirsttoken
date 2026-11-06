@@ -13,6 +13,7 @@ The repo is a pnpm workspace.
 | `apps/web` | One Cloudflare Worker for the whole service. Today it serves the homepage, the projects list, each project's page, each issue's page, sign-in with GitHub, the signed-in person's review queue at `/me`, the page for maintainers at `/maintainers`, the MCP server at `/mcp` with its sign-in for agents and the views MCP Apps hosts show, the admin pages at `/admin`, the design system at `/design`, `/healthz`, the share cards, the live text streams and sockets, each page's markdown version, `/llms.txt`, `/robots.txt`, `/sitemap.xml`, and the JSON data at `/projects.json` and `/<owner>/<repo>.json`, and holds the D1 schema, the functions that read and write it, the issue room, the live feeds, the feed queue's consumer, the scheduled jobs that read GitHub, and the policy crawler with its queue's consumer. The rest of the site joins it here. |
 | `packages/core` | Shared schemas and types: project settings, the claim state machine, every record the database stores, the input, output, and text of every MCP tool, feed events, refusal codes, the schema of the JSON data the site publishes, and the check that strips keys and tokens from posted text. Other packages import its TypeScript source directly, with no build step. |
 | `packages/github-fake` | A fake GitHub for tests and local development, and the sample people and repos. It records whose token made each call. Only tests and dev tooling import it. |
+| `packages/anthropic-fake` | A fake of the Anthropic Messages API and Message Batches API for tests and local development. It checks each request's shape as the API does for Claude Opus 5.5, answers from policy readings recorded for the GitHub fake's sample repos, and lets a test script any answer or failure. Only tests and dev tooling import it. |
 | `scripts/` | The static server behind `pnpm prototype`, the static host's stand-in for the end-to-end tests, the skill build behind `pnpm skills:build`, the deploy scripts, and the check for advisories a pull request adds, with their tests. |
 | `skill-src/` | The one source file per skill, the parts several skills share in `skill-src/shared/`, and each plugin's version and description. Nothing installs from here. |
 | `skills/` | The standalone skills that `npx skills add meanwhileso/goodfirsttoken` installs. Built from `skill-src/`. |
@@ -1532,7 +1533,9 @@ production are not in the repo. The deploy writes their config from the
 GitHub environment, as [Deploys](#deploys) describes.
 `GH_API_URL` and `GH_WEB_URL` hold the GitHub fake's URLs locally. A deploy
 that leaves their settings empty gives them empty strings, and
-`src/github.ts` then calls GitHub itself.
+`src/github.ts` then calls GitHub itself. `ANTHROPIC_API_URL` holds the
+Anthropic fake's URL locally the same way, and `src/anthropic.ts` calls the
+Anthropic API itself when it is empty.
 
 | Binding | Kind | Used from |
 |---|---|---|
@@ -1542,6 +1545,10 @@ that leaves their settings empty gives them empty strings, and
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
+| `ANTHROPIC_API_URL` | Variable: the Anthropic API. The Anthropic fake locally. Empty means `https://api.anthropic.com` | Later, by the policy reader, through `src/anthropic.ts` |
+| `POLICY_READER` | Variable: `rules`, `shadow`, or `model`. Empty means `rules` | Later, by the policy reader, through `src/anthropic.ts` |
+| `MODEL_DAILY_BUDGET_USD` | Variable: the most the model may spend in a UTC day, in US dollars. Empty means 0 | Later, by the policy reader, through `src/anthropic.ts` |
+| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/anthropic.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | Later, by the policy reader, through `src/anthropic.ts` |
 | `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, the scheduled jobs, and the crawler |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
@@ -3647,8 +3654,8 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
 ## Sample data in development
 
 `POST /dev/seed` and `POST /dev/work` are paths for local development only.
-`pnpm seed` resets the GitHub fake, then calls `/dev/seed` when `pnpm dev`
-is running. `/dev/work` takes one action at a time, from `curl` or the
+`pnpm seed` resets the GitHub fake and the Anthropic fake, then calls
+`/dev/seed` when `pnpm dev` is running. `/dev/work` takes one action at a time, from `curl` or the
 end-to-end tests. The rules are in
 [how-it-works.md](how-it-works.md#sample-data-in-development).
 
@@ -3715,7 +3722,10 @@ Each secret the Worker reads goes by name under `secrets.required` in
 also encrypts the copy of each connected agent's GitHub token.
 `GH_SERVICE_TOKEN` is the read-only token the scheduled jobs that read
 GitHub and the policy crawler use, under [The sync](#the-sync). The OAuth library needs no secret of its
-own. GitHub reserves names that start with `GITHUB_` for its own variables
+own. `ANTHROPIC_API_KEY` is optional, so it isn't under `secrets.required`.
+`scripts/deploy.mjs` lists it in `OPTIONAL_SECRETS`, and the deploy puts it
+only when the environment has it. Without it, the policy reader will read
+nothing with the model. GitHub reserves names that start with `GITHUB_` for its own variables
 and secrets, so no variable or secret of the Worker can start with it.
 
 The rate limiters' namespace IDs are the only IDs `wrangler.jsonc` has to
@@ -3727,8 +3737,10 @@ that local development simulates, and a deploy replaces them with the
 Local development needs none of it. `pnpm dev` applies the D1 migrations to
 the local database, then runs the Worker in Miniflare, which simulates every
 binding and keeps D1 and KV data on disk under `apps/web/.wrangler/`. It
-also starts the GitHub fake at `http://127.0.0.1:8944`, which
-`wrangler.jsonc` points the Worker at. The variables the app reads, with
+also starts the GitHub fake at `http://127.0.0.1:8944`, and the Anthropic
+fake at `http://127.0.0.1:8945`, which `wrangler.jsonc` points the Worker
+at. With no `ANTHROPIC_API_KEY` set, `src/anthropic.ts` gives the fake a
+stand-in key, only in development and only with the fake on this machine. The variables the app reads, with
 safe local defaults, are listed in `apps/web/.dev.vars.example`. With no
 secrets set, sign-in uses the stand-ins in `src/auth/settings.ts`, and only
 in development. Wrangler warns that the secrets are missing, and locally

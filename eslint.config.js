@@ -45,6 +45,7 @@ export default defineConfig([
           './apps/web/tsconfig.node.json',
           './packages/core/tsconfig.json',
           './packages/github-fake/tsconfig.json',
+          './packages/anthropic-fake/tsconfig.json',
         ],
         tsconfigRootDir: import.meta.dirname,
       },
@@ -112,6 +113,10 @@ export default defineConfig([
             {
               group: ['@goodfirsttoken/github-fake', '@goodfirsttoken/github-fake/*', '**/packages/github-fake/**'],
               message: 'The GitHub fake is for tests and local development, and never ships in the Worker.',
+            },
+            {
+              group: ['@goodfirsttoken/anthropic-fake', '@goodfirsttoken/anthropic-fake/*', '**/packages/anthropic-fake/**'],
+              message: 'The Anthropic fake is for tests and local development, and never ships in the Worker.',
             },
           ],
         },

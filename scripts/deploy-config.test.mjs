@@ -367,6 +367,7 @@ const sentinels = {
   ADMIN_GITHUB_IDS: '5550001,5550002',
   GH_API_URL: 'https://sentinel-api.example/api',
   GH_WEB_URL: 'https://sentinel-web.example',
+  ANTHROPIC_API_URL: 'https://sentinel-anthropic.example',
 };
 
 test('no ID or deployed name is written to a file git tracks or would add', (t) => {
@@ -416,13 +417,68 @@ test("a deploy's GitHub URLs come from the settings or are empty, and never from
   for (const text of [unset, set]) assert.ok(!text.includes('127.0.0.1'), 'the deploy config names the local fake');
 });
 
-test('a GitHub URL setting has to be an https URL, so a deploy never points at a machine of its own', () => {
-  const withGitHub = { ...local, vars: { ...local.vars, GH_API_URL: '', GH_WEB_URL: '' } };
+test("a deploy's Anthropic URL comes from the setting or is empty, and never from the local Anthropic fake", (t) => {
+  const root = sampleRepo(t);
+  const written = (env) => {
+    writeDeployConfig({ root, target: 'production', env, log: () => {} });
+    return JSON.parse(readFileSync(path.join(root, DEPLOY_CONFIG), 'utf8'));
+  };
+  // The local config points it at the Anthropic fake on this machine.
+  assert.match(realLocal().vars.ANTHROPIC_API_URL, /^http:\/\/127\.0\.0\.1:/);
 
-  const { config } = deployConfig(withGitHub, 'production', { ...withLimiter, GH_API_URL: 'https://api.github.com/' });
+  const unset = written(withLimiter);
+  const set = written({ ...withLimiter, ANTHROPIC_API_URL: 'https://anthropic-proxy.example' });
+
+  assert.equal(unset.vars.ANTHROPIC_API_URL, '');
+  assert.equal(set.vars.ANTHROPIC_API_URL, 'https://anthropic-proxy.example');
+});
+
+test("the policy reader's mode is rules, shadow, or model, and empty means rules", () => {
+  const real = realLocal();
+  assert.equal(deployConfig(real, 'production', withLimiter).config.vars.POLICY_READER, '');
+  for (const mode of ['rules', 'shadow', 'model']) {
+    assert.equal(deployConfig(real, 'production', { ...withLimiter, POLICY_READER: mode }).config.vars.POLICY_READER, mode);
+  }
+  for (const bad of ['Model', 'on', 'rules,model', ' shadow x']) {
+    assert.throws(() => deployConfig(real, 'production', { ...withLimiter, POLICY_READER: bad }), /POLICY_READER/, bad);
+  }
+});
+
+test("the model's daily budget is a number of dollars, and empty means 0", () => {
+  const real = realLocal();
+  assert.equal(deployConfig(real, 'production', withLimiter).config.vars.MODEL_DAILY_BUDGET_USD, '');
+  for (const good of ['0', '20', '12.50']) {
+    const { config } = deployConfig(real, 'production', { ...withLimiter, MODEL_DAILY_BUDGET_USD: good });
+    assert.equal(config.vars.MODEL_DAILY_BUDGET_USD, good);
+  }
+  for (const bad of ['-1', '$20', '20 USD', '1e3', 'twenty', '.5.']) {
+    assert.throws(
+      () => deployConfig(real, 'production', { ...withLimiter, MODEL_DAILY_BUDGET_USD: bad }),
+      /MODEL_DAILY_BUDGET_USD/,
+      bad,
+    );
+  }
+});
+
+test('the Anthropic key is not a required secret, so a deploy goes ahead without it', () => {
+  const { config } = deployConfig(realLocal(), 'production', withLimiter);
+
+  assert.equal(config.secrets.required.includes('ANTHROPIC_API_KEY'), false);
+  assert.equal(JSON.stringify(config.vars).includes('ANTHROPIC_API_KEY'), false, 'the key is no variable either');
+});
+
+test('a GitHub or Anthropic URL setting has to be an https URL, so a deploy never points at a machine of its own', () => {
+  const withGitHub = { ...local, vars: { ...local.vars, GH_API_URL: '', GH_WEB_URL: '', ANTHROPIC_API_URL: '' } };
+
+  const { config } = deployConfig(withGitHub, 'production', {
+    ...withLimiter,
+    GH_API_URL: 'https://api.github.com/',
+    ANTHROPIC_API_URL: 'https://api.anthropic.com/',
+  });
   assert.equal(config.vars.GH_API_URL, 'https://api.github.com');
+  assert.equal(config.vars.ANTHROPIC_API_URL, 'https://api.anthropic.com');
 
-  for (const name of ['GH_API_URL', 'GH_WEB_URL']) {
+  for (const name of ['GH_API_URL', 'GH_WEB_URL', 'ANTHROPIC_API_URL']) {
     for (const bad of ['http://127.0.0.1:8944/api', 'api.github.com', 'https://', 'https://api.github.com?x=1']) {
       assert.throws(() => deployConfig(withGitHub, 'production', { ...withLimiter, [name]: bad }), new RegExp(name), bad);
     }

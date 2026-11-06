@@ -10,9 +10,11 @@ import { mcpViews } from './scripts/mcp-views.ts';
 // bindings from wrangler.jsonc. ENVIRONMENT, the domains, and the OAuth app
 // are pinned to values local development never uses, so a test can tell a
 // value read from the binding from a hard-coded one, and a local .dev.vars
-// can't change the result. The secrets are set, as a deploy sets them. GitHub's
-// URLs are under .test, a domain that never resolves. Tests answer them with
-// the in-process GitHub fake. The D1 migrations are read here, in Node, and a
+// can't change the result. The secrets are set, as a deploy sets them, with
+// a test-only Anthropic key. GitHub's and the Anthropic API's URLs are under
+// .test, a domain that never resolves. Tests answer them with the in-process
+// GitHub fake and Anthropic fake (test/anthropic.ts), and a call to any other
+// host fails the test. The D1 migrations are read here, in Node, and a
 // setup file applies them to the test database. So are the cron triggers in
 // wrangler.jsonc, so a test can run each one's job, and the skills as the
 // plugins carry them with the text of the tools' answers, so a test can check what
@@ -82,6 +84,10 @@ export default defineConfig(async () => {
             ADMIN_GITHUB_IDS: '',
             GH_API_URL: 'https://api.github.test',
             GH_WEB_URL: 'https://github.test',
+            ANTHROPIC_API_KEY: 'test-only-anthropic-key',
+            ANTHROPIC_API_URL: 'https://api.anthropic.test',
+            POLICY_READER: 'rules',
+            MODEL_DAILY_BUDGET_USD: '5',
             TEST_MIGRATIONS: migrations,
             TEST_CRONS: crons,
             TEST_SKILLS: skills,
