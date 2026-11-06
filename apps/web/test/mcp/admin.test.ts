@@ -558,6 +558,138 @@ describe('admin_decide on a crawler find', () => {
   });
 });
 
+/** A made-up post on X by sample-maintainer, who maintains the sample-owner repos in the fake. */
+function postPolicy(changes: Record<string, unknown> = {}) {
+  const at = new Date().toISOString();
+  return {
+    quote: 'Point your agent at sample-bundler and send PRs. Agent contributions welcome.',
+    url: 'https://x.com/sample_person/status/123456789',
+    tier: 'invites_agents' as const,
+    maintainerPost: {
+      maintainerGitHubLogin: 'sample-maintainer',
+      role: 'maintainer',
+      roleSourceUrl: `https://github.com/${BUNDLER}/blob/main/MAINTAINERS.md`,
+      identitySourceUrl: 'https://github.com/sample-maintainer',
+      xHandle: 'sample_person',
+      publishedAt: at,
+      timePrecision: 'exact',
+      postKind: 'authored',
+      evidenceCheckedAt: at,
+      ...changes,
+    },
+  };
+}
+
+describe("admin_add_project from a maintainer's post", () => {
+  test('lists a repo whose docs have no AI policy from its maintainer\'s post, with the evidence and the admin who checked it', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const policy = postPolicy();
+
+    const result = await call(admin, 'admin_add_project', { repo: BUNDLER, policy, settings: { tags: ['help wanted'] } });
+
+    expect(result.structuredContent).toEqual({ repo: BUNDLER, status: 'approved', source: 'policy', updated: false });
+    expect((await getProject(env.DB, BUNDLER))?.policy).toEqual({
+      ...policy,
+      maintainerPost: { ...policy.maintainerPost, verifierGitHubId: ADMIN.githubId },
+    });
+  });
+
+  test('a link that is not the named X account\'s post, a repost, or a role nobody stated changes nothing', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const settings = { tags: ['help wanted'] };
+
+    const wrongLink = await call(admin, 'admin_add_project', {
+      repo: BUNDLER,
+      policy: { ...postPolicy(), url: `https://github.com/${BUNDLER}/blob/main/README.md` },
+      settings,
+    });
+    const repost = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy({ postKind: 'repost' }), settings });
+    const unknownRole = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy({ role: 'unknown' }), settings });
+
+    for (const refused of [wrongLink, repost, unknownRole]) {
+      expect(refused.isError).toBe(true);
+      expect(textOf(refused)).toMatch(/Input validation error/);
+    }
+    expect(textOf(wrongLink)).toContain("must be the maintainer's post");
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('a link to a post on X without its evidence is refused, so relisting to change a setting never drops the evidence', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const { quote, url, tier } = postPolicy();
+    const bare = { quote, url, tier };
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: { tags: ['help wanted'] } });
+
+    const result = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: bare, settings: { tags: ['good first issue'] } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('needs maintainerPost');
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({
+      policy: { maintainerPost: { xHandle: 'sample_person' } },
+      settings: { tags: ['help wanted'] },
+    });
+  });
+
+  test('a post time after now is refused, and lists nothing', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const result = await call(admin, 'admin_add_project', {
+      repo: BUNDLER,
+      policy: postPolicy({
+        publishedAt: new Date(Date.now() + 3_600_000).toISOString(),
+        evidenceCheckedAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+      settings: { tags: ['help wanted'] },
+    });
+
+    expect(textOf(result)).toBe(
+      'Refused (invalid_input): maintainerPost.publishedAt: must not be in the future. Fix it, then call again.',
+    );
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('a post lists no repo that is otherwise blocked: pull requests limited to collaborators, or on the do-not-list', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    sampleRepo(TOOLS).pullRequestCreationPolicy = 'collaborators_only';
+    await addToDoNotList(env.DB, { repo: BUNDLER, addedBy: ADMIN.githubId, reason: null }, Date.now());
+    const policy = postPolicy();
+
+    const closed = await call(admin, 'admin_add_project', { repo: TOOLS, policy, settings: { tags: ['help wanted'] } });
+    const removed = await call(admin, 'admin_add_project', { repo: BUNDLER, policy, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(closed)).toMatch(/^Refused \(repo_not_eligible\): sample-owner\/sample-tools lets only collaborators open pull requests/);
+    expect(textOf(removed)).toMatch(/^Refused \(repo_not_eligible\)/);
+    expect(await getProject(env.DB, TOOLS)).toBeNull();
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('listing it again from its docs drops the post, and listing it again from a post adds one', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: { tags: ['help wanted'] } });
+
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: {} });
+    const fromDocs = await getProject(env.DB, BUNDLER);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: {} });
+    const fromPost = await getProject(env.DB, BUNDLER);
+
+    expect(fromDocs?.policy).toEqual(POLICY);
+    expect(fromPost?.policy?.maintainerPost).toMatchObject({ xHandle: 'sample_person', verifierGitHubId: ADMIN.githubId });
+  });
+
+  test("a maintainer who takes the listing over drops the post with the policy", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: { tags: ['help wanted'] } });
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+
+    const taken = await call(maintainer, 'register_project', { repo: BUNDLER, settings: { tags: ['help wanted'] } });
+
+    expect(taken.isError).not.toBe(true);
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({ source: 'registered', policy: null });
+    const row = await env.DB.prepare('SELECT policy_post FROM projects WHERE repo = ?').bind(BUNDLER).first<{ policy_post: string | null }>();
+    expect(row?.policy_post).toBeNull();
+  });
+});
+
 describe('admin_add_project', () => {
   test('lists a public repo from its policy at once, as GitHub names it, checked with the admin\'s own token', async () => {
     const admin = await connectAgent(github, ADMIN.login);

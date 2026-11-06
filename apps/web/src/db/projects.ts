@@ -49,6 +49,8 @@ interface ProjectRow {
   policy_quote: string | null;
   policy_url: string | null;
   policy_tier: string | null;
+  /** JSON: the evidence for a policy from a maintainer's post, or null. */
+  policy_post: string | null;
   added_by: number;
   added_at: number;
   settings_version: number;
@@ -85,7 +87,12 @@ function toProject(row: ProjectRow): ProjectRecord {
   const policy =
     row.policy_quote === null && row.policy_url === null && row.policy_tier === null
       ? null
-      : { quote: row.policy_quote, url: row.policy_url, tier: row.policy_tier };
+      : {
+          quote: row.policy_quote,
+          url: row.policy_url,
+          tier: row.policy_tier,
+          ...(row.policy_post === null ? {} : { maintainerPost: fromJson(row.policy_post) }),
+        };
   return mustParse(
     projectRecordSchema,
     {
@@ -103,6 +110,11 @@ function toProject(row: ProjectRow): ProjectRecord {
     },
     'project',
   );
+}
+
+/** What policy_post keeps for a policy: its maintainer's post as JSON, or null for one from the repo's docs. */
+function postJson(policy: Policy | null): string | null {
+  return policy?.maintainerPost === undefined ? null : JSON.stringify(policy.maintainerPost);
 }
 
 /** Where a project's tagged issues live. */
@@ -205,8 +217,8 @@ export async function createProject(
     db
       .prepare(
         `INSERT INTO projects (repo, issue_repo, status, status_reason, status_changed_by, status_changed_at,
-           source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version, repo_id, issue_repo_id)
-         SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13
+           source, policy_quote, policy_url, policy_tier, added_by, added_at, settings_version, repo_id, issue_repo_id, policy_post)
+         SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14
          WHERE ?6 = 'registered' OR (${NOT_ON_DO_NOT_LIST} AND ${NO_REMOVAL_WAITING})
          ON CONFLICT DO NOTHING`,
       )
@@ -224,6 +236,7 @@ export async function createProject(
         record.addedAt,
         repoId,
         issueRepoId,
+        postJson(record.policy),
       ),
     // A project that already existed has its first settings. A listing the
     // do-not-list or a waiting request kept out has no row, so these add
@@ -762,7 +775,7 @@ export async function takeOverListing(
     statements.push(
       db
         .prepare(
-          `UPDATE projects SET source = 'registered', policy_quote = NULL, policy_url = NULL, policy_tier = NULL,
+          `UPDATE projects SET source = 'registered', policy_quote = NULL, policy_url = NULL, policy_tier = NULL, policy_post = NULL,
              added_by = ?6, settings_version = ?7, issue_repo = ?8${reopen}, ${setIds('?10', '?11', '?12')}
            WHERE ${listing}`,
         )
@@ -922,10 +935,20 @@ export async function relistFromPolicy(
       db
         .prepare(
           `UPDATE projects SET policy_quote = ?3, policy_url = ?4, policy_tier = ?5, settings_version = ?6,
-             issue_repo = ?7, ${setIds('?8', '?9', '?10')}
+             issue_repo = ?7, ${setIds('?8', '?9', '?10')}, policy_post = ?11
            WHERE ${still}`,
         )
-        .bind(...read, policy.quote, policy.url, policy.tier, version, issueRepoOf(current.repo, next), idChange, ...id),
+        .bind(
+          ...read,
+          policy.quote,
+          policy.url,
+          policy.tier,
+          version,
+          issueRepoOf(current.repo, next),
+          idChange,
+          ...id,
+          postJson(policy),
+        ),
     );
     const results = await db.batch(statements);
     if (results.at(-1)?.meta.changes === 1) return { ok: true, project, changed };

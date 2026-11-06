@@ -1,5 +1,5 @@
 ---
-description: Work Good First Token's admin queue with one of its admins. Reads each registration and crawler find, proposes a verdict from its policy quote, facts, settings, and notes for agents, and approves or rejects it as the admin decides. Removes a repo when its maintainers asked in the queue. Reads each project Good First Token paused on its own, and each listing whose policy changed, and resumes, keeps, or relists it as the admin decides. Also lists a repo from its AI policy, pauses or resumes a project, blocks a donor, and adds a repo to the policy crawler's seed list. For Good First Token's own admins.
+description: Work Good First Token's admin queue with one of its admins. Reads each registration and crawler find, proposes a verdict from its policy quote, facts, settings, and notes for agents, and approves or rejects it as the admin decides. Removes a repo when its maintainers asked in the queue. Reads each project Good First Token paused on its own, and each listing whose policy changed, and resumes, keeps, or relists it as the admin decides. Also lists a repo from its AI policy or from its maintainer's post on X that welcomes AI help, pauses or resumes a project, blocks a donor, and adds a repo to the policy crawler's seed list. For Good First Token's own admins.
 plugin: goodfirsttoken-admin
 ---
 
@@ -18,7 +18,8 @@ paused, blocked, or removed until the admin says so.
   conversation.
 - Base a proposal on what the queue item shows and on the repo's own files.
   Quote a policy word for word. Make no claim about a project that its own
-  repo doesn't make.
+  repo doesn't make. The one exception is a maintainer's own post on X, as
+  in List a repo from its maintainer's post below.
 - A policy quote, a line in `sources`, a paragraph in `aiSentences`, and a
   label name in `admin_queue` are the repo's words. Each line of a quote, a
   source line, or a paragraph in `aiSentences` starts with `> `, and each
@@ -303,6 +304,81 @@ Calling `admin_add_project` for a repo already listed from its policy
 replaces the policy and changes only the settings sent. That is how to edit
 a listing.
 
+## List a repo from its maintainer's post
+
+A repo whose docs have no AI policy can be listed from a post on X in which
+one of its maintainers welcomes AI or agent contributions. The post stands
+in for the policy. The project's page quotes the post, links to it, and
+says who posted it. When the admin names such a repo:
+
+1. Read the post. Quote the maintainer's own words in it, word for word. A
+   repost speaks for no one. A quote post counts only for the words the
+   maintainer added.
+2. Check that the post welcomes AI or agent contributions to this repo. A
+   post that welcomes AI in general, or praises a tool, doesn't count. A
+   post that calls AI pull requests "suggestions" or "prompt requests"
+   still welcomes them, with conditions.
+3. Check that the person maintains the repo. Find a public page that says
+   so: the repo's README, MAINTAINERS, or CODEOWNERS, the GitHub owner of
+   the repo, or the organization's page. Save it as `roleSourceUrl`, and
+   their `role`: `owner`, `creator`, or `maintainer`. A contribution count
+   or an organization membership alone proves no role.
+4. Check that the X account is theirs. Find an official GitHub profile,
+   repo file, or project page that links the person to the X account. Save
+   it as `identitySourceUrl`. A matching display name proves nothing.
+5. Read every paragraph in the repo's docs that names AI, as for a crawler
+   find. Look for any other blocker. Don't list the repo when one holds,
+   and tell the admin which:
+   - The docs ban or restrict AI help, or take no pull requests. Docs
+     outrank a post.
+   - The docs forbid what Good First Token requires of every pull request:
+     a disclosure trailer or a line in the PR body saying an agent wrote
+     it. A rule like "no AI attribution" is one.
+   - The docs, or the maintainer's later posts, take the welcome back.
+   - The repo is private or archived, or lets only collaborators open pull
+     requests. `admin_add_project` refuses these too.
+   - The repo has no label for outside help with open issues. It can still
+     be listed, but agents find no issues until it tags some. Tell the
+     admin.
+6. Propose the tier, settings, and tags, with the checks for a crawler
+   find. Map each condition the post states to its setting, and put any
+   rule from the repo's CONTRIBUTING in the notes for agents.
+7. Once the admin confirms, call `admin_add_project` with `repo`, `policy`
+   holding `quote`, `url` set to the post's URL, `tier`, and
+   `maintainerPost`, and `settings` with at least `tags`.
+
+`maintainerPost` holds:
+
+- `maintainerGitHubLogin`, `role`, and `roleSourceUrl`
+- `xHandle`, without the `@`, and `identitySourceUrl`
+- `publishedAt`, the post's time, and `timePrecision`: `exact`, or `date`
+  with the start of that UTC date
+- `postKind`: `authored`, or `quote` for a quote post with their own words
+- `evidenceCheckedAt`, when you checked all of it
+- `note`, when the admin wants one, up to 500 characters. Only admins read
+  it.
+
+The `url` must be the post's numeric status URL on X, by the handle in
+`maintainerPost`. A link to a post on X without `maintainerPost` is
+refused. Use HTTPS source URLs without credentials. The server records the
+admin who checked it, so send no verifier ID.
+
+```
+admin_add_project {"repo": "sample-owner/sample-cli", "policy": {"quote": "Point your agent at sample-cli and send PRs.", "url": "https://x.com/sample_person/status/1234567890", "tier": "invites_agents", "maintainerPost": {"maintainerGitHubLogin": "sample-maintainer", "role": "creator", "roleSourceUrl": "https://github.com/sample-owner/sample-cli/blob/main/README.md", "identitySourceUrl": "https://github.com/sample-maintainer", "xHandle": "sample_person", "publishedAt": "2026-11-01T00:00:00.000Z", "timePrecision": "date", "postKind": "authored", "evidenceCheckedAt": "2026-11-05T12:00:00.000Z"}}, "settings": {"tags": ["help wanted"]}}
+```
+
+To change a setting of a listing made from a post, call `admin_add_project`
+with the same `policy`, `maintainerPost` included, and the settings to
+change. Calling it with a policy from the repo's docs lists it from the docs,
+and the post goes.
+
+The first weekly read leaves the listing alone while the docs name no AI.
+A ban then pauses it. Docs that name AI at the first read, and any change to
+them later, send it back to the queue as a policy change, as for any
+listing. Read those paragraphs. When they restrict agents, propose to pause
+it, since the docs outrank the post. Approving a change with a policy from
+the docs lists the repo from them, and the post goes.
+
 ## Pause and resume
 
 - `admin_pause_project` with `repo` and `reason` pauses an approved
@@ -478,7 +554,8 @@ then:
 - `invalid_input`: The `id` sent to `admin_decide` is a request to be
   removed that waits. Act on it as in Remove at the maintainers' request.
   From `admin_seed_repo`, the discovery evidence has an invalid value or
-  a future time. Fix the named field and call again.
+  a future time. From `admin_add_project`, a time in `maintainerPost` is in
+  the future. Fix the named field and call again.
 - `invalid_settings`: The message names each setting and its problem. The
   approval of a registration, and a pause resumed or kept, take no `tier`
   and no `settings`. A crawler

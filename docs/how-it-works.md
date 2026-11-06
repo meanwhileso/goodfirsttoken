@@ -1193,6 +1193,11 @@ when someone undoes a stale bot's close. A merged PR can't.
   a listing can have.
 - A project listed from its policy keeps the policy quote, its link, and the
   tier. A registered project has no policy.
+- The policy comes from the repo's docs, or from a maintainer's post on X
+  that welcomes AI help, when the docs have no AI policy. A policy from a
+  post links to the post, and keeps `maintainerPost`: who posted it, their
+  role for the repo, and the sources for both, under
+  [The admin queue](#the-admin-queue).
 - A repo can be a project once. Repo names compare without case, the way
   GitHub compares them, so `Owner/App` and `owner/app` are the same project.
 - A rejected project has a reason. A pending or approved project has none, so
@@ -1800,6 +1805,46 @@ the project's own tags. It is `approved` at once, listed by the admin.
   policy, and changes only the settings sent, as a new save of its settings
   made by the admin. The rest keep the listing's values. It keeps its
   status, who added it, and when. This is how an admin edits a listing.
+
+**Listing from a maintainer's post.** ([spec](specs/maintainer-posts.md))
+An admin can list a repo whose docs have
+no AI policy from a post on X in which one of its maintainers welcomes AI or
+agent contributions. `admin_add_project` takes the post's words as the
+quote and the post as the link, with `maintainerPost` beside them in the
+policy.
+
+- `maintainerPost` holds the poster's GitHub login and their `role` for the
+  repo or its owning organization: `owner`, `creator`, or `maintainer`.
+  `roleSourceUrl` is a public page that states the role. It holds their X
+  handle, and `identitySourceUrl`, a page that links the person to that
+  account. It holds when the post was published, with `timePrecision`
+  `exact`, or `date` for the start of that UTC date, the `postKind`,
+  `authored` or `quote`, when the admin's agent checked it all, and an
+  optional `note` of up to 500 characters.
+- The link has to be a numeric status URL on X, on `x.com` or
+  `twitter.com`, by the handle in `maintainerPost`, compared without case.
+  A link to a post on X without `maintainerPost`, a repost, a role of
+  `unknown`, a check time before the post, or a source that isn't public
+  HTTPS breaks the tool's input rules, and nothing is saved. So listing it
+  again to change a setting has to send the evidence again.
+- A time after the call is refused with `invalid_input`.
+- The server adds `verifierGitHubId`, the admin who made the call. The
+  Worker stores the sources and never fetches them.
+- Every other rule of a listing holds. The repo is read with the admin's
+  token, and has to be public, not archived, and take pull requests from
+  anyone. The do-not-list, a waiting request to be removed, and a
+  registration still refuse it.
+- Listing the repo again without `maintainerPost` lists it from the policy
+  sent, and the post goes. Approving a policy change does the same. A
+  maintainer who takes the listing over drops the post with the policy.
+- The weekly read leaves a listing made from a post alone while its docs
+  give no policy, under [Keeping listings current](#keeping-listings-current).
+- The project's page and its JSON show the post, who posted it, and the two
+  sources. `project_status` says it was listed from a maintainer's post,
+  with `fromPost`. The admin who checked it, the note, and when it was checked stay
+  on admin surfaces.
+- The admin page's form lists from docs only. A listing from a post is
+  made with the MCP tool.
 
 **Pausing.** `admin_pause_project` pauses an approved project, with a
 reason its maintainers read with `project_status`, or resumes any paused
@@ -3509,6 +3554,13 @@ none of the repo's text, and whether they read a ban:
     still reads as another tier, so it goes back to the queue once as a
     policy change, with no pause.
   - A registered project takes its docs as they are, a ban included.
+- A listing made from a maintainer's post on X stood on docs that said
+  nothing about AI. Its first read is no change while the rules read no
+  policy and no sentence that names AI. A ban at its first read is a move
+  into one, as for a listing made from a find, so it pauses the project.
+  Docs that name AI at the first read, a restriction on agents included,
+  go back to the queue once as a policy change. Later reads compare hashes,
+  as for any listing.
 - When what the hash covers changes, as when the rules change what they
   read in most repos, its version goes up. A hash of another version
   compares with nothing: the read takes the new hash, and sends nothing to
@@ -3744,7 +3796,7 @@ tool say what to do with each one on its list, under
 | `request_removal` | `not_maintainer` |
 | `admin_queue` | None |
 | `admin_decide` | `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered`, `invalid_input` |
-| `admin_add_project` | `repo_not_eligible`, `already_registered`, `invalid_settings` |
+| `admin_add_project` | `repo_not_eligible`, `already_registered`, `invalid_settings`, `invalid_input` |
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
@@ -4298,7 +4350,8 @@ it shows is in [brand/brief-website.md](../brand/brief-website.md).
   issues waiting for an agent first. Pending, rejected, and paused projects
   aren't on it.
 - Each row is the homepage's row, with how the project got in:
-  `registered by its maintainers`, or `listed from its AI policy`.
+  `registered by its maintainers`, `listed from its AI policy`, or
+  `listed from a maintainer's post` for a listing made from a post on X.
 - The chips filter by PR mode: `all`, `automatic PRs`, or `reviewed PRs`.
   The search keeps the projects whose repo, or one of whose tags, holds the
   words typed, ignoring case and the spaces around them. The two apply
@@ -4395,7 +4448,12 @@ and the UTC day they did.
 - A registered project says who registered it, by their login now.
 - A project listed from its AI policy shows the policy's quote, a link to
   the file, named by its file and section, like `CONTRIBUTING.md#ai`, and
-  says it was listed from its AI policy. Beside that, `take it over or
+  says it was listed from its AI policy. A project listed from a
+  maintainer's post on X shows the post's words and `post on X`, linked to
+  the post. It says whose post it was, by their X handle, linked to their
+  profile on X. `@handle is @login on GitHub` links to the page that ties
+  the two, and `@login is its creator`, or its owner or maintainer, links to
+  the page that states the role. Beside either, `take it over or
   remove it` links to [/maintainers](#the-maintainers-page), the page that
   says how a maintainer takes over a listing from their agent, with
   `register_project`, or asks to have it removed.
@@ -5239,7 +5297,10 @@ to, as `/start.md` names its server.
   it got in, `registered` or `policy`, its settings, and links to its page,
   its markdown, its JSON, its live stream, and its repo on GitHub.
 - A project listed from its AI policy carries the policy's quote and its
-  link, as its page shows them. A registered project carries `null`. The
+  link, as its page shows them. One listed from a maintainer's post also
+  carries `maintainerPost`: the X handle, the GitHub login, the role, the
+  two source links, and when the post was published. Who checked it, their
+  note, and when stay off. A registered project carries `null`. The
   crawler's reading of the policy isn't published, nor is who added the
   project, nor why it was paused.
 - `/projects.json` lists them by repo, without case, up to 500 a page.

@@ -9,6 +9,7 @@ export * from './crawl-priority';
 export * from './feed';
 export * from './follow-ups';
 export * from './issues';
+export * from './maintainer-post';
 export * from './open-data';
 export * from './people';
 export * from './primitives';

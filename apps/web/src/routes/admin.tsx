@@ -425,6 +425,12 @@ function Listings({ listings }: { listings: PolicyListing[] }) {
               {listing.status !== 'approved' && <span className="faint"> · {listing.status}</span>}
               <br />
               <a href={listing.policy.url}>{tierName(listing.policy.tier)} ↗</a>
+              {listing.policy.maintainerPost && (
+                <span className="faint">
+                  {' '}
+                  · from a post by @{listing.policy.maintainerPost.xHandle}, its {listing.policy.maintainerPost.role}
+                </span>
+              )}
             </li>
           ))}
         </ul>

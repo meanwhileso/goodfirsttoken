@@ -1,7 +1,8 @@
 import {
+  openPolicy,
   utcDay,
   type FeedEvent,
-  type Policy,
+  type OpenPolicy,
   type ProjectSettings,
   type ProjectSource,
   type ProjectStatus,
@@ -72,6 +73,7 @@ export async function loadProjectsList(now = Date.now()): Promise<ProjectsListRe
         prMode: project.settings.prMode,
         waiting,
         source: project.source,
+        ...(project.policy?.maintainerPost === undefined ? {} : { fromPost: true }),
       })),
     };
   } catch (error) {
@@ -116,8 +118,8 @@ export interface ProjectPage {
   site: string;
   origin: string;
   source: ProjectSource;
-  /** The policy it was listed from, or null for a registered project. */
-  policy: Policy | null;
+  /** What the page shows of the policy it was listed from, or null for a registered project. */
+  policy: OpenPolicy | null;
   /** The login now of who added it: the maintainer who registered it, or the admin who listed it. */
   addedBy: string | null;
   settings: ProjectSettings;
@@ -180,7 +182,7 @@ async function read(request: Request, asked: string, now: number): Promise<Proje
     site: siteAddress(request),
     origin: siteOrigin(request),
     source: project.source,
-    policy: project.policy,
+    policy: project.policy === null ? null : openPolicy(project.policy),
     addedBy: logins.get(project.addedBy) ?? null,
     settings: project.settings,
     rulesSet: save && { login: logins.get(save.changedBy) ?? null, at: new Date(save.changedAt).toISOString() },

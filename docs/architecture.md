@@ -786,7 +786,8 @@ The rules are in [how-it-works.md](how-it-works.md#the-admin-queue).
 
 | File | What it does |
 |---|---|
-| `src/admin/actions.ts` | The admin's actions: the queue, deciding, listing from a policy, blocking, pausing, removing, and the crawler's seed list |
+| `src/admin/actions.ts` | The admin's actions: the queue, deciding, listing from a policy or a maintainer's post, blocking, pausing, removing, and the crawler's seed list |
+| `packages/core/src/maintainer-post.ts` | The evidence for a listing made from a maintainer's post on X: its input and stored schemas, the check that the policy links to the post, and the check against the action's clock that stamps the admin |
 | `src/mcp/admin.ts` | The admin's MCP tools, each an action's answer as a tool result |
 | `src/admin/page.ts` | What `/admin` reads, and the answer to its forms |
 | `src/admin/data.ts` | `getAdminPage`, the server function the route's loader calls |
@@ -2507,6 +2508,7 @@ under The projects list and The project page.
 | `src/project/rules.ts` | A project's settings as split badges |
 | `src/project/shown.ts` | `hasPage`, which projects have a page by their status, the sync's mark, and the do-not-list entries of their repo and issue repo, for a project's page, and on its issues' pages for the breadcrumb, the cached copy, and whether the project takes claims. `readDelisting`, why the sync delisted a project that could have a page, from its mark and the do-not-list, for `project_status` and `admin_pause_project`, through `delistingOf`, which `hasPage` reads the mark through too |
 | `src/project/ProjectRow.tsx` | A project as a row, which the homepage shows too |
+| `src/project/source.ts` | How a project got in, in words, for its row and its markdown |
 | `src/db/waiting.ts` | The rule for an issue waiting for an agent, as SQL |
 | `src/styles/projects-page.css`, `src/styles/project-page.css` | The pages' layout |
 

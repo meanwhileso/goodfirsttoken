@@ -30,7 +30,9 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 //   turned off, pauses an approved project at once.
 // - A listing made from a policy whose policy reads differently otherwise
 //   goes back to the admin queue as a policy change, and stays listed while
-//   it waits.
+//   it waits. A listing made from a maintainer's post on X stands on the
+//   post, so its first read sends nothing while its docs name no AI, and a
+//   ban then pauses it.
 //
 // Each pause is the one the sync makes: a pause that names no one, so only
 // an admin lifts it, kept in the status history. The admin queue shows every
@@ -181,6 +183,9 @@ async function pauseForCrawler(
  *   nothing back to the queue.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
+ * - A listing made from a maintainer's post reads as no change at its first
+ *   read while its docs name no AI at all, and a ban then is a move into
+ *   one. Later reads compare hashes, as for any listing.
  */
 function compare(
   project: ProjectRecord,
@@ -191,9 +196,18 @@ function compare(
 ): { changed: boolean; intoBan: boolean } {
   const banned = reading.tier === 'bans_or_restricts';
   const sameRules = comparable(last?.fingerprint ?? null);
+  // A listing made from a maintainer's post stood on docs that said nothing
+  // about AI, so a ban at its first read is a move into one, as for a find.
+  const fromPost = project.policy?.maintainerPost !== undefined;
   const intoBan =
-    banned && (last?.banned == null ? fromFind : !last.banned && (sameRules || project.source === 'policy'));
-  if (last?.fingerprint == null) return { changed: readsOtherwise(project.policy, reading), intoBan };
+    banned && (last?.banned == null ? fromFind || fromPost : !last.banned && (sameRules || project.source === 'policy'));
+  if (last?.fingerprint == null) {
+    // Its first read is no change while the docs still name no AI at all.
+    // Docs that name it, even to restrict agents without a ban, go to an
+    // admin once, and later reads compare hashes as for any listing.
+    if (fromPost && reading.tier === 'no_policy' && reading.aiSentences.length === 0) return { changed: false, intoBan };
+    return { changed: readsOtherwise(project.policy, reading), intoBan };
+  }
   if (!sameRules) return { changed: false, intoBan };
   return { changed: last.fingerprint !== fingerprint, intoBan };
 }

@@ -1,6 +1,7 @@
 import type { PrMode, ProjectSource } from '@goodfirsttoken/core';
 import { Tag } from '../components/Chip';
 import { SplitBadge } from '../components/SplitBadge';
+import { sourceWords } from './source';
 
 // One project asking for help, as a row: the homepage's "asking for help"
 // and the projects list show the same row. Its layout is in
@@ -15,12 +16,9 @@ export interface ProjectRowData {
   waiting: number;
   /** How it got in, when the row says so. */
   source?: ProjectSource;
+  /** True for a listing made from a maintainer's post on X rather than the repo's docs. */
+  fromPost?: boolean;
 }
-
-const SOURCE_WORDS: Record<ProjectSource, string> = {
-  registered: 'registered by its maintainers',
-  policy: 'listed from its AI policy',
-};
 
 export function ProjectRow({ project }: { project: ProjectRowData }) {
   return (
@@ -34,7 +32,7 @@ export function ProjectRow({ project }: { project: ProjectRowData }) {
           <span className="mono small faint">
             {project.waiting > 0 ? `${project.waiting.toLocaleString('en-US')} waiting` : 'nothing waiting right now'}
           </span>
-          {project.source && <span className="project-row__source small">{SOURCE_WORDS[project.source]}</span>}
+          {project.source && <span className="project-row__source small">{sourceWords(project.source, project.fromPost)}</span>}
         </span>
         <span className="project-row__side">
           <SplitBadge rule="PRs" value={project.prMode} strict={project.prMode === 'reviewed'} />
