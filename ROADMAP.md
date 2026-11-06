@@ -166,6 +166,30 @@ PR with GitHub reads, and records them. The last item removes the server's write
 | [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | [#134](https://github.com/meanwhileso/goodfirsttoken/pull/134) |
 | [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | [#135](https://github.com/meanwhileso/goodfirsttoken/pull/135) |
 
+## M10 Adding repos
+
+The [add a repo spec](docs/specs/add-a-repo.md) lets a maintainer register from a form on
+`/maintainers` and manage the project from its settings page, and lets a donor ask for a repo from the
+homepage, from `/request`, or through their agent with `request_repo`. A request lists nothing. The
+crawler reads requested repos after the admins' seeds. A requested repo with 100 stars or more whose
+docs welcome AI help is listed without waiting for an admin, and an admin reviews it afterward.
+
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#152](https://github.com/meanwhileso/goodfirsttoken/issues/152) | Come back to the page after signing in | Nothing | |
+| [#153](https://github.com/meanwhileso/goodfirsttoken/issues/153) | Record repo requests, and add request_repo | Nothing | |
+| [#154](https://github.com/meanwhileso/goodfirsttoken/issues/154) | Read requested repos in the crawler | #153 | |
+| [#155](https://github.com/meanwhileso/goodfirsttoken/issues/155) | Show requesters to admins, and the count to maintainers | #153, #159 | |
+| [#156](https://github.com/meanwhileso/goodfirsttoken/issues/156) | Request a repo from the homepage and /request | #152, #153 | |
+| [#157](https://github.com/meanwhileso/goodfirsttoken/issues/157) | Show a person's requests on /me | #153 | |
+| [#158](https://github.com/meanwhileso/goodfirsttoken/issues/158) | Offer to request a repo in the give skill | #153 | |
+| [#159](https://github.com/meanwhileso/goodfirsttoken/issues/159) | Register a repo from /maintainers | #152 | |
+| [#160](https://github.com/meanwhileso/goodfirsttoken/issues/160) | Show a person's projects on /me | Nothing | |
+| [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 | |
+| [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 | |
+| [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 | |
+| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154, #176 | |
+
 ## M11 Model policy reader
 
 M10 is the proposed add-a-repo spec, in [#151](https://github.com/meanwhileso/goodfirsttoken/pull/151).
@@ -188,7 +212,7 @@ requests. #171, #172, and #173 can run at the same time.
 
 ## Dependency graph
 
-An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits, M11 Model policy reader. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
+An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits, M10 Adding repos, M11 Model policy reader. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
 
 ```mermaid
 flowchart TD
@@ -201,6 +225,7 @@ flowchart TD
   classDef m7 fill:#FFEBE9,stroke:#57606A,color:#0E1116
   classDef m8 fill:#EEF1F4,stroke:#57606A,color:#0E1116
   classDef m9 fill:#E7F5F2,stroke:#57606A,color:#0E1116
+  classDef m10 fill:#F6F8FA,stroke:#57606A,color:#0E1116
   classDef m11 fill:#FCEFF6,stroke:#57606A,color:#0E1116
   classDef done stroke:#1A7F37,stroke-width:3px
   n3["#3 Workspace, app, and CI"]:::m1
@@ -258,6 +283,19 @@ flowchart TD
   n127["#127 Compare page links"]:::m9
   n128["#128 Skills push and open"]:::m9
   n129["#129 Remove server writes"]:::m9
+  n152["#152 Sign-in return path"]:::m10
+  n153["#153 Repo requests"]:::m10
+  n154["#154 Crawl requested repos"]:::m10
+  n155["#155 Request counts"]:::m10
+  n156["#156 Request from the homepage"]:::m10
+  n157["#157 Requests on /me"]:::m10
+  n158["#158 Requests in the give skill"]:::m10
+  n159["#159 Register from /maintainers"]:::m10
+  n160["#160 Projects on /me"]:::m10
+  n162["#162 Settings on the site"]:::m10
+  n163["#163 Pause and refresh on the site"]:::m10
+  n164["#164 Removal on the site"]:::m10
+  n165["#165 List requested repos"]:::m10
   n171["#171 Stop searches"]:::m11
   n172["#172 Corpus, core, and eval"]:::m11
   n173["#173 Key and fake"]:::m11
@@ -343,6 +381,20 @@ flowchart TD
   n175 --> n176
   n176 --> n177
   n33 --> n34
+  n152 --> n156
+  n152 --> n159
+  n153 --> n154
+  n153 --> n155
+  n153 --> n156
+  n153 --> n157
+  n153 --> n158
+  n159 --> n155
+  n152 --> n162
+  n159 --> n162
+  n162 --> n163
+  n162 --> n164
+  n154 --> n165
+  n176 --> n165
   class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173 done
 ```
 
