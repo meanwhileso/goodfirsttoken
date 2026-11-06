@@ -442,9 +442,9 @@ describe('the outcome fingerprint', () => {
     const fingerprint = await readerFingerprint(agents(base), welcome(agents(base), 3, 'Agents may open pull requests here.'), null);
 
     // p1 was one past the rules, and each prompt version after it one more. Raise both together.
-    expect(READER_FINGERPRINT_VERSION).toBe(FINGERPRINT_VERSION + 5);
+    expect(READER_FINGERPRINT_VERSION).toBe(FINGERPRINT_VERSION + 6);
     expect(fingerprint).toMatch(new RegExp(`^v${String(READER_FINGERPRINT_VERSION)}:[0-9a-f]{64}$`));
-    expect(READER_VERSION).toBe('claude-opus-5-5/p5/s1');
+    expect(READER_VERSION).toBe('claude-opus-5-5/p6/s1');
   });
 
   test('reads the same for a build step added to AGENTS.md, even one that says no, and for a welcome cited on other lines', async () => {
@@ -529,16 +529,6 @@ describe('the label check', () => {
 
     expect(result.ok && result.check.ready.map((l) => l.name)).toEqual(['up-for-grabs']);
     expect(result.ok && result.check.dropped).toBe(2);
-  });
-
-  test('keeps a label agents-only only on a statement from the docs, and reads one from its name alone as ready', () => {
-    const result = readLabelOutput(sent, 1, {
-      labels: [entry('up-for-grabs', 'agentsOnly', 'statement', 0), entry('Help Wanted', 'agentsOnly'), entry('good first issue', 'agentsOnly', 'description')],
-    });
-
-    expect(result.ok && result.check.agentsOnly.map((l) => l.name)).toEqual(['up-for-grabs']);
-    expect(result.ok && result.check.ready.map((l) => l.name)).toEqual(['Help Wanted', 'good first issue']);
-    expect(result.ok && result.check.dropped).toBe(0);
   });
 
   test('fails an output with far more labels than were sent, or with a meaning the schema lacks', () => {

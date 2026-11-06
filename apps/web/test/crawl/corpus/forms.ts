@@ -289,6 +289,9 @@ export const FORM_GROUPS: FormGroup[] = [
         'Coding agents must not open pull requests against the release branch.',
         'Do not open a PR against `gh-pages`.',
       ].map((sentence) => inPolicy(sentence, allows, { form: 9 })),
+      // In CONTRIBUTING, with nothing about AI, a rule about which branch to target is no ban.
+      inContributing('AI help is fine.\n\n', 'Do not open pull requests against `develop`. Open them against `main`.', allows, { tier: allows }),
+      inContributing('AI help is fine.\n\n', "Please don't open pull requests against the release branches.", allows, { tier: allows }),
       // Beside an invitation, a pull request kept off a side branch still invites agents.
       {
         sentence: 'Coding agents must not open pull requests against the release branch.',

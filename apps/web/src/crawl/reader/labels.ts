@@ -7,10 +7,8 @@ import type { CheckedStatement } from './statements';
 // isn't one the Worker sent, compared without case, is dropped, and so is
 // one whose evidence is a statement the Worker didn't send. A label keeps
 // the repo's spelling and its open issue count, and counts once, with the
-// first meaning the model gave it. A label is agents-only only when a
-// statement from the docs says so. One the model calls agents-only from its
-// name or description alone, like `agent ready`, is ready for outside help.
-// A label the model leaves out means nothing for outside help. The design is in
+// first meaning the model gave it. A label the model leaves out means
+// nothing for outside help. The design is in
 // docs/specs/model-policy-reader.md, under The label check.
 
 export interface LabelCheck {
@@ -48,8 +46,7 @@ export function readLabelOutput(sent: readonly CheckedLabel[], statementsSent: n
     const key = label.name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const meaning = item.meaning === 'agentsOnly' && item.evidence !== 'statement' ? 'readyForOutsideHelp' : item.meaning;
-    out[meaning].push({ name: label.name, openIssues: label.openIssues });
+    out[item.meaning].push({ name: label.name, openIssues: label.openIssues });
   }
   return { ok: true, check: { ready: out.readyForOutsideHelp, keptForPeople: out.keptForPeople, agentsOnly: out.agentsOnly, dropped } };
 }

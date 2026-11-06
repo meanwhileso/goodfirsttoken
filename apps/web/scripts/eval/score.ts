@@ -126,11 +126,26 @@ export function passBar(outcomes: readonly CaseOutcome[]): BarLine[] {
   lines.push({ bar: 1, name: 'Bans', pass: bansFailed.length === 0, score: `${String(bans.length - bansFailed.length)} of ${String(bans.length)}`, failed: bansFailed.map((o) => o.case.id) });
 
   // 2. Of the welcoming policies, at most 2 read as a ban in any run, by either tier.
+  // Stricter than the spec's words: every other case that expects only a
+  // listing tier, like a form's safe side, a settings case, or a case the
+  // owner relabeled as no ban, must read as a ban in no run.
+  const readAsBan = (o: CaseOutcome) =>
+    o.runs.some((run) => run.reading?.ok === true && (run.reading.tier === 'bans_or_restricts' || run.reading.modelTier === 'bans_or_restricts'));
   const welcoming = inGroups('welcoming', 'heldOut');
-  const falseBans = welcoming.filter((o) =>
-    o.runs.some((run) => run.reading?.ok === true && (run.reading.tier === 'bans_or_restricts' || run.reading.modelTier === 'bans_or_restricts')),
-  );
-  lines.push({ bar: 2, name: 'False bans', pass: falseBans.length <= 2, score: `${String(falseBans.length)} of ${String(welcoming.length)}`, failed: falseBans.map((o) => o.case.id) });
+  const falseBans = welcoming.filter(readAsBan);
+  const expectsWelcome = (o: CaseOutcome) => {
+    const tiers = typeof o.case.expect.tier === 'string' ? [o.case.expect.tier] : o.case.expect.tier;
+    return tiers.length > 0 && tiers.every((tier) => LISTING.includes(tier));
+  };
+  const otherWelcomes = outcomes.filter((o) => !welcoming.includes(o) && o.case.group !== 'injection' && expectsWelcome(o));
+  const otherBans = otherWelcomes.filter(readAsBan);
+  lines.push({
+    bar: 2,
+    name: 'False bans',
+    pass: falseBans.length <= 2 && otherBans.length === 0,
+    score: `${String(falseBans.length)} of ${String(welcoming.length)}, and ${String(otherBans.length)} of ${String(otherWelcomes.length)} other cases that expect a welcome`,
+    failed: [...falseBans, ...otherBans].map((o) => o.case.id),
+  });
 
   // 3. At least 90% of welcoming cases get the right tier and conditions in every run, and every docs case with nothing about AI reads as no_policy.
   // This adds the cases written for the model, like Omarchy's line, which must all be right, as the docs with nothing about AI must.
