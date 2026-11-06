@@ -1487,10 +1487,11 @@ a project is `not_found`.
     refresh that asked GitHub counts even when it read no issue. Within the
     10 minutes, the answer says a refresh ran already, and this one read
     nothing.
-  - It never reads a project while a scheduled run reads it, and a
-    scheduled run leaves a project a refresh reads. While one does, a
-    refresh reads nothing, the answer says the sync is busy with it, and it
-    doesn't count toward the 10 minutes.
+  - It never reads a project while a scheduled run or a read on approval,
+    under [Tagged issues](#tagged-issues), reads it, and a scheduled run
+    leaves a project a refresh reads. While one does, a refresh reads
+    nothing, the answer says the sync is busy with it, and it doesn't count
+    toward the 10 minutes.
   - It stops early the way a scheduled run does, with its own share of the
     budget and its own cap on calls, under The budget in
     [Tagged issues](#tagged-issues), so no maintainer spends what the
@@ -1646,6 +1647,13 @@ queue.
 - Every status change an admin makes lands only on the status it was
   decided on, the way a maintainer's pause does. When someone else changed
   the status first, the action decides again on the new status.
+- An action that leaves a project approved reads its tagged issues from
+  GitHub right after it answers, when no pass of them ever finished, under
+  Read on approval in [Tagged issues](#tagged-issues). That is approving a
+  registration or a crawler find, listing a repo with `admin_add_project`,
+  listing one again, approving a policy change, and a resume, from
+  `admin_pause_project` or from approving a pause in the queue. The answer
+  doesn't wait for the read, and the action lands whatever the read does.
 
 **What waits.** `admin_queue` lists five kinds of item, the one that has
 waited longest first, each with an ID. `admin_decide` takes the ID of any
@@ -2073,6 +2081,48 @@ Delisting below.
   GitHub names it, or none. Suggestions rank by it, under
   [The donor's tools](#the-donors-tools).
 
+**Read on approval.** An admin's action that leaves a project approved, under
+[The admin queue](#the-admin-queue), starts a read of its tagged issues at
+once, so a new listing shows its issues without waiting up to 15 minutes for
+the sync. It reads as a pass of the sync does, and runs after the admin's
+answer goes out.
+
+- It reads only an approved project off the do-not-list that no pass ever
+  finished: a new listing, or one whose reads failed so far, as when the
+  service token had expired. A project the sync read before waits its turn,
+  so a resume or a change of settings reads nothing on its own.
+- A maintainer's own resume, with `pause_project`, starts no read. It isn't
+  an approval, and the maintainer can read the issues now with
+  `project_status` and `refresh`, under
+  [Managing a project](#managing-a-project).
+- It holds the project as a scheduled run does, for a minute at most. While
+  another run holds it, the read reads nothing, since that run is reading
+  the project. A read that never lets go, as when the Worker is stopped
+  partway, frees the project a minute after it took it.
+- Reads on approval run one at a time on each server of the Worker, so many
+  approvals in a row don't read GitHub side by side. Each waits for the one
+  before it, and its 20 seconds count from its approval, the wait included.
+  One whose 20 seconds run out while it waits reads nothing, and the next
+  scheduled run reads the project.
+- It spends under its own row in The budget below. It leaves a fifth of the
+  hour, where the sync stops, so the two together never spend what the PR
+  job and the other jobs leave for each other. It makes at most 200 calls,
+  and stops before a call once 20 seconds have passed since the approval.
+- A read that stops saves what it read, and leaves its pass in progress.
+  The next scheduled run takes that pass first, and reads only the issues
+  it hasn't. A read that finishes its pass leaves the next scheduled run a
+  new pass to start, which reads the project's issues again, as every pass
+  does.
+- With no service token, or when GitHub refuses it, the read reads nothing,
+  and the log says why, as the sync's does. The admin's action has landed
+  already, and the sync reads the project once the token works.
+- Each read that ran logs a line with the issues it read, its calls, what
+  is left of the budget, and why it stopped, when it did. A read that
+  stopped or was skipped logs why first, as the sync does. One that read
+  nothing logs why: no service token, another run held the project, or its
+  20 seconds ran out while it waited. A project that isn't approved, or
+  that a pass read before, logs nothing.
+
 **Linked PRs.** An issue's linked PR is an open pull request, from anyone,
 open in the project's code repo or its issue repo, that GitHub links to the
 issue in either of two ways. The sync reads both for every issue it reads.
@@ -2141,8 +2191,8 @@ too, with the same reason.
   still private shows nothing cached, and the next run pauses it again,
   for Good First Token, as it does any approved project.
 - Only reads with the service token set the mark or take it off: the
-  sync's, and a maintainer's refresh, which reads the same way. No
-  person's token does.
+  sync's, and a maintainer's refresh and the read on approval, which read
+  the same way. No person's token does.
 - Only an answer in GitHub's own form delists a project: its `404` with a
   JSON body that says `Not Found`, a `451` with a JSON body, or the repo,
   with the fields GitHub gives, saying it is private or archived. Any other
@@ -2188,7 +2238,7 @@ too, with the same reason.
 
 **The budget.** GitHub gives the service token's account 5,000 REST calls
 and 5,000 GraphQL points an hour, whichever of its tokens makes them, and the
-scheduled jobs, a maintainer's refresh, and the
+scheduled jobs, a maintainer's refresh, the read on approval, and the
 [policy crawler](#the-policy-crawler) share them. It also gives 30 searches
 a minute, which only the crawler makes. A run first asks
 GitHub what is left, which costs nothing, then reads what GitHub says is
@@ -2201,9 +2251,13 @@ the first question included.
 | The sync | A fifth of the hour's | 1,000 |
 | The PR job | A tenth of the hour's | 100 |
 | A maintainer's refresh | Half of the hour's | 60 |
+| A read on approval | A fifth of the hour's | 200, in at most 20 seconds |
 | The crawler's search | A tenth of the minute's searches | 20 |
 | The crawler's queue, each run of up to 5 batches, weekly reads of listed projects included | Three fifths of the hour's | 60 |
 
+- The read on approval stops where the sync does, so together they leave
+  the PR job and the others the same share as before, and the PR job still
+  reads after both stop.
 - The sync's reads of repos alone, before its passes, start no new project
   once they have made 100 of its calls in a run, so the passes always get
   the rest. The next run starts with the projects they left.
@@ -5475,7 +5529,8 @@ A deployment can serve them from a static host, on a hostname of its own.
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the
   `GH_SERVICE_TOKEN` secret: the sync, the PR job, the job that records
-  cleared PRs, a maintainer's refresh, and the policy crawler. They read public data only, and never with a
+  cleared PRs, a maintainer's refresh, the read on approval, and the policy
+  crawler. They read public data only, and never with a
   person's token. The job that records cleared PRs lists each cleared
   claim's PRs by its branch. The PR job reads each open PR's state,
   author, reviews,

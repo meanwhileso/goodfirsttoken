@@ -72,11 +72,15 @@ import { readDelisting } from '../project/shown';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type ListedRepo, type Standing } from '../projects/repo';
 import { identityOf, isStoredRepo } from '../projects/repo-id';
 import { adminResume, pauseTakenOver, resumableBy } from '../projects/status';
+import { startReadOnApproval } from '../sync/read-now';
 
 // What an admin does, for the admin's MCP tools (src/mcp/admin.ts) and the
 // admin pages (src/admin/page.ts) alike. Every action first checks the
 // caller's permission with requirePermission, before it reads or writes
-// anything. The rules are in docs/how-it-works.md, under The admin queue.
+// anything. Each action that leaves a project approved starts the read of
+// its tagged issues that src/sync/read-now.ts makes on approval, which
+// reads only a project no pass ever finished, and goes on after the action
+// answers. The rules are in docs/how-it-works.md, under The admin queue.
 
 /** What an action gives back: the tool's output, or a refusal. */
 export type Outcome<N extends ToolName> = { ok: true; value: ToolOutputInput<N> } | { ok: false; refusal: Refusal };
@@ -580,6 +584,7 @@ async function listFromPolicy(
       if (relisted?.ok === false) return { ok: false, refusal: invalidSettings(relisted.problems) };
       if (relisted?.ok) {
         const { project } = relisted;
+        if (project.status === 'approved') startReadOnApproval(env, project.repo);
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: true } };
       }
     } else {
@@ -591,6 +596,7 @@ async function listFromPolicy(
         now,
       );
       if (project !== null) {
+        startReadOnApproval(env, project.repo);
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: false } };
       }
     }
@@ -664,6 +670,7 @@ async function decideRegistration(
       alongside,
     );
     if (decided === null) continue;
+    if (decided.status === 'approved') startReadOnApproval(env, decided.repo);
     return { ok: true, value: { repo: decided.repo, kind: 'registration', status: decided.status } };
   }
   throw new Error(`${input.id} kept changing while it was decided.`);
@@ -728,6 +735,7 @@ async function decidePause(
         : adminResume(await statusHistory(env.DB, paused.project.repo), caller.githubId);
     const decided = await setProjectStatusFrom(env.DB, paused.project, change, now);
     if (decided === null) continue;
+    if (decided.status === 'approved') startReadOnApproval(env, decided.repo);
     const delisted = await readDelisting(env.DB, decided);
     return { ok: true, value: { repo: decided.repo, kind: 'pause', status: decided.status, decision: input.decision, delisted } };
   }
@@ -877,7 +885,9 @@ export async function adminPauseProject(
     }
     const { restored, ...next } = change;
     const updated = await setProjectStatusFrom(env.DB, project, next, now);
-    if (updated !== null) return pauseAnswer(updated, true, restored);
+    if (updated === null) continue;
+    if (updated.status === 'approved') startReadOnApproval(env, updated.repo);
+    return pauseAnswer(updated, true, restored);
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
 }

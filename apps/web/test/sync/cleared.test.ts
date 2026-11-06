@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, getPr, saveSubmission } from '../../src/db';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { recordClearedPrs } from '../../src/sync/cleared';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, kenji, maintainer, priya, registeredProject, signIn, t0 } from '../db/helpers';
 import { callsTo, freshNumbers, jobDeps, madeBefore, SERVICE_LOGIN } from './helpers';

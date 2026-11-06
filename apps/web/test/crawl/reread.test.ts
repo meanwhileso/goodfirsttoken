@@ -25,7 +25,7 @@ import {
 } from '../../src/db';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { ServiceGitHub } from '../../src/sync/github';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';
