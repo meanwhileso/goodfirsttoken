@@ -495,13 +495,18 @@ admin_seed_repo {"repo": "sample-owner/sample-cli"}
 
 - With `added` true, the repo is on the seed list. The crawler's next run
   reads its docs, and puts it in the admin queue as a crawler find when
-  they welcome AI help.
-- With `leftAlone` `project`, the repo is a project already. With
-  `leftAlone` `proposed`, the crawler put it in the admin queue before.
-  An ordinary call leaves both alone. An evidence call can update a find
-  that still waits. Tell the admin whether `evidenceChanged` is true.
+  they welcome AI help. It reads every seed again 30 days after the last
+  read.
 - With `added` false and `leftAlone` null, the repo was on the seed list
-  already.
+  already. The crawler's next run reads it again.
+- With `rejectedBefore` true, an admin rejected a find of the repo before.
+  Tell the admin it goes back in the queue only when its docs read
+  differently from that find's.
+- With `leftAlone` `project`, the repo is a project already. With
+  `leftAlone` `proposed`, a find of it waits in the admin queue, or was
+  approved. An ordinary call leaves both alone. An evidence call can
+  update a find that still waits. Tell the admin whether `evidenceChanged`
+  is true.
 
 ### Research discovery priority
 
@@ -541,11 +546,11 @@ are known. An unverified role can be recorded as `role` `unknown`. Neither
 confers priority. Ordinary discovery and existing listings continue.
 
 Send `evidence: null` to clear priority evidence and keep the ordinary seed.
-Saving or clearing evidence keeps who added the seed, when, and its handling
-history. Evidence alone does not queue a seed handled in this pass again.
-For a waiting find, `leftAlone` stays `proposed`, and no policy read is
-queued. `added` says whether a seed was created. `evidenceChanged` says
-whether evidence changed. Projects and decided finds keep their skips.
+Saving or clearing evidence keeps who added the seed and when. Like any
+call, it makes the seed due at the crawler's next run. For a waiting find,
+`leftAlone` stays `proposed`, the seed keeps its handling history, and no
+policy read is queued. `added` says whether a seed was created.
+`evidenceChanged` says whether evidence changed. Projects keep their skip.
 Do-not-list refusals apply to waiting finds too.
 
 Candidate detail in `admin_queue` shows `evidence` and recomputed `priority`.
