@@ -1,9 +1,10 @@
 # Read AI policies and labels with a model
 
 Status: approved on November 5, 2026, by the project's owner. ROADMAP.md
-orders it as M11, issues #171 to #177. The owner decided the model, Claude Opus 5.5 (`claude-opus-5-5`) at high effort,
-called with an Anthropic API key, and answered the open questions the
-same day, under [Decisions](#decisions).
+orders it as M11, issues #171 to #177. The owner decided the model,
+Claude Opus 5.5 (`claude-opus-5-5`) at high effort, called with an
+Anthropic API key, and answered the open questions the same day, under
+[Decisions](#decisions).
 
 This changes how the policy crawler reads a repo's docs and labels, in
 [v1 section 5](v1.md#5-the-policy-crawler), and the parts of
