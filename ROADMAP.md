@@ -166,6 +166,24 @@ PR with GitHub reads, and records them. The last item removes the server's write
 | [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | [#134](https://github.com/meanwhileso/goodfirsttoken/pull/134) |
 | [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | [#135](https://github.com/meanwhileso/goodfirsttoken/pull/135) |
 
+## M10 Model policy reader
+
+The proposed [model policy reader spec](docs/specs/model-policy-reader.md) has Claude Opus 5.5 read a
+repo's AI policy and its labels, with the file and lines behind every claim. The Worker checks each
+claim against the files. An admin still lists every project. Once the spec is approved, each item below
+becomes an issue labeled `roadmap`, this list becomes a table, and the dependency graph gets the items.
+
+1. Move the policy corpus into shared cases, and build the eval harness.
+2. Add the Anthropic key, the reader's variables, and the Messages API fake.
+3. Read docs with the model in shadow, with the docs hash, the read queue, and the budget. Follows items 1
+   and 2.
+4. Check labels with the model, in shadow. Follows item 3.
+5. Read the broad pass with the model, in shadow, if the owner chooses to. Follows item 3.
+6. Let the model decide finds, weekly reads, and pauses, in staging and then production. Follows item 4,
+   item 5 if the owner chose it, an eval run that meets the pass bar, and the owner's read of the shadow
+   numbers.
+7. Remove the rules' classification code, and close #76 and #77 unbuilt. Follows item 6, after a month.
+
 ## Dependency graph
 
 An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
