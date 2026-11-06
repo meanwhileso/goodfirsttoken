@@ -289,7 +289,7 @@ async function keepCurrent(
     const stage = { db, now, calls: () => github.calls };
     const staged = await stageReread(stage, model.run, reads, { project: project.repo, repo, files, hash, rulesTier: reading.tier });
     if (staged === 'cached') {
-      const kept = await getModelReading(db, repo.name);
+      const kept = await getModelReading(db, project.repo);
       if (kept !== null) await rereadFromKept(deps, model.run, project.repo, kept);
     } else if (staged === 'too_big') await countRereadNoVerdict(deps, project.repo, 'docs past the size cap');
   }

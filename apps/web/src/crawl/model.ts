@@ -74,7 +74,7 @@ export async function readerStatus(db: D1Database, now: number): Promise<ReaderS
     await setReaderState(db, SAID_WAITING, day);
     console.warn(
       why === 'no_key'
-        ? 'The policy reader read nothing with the model. The ANTHROPIC_API_KEY secret is not set, so seeds wait for an admin to list them by hand, and weekly reads run the rules and the pull request check. docs/self-hosting.md says how to set it.'
+        ? `The policy reader read nothing with the model. The ANTHROPIC_API_KEY secret is not set, ${policyReader() === 'shadow' ? 'so the rules decide alone, as they do in shadow anyway' : 'so seeds wait for an admin to list them by hand, and weekly reads run only the pull request check'}. docs/self-hosting.md says how to set it.`
         : 'The policy reader read nothing with the model. MODEL_DAILY_BUDGET_USD is 0 or not set, so the model may spend nothing. docs/self-hosting.md says how to set it.',
     );
   }
@@ -122,6 +122,8 @@ export interface StageDeps {
 }
 
 interface Stage {
+  /** The name the reading is kept under: the repo's for a seed, and the project's for a weekly read, which a rename on GitHub doesn't change. */
+  key: string;
   purpose: ReadingPurpose;
   share: Share;
   repo: ReadRepo;
@@ -149,7 +151,7 @@ async function stage(deps: StageDeps, run: ReaderRun, reads: SharedReads, what: 
   await stagePending(
     deps.db,
     {
-      repo: repo.name,
+      repo: what.key,
       purpose: what.purpose,
       share: what.share,
       docsHash: what.hash,
@@ -208,7 +210,7 @@ export async function stageSeed(
       run.notListable += 1;
       return;
     }
-    await stage(deps, run, reads, { ...what, purpose: 'seed', share: 'seeds' });
+    await stage(deps, run, reads, { ...what, key: repo.name, purpose: 'seed', share: 'seeds' });
   } finally {
     run.githubCalls += deps.calls() - before;
   }
@@ -250,11 +252,12 @@ export async function stageReread(
       return 'same';
     }
     if (tooBig(run, repo.name, files)) return 'too_big';
-    if (readsSame(await getModelReading(deps.db, repo.name), hash)) {
+    // Kept under the project's name, which a rename on GitHub doesn't change.
+    if (readsSame(await getModelReading(deps.db, what.project), hash)) {
       run.cacheHits += 1;
       return 'cached';
     }
-    return (await stage(deps, run, reads, { ...what, purpose: 'reread', share: 'weekly' })) ? 'staged' : 'none';
+    return (await stage(deps, run, reads, { ...what, key: what.project, purpose: 'reread', share: 'weekly' })) ? 'staged' : 'none';
   } finally {
     run.githubCalls += deps.calls() - before;
   }

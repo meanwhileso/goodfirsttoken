@@ -345,6 +345,18 @@ describe('pending readings', () => {
   });
 });
 
+  test('staged docs are dropped after 7 days even while the reader reads nothing', async () => {
+    await consume([BANS_AI]);
+    restore();
+    restore = setEnv({ POLICY_READER: 'rules', MODEL_DAILY_BUDGET_USD: '20' });
+    clock += DROP_AFTER_MS + HOUR;
+
+    await hourly();
+
+    expect(await listPending(db)).toEqual([]);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM model_staged_files').first('n')).toBe(0);
+  });
+
 describe('the budget', () => {
   test('reserves before it sends, and settles to what the result cost', async () => {
     await consume([INVITES]);
@@ -384,6 +396,59 @@ describe('the budget', () => {
     expect(nextDay).toMatchObject({ sent: 1, waiting: 0 });
   });
 
+  test('a reservation settles on the day it was made, when the result comes back the next UTC day', async () => {
+    clock = Date.UTC(2100, 3, 1, 23, 30, 0);
+    await consume([BANS_AI]);
+    await hourly();
+    clock = Date.UTC(2100, 3, 2, 0, 30, 0);
+
+    await hourly();
+
+    expect((await daySpend(db, '2100-04-01')).spent).toBeGreaterThan(0);
+    expect(await daySpend(db, '2100-04-02')).toEqual({ spent: 0, reserved: 0 });
+  });
+
+  test("weekly reads can't take the seeds' half before the last hours of the UTC day", async () => {
+    // A fifth of $2 holds one reservation, and half of it two.
+    restore();
+    restore = setEnv({ POLICY_READER: 'shadow', MODEL_DAILY_BUDGET_USD: '2' });
+    await listing(INVITES);
+    await listing(CONDITIONS, { ...LISTED, url: `https://github.com/${CONDITIONS}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' });
+    await week();
+    // Nothing comes back, so nothing reserved is settled yet.
+    anthropic.holdBatches = true;
+    const weekly = await hourly();
+    await consume([BANS_AI, 'sample-policies/mixed-signals']);
+    clock += MINUTE;
+
+    const seeds = await hourly();
+
+    expect(weekly).toMatchObject({ sent: 1, waiting: 1, held: 'budget' });
+    expect(seeds).toMatchObject({ sent: 2 });
+  });
+
+  test('a share that is spent holds no other share back, however many readings wait', async () => {
+    await listing(INVITES);
+    await week();
+    const today = new Date(clock).toISOString().slice(0, 10);
+    await db.prepare("INSERT INTO model_spend (day, share, spent_usd, reserved_usd) VALUES (?, 'seeds', 10, 0)").bind(today).run();
+    const facts = JSON.stringify({ stars: 1, createdAt: 0, pushedAt: 0, ownerCreatedAt: 0 });
+    const rows = Array.from({ length: 210 }, (_, i) =>
+      db
+        .prepare(
+          `INSERT INTO model_pending (id, repo, purpose, share, docs_hash, rules_tier, commit_sha, branch, facts, vouch, labels, staged_at)
+           VALUES (?, ?, 'seed', 'seeds', ?, 'no_policy', 'abc', 'main', ?, NULL, '[]', ?)`,
+        )
+        .bind(`rdg_seed${String(i)}`, `sample-bulk/seed-${String(i)}`, `docs-v1:${'0'.repeat(64)}`, facts, clock - DAY),
+    );
+    await db.batch(rows);
+
+    const run = await hourly();
+
+    expect(run).toMatchObject({ sent: 1, held: 'budget' });
+    expect(anthropic.requests.filter((r) => r.kind === 'reading')).toHaveLength(1);
+  });
+
   test("seeds may spend half the day and no more, and weekly reads may spend what the seeds' share leaves unspent", async () => {
     // Half of $1 is the seeds' share, enough for one reading's reservation and not two.
     restore();
@@ -393,6 +458,8 @@ describe('the budget', () => {
     expect(seeds).toMatchObject({ sent: 1, waiting: 1, held: 'budget' });
     await db.prepare('DELETE FROM model_pending').run();
     await db.prepare('DELETE FROM model_spend').run();
+    // In the last hours of the UTC day.
+    clock = Date.UTC(2100, 3, 1, 19, 0, 0);
 
     await listing(INVITES);
     await listing(CONDITIONS, { ...LISTED, url: `https://github.com/${CONDITIONS}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' });
@@ -415,19 +482,30 @@ describe('the budget', () => {
 });
 
 describe('when it can not read', () => {
+  // A listing in every test here, so "pauses nothing" has something to pause.
+  beforeEach(async () => {
+    await listing(CONDITIONS, { ...LISTED, url: `https://github.com/${CONDITIONS}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' });
+  });
+
   test('with no key, nothing is staged, the log says so once a day, the hourly run calls nothing, and the rules still decide', async () => {
     restore();
     restore = setEnv({ POLICY_READER: 'shadow', MODEL_DAILY_BUDGET_USD: '20', ANTHROPIC_API_KEY: undefined });
 
+    const before = await listedAndPaused();
     const run = await crawlSeed(INVITES);
-    await consume([CONDITIONS]);
+    await consume([BANS_AI]);
+    const weekly = await week();
     await sendAndCollect();
 
     expect(run.proposed).toEqual([INVITES]);
+    expect(weekly.reread.read).toBe(1);
+    expect(weekly.reader.staged).toBe(0);
+    expect(await listedAndPaused()).toEqual({ ...before, finds: [INVITES] });
     expect(run.reader.staged).toBe(0);
     expect(await listPending(db)).toEqual([]);
     expect(anthropic.calls).toEqual([]);
-    expect(logged.filter((line) => line.includes('The ANTHROPIC_API_KEY secret is not set'))).toHaveLength(1);
+    // Once on the seeds' UTC day, for two reads, and once on the weekly read's.
+    expect(logged.filter((line) => line.includes('The ANTHROPIC_API_KEY secret is not set'))).toHaveLength(2);
   });
 
   test.each([
@@ -435,7 +513,6 @@ describe('when it can not read', () => {
     [500, 'a server error'],
     [529, 'overloaded'],
   ])('a batch the API refuses with %i (%s) stays pending for the next hourly run, and lists and pauses nothing', async (status) => {
-    await listing(CONDITIONS, { ...LISTED, url: `https://github.com/${CONDITIONS}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' });
     await consume([INVITES]);
     const before = await listedAndPaused();
     anthropic.fail('createBatch', { status });
@@ -501,6 +578,91 @@ describe('when it can not read', () => {
     expect(sameDay).toMatchObject({ held: 'stopped', sent: 0 });
     expect(nextDay).toMatchObject({ sent: 1 });
     expect(await listedAndPaused()).toEqual(before);
+  });
+
+  test('a batch the API no longer knows sends its readings again', async () => {
+    anthropic.holdBatches = true;
+    await consume([BANS_AI]);
+    await hourly();
+    const batch = Object.keys(anthropic.state.batches)[0] ?? '';
+    Reflect.deleteProperty(anthropic.state.batches, batch);
+    anthropic.holdBatches = false;
+    clock += HOUR;
+
+    const run = await hourly();
+
+    expect(run).toMatchObject({ collected: 0, sent: 1 });
+    expect(logged.some((line) => line.includes(`found no batch ${batch}`))).toBe(true);
+  });
+
+  test.each([
+    ['a server error', () => { anthropic.fail('getBatch', { status: 500 }); }],
+    ['no answer', () => { anthropic.fail('getBatch', { status: 503 }); }],
+  ])('asking after a batch that gets %s leaves it for the next hourly run, and lists and pauses nothing', async (_, failure) => {
+    await consume([BANS_AI]);
+    await hourly();
+    const before = await listedAndPaused();
+    failure();
+    clock += HOUR;
+
+    const failed = await hourly();
+    clock += HOUR;
+    const next = await hourly();
+
+    expect(failed).toMatchObject({ collected: 0, read: 0, held: 'api' });
+    expect(next).toMatchObject({ collected: 1, read: 1 });
+    expect(await listedAndPaused()).toEqual(before);
+  });
+
+  test("an API that can't be reached while collecting leaves the batch for the next hourly run", async () => {
+    await consume([BANS_AI]);
+    await hourly();
+    const network = fetch;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+      new Request(input, init).url.startsWith(anthropic.url) ? Promise.reject(new TypeError('Network connection lost.')) : network(input, init),
+    );
+    clock += HOUR;
+
+    const failed = await hourly();
+    vi.stubGlobal('fetch', network);
+    clock += HOUR;
+    const next = await hourly();
+
+    expect(failed).toMatchObject({ collected: 0, held: 'api' });
+    expect(failed?.stopped).toContain("couldn't be reached");
+    expect(next).toMatchObject({ collected: 1, read: 1 });
+  });
+
+  test('one result that fails to keep is no verdict, and the rest of the run goes on', async () => {
+    await consume([BANS_AI, 'sample-policies/mixed-signals']);
+    await hourly();
+    await consume([INVITES]);
+    await db.prepare('ALTER TABLE model_readings RENAME TO model_readings_away').run();
+    clock += HOUR;
+    let run;
+    try {
+      run = await hourly();
+    } finally {
+      await db.prepare('ALTER TABLE model_readings_away RENAME TO model_readings').run();
+    }
+
+    expect(run).toMatchObject({ collected: 1, read: 0, sent: 1 });
+    expect(Object.values(run?.noVerdict ?? {}).reduce((a, b) => a + b, 0)).toBe(2);
+    expect(await listPending(db)).toHaveLength(1);
+  });
+
+  test('a reading in a batch that kept failing for 7 days is dropped, and its reservation released', async () => {
+    anthropic.holdBatches = true;
+    await consume([BANS_AI]);
+    await hourly();
+    const day = new Date(clock).toISOString().slice(0, 10);
+    clock += DROP_AFTER_MS + HOUR;
+
+    const run = await hourly();
+
+    expect(run?.dropped).toEqual([BANS_AI]);
+    expect(await listPending(db)).toEqual([]);
+    expect((await daySpend(db, day)).reserved).toBe(0);
   });
 
   test('a batch that has not ended stays in progress, and its readings wait', async () => {
@@ -596,6 +758,49 @@ describe('in shadow, a weekly read', () => {
 
     expect(run.reader).toMatchObject({ staged: 0, same: 1 });
     expect(readingsAsked()).toBe(1);
+  });
+
+  test("after GitHub renames the repo, the model's reading is kept under the project's name, and the policy change shows it", async () => {
+    await listing(INVITES);
+    await week();
+    await sendAndCollect();
+    const renamed = `${INVITES}-next`;
+    github.renameRepo(INVITES, renamed);
+    commit(renamed, { 'AI_POLICY.md': '# AI policy\n\nAgents may open pull requests on their own, on issues labeled `agent ready` or `help wanted`.\n' });
+
+    const run = await week();
+    await sendAndCollect();
+
+    expect(run.reread.changed).toEqual([INVITES]);
+    const kept = await getModelReading(db, INVITES);
+    const [change] = await listPolicyChanges(db, 'waiting');
+    expect(kept?.docsHash).toBe(change?.docsHash);
+    expect((await getModelRead(db, INVITES))?.docsHash).toBe(change?.docsHash);
+    const { item } = await queueItem('policy_change', INVITES);
+    expect(item.modelReading).toMatchObject({ docsHash: change?.docsHash });
+  });
+
+  test('that the model reads as changed is named in the log', async () => {
+    await listing(INVITES);
+    await week();
+    await sendAndCollect();
+    commit(INVITES, { 'AGENTS.md': '# Agents\n\nRun the tests before you open a pull request.\n' });
+    anthropic.answer(
+      { kind: 'reading', via: 'batch' },
+      {
+        output: {
+          statements: [{ path: 'AI_POLICY.md', startLine: 3, endLine: 3, quote: QUOTE, about: 'welcomesAi', label: null, value: null, why: 'A welcome.' }],
+          tier: 'allows_with_conditions',
+          steering: [],
+          summary: 'Welcomes AI help.',
+        },
+      },
+    );
+
+    await week();
+    const { second } = await sendAndCollect();
+
+    expect(second?.wouldChange).toEqual([INVITES]);
   });
 
   test('that the model reads as a ban pauses nothing, and the log names it', async () => {

@@ -3,6 +3,7 @@ import type { DocsHash } from '@goodfirsttoken/core';
 import { anthropicApiKey, anthropicUrl, modelDailyBudgetUsd } from '../anthropic';
 import {
   countNoVerdict,
+  countUnsent,
   dayUse,
   dropBatch,
   dropPending,
@@ -27,6 +28,7 @@ import {
 import { readerStatus } from './model';
 import {
   DayBudget,
+  SHARE_NAMES,
   costOf,
   findTier,
   jsonOf,
@@ -66,6 +68,8 @@ export const DROP_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const BATCH_GIVE_UP_MS = 48 * 60 * 60 * 1000;
 /** How long the reader stops after the API refused its key or its request. */
 export const STOP_MS = 60 * 60 * 1000;
+/** The most bytes of JSON a kept reading may hold, under D1's limit on a row. */
+const MAX_KEPT_BYTES = 1_500_000;
 /** Weekly reads in a row with no verdict before a listing made from a policy is reported. */
 export const NO_VERDICTS_TO_REPORT = 3;
 
@@ -258,7 +262,12 @@ async function noVerdict(deps: BatchDeps, run: BatchRun, pending: Pending, why: 
 async function counted(deps: BatchDeps, run: BatchRun, pending: Pending, reading: ModelReading): Promise<void> {
   const files = await stagedFiles(deps.db, pending.id);
   const fingerprint = await readerFingerprint(files, reading, pending.vouch);
-  await keepModelReading(deps.db, { repo: pending.repo, reading: storedReading(reading, pending.docsHash), fingerprint }, deps.now());
+  const stored = storedReading(reading, pending.docsHash);
+  if (new TextEncoder().encode(JSON.stringify(stored)).length > MAX_KEPT_BYTES) {
+    await noVerdict(deps, run, pending, 'a reading too large to keep');
+    return;
+  }
+  await keepModelReading(deps.db, { repo: pending.repo, reading: stored, fingerprint }, deps.now());
   run.read += 1;
   countAgreement(run, pending.rulesTier, reading);
   if (pending.purpose === 'seed') {
@@ -346,7 +355,19 @@ async function collect(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<
         // A reading dropped since, after 7 days of failing.
         if (pending === undefined) continue;
         held.delete(line.custom_id);
-        await collectOne(deps, run, pending, line.result);
+        try {
+          await collectOne(deps, run, pending, line.result);
+        } catch (error) {
+          // One result the Worker fails on can't hold back the rest, or every later run.
+          if (error instanceof Anthropic.APIError) throw error;
+          console.error(`The policy reader couldn't keep its reading of ${pending.repo}, so it is no verdict.`, error);
+          run.noVerdict['an error keeping it'] = (run.noVerdict['an error keeping it'] ?? 0) + 1;
+          try {
+            await settlePending(deps.db, pending, 0, { retry: false });
+          } catch (settling) {
+            console.error(`The policy reader couldn't drop its reading of ${pending.repo}.`, settling);
+          }
+        }
       }
       for (const pending of held.values()) {
         run.retried += 1;
@@ -399,17 +420,25 @@ async function dropStale(deps: BatchDeps, run: BatchRun): Promise<void> {
 async function send(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<void> {
   const now = deps.now();
   const day = utcDay(now);
-  const budget = new DayBudget(modelDailyBudgetUsd(), await dayUse(deps.db, day));
-  const unsent = await listUnsent(deps.db, MAX_BATCH_READINGS * 4);
+  const budget = new DayBudget(modelDailyBudgetUsd(), await dayUse(deps.db, day), now);
+  const unsent = await countUnsent(deps.db);
   const chosen: { pending: Pending; request: ReaderRequest; reservedUsd: number }[] = [];
-  for (const pending of unsent) {
-    if (chosen.length >= MAX_BATCH_READINGS) break;
-    const request = policyRequest(await stagedFiles(deps.db, pending.id));
-    const reservedUsd = reservationOf(request, { batch: true });
-    if (budget.reserve(pending.share, reservedUsd)) chosen.push({ pending, request, reservedUsd });
-    else run.held = 'budget';
+  // Each share in turn, so one that is spent holds no other back. A share
+  // stops at its first reading the budget can't hold, so the oldest goes first.
+  for (const share of SHARE_NAMES) {
+    const room = MAX_BATCH_READINGS - chosen.length;
+    if (room <= 0) break;
+    for (const pending of await listUnsent(deps.db, share, room)) {
+      const request = policyRequest(await stagedFiles(deps.db, pending.id));
+      const reservedUsd = reservationOf(request, { batch: true });
+      if (!budget.reserve(share, reservedUsd)) {
+        run.held = 'budget';
+        break;
+      }
+      chosen.push({ pending, request, reservedUsd });
+    }
   }
-  run.waiting = unsent.length - chosen.length;
+  run.waiting = unsent - chosen.length;
   if (chosen.length === 0) return;
   let batch;
   try {
@@ -418,7 +447,7 @@ async function send(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<voi
     });
   } catch (error) {
     run.held = 'api';
-    run.waiting = unsent.length;
+    run.waiting = unsent;
     await stopFor(deps, run, refusalOf(error, now), 'sending a batch');
     return;
   }
@@ -442,11 +471,13 @@ async function send(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<voi
  */
 export async function runReader(deps: BatchDeps): Promise<BatchRun | null> {
   const now = deps.now();
+  const run = newBatchRun();
+  // First, and whatever else happens, so no staged docs are held past 7 days.
+  await dropStale(deps, run);
   const status = await readerStatus(deps.db, now);
   if (!status.reads) return null;
   const key = anthropicApiKey();
   if (key === null) return null;
-  const run = newBatchRun();
   const stoppedUntil = Number(await getReaderState(deps.db, STOPPED_UNTIL));
   if (Number.isFinite(stoppedUntil) && stoppedUntil > now) {
     run.held = 'stopped';
@@ -454,7 +485,6 @@ export async function runReader(deps: BatchDeps): Promise<BatchRun | null> {
   } else {
     const api = client(key);
     if (await collect(deps, run, api)) {
-      await dropStale(deps, run);
       await send(deps, run, api);
     } else {
       run.held = 'api';

@@ -3740,14 +3740,16 @@ project's files as before, and the rules read them. Then, for the model:
 **The hourly run.** On the crawler's cron, after it queues its repos, the
 reader's run:
 
-1. Asks after each batch it sent. For one that ended, it reads the results
+1. Drops the pending readings that kept failing for 7 days, with their
+   files, and the log names them. It does this first, even when the model
+   reads nothing, so no repo's docs are held past 7 days.
+2. Asks after each batch it sent. For one that ended, it reads the results
    by `custom_id`, which is the pending reading's ID, so their order
    doesn't matter. It checks each reading with the reader's core: every
    statement against the files, then the tier from the ones that check out.
    It keeps a reading that counts. A reading that comes back after a newer
-   one was staged for its repo is dropped.
-2. Drops the pending readings that kept failing for 7 days, with their
-   files, and the log names them.
+   one was staged for its repo is dropped. A result the Worker fails to
+   keep is no verdict, and the rest go on.
 3. Sends the pending readings as one batch through the Message Batches API,
    at most 50, as many as the day's budget allows.
 
@@ -3758,9 +3760,13 @@ price, and `max_tokens` at the output price, at batch prices. It settles to
 the real cost, from the result's usage, when the result comes back. Each
 kind of read has a share of the day: admin seeds 50%, requested repos 20%,
 `register_project` 10%, and the last 20% only for weekly reads and second
-readings for a pause, which may also spend what the other shares left
-unspent. A reading past its share waits for the next UTC day. Only seeds
-and weekly reads use the reader so far.
+readings for a pause. From 18:00 UTC, weekly reads may also spend what the
+other shares left unspent, up to the whole day, so before then a seed
+always finds its half. A reading past its share waits for a later run, and
+at the latest for the next UTC day. Each share is sent in turn, so one that
+is spent holds no other back. Only seeds and weekly reads use the reader so
+far. A reading is kept under the project's name for a weekly read, so a
+repo GitHub renamed keeps its reading.
 
 **When it can't read.** It pauses nothing and lists nothing for a repo the
 model hasn't read.

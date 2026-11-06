@@ -3614,7 +3614,14 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   result settles it, on the day it was reserved, to what its usage says it
   cost. A request that didn't run settles to nothing and waits for a later
   batch. So nothing in flight can overspend, and a reading that comes back
-  the next UTC day counts against the day it was sent.
+  the next UTC day counts against the day it was sent. The input estimate
+  is the larger of one token for every three characters and one for every
+  three UTF-8 bytes, so docs in a script that takes a token a character
+  aren't reserved short.
+- **One result can't stall the run.** An error keeping one result, like a
+  D1 error, makes that reading no verdict, and the run goes on. A kept
+  reading over 1,500,000 bytes of JSON is no verdict too, under D1's 2 MB
+  row limit.
 - **Text held, and for how long.** `model_staged_files` holds a pending
   reading's files, the repo's public docs, until its reading is done, and
   at most 7 days. `model_readings` keeps only what the admin queue shows:

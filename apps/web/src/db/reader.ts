@@ -233,13 +233,18 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
   return id;
 }
 
-/** The pending readings not in a batch, the one staged first first, at most `limit`. */
-export async function listUnsent(db: D1Database, limit: number): Promise<Pending[]> {
+/** A share's pending readings not in a batch, the one staged first first, at most `limit`. */
+export async function listUnsent(db: D1Database, share: Share, limit: number): Promise<Pending[]> {
   const { results } = await db
-    .prepare('SELECT * FROM model_pending WHERE batch_id IS NULL AND replaced = 0 ORDER BY staged_at, id LIMIT ?')
-    .bind(limit)
+    .prepare('SELECT * FROM model_pending WHERE batch_id IS NULL AND replaced = 0 AND share = ? ORDER BY staged_at, id LIMIT ?')
+    .bind(shareOf(share), limit)
     .all<PendingRow>();
   return results.map(toPending);
+}
+
+/** How many pending readings wait to be sent. */
+export async function countUnsent(db: D1Database): Promise<number> {
+  return (await db.prepare('SELECT COUNT(*) AS n FROM model_pending WHERE batch_id IS NULL AND replaced = 0').first<number>('n')) ?? 0;
 }
 
 /** Every pending reading, for a test or the log. */

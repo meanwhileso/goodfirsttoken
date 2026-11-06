@@ -1,13 +1,16 @@
 import { describe, expect, test } from 'vitest';
-import { DayBudget, docsBytes, docsHash, noUse, policyRequest, reservationOf, utcDay } from '../../../src/crawl/reader';
+import { DayBudget, LATE_HOUR, docsBytes, docsHash, noUse, policyRequest, reservationOf, utcDay } from '../../../src/crawl/reader';
 import type { PolicyFile } from '../../../src/crawl/rules';
 
 // The model reader's day budget and docs hash, with no network. The
 // crawler's tests (test/crawl/model-reader.test.ts) run them end to end.
 
+const MIDDAY = Date.UTC(2100, 3, 1, 12);
+const LATE = Date.UTC(2100, 3, 1, LATE_HOUR);
+
 describe('the day budget', () => {
   test("each share but the weekly reads' may spend its part of the day and no more", () => {
-    const budget = new DayBudget(20, noUse());
+    const budget = new DayBudget(20, noUse(), MIDDAY);
 
     expect(budget.reserve('seeds', 9.5)).toBe(true);
     expect(budget.reserve('seeds', 0.6)).toBe(false);
@@ -17,19 +20,33 @@ describe('the day budget', () => {
     expect(budget.reserve('register', 0.1)).toBe(false);
   });
 
-  test('weekly reads may spend what the others left unspent, and the day as a whole is the limit', () => {
-    const budget = new DayBudget(20, { ...noUse(), seeds: 2 });
+  test("before the last hours of the UTC day, weekly reads spend their fifth, and can't take the seeds' half", () => {
+    const budget = new DayBudget(20, noUse(), MIDDAY);
+
+    expect(budget.reserve('weekly', 4)).toBe(true);
+    expect(budget.reserve('weekly', 0.1)).toBe(false);
+    expect(budget.reserve('seeds', 10)).toBe(true);
+  });
+
+  test('from the last hours of the UTC day, weekly reads may spend what the others left unspent, and the day as a whole is the limit', () => {
+    const budget = new DayBudget(20, { ...noUse(), seeds: 2 }, LATE);
 
     expect(budget.reserve('weekly', 17.5)).toBe(true);
     expect(budget.reserve('weekly', 0.6)).toBe(false);
-    // What weekly reads took first, the seeds can't have.
-    expect(budget.reserve('seeds', 1)).toBe(false);
+    expect(new DayBudget(20, noUse(), LATE - 1).allows('weekly', 4.1)).toBe(false);
   });
 
   test('what was spent and reserved earlier in the day counts', () => {
-    expect(new DayBudget(20, { ...noUse(), seeds: 9.8 }).allows('seeds', 0.3)).toBe(false);
-    expect(new DayBudget(20, { ...noUse(), seeds: 10, requests: 4, register: 2, weekly: 3.9 }).allows('weekly', 0.2)).toBe(false);
-    expect(new DayBudget(0, noUse()).allows('weekly', 0.01)).toBe(false);
+    expect(new DayBudget(20, { ...noUse(), seeds: 9.8 }, MIDDAY).allows('seeds', 0.3)).toBe(false);
+    expect(new DayBudget(20, { ...noUse(), seeds: 10, requests: 4, register: 2, weekly: 3.9 }, LATE).allows('weekly', 0.2)).toBe(false);
+    expect(new DayBudget(0, noUse(), LATE).allows('weekly', 0.01)).toBe(false);
+  });
+
+  test('text in scripts that take more tokens a character reserves more', () => {
+    const latin = policyRequest([{ path: 'AGENTS.md', kind: 'agents', text: 'a'.repeat(30_000) }]);
+    const chinese = policyRequest([{ path: 'AGENTS.md', kind: 'agents', text: '代'.repeat(30_000) }]);
+
+    expect(reservationOf(chinese, { batch: true })).toBeGreaterThan(reservationOf(latin, { batch: true }));
   });
 
   test("a request reserves the most it could cost: max_tokens at the batch output price, and more for its input", () => {
