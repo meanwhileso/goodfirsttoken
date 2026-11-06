@@ -446,6 +446,25 @@ function describeModelReading(reading: ModelReading): string {
   );
 }
 
+/**
+ * The model reader's suggested tags for a find, from its label check, in
+ * shadow, beside the rules': each with its open issue count, the tags it
+ * would set, and how many names it gave that were dropped. Label names are
+ * the repo's text, quoted as the repo spells them.
+ */
+function describeModelTags(labels: NonNullable<ModelReading['labels']>): string {
+  const names = (tags: readonly string[]) => (tags.length === 0 ? 'none' : tags.map((tag) => JSON.stringify(tag)).join(', '));
+  const suggested =
+    labels.suggestedTags.length === 0
+      ? 'none'
+      : labels.suggestedTags.map((tag) => `${JSON.stringify(tag.name)} (${tag.openIssues.toLocaleString('en-US')} open)`).join(', ');
+  const dropped =
+    labels.dropped === 0
+      ? ''
+      : ` ${plural(labels.dropped, 'label')} the model named ${labels.dropped === 1 ? "wasn't one" : "weren't ones"} it was sent, or rested on a statement it wasn't sent, and ${labels.dropped === 1 ? 'was' : 'were'} dropped.`;
+  return `the model reader's suggested tags from the same labels, in shadow, each name in quotes as the repo spells it: ${suggested}. The tags it would set: ${names(labels.tags)}.${dropped}`;
+}
+
 /** A pause Good First Token made on its own, with why, and how to decide it. */
 function renderPause(item: QueueItem): string {
   const pause = item.pause;
@@ -516,6 +535,7 @@ function renderQueueItem(item: QueueItem): string {
       `labels that could mean ready for help, each name in quotes as the repo spells it: ${item.suggestedTags
         .map((tag) => `${JSON.stringify(tag.name)} (${tag.openIssues.toLocaleString('en-US')} open)`)
         .join(', ')}`,
+    item.kind === 'candidate' && item.modelReading?.labels && describeModelTags(item.modelReading.labels),
     item.kind === 'candidate'
       ? lines(
           'suggested settings, the rest at their defaults, with label names in quotes:',

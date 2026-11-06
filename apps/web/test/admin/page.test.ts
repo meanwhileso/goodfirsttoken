@@ -16,6 +16,7 @@ import {
   getIssueSync,
   getProject,
   getWaitingRemoval,
+  keepModelReading,
   listIssues,
   savePerson,
 } from '../../src/db';
@@ -212,6 +213,61 @@ describe('who sees /admin', () => {
     expect(html.indexOf('The paragraph starts earlier in the file.')).toBeLessThan(html.indexOf('Step 9 runs here.'));
     expect(html.indexOf('The paragraph goes on in the file.')).toBeGreaterThan(html.indexOf('Claude may help.'));
     expect(html).toContain(' more in the files. Read them there.');
+  });
+
+  test("an admin sees the model reader's suggested tags on a find, with open counts, beside the rules'", async () => {
+    const now = Date.now();
+    const docsHash = `docs-v1:${'a'.repeat(64)}`;
+    await addCandidate(
+      env.DB,
+      {
+        repo: BUNDLER,
+        facts: { stars: 12000, createdAt: now - 6 * 365 * 86_400_000, pushedAt: now - 7_200_000, ownerCreatedAt: now - 9 * 365 * 86_400_000 },
+        policy: { quote: 'Agents are welcome.', url: `https://github.com/${BUNDLER}/blob/main/AGENTS.md`, tier: 'invites_agents' },
+        settings: {},
+        suggestedTags: [{ name: 'help wanted', openIssues: 4 }],
+        docsHash,
+      },
+      now,
+    );
+    await keepModelReading(
+      env.DB,
+      {
+        repo: BUNDLER,
+        fingerprint: `v1:${'b'.repeat(64)}`,
+        reading: {
+          readerVersion: 'claude-opus-5-5/p1/s1',
+          docsHash,
+          tier: 'invites_agents',
+          modelTier: 'invites_agents',
+          agree: true,
+          statements: [],
+          dropped: 0,
+          steering: [],
+          droppedSteering: 0,
+          summary: '',
+          labels: {
+            tags: ['up-for-grabs'],
+            suggestedTags: [
+              { name: 'up-for-grabs', openIssues: 7 },
+              { name: 'good first issue', openIssues: 3 },
+            ],
+            dropped: 2,
+          },
+        },
+      },
+      now,
+    );
+    const browser = await signedIn('sample-admin');
+
+    const html = await (await browser.fetch('/admin')).text();
+
+    expect(html).toContain('labels that could mean ready for help');
+    expect(html).toContain("the model reader&#x27;s suggested tags from the same labels, in shadow");
+    expect(html).toMatch(/up-for-grabs<\/[a-z]+>(<!-- -->)?\s*<span class="mono small muted">7(<!-- -->)? open/);
+    expect(html).toMatch(/good first issue<\/[a-z]+>(<!-- -->)?\s*<span class="mono small muted">3(<!-- -->)? open/);
+    expect(html).toMatch(/the tags it would set: (<!-- -->)?up-for-grabs/);
+    expect(html).toMatch(/2(<!-- -->)? of the labels the model named weren(&#x27;|')t ones it was sent, or rested on a statement it\s+wasn(&#x27;|')t sent, and were dropped\./);
   });
 
   test("the page's server function gives someone who isn't an admin nothing, and asks GitHub nothing", async () => {

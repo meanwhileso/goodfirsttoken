@@ -9,7 +9,7 @@ import {
   stagePending,
   type ReadingPurpose,
 } from '../db';
-import { readsSame, docsBytes, MAX_DOCS_BYTES, utcDay, type Share } from './reader';
+import { readsSame, docsBytes, findTier, MAX_DOCS_BYTES, utcDay, type Share } from './reader';
 import { READER_VERSION } from './reader/version';
 import { RepoFailed } from './reads';
 import type { CrawlTier, PolicyFile, RepoLabel } from './rules';
@@ -130,9 +130,11 @@ interface Stage {
   files: readonly PolicyFile[];
   hash: DocsHash;
   rulesTier: CrawlTier;
+  /** For a label check on its own, the kept reading's output. */
+  labelsFor?: { readingOutput: unknown };
 }
 
-/** Stages a reading, with the repo's labels. False when GitHub didn't give the labels. */
+/** Stages a reading, or a label check on its own, with the repo's labels. False when GitHub didn't give the labels. */
 async function stage(deps: StageDeps, run: ReaderRun, reads: SharedReads, what: Stage): Promise<boolean> {
   const { repo } = what;
   if (repo.commit === null || repo.branch === null || repo.standing === null) return false;
@@ -162,6 +164,7 @@ async function stage(deps: StageDeps, run: ReaderRun, reads: SharedReads, what: 
       vouch: repo.vouch,
       labels,
       files: what.files,
+      ...(what.labelsFor === undefined ? {} : { labelsFor: what.labelsFor }),
     },
     deps.now(),
   );
@@ -182,7 +185,8 @@ function tooBig(run: ReaderRun, repo: string, files: readonly PolicyFile[]): boo
 
 /**
  * Decides whether the model reads a seed's docs, and stages them when it
- * does. Docs it read before with this reader version cost nothing. A seed
+ * does. Docs it read before with this reader version cost no reading, and
+ * when that reading would make a find, they get a fresh label check. A seed
  * whose rejected find has the same docs stays out. Past the size cap, or for
  * a seed that takes no outside pull requests, the model reads nothing. Then
  * it reads the labels, which the rules' find reads too, and stages both.
@@ -198,8 +202,20 @@ export async function stageSeed(
     const { repo, files, hash } = what;
     if (files.length === 0) return;
     if (tooBig(run, repo.name, files)) return;
-    if (readsSame(await getModelReading(deps.db, repo.name), hash)) {
+    const kept = await getModelReading(deps.db, repo.name);
+    if (readsSame(kept, hash)) {
       run.cacheHits += 1;
+      // A reading that would make a find gets a fresh label check, from its kept output, with no new reading,
+      // unless the seed stays out: its rejected find has the same docs, or it takes no outside pull requests.
+      if (
+        kept !== null &&
+        kept.output !== null &&
+        findTier(kept.reading) !== null &&
+        (await lastRejectedFind(deps.db, repo.name))?.docsHash !== hash &&
+        (await reads.listable(repo.name)) === null
+      ) {
+        await stage(deps, run, reads, { ...what, key: repo.name, purpose: 'seed', share: 'seeds', labelsFor: { readingOutput: kept.output } });
+      }
       return;
     }
     if ((await lastRejectedFind(deps.db, repo.name))?.docsHash === hash) {
