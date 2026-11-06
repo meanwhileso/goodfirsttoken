@@ -166,9 +166,29 @@ PR with GitHub reads, and records them. The last item removes the server's write
 | [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | [#134](https://github.com/meanwhileso/goodfirsttoken/pull/134) |
 | [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | [#135](https://github.com/meanwhileso/goodfirsttoken/pull/135) |
 
+## M11 Model policy reader
+
+M10 is the proposed add-a-repo spec, in [#151](https://github.com/meanwhileso/goodfirsttoken/pull/151).
+
+The approved [model policy reader spec](docs/specs/model-policy-reader.md) has Claude Opus 5.5 read a
+repo's AI policy and its labels, with the file and lines behind every claim. The Worker checks each
+claim against the files. An admin still lists every project, apart from requested repos under the
+add-a-repo spec. The crawler stops searching, and new repos come from maintainers, admins, and donors'
+requests. #171, #172, and #173 can run at the same time.
+
+| Issue | Item | Blocked by | Done in |
+|---|---|---|---|
+| [#171](https://github.com/meanwhileso/goodfirsttoken/issues/171) | Stop the crawler's searches, and read seeds monthly | Nothing | |
+| [#172](https://github.com/meanwhileso/goodfirsttoken/issues/172) | Move the policy corpus into shared cases, and build the reader's core and the eval | Nothing | |
+| [#173](https://github.com/meanwhileso/goodfirsttoken/issues/173) | Add the optional Anthropic key, the reader's variables, and the Anthropic API fake | Nothing | |
+| [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | |
+| [#175](https://github.com/meanwhileso/goodfirsttoken/issues/175) | Check labels with the model, in shadow | #174 | |
+| [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | |
+| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | |
+
 ## Dependency graph
 
-An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
+An arrow points from an item to the items it unblocks. Colors mark milestones: M1 Foundation, M2 Sign-in, M3 Projects, M4 Claims and live feeds, M5 Skills and harnesses, M6 Public site, M7 Policy crawler, M8 Launch readiness, M9 Agent-side submits, M11 Model policy reader. Arrows that another path already implies are left out, so the tables above are the full list of blockers. Done items have a heavy border.
 
 ```mermaid
 flowchart TD
@@ -181,6 +201,7 @@ flowchart TD
   classDef m7 fill:#FFEBE9,stroke:#57606A,color:#0E1116
   classDef m8 fill:#EEF1F4,stroke:#57606A,color:#0E1116
   classDef m9 fill:#E7F5F2,stroke:#57606A,color:#0E1116
+  classDef m11 fill:#FCEFF6,stroke:#57606A,color:#0E1116
   classDef done stroke:#1A7F37,stroke-width:3px
   n3["#3 Workspace, app, and CI"]:::m1
   n4["#4 Core schemas"]:::m1
@@ -237,6 +258,13 @@ flowchart TD
   n127["#127 Compare page links"]:::m9
   n128["#128 Skills push and open"]:::m9
   n129["#129 Remove server writes"]:::m9
+  n171["#171 Stop searches"]:::m11
+  n172["#172 Corpus, core, and eval"]:::m11
+  n173["#173 Key and fake"]:::m11
+  n174["#174 Shadow reads"]:::m11
+  n175["#175 Label check"]:::m11
+  n176["#176 Model decides"]:::m11
+  n177["#177 Remove the rules"]:::m11
   n3 --> n4
   n3 --> n6
   n3 --> n7
@@ -309,6 +337,11 @@ flowchart TD
   n126 --> n128
   n127 --> n128
   n128 --> n129
+  n172 --> n174
+  n173 --> n174
+  n174 --> n175
+  n175 --> n176
+  n176 --> n177
   n33 --> n34
   class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34 done
 ```
