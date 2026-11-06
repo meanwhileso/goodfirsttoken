@@ -1,33 +1,34 @@
 {
-  "readerVersion": "claude-opus-5-5/p4/s1",
-  "ranAt": "2026-11-06T21:59:56.959Z",
+  "readerVersion": "claude-opus-5-5/p6/s1",
+  "ranAt": "2026-11-06T22:17:06.424Z",
   "runs": 3,
-  "cases": 463,
-  "passes": true,
-  "cost": 7.32,
+  "cases": 465,
+  "passes": false,
+  "cost": 7.26,
   "bar": [
     {
       "bar": 1,
       "name": "Bans",
-      "pass": true,
-      "score": "295 of 295",
-      "failed": []
+      "pass": false,
+      "score": "284 of 285",
+      "failed": [
+        "ban/r5-3/welcome"
+      ]
     },
     {
       "bar": 2,
       "name": "False bans",
       "pass": true,
-      "score": "0 of 50",
+      "score": "0 of 50, and 0 of 109 other cases that expect a welcome",
       "failed": []
     },
     {
       "bar": 3,
       "name": "Tiers",
       "pass": true,
-      "score": "96.0% of welcoming, 2 of 2 with nothing about AI, 4 of 4 written for the model",
+      "score": "98.0% of welcoming, 2 of 2 with nothing about AI, 4 of 4 written for the model",
       "failed": [
-        "welcoming/05",
-        "welcoming/16"
+        "welcoming/03"
       ]
     },
     {
@@ -41,7 +42,7 @@
       "bar": 5,
       "name": "Evidence",
       "pass": true,
-      "score": "99.9% of 2502 statements",
+      "score": "99.9% of 2463 statements",
       "failed": [
         "real/meanwhileso/goodfirsttoken"
       ]
@@ -64,10 +65,9 @@
       "bar": 8,
       "name": "Agreement",
       "pass": true,
-      "score": "99.6%",
+      "score": "99.8%",
       "failed": [
-        "form/f2-label-scope/safe-1",
-        "settings/kept-from-ai"
+        "ban/r5-3/welcome"
       ]
     },
     {
