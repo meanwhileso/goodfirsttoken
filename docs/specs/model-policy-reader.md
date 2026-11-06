@@ -74,6 +74,9 @@ The owner answered these on November 5, 2026:
     for repos with no AI words, to cut the cost of the search. With the
     search gone, it goes. The model reads every repo the crawler reads,
     and no word list decides anything.
+11. **No waiting to remove the rules.** Once the eval passes, the model
+    decides and the rules' classification code goes, with no month of
+    running both.
 
 ## What changes
 
@@ -862,8 +865,9 @@ them.
   so. A ban only the rules read pauses nothing.
 - **When the API is down**, nothing falls back to the rules, since the
   rules' false bans are why this exists. The crawler waits.
-- **After the switch has run a month** with no pause an admin lifted as
-  wrong, the rules' classification code goes. The word list stays, for
+- **Right after the switch**, the rules' classification code goes, in
+  the next item. The owner chose to switch over once the eval passes,
+  with no month of watching. The word list stays, for
   the admin's net and the fingerprint's passages. `meansReady` stays, as
   `register_project`'s fallback. The corpus stays, as eval
   cases. Issues
@@ -883,8 +887,8 @@ ROADMAP.md lists these as M11, issues #171 to #177.
 2. **Move the corpus into shared cases, and build the reader's core and
    the eval harness.** The core is the requests, the schemas, the checks,
    the tier, and the fingerprint, with no network, so the eval runs the
-   code the Worker will. No change to the Worker. Run it against the first prompt and record the
-   result.
+   code the Worker will. No change to the Worker. Run it against the
+   first prompt and record the result.
 3. **Add the key, the variables, and the fake.** `ANTHROPIC_API_KEY` as an
    optional secret, `ANTHROPIC_API_URL`, `POLICY_READER` set to `rules`,
    and `MODEL_DAILY_BUDGET_USD`. `packages/anthropic-fake` in `pnpm dev`
@@ -897,8 +901,8 @@ ROADMAP.md lists these as M11, issues #171 to #177.
    log reports agreement, cost, and GitHub calls.
 5. **Check labels with the model**, in `shadow` too, with label
    descriptions in the label read.
-6. **Switch to `model`** in staging, then production, once the eval passes
-   and the owner has read the shadow numbers. Before the switch, the
+6. **Switch to `model`** in staging, then production, once the eval
+   passes. Before the switch, the
    shadow readings of every listed project show which ones the switch
    would pause, since a new reader version that reads a ban pauses a
    listing made from a policy. This adds the two-reading pause, the new
@@ -907,9 +911,9 @@ ROADMAP.md lists these as M11, issues #171 to #177.
    landed.
    `docs/how-it-works.md` and the threat model in `docs/architecture.md`
    change with it.
-7. **Remove the rules' classification code** after a month, keeping the
-   word list, `meansReady`, and the cases, and drop `POLICY_READER`. Close
-   #76 and #77 unbuilt.
+7. **Remove the rules' classification code** right after item 6, keeping
+   the word list, `meansReady`, and the cases, and drop `POLICY_READER`.
+   Close #76 and #77 unbuilt.
 
 ## What the implementation touches
 

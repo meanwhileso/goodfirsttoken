@@ -183,8 +183,8 @@ requests. #171, #172, and #173 can run at the same time.
 | [#173](https://github.com/meanwhileso/goodfirsttoken/issues/173) | Add the optional Anthropic key, the reader's variables, and the Anthropic API fake | Nothing | |
 | [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | |
 | [#175](https://github.com/meanwhileso/goodfirsttoken/issues/175) | Check labels with the model, in shadow | #174 | |
-| [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, a passing eval, and the owner's read of the shadow numbers | |
-| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, after a month | |
+| [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | |
+| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | |
 
 ## Dependency graph
 
