@@ -907,8 +907,9 @@ survives a restart.
   happens, one feed event as JSON per message. A call's answer doesn't wait
   for its events to reach the watchers.
 - A watcher that reconnects sends the ID of the last event it saw as
-  `since`, and first gets every event after that one. With no `since`, or
-  one the room never sent, it first gets the whole history.
+  `since`, and first gets the events after that one, up to the newest
+  1,000 of them. With no `since`, or one the room doesn't keep, it first
+  gets the newest 100. A blocked donor's events don't count toward either.
 - A blocked donor's events are left out, and every event while the
   do-not-list covers the issue's repo, as [Live feeds](#live-feeds) says.
 - A room can sleep with watchers connected. They stay connected, and get the
@@ -4044,7 +4045,8 @@ homepage's feed.
   with every event behind it, a minute later, then after 2, 4, 8, 16, and 32
   minutes, then every hour, until the queue takes it. A send that never
   answers is tried again a minute after it started. So no event is lost on
-  the way, and the room's own history has it all along.
+  the way: the room keeps each event in its outbox until the queue takes
+  it.
 - The queue's consumer delivers each event to the homepage's feed, the feed
   of the project the claim was made in, by its code repo, and the feed of
   the claimant, by GitHub ID. The queue waits at most a second to fill a
@@ -4066,15 +4068,21 @@ homepage's feed.
 - On Cloudflare's Workers Free plan, a queue keeps a message 24 hours. A
   feed that fails for longer than that loses those messages: they are
   deleted, and never reach the dead-letter queue.
-- The room keeps every event, whatever happens to the queue.
+- The room keeps each event in its outbox until the queue takes it,
+  whatever happens to the queue.
 - Queues can deliver a message twice. A feed ignores an event it keeps, or
   got in the last 7 days, so it never shows an event twice.
 
 **History**
 
 - A feed keeps its newest 1,000 events, through restarts. Older ones are
-  dropped as new ones come, so a feed stays small however long it runs. The
-  issue room keeps its whole history.
+  dropped as new ones come, so a feed stays small however long it runs.
+- An issue room keeps every change of state, the newest 20 lines of each
+  claim, which are all its lane shows, and its newest 1,000 events,
+  blocked donors' included. Each post deletes the lines older than those.
+  So a donor who posts every 10 seconds for days leaves the room holding
+  about 1,000 events and 20 lines a claim, and a quiet claim keeps its
+  lane however much another posts.
 - A feed also counts its events by the UTC day they happened and by
   claimant, and keeps each day's count for a week. A copy it ignores isn't
   counted. So a day's count holds however many of the day's events the feed
@@ -4164,8 +4172,8 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   the event as it was.
 - `?since=<event ID>` backfills, with the ID from a text line's second
   column or an `.ndjson` line. The stream starts with the events after that
-  one, as a watcher's `since` does. Without it, a feed's stream starts with
-  the newest 100 events, and an issue's with its whole history.
+  one, as a watcher's `since` does. Without it, a stream starts with the
+  newest 100 events, an issue's too.
 - A stream closes an hour after it opened, and when its feed or room closes
   the socket, as a deploy can. The reader reconnects with `since`.
 - A reader that leaves a line untaken for a minute is too slow. The stream
@@ -4210,9 +4218,9 @@ the [views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 - The socket is the feed's or the room's own watcher, as under
   [Live feeds](#live-feeds) and [the issue room](#the-issue-room). Each
   message is one feed event as JSON, the same object as an `.ndjson` line.
-  First come the events after `?since=<event ID>`. With no `since`, or one
-  it doesn't know, a feed sends its newest 100 first, and an issue's room its
-  whole history. Then each new event, as it arrives.
+  First come the events after `?since=<event ID>`, up to 1,000. With no
+  `since`, or one it doesn't know, a feed or an issue's room sends its
+  newest 100 first. Then each new event, as it arrives.
 - Blocked donors' events, and events on issues the do-not-list covers, are
   left out, as for every watcher.
 - It stays open while the feed sleeps, and has no hour limit. It closes when
