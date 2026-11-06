@@ -132,9 +132,16 @@ function labelsOf(reading: ModelReading, about: StatementKind): { name: string; 
   return [...seen.values()];
 }
 
-/** The tier a PolicyReading takes: the worked-out tier, or allows_with_conditions for a find whose tiers differ. */
+/**
+ * The tier a PolicyReading takes: the find's tier, or else the worked-out
+ * tier. When the tiers disagree and the worked-out one is a listing tier,
+ * it takes allows_with_conditions, so a reading the model and the
+ * statements disagree on is never more open than reviewed pull requests.
+ */
 export function policyTier(reading: ModelReading): CrawlTier {
-  return findTier(reading) ?? reading.tier;
+  const found = findTier(reading);
+  if (found !== null) return found;
+  return !reading.agree && LISTING.includes(reading.tier) ? 'allows_with_conditions' : reading.tier;
 }
 
 /**

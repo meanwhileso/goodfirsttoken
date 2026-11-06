@@ -3525,8 +3525,8 @@ admin queue as crawl candidates. The rules are in
   `src/crawl/reader/` with the Message Batches API, scores the runs
   against the pass bar in
   [the model policy reader spec](specs/model-policy-reader.md#the-pass-bar),
-  and writes a summary to `evals/policy-reader.json`. Its full results go
-  to `apps/web/.eval/`, which git ignores, since they hold real repos'
+  and writes a summary to `apps/web/evals/policy-reader.json`. Its full
+  results go to `apps/web/.eval/`, which git ignores, since they hold real repos'
   text. `apps/web/scripts/ts-resolve.mjs` lets Node run the Worker's
   TypeScript, whose imports leave out the extension.
 - **The safe forms are whole sentences.** `judge` in `src/crawl/rules.ts`

@@ -93,7 +93,7 @@ if (dryRun) {
 /** A real repo as a case, with its files fetched, or guessed at in a dry run. */
 async function realCases(): Promise<PolicyCase[]> {
   const cases: PolicyCase[] = [];
-  for (const repo of REAL_REPOS) {
+  for (const repo of REAL_REPOS.filter((r) => wanted(`real/${r.repo}`))) {
     const files: PolicyFile[] = [];
     for (const { kind, path } of repo.files) {
       let text: string;
@@ -111,9 +111,10 @@ async function realCases(): Promise<PolicyCase[]> {
   return cases;
 }
 
-function chosen(cases: PolicyCase[]): PolicyCase[] {
-  const prefixes = args.only?.split(',').map((p) => p.trim()).filter((p) => p !== '');
-  return prefixes === undefined ? cases : cases.filter((c) => prefixes.some((p) => c.id.startsWith(p)));
+const prefixes = args.only?.split(',').map((p) => p.trim()).filter((p) => p !== '');
+/** Whether a case's ID is one --only asks for, so a real repo it leaves out isn't fetched. */
+function wanted(id: string): boolean {
+  return prefixes === undefined || prefixes.some((p) => id.startsWith(p));
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +230,7 @@ interface State {
   readerVersion: string;
   runs: number;
   cases: string;
-  batches: Partial<Record<'round1' | 'round2', string>>;
+  batches: Partial<Record<'round1' | 'round1Again' | 'round2' | 'round2Again', string>>;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -255,6 +256,29 @@ async function collect(client: Anthropic, id: string): Promise<Map<string, Batch
   return results;
 }
 
+/** Whether a result didn't run for a reason that may pass: it expired, was canceled, or errored with an overload or a server error. */
+function mayRunAgain(result: BatchResult | undefined): boolean {
+  if (result === undefined || result.type === 'expired' || result.type === 'canceled') return true;
+  return result.type === 'errored' && result.error.error.type !== 'invalid_request_error';
+}
+
+/** Sends the requests that didn't run once more, as the crawler would, and puts their results in place. */
+async function sendAgain(
+  client: Anthropic,
+  state: State,
+  key: 'round1Again' | 'round2Again',
+  planned: readonly Planned[],
+  results: Map<string, BatchResult>,
+  save: () => void,
+): Promise<void> {
+  const again = planned.filter((p) => mayRunAgain(results.get(p.customId)));
+  if (again.length === 0) return;
+  console.log(`${String(again.length)} requests didn't run. Sending them once more.`);
+  state.batches[key] ??= await sendBatch(client, again);
+  save();
+  for (const [id, result] of await collect(client, state.batches[key])) results.set(id, result);
+}
+
 /** The message a result holds, or why there is none. */
 function messageOf(result: BatchResult | undefined): { ok: true; message: Anthropic.Messages.Message } | { ok: false; reason: string } {
   if (result === undefined) return { ok: false, reason: 'no result' };
@@ -273,7 +297,7 @@ async function confirm(likely: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const cases = chosen([...CASES, ...(await realCases())]);
+  const cases = [...CASES.filter((c) => wanted(c.id)), ...(await realCases())];
   if (cases.length === 0) throw new Error('No case matches --only.');
   const round1 = roundOne(cases);
   const preview = roundTwo(cases, new Map());
@@ -310,6 +334,7 @@ async function main(): Promise<void> {
   state.batches.round1 ??= await sendBatch(client, round1);
   save();
   const first = await collect(client, state.batches.round1);
+  await sendAgain(client, state, 'round1Again', round1, first, save);
 
   const outcomes: CaseOutcome[] = cases.map((c) => ({ case: c, runs: Array.from({ length: RUNS }, (): RunOutcome => ({})) }));
   const readings = new Map<string, ModelReading>();
@@ -356,6 +381,7 @@ async function main(): Promise<void> {
     state.batches.round2 ??= await sendBatch(client, round2);
     save();
     const second = await collect(client, state.batches.round2);
+    await sendAgain(client, state, 'round2Again', round2, second, save);
     for (const planned of round2) read(planned, second.get(planned.customId));
   }
 

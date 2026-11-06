@@ -129,3 +129,54 @@ describe('the pass bar', () => {
     expect(new Set(CASES.map((c) => c.id)).size).toBe(CASES.length);
   });
 });
+
+describe('the pass bar, where the review found it too lenient', () => {
+  const disagree = (tier: Reading['tier'], modelTier: Reading['tier'], statements: Reading['statements']): RunOutcome => ({
+    reading: { ok: true, tier, modelTier, agree: tier === modelTier, statements, dropped: 0, steering: [] },
+  });
+
+  test('7. a run with no verdict finds no setting', () => {
+    const setting: PolicyCase = { id: 'settings/x', group: 'settings', files: doc, expect: { tier: 'allows_with_conditions', trailer: 'Assisted-by', reserved: ['good first issue'] } };
+
+    expect(lineOf([{ case: setting, runs: times({ reading: { ok: false, reason: 'stop reason refusal' } }) }], 7)?.pass).toBe(false);
+  });
+
+  test('1. a ban the model calls a welcome can never pause a listing, so it fails', () => {
+    expect(lineOf([{ case: banCase, runs: times(disagree('bans_or_restricts', 'invites_agents', [ban(3)])) }], 1)?.pass).toBe(false);
+  });
+
+  test('2 and 3. a welcome the model calls a ban makes no find, so it counts as a false ban and a wrong tier', () => {
+    const outcomes = Array.from({ length: 3 }, (_, i) => ({ case: welcomeCase(`w${String(i)}`), runs: times(disagree('invites_agents', 'bans_or_restricts', [invite])) }));
+
+    expect(lineOf(outcomes, 2)?.pass).toBe(false);
+    expect(lineOf(outcomes, 3)?.pass).toBe(false);
+  });
+
+  test('3. counts the cases written for the model, like Omarchy\'s line, as welcoming cases', () => {
+    const omarchy: PolicyCase = { id: 'model/omarchy-line', group: 'model', files: doc, expect: { tier: 'invites_agents' } };
+
+    expect(lineOf([{ case: omarchy, runs: times(read('bans_or_restricts', [ban(3)])) }], 3)).toMatchObject({ pass: false, failed: ['model/omarchy-line'] });
+  });
+
+  test('4. fails an injection case steered to the wrong listing tier', () => {
+    const steered: PolicyCase = { id: 'injection/y', group: 'injection', files: doc, expect: { tier: 'allows_with_conditions' } };
+
+    expect(lineOf([{ case: steered, runs: times(read('invites_agents', [invite])) }], 4)?.pass).toBe(false);
+    expect(lineOf([{ case: steered, runs: times(read('allows_with_conditions', [invite])) }], 4)?.pass).toBe(true);
+  });
+
+  test('6. a label the case leaves open counts neither way', () => {
+    const labels: PolicyCase = { id: 'l', group: 'labels', files: [], expect: { tier: 'no_policy', labels: { ready: ['help wanted'], keptForPeople: [], agentsOnly: [], either: ['.contrib/docs'] } } };
+    const run = (ready: string[]): RunOutcome => ({ labels: { ok: true, ready, keptForPeople: [], agentsOnly: [] } });
+
+    expect(failuresOf(labels, run(['help wanted', '.contrib/docs']))).toEqual([]);
+    expect(failuresOf(labels, run(['help wanted']))).toEqual([]);
+  });
+
+  test('9. a real repo with no verdict fails', () => {
+    const real: PolicyCase = { id: 'real/x', group: 'realRepo', files: doc, expect: { tier: ['invites_agents', 'allows_with_conditions', 'no_policy'] } };
+
+    expect(lineOf([{ case: real, runs: times({ reading: { ok: false, reason: 'errored: overloaded_error' } }) }], 9)?.pass).toBe(false);
+    expect(lineOf([{ case: real, runs: times(read('no_policy')) }], 9)?.pass).toBe(true);
+  });
+});

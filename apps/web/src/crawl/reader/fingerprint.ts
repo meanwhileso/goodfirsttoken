@@ -1,6 +1,6 @@
 import type { PolicyFingerprint } from '@goodfirsttoken/core';
 import { FINGERPRINT_VERSION, wordsOf } from '../fingerprint';
-import { namesAiByWordList, type PolicyFile, type PolicyReading } from '../rules';
+import { forAgents, namesAiByWordList, type PolicyFile, type PolicyReading } from '../rules';
 import { toPolicyReading, type ModelReading } from './reading';
 
 // The fingerprint of what a model reading decided, so a later read can tell
@@ -8,7 +8,9 @@ import { toPolicyReading, type ModelReading } from './reading';
 // reads. This decides whether the policy changed. It covers outcomes: the
 // tier, which conditions hold, the reserved and only label names, the
 // trailer, the CLA link, whether there is a vouch file or a canary, and the
-// passages with a sentence that names AI by the rules' word list. It leaves
+// passages with a sentence that names AI by the rules' word list. In a file
+// written for agents, that is as the rules read it there, plus each
+// passage that holds a kept statement, like the welcome. It leaves
 // out which lines the model cited and the welcome's quote, since a new
 // reading can cite other lines for the same policy. An edit to the welcome
 // still shows, since the welcome names AI and its paragraph is one of those
@@ -31,6 +33,15 @@ function names(labels: readonly { name: string }[]): string[] {
   return [...new Set(labels.map((label) => label.name.toLowerCase()))].sort();
 }
 
+/** Whether a passage the rules kept goes in the fingerprint. */
+function counts(passage: PolicyReading['aiSentences'][number], reading: ModelReading): boolean {
+  if (!forAgents(passage.file.kind)) return namesAiByWordList(passage.text);
+  if (namesAiByWordList(passage.text, true)) return true;
+  return reading.statements.some(
+    (s) => s.file.path === passage.file.path && s.sentences.some((sentence) => passage.text.includes(s.file.text.slice(sentence.start, sentence.end))),
+  );
+}
+
 /** What the fingerprint covers, before it is hashed. Exported for the tests. */
 export function fingerprintContent(files: readonly PolicyFile[], reading: ModelReading, vouch: string | null) {
   const policy: PolicyReading = toPolicyReading(files, reading);
@@ -47,7 +58,7 @@ export function fingerprintContent(files: readonly PolicyFile[], reading: ModelR
     vouched: vouch !== null,
     canary: policy.canary !== null,
     // Sorted, so moving a section reads the same.
-    passages: [...new Set(policy.aiSentences.filter((passage) => namesAiByWordList(passage.text)).map((passage) => wordsOf(passage.text)))].sort(),
+    passages: [...new Set(policy.aiSentences.filter((passage) => counts(passage, reading)).map((passage) => wordsOf(passage.text)))].sort(),
   };
 }
 

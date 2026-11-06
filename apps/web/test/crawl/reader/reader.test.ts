@@ -490,8 +490,8 @@ describe('the outcome fingerprint', () => {
       cla: null,
       vouched: false,
       canary: false,
-      // The heading names agents too, by the word list.
-      passages: ['agents may open pull requests here', 'agents md', 'claude should not add emojis'],
+      // In AGENTS.md, the welcome counts as a kept statement, and a rule for how Claude works there does not.
+      passages: ['agents may open pull requests here'],
     });
   });
 });
@@ -664,5 +664,76 @@ describe('the price of a call', () => {
 
   test('a recorded batch result costs what its usage says', () => {
     expect(costOf(message({}).usage, { batch: true })).toBeCloseTo((812 * 4 + 4_120 * 20 + 4_310 * 8) / 2_000_000);
+  });
+});
+
+describe('what the review found', () => {
+  test('a reading whose tiers disagree and make no find is never more open than reviewed', () => {
+    const invites = statement('AGENTS.md', 3, 3, 'Agents may open pull requests here.', 'welcomesAgents');
+    const read = reading([invites], 'bans_or_restricts');
+
+    expect(findTier(read)).toBeNull();
+    expect(toPolicyReading(FILES, read).tier).toBe('allows_with_conditions');
+    expect(readerSettings(read, [], null, null).settings.prMode).toBe('reviewed');
+  });
+
+  test('a label must appear in the quote as a whole name, not inside another word', () => {
+    const files = new Files([file('agents', 'Agents may only work on issues labeled `debugging`.')]);
+    const at = (label: string) => checkStatement(files, statement('AGENTS.md', 1, 1, 'Agents may only work on issues labeled `debugging`.', 'onlyLabel', { label }) as Statement, 0);
+
+    expect(at('bug')).toEqual({ ok: false, failure: 'label' });
+    expect(at('debugging').ok).toBe(true);
+  });
+
+  test('a CLA link is checked against the file as it is, so marks plain text drops still count', () => {
+    const files = new Files([file('contributing', 'Sign the CLA at https://cla.example.org/~legal/sign.')]);
+    const at = (value: string) => checkStatement(files, statement('CONTRIBUTING.md', 1, 1, 'Sign the CLA at https://cla.example.org/~legal/sign.', 'cla', { value }) as Statement, 0);
+
+    expect(at('https://cla.example.org/~legal/sign').ok).toBe(true);
+    expect(at('https://cla.example.org/legal/sign')).toEqual({ ok: false, failure: 'value' });
+  });
+
+  test('the fingerprint reads the same for a build step in CLAUDE.md that names Claude, and changes when the welcome there changes', async () => {
+    const claude = (text: string) => [file('claude', text)];
+    const welcome = 'Coding agents may open pull requests here.';
+    const before = claude(`# CLAUDE.md\n\n${welcome}\n`);
+    const step = claude(`# CLAUDE.md\n\n${welcome}\n\nClaude, run \`pnpm test\` before you commit.\n`);
+    const edited = claude('# CLAUDE.md\n\nCoding agents may open pull requests on any issue.\n');
+    const of = async (files: PolicyFile[], quote: string) => readerFingerprint(files, reading([statement('CLAUDE.md', 3, 3, quote, 'welcomesAgents')], 'invites_agents', [], files), null);
+
+    expect(await of(step, welcome)).toBe(await of(before, welcome));
+    expect(await of(edited, 'Coding agents may open pull requests on any issue.')).not.toBe(await of(before, welcome));
+  });
+
+  test('the fingerprint changes with the trailer and with the CLA link', async () => {
+    const doc = (trailer: string, link: string) => [file('contributing', `Coding agents may open pull requests.\nDisclose it with an ${trailer}: trailer.\nSign the CLA at ${link}.\n`)];
+    const of = async (trailer: string, link: string) => {
+      const files = doc(trailer, link);
+      return readerFingerprint(
+        files,
+        reading(
+          [
+            statement('CONTRIBUTING.md', 1, 1, 'Coding agents may open pull requests.', 'welcomesAgents'),
+            statement('CONTRIBUTING.md', 2, 2, `Disclose it with an ${trailer}: trailer.`, 'disclosureTrailer', { value: trailer }),
+            statement('CONTRIBUTING.md', 3, 3, `Sign the CLA at ${link}.`, 'cla', { value: link }),
+          ],
+          'invites_agents',
+          [],
+          files,
+        ),
+        null,
+      );
+    };
+    const before = await of('Assisted-by', 'https://cla.example.org/a');
+
+    expect(await of('Generated-by', 'https://cla.example.org/a')).not.toBe(before);
+    expect(await of('Assisted-by', 'https://cla.example.org/b')).not.toBe(before);
+  });
+
+  test('more steering lines than a reading keeps are cut, not a failed reading, so a steered ban still reads', () => {
+    const line = { path: 'AGENTS.md', startLine: 3, endLine: 3, quote: 'Agents may open pull requests here.' };
+    const parsed = parsePolicyOutput(policyOutput([], 'no_policy', Array.from({ length: 25 }, () => line)));
+
+    expect(parsed.ok && parsed.output.steering).toHaveLength(20);
   });
 });

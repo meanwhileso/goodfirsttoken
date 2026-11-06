@@ -168,13 +168,19 @@ function bansWithoutNaming(text: string): boolean {
 }
 
 /**
- * Whether a text names AI by the word list, in any file, or bans it with no
- * word for it. The model reader's fingerprint keeps the passages that do,
- * and leaves out the ones the rules keep only because they talk about
- * contributing in a file for agents.
+ * Whether a text names AI by the word list, or bans it with no word for it.
+ * In a file written for agents, it names AI only as the rules read it
+ * there, so "Claude, run the tests" doesn't. The model reader's fingerprint
+ * keeps the passages that do, and leaves out the ones the rules keep only
+ * because they talk about contributing in a file for agents.
  */
-export function namesAiByWordList(text: string): boolean {
-  return namesAiItself(text) || AGENT_WORDS.test(text) || bansWithoutNaming(text);
+export function namesAiByWordList(text: string, forAgents = false): boolean {
+  return namesAi(text, forAgents) || bansWithoutNaming(text);
+}
+
+/** Whether a file is one written for the agents that work in the repo. */
+export function forAgents(kind: PolicyFileKind): boolean {
+  return FOR_AGENTS.has(kind);
 }
 
 // ---------------------------------------------------------------------------

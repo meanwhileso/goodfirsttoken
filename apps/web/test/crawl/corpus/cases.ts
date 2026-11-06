@@ -45,6 +45,8 @@ export interface ExpectedLabels {
   ready: readonly string[];
   keptForPeople: readonly string[];
   agentsOnly: readonly string[];
+  /** Labels a reading may call ready or not, which count neither way. */
+  either?: readonly string[];
 }
 
 /** What a reading of a case must find. A field left out isn't checked. */

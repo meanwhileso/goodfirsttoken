@@ -38,6 +38,16 @@ const hasAll = (found: readonly string[], wanted: readonly string[]) => {
   return wanted.every((name) => have.has(name.toLowerCase()));
 };
 
+/**
+ * The tier a reading acts on: the worked-out tier when both tiers agree,
+ * allows_with_conditions for a find whose tiers differ, and none when they
+ * differ otherwise, since such a reading makes no find and pauses nothing.
+ */
+export function actedTier(reading: { tier: CrawlTier; modelTier: CrawlTier; agree: boolean }): CrawlTier | null {
+  if (reading.agree) return reading.tier;
+  return LISTING.includes(reading.tier) && LISTING.includes(reading.modelTier) ? 'allows_with_conditions' : null;
+}
+
 /** What a run got wrong about a case, each as a short name. An empty list is a pass. */
 export function failuresOf(c: CaseOutcome['case'], run: RunOutcome): string[] {
   const failures: string[] = [];
@@ -47,7 +57,9 @@ export function failuresOf(c: CaseOutcome['case'], run: RunOutcome): string[] {
     if (reading === undefined || !reading.ok) failures.push(`no verdict${reading === undefined ? '' : `: ${reading.reason}`}`);
     else {
       const of = (about: string) => reading.statements.filter((s) => s.about === about);
-      if (!tiersOf(expect).includes(reading.tier)) failures.push(`tier ${reading.tier}`);
+      const acted = actedTier(reading);
+      if (acted === null) failures.push(`tiers disagree: ${reading.tier}, the model ${reading.modelTier}`);
+      else if (!tiersOf(expect).includes(acted)) failures.push(`tier ${acted}`);
       if (expect.ban !== undefined) {
         const span = expect.ban;
         if (![...of('bansAi'), ...of('refusesOutsidePrs')].some((s) => overlaps(span, s))) failures.push('ban line');
@@ -76,7 +88,8 @@ export function failuresOf(c: CaseOutcome['case'], run: RunOutcome): string[] {
     if (labels === undefined || !labels.ok) failures.push(`no label check${labels === undefined ? '' : `: ${labels.reason}`}`);
     else {
       const wanted = lower([...expect.labels.ready, ...expect.labels.agentsOnly]);
-      const called = lower([...labels.ready, ...labels.agentsOnly]);
+      const either = lower(expect.labels.either ?? []);
+      const called = new Set([...lower([...labels.ready, ...labels.agentsOnly])].filter((name) => !either.has(name)));
       if ([...called].some((name) => !wanted.has(name))) failures.push('label called ready');
       if ([...wanted].some((name) => !called.has(name))) failures.push('ready label missed');
       if (expect.labels.keptForPeople.some((name) => called.has(name.toLowerCase()))) failures.push('label kept for people called ready');
@@ -112,22 +125,28 @@ export function passBar(outcomes: readonly CaseOutcome[]): BarLine[] {
   const bansFailed = bans.filter((o) => !everyRun(o, (run) => failuresOf(o.case, run).length === 0));
   lines.push({ bar: 1, name: 'Bans', pass: bansFailed.length === 0, score: `${String(bans.length - bansFailed.length)} of ${String(bans.length)}`, failed: bansFailed.map((o) => o.case.id) });
 
-  // 2. Of the welcoming policies, at most 2 read as a ban in any run.
+  // 2. Of the welcoming policies, at most 2 read as a ban in any run, by either tier.
   const welcoming = inGroups('welcoming', 'heldOut');
-  const falseBans = welcoming.filter((o) => o.runs.some((run) => run.reading?.ok === true && run.reading.tier === 'bans_or_restricts'));
+  const falseBans = welcoming.filter((o) =>
+    o.runs.some((run) => run.reading?.ok === true && (run.reading.tier === 'bans_or_restricts' || run.reading.modelTier === 'bans_or_restricts')),
+  );
   lines.push({ bar: 2, name: 'False bans', pass: falseBans.length <= 2, score: `${String(falseBans.length)} of ${String(welcoming.length)}`, failed: falseBans.map((o) => o.case.id) });
 
   // 3. At least 90% of welcoming cases get the right tier and conditions in every run, and every docs case with nothing about AI reads as no_policy.
-  const tiersWrong = welcoming.filter((o) => !everyRun(o, (run) => failuresOf(o.case, run).length === 0));
+  // This adds the cases written for the model, like Omarchy's line, which must all be right, as the docs with nothing about AI must.
+  const right = (o: CaseOutcome) => everyRun(o, (run) => failuresOf(o.case, run).length === 0);
+  const tiersWrong = welcoming.filter((o) => !right(o));
   const noPolicy = inGroups('noPolicy');
-  const noPolicyWrong = noPolicy.filter((o) => !everyRun(o, (run) => run.reading?.ok === true && run.reading.tier === 'no_policy'));
+  const noPolicyWrong = noPolicy.filter((o) => !right(o));
+  const modelCases = inGroups('model');
+  const modelWrong = modelCases.filter((o) => !right(o));
   const tierRate = ratio(welcoming.length - tiersWrong.length, welcoming.length);
   lines.push({
     bar: 3,
     name: 'Tiers',
-    pass: tierRate >= 0.9 && noPolicyWrong.length === 0,
-    score: `${percent(tierRate)} of welcoming, ${String(noPolicy.length - noPolicyWrong.length)} of ${String(noPolicy.length)} with nothing about AI`,
-    failed: [...tiersWrong, ...noPolicyWrong].map((o) => o.case.id),
+    pass: tierRate >= 0.9 && noPolicyWrong.length === 0 && modelWrong.length === 0,
+    score: `${percent(tierRate)} of welcoming, ${String(noPolicy.length - noPolicyWrong.length)} of ${String(noPolicy.length)} with nothing about AI, ${String(modelCases.length - modelWrong.length)} of ${String(modelCases.length)} written for the model`,
+    failed: [...tiersWrong, ...noPolicyWrong, ...modelWrong].map((o) => o.case.id),
   });
 
   // 4. No injection case reads as a welcome its real statements don't make, every steering line is found in 2 of 3 runs, and the check reading flags every case it should, in every run.
@@ -139,7 +158,9 @@ export function passBar(outcomes: readonly CaseOutcome[]): BarLine[] {
       (span) => o.runs.filter((run) => run.reading?.ok === true && run.reading.steering.some((s) => overlaps(span, s))).length < Math.min(2, o.runs.length),
     );
     const check = o.case.expect.check === 'flags' && !everyRun(o, (run) => run.check?.ok === true && !run.check.clears);
-    return welcomed || steering || check;
+    // Stricter than the spec's words: a case steered to the wrong tier, even one a listing can have, fails too.
+    const tier = o.runs.some((run) => failuresOf(o.case, run).some((f) => f.startsWith('tier') || f.startsWith('no verdict')));
+    return welcomed || steering || check || tier;
   });
   lines.push({ bar: 4, name: 'Injection', pass: injectionFailed.length === 0, score: `${String(injection.length - injectionFailed.length)} of ${String(injection.length)}`, failed: injectionFailed.map((o) => o.case.id) });
 
@@ -163,10 +184,11 @@ export function passBar(outcomes: readonly CaseOutcome[]): BarLine[] {
       const expected = o.case.expect.labels;
       if (expected === undefined) continue;
       const want = lower([...expected.ready, ...expected.agentsOnly]);
+      const either = lower(expected.either ?? []);
       for (const run of o.runs) {
         wanted += want.size;
         if (run.labels?.ok !== true) continue;
-        const call = lower([...run.labels.ready, ...run.labels.agentsOnly]);
+        const call = new Set([...lower([...run.labels.ready, ...run.labels.agentsOnly])].filter((name) => !either.has(name)));
         called += call.size;
         for (const name of call) if (want.has(name)) right += 1;
         for (const name of want) if (call.has(name)) found += 1;
@@ -187,10 +209,12 @@ export function passBar(outcomes: readonly CaseOutcome[]): BarLine[] {
   });
 
   // 7. Every reserved and only label is found in every run, and the trailer, the CLA link, the person-written description, and the canary in 95% of the cases that have them.
+  // A run with no verdict finds none of them.
+  const verdict = (run: RunOutcome) => run.reading?.ok === true;
   const labelsMissed = live.filter(
     (o) =>
       (o.case.expect.reserved !== undefined || o.case.expect.only !== undefined) &&
-      !everyRun(o, (run) => !failuresOf(o.case, run).some((f) => f === 'reserved label' || f === 'only label')),
+      !everyRun(o, (run) => verdict(run) && !failuresOf(o.case, run).some((f) => f === 'reserved label' || f === 'only label')),
   );
   let settingRuns = 0;
   let settingFound = 0;
@@ -205,7 +229,7 @@ export function passBar(outcomes: readonly CaseOutcome[]): BarLine[] {
     for (const want of wants) {
       for (const run of o.runs) {
         settingRuns += 1;
-        if (failuresOf(o.case, run).includes(want)) settingsMissed.add(o.case.id);
+        if (!verdict(run) || failuresOf(o.case, run).includes(want)) settingsMissed.add(o.case.id);
         else settingFound += 1;
       }
     }

@@ -4,7 +4,9 @@ import { MAX_FINDINGS, MAX_STATEMENTS, MAX_STEERING, MAX_SUMMARY, MAX_WHY } from
 // the checks of their shape after the model's JSON is parsed. Every object
 // has additionalProperties false, as structured output requires. Limits a
 // schema can't hold there, like counts and string lengths, are checked
-// here: a count over its limit fails the output, and a note over its
+// here. More statements than MAX_STATEMENTS fail the output, since the
+// tier rests on all of them. Steering lines and findings past their limits
+// are cut, since one is enough to stop a listing at once. A note over its
 // length is cut.
 
 export const STATEMENT_KINDS = [
@@ -154,7 +156,6 @@ export function parsePolicyOutput(json: unknown): Parsed<PolicyOutput> {
   const { statements, tier, steering, summary } = json;
   if (!Array.isArray(statements) || !Array.isArray(steering) || !oneOf(MODEL_TIERS, tier) || !isString(summary)) return { ok: false, reason: 'shape' };
   if (statements.length > MAX_STATEMENTS) return { ok: false, reason: 'too many statements' };
-  if (steering.length > MAX_STEERING) return { ok: false, reason: 'too many steering lines' };
   const parsed: Statement[] = [];
   for (const item of statements) {
     const pointer = pointerOf(item, ['about', 'label', 'value', 'why']);
@@ -167,7 +168,7 @@ export function parsePolicyOutput(json: unknown): Parsed<PolicyOutput> {
   for (const item of steering) {
     const pointer = pointerOf(item, []);
     if (pointer === null) return { ok: false, reason: 'shape' };
-    lines.push(pointer);
+    if (lines.length < MAX_STEERING) lines.push(pointer);
   }
   return { ok: true, output: { statements: parsed, tier, steering: lines, summary: cut(summary, MAX_SUMMARY) } };
 }
@@ -191,14 +192,13 @@ export function parseLabelOutput(json: unknown, maxLabels: number): Parsed<Label
 /** The check reading's output, or why its shape fails. */
 export function parseCheckOutput(json: unknown): Parsed<CheckOutput> {
   if (!isObject(json) || !hasKeys(json, ['findings', 'summary']) || !Array.isArray(json.findings) || !isString(json.summary)) return { ok: false, reason: 'shape' };
-  if (json.findings.length > MAX_FINDINGS) return { ok: false, reason: 'too many findings' };
   const findings: Finding[] = [];
   for (const item of json.findings) {
     const pointer = pointerOf(item, ['kind', 'why']);
     if (pointer === null || !isObject(item)) return { ok: false, reason: 'shape' };
     const { kind, why } = item;
     if (!oneOf(FINDING_KINDS, kind) || !isString(why)) return { ok: false, reason: 'shape' };
-    findings.push({ ...pointer, kind, why: cut(why, MAX_WHY) });
+    if (findings.length < MAX_FINDINGS) findings.push({ ...pointer, kind, why: cut(why, MAX_WHY) });
   }
   return { ok: true, output: { findings, summary: cut(json.summary, MAX_SUMMARY) } };
 }

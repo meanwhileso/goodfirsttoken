@@ -72,7 +72,8 @@ export const SETTINGS_CASES: SettingsCase[] = [
         { name: '.contrib/docs', openIssues: 2 },
       ],
     },
-    expect: { tier: invites, labels: { ready: ['agent ready', 'Help Wanted', '.contrib/docs'], keptForPeople: ['good first issue'], agentsOnly: [] } },
+    // `.contrib/docs` is ready by the rules' convention for the prefix, which a model has little reason to know.
+    expect: { tier: invites, labels: { ready: ['agent ready', 'Help Wanted'], keptForPeople: ['good first issue'], agentsOnly: [], either: ['.contrib/docs'] } },
   },
   {
     key: 'only-label',
@@ -166,7 +167,7 @@ export const SETTINGS_CASES: SettingsCase[] = [
       expect: {
         tier: allows,
         reserved: ['good first issue'],
-        labels: { ready: ['Help Wanted', '.contrib/docs'], keptForPeople: ['good first issue'], agentsOnly: [] },
+        labels: { ready: ['Help Wanted'], keptForPeople: ['good first issue'], agentsOnly: [], either: ['.contrib/docs'] },
       },
     }),
   ),

@@ -107,10 +107,24 @@ function canonical(sentences: readonly { text: string }[]): string {
 const TRAILER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,49}$/;
 /** An https link, without the punctuation that closes the sentence around it. */
 const LINKS = /https:\/\/[^\s<>()[\]"'`]+/g;
+/** A character that would make a label part of a longer name. */
+const NAME_CHARACTER = /[\p{L}\p{N}_\-/]/u;
 
-/** The links in a text, each without the punctuation that closes the sentence around it. */
+/** The links in a text, each without the punctuation, or the emphasis marks, that close the sentence around it. */
 function linksIn(text: string): string[] {
-  return [...text.matchAll(LINKS)].map((match) => match[0].replace(/[.,;:!?]+$/, ''));
+  return [...text.matchAll(LINKS)].map((match) => match[0].replace(/[.,;:!?*]+$/, ''));
+}
+
+/** Whether a text holds a name whole, without case, and not inside a longer name, as `bug` is inside `debugging`. */
+function holdsName(text: string, name: string): boolean {
+  const haystack = text.toLowerCase();
+  const needle = name.toLowerCase();
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    const before = haystack.charAt(at - 1);
+    const after = haystack.charAt(at + needle.length);
+    if ((at === 0 || !NAME_CHARACTER.test(before)) && (after === '' || !NAME_CHARACTER.test(after))) return true;
+  }
+  return false;
 }
 
 /** A statement that checks out, with what it names as the files spell it. */
@@ -129,9 +143,10 @@ export type StatementCheck = { ok: true; statement: CheckedStatement } | { ok: f
 
 /**
  * Whether a statement checks out: its lines, then what it names. A label
- * appears in the quote. A trailer's name appears in the quote followed by a
- * colon, and is kept as the quote spells it. A CLA link is an https link
- * the quote holds. A canary is in AGENTS.md or CLAUDE.md.
+ * appears whole in the quote. A trailer's name appears in the quote
+ * followed by a colon, and is kept as the quote spells it. A CLA link is an
+ * https link the quoted sentences hold, as the file has them. A canary is
+ * in AGENTS.md or CLAUDE.md.
  */
 export function checkStatement(files: Files, statement: Statement, index: number): StatementCheck {
   const checked = files.check(statement);
@@ -144,7 +159,7 @@ export function checkStatement(files: Files, statement: Statement, index: number
     case 'reservedLabel':
     case 'onlyLabel': {
       const name = plain(statement.label ?? '');
-      if (name === '' || !quote.toLowerCase().includes(name.toLowerCase())) return { ok: false, failure: 'label' };
+      if (name === '' || !holdsName(quote, name)) return { ok: false, failure: 'label' };
       label = statement.label?.trim() ?? null;
       break;
     }
@@ -158,7 +173,8 @@ export function checkStatement(files: Files, statement: Statement, index: number
     }
     case 'cla': {
       const link = statement.value?.trim() ?? '';
-      if (!httpsUrl.safeParse(link).success || !linksIn(quote).includes(link)) return { ok: false, failure: 'value' };
+      const raw = pointer.sentences.map((s) => pointer.file.text.slice(s.start, s.end)).join(' ');
+      if (!httpsUrl.safeParse(link).success || !linksIn(raw).includes(link)) return { ok: false, failure: 'value' };
       value = link;
       break;
     }
