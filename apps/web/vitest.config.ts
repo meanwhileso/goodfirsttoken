@@ -99,7 +99,7 @@ export default defineConfig(async () => {
     ],
     test: {
       include: ['test/**/*.test.ts'],
-      setupFiles: ['./test/apply-migrations.ts', './test/no-network.ts'],
+      setupFiles: ['./test/apply-migrations.ts', './test/no-network.ts', './test/settle.ts'],
       // The first request in each test file compiles the Worker's routes, which
       // takes seconds on a busy machine.
       testTimeout: 20_000,

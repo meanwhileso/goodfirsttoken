@@ -1,7 +1,7 @@
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { ServiceGitHub, type Allowance } from '../../src/sync/github';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 
 // Shared setup for the jobs that read GitHub with the service token. The
 // test config sets GH_SERVICE_TOKEN, and the GitHub fake knows it as the

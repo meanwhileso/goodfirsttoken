@@ -1,7 +1,7 @@
 import { crawlMessageSchema, describeProblems, validate, type CrawlMessage, type PolicyTier } from '@goodfirsttoken/core';
 import { addCandidate, crawlerSkips, lastRejectedFind, setFindFingerprint, type CrawlerSkip } from '../db';
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
-import { ALLOWANCES, serviceToken } from '../sync/scheduled';
+import { ALLOWANCES, serviceToken } from '../sync/allowances';
 import { comparable, policyFingerprint } from './fingerprint';
 import { fileUrl, readFiles, readLabels, readRepos, RepoFailed, whyNotListable, type FoundRepo } from './reads';
 import { newRereadRun, rereadRepos, type RereadRun } from './reread';

@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import worker from '../src/server';
+import { readsOnApprovalSettled } from '../src/sync/read-now';
 
 // How a test sends a request to the whole Worker: it calls the fetch of the
 // Worker's default export itself, with the Worker's bindings. Requests
@@ -11,8 +12,12 @@ import worker from '../src/server';
 /**
  * Sends a request to the Worker with a new execution context, waits for the
  * work the Worker handed to waitUntil, and gives back the response as the
- * Worker made it. The request comes in as the runtime hands one over: its
- * redirect mode is manual, its headers refuse changes, and the caller's
+ * Worker made it. A read on approval goes to the runtime's own waitUntil,
+ * which no test's context counts, so this waits for those reads too. An
+ * MCP answer streams, and its tool runs after the response starts, so each
+ * part of a streamed body waits for the reads started before it. The request
+ * comes in as the runtime hands one over: its redirect mode is manual, its
+ * headers refuse changes, and the caller's
  * AbortSignal doesn't reach it, since the Worker doesn't turn on
  * enable_request_signal. A redirect comes back as it is. Work handed to
  * waitUntil that lasts as long as a stream would hold the stream's response
@@ -26,7 +31,15 @@ export async function workerFetch(input: RequestInfo | URL, init?: RequestInit):
   const ctx = createExecutionContext();
   const response = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
-  return response;
+  await readsOnApprovalSettled();
+  if (response.body === null || !response.headers.get('content-type')?.startsWith('text/event-stream')) return response;
+  const settled = new TransformStream<Uint8Array, Uint8Array>({
+    async transform(chunk, controller) {
+      await readsOnApprovalSettled();
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(response.body.pipeThrough(settled), response);
 }
 
 /**

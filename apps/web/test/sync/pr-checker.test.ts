@@ -7,7 +7,7 @@ import { addPr, getPr, listClaimFollowUps, setPrState } from '../../src/db';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { CHECK_ALLOWANCE, CHECK_ASKS_PER_DONOR_HOUR, CHECK_READS_PER_HOUR, prChecker, type PrChecker } from '../../src/sync/pr-checker';
 import { REOPEN_WINDOW_MS } from '../../src/sync/prs';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, kenji, maintainer, priya, registeredProject, sha, signIn, t0 } from '../db/helpers';
 import { freshNumbers, knowServiceToken, madeBefore, SERVICE_LOGIN } from './helpers';

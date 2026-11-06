@@ -14,7 +14,7 @@ import {
 } from '../../src/db';
 import worker from '../../src/server';
 import { ServiceGitHub, type Allowance } from '../../src/sync/github';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { admin, db, emptyDatabase, maintainer, registeredProject, signIn } from '../db/helpers';
 import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';

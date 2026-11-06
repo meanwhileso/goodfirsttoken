@@ -367,7 +367,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 
 | File | What it does |
 |---|---|
-| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, `pause_project`, and `request_removal`. `project_status` with `refresh` runs the sync for its project, under [The sync](#the-sync) |
+| `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, `pause_project`, and `request_removal`. `project_status` with `refresh` runs the sync for its project, by `refreshIssues` in `src/sync/read-now.ts`, under [The sync](#the-sync) |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/docs.ts` | The files a repo's docs are read from, where each is looked for, and the size limit, for the proposal and the policy crawler alike |
 | `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
@@ -2911,7 +2911,9 @@ and count the hour's reads in one place. The rules are in
 | `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |
-| `src/sync/scheduled.ts` | The crons, what each job may spend, the job each cron runs, and a maintainer's refresh |
+| `src/sync/scheduled.ts` | The crons, and the job each cron runs |
+| `src/sync/allowances.ts` | What each job that reads GitHub with the service token may spend, in `ALLOWANCES`, and the token itself |
+| `src/sync/read-now.ts` | The reads of one project outside the schedule: a maintainer's refresh, and the read an admin's approval starts |
 | `src/db/syncs.ts` | The `issue_syncs` table, where each project's pass stands, when a maintainer last refreshed it, which run holds it, and whether the sync delisted it, with the projects a run checks |
 
 - **Cron triggers.** `wrangler.jsonc` lists `*/15 * * * *` for the sync,
@@ -2964,7 +2966,7 @@ and count the hour's reads in one place. The rules are in
   GitHub counts against no budget, so it knows what is left before its
   first read. `ServiceGitHub` keeps the latest for each resource, `core` and
   `graphql`, and stops before a call when less is left than the job leaves:
-  `ALLOWANCES` in `src/sync/scheduled.ts`. A budget whose hour is over counts
+  `ALLOWANCES` in `src/sync/allowances.ts`. A budget whose hour is over counts
   as full again.
 - **What stops a run.** A `429`. A `403` with nothing left, a `retry-after`,
   or a message that says it is a rate limit, since GitHub's docs say a
@@ -2991,7 +2993,7 @@ and count the hour's reads in one place. The rules are in
   come out of the sync's own cap, so a run still costs at most 1,000 calls:
   the `/rate_limit` read, then one or two for each project it checks, then
   its passes. `checkCalls` in the sync's `ALLOWANCES`, in
-  `src/sync/scheduled.ts` with the other budget figures, starts no new
+  `src/sync/allowances.ts` with the other budget figures, starts no new
   check once the checks have made 100 calls, a tenth of the run, so the
   passes always get about nine tenths, and checks spend about 400 calls an
   hour at most.
@@ -3165,6 +3167,73 @@ and count the hour's reads in one place. The rules are in
   started in the last 10 minutes and no run holds the project, so two
   refreshes at once make one read. `issue_syncs.refreshed_at` counts only
   refreshes, so a scheduled run never makes a refresh wait.
+- **A read on approval** is `readOnApproval` in `src/sync/read-now.ts`.
+  The admin actions in `src/admin/actions.ts` call `startReadOnApproval`
+  wherever one leaves a project approved. `listFromPolicy` calls it for a
+  new listing and for a listing again, and the approvals of a crawler find
+  and of a policy change go through `listFromPolicy` too. So do a
+  registration's approval and both of an admin's resumes. A maintainer's
+  resume in `src/mcp/maintainer.ts` doesn't call it, since the maintainer
+  has `refresh`.
+- **What the read checks.** `startReadOnApproval` hands the read to
+  `waitUntil` from `cloudflare:workers`, so the action answers at once and
+  the read goes on after. It catches every error, so a read that fails
+  can't fail the action. The read checks the project again when it starts:
+  approved, off the do-not-list, and no `issue_syncs.read_at`, which a pass
+  sets only when it finishes. So a project whose reads never got through,
+  like the ones approved while the service token had expired, is read on
+  its next approval, resume, or listing again. One the sync read before is
+  left to the sync. The read takes the hold with `holdProject`, as a
+  scheduled run does, and `readHeld`, which a refresh uses too, runs
+  `syncProject` and lets go of the hold in `finally`. It spends
+  `ALLOWANCES.approval`.
+- **Why `waitUntil`, and not a queue.** The read is one project's, made
+  once in its life, and needs nothing a queue gives: no retry, since the
+  next scheduled run reads what it missed, and no wait for the budget,
+  since a read that stops leaves its pass in progress for the sync. A new
+  queue would be one more resource to deploy, and its consumer would run a
+  second or more after the send. `waitUntil` runs the read right after the
+  answer. `readsOnApprovalSettled` settles once every read started has,
+  for the tests, under [Tests](#tests).
+- **One read at a time.** An admin's agent can approve many projects in a
+  few seconds, and their reads side by side would make many calls a second,
+  against GitHub's advice of one at a time and its secondary limits. So the
+  reads on approval in one isolate take turns: `takeTurn` looks every 200
+  ms whether `readingUntil` has passed, and a read takes the turn by
+  setting it to its own deadline, 20 seconds after its approval. Each
+  request waits on its own timer. Awaiting the promise of the read before
+  it would tie the read to another request's context, which the runtime
+  cancels when that request's time is up. A read cancelled before it lets
+  go of the turn stops counting once its deadline passes. Reads in other
+  isolates can still run side by side, as a refresh and a scheduled run
+  can.
+- **Why 200 calls and 20 seconds.** A Worker runs for 30 seconds after it
+  answers, shared by everything one request hands to `waitUntil`, and then
+  cancels what is left, as
+  [developers.cloudflare.com/workers/runtime-apis/context](https://developers.cloudflare.com/workers/runtime-apis/context/)
+  gave on 2026-11-05. An action starts at most one read. The read stops
+  itself before a call once 20 seconds have passed since its approval, by
+  `maxMs` in its allowance less the time it waited for its turn. A timeline
+  read takes a few tenths of a second, so 20 seconds is about 50 to 100
+  calls, and the cap of 200 calls is for a GitHub that answers fast. That
+  reads a project of about 150 tagged issues whole, where a refresh's 60
+  calls read about 50, and the sync's next run reads the rest of a bigger
+  one.
+- **A hold of a minute.** `APPROVAL_HOLD_MS`, a minute, covers the 20
+  seconds of reading and the runtime's 30, with a margin. A call to GitHub
+  has no timeout of its own, so a call that hangs can outlast the 30
+  seconds, and the runtime then cancels the read before its `finally` lets
+  go of the hold. A hold of the scheduled run's 15 minutes would then keep
+  the next scheduled run off the project, and make a refresh answer
+  `busy`. A minute frees it for the next run.
+- **What it spends.** It leaves a fifth of the hour, where the sync stops,
+  so the sync and the reads on approval together never go below a fifth,
+  and the PR job and the others keep their shares. A read cut short saves
+  the next scheduled run the issues it read. A read that finishes its pass
+  saves it nothing: the next run starts a new pass, which reads the issues
+  again, as every pass does. That costs about a call for each tagged issue,
+  once for each project an admin approves, well inside the sync's own 1,000
+  a run.
 - **The log.** Each run logs one line, with what it read, what is left of
   the budget, the projects another run held, how many projects it checked
   and which of them it delisted, and every open PR it found linked to the
@@ -3259,7 +3328,7 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   at 52 minutes past each hour, reads only D1 and sends to the queue. The
   consumer makes the GraphQL and REST reads, with its own `ServiceGitHub`
   and its allowance, `crawlRead`, in `ALLOWANCES` in
-  `src/sync/scheduled.ts`. A batch holds 10 repos, which keeps its GraphQL
+  `src/sync/allowances.ts`. A batch holds 10 repos, which keeps its GraphQL
   queries small. The consumer's `max_concurrency` of 1 keeps it to one
   batch at a time, since GitHub asks a client not to make concurrent
   requests for one user.
@@ -3557,6 +3626,7 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   | The PR job | GraphQL | 500 of 5,000 |
   | The sync | REST | 1,000 of 5,000 |
   | A maintainer's refresh | REST | 2,500 of 5,000 |
+  | A read on approval | REST | 1,000 of 5,000 |
   | The crawler's consumer, crawls and weekly reads | GraphQL, and REST for weekly reads | 3,000 of 5,000 |
 
   The daily job that ends lapsed connections, under [The sync](#the-sync),
@@ -3974,8 +4044,10 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   routing and headers a browser does. It calls the `fetch` of the Worker's
   default export in `src/server.ts` itself, with the Worker's bindings and a
   new execution context, and waits for the work the Worker hands to
-  `waitUntil`. The response comes back as the Worker made it, redirects
-  included. The request comes in as the runtime hands one over: its
+  `waitUntil`, and for the reads on approval, as the read on approval's
+  tests below say. The response comes back as the Worker made it,
+  redirects included, with its body passed through a step that holds each
+  part until those reads end. The request comes in as the runtime hands one over: its
   redirect mode is `manual`, its headers and its clones' headers refuse
   changes, and the caller's `AbortSignal` doesn't reach it. Requests
   through `exports.default.fetch` from `cloudflare:workers` get slower one
@@ -4169,7 +4241,16 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   rooms keep their storage across a file. The scheduled tests run each cron
   in `wrangler.jsonc`, which `vitest.config.ts` reads and passes in as
   `TEST_CRONS`. A maintainer's refresh is tested through the MCP client SDK
-  with the MCP tests. `delisting.test.ts` pauses and resumes projects the
+  with the MCP tests, and so is the read on approval, in
+  `apps/web/test/mcp/approval-read.test.ts`. The runtime's `waitUntil`
+  counts in no test's execution context, so `workerFetch` waits for every
+  read on approval with `readsOnApprovalSettled`, and holds back each part
+  of a response's body until the reads started before it end, since an MCP
+  answer streams and its tool runs after the response starts. So a tool's
+  answer reaches the test after the read it started, and one test shows
+  the action answers first by calling it directly. `test/settle.ts` ends
+  each test once its reads have, so none writes to the next test's
+  database. `delisting.test.ts` pauses and resumes projects the
   same way, as their maintainer and as an admin, on the real clock, which
   signing in an agent needs, and reads what the pages show through the
   Worker. The test of what migration `0006_delisting.sql` marks runs the
@@ -4666,7 +4747,7 @@ not.
 - The address is an IPv4 address or an IPv6 /64, with IPv4 written as IPv6
   folded to IPv4 (`limiterKey`).
 - Every job that reads GitHub has a cap in `ALLOWANCES`
-  (`src/sync/scheduled.ts`), and the daily job that ends lapsed connections
+  (`src/sync/allowances.ts`), and the daily job that ends lapsed connections
   has `LAPSED_PER_RUN`. One look at the admin queue makes at most 40 calls,
   with the admin's own token. A person's token is spent only by their own
   requests.

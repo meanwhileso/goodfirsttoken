@@ -29,6 +29,7 @@ import {
 } from '../../src/db';
 import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
+import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 import { priorityEvidence } from '../priority-evidence';
 
@@ -692,6 +693,7 @@ describe("admin_add_project from a maintainer's post", () => {
 
 describe('admin_add_project', () => {
   test('lists a public repo from its policy at once, as GitHub names it, checked with the admin\'s own token', async () => {
+    knowServiceToken(github);
     const admin = await connectAgent(github, ADMIN.login);
     const reads = github.calls.length;
 
@@ -703,7 +705,9 @@ describe('admin_add_project', () => {
 
     expect(result.structuredContent).toEqual({ repo: BUNDLER, status: 'approved', source: 'policy', updated: false });
     expect(await getProject(env.DB, BUNDLER)).toMatchObject({ source: 'policy', policy: POLICY, addedBy: ADMIN.githubId });
-    expect(github.calls.slice(reads).map((c) => c.login)).toEqual([ADMIN.login]);
+    // The other calls are the read of its tagged issues the listing starts,
+    // with the service token.
+    expect(github.calls.slice(reads).filter((c) => c.login !== SERVICE_LOGIN).map((c) => c.login)).toEqual([ADMIN.login]);
   });
 
   test("listing a repo already listed from its policy replaces the listing's policy and settings, and keeps its status", async () => {
