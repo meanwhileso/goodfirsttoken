@@ -1,7 +1,7 @@
 # Read AI policies and labels with a model
 
-Status: proposed on November 5, 2026. Not approved. The project's owner
-decided the model, Claude Opus 5.5 (`claude-opus-5-5`) at high effort,
+Status: approved on November 5, 2026, by the project's owner. ROADMAP.md
+orders it as M11, issues #171 to #177. The owner decided the model, Claude Opus 5.5 (`claude-opus-5-5`) at high effort,
 called with an Anthropic API key, and answered the open questions the
 same day, under [Decisions](#decisions).
 
@@ -872,16 +872,17 @@ them.
 
 ## Rollout
 
-ROADMAP.md lists these as M11. Each becomes an issue once the spec is
-approved.
+ROADMAP.md lists these as M11, issues #171 to #177.
 
 1. **Stop the crawler's searches.** The producer stops the broad search and
    the popular sample, and keeps queuing seeds and weekly reads. Seeds get
    their monthly cycle, and `admin_seed_repo` can seed a repo again. A
    migration drops the search's records. The rules keep reading. This
    needs no model and can ship first.
-2. **Move the corpus into shared cases, and build the eval harness.** No
-   change to the Worker. Run it against the first prompt and record the
+2. **Move the corpus into shared cases, and build the reader's core and
+   the eval harness.** The core is the requests, the schemas, the checks,
+   the tier, and the fingerprint, with no network, so the eval runs the
+   code the Worker will. No change to the Worker. Run it against the first prompt and record the
    result.
 3. **Add the key, the variables, and the fake.** `ANTHROPIC_API_KEY` as an
    optional secret, `ANTHROPIC_API_URL`, `POLICY_READER` set to `rules`,
