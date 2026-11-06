@@ -2,8 +2,7 @@
 
 Status: proposed on November 5, 2026. Not approved. The project's owner
 decided the model, Claude Opus 5.5 (`claude-opus-5-5`) at high effort,
-called with an Anthropic API key, and answered the first round of open
-questions the same day, under [Decisions](#decisions).
+called with an Anthropic API key, and answered the open questions the same day, under [Decisions](#decisions).
 
 This changes how the policy crawler reads a repo's docs and labels, in
 [v1 section 5](v1.md#5-the-policy-crawler), and the parts of
@@ -65,10 +64,10 @@ The owner answered these on November 5, 2026:
    automatically and lists projects by hand.
 9. **Registered projects.** No admin queue for their docs changes. A move
    into a ban pauses them on its own, as today.
-
-The gate in the first draft, a word list that skipped the model for repos
-with no AI words, existed to cut the cost of the search. With the search
-gone, this spec drops it. See [Open questions](#open-questions).
+10. **No gate.** The first draft had a word list that skipped the model
+    for repos with no AI words, to cut the cost of the search. With the
+    search gone, it goes. The model reads every repo the crawler reads,
+    and no word list decides anything.
 
 ## What changes
 
@@ -892,9 +891,6 @@ lists the ones it needs.
 
 ## Open questions
 
-1. **The gate.** This spec drops it, so the model reads every repo the
-   crawler reads, and no word list decides anything. Keeping it would save
-   a few cents on seeds whose docs say nothing about AI. Drop it?
-2. **Suggesting a repo.** Seeds stay with admins. Should anyone else, like
+1. **Suggesting a repo.** Seeds stay with admins. Should anyone else, like
    a donor, be able to suggest a repo for an admin to seed? That would be
    a spec of its own.
