@@ -354,6 +354,70 @@ describe('the slots', () => {
     expect(page.view.openPrs).toEqual([]);
   });
 
+  test('a paused claim that submits goes to review and keeps its slot, live and loaded', async () => {
+    const p = await claim(priya);
+    at(start + 30 * MINUTE);
+    const loaded = await load();
+    expect(lanesInPlay(loaded.view)[0]?.state).toBe('paused');
+    const socket = await liveSocket(`/${repo}/issues/${number}/live.ndjson?since=${String(loaded.view.last)}`);
+
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    expect(submitted.claim.state).toBe('awaiting_review');
+    await socket.event('submitted the work');
+    socket.socket.close(1000);
+    const live = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
+
+    for (const view of [live, (await load()).view]) {
+      expect(lanesInPlay(view).map((lane) => [lane.login, lane.state])).toEqual([['priya', 'awaiting_review']]);
+      expect(slotsTaken(view)).toBe(1);
+    }
+  });
+
+  test("work submitted again after a claim's PR opened leaves its lane on that PR, holding no slot, live and loaded", async () => {
+    await tag();
+    const p = await claim(priya);
+    await claim(kenji, 'codex');
+    await openPr(p, 57);
+    const loaded = await load();
+    const socket = await liveSocket(`/${repo}/issues/${number}/live.ndjson?since=${String(loaded.view.last)}`);
+
+    // In core, a submit on a claim with its PR open keeps it pr_opened.
+    const again = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!again.ok) throw new Error(again.refusal.message);
+    expect(again.claim.state).toBe('pr_opened');
+    await socket.event('submitted more work');
+    const live = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
+    const whileOpen = await load();
+
+    for (const view of [live, whileOpen.view]) {
+      expect(lanesInPlay(view).map((lane) => [lane.login, lane.state, lane.pr])).toEqual([
+        ['priya', 'pr_opened', prLink(57)],
+        ['kenji', 'active', null],
+      ]);
+      expect(slotsTaken(view)).toBe(1);
+    }
+
+    // Once the PR closes without merging, the issue takes claims again, and
+    // only kenji's claim holds a slot.
+    await room().claimPrEnded({ claimId: p.id, pr: prRef(57), merged: false });
+    await socket.event(`PR ${repo}#57 closed without merging`);
+    socket.socket.close(1000);
+    const closedLive = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
+    const closed = await load();
+
+    for (const view of [closedLive, closed.view]) {
+      expect(lanesInPlay(view).map((lane) => [lane.login, lane.state, lane.prOutcome])).toEqual([
+        ['priya', 'pr_opened', 'closed'],
+        ['kenji', 'active', null],
+      ]);
+      expect(slotsTaken(view)).toBe(1);
+    }
+    const markdown = await (await workerFetch(`http://localhost/${repo}/issues/${number}.md`)).text();
+    expect(markdown).toContain(`: PR closed, [PR #57](https://github.com/${repo}/pull/57)`);
+    expect(markdown).toContain(`1 of ${String(closed.slots)} slots taken.`);
+  });
+
   test('a PR someone opened outside Good First Token closes the slots too', async () => {
     await claim(priya);
     const outside = { repo, number: 61, url: `https://github.com/${repo}/pull/61` };
