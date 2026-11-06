@@ -25,9 +25,9 @@ import { toPolicyReading, type ModelReading } from './reading';
  * One more than the rules' FINGERPRINT_VERSION, and one more with every
  * reader version after it, so no listing reads as changed for a new
  * reader, and a listing whose policy now reads as a ban is a move into one.
- * Reader p1 was one past the rules, p2 two, and p3 three.
+ * Reader p1 was one past the rules, p2 two, p3 three, and p4 four.
  */
-export const READER_FINGERPRINT_VERSION = FINGERPRINT_VERSION + 3;
+export const READER_FINGERPRINT_VERSION = FINGERPRINT_VERSION + 4;
 
 /** Label names, each once, in lower case and in order, as GitHub compares them. */
 function names(labels: readonly { name: string }[]): string[] {
