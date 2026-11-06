@@ -1,6 +1,9 @@
 import type { CrawlTier, PolicyFile } from '../../../src/crawl/rules';
 import { contributing, file, LISTING_TIERS, type Expected, type LineSpan, type PolicyCase } from './cases';
 
+/** The day the owner relabeled the ban sides that are rules for how to work. */
+const RELABELED_ON = '2026-11-06';
+
 // The tests that read a sentence both ways: the forms known to say no to
 // something else, and the other wordings the rules tests read as a ban one
 // way and no ban the other. Each side holds the docs, the tier the rules
@@ -28,6 +31,12 @@ export interface FormSide {
   reserved?: string[];
   only?: string[];
   note?: string;
+  /**
+   * Why the owner relabeled a ban side as no ban. Its case then expects a
+   * listing tier, and keeps what it expected before. The rules test still
+   * holds the rules to `rules`.
+   */
+  relabel?: string;
 }
 
 /** A both-ways test: sentences that are no ban, and sentences that are. */
@@ -182,20 +191,27 @@ export const FORM_GROUPS: FormGroup[] = [
         'Agents should not push to main today.',
         'Do not include secrets or tokens in a PR, or code from Copilot.',
       ].map((sentence) =>
-        inContributing('AI help is fine. ', sentence, ban, sentence === 'Agents should not push to main today.' ? { note: RULE_NOTE } : {}),
+        inContributing(
+          'AI help is fine. ',
+          sentence,
+          ban,
+          sentence === 'Agents should not push to main today.' ? { relabel: 'A rule about pushing to main, which outside contributors do from forks.' } : {},
+        ),
       ),
       // Slots that would hold the whole repo, no pull request at all, or
       // work AI made, and a form with a clause after it.
       ...[
-        ['Please do not tag maintainers directly; we read every pull request.', RULE_NOTE],
+        ['Please do not tag maintainers directly; we read every pull request.', undefined, 'A rule for how to ask for review.'],
         ['Coding agents must not modify any files under `/`.'],
         ['AI agents must not edit any files in ./'],
         ['Do not touch any files under `../`.', RULE_NOTE],
         ['Coding agents must not open more than 0 pull requests.'],
-        ['Please do not commit generated files.', 'Written as a ban for rules that err toward one. The spec names it as a case the owner may relabel.'],
-        ['Contributors must not commit generated output.', RULE_NOTE],
-        ['Do not commit generated build output.', RULE_NOTE],
-      ].map(([sentence = '', note]) => inPolicy(sentence, ban, { form: null, ...(note === undefined ? {} : { note }) })),
+        ['Please do not commit generated files.', undefined, 'A rule about build output.'],
+        ['Contributors must not commit generated output.', undefined, 'A rule about build output.'],
+        ['Do not commit generated build output.', undefined, 'A rule about build output.'],
+      ].map(([sentence = '', note, relabel]) =>
+        inPolicy(sentence, ban, { form: null, ...(note === undefined ? {} : { note }), ...(relabel === undefined ? {} : { relabel }) }),
+      ),
       {
         sentence: 'Do not modify any file in this repository.',
         files: [file('aiPolicy', 'Agents may open pull requests. Do not modify any file in this repository.')],
@@ -220,7 +236,7 @@ export const FORM_GROUPS: FormGroup[] = [
     safe: [inContributing('Agents may open pull requests. ', 'If an agent cannot run the tests, say so in the pull request.', invites, { tier: invites })],
     bans: [
       inContributing('Agents may open pull requests. ', 'If an agent cannot run the tests, do not open one.', ban, {
-        note: 'A condition on when to open a pull request. The rules read it as a ban. The owner may relabel it.',
+        relabel: 'A condition on when to open a pull request.',
       }),
     ],
   },
@@ -323,12 +339,14 @@ export const FORM_GROUPS: FormGroup[] = [
       ['We only ask that you leave the machine out of it.'],
       ['We only want people who write their own code.'],
       ["You don't need to ask: every line here is written by a person."],
-      ['We only ask that you tell us which model wrote it.', 'A rule to disclose which model helped. The rules read it as a ban. The owner may relabel it.'],
+      ['We only ask that you tell us which model wrote it.', undefined, 'A rule to disclose which model helped.'],
       ['We only ask that you tell us you wrote it without AI.'],
       ['We only ask that you keep Copilot away from this repo.'],
       ["You don't need to ask, just skip the AI."],
       ['We only ask that you disclose it, and use no LLM.'],
-    ].map(([sentence = '', note]) => inPolicy(sentence, ban, note === undefined ? {} : { note })),
+    ].map(([sentence = '', note, relabel]) =>
+      inPolicy(sentence, ban, { ...(note === undefined ? {} : { note }), ...(relabel === undefined ? {} : { relabel }) }),
+    ),
   },
   {
     key: 'checkbox-second',
@@ -502,13 +520,17 @@ function expectOf(side: FormSide, isBan: boolean): Expected {
 
 export const FORM_CASES: PolicyCase[] = FORM_GROUPS.flatMap((group) =>
   (['safe', 'bans'] as const).flatMap((which) =>
-    group[which].map((side, index): PolicyCase => ({
-      id: `form/${group.key}/${which === 'safe' ? 'safe' : 'ban'}-${String(index + 1)}`,
-      group: which === 'safe' ? 'formSafe' : 'formBan',
-      files: side.files,
-      expect: expectOf(side, which === 'bans'),
-      rules: side.rules,
-      ...(side.note === undefined ? {} : { note: side.note }),
-    })),
+    group[which].map((side, index): PolicyCase => {
+      const relabeled = which === 'bans' && side.relabel !== undefined;
+      return {
+        id: `form/${group.key}/${which === 'safe' ? 'safe' : 'ban'}-${String(index + 1)}`,
+        group: which === 'safe' ? 'formSafe' : 'formBan',
+        files: side.files,
+        expect: relabeled ? expectOf(side, false) : expectOf(side, which === 'bans'),
+        rules: side.rules,
+        ...(side.note === undefined ? {} : { note: side.note }),
+        ...(relabeled && side.relabel !== undefined ? { relabeled: { on: RELABELED_ON, why: side.relabel, was: expectOf(side, true) } } : {}),
+      };
+    }),
   ),
 );

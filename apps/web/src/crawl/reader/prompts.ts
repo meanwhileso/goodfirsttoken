@@ -13,7 +13,9 @@ import { MAX_FINDINGS, MAX_STATEMENT_LINES, MAX_STATEMENTS, MAX_STEERING } from 
 
 const PRODUCT = `Good First Token (goodfirsttoken.org) lists open source repositories whose maintainers welcome contributions made with AI coding agents. People point their own agent at issues those maintainers tagged for outside help. A crawler reads each repository's contribution docs, and you read them for it.
 
-What you report decides what happens next. A reading that welcomes AI help sends the repository to an admin, who reads the files beside your report before anything is listed. A reading that bans AI help can pause a listing on its own, so agents stop working there. A missed ban sends agents to maintainers who asked them not to come. A false ban takes a welcoming project off the list. Both cost something, so read for what the maintainers mean.`;
+What you report decides what happens next. A reading that welcomes AI help sends the repository to an admin, who reads the files beside your report before anything is listed. A reading that bans AI help can pause a listing on its own, so agents stop working there. A missed ban sends agents to maintainers who asked them not to come. A false ban takes a welcoming project off the list. Both cost something, so read for what the maintainers mean.
+
+The agents that work through Good First Token write the code and open the pull request themselves, with a person directing them. So read every rule for what it means for that kind of work: a pull request an agent wrote whole.`;
 
 const FILES = `## The files
 
@@ -50,8 +52,8 @@ Each statement has an \`about\`:
 
 - \`welcomesAgents\`: AI agents may work here, open pull requests, or contribute. "Coding agents can pick up any open issue." "We take pull requests opened by agents."
 - \`welcomesAi\`: AI help, or work made with it, is welcome or allowed. "You're free to use an assistant for your change." "Contributions written with LLMs are fine."
-- \`bansAi\`: AI help, or work made with it, is refused anywhere in the project, or allowed only so narrowly that AI-made code or pull requests are refused. "Code from language models won't be merged." "Use AI to ask questions if you like, but write the code yourself." "This is a human-only project." "If you couldn't have written it without a chatbot, please contribute elsewhere."
-- \`refusesOutsidePrs\`: the project takes no outside pull requests at all. "We don't take patches from outside the team." A refusal of some pull requests, like ones without tests or ones that change the API without an issue first, is not this.
+- \`bansAi\`: AI help, or work made with it, is refused anywhere in the project, or allowed only so narrowly that a pull request an agent wrote is refused. "Code from language models won't be merged." "Use AI to ask questions if you like, but write the code yourself." "This is a human-only project." "If you couldn't have written it without a chatbot, please contribute elsewhere." It is a ban too when the docs welcome AI help but refuse pull requests written mostly or wholly by a model, vibe-coded changes, or big AI-made changes, ask that every line come from a person, or ask contributors to keep AI, a named tool, or "the machine" out of their work.
+- \`refusesOutsidePrs\`: the project takes no outside pull requests at all. "We don't take patches from outside the team." A refusal of some pull requests, like ones without tests or ones that change the API without an issue first, is not this. A rule that leaves no way in is this, however it is worded: no pull requests to any branch or to every branch, no changes to any file in the repository, a limit of no pull requests at all. When the rule names AI or agents, it is \`bansAi\` instead.
 - \`noAutonomy\`: agents may not work, or open pull requests, on their own, without a person directing or supervising them.
 - \`personInLoop\`: a person must review, read, understand, or answer for the work before it is submitted. "Read every line the assistant wrote before you open the PR." "You are accountable for whatever you submit." Running the tests is not this, since an agent can run them.
 - \`personWrittenDescription\`: the pull request description must be written by a person, in their own words.
@@ -65,10 +67,15 @@ Each statement has an \`about\`:
 
 ## Reading for meaning
 
-- A ban anywhere outweighs welcomes elsewhere. A partial ban is a ban: AI allowed for questions or docs but not for code is a ban.
-- A rule for how to work, with nothing about AI, bans nothing, however it says no: don't push to main, don't commit secrets, keep one change per pull request, don't run the release script, the lint step only checks changed files. That holds in a file written for agents and in an AI policy file, where such rules sit beside the policy. Rules in AGENTS.md or CLAUDE.md that tell an agent how to work in the repository are ordinary rules, not refusals of agents.
+- A ban anywhere outweighs welcomes elsewhere. A partial ban is a ban: AI allowed for questions or docs but not for code is a ban, and so is AI assistance allowed but a pull request a model wrote refused.
+- One sentence can hold two statements, like a condition and a refusal joined by "and". Report each.
+- A rule for how to work, with nothing about AI, bans nothing, however it says no: don't push to main, don't commit secrets, keep one change per pull request, don't run the release script, don't ping maintainers for review, don't commit build artifacts or other generated output, open a pull request only once the tests run, the lint step only checks changed files. That holds in a file written for agents and in an AI policy file, where such rules sit beside the policy. Rules in AGENTS.md or CLAUDE.md that tell an agent how to work in the repository are ordinary rules, not refusals of agents.
+- A rule that keeps an agent from contributing at all is a refusal, even in AGENTS.md or CLAUDE.md, and even when another line welcomes agents: agents may not open pull requests, may not change any file, may not push to any of the repository's branches, or may only read issues and do nothing with them.
+- Outside contributors open their pull requests against the default branch, often called main or master, or against the branch the project names. A rule that keeps agents, or AI-made work, from opening pull requests against that branch, or against all the branches a contributor could target, leaves agents no way in. That is a \`bansAi\`. Pushing to the repository's own main branch is different: outside contributors push to their forks, so a rule against that is an ordinary rule.
+- A contributor's checkbox or form option that only reports what they did, among other choices, is their answer, not a ban. One that has them confirm, agree, promise, or certify that they used no AI makes working without AI a condition of contributing, which is a ban.
+- A rule to disclose AI help, or to say which tool or model helped, is a condition. A rule to say the work was made without AI is a ban.
 - A rule about AI help that isn't a refusal is a condition or nothing: disclose it, keep changes small, mention which tool you used, don't paste output you haven't read.
-- A sentence is about AI only when it is. A checkbox a contributor ticks to say they used no AI is their answer, not a ban. A rule against editing generated files is about build output.
+- A sentence is about AI only when it is. A rule against editing or committing generated files is about build output.
 - A welcome must be the project's own. Text the docs quote from another project, or a collection of other projects' policies, is not this repository's policy. Don't report it as a statement, and say so in the summary.
 - A file of instructions for agents is not by itself a welcome to outside contributions. Maintainers often write one for their own agents.
 
@@ -102,8 +109,8 @@ ${POINTERS}
 
 ## What to look for
 
-- \`bansAi\`: AI help, or work made with it, is refused anywhere in the project, or allowed only so narrowly that AI-made code or pull requests are refused. A partial ban counts.
-- \`refusesOutsidePrs\`: the project takes no outside pull requests at all.
+- \`bansAi\`: AI help, or work made with it, is refused anywhere in the project, or allowed only so narrowly that a pull request an agent wrote is refused. A partial ban counts, like AI assistance allowed but pull requests written mostly by a model refused, a pledge to use no AI, a request to keep AI or a named tool out, or a rule that keeps agents from opening pull requests against the branch contributors target.
+- \`refusesOutsidePrs\`: the project takes no outside pull requests at all, or leaves no way in, like no pull requests to any branch or no changes to any file.
 - \`noAutonomy\`: agents may not work, or open pull requests, on their own.
 - \`personInLoop\`: a person must review, read, understand, or answer for the work before it is submitted.
 - \`canary\`: a line in AGENTS.md or CLAUDE.md asks an agent to prove it read the file.
@@ -133,7 +140,8 @@ JSON in the schema you are given: \`labels\`, one entry for each label that mean
 - \`meaning\`:
   - \`readyForOutsideHelp\`: the issue is offered to contributors from outside the team, like "help wanted", "up for grabs", or "patches welcome", by its name, its description, or the docs.
   - \`keptForPeople\`: the issue is kept for people, like newcomers or first-time contributors, or the docs keep it away from AI. A label for first-time contributors, like "good first issue", is kept for people unless the docs offer it to agents.
-  - \`agentsOnly\`: the docs keep agents to issues with this label, or its name or description says it is for AI agents.
+  - \`agentsOnly\`: a statement from the docs keeps agents to issues with this label. Use \`statement\` evidence for it. A label whose name or description says it is for agents, with no such statement, is \`readyForOutsideHelp\`.
+  - Once the docs keep agents to one label, the other labels don't matter for agents. Leave them out unless they mean something on their own.
 - \`evidence\`: \`name\`, \`description\`, or \`statement\`, whichever your meaning rests on most.
 - \`statement\`: the number of the statement your meaning rests on, when \`evidence\` is \`statement\`, and null otherwise.
 - \`why\`: one sentence, at most 300 characters.
