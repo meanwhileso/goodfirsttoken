@@ -9,6 +9,7 @@ import {
   ensureResources,
   exportCredential,
   getCredential,
+  OPTIONAL_SECRETS,
   putSecrets,
   smokeTest,
   smokeTestUrl,
@@ -524,6 +525,64 @@ test('each secret the Worker declares is put one at a time, its value only on st
     assert.equal(JSON.stringify(run.env).includes('value-'), false, 'no secret value in the environment Wrangler gets');
   }
   assert.equal(lines.join('\n').includes('value-'), false, 'no secret value in the log');
+});
+
+test('an optional secret is put when the environment has it, and left alone when it does not', (t) => {
+  const root = sampleRoot(t);
+  const runs = recordingWrangler(root);
+  const lines = [];
+  const required = { SESSION_KEY: 'value-one' };
+  const put = (env) =>
+    putSecrets({
+      config: { secrets: { required: ['SESSION_KEY'] } },
+      optional: ['MODEL_KEY', 'OTHER_KEY'],
+      env,
+      wrangler: wranglerIn(root, { ...process.env, ...env }),
+      log: (line) => lines.push(line),
+    });
+
+  put(required);
+  const without = runs().map((run) => run.args[2]);
+  put({ ...required, MODEL_KEY: 'value-model', OTHER_KEY: '' });
+  const recorded = runs().slice(without.length);
+
+  assert.deepEqual(without, ['SESSION_KEY'], 'a deploy without the optional secrets goes ahead');
+  assert.deepEqual(
+    recorded.map((run) => run.args),
+    [
+      ['secret', 'put', 'SESSION_KEY', '--config', 'wrangler.deploy.json'],
+      ['secret', 'put', 'MODEL_KEY', '--config', 'wrangler.deploy.json'],
+    ],
+  );
+  assert.equal(recorded[1]?.stdin, 'value-model');
+  for (const run of recorded) {
+    assert.equal(JSON.stringify(run.env).includes('value-'), false, 'no secret value in the environment Wrangler gets');
+  }
+  assert.ok(lines.some((line) => /MODEL_KEY is not set/.test(line)), 'the log says which optional secret was left out');
+  assert.equal(lines.join('\n').includes('value-'), false, 'no secret value in the log');
+});
+
+test('the secrets step puts the Anthropic key when the environment has it, and goes ahead without it', (t) => {
+  const root = sampleRoot(t);
+  const runs = recordingWrangler(root);
+  const config = { secrets: { required: ['SESSION_KEY'] } };
+  const put = (env) => putSecrets({ config, env, wrangler: wranglerIn(root, { ...process.env, ...env }), log: () => {} });
+
+  put({ SESSION_KEY: 'value-one' });
+  const without = runs().length;
+  put({ SESSION_KEY: 'value-one', ANTHROPIC_API_KEY: 'value-anthropic' });
+  const withKey = runs().slice(without);
+
+  assert.ok(OPTIONAL_SECRETS.includes('ANTHROPIC_API_KEY'));
+  assert.equal(without, 1);
+  assert.deepEqual(
+    withKey.map((run) => [run.args[2], run.stdin]),
+    [
+      ['SESSION_KEY', 'value-one'],
+      ['ANTHROPIC_API_KEY', 'value-anthropic'],
+    ],
+  );
+  for (const run of withKey) assert.equal(JSON.stringify(run.env).includes('value-'), false);
 });
 
 test('a missing secret stops the deploy before any secret is put', () => {

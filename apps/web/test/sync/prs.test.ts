@@ -18,7 +18,7 @@ import {
 import { issueRoom, type IssueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, sha, signIn, t0 } from '../db/helpers';
 import { callsTo, freshNumbers, jobDeps, madeBefore, SERVICE_LOGIN } from './helpers';

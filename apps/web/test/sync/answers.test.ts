@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { addPr, getPr, getProject, saveClaim } from '../../src/db';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { followPrs } from '../../src/sync/prs';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, maintainer, priya, registeredProject, sha, signIn } from '../db/helpers';
 import { freshNumbers, jobDeps } from './helpers';

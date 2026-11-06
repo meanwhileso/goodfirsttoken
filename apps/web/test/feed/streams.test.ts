@@ -1,15 +1,16 @@
 import { listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import type { ClaimRecord, FeedEvent } from '@goodfirsttoken/core';
+import { utcDay, type ClaimRecord, type FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { blockDonor, saveIssues, savePerson } from '../../src/db';
+import { adminRemoveProject } from '../../src/admin/actions';
+import { blockDonor, changeSettings, createProject, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
-import { homeFeed, personFeed } from '../../src/rooms/feed';
+import { homeFeed, personFeed, repoFeed } from '../../src/rooms/feed';
 import { issueRoom, ROOM_RESUME, ROOM_TAIL } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
 import { inOneLimitWindow, randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
-import { feedEvent, fields, liveSocket, readStream, storedEvents } from './helpers';
+import { feedEvent, fields, liveSocket, readStream, storedEvents, watchSocket } from './helpers';
 
 // The live text streams, read through the Worker the way `curl -N` reads
 // them, while the issue room, the feed queue, and the feeds run as they do in
@@ -30,6 +31,18 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/** An admin removes the project at its maintainers' request, which lists its repo and rejects it. */
+async function remove(name: string): Promise<void> {
+  const configured = env.ADMIN_GITHUB_IDS;
+  env.ADMIN_GITHUB_IDS = String(admin.githubId);
+  try {
+    const removed = await adminRemoveProject({ ...admin, gitHubToken: () => Promise.resolve(null) }, { repo: name }, Date.now());
+    if (!removed.ok) throw new Error(removed.refusal.message);
+  } finally {
+    env.ADMIN_GITHUB_IDS = configured;
+  }
+}
 
 async function claim(person: { githubId: number; login: string }, agent = 'claude-code'): Promise<ClaimRecord> {
   const result = await issueRoom(env.ISSUE_ROOM, issue).claim({
@@ -147,7 +160,7 @@ describe('a text stream', () => {
   /** Delivers an event with this text and job to priya's feed, as a feed kept it. */
   async function keptEvent(text: string, job: string | null = null): Promise<void> {
     const event = feedEvent({ time: new Date().toISOString(), user: priya.login, issue, text, job });
-    await personFeed(env.FEED, priya.githubId).deliver([{ event, githubId: priya.githubId }]);
+    await personFeed(env.FEED, priya.githubId).deliver([{ event, githubId: priya.githubId, project: repo }]);
   }
 
   test('keeps a text with tabs, line breaks, carriage returns, and terminal controls on one line', async () => {
@@ -281,7 +294,7 @@ describe('a text stream', () => {
     const reader = { githubId: 3303, login: 'sample-hour-reader' };
     await signIn(reader);
     const feed = personFeed(env.FEED, reader.githubId);
-    const entry = (text: string) => ({ event: feedEvent({ user: reader.login, text }), githubId: reader.githubId });
+    const entry = (text: string) => ({ event: feedEvent({ user: reader.login, text }), githubId: reader.githubId, project: repo });
     // Far ahead of the real clock. Only Date is fake, which the Worker's own
     // request reads too.
     const opened = Date.UTC(2100, 0, 4, 12, 0, 0);
@@ -344,7 +357,7 @@ describe('a text stream', () => {
     const request = new Request(`http://localhost/@${slow.login}/live.txt`);
     const res = await handleStream(request, { readerWaitMs: 100 });
     expect(res.status).toBe(200);
-    const entry = () => ({ event: feedEvent({ user: slow.login }), githubId: slow.githubId });
+    const entry = () => ({ event: feedEvent({ user: slow.login }), githubId: slow.githubId, project: repo });
 
     await feed.deliver([entry()]);
     expect(await sockets(feed)).toBe(1);
@@ -441,6 +454,24 @@ describe('asking for a stream', () => {
     // Nothing made a room for the issue.
     const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
+  });
+
+  test('a pending project has no stream of its own, and a paused one keeps its stream', async () => {
+    for (const [name, status] of [['sample-owner/sample-pending', 'pending'], ['sample-owner/sample-paused', 'paused']] as const) {
+      await createProject(
+        db,
+        { repo: name, status, source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+        t0,
+      );
+    }
+
+    const pending = await readStream('/sample-owner/sample-pending/live.txt');
+    const paused = await readStream('/sample-owner/sample-paused/live.txt');
+
+    expect(pending.res.status).toBe(404);
+    expect(await pending.res.text()).toBe('sample-owner/sample-pending is not a project on Good First Token.\n');
+    expect(paused.res.status).toBe(200);
+    await paused.cancel();
   });
 
   test("a blocked donor's stream answers the same as a login no one signed in with, so it gives away no block", async () => {
@@ -687,6 +718,45 @@ describe("an issue's live socket on a long history", () => {
     ]);
     socket.socket.close(1000);
   });
+
+  test("fills the newest 100 past a removed project's newer posts, and its glance leaves them out", async () => {
+    // Another project keeps its issues in this repo, and kenji's claim on the
+    // issue is on it. Removing it leaves the repo shown, since this repo's own
+    // project is approved and off the list, so only the project hides his.
+    const removed = 'sample-owner/sample-removed';
+    await registeredProject({ tags: ['help wanted'], issueRepo: repo }, removed);
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const priyas = await claim(priya);
+    await postMany(priyas, 3);
+    const kenjis = await room.claim({
+      issue,
+      project: removed,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!kenjis.ok) throw new Error(kenjis.refusal.message);
+    await postMany(kenjis.claim, ROOM_TAIL, 'kenji');
+    await remove(removed);
+
+    const socket = await liveSocket(issueSocket());
+    const glance = await room.glance();
+
+    await socket.event('update 3');
+    const priyas4 = [
+      ['priya', 'claimed the issue'],
+      ['priya', 'update 1'],
+      ['priya', 'update 2'],
+      ['priya', 'update 3'],
+    ];
+    expect(socket.events.map((e) => [e.user, e.text])).toEqual(priyas4);
+    expect(glance?.events.map((e) => [e.user, e.text])).toEqual(priyas4);
+    expect((await room.history()).map((e) => [e.user, e.text])).toEqual(priyas4);
+    socket.socket.close(1000);
+  }, 60_000);
 });
 
 describe('the stream limit', () => {
@@ -790,4 +860,74 @@ describe('the sockets one address holds', () => {
     },
     90_000,
   );
+});
+
+describe('a project removed after it moved its issues back to its code repo', () => {
+  const code = 'sample-owner/sample-moved';
+  const elsewhere = 'sample-owner/sample-moved-issues';
+
+  test('has the events on its old issues hidden everywhere they were shown', async () => {
+    await registeredProject({ tags: ['help wanted'], issueRepo: elsewhere }, code);
+    const old = `${elsewhere}#${String(issueNumber)}`;
+    const room = issueRoom(env.ISSUE_ROOM, old);
+    const claimed = await room.claim({
+      issue: old,
+      project: code,
+      githubId: priya.githubId,
+      login: priya.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!claimed.ok) throw new Error(claimed.refusal.message);
+    const text = `work on the old issue #${String(issueNumber)}`;
+    const posted = await room.postUpdate({ claimId: claimed.claim.id, githubId: priya.githubId, text });
+    if (!posted.ok || !posted.posted) throw new Error('The post was not stored.');
+    const feeds = [homeFeed(env.FEED), repoFeed(env.FEED, code), personFeed(env.FEED, priya.githubId)];
+    for (const feed of feeds) await delivered(feed, text);
+
+    // The maintainers move the issues back to the code repo, then ask to be removed.
+    const moved = await changeSettings(db, code, { issueRepo: null }, maintainer.githubId, Date.now());
+    if (moved === null || !moved.ok) throw new Error('The issue repo did not move.');
+    await remove(code);
+
+    const day = utcDay(Date.now());
+    for (const feed of feeds) {
+      expect((await feed.history()).map((e) => e.text)).not.toContain(text);
+      expect((await feed.glance({ count: 100, day }))?.events.map((e) => e.text)).not.toContain(text);
+    }
+    expect((await room.history()).map((e) => e.text)).not.toContain(text);
+    const glance = await room.glance();
+    expect(glance?.events.map((e) => e.text)).not.toContain(text);
+
+    // A new socket on each gets nothing of it. A line on another project's
+    // claim marks when the history has gone out.
+    const sockets = await Promise.all([...feeds, room].map((stub) => watchSocket(stub)));
+    const marker = `a line elsewhere #${String(issueNumber)}`;
+    for (const feed of feeds) {
+      await feed.deliver([{ event: feedEvent({ issue, text: marker }), githubId: kenji.githubId, project: repo }]);
+    }
+    const kenjis = await room.claim({
+      issue: old,
+      project: repo,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!kenjis.ok) throw new Error(kenjis.refusal.message);
+    const marked = await room.postUpdate({ claimId: kenjis.claim.id, githubId: kenji.githubId, text: marker });
+    if (!marked.ok || !marked.posted) throw new Error('The marker was not stored.');
+    for (const socket of sockets) {
+      await socket.event(marker);
+      expect(socket.events.map((e) => e.text)).not.toContain(text);
+    }
+
+    // The removed project has no stream of its own.
+    const stream = await readStream(`/${code}/live.txt`);
+    expect(stream.res.status).toBe(404);
+  });
 });

@@ -19,7 +19,7 @@ import {
 import { BranchReader } from '../../src/donor/branches';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { recordClearedPrs } from '../../src/sync/cleared';
-import { ALLOWANCES } from '../../src/sync/scheduled';
+import { ALLOWANCES } from '../../src/sync/allowances';
 import { APP as OAUTH_APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { freshNumbers, jobDeps } from '../sync/helpers';

@@ -426,7 +426,7 @@ describe('text from GitHub or an agent adds nothing to the markdown', () => {
     }
     await claimWithLine(`${repo}#1`, ATTACKS.join(' ').slice(0, 190));
     await homeFeed(env.FEED).deliver(
-      ATTACKS.map((text, i): { event: FeedEvent; githubId: number } => ({
+      ATTACKS.map((text, i): { event: FeedEvent; githubId: number; project: string } => ({
         event: {
           id: `e_readable${String(i).padStart(14, '0')}`,
           time: new Date(t0 + i * 1000).toISOString(),
@@ -439,6 +439,7 @@ describe('text from GitHub or an agent adds nothing to the markdown', () => {
           text: text.replaceAll('\n', ' '),
         },
         githubId: priya.githubId,
+        project: repo,
       })),
     );
 

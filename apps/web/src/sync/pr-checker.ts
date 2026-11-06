@@ -3,7 +3,7 @@ import { githubId as githubIdSchema, id, mustParse, type PrRecord } from '@goodf
 import { getPr } from '../db';
 import { ServiceGitHub, type Allowance } from './github';
 import { BATCH, checkClaimPrs, isFollowed } from './prs';
-import { ALLOWANCES } from './scheduled';
+import { ALLOWANCES } from './allowances';
 
 // The checks donors ask for with check_pr (src/mcp/donor.ts). The donor's
 // agent reads their PRs on GitHub with the donor's own account, and asks

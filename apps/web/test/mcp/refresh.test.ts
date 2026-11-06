@@ -5,7 +5,7 @@ import { createProject, getProject, listIssues, savePerson } from '../../src/db'
 import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { syncTaggedIssues } from '../../src/sync/issues';
-import { refreshIssues } from '../../src/sync/scheduled';
+import { refreshIssues } from '../../src/sync/read-now';
 import { freshNumbers, jobDeps, knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 
