@@ -175,9 +175,9 @@ export class Feed extends DurableObject<Env> {
 
   /**
    * The events the feed keeps after the one with ID `since`, oldest first,
-   * without blocked donors' events, events in repos the do-not-list
-   * covers, or events on projects it names. With no `since`, or one the feed doesn't keep, every event it
-   * keeps. Throws when D1 can't say what to hide.
+   * without blocked donors' events, events in repos the do-not-list covers,
+   * or events on projects it names. With no `since`, or one the feed doesn't
+   * keep, every event it keeps. Throws when D1 can't say what to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const at = typeof since === 'string' ? this.placeOf(since) : null;
@@ -189,15 +189,15 @@ export class Feed extends DurableObject<Env> {
   }
 
   /**
-   * The newest `count` events a watcher may see, up to 100, oldest first,
-   * and how many events happened on `day`, a UTC day like 2026-09-27. Blocked
-   * donors' events are left out of both, and events the do-not-list
-   * covers, by repo or by project, out of the events. The day's count is kept by
-   * claimant, so it still counts those. A page shows these first, then
-   * opens a watcher's socket with the newest event's ID as `since`. Null
-   * when D1 can't say what to hide, so nothing that should be hidden shows.
-   * The runtime reports an error thrown in a Durable Object as uncaught, so
-   * this answers null in its place.
+   * The newest `count` events a watcher may see, up to 100, oldest first, and
+   * how many events happened on `day`, a UTC day like 2026-09-27. Blocked
+   * donors' events are left out of both, and events the do-not-list covers,
+   * by repo or by project, out of the events. The day's count is kept by
+   * claimant, so it still counts those. A page shows these first, then opens
+   * a watcher's socket with the newest event's ID as `since`. Null when D1
+   * can't say what to hide, so nothing that should be hidden shows. The
+   * runtime reports an error thrown in a Durable Object as uncaught, so this
+   * answers null in its place.
    */
   async glance({ count, day }: { count: number; day: string }): Promise<FeedGlance | null> {
     const size = mustParse(wholeNumber(1, FEED_TAIL), count, 'count');

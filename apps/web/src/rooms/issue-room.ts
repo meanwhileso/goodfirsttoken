@@ -516,8 +516,8 @@ export class IssueRoom extends DurableObject<Env> {
   /**
    * The events after the one with ID `since`, oldest first, without blocked
    * donors' events, and none while the do-not-list covers the issue's repo,
-   * or names the project of the event's claim. With no `since`, or one this room never sent, every event. Throws when D1
-   * can't say what to hide.
+   * or names the project of the event's claim. With no `since`, or one this
+   * room never sent, every event. Throws when D1 can't say what to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const from = typeof since === 'string' ? (this.placeOf(since) ?? 0) : 0;

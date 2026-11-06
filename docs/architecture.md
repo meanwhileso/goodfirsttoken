@@ -2117,20 +2117,20 @@ streams' in [Text streams](how-it-works.md#text-streams).
   for D1's `donor_blocks` and `do_not_list` in between, so calls can finish
   out of order. Each send reads the events after the lowest place among the
   sockets, asks D1 which of their claimants are blocked and which of their
-  issues' repos and claims' projects the do-not-list covers, and sends each socket what it hasn't
-  had, up to the last event it read before the await. An event stored
-  during the await goes out with the send of the call that stored it. So
-  each watcher gets each event once, in order. A send returns the lowest
-  place a watcher is at once it is done, so a room can tell whether it
-  reached the last event stored.
+  issues' repos and claims' projects the do-not-list covers, and sends each
+  socket what it hasn't had, up to the last event it read before the await.
+  An event stored during the await goes out with the send of the call that
+  stored it. So each watcher gets each event once, in order. A send returns
+  the lowest place a watcher is at once it is done, so a room can tell
+  whether it reached the last event stored.
 - **A new watcher's history.** The feed or room is told which donors are
   known to be blocked and which repos and projects the do-not-list is known
   to cover, and reads only the events it will send: a feed with no `since`
   reads its newest 100 of the others, in one query. D1 is asked about any
   claimant, repo, or project in them not yet asked about, and the read
-  repeats until none is new. Then the socket is accepted, sent its history, and given its
-  place, with no await in between, so no event falls between its history
-  and the live ones.
+  repeats until none is new. Then the socket is accepted, sent its
+  history, and given its place, with no await in between, so no event
+  falls between its history and the live ones.
 - **When D1 can't say who is blocked,** a feed sets its alarm a minute
   ahead, and the alarm sends what is waiting. A feed has no other alarm.
   `deliver` also sends when every event it got was a copy, since the queue
@@ -2159,15 +2159,13 @@ streams' in [Text streams](how-it-works.md#text-streams).
     a `project` column, from the feed queue's message. That keeps an
     approved or paused project's events on a shared issue repo shown, and
     hides the removed project's own events there.
-  - A feed made before the column gains it in its constructor, and its
-    events stored before then have a null project. Those are judged by
-    their claim instead, with `doNotListedClaimsAmong`, which reads the
-    claim's project from D1's `claims`, which keeps every claim. That is a
-    join at read time, not a backfill, so nothing has to run once per feed,
-    a feed that never wakes needs nothing, and when D1 can't say, the event
-    waits like any other. A claim D1 doesn't hold yet is judged by its
-    repo alone. A feed keeps its newest 1,000 events, so these age out as new ones
-    arrive.
+  - A feed made before the column gains it in its constructor. Its events
+    stored before then have a null project, and are judged by their claim.
+    `doNotListedClaimsAmong` reads each claim's project from D1's `claims`,
+    which keeps every claim, in the same query as the rest. So no backfill
+    has to run in each feed, and when D1 can't say, the event waits like
+    any other. A claim D1 doesn't hold yet is judged by its repo alone.
+    These events leave as a feed drops its oldest past 1,000.
   - A feed with no `since` skips hidden repos, projects, and claims in SQL,
     so its newest 100 are ones it sends.
 
@@ -2576,12 +2574,11 @@ under The projects list and The project page.
   list that kept its issues there would take the page away.
   `doNotListedProjectsAmong`, which they hide events by project with,
   reads the same two entries. A repo's text stream and live socket open
-  only when `hasPage` is true, so a removed project has no stream. Who paused it doesn't
-  count. The mark in
-  `issue_syncs.delisted` hides what the site cached from the repos,
-  whatever the status, and `DELISTED` in `src/db/waiting.ts` reads the same
-  column for the lists and the claims, so the rule lives in that column
-  alone. Then, at the same time, its
+  only when `hasPage` is true, so a removed project has no stream. Who
+  paused it doesn't count. The mark in `issue_syncs.delisted` hides what the
+  site cached from the repos, whatever the status, and `DELISTED` in
+  `src/db/waiting.ts` reads the same column for the lists and the claims, so
+  the rule lives in that column alone. Then, at the same time, its
   tagged issues with `listProjectIssues`, the claims working now with
   `countWorkingClaims`, the merged PRs with `listMergedPrs`, the top
   helpers with `topHelpers`, the save of its current settings with

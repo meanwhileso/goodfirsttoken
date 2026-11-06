@@ -181,12 +181,12 @@ function tooManyWatchers(): Response {
  * can fill a feed that sends each event to every socket it holds. An upgrade
  * that names no address, which only tests make, has no cap.
  *
- * What to hide is read before the socket is accepted. D1 is asked about
- * each donor, repo, project, and claim in the history not yet asked about,
- * and the history is read again, until none in it is new. Then the socket is accepted, sent
- * its history, and given its place with no await in between, so no event
- * can fall between the history and the live events. When D1 can't say what
- * to hide, the answer is 503 and nothing is sent.
+ * What to hide is read before the socket is accepted. D1 is asked about each
+ * donor, repo, project, and claim in the history not yet asked about, and the
+ * history is read again, until none in it is new. Then the socket is
+ * accepted, sent its history, and given its place with no await in between,
+ * so no event can fall between the history and the live events. When D1 can't
+ * say what to hide, the answer is 503 and nothing is sent.
  */
 export async function openWatcher(
   ctx: DurableObjectState,
@@ -230,9 +230,9 @@ export async function openWatcher(
 
 /**
  * Sends each watcher the events stored since the last one it was sent,
- * leaving out blocked donors' events, events in repos the do-not-list
- * covers, and events on projects it names. `after(seq)` gives the stored events after that place, oldest
- * first.
+ * leaving out blocked donors' events, events in repos the do-not-list covers,
+ * and events on projects it names. `after(seq)` gives the stored events after
+ * that place, oldest first.
  *
  * It sends only the events stored before it asks D1 what to hide. An event
  * stored during that await is sent by the call that stored it. Returns the

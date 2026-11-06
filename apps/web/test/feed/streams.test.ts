@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { utcDay, type ClaimRecord, type FeedEvent } from '@goodfirsttoken/core';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { adminRemoveProject } from '../../src/admin/actions';
-import { blockDonor, changeSettings, saveIssues, savePerson } from '../../src/db';
+import { blockDonor, changeSettings, createProject, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed, repoFeed } from '../../src/rooms/feed';
 import { issueRoom } from '../../src/rooms/issue-room';
@@ -444,6 +444,24 @@ describe('asking for a stream', () => {
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
   });
 
+  test('a pending project has no stream of its own, and a paused one keeps its stream', async () => {
+    for (const [name, status] of [['sample-owner/sample-pending', 'pending'], ['sample-owner/sample-paused', 'paused']] as const) {
+      await createProject(
+        db,
+        { repo: name, status, source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId },
+        t0,
+      );
+    }
+
+    const pending = await readStream('/sample-owner/sample-pending/live.txt');
+    const paused = await readStream('/sample-owner/sample-paused/live.txt');
+
+    expect(pending.res.status).toBe(404);
+    expect(await pending.res.text()).toBe('sample-owner/sample-pending is not a project on Good First Token.\n');
+    expect(paused.res.status).toBe(200);
+    await paused.cancel();
+  });
+
   test("a blocked donor's stream answers the same as a login no one signed in with, so it gives away no block", async () => {
     await blockDonor(db, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
     const answer = async (login: string, form: string, init?: RequestInit) => {
@@ -776,19 +794,29 @@ describe('a project removed after it moved its issues back to its code repo', ()
     expect(glance?.events.map((e) => e.text)).not.toContain(text);
 
     // A new socket on each gets nothing of it. A line on another project's
-    // issue marks when the feeds' history has gone out.
-    const sockets = await Promise.all(feeds.map((feed) => watchSocket(feed)));
-    const roomSocket = await watchSocket(room);
+    // claim marks when the history has gone out.
+    const sockets = await Promise.all([...feeds, room].map((stub) => watchSocket(stub)));
     const marker = `a line elsewhere #${String(issueNumber)}`;
     for (const feed of feeds) {
       await feed.deliver([{ event: feedEvent({ issue, text: marker }), githubId: kenji.githubId, project: repo }]);
     }
+    const kenjis = await room.claim({
+      issue: old,
+      project: repo,
+      githubId: kenji.githubId,
+      login: kenji.login,
+      agent: 'claude-code',
+      ownProject: false,
+      startCommit: sha,
+      slots: 3,
+    });
+    if (!kenjis.ok) throw new Error(kenjis.refusal.message);
+    const marked = await room.postUpdate({ claimId: kenjis.claim.id, githubId: kenji.githubId, text: marker });
+    if (!marked.ok || !marked.posted) throw new Error('The marker was not stored.');
     for (const socket of sockets) {
       await socket.event(marker);
       expect(socket.events.map((e) => e.text)).not.toContain(text);
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(roomSocket.events.map((e) => e.text)).not.toContain(text);
 
     // The removed project has no stream of its own.
     const stream = await readStream(`/${code}/live.txt`);

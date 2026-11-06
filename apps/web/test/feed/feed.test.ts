@@ -250,13 +250,16 @@ describe('a repo on the do-not-list', () => {
   }
 
   test("has the events on its issues hidden from the feed's watchers, the history stored before included, and they stay stored", async () => {
-    await feed.deliver([on('sample-owner/sample-app#1', 'app before'), on('sample-owner/sample-tools#2', 'tools before')]);
+    // The claims on its issues are another project's, which the list doesn't
+    // name, so only the issues' repo hides them.
+    const other = 'sample-owner/sample-other';
+    await feed.deliver([on('sample-owner/sample-app#1', 'app before', other), on('sample-owner/sample-tools#2', 'tools before')]);
 
     await addToDoNotList(db, { repo: 'Sample-Owner/Sample-App', reason: null, addedBy: admin.githubId }, Date.now());
 
     const watcher = await watchSocket(feed);
     expect(await watcher.received(1)).toEqual(['tools before']);
-    await feed.deliver([on('sample-owner/sample-app#3', 'app during'), on('sample-owner/sample-tools#4', 'tools during')]);
+    await feed.deliver([on('sample-owner/sample-app#3', 'app during', other), on('sample-owner/sample-tools#4', 'tools during')]);
     expect(await watcher.received(2)).toEqual(['tools before', 'tools during']);
     expect(await texts()).toEqual(['tools before', 'tools during']);
     expect((await storedEvents(feed)).map((e) => e.text)).toEqual(['app before', 'tools before', 'app during', 'tools during']);
