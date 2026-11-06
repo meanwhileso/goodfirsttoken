@@ -4077,12 +4077,14 @@ homepage's feed.
 
 - A feed keeps its newest 1,000 events, through restarts. Older ones are
   dropped as new ones come, so a feed stays small however long it runs.
-- An issue room keeps every change of state, the newest 20 lines of each
-  claim, which are all its lane shows, and its newest 1,000 events,
-  blocked donors' included. Each post deletes the lines older than those.
-  So a donor who posts every 10 seconds for days leaves the room holding
-  about 1,000 events and 20 lines a claim, and a quiet claim keeps its
-  lane however much another posts.
+- An issue room keeps its newest 1,000 events, blocked donors' included,
+  and beyond those, every change of state but repeat submits, the newest
+  20 lines of each claim, which are all its lane shows, and each claim's
+  first submit and its newest. Each post and submit deletes the rest. So a
+  donor who posts every 10 seconds for days, or submits again and again,
+  leaves the room holding about 1,000 events, 20 lines a claim, and two
+  submits a claim, and a quiet claim keeps its lane however much another
+  posts.
 - A feed also counts its events by the UTC day they happened and by
   claimant, and keeps each day's count for a week. A copy it ignores isn't
   counted. So a day's count holds however many of the day's events the feed
@@ -4595,7 +4597,9 @@ each a ring, filled while a claim takes it.
 
 **The timeline** lists every change of state on the issue, oldest first:
 each claim, pause, submit, PR, release, and expiry, with its time in UTC, the
-claimant, and their agent. The lines are in the lanes.
+claimant, and their agent. Past the room's newest 1,000 events, it can
+show only a claim's first submit and its newest, as the room keeps them.
+The lines are in the lanes.
 
 **Blocked donors** have no lane, no line, and no place in the timeline, as
 everywhere under [Live feeds](#live-feeds). A claim of theirs still takes

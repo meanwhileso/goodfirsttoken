@@ -11,7 +11,7 @@ import {
   savePerson,
   unblockDonor,
 } from '../../src/db';
-import { LANE_LINES } from '../../src/issue/view';
+import { foldEvents, LANE_LINES } from '../../src/issue/view';
 import {
   issueRoom,
   POST_INTERVAL_MS,
@@ -477,6 +477,44 @@ describe('posting updates', () => {
       'claimed the issue',
       ...range('kenji', 3, LANE_LINES + 2),
       'paused: no update for 30 minutes',
+    ]);
+  }, 120_000);
+
+  test("keeps each claim's first and newest submit, and deletes the repeat submits older than the newest events", async () => {
+    let now = t0;
+    const submitAs = async (claimed: ClaimRecord) => {
+      now += SECOND;
+      at(now);
+      expect(await room.submit({ claimId: claimed.id, githubId: claimed.githubId })).toMatchObject({ ok: true });
+      return new Date(now).toISOString();
+    };
+    const quiet = await claim(kenji);
+    const kenjiFirst = await submitAs(quiet);
+    await submitAs(quiet);
+    const kenjiNewest = await submitAs(quiet);
+    const busy = await claim(priya);
+    const priyas: string[] = [];
+    for (let i = 1; i <= ROOM_RESUME + 50; i += 1) priyas.push(await submitAs(busy));
+
+    const kept = (await storedEvents(room)).filter((e) => e.kind === 'submitted');
+
+    // The newest events are all of priya's submits but her first 50.
+    expect(kept.map((e) => [e.user, e.time])).toEqual([
+      ['kenji', kenjiFirst],
+      ['kenji', kenjiNewest],
+      ['priya', priyas[0]],
+      ...priyas.slice(50).map((time) => ['priya', time]),
+    ]);
+    // Both lanes still fold to awaiting review from the events the glance sends.
+    const glance = await room.glance();
+    expect(foldEvents(glance?.events ?? []).lanes.map((lane) => [lane.login, lane.state])).toEqual([
+      ['kenji', 'awaiting_review'],
+      ['priya', 'awaiting_review'],
+    ]);
+    expect(glance?.events.filter((e) => e.user === 'kenji').map((e) => e.text)).toEqual([
+      'claimed the issue',
+      'submitted the work',
+      'submitted more work',
     ]);
   }, 120_000);
 });
