@@ -503,8 +503,8 @@ admin_seed_repo {"repo": "sample-owner/sample-cli"}
   Tell the admin it goes back in the queue only when its docs read
   differently from that find's.
 - With `leftAlone` `project`, the repo is a project already. With
-  `leftAlone` `proposed`, a find of it waits in the admin queue, or was
-  approved. An ordinary call leaves both alone. An evidence call can
+  `leftAlone` `proposed`, a find of it waits in the admin queue. An
+  ordinary call leaves both alone. An evidence call can
   update a find that still waits. Tell the admin whether `evidenceChanged`
   is true.
 

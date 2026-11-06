@@ -444,6 +444,7 @@ describe('what each result says', () => {
     const note = `An admin rejected a find of ${repoName} before, so it goes back in the admin queue only when its docs read differently.`;
     expect(seed({ added: true, rejectedBefore: true })).toContain(note);
     expect(seed({ added: false, rejectedBefore: true })).toContain(note);
+    expect(seed({ added: true, rejectedBefore: true })).not.toContain('if they welcome AI help');
     expect(seed({ added: true, rejectedBefore: false })).not.toContain('rejected');
   });
 

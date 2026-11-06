@@ -1948,13 +1948,14 @@ midnight and `timePrecision: date`. Rechecking a post keeps its original
 publication time. Checks and publication times exactly 30 and 90 days old
 still qualify, and expire one millisecond later.
 
-Saving or clearing evidence preserves `addedBy`, `addedAt`, `handledAt`, and
-`outcome`. A waiting candidate accepts evidence before the ordinary
-`leftAlone: proposed` skip. If no seed exists, the call creates one already
-handled at the call's time with outcome `proposed`. An existing seed keeps
-its history. No extra policy read is queued. Projects and decided finds
-keep their skips. The do-not-list takes precedence, including for a waiting
-candidate. `added` reports seed creation. `evidenceChanged` reports an
+Saving or clearing evidence preserves `addedBy` and `addedAt`, and makes
+the seed due at the crawler's next run, as any call does. A waiting
+candidate accepts evidence before the ordinary `leftAlone: proposed` skip.
+If no seed exists, the call creates one already handled at the call's time
+with outcome `proposed`. An existing seed of a waiting candidate keeps its
+history. No extra policy read is queued for one. A project keeps its skip.
+A repo whose find an admin rejected takes evidence like any seed. The
+do-not-list takes precedence, including for a waiting candidate. `added` reports seed creation. `evidenceChanged` reports an
 evidence change even when `added` is false.
 
 Seed results and candidate admin detail show saved evidence and current

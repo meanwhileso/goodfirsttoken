@@ -414,6 +414,19 @@ describe('the cron job', () => {
     expect(logged).toContain('The crawler queued seeds: 1, listed projects to read again: 1.');
   });
 
+  test('a send the queue refuses fails the run, and its seeds stay due for the next run', async () => {
+    await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
+    const refusing = { sendBatch: () => Promise.reject(new Error('The queue is down.')) };
+
+    await expect(fillCrawlQueue({ db, queue: refusing, now: () => Date.now() })).rejects.toThrow('The queue is down.');
+    const after = await getSeed(db, SEED);
+    later(HOUR);
+    await fill();
+
+    expect(after).toMatchObject({ handledAt: null, outcome: null });
+    expect(sent).toEqual([{ repos: [SEED] }]);
+  });
+
   test('queues nothing when no seed is due and no listed project is due for its weekly read', async () => {
     const run = await fill();
 

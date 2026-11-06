@@ -129,8 +129,8 @@ export class ServiceGitHub implements GitHubReader {
     if (budgets.some((budget) => budget === null)) {
       throw new SyncStopped('github_error', "GitHub's API answered its rate limit in a form GitHub doesn't use.");
     }
-    // Only the crawler searches, so a job reads on when GitHub leaves the
-    // search budget out, and the first search's headers give it.
+    // No job searches now, so a job reads on when GitHub leaves the search
+    // budget out, and a search's headers would give it.
     for (const budget of [...budgets, budgetOf(SEARCH)]) this.note(budget);
   }
 
