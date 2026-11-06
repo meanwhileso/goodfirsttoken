@@ -67,6 +67,8 @@ export function storedReading(reading: ModelReading, hash: DocsHash): StoredRead
     steering: reading.steering.map(pointerOf),
     droppedSteering: reading.droppedSteering,
     summary: reading.summary,
+    // A find's label check comes back in a later batch, and adds them.
+    labels: null,
   };
 }
 

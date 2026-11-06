@@ -441,7 +441,7 @@ export async function readFiles(github: ServiceGitHub, repos: readonly FoundRepo
 }
 
 interface LabelConnection {
-  nodes: ({ name: string; issues: { totalCount: number } } | null)[] | null;
+  nodes: ({ name: string; description: string | null; issues: { totalCount: number } } | null)[] | null;
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
 }
 
@@ -458,8 +458,8 @@ export class RepoFailed extends Error {
 }
 
 /**
- * The repo's labels, the first 1,000, each with how many open issues carry
- * it, 100 to a GraphQL query. Null when GitHub doesn't show the repo. Throws
+ * The repo's labels, the first 1,000, each with its description and how
+ * many open issues carry it, 100 to a GraphQL query. Null when GitHub doesn't show the repo. Throws
  * RepoFailed when GitHub answers with any other error.
  */
 // https://docs.github.com/en/graphql/reference/labels#object-label
@@ -472,7 +472,7 @@ export async function readLabels(github: ServiceGitHub, repo: string): Promise<R
       `query ($owner: String!, $name: String!, $after: String) {
         repository(owner: $owner, name: $name) {
           labels(first: ${String(PAGE)}, after: $after) {
-            nodes { name issues(states: [OPEN]) { totalCount } }
+            nodes { name description issues(states: [OPEN]) { totalCount } }
             pageInfo { hasNextPage endCursor }
           }
         }
@@ -489,7 +489,10 @@ export async function readLabels(github: ServiceGitHub, repo: string): Promise<R
     if (!found) throw new RepoFailed(`GitHub gave no labels for ${repo}.`);
     for (const label of found.nodes ?? []) {
       const open = label?.issues.totalCount;
-      if (label && typeof label.name === 'string' && Number.isInteger(open)) labels.push({ name: label.name, openIssues: open ?? 0 });
+      if (label && typeof label.name === 'string' && Number.isInteger(open)) {
+        const description = typeof label.description === 'string' && label.description.trim() !== '' ? label.description : null;
+        labels.push({ name: label.name, description, openIssues: open ?? 0 });
+      }
     }
     if (!found.pageInfo.hasNextPage || found.pageInfo.endCursor === null) break;
     after = found.pageInfo.endCursor;

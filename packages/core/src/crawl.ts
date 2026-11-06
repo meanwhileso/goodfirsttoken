@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { count, epochMs, githubId, httpsUrl, id, labelName, repoName, trimmedText } from './primitives';
-import { policySchema, projectSettingsPatchSchema } from './projects';
+import { MAX_TAGS, policySchema, projectSettingsPatchSchema } from './projects';
 import { crawlPrioritySchema } from './crawl-priority';
 
 // The policy crawler's records (spec section 5): the repos it found for the
@@ -177,6 +177,23 @@ export const modelReadingSchema = z.object({
   droppedSteering: count,
   /** The model's summary for the admin. */
   summary: z.string().max(MAX_READING_SUMMARY),
+  /**
+   * What the model's label check made of the repo's labels, for a reading
+   * that would make a find, or null before the check is back, when it gave
+   * no verdict, or for a reading that makes no find. Label names are the
+   * repo's text.
+   */
+  labels: z
+    .object({
+      /** The tags the model's find would set: the labels it reads as ready, or the only label the docs name. */
+      tags: z.array(labelName).max(MAX_TAGS),
+      /** Those and the labels it reads as kept for people, each with its open issue count, for the admin to pick from. */
+      suggestedTags: z.array(suggestedTagSchema).max(MAX_TAGS),
+      /** How many labels the model named that the repo doesn't have, or that rest on a statement it wasn't sent, which were dropped. */
+      dropped: count,
+    })
+    .nullable()
+    .default(null),
 });
 export type ModelReading = z.infer<typeof modelReadingSchema>;
 

@@ -11,6 +11,7 @@ import { READER_VERSION } from '../../src/crawl/reader/version';
 import {
   addSeed,
   createProject,
+  dayUse,
   daySpend,
   decideCandidate,
   getModelRead,
@@ -195,11 +196,15 @@ describe('in shadow, a seed', () => {
     const { first, second } = await sendAndCollect();
 
     expect(first?.sent).toBe(1);
-    expect(anthropic.requests.map((r) => ({ via: r.via, kind: r.kind, refused: r.refused }))).toEqual([{ via: 'batch', kind: 'reading', refused: null }]);
+    // The reading would make a find, so its label check went in the second run's batch.
+    expect(anthropic.requests.map((r) => ({ via: r.via, kind: r.kind, refused: r.refused }))).toEqual([
+      { via: 'batch', kind: 'reading', refused: null },
+      { via: 'batch', kind: 'labels', refused: null },
+    ]);
     expect(second).toMatchObject({ collected: 1, read: 1, agree: 1, disagree: 0 });
     const kept = await getModelReading(db, INVITES);
     expect(kept).toMatchObject({ readerVersion: READER_VERSION, reading: { tier: 'invites_agents', agree: true } });
-    expect(await listPending(db)).toEqual([]);
+    expect(await listPending(db)).toMatchObject([{ step: 'labels' }]);
     // The rules' find is the one in the queue, with the rules' policy, and the model's reading beside it.
     const [find] = await listCandidates(db, 'waiting');
     expect(find?.policy).toEqual(LISTED);
@@ -232,6 +237,10 @@ describe('in shadow, a seed', () => {
 
     const run = await crawlSeed(BANS_AI);
     await sendAndCollect();
+    // The model's find waits for its label check.
+    expect(logged.some((line) => line.includes(`Seeds the model would have found that the rules didn't: ${BANS_AI}`))).toBe(false);
+    clock += HOUR;
+    await hourly();
 
     expect(run.tiers).toEqual({ bans_or_restricts: 1 });
     expect(await listCandidates(db, 'waiting')).toEqual([]);
@@ -359,7 +368,8 @@ describe('pending readings', () => {
 
 describe('the budget', () => {
   test('reserves before it sends, and settles to what the result cost', async () => {
-    await consume([INVITES]);
+    // A reading that makes no find, so no label check follows it.
+    await consume([BANS_AI]);
     const day = new Date(clock).toISOString().slice(0, 10);
 
     await hourly();
@@ -843,5 +853,251 @@ describe('in shadow, a weekly read', () => {
     expect(logged.filter((line) => line.includes(`gave ${INVITES} no verdict on`))).toHaveLength(1);
     expect((await getProject(db, INVITES))?.status).toBe('approved');
     expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
+  });
+});
+
+describe('in shadow, the label check', () => {
+  const WELCOME = 'Contributions written with AI tools are welcome.';
+  const ONLY = 'Agents work only on issues labeled agents only.';
+
+  /** Docs the rules read as a ban, which the model reads as a welcome, so its reading would make a find. */
+  function welcomeOn(repo: string, extra: Record<string, unknown>[] = [], only = ONLY): void {
+    commit(repo, { 'AGENTS.md': `# Agents\n\n${WELCOME}\n\n${only}\n` });
+    anthropic.answer(
+      { kind: 'reading' },
+      {
+        output: {
+          statements: [
+            { path: 'AGENTS.md', startLine: 3, endLine: 3, quote: WELCOME, about: 'welcomesAi', label: null, value: null, why: 'A welcome.' },
+            ...extra,
+          ],
+          tier: 'allows_with_conditions',
+          steering: [],
+          summary: 'Welcomes AI help.',
+        },
+      },
+    );
+  }
+
+  /** The model's answer to the next label check. */
+  function labelsAnswer(labels: { name: string; meaning: string }[]): void {
+    anthropic.answer(
+      { kind: 'labels' },
+      { output: { labels: labels.map((label) => ({ ...label, evidence: 'name', statement: null, why: 'Its name says so.' })) } },
+    );
+  }
+
+  /** The kinds of the model requests so far, in order. */
+  function kinds(): (string | null)[] {
+    return anthropic.requests.map((r) => r.kind);
+  }
+
+  /** The text of the last label check's user turn. */
+  function labelTurn(): string {
+    const request = anthropic.requests.filter((r) => r.kind === 'labels').at(-1);
+    const params = request?.params as { messages: { role: string; content: string }[] } | undefined;
+    return params?.messages[0]?.content ?? '';
+  }
+
+  /** The seed read, its reading sent and collected, and its label check sent and collected. */
+  async function readSeed(repo: string) {
+    await crawlSeed(repo);
+    const { first, second } = await sendAndCollect();
+    clock += HOUR;
+    const third = await hourly();
+    return { first, second, third };
+  }
+
+  test("goes in the batch after a reading that would make a find, at medium effort, and the find shows the model's suggested tags with open counts beside the rules'", async () => {
+    await crawlSeed(INVITES);
+    await sendAndCollect();
+
+    // The reading came back in the second run, which sent the label check in its batch.
+    expect(kinds()).toEqual(['reading', 'labels']);
+    const check = anthropic.requests[1];
+    expect(check?.via).toBe('batch');
+    expect(check?.refused).toBeNull();
+    expect(check?.params).toMatchObject({ max_tokens: 16_000, output_config: { effort: 'medium' } });
+    // Each label goes with its description, from the crawler's GraphQL read.
+    expect(labelTurn()).toContain(JSON.stringify({ name: 'agent ready', description: 'Ready for an agent', openIssues: 2 }));
+    expect(labelTurn()).toContain(JSON.stringify({ name: 'bug', description: "Something isn't working", openIssues: 0 }));
+    // With the reading's kept statements and their lines.
+    expect(labelTurn()).toContain('"about":"onlyLabel","label":"agent ready","path":"AI_POLICY.md"');
+    expect((await getModelReading(db, INVITES))?.reading.labels).toBeNull();
+
+    clock += HOUR;
+    const third = await hourly();
+
+    expect(third).toMatchObject({ collected: 1, labelsRead: 1 });
+    expect(await listPending(db)).toEqual([]);
+    expect((await getModelReading(db, INVITES))?.reading.labels).toEqual({
+      tags: ['agent ready'],
+      suggestedTags: [{ name: 'agent ready', openIssues: 2 }],
+      dropped: 0,
+    });
+    const { item, text } = await queueItem('candidate', INVITES);
+    // The rules suggest labels by name, and the model keeps to the only label the docs name.
+    expect(item.suggestedTags).toEqual([
+      { name: 'agent ready', openIssues: 2 },
+      { name: 'good first issue', openIssues: 1 },
+      { name: 'help wanted', openIssues: 0 },
+    ]);
+    expect(item.modelReading).toMatchObject({ labels: { suggestedTags: [{ name: 'agent ready', openIssues: 2 }] } });
+    expect(text).toContain(
+      'labels that could mean ready for help, each name in quotes as the repo spells it: "agent ready" (2 open), "good first issue" (1 open), "help wanted" (0 open)',
+    );
+    expect(text).toContain(
+      'the model reader\'s suggested tags from the same labels, in shadow, each name in quotes as the repo spells it: "agent ready" (2 open). The tags it would set: "agent ready".',
+    );
+  });
+
+  test('is not sent for a reading that would make no find, or for a weekly read', async () => {
+    await crawlSeed(BANS_AI);
+    await sendAndCollect();
+    await listing(INVITES);
+    await week();
+    await sendAndCollect();
+    clock += HOUR;
+    await hourly();
+
+    expect(kinds()).toEqual(['reading', 'reading']);
+    expect(await listPending(db)).toEqual([]);
+  });
+
+  test('drops a label the repo does not have', async () => {
+    welcomeOn(BANS_AI);
+    labelsAnswer([
+      { name: 'Help Wanted', meaning: 'readyForOutsideHelp' },
+      { name: 'up-for-grabs', meaning: 'readyForOutsideHelp' },
+    ]);
+
+    await readSeed(BANS_AI);
+
+    expect((await getModelReading(db, BANS_AI))?.reading.labels).toEqual({
+      tags: ['help wanted'],
+      suggestedTags: [{ name: 'help wanted', openIssues: 0 }],
+      dropped: 1,
+    });
+  });
+
+  test('keeps good first issue out of the tags and in the suggested tags, even when the model calls it ready', async () => {
+    welcomeOn(BANS_AI);
+    labelsAnswer([
+      { name: 'good first issue', meaning: 'readyForOutsideHelp' },
+      { name: 'help wanted', meaning: 'readyForOutsideHelp' },
+    ]);
+
+    await readSeed(BANS_AI);
+
+    expect((await getModelReading(db, BANS_AI))?.reading.labels).toEqual({
+      tags: ['help wanted'],
+      suggestedTags: [
+        { name: 'good first issue', openIssues: 0 },
+        { name: 'help wanted', openIssues: 0 },
+      ],
+      dropped: 0,
+    });
+  });
+
+  test('keeps an only label the only tag, even when the model calls others ready', async () => {
+    // The fake calls help wanted ready too, and the docs keep agents to agent ready.
+    await readSeed(INVITES);
+
+    expect(labelTurn()).toContain('"name":"help wanted"');
+    const labels = (await getModelReading(db, INVITES))?.reading.labels;
+    expect(labels?.tags).toEqual(['agent ready']);
+    expect(labels?.suggestedTags.map((tag) => tag.name)).toEqual(['agent ready']);
+  });
+
+  test("makes no tag for an only label the repo doesn't have", async () => {
+    welcomeOn(BANS_AI, [{ path: 'AGENTS.md', startLine: 5, endLine: 5, quote: ONLY, about: 'onlyLabel', label: 'agents only', value: null, why: 'Keeps agents to it.' }]);
+    labelsAnswer([{ name: 'help wanted', meaning: 'readyForOutsideHelp' }]);
+
+    await readSeed(BANS_AI);
+
+    expect((await getModelReading(db, BANS_AI))?.reading.labels).toEqual({ tags: [], suggestedTags: [], dropped: 0 });
+  });
+
+  test('sends up to 300 labels, the most open issues first, and every label a kept statement names', async () => {
+    // 305 labels with no open issues, and one the docs name, past the first 300 by name.
+    const areas = Array.from({ length: 305 }, (_, i) => `area ${String(i).padStart(3, '0')}`);
+    const old = github.openIssue(BANS_AI, { title: 'An old one', labels: [...areas, 'zz agents only'], by: MAINTAINER.login });
+    github.closeIssue(BANS_AI, old, MAINTAINER.login);
+    for (let i = 0; i < 3; i++) github.openIssue(BANS_AI, { title: `Fix ${String(i)}`, labels: ['help wanted'], by: MAINTAINER.login });
+    const only = 'Agents work only on issues labeled zz agents only.';
+    welcomeOn(
+      BANS_AI,
+      [{ path: 'AGENTS.md', startLine: 5, endLine: 5, quote: only, about: 'onlyLabel', label: 'zz agents only', value: null, why: 'Keeps agents to it.' }],
+      only,
+    );
+
+    await readSeed(BANS_AI);
+
+    const sentNames = labelTurn()
+      .split('\n')
+      .flatMap((line) => (line.startsWith('{"name":') ? [(JSON.parse(line) as { name: string }).name] : []));
+    expect(sentNames).toHaveLength(301);
+    expect(sentNames[0]).toBe('help wanted');
+    expect(sentNames.at(-1)).toBe('zz agents only');
+  });
+
+  test("spends from the seeds' share", async () => {
+    await crawlSeed(INVITES);
+    await sendAndCollect();
+    const day = new Date(clock).toISOString().slice(0, 10);
+
+    const use = await dayUse(db, day);
+    const [pending] = await listPending(db);
+
+    expect(pending).toMatchObject({ step: 'labels', share: 'seeds' });
+    expect(pending?.reservedUsd).toBeGreaterThan(0);
+    expect(use.weekly).toBe(0);
+    expect(use.seeds).toBeGreaterThan(pending?.reservedUsd ?? 0);
+  });
+
+  test('with no verdict keeps the reading without suggested tags, and the log says why', async () => {
+    anthropic.answer({ kind: 'labels' }, { stop: 'refusal' });
+
+    const { third } = await readSeed(INVITES);
+
+    expect(third?.noVerdict).toEqual({ 'labels: stop reason refusal': 1 });
+    expect(await listPending(db)).toEqual([]);
+    expect(await getModelReading(db, INVITES)).toMatchObject({ reading: { tier: 'invites_agents', labels: null } });
+    expect(logged.some((line) => line.includes(`The policy reader gave ${INVITES}'s labels no verdict: stop reason refusal.`))).toBe(true);
+  });
+
+  test('that expired goes in a later batch', async () => {
+    anthropic.answer({ kind: 'labels' }, { result: 'expired' });
+
+    const { third } = await readSeed(INVITES);
+    expect(third).toMatchObject({ retried: 1, sent: 1 });
+    clock += HOUR;
+    await hourly();
+
+    expect(kinds()).toEqual(['reading', 'labels', 'labels']);
+    expect((await getModelReading(db, INVITES))?.reading.labels?.tags).toEqual(['agent ready']);
+  });
+
+  test('is dropped when newer docs were staged for the repo before it came back', async () => {
+    // The rules make no find here, so the seed is read again.
+    anthropic.holdBatches = true;
+    welcomeOn(BANS_AI);
+    await crawlSeed(BANS_AI);
+    await hourly();
+    anthropic.endBatches();
+    clock += HOUR;
+    await hourly();
+    // The label check is in a batch the API hasn't ended.
+    expect(await listPending(db)).toMatchObject([{ step: 'labels', batchId: expect.any(String) as unknown }]);
+    commit(BANS_AI, { 'AGENTS.md': '# Agents\n\nRun the tests before you open a pull request.\n' });
+    await consume([BANS_AI]);
+    anthropic.endBatches();
+    clock += HOUR;
+
+    const run = await hourly();
+
+    expect(run).toMatchObject({ replaced: 1, labelsRead: 0 });
+    expect((await getModelReading(db, BANS_AI))?.reading.labels).toBeNull();
+    expect(await listPending(db)).toMatchObject([{ step: 'reading' }]);
   });
 });

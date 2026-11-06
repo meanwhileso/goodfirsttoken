@@ -886,10 +886,12 @@ function firstFound<T>(files: readonly PolicyFile[], find: (text: string) => Fou
   return null;
 }
 
-/** A label with its open issue count, as GitHub gave it. */
+/** A label with its open issue count, as GitHub gave it, and its description, which the model's label check reads. */
 export interface RepoLabel {
   name: string;
   openIssues: number;
+  /** The repo's text. Null when the label has none, and left out where only the name and count matter. */
+  description?: string | null;
 }
 
 const lower = (text: string) => text.toLowerCase();

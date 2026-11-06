@@ -1625,8 +1625,8 @@ in `people`.
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read and whether they read a ban, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, and how many weekly reads in a row gave no verdict | `project` |
 | `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, status, and the admin's decision | `id` |
-| `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, its outcome fingerprint, and when | `repo` |
-| `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, the rules' tier, the commit, branch, facts, vouch file, and labels, and while in a batch, the batch and what it reserved on which day | `id` |
+| `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, with the label check's tags and suggested tags once back, its outcome fingerprint, and when | `repo` |
+| `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, the rules' tier, the commit, branch, facts, vouch file, and labels with their descriptions, and while in a batch, the batch and what it reserved on which day. After a seed's reading that would make a find, it waits on the label check, with the model's policy reading | `id` |
 | `model_staged_files` | File a pending reading reads, in the crawler's order | `reading_id`, `position` |
 | `model_batches` | Batch the reader sent and hasn't collected | `id` |
 | `model_spend` | What the model spent and reserved, on a UTC day, for a share of the budget | `day`, `share` |
@@ -3351,7 +3351,7 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
 | `src/crawl/reader/` | The model policy reader's core: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, the price table, the docs hash, and the day's budget with its shares. It makes no network calls |
 | `src/crawl/model.ts` | The crawl consumer's half of the model reader: after the rules read a repo, decides whether the model reads it too, and stages its files and labels in D1 |
-| `src/crawl/batches.ts` | The model reader's hourly run: collects the batches that ended by `custom_id`, checks and keeps each reading, drops what kept failing for 7 days, and sends what is pending as one batch, inside the day's budget |
+| `src/crawl/batches.ts` | The model reader's hourly run: collects the batches that ended by `custom_id`, checks and keeps each reading, drops what kept failing for 7 days, and sends what is pending as one batch, inside the day's budget. A find's label check goes in the batch after its reading |
 | `src/db/reader.ts` | The model reader's tables: the last reading of each repo, the pending readings and their staged files, the batches in flight, each day's spend, and the reader's state between runs |
 
 - **A cron fills a queue, and the queue's consumer reads.** The cron job,
@@ -3639,13 +3639,21 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   is the larger of one token for every three characters and one for every
   three UTF-8 bytes, so docs in a script that takes a token a character
   aren't reserved short.
+- **The label check rides its reading's row.** A seed's reading that would
+  make a find stays in `model_pending` with `step = 'labels'` and the
+  model's policy reading as JSON, and keeps its staged files and its
+  `custom_id`. Sending and collecting the check both read that JSON
+  against the files again, so both see the same kept statements, and
+  `labelsToSend` picks the same labels. The check reserves from the
+  reading's share. The tags and suggested tags go on the `model_readings`
+  row only when its docs hash is still the check's.
 - **One result can't stall the run.** An error keeping one result, like a
   D1 error, makes that reading no verdict, and the run goes on. A kept
   reading over 1,500,000 bytes of JSON is no verdict too, under D1's 2 MB
   row limit.
 - **Text held, and for how long.** `model_staged_files` holds a pending
-  reading's files, the repo's public docs, until its reading is done, and
-  at most 7 days. `model_readings` keeps only what the admin queue shows:
+  reading's files, the repo's public docs, until its reading and any label
+  check are done, and at most 7 days. `model_readings` keeps only what the admin queue shows:
   the lines each statement and steering line points at, each cut to 500
   characters, and the model's notes.
 - **The queue's name.** The Worker tells a crawl batch by its queue's name:

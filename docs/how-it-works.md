@@ -1696,8 +1696,10 @@ of them but a request to be removed.
   [policy crawler](#the-policy-crawler) makes them, and so does the sample
   data. When the [model policy reader](#the-model-policy-reader) has read
   the same docs, the find shows its reading too, under the rules' one, and
-  any lines it found that try to steer a reader, at the top. While the
-  reader runs in shadow, the rules' reading is the one acted on.
+  any lines it found that try to steer a reader, at the top. Once the
+  model's label check is back, the find shows its suggested tags beside
+  the rules'. While the reader runs in shadow, the rules' reading is the
+  one acted on.
 - A **request to be removed** is a maintainer's request, under
   [Asking to be removed](#asking-to-be-removed), with who asked, when,
   their reason, as a JSON string, and the repo's project, with its status
@@ -3736,7 +3738,8 @@ project's files as before, and the rules read them. Then, for the model:
   pending reading at most. A newer one replaces an older one that wasn't
   sent, with its files. Every GitHub read happens here, so the batch job
   never calls GitHub. The rules' find shares these reads, so a seed reads
-  its labels once.
+  its labels once. The label read is one GraphQL call for each 100 labels,
+  with each label's name, description, and open issue count.
 
 **The hourly run.** On the crawler's cron, after it queues its repos, the
 reader's run:
@@ -3750,9 +3753,38 @@ reader's run:
    statement against the files, then the tier from the ones that check out.
    It keeps a reading that counts. A reading that comes back after a newer
    one was staged for its repo is dropped. A result the Worker fails to
-   keep is no verdict, and the rest go on.
-3. Sends the pending readings as one batch through the Message Batches API,
-   at most 50, as many as the day's budget allows.
+   keep is no verdict, and the rest go on. A seed's reading that would make
+   a find stays pending, as its label check.
+3. Sends the pending readings and label checks as one batch through the
+   Message Batches API, at most 50, as many as the day's budget allows. So
+   a find's label check goes in the batch after its reading.
+
+**The label check.** A find needs suggested tags, so a seed's reading that
+would make one is followed by a second call, at `medium` effort, which
+reads the repo's labels. It sends up to 300 labels, the most open issues
+first, then every label a kept statement names, so a label the docs name
+with no open issues still goes. Each goes with its name, its description,
+and its open issue count, with the reading's kept statements and their
+lines. The model says which labels mean an issue is ready for outside
+help, which are kept for people, and which are for agents only. Then the
+Worker:
+
+- drops a name that isn't one of the repo's labels, compared without case,
+  and one whose evidence is a statement it didn't send;
+- makes the tags from the labels that mean ready for outside help or are
+  for agents only, leaving out excluded ones, up to 20;
+- keeps `good first issue` out of the tags and in the suggested tags, even
+  when the model calls it ready;
+- makes the label an `onlyLabel` statement names the only tag, or no tag
+  when the repo doesn't have it.
+
+The suggested tags are the tags and the labels kept for people, each with
+its open issue count. The model's find is written once the check is back.
+In shadow that means its tags and suggested tags are kept on its reading of
+the same docs, and the log names a seed the model would have found that
+the rules didn't. A weekly read makes no label check, since a policy
+change shows no suggested tags. A label check that comes back after newer
+docs were staged for the repo is dropped.
 
 **The budget.** The model may spend `MODEL_DAILY_BUDGET_USD` in a UTC day.
 Before it sends a request, the Worker reserves the most it could cost: its
@@ -3765,8 +3797,9 @@ readings for a pause. From 18:00 UTC, weekly reads may also spend what the
 other shares left unspent, up to the whole day, so before then a seed
 always finds its half. A reading past its share waits for a later run, and
 at the latest for the next UTC day. Each share is sent in turn, so one that
-is spent holds no other back. Only seeds and weekly reads use the reader so
-far. A reading is kept under the project's name for a weekly read, so a
+is spent holds no other back. A label check spends from its reading's
+share, the seeds' today, and the requested repos' once they read. Only
+seeds, their label checks, and weekly reads use the reader so far. A reading is kept under the project's name for a weekly read, so a
 repo GitHub renamed keeps its reading.
 
 **When it can't read.** It pauses nothing and lists nothing for a repo the
@@ -3782,6 +3815,7 @@ model hasn't read.
 | The account is out of credit, or the workspace's spend limit is reached (402) | The reader waits until the next UTC day |
 | A request expired, was canceled, or errored with an overload or a server error | It goes in the next batch |
 | `refusal`, `max_tokens`, an invalid request error in the result, or output that fails the checks | No verdict. The log says why, and nothing is kept. For a weekly read, the docs hash isn't kept, so the next weekly read tries again |
+| A label check with `refusal`, `max_tokens`, an invalid request error, or output that fails the checks | No verdict on the labels. The log says why, and the reading is kept without the model's suggested tags |
 
 After three weekly reads in a row with no verdict, the log says so once.
 Once the model decides, a listing made from a policy goes to the admin
@@ -3797,7 +3831,11 @@ statements failed the check and were dropped, and the model's summary. The
 lines are the repo's text, and the notes are text the model wrote from it,
 so `admin_queue` marks all of it as data, as it marks the repo's text.
 Lines that try to steer a reader, like one that says how to classify the
-repo, show at the top of the item.
+repo, show at the top of the item. Once its label check is back, a find
+also shows the model's suggested tags beside the rules', each with its open
+issue count, the tags it would set, and how many label names it gave were
+dropped. Label names are the repo's text, so `admin_queue` quotes each one
+as the repo spells it.
 
 **The log.** The consumer's line says how many readings it staged, how
 many it skipped as read before, as the same docs, as a rejected find, or

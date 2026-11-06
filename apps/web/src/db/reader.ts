@@ -92,10 +92,29 @@ export async function keepModelReading(
     .run();
 }
 
+/**
+ * Keeps what the model's label check made of the repo's labels on its kept
+ * reading of these docs. False when the kept reading is of other docs, or
+ * there is none, so nothing changed.
+ */
+export async function keepModelLabels(db: D1Database, repo: string, hash: DocsHash, labels: ModelReading['labels']): Promise<boolean> {
+  const kept = await getModelReading(db, repo);
+  if (kept?.docsHash !== hash) return false;
+  const reading = mustParse(modelReadingSchema, { ...kept.reading, labels }, 'reading');
+  const result = await db
+    .prepare('UPDATE model_readings SET reading = ? WHERE repo = ? AND docs_hash = ?')
+    .bind(JSON.stringify(reading), mustParse(repoName, repo, 'repo'), hash)
+    .run();
+  return result.meta.changes === 1;
+}
+
 // ---------------------------------------------------------------------------
 // Pending readings and their staged files.
 
 export type ReadingPurpose = 'seed' | 'reread';
+
+/** Which call a pending reading waits on: the policy reading, or a find's label check after it. */
+export type PendingStep = 'reading' | 'labels';
 
 export interface NewPending {
   repo: string;
@@ -121,6 +140,9 @@ export interface Pending extends Omit<NewPending, 'files'> {
   reservedDay: string | null;
   /** True when a newer reading of the repo was staged after this one was sent. */
   replaced: boolean;
+  step: PendingStep;
+  /** The model's policy reading, as JSON that passed the checks, while the label check waits. */
+  readingOutput: unknown;
 }
 
 interface PendingRow {
@@ -141,17 +163,22 @@ interface PendingRow {
   reserved_usd: number;
   reserved_day: string | null;
   replaced: number;
+  step: string;
+  reading_output: string | null;
 }
 
-/** Labels as they were staged, or a throw for a row in another form. */
+/** Labels as they were staged, each with its description, or a throw for a row in another form. */
 function labelsOf(value: unknown): RepoLabel[] {
   if (!Array.isArray(value)) throw new TypeError('labels must be a list');
   return value.map((label: unknown) => {
-    const { name, openIssues } = (label ?? {}) as { name?: unknown; openIssues?: unknown };
+    const { name, openIssues, description } = (label ?? {}) as { name?: unknown; openIssues?: unknown; description?: unknown };
     if (typeof name !== 'string' || typeof openIssues !== 'number' || !Number.isInteger(openIssues) || openIssues < 0) {
       throw new TypeError('each label must have a name and an open issue count');
     }
-    return { name, openIssues };
+    if (description !== undefined && description !== null && typeof description !== 'string') {
+      throw new TypeError("a label's description must be text");
+    }
+    return { name, openIssues, description: description ?? null };
   });
 }
 
@@ -183,6 +210,8 @@ function toPending(row: PendingRow): Pending {
     reservedUsd: row.reserved_usd,
     reservedDay: row.reserved_day,
     replaced: row.replaced === 1,
+    step: row.step === 'labels' ? 'labels' : 'reading',
+    readingOutput: row.reading_output === null ? null : fromJson(row.reading_output),
   };
 }
 
@@ -336,6 +365,26 @@ export async function settlePending(db: D1Database, pending: Pending, cost: numb
     statements.push(db.prepare('DELETE FROM model_staged_files WHERE reading_id = ?').bind(pending.id));
     statements.push(db.prepare('DELETE FROM model_pending WHERE id = ?').bind(pending.id));
   }
+  await db.batch(statements);
+}
+
+/**
+ * Settles what a reading cost, on the day it reserved it, and keeps it
+ * pending as the label check for its find, with the model's policy reading,
+ * to go in the next batch. Its staged files stay, so the check reads the
+ * same statements, until the check is done.
+ */
+export async function awaitLabelCheck(db: D1Database, pending: Pending, cost: number, readingOutput: unknown): Promise<void> {
+  const statements: D1PreparedStatement[] = [];
+  if (pending.reservedDay !== null) statements.push(addSpend(db, pending.reservedDay, pending.share, { spent: cost, reserved: -pending.reservedUsd }));
+  statements.push(
+    db
+      .prepare(
+        `UPDATE model_pending SET step = 'labels', reading_output = ?, batch_id = NULL, sent_at = NULL, reserved_usd = 0, reserved_day = NULL
+         WHERE id = ?`,
+      )
+      .bind(JSON.stringify(readingOutput), pending.id),
+  );
   await db.batch(statements);
 }
 

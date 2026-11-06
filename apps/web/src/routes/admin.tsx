@@ -275,6 +275,38 @@ function ModelReading({ item }: { item: QueueItem }) {
   );
 }
 
+/**
+ * The model reader's suggested tags from its label check, in shadow, beside
+ * the rules': each with its open issue count, and the tags it would set.
+ * Label names are the repo's text.
+ */
+function ModelTags({ item }: { item: QueueItem }) {
+  const labels = item.modelReading?.labels;
+  if (!labels) return null;
+  return (
+    <Block label="the model reader's suggested tags from the same labels, in shadow">
+      {labels.suggestedTags.length === 0 ? (
+        <p className="small muted">none</p>
+      ) : (
+        <div className="admin-item__labels">
+          {labels.suggestedTags.map((tag) => (
+            <span key={tag.name} className="cluster" style={{ '--gap': '8px' } as CSSProperties}>
+              <Tag>{tag.name}</Tag>
+              <span className="mono small muted">{tag.openIssues.toLocaleString('en-US')} open</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="small muted">the tags it would set: {labels.tags.length === 0 ? 'none' : labels.tags.join(', ')}</p>
+      {labels.dropped > 0 && (
+        <p className="small muted">
+          {labels.dropped.toLocaleString('en-US')} of the labels the model named aren&apos;t the repo&apos;s, and were dropped.
+        </p>
+      )}
+    </Block>
+  );
+}
+
 function DoNotListNote({ item }: { item: QueueItem }) {
   return item.onDoNotList ? <p className="admin-item__warning">{doNotListNote(item.kind)}</p> : null;
 }
@@ -377,6 +409,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
           </div>
         </Block>
       )}
+      <ModelTags item={item} />
       <DoNotListNote item={item} />
       <RemovalWaitsNote item={item} />
       <form method="post" action={ADMIN_PATH}>
