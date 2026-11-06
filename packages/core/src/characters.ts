@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { cutGraphemes } from './primitives';
 
-// Characters that don't belong in text shown as one line, like a line of a
-// text stream or a maintainer's words quoted in a tool's answer, and the one
-// fold for text from someone else, which drops them.
+// Characters that don't belong in text from someone else, and the folds
+// that drop them. One fold makes the text one line, like a line of a text
+// stream or a maintainer's words quoted in a tool's answer. The other keeps
+// its lines, for text like an issue's body.
 
 /**
  * A character that could break a line or a column, or change what a
@@ -68,6 +69,42 @@ export function foldLine(text: string): string {
  */
 export function foldUntrusted(text: string, max: number): string {
   return cutGraphemes(foldLine(text), max);
+}
+
+/**
+ * One character to fold in text of many lines: a line break of any kind,
+ * with CRLF as one, or a character that is unsafe or hidden above. Each
+ * match is one character, or CRLF, so the fold takes time in proportion to
+ * the text's length and never overflows the pattern engine's stack.
+ */
+const LINES_CHARACTER = new RegExp(`\\r\\n|${UNSAFE_CHARACTER.source}|${HIDDEN_CHARACTER.source}`, 'gu');
+
+/** A line break other than `\n`: CR, CRLF, a next-line control, or a Unicode line or paragraph separator. */
+const OTHER_LINE_BREAK = /^(?:\r\n?|[\u0085\u2028\u2029])$/u;
+
+/**
+ * A tab or `\n` stays, any other line break becomes `\n`, a hidden
+ * character goes, and any other control character becomes a space. A mark
+ * that reorders text is hidden, so it goes.
+ */
+function foldUntrustedLinesCharacter(character: string): string {
+  if (character === '\t' || character === '\n') return character;
+  if (OTHER_LINE_BREAK.test(character)) return '\n';
+  return HIDDEN_CHARACTER.test(character) ? '' : ' ';
+}
+
+/**
+ * Text from someone else of many lines, like an issue's body, with its
+ * lines kept. Every hidden character goes, the same ones foldLine drops.
+ * That includes a few that change what a person sees, like the joiner in
+ * an emoji of a family. Every line break becomes `\n`. Any other control
+ * character but a tab becomes a space. Spaces, tabs, and blank lines stay.
+ *
+ * Folding the text again changes nothing. It takes time in proportion to
+ * the text's length, so it needs no cap.
+ */
+export function foldUntrustedLines(text: string): string {
+  return text.replace(LINES_CHARACTER, foldUntrustedLinesCharacter);
 }
 
 /**

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { foldUntrusted } from './characters';
+import { foldUntrusted, foldUntrustedLines } from './characters';
 import { epochMs, issueRef, labelName, prRefSchema, repoName, trimmedText } from './primitives';
 import { MAX_STATUS_REASON } from './projects';
 
@@ -39,6 +39,14 @@ export const issueTitle = z
     (title) => foldIssueTitle(title) === title,
     `must be one folded line of at most ${String(MAX_ISSUE_TITLE)} graphemes`,
   );
+
+/**
+ * An issue's body as a tool sends it: untrusted repo text, folded by
+ * foldUntrustedLines, so it holds only what a person can see and keeps its lines.
+ */
+export const issueBody = z
+  .string({ error: 'must be text' })
+  .refine((body) => foldUntrustedLines(body) === body, 'must hold only what a person can see, with every line break a \\n');
 
 /** An open issue carrying one of its project's tags, as GitHub last showed it. */
 export const taggedIssueSchema = z

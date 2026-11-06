@@ -2040,6 +2040,17 @@ sync reads from GitHub.
   a PR's title they show in its place. So a title can't add a line to a
   tool's text, or words only an agent reads, and every page and tool
   shows it the same.
+- The cache keeps no issue's body. The donor's tools read it from GitHub
+  with the donor's token, and it is untrusted repo text too. It loses the
+  same characters a title loses, but keeps its lines. A few of those
+  characters change what a person sees, like the joiner in an emoji of a
+  family, so the emoji shows as separate faces. Every line break, CR,
+  CRLF, a next-line control, or a Unicode line or paragraph separator,
+  becomes `\n`. Any other control character but a tab becomes a space.
+  Spaces, tabs, and blank lines stay. So no character in the body reaches
+  the agent unseen by a person reading the raw text. Markdown that
+  GitHub's page hides, like an HTML comment, still reaches the agent, and
+  the raw text shows it.
 - Each project has its own copy of an issue, so two projects that keep issues
   in the same repo each keep theirs. The project must exist.
 - Issues saved together all save, or none of them do, so one bad issue saves
@@ -2499,6 +2510,7 @@ the donor's tools use the one rule, so they agree.
   donor can push to the code repo, the queued picks passed over, the picks
   still waiting, and what is left of the budget. Whether they can push is
   GitHub's answer for the donor's token, read again when a claim resumes.
+  The issue's text is folded as under [Tagged issues](#tagged-issues).
 
 **The CLA.** A claim on a project with a CLA is refused with `cla_required`
 and the CLA's link until the donor confirms they signed it. The agent then

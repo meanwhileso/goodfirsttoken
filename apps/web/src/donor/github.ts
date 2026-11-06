@@ -1,4 +1,4 @@
-import { foldIssueTitle, labelName, type ProjectRecord, type Refusal } from '@goodfirsttoken/core';
+import { foldIssueTitle, foldUntrustedLines, labelName, type ProjectRecord, type Refusal } from '@goodfirsttoken/core';
 import { judgeLabels } from '../db';
 import { GitHubError, gitHubQuery, gitHubRead, type GitHubPage, type GraphQLResult } from '../github';
 import { limitsRate, type GitHubReader } from '../sync/github';
@@ -132,6 +132,7 @@ interface RestIssue {
 export interface GitHubIssue {
   /** Folded by foldIssueTitle. */
   title: string;
+  /** Folded by foldUntrustedLines, with its lines kept. */
   body: string;
   /** The issue on GitHub. */
   url: string;
@@ -170,9 +171,10 @@ export async function readIssue(reader: GitHubReader, issue: string): Promise<Gi
     typeof person?.login === 'string' ? [person.login] : [],
   );
   return {
-    // Untrusted repo text, folded as the sync folds the titles it keeps.
+    // Untrusted repo text, folded as the sync folds the titles it keeps,
+    // and the body with its lines kept.
     title: typeof found.title === 'string' ? foldIssueTitle(found.title) : issue,
-    body: typeof found.body === 'string' ? found.body : '',
+    body: typeof found.body === 'string' ? foldUntrustedLines(found.body) : '',
     url: typeof found.html_url === 'string' ? found.html_url : '',
     open: found.state === 'open',
     labels,
