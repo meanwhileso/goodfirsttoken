@@ -1,6 +1,7 @@
 import {
   candidateStatusSchema,
   crawlCandidateSchema,
+  docsHashSchema,
   id,
   mustParse,
   policyFingerprintSchema,
@@ -39,6 +40,7 @@ interface CandidateRow {
   decided_by: number | null;
   decided_at: number | null;
   reason: string | null;
+  docs_hash: string | null;
 }
 
 function toCandidate(row: CandidateRow): CrawlCandidate {
@@ -60,6 +62,7 @@ function toCandidate(row: CandidateRow): CrawlCandidate {
       sources: fromJson(row.sources),
       aiSentences: fromJson(row.ai_sentences),
       moreAiSentences: row.more_ai_sentences,
+      docsHash: row.docs_hash,
       status: row.status,
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
@@ -82,6 +85,8 @@ export interface NewCandidate {
   moreAiSentences?: number;
   /** What the crawler's rules read in the repo's docs, from src/crawl/fingerprint.ts. None when left out. */
   fingerprint?: string;
+  /** What the crawler read in the docs, as a docs hash (src/crawl/reader/docs.ts). None when left out. */
+  docsHash?: string;
 }
 
 /**
@@ -114,8 +119,8 @@ export async function addCandidate(
     .prepare(
       `INSERT INTO crawl_candidates (id, repo, found_at, stars, repo_created_at, repo_pushed_at,
          owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, sources, ai_sentences,
-         more_ai_sentences, status, decided_by, decided_at, reason, fingerprint)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL, ?16
+         more_ai_sentences, status, decided_by, decided_at, reason, fingerprint, docs_hash)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL, ?16, ?17
        WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?2)
        ON CONFLICT DO NOTHING`,
     )
@@ -136,6 +141,7 @@ export async function addCandidate(
       JSON.stringify(c.aiSentences),
       c.moreAiSentences,
       fingerprint,
+      c.docsHash,
     )
     .run();
   return result.meta.changes === 1 ? c : null;
@@ -187,19 +193,27 @@ export async function crawlerSkips(
 
 /**
  * The repo's find an admin rejected last, with what the crawler's rules
- * read in its docs then, or null when an admin rejected none. The
- * fingerprint is null for a find stored before finds kept one.
+ * read in its docs then, and the docs hash of those docs, or null when an
+ * admin rejected none. The fingerprint is null for a find stored before
+ * finds kept one, and the docs hash for one stored before finds kept it.
  */
-export async function lastRejectedFind(db: D1Database, repo: string): Promise<{ id: string; fingerprint: string | null } | null> {
+export async function lastRejectedFind(
+  db: D1Database,
+  repo: string,
+): Promise<{ id: string; fingerprint: string | null; docsHash: string | null } | null> {
   const row = await db
     .prepare(
-      `SELECT id, fingerprint FROM crawl_candidates WHERE repo = ? AND status = 'rejected'
+      `SELECT id, fingerprint, docs_hash FROM crawl_candidates WHERE repo = ? AND status = 'rejected'
        ORDER BY decided_at DESC, found_at DESC, id DESC LIMIT 1`,
     )
     .bind(mustParse(repoName, repo, 'repo'))
-    .first<{ id: string; fingerprint: string | null }>();
+    .first<{ id: string; fingerprint: string | null; docs_hash: string | null }>();
   if (row === null) return null;
-  return { id: row.id, fingerprint: row.fingerprint === null ? null : mustParse(policyFingerprintSchema, row.fingerprint, 'fingerprint') };
+  return {
+    id: row.id,
+    fingerprint: row.fingerprint === null ? null : mustParse(policyFingerprintSchema, row.fingerprint, 'fingerprint'),
+    docsHash: row.docs_hash === null ? null : mustParse(docsHashSchema, row.docs_hash, 'docsHash'),
+  };
 }
 
 /**
@@ -217,12 +231,17 @@ export async function hasApprovedFind(db: D1Database, repo: string): Promise<boo
 
 /**
  * Keeps what the rules read in a find's repo now, as the one to compare the
- * next read with, for a find that kept none, or one of an older version.
+ * next read with, for a find that kept none, or one of an older version,
+ * with the docs hash of the docs read now, when given.
  */
-export async function setFindFingerprint(db: D1Database, candidateId: string, fingerprint: string): Promise<void> {
+export async function setFindFingerprint(db: D1Database, candidateId: string, fingerprint: string, docsHash?: string): Promise<void> {
   await db
-    .prepare('UPDATE crawl_candidates SET fingerprint = ? WHERE id = ?')
-    .bind(mustParse(policyFingerprintSchema, fingerprint, 'fingerprint'), mustParse(id, candidateId, 'candidateId'))
+    .prepare('UPDATE crawl_candidates SET fingerprint = ?1, docs_hash = COALESCE(?3, docs_hash) WHERE id = ?2')
+    .bind(
+      mustParse(policyFingerprintSchema, fingerprint, 'fingerprint'),
+      mustParse(id, candidateId, 'candidateId'),
+      docsHash === undefined ? null : mustParse(docsHashSchema, docsHash, 'docsHash'),
+    )
     .run();
 }
 

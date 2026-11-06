@@ -1545,10 +1545,10 @@ Anthropic API itself when it is empty.
 | `ADMIN_GITHUB_IDS` | Variable: admins' numeric GitHub IDs, separated by commas | Now, by `src/auth/permissions.ts` |
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
-| `ANTHROPIC_API_URL` | Variable: the Anthropic API. The Anthropic fake locally. Empty means `https://api.anthropic.com` | Later, by the policy reader, through `src/anthropic.ts` |
-| `POLICY_READER` | Variable: `rules`, `shadow`, or `model`. Empty means `rules` | Later, by the policy reader, through `src/anthropic.ts` |
-| `MODEL_DAILY_BUDGET_USD` | Variable: the most the model may spend in a UTC day, in US dollars. Empty means 0 | Later, by the policy reader, through `src/anthropic.ts` |
-| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/optional-secrets.d.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | Later, by the policy reader, through `src/anthropic.ts` |
+| `ANTHROPIC_API_URL` | Variable: the Anthropic API. The Anthropic fake locally. Empty means `https://api.anthropic.com` | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
+| `POLICY_READER` | Variable: `rules`, `shadow`, or `model`. Empty means `rules` | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
+| `MODEL_DAILY_BUDGET_USD` | Variable: the most the model may spend in a UTC day, in US dollars. Empty means 0 | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
+| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/optional-secrets.d.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
 | `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, the scheduled jobs, and the crawler |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
@@ -1620,11 +1620,17 @@ in `people`.
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
-| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, status, and the admin's decision | `id` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
-| `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read and whether they read a ban, and why the crawler last paused it | `project` |
-| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, status, and the admin's decision | `id` |
+| `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read and whether they read a ban, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, and how many weekly reads in a row gave no verdict | `project` |
+| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, status, and the admin's decision | `id` |
+| `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, its outcome fingerprint, and when | `repo` |
+| `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, the rules' tier, the commit, branch, facts, vouch file, and labels, and while in a batch, the batch and what it reserved on which day | `id` |
+| `model_staged_files` | File a pending reading reads, in the crawler's order | `reading_id`, `position` |
+| `model_batches` | Batch the reader sent and hasn't collected | `id` |
+| `model_spend` | What the model spent and reserved, on a UTC day, for a share of the budget | `day`, `share` |
+| `model_reader_state` | Fact the reader keeps between runs, like when it may call the API again | `key` |
 
 Each module in `apps/web/src/db/` owns one table, and `projects.ts` owns the
 three project tables. Its functions take the database first, so the Worker
@@ -3322,7 +3328,10 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
 | `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue |
 | `src/crawl/fingerprint.ts` | The hash of what the rules read in a repo's docs, which a weekly read and a crawler find keep |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
-| `src/crawl/reader/` | The model policy reader's core, which nothing in the Worker calls yet: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, and the price table. It makes no network calls |
+| `src/crawl/reader/` | The model policy reader's core: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, the price table, the docs hash, and the day's budget with its shares. It makes no network calls |
+| `src/crawl/model.ts` | The crawl consumer's half of the model reader: after the rules read a repo, decides whether the model reads it too, and stages its files and labels in D1 |
+| `src/crawl/batches.ts` | The model reader's hourly run: collects the batches that ended by `custom_id`, checks and keeps each reading, drops what kept failing for 7 days, and sends what is pending as one batch, inside the day's budget |
+| `src/db/reader.ts` | The model reader's tables: the last reading of each repo, the pending readings and their staged files, the batches in flight, each day's spend, and the reader's state between runs |
 
 - **A cron fills a queue, and the queue's consumer reads.** The cron job,
   at 52 minutes past each hour, reads only D1 and sends to the queue. The
@@ -3583,6 +3592,34 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   no line of a repo's text can pass for a line of the result. It breaks a
   line at a vertical tab, a form feed, and the file, group, and record
   separators too, as some readers do.
+- **The model reader runs in shadow.** With `POLICY_READER=shadow`, the
+  consumer's half (`src/crawl/model.ts`) stages a repo's docs after the
+  rules read them, and the hourly run (`src/crawl/batches.ts`) sends them
+  through the Message Batches API with `@anthropic-ai/sdk` and collects the
+  readings an hour later. The rules decide, and the reading is kept in
+  `model_readings` and shown beside theirs, joined to a find or a policy
+  change by the docs hash. The SDK client has no retries of its own, since
+  the next hourly run is the retry, and takes the fetch of the moment, so a
+  test's fakes answer. Results are read by `custom_id`, never by position.
+  The design is the
+  [model policy reader spec](specs/model-policy-reader.md), and the rules are in
+  [how-it-works.md](how-it-works.md#the-model-policy-reader).
+- **Shared reads.** A seed's find and its staging both ask who can open
+  pull requests and read the labels. `sharedReads` in `src/crawl/model.ts`
+  makes each read once a repo, so staging adds a call only for a seed the
+  rules make no find of. The consumer stages after the rules' finds are
+  written, so a stop on GitHub's budget loses no find.
+- **Reservations.** Before a batch is sent, each request reserves the most
+  it could cost in `model_spend`, for its share of the day. Collecting a
+  result settles it, on the day it was reserved, to what its usage says it
+  cost. A request that didn't run settles to nothing and waits for a later
+  batch. So nothing in flight can overspend, and a reading that comes back
+  the next UTC day counts against the day it was sent.
+- **Text held, and for how long.** `model_staged_files` holds a pending
+  reading's files, the repo's public docs, until its reading is done, and
+  at most 7 days. `model_readings` keeps only what the admin queue shows:
+  the lines each statement and steering line points at, each cut to 500
+  characters, and the model's notes.
 - **The queue's name.** The Worker tells a crawl batch by its queue's name:
   `crawl`, or one ending `-crawl`, as the deploy's `<WORKER_NAME>-crawl`
   does.

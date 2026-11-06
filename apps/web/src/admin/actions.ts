@@ -44,6 +44,7 @@ import {
   getIssueSync,
   getPendingProject,
   getPerson,
+  getModelReadingOf,
   getPolicyChange,
   getPolicyRead,
   getProject,
@@ -235,10 +236,11 @@ async function removalItem(token: string | null, request: RemovalRequest): Promi
 }
 
 async function candidateItem(candidate: CrawlCandidate, now: number): Promise<QueueItem> {
-  const [doNotList, removals, seed] = await Promise.all([
+  const [doNotList, removals, seed, modelReading] = await Promise.all([
     getDoNotListEntry(env.DB, candidate.repo),
     removalsOf(candidate.repo),
     getSeed(env.DB, candidate.repo),
+    getModelReadingOf(env.DB, candidate.repo, candidate.docsHash),
   ]);
   return {
     id: candidate.id,
@@ -257,6 +259,7 @@ async function candidateItem(candidate: CrawlCandidate, now: number): Promise<Qu
     sources: candidate.sources,
     aiSentences: candidate.aiSentences,
     moreAiSentences: candidate.moreAiSentences,
+    modelReading,
     ...removals,
   };
 }
@@ -313,10 +316,11 @@ async function pauseItem({ project, changeId }: SelfPausedProject): Promise<Queu
  * has now.
  */
 async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
-  const [project, doNotList, sync] = await Promise.all([
+  const [project, doNotList, sync, modelReading] = await Promise.all([
     getProject(env.DB, change.repo),
     getDoNotListEntry(env.DB, change.repo),
     getIssueSync(env.DB, change.repo),
+    getModelReadingOf(env.DB, change.repo, change.docsHash),
   ]);
   if (project === null) throw new Error(`The policy change ${change.id} is for ${change.repo}, which isn't a project.`);
   // While the sync has the project delisted, nothing read from its repo shows.
@@ -337,6 +341,7 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
     sources: shown ? change.sources : [],
     aiSentences: shown ? change.aiSentences : [],
     moreAiSentences: shown ? change.moreAiSentences : 0,
+    modelReading: shown ? modelReading : null,
     change: { listed: shown ? project.policy : null, status: project.status, delisted },
   };
 }

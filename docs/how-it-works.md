@@ -1693,7 +1693,10 @@ of them but a request to be removed.
   questions. Any code from a machine gets closed right away.", so the admin
   reads those paragraphs before a verdict. The
   [policy crawler](#the-policy-crawler) makes them, and so does the sample
-  data.
+  data. When the [model policy reader](#the-model-policy-reader) has read
+  the same docs, the find shows its reading too, under the rules' one, and
+  any lines it found that try to steer a reader, at the top. While the
+  reader runs in shadow, the rules' reading is the one acted on.
 - A **request to be removed** is a maintainer's request, under
   [Asking to be removed](#asking-to-be-removed), with who asked, when,
   their reason, as a JSON string, and the repo's project, with its status
@@ -3688,6 +3691,117 @@ a crawl.
 **The log.** The consumer's line says how many listed projects it read
 again, which it left alone and why, whose policy changed, and which it
 paused. The cron job's line says how many it queued.
+
+## The model policy reader
+
+A model, Claude Opus 5.5, reads a repo's docs beside the rules. The design
+is the [model policy reader spec](specs/model-policy-reader.md). It is
+built in steps, and for now it runs in shadow: the rules decide everything
+they decided before, and the model decides nothing. Its reading is kept and
+shown beside the rules', so the shadow run measures how often the two
+agree and what the model costs.
+
+**When it runs.** `POLICY_READER` says how the crawler reads a policy:
+`rules`, `shadow`, or `model`. Empty means `rules`, and the model reads
+nothing. `shadow` and `model` both read with the model, and both let the
+rules decide until the model may, in a later step. The model also needs
+the `ANTHROPIC_API_KEY` secret and a day's budget, `MODEL_DAILY_BUDGET_USD`,
+of more than 0. Without either, it reads nothing, and the log says so once
+a UTC day.
+
+**When the model reads.** The crawl consumer reads a seed's or a listed
+project's files as before, and the rules read them. Then, for the model:
+
+- **The docs hash.** The Worker hashes what it read: each file's path and
+  exact text, sorted by path, and whether there is a vouch file. It holds
+  none of the repo's text. A find and a policy change keep it, so the admin
+  queue can show the model's reading of the same docs.
+- **The same docs cost nothing.** The last reading of each repo is kept
+  with its docs hash and the reader version, which names the model, the
+  prompt, and the output schema. When both match, the model isn't called
+  again.
+- **A weekly read of the same docs decides nothing.** When the docs hash
+  and reader version are the last weekly read's, the model's half does
+  nothing more.
+- **A rejected find with the same docs.** A seed whose last rejected find
+  has the same docs hash stays out, with no model call.
+- **A seed that takes no outside pull requests** stays out, with no model
+  call.
+- **Size.** Files that total more than 400,000 bytes of text get no
+  verdict from the model, and the log names the repo.
+- **Staging.** Otherwise the consumer reads the repo's labels, and writes
+  the files and labels to D1 with a pending reading: the commit, the
+  branch, the repo's facts, and the vouch file's path. A repo has one
+  pending reading at most. A newer one replaces an older one that wasn't
+  sent, with its files. Every GitHub read happens here, so the batch job
+  never calls GitHub. The rules' find shares these reads, so a seed reads
+  its labels once.
+
+**The hourly run.** On the crawler's cron, after it queues its repos, the
+reader's run:
+
+1. Asks after each batch it sent. For one that ended, it reads the results
+   by `custom_id`, which is the pending reading's ID, so their order
+   doesn't matter. It checks each reading with the reader's core: every
+   statement against the files, then the tier from the ones that check out.
+   It keeps a reading that counts. A reading that comes back after a newer
+   one was staged for its repo is dropped.
+2. Drops the pending readings that kept failing for 7 days, with their
+   files, and the log names them.
+3. Sends the pending readings as one batch through the Message Batches API,
+   at most 50, as many as the day's budget allows.
+
+**The budget.** The model may spend `MODEL_DAILY_BUDGET_USD` in a UTC day.
+Before it sends a request, the Worker reserves the most it could cost: its
+input estimate at the input price, the system prompt at the cache write
+price, and `max_tokens` at the output price, at batch prices. It settles to
+the real cost, from the result's usage, when the result comes back. Each
+kind of read has a share of the day: admin seeds 50%, requested repos 20%,
+`register_project` 10%, and the last 20% only for weekly reads and second
+readings for a pause, which may also spend what the other shares left
+unspent. A reading past its share waits for the next UTC day. Only seeds
+and weekly reads use the reader so far.
+
+**When it can't read.** It pauses nothing and lists nothing for a repo the
+model hasn't read.
+
+| What happened | What the reader does |
+|---|---|
+| The API is down, rate limited, or overloaded, so a batch can't be sent or asked after | The readings stay pending for the next hourly run |
+| The day's share is spent | The reading waits until the next UTC day |
+| No `ANTHROPIC_API_KEY`, or a budget of 0 | Nothing is staged, and the log says so once a day |
+| The API refuses the key (401), or it may not use the model (403) | The readings stay pending, the reader stops for an hour, and the log names the secret |
+| The API refuses the request as malformed, or names no such model (400, 404) | The reader stops for an hour, with an error in the log |
+| The account is out of credit, or the workspace's spend limit is reached (402) | The reader waits until the next UTC day |
+| A request expired, was canceled, or errored with an overload or a server error | It goes in the next batch |
+| `refusal`, `max_tokens`, an invalid request error in the result, or output that fails the checks | No verdict. The log says why, and nothing is kept. For a weekly read, the docs hash isn't kept, so the next weekly read tries again |
+
+After three weekly reads in a row with no verdict, the log says so once.
+Once the model decides, a listing made from a policy goes to the admin
+queue then, as a policy change that says the reader can't read its docs.
+A read that never reached the model, as with no key, doesn't count. The
+size cap does.
+
+**What the admin sees.** A crawler find, and a policy change, show the
+model's reading of the same docs, when it has read them: the tier its
+statements give and the tier the model gave, each statement with its
+lines quoted from the files and the model's note on it, how many
+statements failed the check and were dropped, and the model's summary. The
+lines are the repo's text, and the notes are text the model wrote from it,
+so `admin_queue` marks all of it as data, as it marks the repo's text.
+Lines that try to steer a reader, like one that says how to classify the
+repo, show at the top of the item.
+
+**The log.** The consumer's line says how many readings it staged, how
+many it skipped as read before, as the same docs, as a rejected find, or
+as a seed that takes no outside pull requests, which repos were past the
+size cap, and its calls to GitHub for the model. The hourly run's line says
+how many batches it collected and how many are still in progress, how many
+readings counted, where the model and the rules agree on the tier and where
+they disagree, the readings with no verdict and why, the seeds the model
+would have found that the rules didn't, the listings the model reads as
+moved into a ban or as changed, what it sent and what waits, the cost, the
+prompt cache hits, and what the day used of its budget.
 
 ## MCP tools
 

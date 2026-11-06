@@ -259,6 +259,7 @@ describe('admin_queue', () => {
           evidence: null,
           priority: null,
           kind: 'registration',
+          modelReading: null,
           repo: HARBOR,
           requestedBy: 'octo-maintainer',
           requestedAt: expect.any(String) as unknown,

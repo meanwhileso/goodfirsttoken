@@ -1,4 +1,5 @@
 import { authSecret, oauthApp, SignInNotSetUp } from '../auth/settings';
+import { runReader } from '../crawl/batches';
 import { fillCrawlQueue } from '../crawl/producer';
 import { endEveryLapsedConnection } from '../mcp/connections';
 import { ALLOWANCES, serviceToken } from './allowances';
@@ -22,7 +23,12 @@ export const ISSUE_SYNC_CRON = '*/15 * * * *';
  * the job that records cleared PRs nobody recorded (src/sync/cleared.ts).
  */
 export const PR_JOB_CRON = '7,37 * * * *';
-/** Once an hour, apart from both: the policy crawler's cron job (src/crawl/producer.ts), which queues its seeds and weekly reads. */
+/**
+ * Once an hour, apart from both: the policy crawler's cron job
+ * (src/crawl/producer.ts), which queues its seeds and weekly reads, then the
+ * model policy reader's run (src/crawl/batches.ts), which collects and sends
+ * its batches.
+ */
 export const CRAWL_CRON = '52 * * * *';
 /** Once a day, apart from the others: ending lapsed connections (src/mcp/connections.ts). */
 export const LAPSED_CONNECTIONS_CRON = '23 4 * * *';
@@ -82,6 +88,7 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       return;
     case CRAWL_CRON:
       await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, now });
+      await runReader({ db: env.DB, now });
       return;
     default:
       console.error(`No job runs on the cron ${cron}. Each cron trigger in wrangler.jsonc needs one in src/sync/scheduled.ts.`);

@@ -83,6 +83,103 @@ export const aiSentenceSchema = z.object({
 });
 export type AiSentence = z.infer<typeof aiSentenceSchema>;
 
+/**
+ * What the crawler read in a repo's docs, as a hash: each file's path and
+ * exact text, sorted by path, and whether there is a vouch file. It holds
+ * none of the repo's text. A model reading is kept for the docs hash it was
+ * made for, so docs that read the same cost no model call.
+ */
+export const docsHashSchema = z
+  .string({ error: 'must be a docs hash' })
+  .regex(/^docs-v[1-9][0-9]{0,3}:[0-9a-f]{64}$/, 'must be a docs hash');
+export type DocsHash = z.infer<typeof docsHashSchema>;
+
+/** The tiers a reading of a repo's docs can give: the two a listing can have, a ban, and no policy. */
+export const crawlTiers = ['invites_agents', 'allows_with_conditions', 'bans_or_restricts', 'no_policy'] as const;
+export const crawlTierSchema = z.enum(crawlTiers);
+
+/** What a statement in a model reading says, from docs/specs/model-policy-reader.md, under What the model returns. */
+export const modelStatementAbouts = [
+  'welcomesAgents',
+  'welcomesAi',
+  'bansAi',
+  'refusesOutsidePrs',
+  'noAutonomy',
+  'personInLoop',
+  'personWrittenDescription',
+  'reservedLabel',
+  'onlyLabel',
+  'disclosureTrailer',
+  'cla',
+  'canary',
+] as const;
+
+/** The most lines one statement in a model reading may span. */
+export const MAX_READING_LINES = 20;
+/** The most statements a model reading keeps. */
+export const MAX_READING_STATEMENTS = 60;
+/** The most steering lines a model reading keeps. */
+export const MAX_READING_STEERING = 20;
+/** The longest note the model writes about one statement. */
+export const MAX_READING_NOTE = 300;
+/** The longest summary the model writes for the admin. */
+export const MAX_READING_SUMMARY = 500;
+
+/** Lines in a repo's file, as the file has them, each cut to MAX_SOURCE_LINE characters. */
+const readingLines = z.string().max(MAX_READING_LINES * (MAX_SOURCE_LINE + 1));
+const lineNumber = z.int().min(1);
+
+/** Lines a model reading points at, checked against the file: its path, the lines, and the lines as the file has them. */
+export const readingPointerSchema = z.object({
+  path: trimmedText(MAX_SOURCE_LINE),
+  startLine: lineNumber,
+  endLine: lineNumber,
+  lines: readingLines,
+});
+
+/**
+ * What the model policy reader read in a repo's docs, for the admin queue:
+ * the statements that checked out against the files, each with its lines as
+ * the files have them and the model's note on it, the steering lines that
+ * checked out, the tier the Worker worked out from the statements and the one
+ * the model gave, and the model's summary. The lines are the repo's text, and
+ * the notes and the summary are text the model wrote from it, so all of it is
+ * data to the admin. In shadow it decides nothing.
+ */
+export const modelReadingSchema = z.object({
+  /** The model, the prompt, and the output schema, like claude-opus-5-5/p1/s1. */
+  readerVersion: trimmedText(100),
+  docsHash: docsHashSchema,
+  /** The tier the Worker worked out from the statements that checked out. */
+  tier: crawlTierSchema,
+  /** The tier the model gave. */
+  modelTier: crawlTierSchema,
+  /** Whether the two tiers agree. */
+  agree: z.boolean(),
+  statements: z
+    .array(
+      readingPointerSchema.extend({
+        about: z.enum(modelStatementAbouts),
+        /** The label, for reservedLabel and onlyLabel, as the docs spell it. */
+        label: z.string().max(MAX_SOURCE_LINE).nullable(),
+        /** The trailer's name, or the CLA link. */
+        value: z.string().max(MAX_SOURCE_LINE).nullable(),
+        /** The model's note on it. */
+        why: z.string().max(MAX_READING_NOTE),
+      }),
+    )
+    .max(MAX_READING_STATEMENTS),
+  /** How many of the model's statements failed a check against the files, and were dropped. */
+  dropped: count,
+  /** Lines that try to steer a reader of the docs, which checked out against the files. */
+  steering: z.array(readingPointerSchema).max(MAX_READING_STEERING),
+  /** How many steering lines failed a check. */
+  droppedSteering: count,
+  /** The model's summary for the admin. */
+  summary: z.string().max(MAX_READING_SUMMARY),
+});
+export type ModelReading = z.infer<typeof modelReadingSchema>;
+
 /** A repo whose own docs welcome AI help, waiting for an admin or decided by one. */
 export const crawlCandidateSchema = z
   .object({
@@ -105,6 +202,8 @@ export const crawlCandidateSchema = z
     aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES).default([]),
     /** How many more sentences that name AI the docs have, in no paragraph kept. */
     moreAiSentences: count.default(0),
+    /** What the crawler read in the docs it found the repo in, as a docs hash, or null for a find made before. */
+    docsHash: docsHashSchema.nullable().default(null),
     status: candidateStatusSchema,
     /** The admin who decided, or null while it waits. */
     decidedBy: githubId.nullable(),
@@ -255,6 +354,8 @@ export const policyChangeSchema = z
     sources: z.array(candidateSourceSchema).default([]),
     aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES).default([]),
     moreAiSentences: count.default(0),
+    /** What the crawler read in the docs, as a docs hash, or null for a change found before. */
+    docsHash: docsHashSchema.nullable().default(null),
     status: candidateStatusSchema,
     decidedBy: githubId.nullable(),
     decidedAt: epochMs.nullable(),

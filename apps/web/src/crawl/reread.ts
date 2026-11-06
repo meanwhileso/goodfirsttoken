@@ -1,6 +1,7 @@
 import type { AiSentence, BanLine, Policy, PolicyTier, ProjectRecord } from '@goodfirsttoken/core';
 import {
   addPolicyChange,
+  getModelReading,
   getDoNotListEntry,
   getIssueSync,
   getPolicyRead,
@@ -12,7 +13,10 @@ import {
 } from '../db';
 import { whyNotEligible, type RepoFacts } from '../projects/repo';
 import { isProjectRepo } from '../projects/repo-id';
+import { countRereadNoVerdict, rereadFromKept } from './batches';
 import { comparable, policyFingerprint, wordsOf } from './fingerprint';
+import { readerStatus, sharedReads, stageReread, type ReaderRun, type ReaderStatus } from './model';
+import { docsHash } from './reader/docs';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
 import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
 import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type PolicyReading } from './rules';
@@ -227,10 +231,13 @@ async function keepCurrent(
   files: PolicyFile[],
   facts: RepoFacts,
   run: RereadRun,
+  model: { status: ReaderStatus; run: ReaderRun },
 ): Promise<'read' | 'gone'> {
   const { db, github, now } = deps;
   const reading = readPolicy(files);
   const fingerprint = await policyFingerprint(reading, files, repo.vouch);
+  const hash = await docsHash(files, repo.vouch);
+  const reads = sharedReads({ listable: () => Promise.resolve(null), labels: (name) => readLabels(github, name) });
   const last = await getPolicyRead(db, project.repo);
   // Only the first read of a listing asks whether a find is behind it.
   const fromFind = last?.banned == null && project.source === 'policy' && (await hasApprovedFind(db, project.repo));
@@ -244,7 +251,7 @@ async function keepCurrent(
     const why = { ban, aiSentences: passages(reading), moreAiSentences: reading.moreAiSentences };
     if (await pauseForCrawler(deps, project.repo, BAN_REASON, why, true)) run.paused.push(project.repo);
   } else if (changed && project.source === 'policy') {
-    const labels = await readLabels(github, repo.name);
+    const labels = await reads.labels(repo.name);
     if (labels === null) return 'gone';
     const welcome = reading.welcome;
     const policy =
@@ -254,7 +261,15 @@ async function keepCurrent(
     const { sources } = suggestSettings(reading, files, labels, repo.vouch);
     const change = await addPolicyChange(
       db,
-      { repo: project.repo, facts: repo.standing, policy, sources, aiSentences: passages(reading), moreAiSentences: reading.moreAiSentences },
+      {
+        repo: project.repo,
+        facts: repo.standing,
+        policy,
+        sources,
+        aiSentences: passages(reading),
+        moreAiSentences: reading.moreAiSentences,
+        docsHash: hash,
+      },
       now(),
     );
     if (change !== null) run.changed.push(project.repo);
@@ -268,6 +283,16 @@ async function keepCurrent(
     if (await pauseForCrawler(deps, project.repo, pullRequests.limited, why, false)) run.paused.push(project.repo);
   }
   await keepFingerprint(db, project.repo, { fingerprint, banned: reading.tier === 'bans_or_restricts' }, now());
+  // The model reads the same files, for its reading to show beside the
+  // rules'. In shadow it acts on nothing.
+  if (model.status.reads) {
+    const stage = { db, now, calls: () => github.calls };
+    const staged = await stageReread(stage, model.run, reads, { project: project.repo, repo, files, hash, rulesTier: reading.tier });
+    if (staged === 'cached') {
+      const kept = await getModelReading(db, repo.name);
+      if (kept !== null) await rereadFromKept(deps, model.run, project.repo, kept);
+    } else if (staged === 'too_big') await countRereadNoVerdict(deps, project.repo, 'docs past the size cap');
+  }
   return 'read';
 }
 
@@ -321,6 +346,7 @@ export async function rereadRepos(deps: CrawlDeps, repos: readonly string[], run
   }
 
   const read = await readFiles(github, readable);
+  const model = { status: await readerStatus(db, deps.now()), run: run.reader };
   for (const repo of readable) {
     const project = listed.get(repo.asked);
     const result = read.get(repo) ?? { failed: `GitHub gave nothing for ${repo.name}.` };
@@ -347,7 +373,7 @@ export async function rereadRepos(deps: CrawlDeps, repos: readonly string[], run
     }
     let outcome;
     try {
-      outcome = await keepCurrent(deps, project, repo, result.files, facts, run.reread);
+      outcome = await keepCurrent(deps, project, repo, result.files, facts, run.reread, model);
     } catch (error) {
       if (!(error instanceof RepoFailed)) throw error;
       fail(repo.asked, error.message);

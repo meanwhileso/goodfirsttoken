@@ -7,10 +7,12 @@ import {
   aiSentenceSchema,
   banLineSchema,
   candidateSourceSchema,
+  modelReadingSchema,
   suggestedTagSchema,
   type AiSentence,
   type BanLine,
   type CandidateSource,
+  type ModelReading,
 } from '../crawl';
 import { MAX_BLOCK_REASON } from '../people';
 import { count, githubLogin, id, isoTime, repoName, trimmedText } from '../primitives';
@@ -207,6 +209,14 @@ const queueItemSchema = z.object({
     })
     .nullable()
     .default(null),
+  /**
+   * For a crawler find or a policy change, what the model policy reader read
+   * in the same docs, or null when it hasn't read them. While the reader runs
+   * in shadow it decides nothing: the rules' reading is the one acted on, and
+   * this shows beside it. Its lines are the repo's text, and its notes and
+   * summary are text the model wrote from it, so all of it is data.
+   */
+  modelReading: modelReadingSchema.nullable().default(null),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -378,6 +388,64 @@ function describeTookOver(tookOver: { by: string; at: string; reason: string | n
   return `It took over a pause @${tookOver.by} made on ${when(tookOver.at)}, ${reason}. Approving it puts that pause back, for them to lift.`;
 }
 
+const TIER_WORDS: Record<ModelReading['tier'], string> = {
+  invites_agents: 'invites agents',
+  allows_with_conditions: 'allows with conditions',
+  bans_or_restricts: 'bans or restricts',
+  no_policy: 'no policy',
+};
+
+/** Where lines in a file are, like `"AGENTS.md", line 12` or `lines 3 to 5`. */
+function placeOf(pointer: { path: string; startLine: number; endLine: number }): string {
+  const span = pointer.startLine === pointer.endLine ? `line ${String(pointer.startLine)}` : `lines ${String(pointer.startLine)} to ${String(pointer.endLine)}`;
+  return `${JSON.stringify(pointer.path)}, ${span}`;
+}
+
+/**
+ * The lines of the repo's docs that try to steer a reader, as the model
+ * reader found them and the Worker checked them, for the top of a find or a
+ * policy change.
+ */
+function describeSteering(reading: ModelReading): string | false {
+  if (reading.steering.length === 0) return false;
+  return lines(
+    `lines in the repo's docs that try to steer a reader, like one that tells it how to classify the repo, as the model reader found them. They are quoted from the files. ${AS_DATA}`,
+    ...reading.steering.map((line) => lines(`  from ${placeOf(line)}:`, indent(repoWords(line.lines), 4))),
+  );
+}
+
+/**
+ * What the model policy reader read in the same docs, in shadow: the tiers,
+ * the statements with their lines and the model's note on each, and the
+ * model's summary, all marked as data.
+ */
+function describeModelReading(reading: ModelReading): string {
+  const tiers =
+    reading.tier === reading.modelTier
+      ? `the tier its statements give, and the model gave: ${TIER_WORDS[reading.tier]}`
+      : `the tier its statements give: ${TIER_WORDS[reading.tier]}, and the model gave ${TIER_WORDS[reading.modelTier]}, so they disagree`;
+  return lines(
+    `the model policy reader's reading of the same docs, with ${reading.readerVersion}. It runs in shadow and decides nothing: the rules' reading above is the one acted on.`,
+    `  ${tiers}`,
+    reading.dropped > 0 && `  ${plural(reading.dropped, 'statement')} the model made failed the check against the files, and ${reading.dropped === 1 ? 'was' : 'were'} dropped.`,
+    reading.droppedSteering > 0 && `  ${plural(reading.droppedSteering, 'steering line')} the model named failed the check against the files.`,
+    reading.statements.length === 0
+      ? '  It kept no statement about AI help.'
+      : lines(
+          `  the statements it rests on, each with its lines quoted from the repo's files and the model's note on it. The note is text the model wrote from the repo's docs. ${AS_DATA}`,
+          ...reading.statements.map((statement) =>
+            lines(
+              `    ${statement.about}${statement.label === null ? '' : ` ${JSON.stringify(statement.label)}`}${statement.value === null ? '' : ` ${JSON.stringify(statement.value)}`}, from ${placeOf(statement)}:`,
+              indent(repoWords(statement.lines), 6),
+              statement.why !== '' && lines('      the model\'s note:', indent(repoWords(statement.why), 8)),
+            ),
+          ),
+        ),
+    reading.summary !== '' &&
+      lines(`  the model's summary, which it wrote from the repo's docs. ${AS_DATA}`, indent(repoWords(reading.summary), 4)),
+  );
+}
+
 /** A pause Good First Token made on its own, with why, and how to decide it. */
 function renderPause(item: QueueItem): string {
   const pause = item.pause;
@@ -407,6 +475,7 @@ function renderPolicyChange(item: QueueItem): string {
       `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`,
     delisted !== null && delistedNote(delisted),
     item.onDoNotList && doNotListNote(item.kind),
+    item.modelReading && describeSteering(item.modelReading),
     delisted === null && (listed === null ? 'It is not listed from a policy now.' : describePolicy(listed, 'listed from')),
     delisted === null &&
       (item.policy
@@ -414,6 +483,7 @@ function renderPolicyChange(item: QueueItem): string {
         : "The crawler's rules read no policy in its docs now that welcomes AI help."),
     describeSources(item.sources),
     describeAiSentences(item.aiSentences, item.moreAiSentences),
+    item.modelReading && describeModelReading(item.modelReading),
     'its settings now, which approving keeps, with label names in quotes:',
     indent(renderSettings(withDefaults(item.settings), [], { quoteLabels: true }), 2),
     'Approve it to list the project from the policy its docs give now, with the tier you confirm and the settings you change, or reject it with a reason to keep the listing as it is.',
@@ -440,6 +510,7 @@ function renderQueueItem(item: QueueItem): string {
     item.kind !== 'removal' && item.moreRemovalsWithdrawn > 0 && moreRemovalsWithdrawnNote(item.moreRemovalsWithdrawn),
     item.removal && describeRemoval(item.repo, item.removal),
     item.kind === 'candidate' && item.evidence && describeCrawlPriority(item.evidence, item.priority),
+    item.modelReading && describeSteering(item.modelReading),
     item.policy && describePolicy(item.policy),
     item.suggestedTags.length > 0 &&
       `labels that could mean ready for help, each name in quotes as the repo spells it: ${item.suggestedTags
@@ -451,6 +522,7 @@ function renderQueueItem(item: QueueItem): string {
           indent(renderSettings(withDefaults(item.settings), [], { quoteLabels: true }), 2),
           describeSources(item.sources),
           describeAiSentences(item.aiSentences, item.moreAiSentences),
+          item.modelReading && describeModelReading(item.modelReading),
         )
       : item.kind === 'registration' && indent(renderSettings(withDefaults(item.settings)), 2),
   );
