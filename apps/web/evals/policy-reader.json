@@ -1,19 +1,17 @@
 {
-  "readerVersion": "claude-opus-5-5/p6/s1",
-  "ranAt": "2026-11-06T22:17:06.424Z",
+  "readerVersion": "claude-opus-5-5/p7/s1",
+  "ranAt": "2026-11-06T22:25:06.705Z",
   "runs": 3,
   "cases": 465,
-  "passes": false,
+  "passes": true,
   "cost": 7.26,
   "bar": [
     {
       "bar": 1,
       "name": "Bans",
-      "pass": false,
-      "score": "284 of 285",
-      "failed": [
-        "ban/r5-3/welcome"
-      ]
+      "pass": true,
+      "score": "285 of 285",
+      "failed": []
     },
     {
       "bar": 2,
@@ -28,7 +26,7 @@
       "pass": true,
       "score": "98.0% of welcoming, 2 of 2 with nothing about AI, 4 of 4 written for the model",
       "failed": [
-        "welcoming/03"
+        "welcoming/27"
       ]
     },
     {
@@ -42,7 +40,7 @@
       "bar": 5,
       "name": "Evidence",
       "pass": true,
-      "score": "99.9% of 2463 statements",
+      "score": "99.9% of 2468 statements",
       "failed": [
         "real/meanwhileso/goodfirsttoken"
       ]
@@ -65,10 +63,8 @@
       "bar": 8,
       "name": "Agreement",
       "pass": true,
-      "score": "99.8%",
-      "failed": [
-        "ban/r5-3/welcome"
-      ]
+      "score": "100.0%",
+      "failed": []
     },
     {
       "bar": 9,
