@@ -49,7 +49,7 @@ export async function deliverFeedBatch(batch: MessageBatch, env: Pick<Env, 'FEED
       continue;
     }
     const { event, githubId, project } = checked.value;
-    const entry = { event, githubId };
+    const entry = { event, githubId, project };
     add('home', () => homeFeed(env.FEED), message, entry);
     add(`repo:${project.toLowerCase()}`, () => repoFeed(env.FEED, project), message, entry);
     add(`person:${String(githubId)}`, () => personFeed(env.FEED, githubId), message, entry);

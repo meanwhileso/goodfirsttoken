@@ -426,7 +426,7 @@ describe('text from GitHub or an agent adds nothing to the markdown', () => {
     }
     await claimWithLine(`${repo}#1`, ATTACKS.join(' ').slice(0, 190));
     await homeFeed(env.FEED).deliver(
-      ATTACKS.map((text, i): { event: FeedEvent; githubId: number } => ({
+      ATTACKS.map((text, i): { event: FeedEvent; githubId: number; project: string } => ({
         event: {
           id: `e_readable${String(i).padStart(14, '0')}`,
           time: new Date(t0 + i * 1000).toISOString(),
@@ -439,6 +439,7 @@ describe('text from GitHub or an agent adds nothing to the markdown', () => {
           text: text.replaceAll('\n', ' '),
         },
         githubId: priya.githubId,
+        project: repo,
       })),
     );
 
@@ -578,6 +579,65 @@ describe('robots.txt, the sitemap, and llms.txt', () => {
       .filter((path) => !path.includes('<') && path !== '/mcp' && !path.endsWith('.txt') && !path.endsWith('/'));
     expect(links.length).toBeGreaterThan(5);
     for (const path of links) expect((await get(path)).status, path).toBe(200);
+  });
+});
+
+/** A made-up post on X, checked by the admin, with a note only admins see. */
+const POSTED: Policy = {
+  quote: 'Point your agent at sample-listed and send PRs.',
+  url: 'https://x.com/sample_person/status/123456789',
+  tier: 'invites_agents',
+  maintainerPost: {
+    maintainerGitHubLogin: 'sample-maintainer',
+    role: 'creator',
+    roleSourceUrl: 'https://github.com/sample-owner/sample-listed/blob/main/README.md',
+    identitySourceUrl: 'https://github.com/sample-maintainer',
+    xHandle: 'sample_person',
+    publishedAt: '2026-11-01T00:00:00.000Z',
+    timePrecision: 'date',
+    postKind: 'authored',
+    evidenceCheckedAt: '2026-11-04T00:00:00.000Z',
+    note: 'Only admins read this note.',
+    verifierGitHubId: 1010,
+  },
+};
+
+describe("a project listed from a maintainer's post", () => {
+  test('its JSON carries who posted it and the sources, and none of what only admins read', async () => {
+    await policyListing('sample-owner/sample-listed', POSTED);
+
+    const body: unknown = await (await get('/sample-owner/sample-listed.json')).json();
+    const listed: unknown = await (await get('/projects.json')).json();
+
+    expect(openProjectFileSchema.parse(body).project.policy).toEqual({
+      quote: POSTED.quote,
+      url: POSTED.url,
+      maintainerPost: {
+        xHandle: 'sample_person',
+        maintainerGitHubLogin: 'sample-maintainer',
+        role: 'creator',
+        roleSourceUrl: 'https://github.com/sample-owner/sample-listed/blob/main/README.md',
+        identitySourceUrl: 'https://github.com/sample-maintainer',
+        publishedAt: '2026-11-01T00:00:00.000Z',
+      },
+    });
+    expect(openProjectsFileSchema.safeParse(listed).success).toBe(true);
+    for (const json of [body, listed]) expect(JSON.stringify(json)).not.toMatch(/Only admins|verifierGitHubId|1010|evidenceCheckedAt/);
+  });
+
+  test('its markdown quotes the post, links to it, and says who posted it, with the sources for their role and their X account', async () => {
+    await policyListing('sample-owner/sample-listed', POSTED);
+
+    const page = await (await get('/sample-owner/sample-listed.md')).text();
+    const list = await (await get('/projects.md')).text();
+
+    expect(page).toContain(`> “${POSTED.quote}” [post on X](${POSTED.url})`);
+    expect(page).toContain(
+      "Listed from [@sample\\_person](https://x.com/sample_person)'s post on X. [@sample\\_person is @sample-maintainer on GitHub](https://github.com/sample-maintainer). [@sample-maintainer is its creator](https://github.com/sample-owner/sample-listed/blob/main/README.md).",
+    );
+    expect(page).not.toContain('Listed from its AI policy');
+    expect(page).not.toContain('Only admins');
+    expect(list).toContain("listed from a maintainer's post");
   });
 });
 

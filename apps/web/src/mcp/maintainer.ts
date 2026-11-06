@@ -50,7 +50,7 @@ import {
   whyNotIssueRepo,
 } from '../projects/repo';
 import { resumableBy, statusBeforePause } from '../projects/status';
-import { refreshIssues } from '../sync/scheduled';
+import { refreshIssues } from '../sync/read-now';
 
 // The maintainer's tools: register_project, update_project, project_status,
 // pause_project, and request_removal. Each one first asks GitHub, with the
@@ -342,6 +342,7 @@ export async function projectStatus(caller: Caller, input: ToolInput<'project_st
       refresh,
       delisted,
       resumableBy: resumableBy(project),
+      fromPost: project.policy?.maintainerPost !== undefined,
     }),
   );
 }

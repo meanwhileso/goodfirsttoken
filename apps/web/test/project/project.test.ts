@@ -69,6 +69,26 @@ const POLICY: Policy = {
   tier: 'invites_agents',
 };
 
+/** A made-up post on X, checked by the admin, with a note only admins see. */
+const POSTED: Policy = {
+  quote: 'Point your agent at sample-listed and send PRs.',
+  url: 'https://x.com/sample_person/status/123456789',
+  tier: 'invites_agents',
+  maintainerPost: {
+    maintainerGitHubLogin: 'sample-maintainer',
+    role: 'creator',
+    roleSourceUrl: 'https://github.com/sample-owner/sample-listed/blob/main/README.md',
+    identitySourceUrl: 'https://github.com/sample-maintainer',
+    xHandle: 'sample_person',
+    publishedAt: '2026-11-01T00:00:00.000Z',
+    timePrecision: 'date',
+    postKind: 'authored',
+    evidenceCheckedAt: '2026-11-04T00:00:00.000Z',
+    note: 'Only admins read this note.',
+    verifierGitHubId: 1010,
+  },
+};
+
 let restore: () => void = () => undefined;
 
 beforeEach(async () => {
@@ -596,8 +616,8 @@ describe("a project's live feed", () => {
     await registeredProject({ tags: ['help wanted'] }, name);
     const lines = Array.from({ length: 8 }, (_, i) => event(name, priya, `line ${String(i)}`));
     await repoFeed(env.FEED, name).deliver([
-      ...lines.map((e) => ({ event: e, githubId: priya.githubId })),
-      { event: event(name, kenji, 'a line nobody should see'), githubId: kenji.githubId },
+      ...lines.map((e) => ({ event: e, githubId: priya.githubId, project: name })),
+      { event: event(name, kenji, 'a line nobody should see'), githubId: kenji.githubId, project: name },
     ]);
     await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, t0);
 
@@ -723,6 +743,26 @@ describe('the page, through the Worker', () => {
     expect(html).toContain('listed from its AI policy');
     expect(html).toContain('<a href="/maintainers">take it over or remove it</a>');
     expect(html).not.toContain('registered by');
+  });
+
+  test("shows a project listed from a maintainer's post with the post, who posted it, and the sources, and none of what only admins read", async () => {
+    await createProject(
+      db,
+      { repo: 'sample-owner/sample-listed', status: 'approved', source: 'policy', policy: POSTED, settings: { tags: ['help wanted'] }, addedBy: admin.githubId },
+      t0,
+    );
+
+    const html = shown(await (await page('/sample-owner/sample-listed')).text());
+    const list = shown(await (await page('/projects')).text());
+
+    expect(html).toContain(`<div class="project-policy__text">${POSTED.quote}</div>`);
+    expect(html).toContain(`href="${POSTED.url}">post on X ↗</a>`);
+    expect(html).toContain('listed from <a href="https://x.com/sample_person">@sample_person</a>&#x27;s post on X');
+    expect(html).toContain('<a href="https://github.com/sample-maintainer">@sample_person is @sample-maintainer on GitHub</a>');
+    expect(html).toContain('<a href="https://github.com/sample-owner/sample-listed/blob/main/README.md">@sample-maintainer is its creator</a>');
+    expect(html).not.toContain('listed from its AI policy');
+    expect(html).not.toMatch(/Only admins|verifierGitHubId|evidenceCheckedAt/);
+    expect(list).toContain("listed from a maintainer&#x27;s post");
   });
 
   test('keeps policy markdown, line breaks, and indentation as escaped text, with its source link outside the excerpt', async () => {

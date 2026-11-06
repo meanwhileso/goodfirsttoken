@@ -81,7 +81,7 @@ describe('the homepage', () => {
     const now = nextDay();
     const yesterday = event(now - DAY, kenji, 'from the day before');
     const today = Array.from({ length: 8 }, (_, i) => event(now - HOUR + i, priya, `line ${String(i)}`));
-    await homeFeed(env.FEED).deliver([yesterday, ...today].map((e) => ({ event: e, githubId: e.user === 'priya' ? priya.githubId : kenji.githubId })));
+    await homeFeed(env.FEED).deliver([yesterday, ...today].map((e) => ({ event: e, githubId: e.user === 'priya' ? priya.githubId : kenji.githubId, project: 'sample-owner/sample-app' })));
 
     const home = await loadHome(request, now);
 
@@ -97,8 +97,8 @@ describe('the homepage', () => {
     const theirs = event(now, priya, 'priya today');
     const others = event(now + 1, kenji, 'kenji today');
     await homeFeed(env.FEED).deliver([
-      { event: theirs, githubId: priya.githubId },
-      { event: others, githubId: kenji.githubId },
+      { event: theirs, githubId: priya.githubId, project: 'sample-owner/sample-app' },
+      { event: others, githubId: kenji.githubId, project: 'sample-owner/sample-app' },
     ]);
     await blockDonor(env.DB, { githubId: priya.githubId, reason: null, blockedBy: admin.githubId }, now);
 
@@ -129,7 +129,7 @@ describe('the homepage', () => {
 
   test("leaves the wall and the count out when the homepage's feed can't say who is blocked", async () => {
     const now = nextDay();
-    await homeFeed(env.FEED).deliver([{ event: event(now, kenji, 'while D1 is down for the feed'), githubId: kenji.githubId }]);
+    await homeFeed(env.FEED).deliver([{ event: event(now, kenji, 'while D1 is down for the feed'), githubId: kenji.githubId, project: 'sample-owner/sample-app' }]);
     const down = { prepare: () => { throw new Error('D1 is down.'); } } as unknown as D1Database;
     await runInDurableObject(homeFeed(env.FEED), (instance) => {
       const live = instance as unknown as { env: Env };

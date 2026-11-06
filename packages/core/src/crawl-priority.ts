@@ -17,7 +17,7 @@ export const crawlEvidenceUrlSchema = z.url({ protocol: /^https$/, hostname: /^[
 }, 'must be a public HTTPS source URL without credentials');
 
 // The action clock uses whole milliseconds. Reject finer precision rather than rounding a future time down.
-const utcTime = isoTime.max(24, 'must use UTC with at most millisecond precision');
+export const utcTime = isoTime.max(24, 'must use UTC with at most millisecond precision');
 const evidenceFields = {
   stars: count,
   public: z.boolean(),
@@ -41,19 +41,29 @@ const evidenceFields = {
   note: trimmedText(500).optional(),
 };
 
+/** The X handle in a post's numeric status URL, or null when the URL isn't one. */
+export function xPostAuthor(url: string): string | null {
+  const match = /^https:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/status\/([1-9][0-9]{0,24})\/?(?:[?#].*)?$/i.exec(url);
+  return match?.[1] ?? null;
+}
+
+/** Whether a date-precision time is the start of its UTC date, as research saves a date alone. */
+export function startsItsDate(time: string, precision: string): boolean {
+  return precision !== 'date' || !Number.isFinite(Date.parse(time)) || new Date(time).toISOString().endsWith('T00:00:00.000Z');
+}
+
 function evidenceChecks(evidence: { postUrl: string; xHandle: string; publishedAt: string; timePrecision: string }, ctx: z.RefinementCtx) {
-  const match = /^https:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/status\/([1-9][0-9]{0,24})\/?(?:[?#].*)?$/i.exec(evidence.postUrl);
-  if (match?.[1]?.toLowerCase() !== evidence.xHandle.toLowerCase()) {
+  if (xPostAuthor(evidence.postUrl)?.toLowerCase() !== evidence.xHandle.toLowerCase()) {
     ctx.addIssue({ code: 'custom', path: ['postUrl'], message: 'must be the named X account\'s numeric status URL' });
   }
-  if (evidence.timePrecision === 'date' && Number.isFinite(Date.parse(evidence.publishedAt)) && !new Date(evidence.publishedAt).toISOString().endsWith('T00:00:00.000Z')) {
+  if (!startsItsDate(evidence.publishedAt, evidence.timePrecision)) {
     ctx.addIssue({ code: 'custom', path: ['publishedAt'], message: 'date precision must use the start of the UTC date' });
   }
 }
 
 /** The client supplies research facts. The server supplies the verifier ID. */
 export const crawlPriorityInputSchema = z.strictObject(evidenceFields).superRefine(evidenceChecks);
-const storedTime = utcTime.refine((time) => Number.isFinite(Date.parse(time)) && time === new Date(time).toISOString(), 'must be a canonical UTC timestamp');
+export const storedTime = utcTime.refine((time) => Number.isFinite(Date.parse(time)) && time === new Date(time).toISOString(), 'must be a canonical UTC timestamp');
 export const crawlPrioritySchema = z.strictObject({ ...evidenceFields,
   pushedAt: storedTime, metadataCheckedAt: storedTime, publishedAt: storedTime, evidenceCheckedAt: storedTime,
   verifierGitHubId: githubId }).superRefine(evidenceChecks);

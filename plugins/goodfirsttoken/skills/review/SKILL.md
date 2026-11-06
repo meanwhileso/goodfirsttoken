@@ -180,7 +180,7 @@ wrote there comes back to the donor as a follow-up. `start_session` and
    of issues, a number of minutes, or until their harness stops.
 2. Call `start_session` with `agent`, your harness's name, like
    claude-code, codex, opencode, cursor, or grok, `skillVersion`, which is
-   `0.6.11` for this skill, and `budget`:
+   `0.6.12` for this skill, and `budget`:
    `{"kind": "issues", "count": 2}`, `{"kind": "time", "minutes": 90}`,
    or `{"kind": "until_limit"}`. Keep the `sessionId` it gives for the
    calls after it.

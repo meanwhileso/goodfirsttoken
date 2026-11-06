@@ -130,7 +130,7 @@ Every page has a markdown version at its URL plus \`.md\`, and answers \`Accept:
 
 ## JSON data
 
-Every project with a page, with its settings and how it got in, under ${OPEN_DATA_LICENSE} (public domain). A project listed from its AI policy carries the quote and its link.
+Every project with a page, with its settings and how it got in, under ${OPEN_DATA_LICENSE} (public domain). A project listed from its AI policy carries the quote and its link, and one listed from a maintainer's post on X also carries who posted it.
 
 - [projects.json](${origin}/projects.json): up to ${String(PROJECTS_JSON_PAGE)} projects a page, by repo, with \`total\` for all of them and \`next\` for the next page, or null on the last
 - One project: ${origin}/<owner>/<repo>.json

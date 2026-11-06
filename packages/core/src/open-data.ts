@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { storedTime } from './crawl-priority';
+import { maintainerPostFields } from './maintainer-post';
 import { count, httpsUrl, repoName, trimmedText, webUrl } from './primitives';
-import { MAX_POLICY_QUOTE, projectSettingsSchema, projectSourceSchema } from './projects';
+import { MAX_POLICY_QUOTE, projectSettingsSchema, projectSourceSchema, type Policy } from './projects';
 
 // The projects' settings as the site publishes them, at /projects.json and
 // /<owner>/<repo>.json, under CC0. Each file carries its licence. A project
@@ -19,10 +21,37 @@ const licence = {
   licenseUrl: z.literal(OPEN_DATA_LICENSE_URL),
 };
 
+/** What the JSON data publishes of a maintainer's post: none of the admin's own notes. */
+export const openMaintainerPostSchema = z.strictObject({
+  xHandle: maintainerPostFields.xHandle,
+  maintainerGitHubLogin: maintainerPostFields.maintainerGitHubLogin,
+  role: maintainerPostFields.role,
+  roleSourceUrl: maintainerPostFields.roleSourceUrl,
+  identitySourceUrl: maintainerPostFields.identitySourceUrl,
+  publishedAt: storedTime,
+});
+export type OpenMaintainerPost = z.infer<typeof openMaintainerPostSchema>;
+
+/** A policy as the site shows it: the quote, its link, and who posted it when it is a maintainer's post. */
+export interface OpenPolicy {
+  quote: string;
+  url: string;
+  maintainerPost?: OpenMaintainerPost;
+}
+
+/** The part of a policy the site shows and publishes. The admin who checked a post, and their note, stay on admin surfaces. */
+export function openPolicy(policy: Policy): OpenPolicy {
+  const post = policy.maintainerPost;
+  if (post === undefined) return { quote: policy.quote, url: policy.url };
+  const { xHandle, maintainerGitHubLogin, role, roleSourceUrl, identitySourceUrl, publishedAt } = post;
+  return { quote: policy.quote, url: policy.url, maintainerPost: { xHandle, maintainerGitHubLogin, role, roleSourceUrl, identitySourceUrl, publishedAt } };
+}
+
 /**
  * One project as the JSON data publishes it: its repo, its status, how it
  * got in, its settings, and where its page, markdown, JSON, and live stream
- * are. A project listed from its AI policy carries the quote and its link.
+ * are. A project listed from its AI policy carries the quote and its link,
+ * and one listed from a maintainer's post on X carries who posted it.
  * A registered project carries none.
  */
 export const openProjectSchema = z
@@ -31,7 +60,14 @@ export const openProjectSchema = z
     /** A paused project takes no new claims until it resumes. */
     status: z.enum(['approved', 'paused']),
     source: projectSourceSchema,
-    policy: z.strictObject({ quote: trimmedText(MAX_POLICY_QUOTE), url: httpsUrl }).nullable(),
+    policy: z
+      .strictObject({
+        quote: trimmedText(MAX_POLICY_QUOTE),
+        url: httpsUrl,
+        /** For a policy from a maintainer's post on X, which `url` links to: who posted it, and the sources for their role and their X account. */
+        maintainerPost: openMaintainerPostSchema.optional(),
+      })
+      .nullable(),
     settings: projectSettingsSchema,
     links: z.strictObject({
       page: webUrl,

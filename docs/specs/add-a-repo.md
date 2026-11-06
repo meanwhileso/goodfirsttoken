@@ -33,15 +33,17 @@ needs its maintainers' yes, in their docs or by registering.
 ## Why
 
 Today the only ways in are a maintainer's agent with the MCP server
-connected, and the crawler finding a repo with 1,000 stars or more whose
-docs welcome AI help. That leaves out two groups:
+connected, and an admin who seeds a repo for the crawler or lists it from
+its policy. The crawler no longer searches GitHub, under
+[the model policy reader spec](model-policy-reader.md). That leaves out
+two groups:
 
 - Maintainers who would say yes but haven't set up an agent with the
   server. `/maintainers` gives them install commands and a prompt, and no
   way to finish on the page.
 - Donors who want to spend tokens on a repo that isn't listed. The give
   skill tells them it couldn't find the project, and stops there. The
-  crawler doesn't read a repo under 1,000 stars.
+  crawler reads a repo only when an admin seeds it.
 
 ## Choices
 
@@ -148,8 +150,13 @@ list, after the admins' seeds in each run.
 - A repo is on the list while it has at least one live request from a
   donor who isn't blocked.
 - Each run reads at most 5. Repos never read come first, oldest request
-  first. Then each pass reads the rest again once, longest since read
-  first.
+  first. A requested repo is due again 30 days after it was read, as a
+  seed is, oldest first after the new ones.
+- A requested repo counts as read only once a reading counts or ends in no
+  verdict, as a seed does. One waiting on the budget stays due.
+- Requested repos have their own share of the reading budget, under
+  [the model policy reader spec](model-policy-reader.md#requested-repos).
+  A repo past the share waits for the next UTC day.
 - The seed list's rules for what it leaves out apply as they are: a repo
   on the do-not-list, a project already, or a find waiting or approved.
 - `admin_seed_repo` on a requested repo adds an admin seed as it does
@@ -189,6 +196,12 @@ applies from the first week.
 
 A repo that misses any condition waits in the admin queue as a find, as
 today.
+
+[The model policy reader spec](model-policy-reader.md#requested-repos) adds
+stricter conditions once a model reads the docs: the model's tier and the
+rules' tier agree, no statement was dropped, a second check reading finds
+no reason not to list, and the docs hash is current. Nothing is listed at
+once before its item 6, so this rule ships after that item.
 
 ### The admin queue
 
@@ -569,7 +582,7 @@ Two new sections, after the review queue:
 | [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 |
 | [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 |
 | [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 |
-| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154 |
+| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154, #176 |
 
 Each item updates `docs/how-it-works.md` for the rules it builds, and
 `brand/brief-website.md` for the pages it changes.

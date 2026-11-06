@@ -6,7 +6,7 @@ import type { FeedEvent, FeedEventKind } from '@goodfirsttoken/core';
 // sends after that, with the same function, so the two always agree. It
 // imports only types, so it runs the same on the server and in the page.
 
-/** How many of a lane's newest lines it keeps. The text stream has them all. */
+/** How many of a lane's newest lines it keeps, and the room keeps for it. */
 export const LANE_LINES = 20;
 
 /** A claim's state, as the page follows it from the room's events. */
@@ -128,16 +128,18 @@ export function samePr(a: Pick<PrLink, 'repo' | 'number'>, b: Pick<PrLink, 'repo
   return a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number;
 }
 
-// The state each change of state moves a claim to. A line wakes a paused
-// claim, and leaves any other state as it is. A PR's merge or close leaves
-// the claim's state as it is.
-const MOVES_TO: Partial<Record<FeedEventKind, LaneState>> = {
-  claimed: 'active',
-  paused: 'paused',
-  submitted: 'awaiting_review',
-  pr_opened: 'pr_opened',
-  released: 'released',
-  expired: 'expired',
+// The state each change of state moves a claim to, as core's nextClaimState
+// moves it. A line wakes a paused claim, and leaves any other state as it is.
+// A submit sends a working or paused claim to review. A submit on a claim
+// awaiting review or with its PR open adds work to the same branch, so its
+// state stays. A PR's merge or close leaves the claim's state as it is.
+const MOVES_TO: Partial<Record<FeedEventKind, (state: LaneState) => LaneState>> = {
+  claimed: () => 'active',
+  paused: () => 'paused',
+  submitted: (state) => (state === 'active' || state === 'paused' ? 'awaiting_review' : state),
+  pr_opened: () => 'pr_opened',
+  released: () => 'released',
+  expired: () => 'expired',
 };
 
 function withLane(view: IssueView, event: FeedEvent): { lanes: Lane[]; lane: Lane } {
@@ -181,8 +183,8 @@ export function applyEvent(view: IssueView, event: FeedEvent, lineCap = LANE_LIN
       lines: [...lane.lines, { id: event.id, time: event.time, job: event.job, text: event.text }].slice(-lineCap),
     };
   } else {
-    const state = MOVES_TO[event.kind];
-    next = { ...lane, state: state ?? lane.state };
+    const state = MOVES_TO[event.kind]?.(lane.state) ?? lane.state;
+    next = { ...lane, state };
     if (state === 'released' || state === 'expired') next.lines = [];
     if (event.kind === 'pr_opened') {
       const pr = prFromText(event.text);

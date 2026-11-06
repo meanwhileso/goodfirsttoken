@@ -7,6 +7,8 @@ import {
   validate,
   qualifyCrawlPriority,
   verifyCrawlPriority,
+  verifyMaintainerPost,
+  FuturePostTime,
   type QueuePlace,
   type CrawlCandidate,
   type Policy,
@@ -42,12 +44,14 @@ import {
   getIssueSync,
   getPendingProject,
   getPerson,
+  getModelReadingOf,
   getPolicyChange,
   getPolicyRead,
   getProject,
   getRemoval,
   getSelfPausedProject,
   getWaitingCandidate,
+  lastRejectedFind,
   getWaitingRemoval,
   leaveDoNotListWhenApproved,
   listCandidates,
@@ -70,11 +74,15 @@ import { readDelisting } from '../project/shown';
 import { readRepo, readStanding, repoFacts, whyNotEligible, whyNotIssueRepo, type ListedRepo, type Standing } from '../projects/repo';
 import { identityOf, isStoredRepo } from '../projects/repo-id';
 import { adminResume, pauseTakenOver, resumableBy } from '../projects/status';
+import { startReadOnApproval } from '../sync/read-now';
 
 // What an admin does, for the admin's MCP tools (src/mcp/admin.ts) and the
 // admin pages (src/admin/page.ts) alike. Every action first checks the
 // caller's permission with requirePermission, before it reads or writes
-// anything. The rules are in docs/how-it-works.md, under The admin queue.
+// anything. Each action that leaves a project approved starts the read of
+// its tagged issues that src/sync/read-now.ts makes on approval, which
+// reads only a project no pass ever finished, and goes on after the action
+// answers. The rules are in docs/how-it-works.md, under The admin queue.
 
 /** What an action gives back: the tool's output, or a refusal. */
 export type Outcome<N extends ToolName> = { ok: true; value: ToolOutputInput<N> } | { ok: false; refusal: Refusal };
@@ -228,10 +236,11 @@ async function removalItem(token: string | null, request: RemovalRequest): Promi
 }
 
 async function candidateItem(candidate: CrawlCandidate, now: number): Promise<QueueItem> {
-  const [doNotList, removals, seed] = await Promise.all([
+  const [doNotList, removals, seed, modelReading] = await Promise.all([
     getDoNotListEntry(env.DB, candidate.repo),
     removalsOf(candidate.repo),
     getSeed(env.DB, candidate.repo),
+    getModelReadingOf(env.DB, candidate.repo, candidate.docsHash),
   ]);
   return {
     id: candidate.id,
@@ -250,6 +259,7 @@ async function candidateItem(candidate: CrawlCandidate, now: number): Promise<Qu
     sources: candidate.sources,
     aiSentences: candidate.aiSentences,
     moreAiSentences: candidate.moreAiSentences,
+    modelReading,
     ...removals,
   };
 }
@@ -306,10 +316,11 @@ async function pauseItem({ project, changeId }: SelfPausedProject): Promise<Queu
  * has now.
  */
 async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
-  const [project, doNotList, sync] = await Promise.all([
+  const [project, doNotList, sync, modelReading] = await Promise.all([
     getProject(env.DB, change.repo),
     getDoNotListEntry(env.DB, change.repo),
     getIssueSync(env.DB, change.repo),
+    getModelReadingOf(env.DB, change.repo, change.docsHash),
   ]);
   if (project === null) throw new Error(`The policy change ${change.id} is for ${change.repo}, which isn't a project.`);
   // While the sync has the project delisted, nothing read from its repo shows.
@@ -330,6 +341,7 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
     sources: shown ? change.sources : [],
     aiSentences: shown ? change.aiSentences : [],
     moreAiSentences: shown ? change.moreAiSentences : 0,
+    modelReading: shown ? modelReading : null,
     change: { listed: shown ? project.policy : null, status: project.status, delisted },
   };
 }
@@ -578,6 +590,7 @@ async function listFromPolicy(
       if (relisted?.ok === false) return { ok: false, refusal: invalidSettings(relisted.problems) };
       if (relisted?.ok) {
         const { project } = relisted;
+        if (project.status === 'approved') startReadOnApproval(env, project.repo);
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: true } };
       }
     } else {
@@ -589,6 +602,7 @@ async function listFromPolicy(
         now,
       );
       if (project !== null) {
+        startReadOnApproval(env, project.repo);
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: false } };
       }
     }
@@ -607,7 +621,18 @@ export async function adminAddProject(
   now: number,
 ): Promise<Outcome<'admin_add_project'>> {
   await requirePermission(caller, 'list_from_policy');
-  return listFromPolicy(caller, input.repo, input.policy, input.settings, now);
+  const { maintainerPost, ...words } = input.policy;
+  let policy: Policy = words;
+  if (maintainerPost !== undefined) {
+    // The server stamps who verified the post, and refuses a time after now.
+    try {
+      policy = { ...words, maintainerPost: verifyMaintainerPost(maintainerPost, caller.githubId, now) };
+    } catch (error) {
+      if (!(error instanceof FuturePostTime)) throw error;
+      return refuse('invalid_input', `${error.message}. Fix it, then call again.`);
+    }
+  }
+  return listFromPolicy(caller, input.repo, policy, input.settings, now);
 }
 
 function nothingWaits(id: string): { ok: false; refusal: Refusal } {
@@ -651,6 +676,7 @@ async function decideRegistration(
       alongside,
     );
     if (decided === null) continue;
+    if (decided.status === 'approved') startReadOnApproval(env, decided.repo);
     return { ok: true, value: { repo: decided.repo, kind: 'registration', status: decided.status } };
   }
   throw new Error(`${input.id} kept changing while it was decided.`);
@@ -715,6 +741,7 @@ async function decidePause(
         : adminResume(await statusHistory(env.DB, paused.project.repo), caller.githubId);
     const decided = await setProjectStatusFrom(env.DB, paused.project, change, now);
     if (decided === null) continue;
+    if (decided.status === 'approved') startReadOnApproval(env, decided.repo);
     const delisted = await readDelisting(env.DB, decided);
     return { ok: true, value: { repo: decided.repo, kind: 'pause', status: decided.status, decision: input.decision, delisted } };
   }
@@ -864,18 +891,23 @@ export async function adminPauseProject(
     }
     const { restored, ...next } = change;
     const updated = await setProjectStatusFrom(env.DB, project, next, now);
-    if (updated !== null) return pauseAnswer(updated, true, restored);
+    if (updated === null) continue;
+    if (updated.status === 'approved') startReadOnApproval(env, updated.repo);
+    return pauseAnswer(updated, true, restored);
   }
   throw new Error(`${input.repo} kept changing status while an admin paused or resumed it.`);
 }
 
 /**
- * Adds a repo to the crawler's seed list, for the crawler to read whatever
- * its stars or last push. A repo on the do-not-list is refused, since the
- * crawler never reads one. Ordinary calls skip projects and earlier finds.
- * Evidence calls can update a waiting find, keeping seed handling history
- * and queuing no policy read. The server stamps the verifier and validates
- * timestamps against this action's clock. No source URL is fetched.
+ * Adds a repo to the crawler's seed list, or seeds it again, for the crawler
+ * to read at its next run whatever its stars or last push. A seed on the list
+ * already, or a repo whose finds an admin rejected, is due at the next run,
+ * and a rejected find comes back only when its docs read differently. A repo
+ * on the do-not-list is refused, since the crawler never reads one. Projects
+ * and finds that wait or were approved are left alone. Evidence calls can
+ * update a waiting find, keeping seed handling history and queuing no policy
+ * read. The server stamps the verifier and validates timestamps against this
+ * action's clock. No source URL is fetched.
  */
 export async function adminSeedRepo(
   caller: Caller,
@@ -889,26 +921,32 @@ export async function adminSeedRepo(
   } catch (error) {
     return refuse('invalid_input', error instanceof Error ? error.message : 'Invalid priority evidence.');
   }
-  const skip = (await crawlerSkips(env.DB, [input.repo])).get(input.repo.toLowerCase());
+  // A rejected find doesn't keep a repo off the list: the consumer reads it, and it comes back only when its docs read differently.
+  const skip = (await crawlerSkips(env.DB, [input.repo], { readRejected: true })).get(input.repo.toLowerCase());
   if (skip === 'do_not_list') {
     return refuse(
       'repo_not_eligible',
       `${input.repo} is on the do-not-list, because its maintainers asked to be removed, so the crawler never reads it.`,
     );
   }
+  const rejectedBefore = skip === undefined && (await lastRejectedFind(env.DB, input.repo)) !== null;
   if (evidence !== undefined && (skip === undefined || (skip === 'proposed' && await getWaitingCandidate(env.DB, input.repo) !== null))) {
-    const saved = await saveSeedEvidence(env.DB, { repo: input.repo, addedBy: caller.githubId, evidence, proposed: skip === 'proposed' }, now);
+    const saved = await saveSeedEvidence(
+      env.DB,
+      { repo: input.repo, addedBy: caller.githubId, evidence, proposed: skip === 'proposed', due: skip === undefined },
+      now,
+    );
     if (saved === null) return refuse('repo_not_eligible', `${input.repo} is on the do-not-list, so discovery evidence was not saved.`);
     return { ok: true, value: { repo: saved.seed.repo, added: saved.added, evidenceChanged: saved.evidenceChanged, leftAlone: skip ?? null,
-      evidence: saved.seed.evidence, priority: qualifyCrawlPriority(saved.seed.evidence, now) } };
+      rejectedBefore, evidence: saved.seed.evidence, priority: qualifyCrawlPriority(saved.seed.evidence, now) } };
   }
   if (skip !== undefined) {
     const seed = await getSeed(env.DB, input.repo);
-    return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip, evidenceChanged: false,
+    return { ok: true, value: { repo: input.repo, added: false, leftAlone: skip, evidenceChanged: false, rejectedBefore,
       evidence: seed?.evidence ?? null, priority: qualifyCrawlPriority(seed?.evidence ?? null, now) } };
   }
   const { seed, added } = await addSeed(env.DB, { repo: input.repo, addedBy: caller.githubId }, now);
-  return { ok: true, value: { repo: seed.repo, added, leftAlone: null, evidenceChanged: false,
+  return { ok: true, value: { repo: seed.repo, added, leftAlone: null, evidenceChanged: false, rejectedBefore,
     evidence: seed.evidence, priority: qualifyCrawlPriority(seed.evidence, now) } };
 }
 

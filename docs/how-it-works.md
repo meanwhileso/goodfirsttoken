@@ -907,10 +907,12 @@ survives a restart.
   happens, one feed event as JSON per message. A call's answer doesn't wait
   for its events to reach the watchers.
 - A watcher that reconnects sends the ID of the last event it saw as
-  `since`, and first gets every event after that one. With no `since`, or
-  one the room never sent, it first gets the whole history.
+  `since`, and first gets the events after that one, up to the newest
+  1,000 of them. With no `since`, or one the room doesn't keep, it first
+  gets the newest 100. A blocked donor's events don't count toward either.
 - A blocked donor's events are left out, and every event while the
-  do-not-list covers the issue's repo, as [Live feeds](#live-feeds) says.
+  do-not-list covers the issue's repo or names its claim's project, as
+  [Live feeds](#live-feeds) says.
 - A room can sleep with watchers connected. They stay connected, and get the
   next event.
 - Watchers only listen. A watcher that sends anything has its socket closed,
@@ -1193,6 +1195,11 @@ when someone undoes a stale bot's close. A merged PR can't.
   a listing can have.
 - A project listed from its policy keeps the policy quote, its link, and the
   tier. A registered project has no policy.
+- The policy comes from the repo's docs, or from a maintainer's post on X
+  that welcomes AI help, when the docs have no AI policy. A policy from a
+  post links to the post, and keeps `maintainerPost`: who posted it, their
+  role for the repo, and the sources for both, under
+  [The admin queue](#the-admin-queue).
 - A repo can be a project once. Repo names compare without case, the way
   GitHub compares them, so `Owner/App` and `owner/app` are the same project.
 - A rejected project has a reason. A pending or approved project has none, so
@@ -1482,10 +1489,11 @@ a project is `not_found`.
     refresh that asked GitHub counts even when it read no issue. Within the
     10 minutes, the answer says a refresh ran already, and this one read
     nothing.
-  - It never reads a project while a scheduled run reads it, and a
-    scheduled run leaves a project a refresh reads. While one does, a
-    refresh reads nothing, the answer says the sync is busy with it, and it
-    doesn't count toward the 10 minutes.
+  - It never reads a project while a scheduled run or a read on approval,
+    under [Tagged issues](#tagged-issues), reads it, and a scheduled run
+    leaves a project a refresh reads. While one does, a refresh reads
+    nothing, the answer says the sync is busy with it, and it doesn't count
+    toward the 10 minutes.
   - It stops early the way a scheduled run does, with its own share of the
     budget and its own cap on calls, under The budget in
     [Tagged issues](#tagged-issues), so no maintainer spends what the
@@ -1641,6 +1649,13 @@ queue.
 - Every status change an admin makes lands only on the status it was
   decided on, the way a maintainer's pause does. When someone else changed
   the status first, the action decides again on the new status.
+- An action that leaves a project approved reads its tagged issues from
+  GitHub right after it answers, when no pass of them ever finished, under
+  Read on approval in [Tagged issues](#tagged-issues). That is approving a
+  registration or a crawler find, listing a repo with `admin_add_project`,
+  listing one again, approving a policy change, and a resume, from
+  `admin_pause_project` or from approving a pause in the queue. The answer
+  doesn't wait for the read, and the action lands whatever the read does.
 
 **What waits.** `admin_queue` lists five kinds of item, the one that has
 waited longest first, each with an ID. `admin_decide` takes the ID of any
@@ -1679,7 +1694,10 @@ of them but a request to be removed.
   questions. Any code from a machine gets closed right away.", so the admin
   reads those paragraphs before a verdict. The
   [policy crawler](#the-policy-crawler) makes them, and so does the sample
-  data.
+  data. When the [model policy reader](#the-model-policy-reader) has read
+  the same docs, the find shows its reading too, under the rules' one, and
+  any lines it found that try to steer a reader, at the top. While the
+  reader runs in shadow, the rules' reading is the one acted on.
 - A **request to be removed** is a maintainer's request, under
   [Asking to be removed](#asking-to-be-removed), with who asked, when,
   their reason, as a JSON string, and the repo's project, with its status
@@ -1801,6 +1819,46 @@ the project's own tags. It is `approved` at once, listed by the admin.
   made by the admin. The rest keep the listing's values. It keeps its
   status, who added it, and when. This is how an admin edits a listing.
 
+**Listing from a maintainer's post.** ([spec](specs/maintainer-posts.md))
+An admin can list a repo whose docs have
+no AI policy from a post on X in which one of its maintainers welcomes AI or
+agent contributions. `admin_add_project` takes the post's words as the
+quote and the post as the link, with `maintainerPost` beside them in the
+policy.
+
+- `maintainerPost` holds the poster's GitHub login and their `role` for the
+  repo or its owning organization: `owner`, `creator`, or `maintainer`.
+  `roleSourceUrl` is a public page that states the role. It holds their X
+  handle, and `identitySourceUrl`, a page that links the person to that
+  account. It holds when the post was published, with `timePrecision`
+  `exact`, or `date` for the start of that UTC date, the `postKind`,
+  `authored` or `quote`, when the admin's agent checked it all, and an
+  optional `note` of up to 500 characters.
+- The link has to be a numeric status URL on X, on `x.com` or
+  `twitter.com`, by the handle in `maintainerPost`, compared without case.
+  A link to a post on X without `maintainerPost`, a repost, a role of
+  `unknown`, a check time before the post, or a source that isn't public
+  HTTPS breaks the tool's input rules, and nothing is saved. So listing it
+  again to change a setting has to send the evidence again.
+- A time after the call is refused with `invalid_input`.
+- The server adds `verifierGitHubId`, the admin who made the call. The
+  Worker stores the sources and never fetches them.
+- Every other rule of a listing holds. The repo is read with the admin's
+  token, and has to be public, not archived, and take pull requests from
+  anyone. The do-not-list, a waiting request to be removed, and a
+  registration still refuse it.
+- Listing the repo again without `maintainerPost` lists it from the policy
+  sent, and the post goes. Approving a policy change does the same. A
+  maintainer who takes the listing over drops the post with the policy.
+- The weekly read leaves a listing made from a post alone while its docs
+  give no policy, under [Keeping listings current](#keeping-listings-current).
+- The project's page and its JSON show the post, who posted it, and the two
+  sources. `project_status` says it was listed from a maintainer's post,
+  with `fromPost`. The admin who checked it, the note, and when it was checked stay
+  on admin surfaces.
+- The admin page's form lists from docs only. A listing from a post is
+  made with the MCP tool.
+
 **Pausing.** `admin_pause_project` pauses an approved project, with a
 reason its maintainers read with `project_status`, or resumes any paused
 project with `paused: false`.
@@ -1860,22 +1918,26 @@ how they asked, and only admins see it.
   taken over, and a removed registration is registered again, and either
   waits in the queue as `pending`, still on the list. Approving it takes
   the repo off the list, and rejecting it leaves it on.
-- The events on its issues leave the live feeds, as
-  [Live feeds](#live-feeds) says.
+- The events on its issues, and of its claims wherever their issues were,
+  leave the live feeds, as [Live feeds](#live-feeds) says.
 
 **The seed list.** `admin_seed_repo` adds a repo to the crawler's seed
 list, for the [policy crawler](#the-policy-crawler) to read whatever its
 stars or last push.
 
 - A repo is on the list once, whatever the case of its name, and keeps the
-  admin who added it and when. An ordinary call again changes nothing, and the
-  answer says so.
+  admin who added it and when.
+- Seeding a repo on the list already makes it due at the crawler's next
+  run, and the answer says so. The crawler reads every seed again 30 days
+  after it last did.
+- A repo whose find an admin rejected is added, or made due, the same way.
+  The answer says its find goes back in the admin queue only when its docs
+  read differently, under
+  [Keeping listings current](#keeping-listings-current).
 - A repo on the do-not-list is refused with `repo_not_eligible`.
-- A repo that is a project already, whatever its status, or that the
-  crawler put in the admin queue before, isn't added. The crawler reads a
-  listed project each week, and an earlier find again as its passes find
-  it, under [Keeping listings current](#keeping-listings-current). The
-  answer says which, and that nothing changed.
+- A repo that is a project already, whatever its status, or whose find
+  waits in the admin queue, isn't added. The crawler reads a listed project
+  each week. The answer says which, and that nothing changed.
 - It asks GitHub nothing. The crawler reads the repo when it queues it.
 
 `admin_seed_repo` also takes optional `evidence` researched by an admin's
@@ -1899,13 +1961,14 @@ midnight and `timePrecision: date`. Rechecking a post keeps its original
 publication time. Checks and publication times exactly 30 and 90 days old
 still qualify, and expire one millisecond later.
 
-Saving or clearing evidence preserves `addedBy`, `addedAt`, `handledAt`, and
-`outcome`. A waiting candidate accepts evidence before the ordinary
-`leftAlone: proposed` skip. If no seed exists, the call creates one already
-handled at the call's time with outcome `proposed`. An existing seed keeps
-its history. No extra policy read is queued. Projects and decided finds
-keep their skips. The do-not-list takes precedence, including for a waiting
-candidate. `added` reports seed creation. `evidenceChanged` reports an
+Saving or clearing evidence preserves `addedBy` and `addedAt`, and makes
+the seed due at the crawler's next run, as any call does. A waiting
+candidate accepts evidence before the ordinary `leftAlone: proposed` skip.
+If no seed exists, the call creates one already handled at the call's time
+with outcome `proposed`. An existing seed of a waiting candidate keeps its
+history. No extra policy read is queued for one. A project keeps its skip.
+A repo whose find an admin rejected takes evidence like any seed. The
+do-not-list takes precedence, including for a waiting candidate. `added` reports seed creation. `evidenceChanged` reports an
 evidence change even when `added` is false.
 
 Seed results and candidate admin detail show saved evidence and current
@@ -1995,6 +2058,17 @@ sync reads from GitHub.
   a PR's title they show in its place. So a title can't add a line to a
   tool's text, or words only an agent reads, and every page and tool
   shows it the same.
+- The cache keeps no issue's body. The donor's tools read it from GitHub
+  with the donor's token, and it is untrusted repo text too. It loses the
+  same characters a title loses, but keeps its lines. A few of those
+  characters change what a person sees, like the joiner in an emoji of a
+  family, so the emoji shows as separate faces. Every line break, CR,
+  CRLF, a next-line control, or a Unicode line or paragraph separator,
+  becomes `\n`. Any other control character but a tab becomes a space.
+  Spaces, tabs, and blank lines stay. So no character in the body reaches
+  the agent unseen by a person reading the raw text. Markdown that
+  GitHub's page hides, like an HTML comment, still reaches the agent, and
+  the raw text shows it.
 - Each project has its own copy of an issue, so two projects that keep issues
   in the same repo each keep theirs. The project must exist.
 - Issues saved together all save, or none of them do, so one bad issue saves
@@ -2027,6 +2101,48 @@ Delisting below.
 - Each read of the project's code repo also keeps its main language, as
   GitHub names it, or none. Suggestions rank by it, under
   [The donor's tools](#the-donors-tools).
+
+**Read on approval.** An admin's action that leaves a project approved, under
+[The admin queue](#the-admin-queue), starts a read of its tagged issues at
+once, so a new listing shows its issues without waiting up to 15 minutes for
+the sync. It reads as a pass of the sync does, and runs after the admin's
+answer goes out.
+
+- It reads only an approved project off the do-not-list that no pass ever
+  finished: a new listing, or one whose reads failed so far, as when the
+  service token had expired. A project the sync read before waits its turn,
+  so a resume or a change of settings reads nothing on its own.
+- A maintainer's own resume, with `pause_project`, starts no read. It isn't
+  an approval, and the maintainer can read the issues now with
+  `project_status` and `refresh`, under
+  [Managing a project](#managing-a-project).
+- It holds the project as a scheduled run does, for a minute at most. While
+  another run holds it, the read reads nothing, since that run is reading
+  the project. A read that never lets go, as when the Worker is stopped
+  partway, frees the project a minute after it took it.
+- Reads on approval run one at a time on each server of the Worker, so many
+  approvals in a row don't read GitHub side by side. Each waits for the one
+  before it, and its 20 seconds count from its approval, the wait included.
+  One whose 20 seconds run out while it waits reads nothing, and the next
+  scheduled run reads the project.
+- It spends under its own row in The budget below. It leaves a fifth of the
+  hour, where the sync stops, so the two together never spend what the PR
+  job and the other jobs leave for each other. It makes at most 200 calls,
+  and stops before a call once 20 seconds have passed since the approval.
+- A read that stops saves what it read, and leaves its pass in progress.
+  The next scheduled run takes that pass first, and reads only the issues
+  it hasn't. A read that finishes its pass leaves the next scheduled run a
+  new pass to start, which reads the project's issues again, as every pass
+  does.
+- With no service token, or when GitHub refuses it, the read reads nothing,
+  and the log says why, as the sync's does. The admin's action has landed
+  already, and the sync reads the project once the token works.
+- Each read that ran logs a line with the issues it read, its calls, what
+  is left of the budget, and why it stopped, when it did. A read that
+  stopped or was skipped logs why first, as the sync does. One that read
+  nothing logs why: no service token, another run held the project, or its
+  20 seconds ran out while it waited. A project that isn't approved, or
+  that a pass read before, logs nothing.
 
 **Linked PRs.** An issue's linked PR is an open pull request, from anyone,
 open in the project's code repo or its issue repo, that GitHub links to the
@@ -2096,8 +2212,8 @@ too, with the same reason.
   still private shows nothing cached, and the next run pauses it again,
   for Good First Token, as it does any approved project.
 - Only reads with the service token set the mark or take it off: the
-  sync's, and a maintainer's refresh, which reads the same way. No
-  person's token does.
+  sync's, and a maintainer's refresh and the read on approval, which read
+  the same way. No person's token does.
 - Only an answer in GitHub's own form delists a project: its `404` with a
   JSON body that says `Not Found`, a `451` with a JSON body, or the repo,
   with the fields GitHub gives, saying it is private or archived. Any other
@@ -2143,9 +2259,8 @@ too, with the same reason.
 
 **The budget.** GitHub gives the service token's account 5,000 REST calls
 and 5,000 GraphQL points an hour, whichever of its tokens makes them, and the
-scheduled jobs, a maintainer's refresh, and the
-[policy crawler](#the-policy-crawler) share them. It also gives 30 searches
-a minute, which only the crawler makes. A run first asks
+scheduled jobs, a maintainer's refresh, the read on approval, and the
+[policy crawler](#the-policy-crawler) share them. A run first asks
 GitHub what is left, which costs nothing, then reads what GitHub says is
 left after every call, and before each call it stops when less is left than
 its job leaves for the others. Each job also caps the calls one run makes,
@@ -2156,9 +2271,12 @@ the first question included.
 | The sync | A fifth of the hour's | 1,000 |
 | The PR job | A tenth of the hour's | 100 |
 | A maintainer's refresh | Half of the hour's | 60 |
-| The crawler's search | A tenth of the minute's searches | 20 |
+| A read on approval | A fifth of the hour's | 200, in at most 20 seconds |
 | The crawler's queue, each run of up to 5 batches, weekly reads of listed projects included | Three fifths of the hour's | 60 |
 
+- The read on approval stops where the sync does, so together they leave
+  the PR job and the others the same share as before, and the PR job still
+  reads after both stop.
 - The sync's reads of repos alone, before its passes, start no new project
   once they have made 100 of its calls in a run, so the passes always get
   the rest. The next run starts with the projects they left.
@@ -2454,6 +2572,7 @@ the donor's tools use the one rule, so they agree.
   donor can push to the code repo, the queued picks passed over, the picks
   still waiting, and what is left of the budget. Whether they can push is
   GitHub's answer for the donor's token, read again when a claim resumes.
+  The issue's text is folded as under [Tagged issues](#tagged-issues).
 
 **The CLA.** A claim on a project with a CLA is refused with `cla_required`
 and the CLA's link until the donor confirms they signed it. The agent then
@@ -2934,8 +3053,8 @@ approving a maintainer's registration of it takes it off, under
 
 ## The policy crawler
 
-The crawler looks for popular projects whose own docs welcome AI help, and
-puts each one in the admin queue as a [candidate](#crawl-candidates). It
+The crawler reads the repos admins seed, and puts each one whose own docs
+welcome AI help in the admin queue as a [candidate](#crawl-candidates). It
 never lists a project. An admin does, under
 [The admin queue](#the-admin-queue).
 
@@ -2952,90 +3071,36 @@ wrong, below. It reads public data only, with the
 service token, under [Calls to GitHub](#calls-to-github). With no service
 token it reads nothing, and the log names the secret.
 
-**Which repos it reads.** Once an hour, at 52 minutes past, a scheduled run
-puts repos in the crawl queue, 10 to a batch. It also puts the listed
-projects due for their weekly read there, under
-[Keeping listings current](#keeping-listings-current).
+**Which repos it reads.** The crawler doesn't search GitHub. New repos come
+from maintainers who register them, under
+[Registering a project](#registering-a-project), and from admins, who seed
+a repo or list one from its policy, under [The admin queue](#the-admin-queue).
+Once an hour, at 52 minutes past, a scheduled run puts the seeds that are
+due in the crawl queue, 10 to a batch. It also puts the listed projects due
+for their weekly read there, under
+[Keeping listings current](#keeping-listings-current). The run makes no
+call to GitHub.
 
-- First the seeds admins added that it hasn't handled yet, under The seed
-  list in [The admin queue](#the-admin-queue), whatever their stars or last
-  push. Qualifying evidence comes first, before the run's seed limit. Within
-  each group, the oldest added time comes first, then the repo name. The
-  producer's clock determines freshness. It records what it did with each: queued it, or left it alone, and
-  why.
-- Then one call advances the broad search. Up to four calls read a separate
-  popular sample. The remaining calls advance the broad search. Both use
-  the same allowance. The first rate-limit check counts toward it.
-- The broad search finds public, unarchived repos with at least 1,000 stars
-  and a push in the 30 days before the pass started. Search leaves out
-  forks, as it does by default.
-- The popular sample finds public, unarchived repos with at least 10,000
-  stars and a push in the 30 days before the sample started. It reads the
-  highest-star results first, 100 per page, for at most ten pages. This
-  samples the first 1,000 results. The broad search still covers that pool.
-  The log reports the sample's total count, cap, next page, and queued count
-  separately from the broad pass. It says when the sample finishes.
-  Saved queued counts cover committed successful pages. Physical queue
-  deliveries may differ after a crash or concurrent run.
-- The sample starts even while an older broad pass is unfinished, or when
-  that pass has finished and the next one is not due. It keeps its own
-  page and push date. A finished sample starts again once 30 days have
-  passed since it started. It never resets the broad checkpoint.
+- A seed is due when the run hasn't handled it yet, under The seed list in
+  [The admin queue](#the-admin-queue), whatever its stars or last push.
+- A seed is due again 30 days after the run handled it, unless its repo is
+  a project or a find of it waits in the admin queue. Seeding it again with
+  `admin_seed_repo` makes it due at the next run.
+- A run takes at most 500 seeds. Qualifying evidence comes first, before
+  the limit. Within each group, the oldest added time comes first, then the
+  repo name. The run's clock decides whether evidence is fresh. Seeds it
+  doesn't take wait for the next run.
 - It leaves out a repo on the do-not-list, a repo that is a project
   already, whatever its status, and a repo whose find waits in the admin
-  queue, or was approved. A repo whose finds an admin rejected, from the
-  search or the seed list, is read again, and goes back in the queue only
-  when its docs read differently, under
-  [Keeping listings current](#keeping-listings-current). Names compare
-  without case.
-- Search serves at most 1,000 repos for one query, so a pass reads the pool
-  in bands of star counts, fewest stars first. The first band is every repo
-  with 1,000 stars or more, which counts the whole pool.
-- When search counts more than 1,000 repos in a band, the band is split
-  before anything in it is queued. A band with no upper end gets one, at
-  the width the pass is using, which starts at 10 star counts. A band with
-  an upper end becomes half as wide, down to one star count, which gives
-  the first 1,000.
-- Each band starts where the one before it ended, just as wide. After a
-  band with fewer than 250 repos in it, the next is twice as wide, and
-  first tries the rest of the pool with no upper end. The pass is done when
-  a band with no upper end is read whole.
-- A run stops before a search when less than a tenth of the minute's
-  searches is left, or after 20 calls, the first question to GitHub
-  included. The next run picks up where it stopped.
-- A search GitHub says ran out of time, with `incomplete_results`, stops
-  the run. Malformed results, rate limits, and failed queue sends also
-  leave the affected search checkpoint at its last successful page. The
-  next run asks again. A successful page from the other search stays saved.
-- A pass that is done stays done until 30 days after it started. The next
-  run then starts a new pass, so the search reads the pool once a month.
-- Each pass reads every seed once, whatever its stars or last push: a
-  seed added meanwhile at the next run, and every other seed again once a
-  new pass starts. A seed it leaves alone is recorded with why, each
-  pass. A seed either search queues first, as when there are more seeds
-  than one run takes, counts as handled in the pass.
-- After a seed or either search sends a repo successfully, the crawler
-  records the send for the latest broad pass. Later seed, popular, and
-  broad results with that name count as seen, without case. This scope
-  stays in use after the broad pass finishes. If a new broad pass starts
-  during an unfinished sample, subsequent sample pages use the new scope
-  and keep their page and push date. Completed older scopes are retired
-  after that switch. The latest scope stays available between passes.
-  Seeds handled before these records existed stay protected by their
-  handling history. Older non-seed sends cannot be reconstructed, so the
-  first sample may queue those repos once more.
-- A repo whose stars change while a pass reads the pool can land in two
-  bands, or in none. Search gives repos with the same stars in no set
-  order, so a band read over several pages can give one of them twice, or
-  skip it.
-- Two runs at once, as when one outlasts the hour, can queue the same seed
-  or page before either records its send. A crash after sending and before
-  recording can also deliver twice. Each checkpoint uses compare and swap
-  so competing runs cannot both move it from the same page. A repo read
-  twice is put in the admin queue once.
-- The queue is FIFO. The popular sample changes the order of new messages
-  entering it. Messages already queued keep their place. Check the backlog
-  before estimating when a newly queued repo will be read.
+  queue, or was approved. A repo whose finds an admin rejected is read
+  again, and goes back in the queue only when its docs read differently,
+  under [Keeping listings current](#keeping-listings-current). Names
+  compare without case.
+- It records what it did with each seed: queued it, or left it alone, and
+  why.
+- It records a seed as handled after the queue takes the batch. A crash
+  between the two, or two runs at once, as when one outlasts the hour, can
+  queue a seed twice. A repo read twice is put in the admin queue once.
 
 **What it reads in each repo.** The crawl queue's consumer reads each batch
 from the repo's default branch. It lists the folders, then reads every
@@ -3433,9 +3498,8 @@ time, and first asks GitHub what is left of the budget.
   queue, the repos it sent back alone, its calls, what is left of the
   budget, and why it stopped. A repo it gave no verdict, a repo GitHub
   failed on, and a find it couldn't write each get a line that names it.
-  It names no other repo it left out. The search's run logs one line too:
-  the seeds, listed projects, and repos it queued, its searches, where the
-  pass stands, how many repos the pool has, and why it stopped.
+  It names no other repo it left out. The cron job logs one line too: how
+  many seeds and listed projects it queued.
 
 ## Keeping listings current
 
@@ -3445,7 +3509,7 @@ the reads and the rules of a crawl, under
 pause a project on its own. It never lists, approves, adds, or resumes one.
 
 **Which projects, and when.** Each run of the crawler's cron job, once an
-hour, queues the listed projects due for a read, before its search.
+hour, queues the listed projects due for a read, after its seeds.
 
 - A listed project is an approved or paused project, whoever paused it,
   whether a maintainer registered it or an admin listed it from its policy.
@@ -3509,6 +3573,13 @@ none of the repo's text, and whether they read a ban:
     still reads as another tier, so it goes back to the queue once as a
     policy change, with no pause.
   - A registered project takes its docs as they are, a ban included.
+- A listing made from a maintainer's post on X stood on docs that said
+  nothing about AI. Its first read is no change while the rules read no
+  policy and no sentence that names AI. A ban at its first read is a move
+  into one, as for a listing made from a find, so it pauses the project.
+  Docs that name AI at the first read, a restriction on agents included,
+  go back to the queue once as a policy change. Later reads compare hashes,
+  as for any listing.
 - When what the hash covers changes, as when the rules change what they
   read in most repos, its version goes up. A hash of another version
   compares with nothing: the read takes the new hash, and sends nothing to
@@ -3597,19 +3668,18 @@ sync makes, under [Projects](#projects).
 - The crawler never resumes it, even when the docs welcome AI help again.
   An admin does, from the admin queue.
 
-**The wider pool, monthly.** The search reads the pool again in a new pass
-30 days after the last pass started, and every seed with it, under
-[The policy crawler](#the-policy-crawler). An earlier find comes back like
-this:
+**Seeds, monthly.** The cron job reads each seed again 30 days after it
+last handled it, under [The policy crawler](#the-policy-crawler). An
+earlier find comes back like this:
 
 - A find that waits in the admin queue stays as it is, and its repo isn't
   read again.
 - A find an admin approved is a project, and is read only as a listing.
 - A repo removed at its maintainers' request is on the do-not-list, and
   never comes back.
-- A find an admin rejected is read again when the search or the seed list
-  gives its repo, and goes back in the queue only when its docs read
-  differently from the last rejected find's, by the hash above. So an admin decides the same
+- A find an admin rejected is read again when its seed is due, and goes
+  back in the queue only when its docs read differently from the last
+  rejected find's, by the hash above. So an admin decides the same
   docs once. A find stored before finds kept a hash, or with one of an
   older version, takes the new one, and stays out.
 
@@ -3622,6 +3692,123 @@ a crawl.
 **The log.** The consumer's line says how many listed projects it read
 again, which it left alone and why, whose policy changed, and which it
 paused. The cron job's line says how many it queued.
+
+## The model policy reader
+
+A model, Claude Opus 5.5, reads a repo's docs beside the rules. The design
+is the [model policy reader spec](specs/model-policy-reader.md). It is
+built in steps, and for now it runs in shadow: the rules decide everything
+they decided before, and the model decides nothing. Its reading is kept and
+shown beside the rules', so the shadow run measures how often the two
+agree and what the model costs.
+
+**When it runs.** `POLICY_READER` says how the crawler reads a policy:
+`rules`, `shadow`, or `model`. Empty means `rules`, and the model reads
+nothing. `shadow` and `model` both read with the model, and both let the
+rules decide until the model may, in a later step. The model also needs
+the `ANTHROPIC_API_KEY` secret and a day's budget, `MODEL_DAILY_BUDGET_USD`,
+of more than 0. Without either, it reads nothing, and the log says so once
+a UTC day.
+
+**When the model reads.** The crawl consumer reads a seed's or a listed
+project's files as before, and the rules read them. Then, for the model:
+
+- **The docs hash.** The Worker hashes what it read: each file's path and
+  exact text, sorted by path, and whether there is a vouch file. It holds
+  none of the repo's text. A find and a policy change keep it, so the admin
+  queue can show the model's reading of the same docs.
+- **The same docs cost nothing.** The last reading of each repo is kept
+  with its docs hash and the reader version, which names the model, the
+  prompt, and the output schema. When both match, the model isn't called
+  again.
+- **A weekly read of the same docs decides nothing.** When the docs hash
+  and reader version are the last weekly read's, the model's half does
+  nothing more.
+- **A rejected find with the same docs.** A seed whose last rejected find
+  has the same docs hash stays out, with no model call.
+- **A seed that takes no outside pull requests** stays out, with no model
+  call.
+- **Size.** Files that total more than 400,000 bytes of text get no
+  verdict from the model, and the log names the repo.
+- **Staging.** Otherwise the consumer reads the repo's labels, and writes
+  the files and labels to D1 with a pending reading: the commit, the
+  branch, the repo's facts, and the vouch file's path. A repo has one
+  pending reading at most. A newer one replaces an older one that wasn't
+  sent, with its files. Every GitHub read happens here, so the batch job
+  never calls GitHub. The rules' find shares these reads, so a seed reads
+  its labels once.
+
+**The hourly run.** On the crawler's cron, after it queues its repos, the
+reader's run:
+
+1. Drops the pending readings that kept failing for 7 days, with their
+   files, and the log names them. It does this first, even when the model
+   reads nothing, so no repo's docs are held past 7 days.
+2. Asks after each batch it sent. For one that ended, it reads the results
+   by `custom_id`, which is the pending reading's ID, so their order
+   doesn't matter. It checks each reading with the reader's core: every
+   statement against the files, then the tier from the ones that check out.
+   It keeps a reading that counts. A reading that comes back after a newer
+   one was staged for its repo is dropped. A result the Worker fails to
+   keep is no verdict, and the rest go on.
+3. Sends the pending readings as one batch through the Message Batches API,
+   at most 50, as many as the day's budget allows.
+
+**The budget.** The model may spend `MODEL_DAILY_BUDGET_USD` in a UTC day.
+Before it sends a request, the Worker reserves the most it could cost: its
+input estimate at the input price, the system prompt at the cache write
+price, and `max_tokens` at the output price, at batch prices. It settles to
+the real cost, from the result's usage, when the result comes back. Each
+kind of read has a share of the day: admin seeds 50%, requested repos 20%,
+`register_project` 10%, and the last 20% only for weekly reads and second
+readings for a pause. From 18:00 UTC, weekly reads may also spend what the
+other shares left unspent, up to the whole day, so before then a seed
+always finds its half. A reading past its share waits for a later run, and
+at the latest for the next UTC day. Each share is sent in turn, so one that
+is spent holds no other back. Only seeds and weekly reads use the reader so
+far. A reading is kept under the project's name for a weekly read, so a
+repo GitHub renamed keeps its reading.
+
+**When it can't read.** It pauses nothing and lists nothing for a repo the
+model hasn't read.
+
+| What happened | What the reader does |
+|---|---|
+| The API is down, rate limited, or overloaded, so a batch can't be sent or asked after | The readings stay pending for the next hourly run |
+| The day's share is spent | The reading waits until the next UTC day |
+| No `ANTHROPIC_API_KEY`, or a budget of 0 | Nothing is staged, and the log says so once a day |
+| The API refuses the key (401), or it may not use the model (403) | The readings stay pending, the reader stops for an hour, and the log names the secret |
+| The API refuses the request as malformed, or names no such model (400, 404) | The reader stops for an hour, with an error in the log |
+| The account is out of credit, or the workspace's spend limit is reached (402) | The reader waits until the next UTC day |
+| A request expired, was canceled, or errored with an overload or a server error | It goes in the next batch |
+| `refusal`, `max_tokens`, an invalid request error in the result, or output that fails the checks | No verdict. The log says why, and nothing is kept. For a weekly read, the docs hash isn't kept, so the next weekly read tries again |
+
+After three weekly reads in a row with no verdict, the log says so once.
+Once the model decides, a listing made from a policy goes to the admin
+queue then, as a policy change that says the reader can't read its docs.
+A read that never reached the model, as with no key, doesn't count. The
+size cap does.
+
+**What the admin sees.** A crawler find, and a policy change, show the
+model's reading of the same docs, when it has read them: the tier its
+statements give and the tier the model gave, each statement with its
+lines quoted from the files and the model's note on it, how many
+statements failed the check and were dropped, and the model's summary. The
+lines are the repo's text, and the notes are text the model wrote from it,
+so `admin_queue` marks all of it as data, as it marks the repo's text.
+Lines that try to steer a reader, like one that says how to classify the
+repo, show at the top of the item.
+
+**The log.** The consumer's line says how many readings it staged, how
+many it skipped as read before, as the same docs, as a rejected find, or
+as a seed that takes no outside pull requests, which repos were past the
+size cap, and its calls to GitHub for the model. The hourly run's line says
+how many batches it collected and how many are still in progress, how many
+readings counted, where the model and the rules agree on the tier and where
+they disagree, the readings with no verdict and why, the seeds the model
+would have found that the rules didn't, the listings the model reads as
+moved into a ban or as changed, what it sent and what waits, the cost, the
+prompt cache hits, and what the day used of its budget.
 
 ## MCP tools
 
@@ -3744,7 +3931,7 @@ tool say what to do with each one on its list, under
 | `request_removal` | `not_maintainer` |
 | `admin_queue` | None |
 | `admin_decide` | `not_found`, `invalid_settings`, `repo_not_eligible`, `already_registered`, `invalid_input` |
-| `admin_add_project` | `repo_not_eligible`, `already_registered`, `invalid_settings` |
+| `admin_add_project` | `repo_not_eligible`, `already_registered`, `invalid_settings`, `invalid_input` |
 | `admin_block_donor` | `not_found` |
 | `admin_pause_project` | `not_found`, `project_not_open` |
 | `admin_remove_project` | None |
@@ -3992,7 +4179,8 @@ homepage's feed.
   with every event behind it, a minute later, then after 2, 4, 8, 16, and 32
   minutes, then every hour, until the queue takes it. A send that never
   answers is tried again a minute after it started. So no event is lost on
-  the way, and the room's own history has it all along.
+  the way: the room keeps each event in its outbox until the queue takes
+  it.
 - The queue's consumer delivers each event to the homepage's feed, the feed
   of the project the claim was made in, by its code repo, and the feed of
   the claimant, by GitHub ID. The queue waits at most a second to fill a
@@ -4014,15 +4202,23 @@ homepage's feed.
 - On Cloudflare's Workers Free plan, a queue keeps a message 24 hours. A
   feed that fails for longer than that loses those messages: they are
   deleted, and never reach the dead-letter queue.
-- The room keeps every event, whatever happens to the queue.
+- The room keeps each event in its outbox until the queue takes it,
+  whatever happens to the queue.
 - Queues can deliver a message twice. A feed ignores an event it keeps, or
   got in the last 7 days, so it never shows an event twice.
 
 **History**
 
 - A feed keeps its newest 1,000 events, through restarts. Older ones are
-  dropped as new ones come, so a feed stays small however long it runs. The
-  issue room keeps its whole history.
+  dropped as new ones come, so a feed stays small however long it runs.
+- An issue room keeps its newest 1,000 events, blocked donors' included,
+  and beyond those, every change of state but repeat submits, the newest
+  20 lines of each claim, which are all its lane shows, and each claim's
+  first submit and its newest. Each post and submit deletes the rest. So a
+  donor who posts every 10 seconds for days, or submits again and again,
+  leaves the room holding about 1,000 events, 20 lines a claim, and two
+  submits a claim, and a quiet claim keeps its lane however much another
+  posts.
 - A feed also counts its events by the UTC day they happened and by
   claimant, and keeps each day's count for a week. A copy it ignores isn't
   counted. So a day's count holds however many of the day's events the feed
@@ -4058,21 +4254,31 @@ out of what they send watchers, and so of every stream.
   tries again a minute later, and with each new event.
 
 **The do-not-list.** Every event on an issue in a repo the
-[do-not-list](#crawl-candidates) covers is hidden the same way: feeds and
-rooms leave it out of what they send watchers, and so of every stream and
-live socket, and of a room's or feed's history read directly.
+[do-not-list](#crawl-candidates) covers, and every event on a claim of a
+project the list names, is hidden the same way: feeds and rooms leave it
+out of what they send watchers, and so of every stream and live socket,
+and of a room's or feed's history read directly.
 
 - What the list covers is read from the database each time events go out,
   and each time a watcher connects, with who is blocked. So removing a
   project hides the events already stored on its issues, and new ones, from
   then on. Feeds and rooms still store them, and a watcher that connects
   after the repo comes off the list gets them again.
-- An event is judged by the repo its issue is in, as the event names it.
-  So while an approved or paused project off the list keeps its issues in
-  the same issue repo as a removed one, the events on both projects' issues
-  there show. When the repo on the list is the removed project's own code
-  repo, the events on it are hidden, those of other projects that keep
-  their issues there included.
+- An event is judged by the repo its issue is in, as the event names it,
+  and by its claim's project. A project the list names, by its code repo
+  or by the repo it keeps its issues in now, has every event of its claims
+  hidden, wherever the issues were. So a project that moved its issues to
+  another repo before it was removed leaves none of its events on the old
+  issues shown, as the public pages show none of its claims.
+- While an approved or paused project off the list keeps its issues in the
+  same issue repo as a removed one, the events of its own claims there
+  show, and the removed project's are hidden. When the repo on the list is
+  the removed project's own code repo, the events on it are hidden, those
+  of other projects that keep their issues there included.
+- A feed keeps each event's project from the time this rule began. An
+  event it stored before then is judged by its claim, whose project the
+  database holds. One whose claim the database doesn't hold is judged by
+  its repo alone.
 - A feed counts its events by day and claimant, so a day's count still
   counts events on issues the list covers.
 - When the database can't say what the list covers, nothing goes out, as
@@ -4112,8 +4318,8 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   the event as it was.
 - `?since=<event ID>` backfills, with the ID from a text line's second
   column or an `.ndjson` line. The stream starts with the events after that
-  one, as a watcher's `since` does. Without it, a feed's stream starts with
-  the newest 100 events, and an issue's with its whole history.
+  one, as a watcher's `since` does. Without it, a stream starts with the
+  newest 100 events, an issue's too.
 - A stream closes an hour after it opened, and when its feed or room closes
   the socket, as a deploy can. The reader reconnects with `since`.
 - A reader that leaves a line untaken for a minute is too slow. The stream
@@ -4139,6 +4345,9 @@ Every feed has a plain-text live stream, readable with `curl -N`:
   GitHub couldn't have, are `404`. So a request never makes a feed or room
   that nothing could fill. A `since` that isn't an event ID is `400`. When
   the database or the feed can't answer, it is `503`.
+- A repo whose project has no [page](#the-project-page), as a pending,
+  rejected, or delisted project has none, is `404` too, with the same words
+  as for a repo that isn't a project.
 - A blocked donor's stream is `404` too, as their
   [page](#a-persons-page) is. It says `@<user> has no stream on Good First
   Token.`, the same words as for a login no one has signed in with, so it
@@ -4158,9 +4367,9 @@ the [views in MCP Apps hosts](#views-in-mcp-apps-hosts).
 - The socket is the feed's or the room's own watcher, as under
   [Live feeds](#live-feeds) and [the issue room](#the-issue-room). Each
   message is one feed event as JSON, the same object as an `.ndjson` line.
-  First come the events after `?since=<event ID>`. With no `since`, or one
-  it doesn't know, a feed sends its newest 100 first, and an issue's room its
-  whole history. Then each new event, as it arrives.
+  First come the events after `?since=<event ID>`, up to 1,000. With no
+  `since`, or one it doesn't know, a feed or an issue's room sends its
+  newest 100 first. Then each new event, as it arrives.
 - Blocked donors' events, and events on issues the do-not-list covers, are
   left out, as for every watcher.
 - It stays open while the feed sleeps, and has no hour limit. It closes when
@@ -4298,7 +4507,8 @@ it shows is in [brand/brief-website.md](../brand/brief-website.md).
   issues waiting for an agent first. Pending, rejected, and paused projects
   aren't on it.
 - Each row is the homepage's row, with how the project got in:
-  `registered by its maintainers`, or `listed from its AI policy`.
+  `registered by its maintainers`, `listed from its AI policy`, or
+  `listed from a maintainer's post` for a listing made from a post on X.
 - The chips filter by PR mode: `all`, `automatic PRs`, or `reviewed PRs`.
   The search keeps the projects whose repo, or one of whose tags, holds the
   words typed, ignoring case and the spaces around them. The two apply
@@ -4395,7 +4605,12 @@ and the UTC day they did.
 - A registered project says who registered it, by their login now.
 - A project listed from its AI policy shows the policy's quote, a link to
   the file, named by its file and section, like `CONTRIBUTING.md#ai`, and
-  says it was listed from its AI policy. Beside that, `take it over or
+  says it was listed from its AI policy. A project listed from a
+  maintainer's post on X shows the post's words and `post on X`, linked to
+  the post. It says whose post it was, by their X handle, linked to their
+  profile on X. `@handle is @login on GitHub` links to the page that ties
+  the two, and `@login is its creator`, or its owner or maintainer, links to
+  the page that states the role. Beside either, `take it over or
   remove it` links to [/maintainers](#the-maintainers-page), the page that
   says how a maintainer takes over a listing from their agent, with
   `register_project`, or asks to have it removed.
@@ -4529,7 +4744,9 @@ each a ring, filled while a claim takes it.
 
 **The timeline** lists every change of state on the issue, oldest first:
 each claim, pause, submit, PR, release, and expiry, with its time in UTC, the
-claimant, and their agent. The lines are in the lanes.
+claimant, and their agent. Past the room's newest 1,000 events, it can
+show only a claim's first submit and its newest, as the room keeps them.
+The lines are in the lanes.
 
 **Blocked donors** have no lane, no line, and no place in the timeline, as
 everywhere under [Live feeds](#live-feeds). A claim of theirs still takes
@@ -5239,7 +5456,10 @@ to, as `/start.md` names its server.
   it got in, `registered` or `policy`, its settings, and links to its page,
   its markdown, its JSON, its live stream, and its repo on GitHub.
 - A project listed from its AI policy carries the policy's quote and its
-  link, as its page shows them. A registered project carries `null`. The
+  link, as its page shows them. One listed from a maintainer's post also
+  carries `maintainerPost`: the X handle, the GitHub login, the role, the
+  two source links, and when the post was published. Who checked it, their
+  note, and when stay off. A registered project carries `null`. The
   crawler's reading of the policy isn't published, nor is who added the
   project, nor why it was paused.
 - `/projects.json` lists them by repo, without case, up to 500 a page.
@@ -5414,7 +5634,8 @@ A deployment can serve them from a static host, on a hostname of its own.
   the one from their sign-in on the site.
 - Reads that act for no one run with the read-only service token, the
   `GH_SERVICE_TOKEN` secret: the sync, the PR job, the job that records
-  cleared PRs, a maintainer's refresh, and the policy crawler. They read public data only, and never with a
+  cleared PRs, a maintainer's refresh, the read on approval, and the policy
+  crawler. They read public data only, and never with a
   person's token. The job that records cleared PRs lists each cleared
   claim's PRs by its branch. The PR job reads each open PR's state,
   author, reviews,

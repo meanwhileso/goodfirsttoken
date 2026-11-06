@@ -13,12 +13,15 @@ import {
   createProject,
   getBlock,
   getDoNotListEntry,
+  getIssueSync,
   getProject,
   getWaitingRemoval,
+  listIssues,
   savePerson,
 } from '../../src/db';
 import { Browser, ORIGIN, location, signIn, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
+import { knowServiceToken } from '../sync/helpers';
 
 // The admin pages at /admin, fetched through the whole Worker by a browser
 // signed in with the GitHub fake, and the function behind the page's server
@@ -279,6 +282,17 @@ describe("the admin page's forms", () => {
 
     expect(html).toContain(`Approved ${HARBOR}. It is listed now.`);
     expect(await getProject(env.DB, HARBOR)).toMatchObject({ status: 'approved', statusChangedBy: 1010 });
+  });
+
+  test('approving a registration on the page reads its tagged issues from GitHub, with no cron run', async () => {
+    knowServiceToken(github);
+    const browser = await signedIn('sample-admin');
+    const id = harborId(await (await browser.fetch('/admin')).text());
+
+    await back(browser, await browser.post('/admin', { action: 'decide', id, decision: 'approve' }));
+
+    expect((await listIssues(env.DB, HARBOR)).length).toBeGreaterThan(0);
+    expect((await getIssueSync(env.DB, HARBOR))?.readAt).not.toBeNull();
   });
 
   test('when GitHub no longer takes the admin\'s token, the queue shows no facts, a form changes nothing, and each says to sign in again', async () => {

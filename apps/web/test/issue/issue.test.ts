@@ -14,7 +14,7 @@ import {
   setProjectStatus,
 } from '../../src/db';
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
-import { applyEvent, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
+import { applyEvent, foldEvents, LANE_LINES, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { LOCAL_FAKE, runAsDevelopment, setEnv, startGitHub } from '../auth/helpers';
@@ -352,6 +352,70 @@ describe('the slots', () => {
     ]);
     expect(page.view.timeline.map((entry) => entry.kind).slice(-2)).toEqual(['pr_merged', 'pr_closed']);
     expect(page.view.openPrs).toEqual([]);
+  });
+
+  test('a paused claim that submits goes to review and keeps its slot, live and loaded', async () => {
+    const p = await claim(priya);
+    at(start + 30 * MINUTE);
+    const loaded = await load();
+    expect(lanesInPlay(loaded.view)[0]?.state).toBe('paused');
+    const socket = await liveSocket(`/${repo}/issues/${number}/live.ndjson?since=${String(loaded.view.last)}`);
+
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    expect(submitted.claim.state).toBe('awaiting_review');
+    await socket.event('submitted the work');
+    socket.socket.close(1000);
+    const live = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
+
+    for (const view of [live, (await load()).view]) {
+      expect(lanesInPlay(view).map((lane) => [lane.login, lane.state])).toEqual([['priya', 'awaiting_review']]);
+      expect(slotsTaken(view)).toBe(1);
+    }
+  });
+
+  test("work submitted again after a claim's PR opened leaves its lane on that PR, holding no slot, live and loaded", async () => {
+    await tag();
+    const p = await claim(priya);
+    await claim(kenji, 'codex');
+    await openPr(p, 57);
+    const loaded = await load();
+    const socket = await liveSocket(`/${repo}/issues/${number}/live.ndjson?since=${String(loaded.view.last)}`);
+
+    // In core, a submit on a claim with its PR open keeps it pr_opened.
+    const again = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!again.ok) throw new Error(again.refusal.message);
+    expect(again.claim.state).toBe('pr_opened');
+    await socket.event('submitted more work');
+    const live = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
+    const whileOpen = await load();
+
+    for (const view of [live, whileOpen.view]) {
+      expect(lanesInPlay(view).map((lane) => [lane.login, lane.state, lane.pr])).toEqual([
+        ['priya', 'pr_opened', prLink(57)],
+        ['kenji', 'active', null],
+      ]);
+      expect(slotsTaken(view)).toBe(1);
+    }
+
+    // Once the PR closes without merging, the issue takes claims again, and
+    // only kenji's claim holds a slot.
+    await room().claimPrEnded({ claimId: p.id, pr: prRef(57), merged: false });
+    await socket.event(`PR ${repo}#57 closed without merging`);
+    socket.socket.close(1000);
+    const closedLive = socket.events.reduce((view, event) => applyEvent(view, event), loaded.view);
+    const closed = await load();
+
+    for (const view of [closedLive, closed.view]) {
+      expect(lanesInPlay(view).map((lane) => [lane.login, lane.state, lane.prOutcome])).toEqual([
+        ['priya', 'pr_opened', 'closed'],
+        ['kenji', 'active', null],
+      ]);
+      expect(slotsTaken(view)).toBe(1);
+    }
+    const markdown = await (await workerFetch(`http://localhost/${repo}/issues/${number}.md`)).text();
+    expect(markdown).toContain(`: PR closed, [PR #57](https://github.com/${repo}/pull/57)`);
+    expect(markdown).toContain(`1 of ${String(closed.slots)} slots taken.`);
   });
 
   test('a PR someone opened outside Good First Token closes the slots too', async () => {
@@ -854,6 +918,30 @@ describe("the room's glance, which the page loads with", () => {
 
     expect(glance?.events.map((event) => event.user)).toEqual(['priya']);
     expect(glance?.claims.map((claim) => claim.login)).toEqual(['priya', 'kenji']);
+  });
+
+  test("holds every change of state and only the lines each lane shows, so the page folds to what the whole history would", async () => {
+    const p = await claim(priya);
+    const k = await claim(kenji, 'codex');
+    let now = start;
+    const postAs = async (claimed: ClaimRecord, text: string) => {
+      now += 10 * SECOND;
+      at(now);
+      await post(claimed, text);
+    };
+    for (let i = 1; i <= LANE_LINES + 5; i += 1) await postAs(p, `priya ${String(i)}`);
+    for (let i = 1; i <= LANE_LINES + 3; i += 1) await postAs(k, `kenji ${String(i)}`);
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    await postAs(k, 'kenji after the submit');
+
+    const glance = await room().glance();
+    const whole = await room().history();
+
+    const changes = whole.filter((event) => event.kind !== 'update');
+    expect(glance?.events.filter((event) => event.kind !== 'update')).toEqual(changes);
+    expect(glance?.events).toHaveLength(changes.length + 2 * LANE_LINES);
+    expect(foldEvents(glance?.events ?? [])).toEqual(foldEvents(whole));
   });
 });
 

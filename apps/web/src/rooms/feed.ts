@@ -41,10 +41,14 @@ const DAY_COUNTS_KEPT_MS = 7 * DAY;
 // How soon a send to the watchers that D1 kept from going out is tried again.
 const WATCHERS_RETRY_MS = 60 * 1000;
 
-/** An event for a feed, with the GitHub ID of the claimant it is about. */
+/**
+ * An event for a feed, with the GitHub ID of the claimant it is about, and
+ * the code repo of the project their claim is on.
+ */
 export interface FeedEntry {
   event: FeedEvent;
   githubId: number;
+  project: string;
 }
 
 /** The homepage's feed: every event from everyone. */
@@ -62,12 +66,16 @@ export function personFeed(namespace: DurableObjectNamespace<Feed>, id: number):
   return namespace.getByName(`person:${String(mustParse(githubId, id, 'githubId'))}`);
 }
 
+// An event's project is the code repo of its claim's project, in lower
+// case. A feed made before feeds kept it gains the column in the
+// constructor, and its events stored before then keep a null project.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY,
     id TEXT NOT NULL UNIQUE,
     github_id INTEGER NOT NULL,
-    event TEXT NOT NULL
+    event TEXT NOT NULL,
+    project TEXT
   ) STRICT;
   CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, at INTEGER NOT NULL) STRICT;
   CREATE INDEX IF NOT EXISTS seen_by_time ON seen (at);
@@ -89,15 +97,16 @@ export interface FeedGlance {
   dayCount: number;
 }
 
-type EventRow = { seq: number; github_id: number; repo: string; event: string };
+type EventRow = { seq: number; github_id: number; repo: string; project: string | null; claim: string; event: string };
 
-// Each event's columns, with the repo its issue is in, in lower case, read
-// from the event. Repo names are ASCII, which SQLite's lower() folds.
-const EVENT_COLUMNS = `seq, github_id, event,
+// Each event's columns, with the repo its issue is in, in lower case, and
+// its claim's ID, read from the event. Repo names are ASCII, which SQLite's
+// lower() folds.
+const EVENT_COLUMNS = `seq, github_id, event, project, json_extract(event, '$.claim') AS claim,
   lower(substr(json_extract(event, '$.issue'), 1, instr(json_extract(event, '$.issue'), '#') - 1)) AS repo`;
 
 function toStored(row: EventRow): StoredEvent {
-  return { seq: row.seq, githubId: row.github_id, repo: row.repo, json: row.event };
+  return { seq: row.seq, githubId: row.github_id, repo: row.repo, project: row.project, claim: row.claim, json: row.event };
 }
 
 export class Feed extends DurableObject<Env> {
@@ -107,6 +116,8 @@ export class Feed extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(SCHEMA);
+    const columns = this.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('events')").toArray();
+    if (!columns.some((column) => column.name === 'project')) this.sql.exec('ALTER TABLE events ADD COLUMN project TEXT');
   }
 
   /**
@@ -120,16 +131,18 @@ export class Feed extends DurableObject<Env> {
     const checked = entries.map((entry) => ({
       event: mustParse(feedEventSchema, entry.event, 'event'),
       githubId: mustParse(githubId, entry.githubId, 'githubId'),
+      project: mustParse(repoName, entry.project, 'project').toLowerCase(),
     }));
     let stored = 0;
-    for (const { event, githubId: claimant } of checked) {
+    for (const { event, githubId: claimant, project } of checked) {
       const fresh = this.sql.exec('INSERT OR IGNORE INTO seen (id, at) VALUES (?, ?)', event.id, now).rowsWritten > 0;
       if (!fresh) continue;
       this.sql.exec(
-        'INSERT INTO events (id, github_id, event) VALUES (?, ?, ?)',
+        'INSERT INTO events (id, github_id, event, project) VALUES (?, ?, ?, ?)',
         event.id,
         claimant,
         JSON.stringify(event),
+        project,
       );
       this.sql.exec(
         `INSERT INTO day_counts (day, github_id, events) VALUES (?, ?, 1)
@@ -162,9 +175,9 @@ export class Feed extends DurableObject<Env> {
 
   /**
    * The events the feed keeps after the one with ID `since`, oldest first,
-   * without blocked donors' events or events in repos the do-not-list
-   * covers. With no `since`, or one the feed doesn't keep, every event it
-   * keeps. Throws when D1 can't say what to hide.
+   * without blocked donors' events, events in repos the do-not-list covers,
+   * or events on projects it names. With no `since`, or one the feed doesn't
+   * keep, every event it keeps. Throws when D1 can't say what to hide.
    */
   async history(since?: string | null): Promise<FeedEvent[]> {
     const at = typeof since === 'string' ? this.placeOf(since) : null;
@@ -176,15 +189,15 @@ export class Feed extends DurableObject<Env> {
   }
 
   /**
-   * The newest `count` events a watcher may see, up to 100, oldest first,
-   * and how many events happened on `day`, a UTC day like 2026-09-27. Blocked
-   * donors' events are left out of both, and events in repos the
-   * do-not-list covers out of the events. The day's count is kept by
-   * claimant, so it still counts those. A page shows these first, then
-   * opens a watcher's socket with the newest event's ID as `since`. Null
-   * when D1 can't say what to hide, so nothing that should be hidden shows.
-   * The runtime reports an error thrown in a Durable Object as uncaught, so
-   * this answers null in its place.
+   * The newest `count` events a watcher may see, up to 100, oldest first, and
+   * how many events happened on `day`, a UTC day like 2026-09-27. Blocked
+   * donors' events are left out of both, and events the do-not-list covers,
+   * by repo or by project, out of the events. The day's count is kept by
+   * claimant, so it still counts those. A page shows these first, then opens
+   * a watcher's socket with the newest event's ID as `since`. Null when D1
+   * can't say what to hide, so nothing that should be hidden shows. The
+   * runtime reports an error thrown in a Durable Object as uncaught, so this
+   * answers null in its place.
    */
   async glance({ count, day }: { count: number; day: string }): Promise<FeedGlance | null> {
     const size = mustParse(wholeNumber(1, FEED_TAIL), count, 'count');
@@ -203,7 +216,7 @@ export class Feed extends DurableObject<Env> {
       try {
         learned = await learnHidden(
           this.env.DB,
-          { donors: [...asked.donors, ...counts.map((row) => row.github_id)], repos: asked.repos },
+          { ...asked, donors: [...asked.donors, ...counts.map((row) => row.github_id)] },
           known,
           hidden,
         );
@@ -226,7 +239,7 @@ export class Feed extends DurableObject<Env> {
    * last week, sends every event it keeps after that one first. Without it,
    * or with any other ID, the newest 100 come first. Then every new event, as
    * it arrives. A blocked donor's events are left out, and so are events in
-   * repos the do-not-list covers.
+   * repos the do-not-list covers, and events on projects it names.
    */
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -281,14 +294,23 @@ export class Feed extends DurableObject<Env> {
       .map(toStored);
   }
 
-  /** The newest `count` events, oldest first, leaving out the donors and repos in `skip`. */
+  /**
+   * The newest `count` events, oldest first, leaving out the donors, repos,
+   * and projects in `skip`, and for an event stored with no project, the
+   * claims in it.
+   */
   private newest(count: number, skip: Hidden): StoredEvent[] {
     return this.sql
       .exec<EventRow>(
-        `SELECT * FROM (SELECT ${EVENT_COLUMNS} FROM events WHERE github_id NOT IN (SELECT value FROM json_each(?)))
-         WHERE repo NOT IN (SELECT value FROM json_each(?)) ORDER BY seq DESC LIMIT ?`,
+        `SELECT * FROM (SELECT ${EVENT_COLUMNS} FROM events WHERE github_id NOT IN (SELECT value FROM json_each(?1)))
+         WHERE repo NOT IN (SELECT value FROM json_each(?2))
+           AND CASE WHEN project IS NULL THEN claim NOT IN (SELECT value FROM json_each(?4))
+             ELSE project NOT IN (SELECT value FROM json_each(?3)) END
+         ORDER BY seq DESC LIMIT ?5`,
         JSON.stringify([...skip.donors]),
         JSON.stringify([...skip.repos]),
+        JSON.stringify([...skip.projects]),
+        JSON.stringify([...skip.claims]),
         count,
       )
       .toArray()

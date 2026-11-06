@@ -1,6 +1,7 @@
 import type { AiSentence, BanLine, Policy, PolicyTier, ProjectRecord } from '@goodfirsttoken/core';
 import {
   addPolicyChange,
+  getModelReading,
   getDoNotListEntry,
   getIssueSync,
   getPolicyRead,
@@ -12,7 +13,10 @@ import {
 } from '../db';
 import { whyNotEligible, type RepoFacts } from '../projects/repo';
 import { isProjectRepo } from '../projects/repo-id';
+import { countRereadNoVerdict, rereadFromKept } from './batches';
 import { comparable, policyFingerprint, wordsOf } from './fingerprint';
+import { readerStatus, sharedReads, stageReread, type ReaderRun, type ReaderStatus } from './model';
+import { docsHash } from './reader/docs';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
 import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
 import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type PolicyReading } from './rules';
@@ -20,7 +24,7 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 // Keeping listings current (spec section 5): the crawl queue's consumer
 // reads each listed project's docs again every week, with the same reads and
 // the same rules as a crawl, and compares what the rules read with the last
-// read. The crawler's cron job queues them (src/crawl/search.ts).
+// read. The crawler's cron job queues them (src/crawl/producer.ts).
 //
 // - Docs that move into a ban on AI help, from a last read that wasn't one,
 //   pause the project at once. A ban the docs had at the first read of a
@@ -30,7 +34,9 @@ import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type Poli
 //   turned off, pauses an approved project at once.
 // - A listing made from a policy whose policy reads differently otherwise
 //   goes back to the admin queue as a policy change, and stays listed while
-//   it waits.
+//   it waits. A listing made from a maintainer's post on X stands on the
+//   post, so its first read sends nothing while its docs name no AI, and a
+//   ban then pauses it.
 //
 // Each pause is the one the sync makes: a pause that names no one, so only
 // an admin lifts it, kept in the status history. The admin queue shows every
@@ -181,6 +187,9 @@ async function pauseForCrawler(
  *   nothing back to the queue.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
+ * - A listing made from a maintainer's post reads as no change at its first
+ *   read while its docs name no AI at all, and a ban then is a move into
+ *   one. Later reads compare hashes, as for any listing.
  */
 function compare(
   project: ProjectRecord,
@@ -191,9 +200,18 @@ function compare(
 ): { changed: boolean; intoBan: boolean } {
   const banned = reading.tier === 'bans_or_restricts';
   const sameRules = comparable(last?.fingerprint ?? null);
+  // A listing made from a maintainer's post stood on docs that said nothing
+  // about AI, so a ban at its first read is a move into one, as for a find.
+  const fromPost = project.policy?.maintainerPost !== undefined;
   const intoBan =
-    banned && (last?.banned == null ? fromFind : !last.banned && (sameRules || project.source === 'policy'));
-  if (last?.fingerprint == null) return { changed: readsOtherwise(project.policy, reading), intoBan };
+    banned && (last?.banned == null ? fromFind || fromPost : !last.banned && (sameRules || project.source === 'policy'));
+  if (last?.fingerprint == null) {
+    // Its first read is no change while the docs still name no AI at all.
+    // Docs that name it, even to restrict agents without a ban, go to an
+    // admin once, and later reads compare hashes as for any listing.
+    if (fromPost && reading.tier === 'no_policy' && reading.aiSentences.length === 0) return { changed: false, intoBan };
+    return { changed: readsOtherwise(project.policy, reading), intoBan };
+  }
   if (!sameRules) return { changed: false, intoBan };
   return { changed: last.fingerprint !== fingerprint, intoBan };
 }
@@ -213,10 +231,13 @@ async function keepCurrent(
   files: PolicyFile[],
   facts: RepoFacts,
   run: RereadRun,
+  model: { status: ReaderStatus; run: ReaderRun },
 ): Promise<'read' | 'gone'> {
   const { db, github, now } = deps;
   const reading = readPolicy(files);
   const fingerprint = await policyFingerprint(reading, files, repo.vouch);
+  const hash = await docsHash(files, repo.vouch);
+  const reads = sharedReads({ listable: () => Promise.resolve(null), labels: (name) => readLabels(github, name) });
   const last = await getPolicyRead(db, project.repo);
   // Only the first read of a listing asks whether a find is behind it.
   const fromFind = last?.banned == null && project.source === 'policy' && (await hasApprovedFind(db, project.repo));
@@ -230,7 +251,7 @@ async function keepCurrent(
     const why = { ban, aiSentences: passages(reading), moreAiSentences: reading.moreAiSentences };
     if (await pauseForCrawler(deps, project.repo, BAN_REASON, why, true)) run.paused.push(project.repo);
   } else if (changed && project.source === 'policy') {
-    const labels = await readLabels(github, repo.name);
+    const labels = await reads.labels(repo.name);
     if (labels === null) return 'gone';
     const welcome = reading.welcome;
     const policy =
@@ -240,7 +261,15 @@ async function keepCurrent(
     const { sources } = suggestSettings(reading, files, labels, repo.vouch);
     const change = await addPolicyChange(
       db,
-      { repo: project.repo, facts: repo.standing, policy, sources, aiSentences: passages(reading), moreAiSentences: reading.moreAiSentences },
+      {
+        repo: project.repo,
+        facts: repo.standing,
+        policy,
+        sources,
+        aiSentences: passages(reading),
+        moreAiSentences: reading.moreAiSentences,
+        docsHash: hash,
+      },
       now(),
     );
     if (change !== null) run.changed.push(project.repo);
@@ -254,6 +283,16 @@ async function keepCurrent(
     if (await pauseForCrawler(deps, project.repo, pullRequests.limited, why, false)) run.paused.push(project.repo);
   }
   await keepFingerprint(db, project.repo, { fingerprint, banned: reading.tier === 'bans_or_restricts' }, now());
+  // The model reads the same files, for its reading to show beside the
+  // rules'. In shadow it acts on nothing.
+  if (model.status.reads) {
+    const stage = { db, now, calls: () => github.calls };
+    const staged = await stageReread(stage, model.run, reads, { project: project.repo, repo, files, hash, rulesTier: reading.tier });
+    if (staged === 'cached') {
+      const kept = await getModelReading(db, project.repo);
+      if (kept !== null) await rereadFromKept(deps, model.run, project.repo, kept);
+    } else if (staged === 'too_big') await countRereadNoVerdict(deps, project.repo, 'docs past the size cap');
+  }
   return 'read';
 }
 
@@ -307,6 +346,7 @@ export async function rereadRepos(deps: CrawlDeps, repos: readonly string[], run
   }
 
   const read = await readFiles(github, readable);
+  const model = { status: await readerStatus(db, deps.now()), run: run.reader };
   for (const repo of readable) {
     const project = listed.get(repo.asked);
     const result = read.get(repo) ?? { failed: `GitHub gave nothing for ${repo.name}.` };
@@ -333,7 +373,7 @@ export async function rereadRepos(deps: CrawlDeps, repos: readonly string[], run
     }
     let outcome;
     try {
-      outcome = await keepCurrent(deps, project, repo, result.files, facts, run.reread);
+      outcome = await keepCurrent(deps, project, repo, result.files, facts, run.reread, model);
     } catch (error) {
       if (!(error instanceof RepoFailed)) throw error;
       fail(repo.asked, error.message);

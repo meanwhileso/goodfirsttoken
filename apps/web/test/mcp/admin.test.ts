@@ -29,6 +29,7 @@ import {
 } from '../../src/db';
 import { startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
+import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
 import { priorityEvidence } from '../priority-evidence';
 
@@ -258,6 +259,7 @@ describe('admin_queue', () => {
           evidence: null,
           priority: null,
           kind: 'registration',
+          modelReading: null,
           repo: HARBOR,
           requestedBy: 'octo-maintainer',
           requestedAt: expect.any(String) as unknown,
@@ -558,8 +560,141 @@ describe('admin_decide on a crawler find', () => {
   });
 });
 
+/** A made-up post on X by sample-maintainer, who maintains the sample-owner repos in the fake. */
+function postPolicy(changes: Record<string, unknown> = {}) {
+  const at = new Date().toISOString();
+  return {
+    quote: 'Point your agent at sample-bundler and send PRs. Agent contributions welcome.',
+    url: 'https://x.com/sample_person/status/123456789',
+    tier: 'invites_agents' as const,
+    maintainerPost: {
+      maintainerGitHubLogin: 'sample-maintainer',
+      role: 'maintainer',
+      roleSourceUrl: `https://github.com/${BUNDLER}/blob/main/MAINTAINERS.md`,
+      identitySourceUrl: 'https://github.com/sample-maintainer',
+      xHandle: 'sample_person',
+      publishedAt: at,
+      timePrecision: 'exact',
+      postKind: 'authored',
+      evidenceCheckedAt: at,
+      ...changes,
+    },
+  };
+}
+
+describe("admin_add_project from a maintainer's post", () => {
+  test('lists a repo whose docs have no AI policy from its maintainer\'s post, with the evidence and the admin who checked it', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const policy = postPolicy();
+
+    const result = await call(admin, 'admin_add_project', { repo: BUNDLER, policy, settings: { tags: ['help wanted'] } });
+
+    expect(result.structuredContent).toEqual({ repo: BUNDLER, status: 'approved', source: 'policy', updated: false });
+    expect((await getProject(env.DB, BUNDLER))?.policy).toEqual({
+      ...policy,
+      maintainerPost: { ...policy.maintainerPost, verifierGitHubId: ADMIN.githubId },
+    });
+  });
+
+  test('a link that is not the named X account\'s post, a repost, or a role nobody stated changes nothing', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const settings = { tags: ['help wanted'] };
+
+    const wrongLink = await call(admin, 'admin_add_project', {
+      repo: BUNDLER,
+      policy: { ...postPolicy(), url: `https://github.com/${BUNDLER}/blob/main/README.md` },
+      settings,
+    });
+    const repost = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy({ postKind: 'repost' }), settings });
+    const unknownRole = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy({ role: 'unknown' }), settings });
+
+    for (const refused of [wrongLink, repost, unknownRole]) {
+      expect(refused.isError).toBe(true);
+      expect(textOf(refused)).toMatch(/Input validation error/);
+    }
+    expect(textOf(wrongLink)).toContain("must be the maintainer's post");
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('a link to a post on X without its evidence is refused, so relisting to change a setting never drops the evidence', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const { quote, url, tier } = postPolicy();
+    const bare = { quote, url, tier };
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: { tags: ['help wanted'] } });
+
+    const result = await call(admin, 'admin_add_project', { repo: BUNDLER, policy: bare, settings: { tags: ['good first issue'] } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('needs maintainerPost');
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({
+      policy: { maintainerPost: { xHandle: 'sample_person' } },
+      settings: { tags: ['help wanted'] },
+    });
+  });
+
+  test('a post time after now is refused, and lists nothing', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+
+    const result = await call(admin, 'admin_add_project', {
+      repo: BUNDLER,
+      policy: postPolicy({
+        publishedAt: new Date(Date.now() + 3_600_000).toISOString(),
+        evidenceCheckedAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+      settings: { tags: ['help wanted'] },
+    });
+
+    expect(textOf(result)).toBe(
+      'Refused (invalid_input): maintainerPost.publishedAt: must not be in the future. Fix it, then call again.',
+    );
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('a post lists no repo that is otherwise blocked: pull requests limited to collaborators, or on the do-not-list', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    sampleRepo(TOOLS).pullRequestCreationPolicy = 'collaborators_only';
+    await addToDoNotList(env.DB, { repo: BUNDLER, addedBy: ADMIN.githubId, reason: null }, Date.now());
+    const policy = postPolicy();
+
+    const closed = await call(admin, 'admin_add_project', { repo: TOOLS, policy, settings: { tags: ['help wanted'] } });
+    const removed = await call(admin, 'admin_add_project', { repo: BUNDLER, policy, settings: { tags: ['help wanted'] } });
+
+    expect(textOf(closed)).toMatch(/^Refused \(repo_not_eligible\): sample-owner\/sample-tools lets only collaborators open pull requests/);
+    expect(textOf(removed)).toMatch(/^Refused \(repo_not_eligible\)/);
+    expect(await getProject(env.DB, TOOLS)).toBeNull();
+    expect(await getProject(env.DB, BUNDLER)).toBeNull();
+  });
+
+  test('listing it again from its docs drops the post, and listing it again from a post adds one', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: { tags: ['help wanted'] } });
+
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: POLICY, settings: {} });
+    const fromDocs = await getProject(env.DB, BUNDLER);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: {} });
+    const fromPost = await getProject(env.DB, BUNDLER);
+
+    expect(fromDocs?.policy).toEqual(POLICY);
+    expect(fromPost?.policy?.maintainerPost).toMatchObject({ xHandle: 'sample_person', verifierGitHubId: ADMIN.githubId });
+  });
+
+  test("a maintainer who takes the listing over drops the post with the policy", async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    await call(admin, 'admin_add_project', { repo: BUNDLER, policy: postPolicy(), settings: { tags: ['help wanted'] } });
+    const maintainer = await connectAgent(github, 'sample-maintainer');
+
+    const taken = await call(maintainer, 'register_project', { repo: BUNDLER, settings: { tags: ['help wanted'] } });
+
+    expect(taken.isError).not.toBe(true);
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({ source: 'registered', policy: null });
+    const row = await env.DB.prepare('SELECT policy_post FROM projects WHERE repo = ?').bind(BUNDLER).first<{ policy_post: string | null }>();
+    expect(row?.policy_post).toBeNull();
+  });
+});
+
 describe('admin_add_project', () => {
   test('lists a public repo from its policy at once, as GitHub names it, checked with the admin\'s own token', async () => {
+    knowServiceToken(github);
     const admin = await connectAgent(github, ADMIN.login);
     const reads = github.calls.length;
 
@@ -571,7 +706,9 @@ describe('admin_add_project', () => {
 
     expect(result.structuredContent).toEqual({ repo: BUNDLER, status: 'approved', source: 'policy', updated: false });
     expect(await getProject(env.DB, BUNDLER)).toMatchObject({ source: 'policy', policy: POLICY, addedBy: ADMIN.githubId });
-    expect(github.calls.slice(reads).map((c) => c.login)).toEqual([ADMIN.login]);
+    // The other calls are the read of its tagged issues the listing starts,
+    // with the service token.
+    expect(github.calls.slice(reads).filter((c) => c.login !== SERVICE_LOGIN).map((c) => c.login)).toEqual([ADMIN.login]);
   });
 
   test("listing a repo already listed from its policy replaces the listing's policy and settings, and keeps its status", async () => {
@@ -865,14 +1002,29 @@ describe('admin_seed_repo', () => {
     expect(await getSeed(env.DB, candidate.repo)).toBeNull();
   });
 
-  test('listed projects and finds with only a decided candidate keep their evidence-write skips', async () => {
+  test('a listed project keeps its evidence-write skip, and a rejected find takes evidence and is due at the next run', async () => {
     await registerHarbor();
     const candidate = await crawlerFind();
     const admin = await connectAgent(github, ADMIN.login);
     await call(admin, 'admin_decide', { id: candidate.id, decision: 'reject', reason: 'Read the policy again later.' });
     expect((await call(admin, 'admin_seed_repo', { repo: HARBOR, evidence: priorityEvidence() })).structuredContent).toMatchObject({ leftAlone: 'project', evidenceChanged: false });
-    expect((await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() })).structuredContent).toMatchObject({ leftAlone: 'proposed', evidenceChanged: false });
-    expect(await getSeed(env.DB, candidate.repo)).toBeNull();
+    expect(await getSeed(env.DB, HARBOR)).toBeNull();
+
+    const saved = await call(admin, 'admin_seed_repo', { repo: candidate.repo, evidence: priorityEvidence() });
+
+    expect(saved.structuredContent).toMatchObject({ leftAlone: null, added: true, evidenceChanged: true, rejectedBefore: true });
+    expect((await listSeedsToHandle(env.DB, 10)).map((seed) => seed.repo)).toEqual([candidate.repo]);
+  });
+
+  test('evidence on a seed the crawler handled makes it due at the next run', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const at = Date.now() - 5000;
+    await addSeed(env.DB, { repo: TOOLS, addedBy: ADMIN.githubId }, at);
+    await markSeedsHandled(env.DB, [{ repo: TOOLS, outcome: 'queued' }], at + 1);
+
+    await call(admin, 'admin_seed_repo', { repo: TOOLS, evidence: priorityEvidence() });
+
+    expect(await getSeed(env.DB, TOOLS)).toMatchObject({ handledAt: null, outcome: null, evidence: { verifierGitHubId: ADMIN.githubId } });
   });
 
   test('future evidence and forged verifier IDs are refused without saving a seed', async () => {
@@ -903,7 +1055,8 @@ describe('admin_seed_repo', () => {
 
     expect(added.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: true, leftAlone: null, evidence: null });
     expect(textOf(added)).toContain("Added sample-policies/small-seed to the crawler's seed list.");
-    expect(again.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: false, leftAlone: null, evidence: null });
+    expect(again.structuredContent).toMatchObject({ repo: 'sample-policies/small-seed', added: false, leftAlone: null, evidence: null, rejectedBefore: false });
+    expect(textOf(again)).toBe("sample-policies/small-seed is on the crawler's seed list already. The crawler's next run reads it again.");
     expect(await listSeedsToHandle(env.DB, 10)).toEqual([
       {
         repo: 'sample-policies/small-seed',
@@ -915,6 +1068,22 @@ describe('admin_seed_repo', () => {
       },
     ]);
     expect(github.calls.slice(reads)).toEqual([]);
+  });
+
+  test('seeding a repo the crawler handled makes it due at the next run, and keeps who added it and when', async () => {
+    const admin = await connectAgent(github, ADMIN.login);
+    const at = Date.now() - 5000;
+    await addSeed(env.DB, { repo: TOOLS, addedBy: ADMIN.githubId }, at);
+    await markSeedsHandled(env.DB, [{ repo: TOOLS, outcome: 'queued' }], at + 1);
+    const handled = await listSeedsToHandle(env.DB, 10);
+
+    const again = await call(admin, 'admin_seed_repo', { repo: TOOLS });
+
+    expect(handled).toEqual([]);
+    expect(again.structuredContent).toMatchObject({ repo: TOOLS, added: false, leftAlone: null });
+    expect(await listSeedsToHandle(env.DB, 10)).toEqual([
+      { repo: TOOLS, addedBy: ADMIN.githubId, addedAt: at, handledAt: null, outcome: null, evidence: null },
+    ]);
   });
 
   test('a repo that is a project already, or that the crawler proposed before, is not added, and the answer says why', async () => {
