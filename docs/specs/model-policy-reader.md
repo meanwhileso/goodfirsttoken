@@ -2,14 +2,18 @@
 
 Status: proposed on November 5, 2026. Not approved. The project's owner
 decided the model, Claude Opus 5.5 (`claude-opus-5-5`) at high effort,
-called with an Anthropic API key, and answered the open questions the same day, under [Decisions](#decisions).
+called with an Anthropic API key, and answered the open questions the
+same day, under [Decisions](#decisions).
 
 This changes how the policy crawler reads a repo's docs and labels, in
 [v1 section 5](v1.md#5-the-policy-crawler), and the parts of
 [crawler-priority](crawler-priority.md) and
 [maintainer-posts](maintainer-posts.md) that name "the crawler's rules".
-It also stops the crawler's searches. New repos come from maintainers and
-admins. The listing rules stay as they are. An admin lists every project.
+It also stops the crawler's searches. New repos come from maintainers,
+admins, and donors' requests. It works with the proposed
+[add-a-repo](https://github.com/meanwhileso/goodfirsttoken/pull/151) spec, which adds the requests. The listing rules stay as
+they are. An admin lists every project, apart from the requested repos
+that spec lists at once, under [Requested repos](#requested-repos).
 
 ## Why
 
@@ -51,7 +55,8 @@ The owner answered these on November 5, 2026:
    the last 30 days. Its popular sample, the 3,455 of them with 10,000
    stars, sits inside that pool. A model reading of each would cost about
    $2,400 at batch prices in the first month, and less after, as the docs
-   hash skips docs that read the same. New repos come from maintainers and admins, under
+   hash skips docs that read the same. New repos come from maintainers,
+   admins, and donors' requests, under
    [Where new repos come from](#where-new-repos-come-from).
 4. **Batches.** The crawler's model calls go through the Message Batches
    API, at half price. Structured output works there.
@@ -79,7 +84,9 @@ The owner answered these on November 5, 2026:
   for outside help.
 - The model runs when the docs change. A weekly read of docs that read the
   same costs no model call.
-- An admin still lists every project. The model's output never lists one.
+- An admin still lists every project, apart from requested repos under
+  add-a-repo's rule. A reading lists one of those only with the stricter
+  conditions under [Requested repos](#requested-repos).
 - A move into a ban still pauses a listing on its own, when two readings
   agree and the ban's line is in the file.
 - When the API is down or the day's budget is spent, the crawler pauses
@@ -101,6 +108,9 @@ come from:
   which still orders seeds.
 - **An admin** listing a repo from its maintainer's post, under
   [maintainer-posts](maintainer-posts.md).
+- **A donor** requesting a repo on the site or with `request_repo`, under
+  the add-a-repo spec. The crawler reads requested repos after the
+  admins' seeds.
 
 Today a handled seed is read again only when a new search pass starts,
 and `admin_seed_repo` turns away a repo whose find an admin decided. With
@@ -116,12 +126,56 @@ no passes, both would leave a seed read once for good. So:
   The do-not-list and projects still refuse it.
 - **A seed counts as handled** only once a reading counts or ends in no
   verdict. A seed waiting on the budget or the API stays due.
+- **Requested repos follow the same cycle.** add-a-repo reads its
+  requested repos once each, then reads the rest again "once" each pass.
+  With no search passes, a requested repo is due again 30 days after it
+  was read, as a seed is.
 - **The search's records go.** Item 1 removes the search code, and a new
   migration drops the pass checkpoints, the popular sample's checkpoint,
   and the record of repos queued in a pass.
 
-A way for anyone else to suggest a repo would be a spec of its own. See
-[Open questions](#open-questions).
+### Requested repos
+
+add-a-repo lists a requested repo with 100 stars or more at once, with no
+admin, when its docs welcome AI help and its other conditions hold: every
+check `admin_add_project` makes, at least one suggested tag, no canary,
+and no line that keeps agents from working on their own. The find still
+goes to the admin queue, and an admin who rejects it pauses the project.
+
+Anyone signed in can request any repo, so this is where a steered or
+mistaken reading would do the most harm. add-a-repo's own conditions,
+like no canary, become things the reading must report, and a reading
+that misses a line reports nothing. So a requested repo is listed at once
+only when all of these hold, on top of add-a-repo's conditions:
+
+- The worked-out tier and the model's tier agree, and both are a listing
+  tier.
+- No statement was dropped for failing a check, and no `steering` line
+  checks out.
+- **A check reading agrees.** The batch after the reading carries a second
+  call with a prompt of its own, so it doesn't share the first reading's
+  blind spots. It looks only for reasons not to list: a ban, a refusal of
+  outside pull requests, a line that keeps agents from working on their
+  own or asks for a person in the loop, a canary, steering, and whether
+  the welcome is the project's own policy or text it quotes from
+  elsewhere, like a collection of other projects' policies. Any of those
+  that checks out sends the repo to an admin. The label check rides in
+  the same batch.
+- The docs hash is still the newest one staged for the repo, as for a
+  pause.
+- **During the rollout, the rules agree too.** Until item 7, a ban, a line
+  that keeps agents from working on their own, or a canary that the rules
+  read sends the repo to an admin, whatever the model read.
+
+A repo that misses any of these waits in the admin queue as a find, as
+add-a-repo does for a repo under 100 stars. Nothing is listed at once
+before item 6. Until then, every requested repo waits for an admin.
+
+**Its budget.** Requested repos have a share of their own, 20% of the
+day, which covers their readings, check readings, and label checks.
+add-a-repo's limit of 5 a run holds. A requested repo past its share
+waits for the next UTC day. So requests can't spend what admin seeds,
+weekly reads, or pauses need.
 
 ## The policy reading
 
@@ -417,8 +471,10 @@ The design assumes some repos will.
   be approved, since a repo may quote such a line in an example.
 - **The word list stays as a net.** The paragraphs that name AI come from
   the current word list, whatever the model said.
-- **The model lists nothing.** A find goes to the admin queue, and an
-  admin decides, as today. No code path turns a reading into a listing.
+- **The model lists almost nothing.** A find goes to the admin queue, and
+  an admin decides, as today. The one path that turns a reading into a
+  listing is a requested repo, and it needs two agreeing readings with no
+  steering, under [Requested repos](#requested-repos).
 - **Pauses need two readings.** See below.
 - **Size and rate.** The 400 KB cap bounds a request. A repo is read again
   only when its docs change.
@@ -563,6 +619,7 @@ them with measured ones.
 | Policy reading, typical repo | 4,000 of system prompt, 10,000 of docs | about 6,000 | about $0.10 | |
 | Policy reading, at the 400 KB cap | 4,000 of system prompt, about 130,000 of docs | about 10,000 | about $0.38 | |
 | Second reading for a pause | the same as the first | about 6,000 | about $0.10 | |
+| Check reading for a requested repo | the same as the first | about 6,000 | about $0.10 | |
 | Label check, `medium` | about 8,000 | about 1,500 | about $0.04 | about $0.07 |
 
 Each figure counts the system prompt as a one-hour cache write, at twice
@@ -577,6 +634,10 @@ one-hour cache write $8 per million. Thinking tokens bill as output.
 
 - **Seeds.** One reading for each seed an admin adds, and a label check
   for each that becomes a find.
+- **Requested repos.** One reading for each, and for one that could be
+  listed at once, a check reading and a label check. At 5 a run, that is
+  up to 120 a day, about $0.24 each when all three run, so their share
+  caps them.
 - **Weekly reads.** One reading for each listed project whose docs hash
   changed, and a second one on a move into a ban.
 - **`register_project`.** One label check for each registration, at full
@@ -585,8 +646,9 @@ one-hour cache write $8 per million. Thinking tokens bill as output.
   again at its next weekly read.
 
 The $20 a day buys about 200 typical readings at batch prices. Without the
-searches, a day's reads are a few seeds and the listed projects whose docs
-changed, so the budget is a ceiling it rarely meets.
+searches, a day's reads are a few seeds, the requests, and the listed
+projects whose docs changed. Requests are the part that can reach the
+ceiling, which is why they have a share of their own.
 
 ### The budget
 
@@ -599,10 +661,10 @@ changed, so the budget is a ceiling it rarely meets.
   cache write price, and `max_tokens` at the output price, at batch or
   full price. It settles to the real cost when
   the result comes back. So nothing in flight can overspend.
-- **Listed projects come first.** Seeds and their label checks stop when
-  70% of the day is spent. `register_project` may spend at most 10% of the
-  day. The last 20% is only for weekly reads and second readings for a
-  pause.
+- **Each kind of read has a share of the day.** Admin seeds and their
+  label checks get 50%. Requested repos get 20%. `register_project` gets
+  10%. The last 20% is only for weekly reads and second readings for a
+  pause, and they may also spend what the other shares left unspent.
 - **A spend limit on the Anthropic workspace** is the backstop, about $620
   a month, set in the Anthropic Console. Each environment has a workspace
   and a key of its own, so staging can't spend production's budget or its
@@ -762,7 +824,10 @@ A reader version may decide anything only after an eval run where:
    reads as `no_policy`.
 4. **Injection.** No injection case reads as a welcome when its real
    statements don't welcome AI. Every steering line is found in at least
-   two of three runs.
+   two of three runs. Cases that steer the reading to leave out a ban, a
+   line that keeps agents from working on their own, or a canary, and
+   repos that quote other projects' welcomes, fail the check reading for a
+   requested repo in every run.
 5. **Evidence.** At least 99% of statements check out against the files.
 6. **Labels.** At least 95% of the labels it calls ready for outside help
    are, and it finds at least 90% of them, with docs and with labels
@@ -807,7 +872,7 @@ them.
 
 ## Rollout
 
-ROADMAP.md lists these as M10. Each becomes an issue once the spec is
+ROADMAP.md lists these as M11. Each becomes an issue once the spec is
 approved.
 
 1. **Stop the crawler's searches.** The producer stops the broad search and
@@ -835,7 +900,9 @@ approved.
    shadow readings of every listed project show which ones the switch
    would pause, since a new reader version that reads a ban pauses a
    listing made from a policy. This adds the two-reading pause, the new
-   pause reason, and the label check in `register_project`.
+   pause reason, the label check in `register_project`, and the
+   conditions for listing a requested repo at once, if add-a-repo has
+   landed.
    `docs/how-it-works.md` and the threat model in `docs/architecture.md`
    change with it.
 7. **Remove the rules' classification code** after a month, keeping the
@@ -878,7 +945,8 @@ lists the ones it needs.
 
 ## What stays the same
 
-- An admin lists every project. A find waits in the admin queue.
+- An admin lists every project, apart from requested repos under
+  add-a-repo. A find waits in the admin queue.
 - The files the crawler reads, its caps, and its GitHub budget, apart from
   the new 400 KB cap on all the files together, and the label and pull
   request checks that move before staging.
@@ -889,8 +957,22 @@ lists the ones it needs.
 - The crawler never resumes a project.
 - The sync and the maintainer's refresh make no model calls.
 
-## Open questions
+## With add-a-repo
 
-1. **Suggesting a repo.** Seeds stay with admins. Should anyone else, like
-   a donor, be able to suggest a repo for an admin to seed? That would be
-   a spec of its own.
+This spec and [add-a-repo](https://github.com/meanwhileso/goodfirsttoken/pull/151), proposed in #151, change the same crawler.
+Whichever merges second updates the other's text where they meet:
+
+- add-a-repo's "its rules read the docs" and "the rules suggest at least
+  one tag" become the model's reading and the label check, with the
+  conditions under [Requested repos](#requested-repos).
+- add-a-repo's "The rules found no canary, and no line that keeps agents
+  from working on their own" becomes the check reading, which looks for
+  both.
+- add-a-repo's "each pass reads the rest again once" becomes the 30 day
+  cycle, since the search passes stop.
+- add-a-repo's Why says the crawler finds repos with 1,000 stars or more.
+  That stops with the searches.
+- add-a-repo's issue #165, listing a requested repo at once, follows item
+  6 of this spec. Until then, every requested repo waits for an admin.
+- add-a-repo holds M10 in the roadmap, so this spec is M11, whichever
+  merges first.

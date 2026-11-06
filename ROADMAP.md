@@ -166,12 +166,15 @@ PR with GitHub reads, and records them. The last item removes the server's write
 | [#128](https://github.com/meanwhileso/goodfirsttoken/issues/128) | Teach the skills to push the branch, open the PR, and record it | #126, #127 | [#134](https://github.com/meanwhileso/goodfirsttoken/pull/134) |
 | [#129](https://github.com/meanwhileso/goodfirsttoken/issues/129) | Remove the server's write path for donors' work | #128 | [#135](https://github.com/meanwhileso/goodfirsttoken/pull/135) |
 
-## M10 Model policy reader
+## M11 Model policy reader
+
+M10 is the proposed add-a-repo spec, in [#151](https://github.com/meanwhileso/goodfirsttoken/pull/151).
 
 The proposed [model policy reader spec](docs/specs/model-policy-reader.md) has Claude Opus 5.5 read a
 repo's AI policy and its labels, with the file and lines behind every claim. The Worker checks each
-claim against the files. An admin still lists every project. The crawler stops searching, and new repos
-come from maintainers and admins. Once the spec is approved, each item below becomes an issue labeled
+claim against the files. An admin still lists every project, apart from requested repos under the
+proposed add-a-repo spec. The crawler stops searching, and new repos come from maintainers, admins, and
+donors' requests. Once the spec is approved, each item below becomes an issue labeled
 `roadmap`, this list becomes a table, and the dependency graph gets the items.
 
 1. Stop the crawler's broad search and popular sample. Read seeds monthly, and let admins seed a repo again.
