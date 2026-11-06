@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, saveIssues, savePerson } from '../../src/db';
 import { handleStream } from '../../src/feed/streams';
 import { homeFeed, personFeed } from '../../src/rooms/feed';
-import { issueRoom } from '../../src/rooms/issue-room';
+import { issueRoom, ROOM_RESUME, ROOM_TAIL } from '../../src/rooms/issue-room';
 import { admin, db, emptyDatabase, HOUR, kenji, maintainer, priya, registeredProject, repo, sha, signIn, t0 } from '../db/helpers';
 import { inOneLimitWindow, randomAddress } from '../auth/helpers';
 import { workerFetch } from '../worker';
@@ -617,6 +617,75 @@ describe('a live socket, which a page opens on the .ndjson form of a stream', ()
     // Nothing made a room for the issue.
     const rooms = (await listDurableObjectIds(env.ISSUE_ROOM)).map(String);
     expect(rooms).not.toContain(String(env.ISSUE_ROOM.idFromName(issue.toLowerCase())));
+  });
+});
+
+describe("an issue's live socket on a long history", () => {
+  const issueSocket = () => `/${repo}/issues/${String(issueNumber)}/live.ndjson`;
+
+  /** Posts `<text> 1` to `<text> <count>`, each 10 seconds after the last, as soon as a claim may post again. */
+  async function postMany(claimed: ClaimRecord, count: number, text = 'update'): Promise<void> {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    for (let i = 1; i <= count; i += 1) {
+      vi.setSystemTime(Date.now() + 10_000);
+      await post(claimed, `${text} ${String(i)}`);
+    }
+  }
+
+  /** The texts `update <from>` to `update <to>`. */
+  function updates(from: number, to: number): string[] {
+    return Array.from({ length: to - from + 1 }, (_, i) => `update ${String(from + i)}`);
+  }
+
+  test('with no since, or one the room never sent, sends only the newest events, the newest last', async () => {
+    const priyas = await claim(priya);
+    await postMany(priyas, 2 * ROOM_TAIL);
+    const newest = `update ${String(2 * ROOM_TAIL)}`;
+
+    for (const path of [issueSocket(), `${issueSocket()}?since=e_never-sent`]) {
+      const socket = await liveSocket(path);
+      await socket.event(newest);
+      expect(socket.events.map((e) => e.text), path).toEqual(updates(ROOM_TAIL + 1, 2 * ROOM_TAIL));
+      socket.socket.close(1000);
+    }
+  });
+
+  test('with since, sends at most the newest events after it', async () => {
+    const room = issueRoom(env.ISSUE_ROOM, issue);
+    const priyas = await claim(priya);
+    const [claimed] = await room.history();
+    // Priya's lane keeps its lines, and her claim pauses while kenji posts,
+    // so the room keeps more than ROOM_RESUME events after her claim.
+    await postMany(priyas, 20, 'priya');
+    const kenjis = await claim(kenji);
+    await postMany(kenjis, ROOM_RESUME + 5, 'kenji');
+    const kept = await storedEvents(room);
+    expect(kept.length - 1).toBeGreaterThan(ROOM_RESUME);
+
+    const socket = await liveSocket(`${issueSocket()}?since=${String(claimed?.id)}`);
+
+    await socket.event(`kenji ${String(ROOM_RESUME + 5)}`);
+    expect(socket.events.map((e) => e.id)).toEqual(kept.slice(-ROOM_RESUME).map((e) => e.id));
+    socket.socket.close(1000);
+  }, 120_000);
+
+  test("fills the newest 100 with events it may send, past a blocked donor's newer posts", async () => {
+    const priyas = await claim(priya);
+    await postMany(priyas, 3);
+    const kenjis = await claim(kenji);
+    await postMany(kenjis, ROOM_TAIL);
+    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, Date.now());
+
+    const socket = await liveSocket(issueSocket());
+
+    await socket.event('update 3');
+    expect(socket.events.map((e) => [e.user, e.text])).toEqual([
+      ['priya', 'claimed the issue'],
+      ['priya', 'update 1'],
+      ['priya', 'update 2'],
+      ['priya', 'update 3'],
+    ]);
+    socket.socket.close(1000);
   });
 });
 

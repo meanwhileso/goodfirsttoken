@@ -14,7 +14,7 @@ import {
   setProjectStatus,
 } from '../../src/db';
 import { loadIssue, type IssuePage, type IssuePageResult } from '../../src/issue/load';
-import { applyEvent, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
+import { applyEvent, foldEvents, LANE_LINES, lanesInPlay, slotsTaken, timesClaimed, type IssueView } from '../../src/issue/view';
 import { issueRoom } from '../../src/rooms/issue-room';
 import { syncTaggedIssues } from '../../src/sync/issues';
 import { LOCAL_FAKE, runAsDevelopment, setEnv, startGitHub } from '../auth/helpers';
@@ -854,6 +854,30 @@ describe("the room's glance, which the page loads with", () => {
 
     expect(glance?.events.map((event) => event.user)).toEqual(['priya']);
     expect(glance?.claims.map((claim) => claim.login)).toEqual(['priya', 'kenji']);
+  });
+
+  test("holds every change of state and only the lines each lane shows, so the page folds to what the whole history would", async () => {
+    const p = await claim(priya);
+    const k = await claim(kenji, 'codex');
+    let now = start;
+    const postAs = async (claimed: ClaimRecord, text: string) => {
+      now += 10 * SECOND;
+      at(now);
+      await post(claimed, text);
+    };
+    for (let i = 1; i <= LANE_LINES + 5; i += 1) await postAs(p, `priya ${String(i)}`);
+    for (let i = 1; i <= LANE_LINES + 3; i += 1) await postAs(k, `kenji ${String(i)}`);
+    const submitted = await room().submit({ claimId: p.id, githubId: priya.githubId });
+    if (!submitted.ok) throw new Error(submitted.refusal.message);
+    await postAs(k, 'kenji after the submit');
+
+    const glance = await room().glance();
+    const whole = await room().history();
+
+    const changes = whole.filter((event) => event.kind !== 'update');
+    expect(glance?.events.filter((event) => event.kind !== 'update')).toEqual(changes);
+    expect(glance?.events).toHaveLength(changes.length + 2 * LANE_LINES);
+    expect(foldEvents(glance?.events ?? [])).toEqual(foldEvents(whole));
   });
 });
 

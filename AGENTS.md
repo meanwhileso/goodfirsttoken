@@ -16,8 +16,8 @@ describe the code as it is.
 
 - `corepack enable && pnpm install`
 - `pnpm dev` serves the site at http://localhost:5173, with no accounts and
-  no network. It starts a fake GitHub with sample data beside it.
-  `pnpm seed` resets that data.
+  no network. It starts a fake GitHub with sample data beside it, and a
+  fake of the Anthropic API. `pnpm seed` resets both.
 - `pnpm check` runs lint, typecheck, and `pnpm skills:check`.
 - `pnpm skills:build` builds the skills and plugins from skill-src/.
 - `pnpm test` runs the unit tests, the Worker's inside the Workers runtime.

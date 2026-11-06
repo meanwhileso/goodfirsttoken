@@ -1,6 +1,6 @@
 import { ISSUE_REFRESH_INTERVAL_MS, type ProjectRecord, type ToolOutput } from '@goodfirsttoken/core';
 import { authSecret, oauthApp, SignInNotSetUp } from '../auth/settings';
-import { fillCrawlQueue } from '../crawl/search';
+import { fillCrawlQueue } from '../crawl/producer';
 import { getDoNotListEntry, releaseProject, takeRefresh } from '../db';
 import { endEveryLapsedConnection } from '../mcp/connections';
 import { ServiceGitHub, SyncStopped, type Allowance } from './github';
@@ -21,7 +21,7 @@ export const ISSUE_SYNC_CRON = '*/15 * * * *';
  * the job that records cleared PRs nobody recorded (src/sync/cleared.ts).
  */
 export const PR_JOB_CRON = '7,37 * * * *';
-/** Once an hour, apart from both: the policy crawler's search (src/crawl/search.ts). */
+/** Once an hour, apart from both: the policy crawler's cron job (src/crawl/producer.ts), which queues its seeds and weekly reads. */
 export const CRAWL_CRON = '52 * * * *';
 /** Once a day, apart from the others: ending lapsed connections (src/mcp/connections.ts). */
 export const LAPSED_CONNECTIONS_CRON = '23 4 * * *';
@@ -31,16 +31,14 @@ export const LAPSED_CONNECTIONS_CRON = '23 4 * * *';
  * run makes, and how many of the sync's go to its checks of the repos of
  * the projects it reads no issues for. docs/how-it-works.md gives the rule,
  * under Tagged issues, and docs/architecture.md, under The sync and The
- * policy crawler, why these numbers. The crawler's search spends the search
- * budget, which only it uses, and each run of its queue's consumer spends
- * from the others.
+ * policy crawler, why these numbers. The crawler's cron job makes no call,
+ * and each run of its queue's consumer spends from the token's budget.
  */
 export const ALLOWANCES = {
   sync: { leave: 0.2, maxCalls: 1000, checkCalls: 100 },
   prs: { leave: 0.1, maxCalls: 100 },
   cleared: { leave: 0.1, maxCalls: 100 },
   refresh: { leave: 0.5, maxCalls: 60 },
-  crawlSearch: { leave: 0.1, maxCalls: 20 },
   crawlRead: { leave: 0.6, maxCalls: 60 },
 } satisfies Record<string, Allowance>;
 
@@ -104,7 +102,7 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       await recordClearedPrs({ db: env.DB, github: new ServiceGitHub(token, ALLOWANCES.cleared), now });
       return;
     case CRAWL_CRON:
-      await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, github: new ServiceGitHub(token, ALLOWANCES.crawlSearch), now });
+      await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, now });
       return;
     default:
       console.error(`No job runs on the cron ${cron}. Each cron trigger in wrangler.jsonc needs one in src/sync/scheduled.ts.`);
