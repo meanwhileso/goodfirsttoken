@@ -394,7 +394,7 @@ export class IssueRoom extends DurableObject<Env> {
     }
     this.save(result.claim, { postedAt: now });
     this.emit(result.claim, 'update', text, job, now);
-    this.pruneLines();
+    this.prune();
     return this.done(now, { ok: true, posted: true, waitSeconds: null, claimId, state: result.claim.state, prOnIssue });
   }
 
@@ -670,6 +670,7 @@ export class IssueRoom extends DurableObject<Env> {
     const { claim, kind, text } = describe(before, result.claim);
     this.save(claim);
     this.emit(claim, kind, text, null, now);
+    this.prune();
     return this.done(now, { ok: true, claim });
   }
 
@@ -883,21 +884,30 @@ export class IssueRoom extends DurableObject<Env> {
   }
 
   /**
-   * Deletes the lines older than the room's newest ROOM_RESUME events,
-   * blocked donors' included, that are not among the newest lines of their
-   * claim's lane. Every change of state stays, and so does each lane. A room
-   * that has never held more than ROOM_RESUME events has nothing to delete.
+   * Deletes the events older than the room's newest ROOM_RESUME events,
+   * blocked donors' included, that a lane can do without: the lines that
+   * are not among the newest lines of their claim's lane, and the submits
+   * that are neither their claim's first nor its newest, so the timeline
+   * leaves those out. Every other change of state stays, and so does each
+   * lane, and each claim's state folds as it did. A room that has never
+   * held more than ROOM_RESUME events has nothing to delete.
    */
-  private pruneLines(): void {
+  private prune(): void {
     if (this.lastPlace() <= ROOM_RESUME) return;
     this.sql.exec(
       `DELETE FROM events
        WHERE seq < (SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET ?)
          AND seq IN (
            SELECT seq FROM (
-             SELECT seq, ROW_NUMBER() OVER (PARTITION BY json_extract(event, '$.claim') ORDER BY seq DESC) AS back
-             FROM events WHERE json_extract(event, '$.kind') = 'update'
-           ) WHERE back > ?
+             SELECT seq, json_extract(event, '$.kind') AS kind,
+               ROW_NUMBER() OVER (
+                 PARTITION BY json_extract(event, '$.claim'), json_extract(event, '$.kind') ORDER BY seq DESC
+               ) AS back,
+               ROW_NUMBER() OVER (
+                 PARTITION BY json_extract(event, '$.claim'), json_extract(event, '$.kind') ORDER BY seq
+               ) AS forth
+             FROM events WHERE json_extract(event, '$.kind') IN ('update', 'submitted')
+           ) WHERE (kind = 'update' AND back > ?) OR (kind = 'submitted' AND back > 1 AND forth > 1)
          )`,
       ROOM_RESUME - 1,
       LANE_LINES,
