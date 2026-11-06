@@ -1,5 +1,5 @@
 import type { PolicyFileKind } from '../../../src/crawl/rules';
-import { allLines, contributing, DEFAULT_PATHS, file, type PolicyCase } from './cases';
+import { allLines, contributing, DEFAULT_PATHS, file, LISTING_TIERS, type PolicyCase } from './cases';
 
 /**
  * The regression corpus: every ban wording the reviews found the rules
@@ -146,6 +146,18 @@ export const BAN_CORPUS: { review: string; key: string; cases: [PolicyFileKind, 
   },
 ];
 
+/**
+ * Wordings the owner relabeled as no ban on 2026-11-06, since they are rules
+ * for how to work, with why. The rules tests still read them as bans.
+ */
+const PUSH_WHY = "A rule about pushing or committing to the repo's own branches. Outside contributors push to and commit in their forks, and only a rule against opening pull requests keeps them out.";
+const RELABELED = new Map([
+  ['Please do not commit generated files.', 'A rule about build output.'],
+  ['Please do not commit code to any branch.', PUSH_WHY],
+  ['Coding agents must not push to the main branch or any other branch.', PUSH_WHY],
+  ['AI agents must not push to our branches.', PUSH_WHY],
+]);
+
 /** What sits beside each ban: a welcome, then an invitation. */
 export const BAN_PLACEMENTS = [
   { key: 'welcome', text: 'AI help is fine for questions.' },
@@ -165,18 +177,21 @@ export const BAN_WORDINGS = BAN_CORPUS.flatMap(({ review, key, cases }) =>
 export const BAN_CASES: PolicyCase[] = BAN_WORDINGS.flatMap((wording) =>
   BAN_PLACEMENTS.map((placement): PolicyCase => {
     const path = wording.kind === 'contributing' ? 'docs/CONTRIBUTING.md' : DEFAULT_PATHS[wording.kind];
+    const banned = {
+      tier: 'bans_or_restricts' as const,
+      ban: wording.lines === undefined ? allLines(path, wording.text) : { path, lines: wording.lines },
+    };
     return {
       id: `ban/${wording.id}/${placement.key}`,
       group: 'ban',
       files: [contributing(placement.text), file(wording.kind, wording.text, path)],
-      expect: {
-        tier: 'bans_or_restricts',
-        ban: wording.lines === undefined ? allLines(path, wording.text) : { path, lines: wording.lines },
-      },
+      ...(RELABELED.has(wording.text)
+        ? {
+            expect: { tier: LISTING_TIERS },
+            relabeled: { on: '2026-11-06', why: RELABELED.get(wording.text) ?? '', was: banned },
+          }
+        : { expect: banned }),
       rules: 'bans_or_restricts',
-      ...(wording.text === 'Please do not commit generated files.'
-        ? { note: 'Written as a ban for rules that err toward one. The spec names it as a case the owner may relabel.' }
-        : {}),
     };
   }),
 );

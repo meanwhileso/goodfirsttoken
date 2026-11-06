@@ -822,7 +822,9 @@ A reader version may decide anything only after an eval run where:
    as `bans_or_restricts` in all three runs, except cases the owner
    relabeled.
 2. **False bans.** Of the 50 welcoming policies, at most 2 read as a ban in
-   any run. The rules read 13 of them as a ban today.
+   any run. The rules read 13 of them as a ban today. Every other case that
+   expects a welcome, like a form's safe side, a settings case, or a case
+   the owner relabeled as no ban, reads as a ban in no run.
 3. **Tiers.** At least 90% of welcoming cases get the right tier in every
    run, with the right conditions. Every docs case with nothing about AI
    reads as `no_policy`.

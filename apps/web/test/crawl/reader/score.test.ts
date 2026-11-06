@@ -73,6 +73,19 @@ describe('the pass bar', () => {
     expect(lineOf(outcomes(3), 2)?.pass).toBe(false);
   });
 
+  test('2. fails when a form-safe side, a settings case, or a relabeled case that expects a welcome reads as a ban in any run', () => {
+    const listing = { tier: ['invites_agents', 'allows_with_conditions'] as const };
+    const safeSide: PolicyCase = { id: 'form/x/safe-1', group: 'formSafe', files: doc, expect: { tier: [...listing.tier] } };
+    const settings: PolicyCase = { id: 'settings/x', group: 'settings', files: doc, expect: { tier: 'allows_with_conditions' } };
+    const relabeled: PolicyCase = { ...banCase, expect: { tier: [...listing.tier] }, relabeled: { on: '2026-11-06', why: 'A rule for how to work.', was: banCase.expect } };
+    const once = [read('invites_agents', [invite]), read('bans_or_restricts', [ban(3)]), read('invites_agents', [invite])];
+
+    for (const c of [safeSide, settings, relabeled]) {
+      expect(lineOf([{ case: c, runs: times(read('invites_agents', [invite])) }], 2)?.pass, c.id).toBe(true);
+      expect(lineOf([{ case: c, runs: once }], 2), c.id).toMatchObject({ pass: false, failed: [c.id] });
+    }
+  });
+
   test('3. needs 90% of welcoming cases right in every run', () => {
     const outcomes = (wrong: number) =>
       Array.from({ length: 20 }, (_, i) => ({ case: welcomeCase(`w${String(i)}`), runs: times(read(i < wrong ? 'allows_with_conditions' : 'invites_agents', [invite])) }));

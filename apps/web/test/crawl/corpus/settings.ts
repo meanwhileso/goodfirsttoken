@@ -87,7 +87,7 @@ export const SETTINGS_CASES: SettingsCase[] = [
       suggestedTags: [{ name: 'agent ready', openIssues: 2 }],
       sources: [{ about: 'tags', path: 'CONTRIBUTING.md', line: 'Agents may only work on issues labeled `Agent Ready`.' }],
     },
-    expect: { tier: invites, only: ['Agent Ready'], labels: { ready: ['help wanted'], keptForPeople: [], agentsOnly: ['agent ready'] } },
+    expect: { tier: invites, only: ['Agent Ready'], labels: { ready: [], keptForPeople: [], agentsOnly: ['agent ready'], either: ['help wanted'] } },
   },
   ...(['agents', 'claude'] as const).map(
     (kind): SettingsCase => ({
@@ -102,7 +102,7 @@ export const SETTINGS_CASES: SettingsCase[] = [
         suggestedTags: [{ name: 'agent ready', openIssues: 2 }],
         sources: [{ about: 'tags', path: kind === 'agents' ? 'AGENTS.md' : 'CLAUDE.md', line: ONLY }],
       },
-      expect: { tier: invites, only: ['agent ready'], labels: { ready: ['help wanted'], keptForPeople: [], agentsOnly: ['agent ready'] } },
+      expect: { tier: invites, only: ['agent ready'], labels: { ready: [], keptForPeople: [], agentsOnly: ['agent ready'], either: ['help wanted'] } },
     }),
   ),
   {
@@ -167,7 +167,8 @@ export const SETTINGS_CASES: SettingsCase[] = [
       expect: {
         tier: allows,
         reserved: ['good first issue'],
-        labels: { ready: ['Help Wanted'], keptForPeople: ['good first issue'], agentsOnly: [], either: ['.contrib/docs'] },
+        // The owner loosened this on 2026-11-06: `agent ready` may be read as ready from its name.
+        labels: { ready: ['Help Wanted'], keptForPeople: ['good first issue'], agentsOnly: [], either: ['.contrib/docs', 'agent ready'] },
       },
     }),
   ),
