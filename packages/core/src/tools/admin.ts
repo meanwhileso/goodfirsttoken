@@ -7,7 +7,10 @@ import {
   aiSentenceSchema,
   banLineSchema,
   candidateSourceSchema,
+  crawlTierSchema,
+  findMakers,
   modelReadingSchema,
+  policyChangeWhys,
   suggestedTagSchema,
   type AiSentence,
   type BanLine,
@@ -217,6 +220,21 @@ const queueItemSchema = z.object({
    * summary are text the model wrote from it, so all of it is data.
    */
   modelReading: modelReadingSchema.nullable().default(null),
+  /**
+   * For a crawler find or a policy change, who made it: the crawler's rules,
+   * or the model policy reader once it decides. A find or a change the model
+   * made stands on the model's reading, and `rulesTier` is what the rules
+   * read in the same docs, when it differs. Null when they agree, and both
+   * are null for every other kind.
+   */
+  madeBy: findMakers.nullable().default(null),
+  rulesTier: crawlTierSchema.nullable().default(null),
+  /**
+   * For a policy change, why it was sent: its policy reads differently, the
+   * model reader read a move into a ban it couldn't confirm, or it gave no
+   * verdict on three weekly reads in a row. Null for every other kind.
+   */
+  changeWhy: z.enum(policyChangeWhys).nullable().default(null),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -419,13 +437,18 @@ function describeSteering(reading: ModelReading): string | false {
  * the statements with their lines and the model's note on each, and the
  * model's summary, all marked as data.
  */
-function describeModelReading(reading: ModelReading): string {
+function describeModelReading(reading: ModelReading, item: Pick<QueueItem, 'kind' | 'madeBy' | 'rulesTier'>): string {
+  const made = item.kind === 'candidate' ? 'this find' : 'this policy change';
+  const heading =
+    item.madeBy === 'model'
+      ? `the model policy reader's reading, which made ${made}, with ${reading.readerVersion}.${item.rulesTier === null ? '' : ` The crawler's rules read the same docs as ${TIER_WORDS[item.rulesTier]}.`}`
+      : `the model policy reader's reading of the same docs, with ${reading.readerVersion}. It runs in shadow and decides nothing: the rules' reading above is the one acted on.`;
   const tiers =
     reading.tier === reading.modelTier
       ? `the tier its statements give, and the model gave: ${TIER_WORDS[reading.tier]}`
       : `the tier its statements give: ${TIER_WORDS[reading.tier]}, and the model gave ${TIER_WORDS[reading.modelTier]}, so they disagree`;
   return lines(
-    `the model policy reader's reading of the same docs, with ${reading.readerVersion}. It runs in shadow and decides nothing: the rules' reading above is the one acted on.`,
+    heading,
     `  ${tiers}`,
     reading.dropped > 0 && `  ${plural(reading.dropped, 'statement')} the model made failed the check against the files, and ${reading.dropped === 1 ? 'was' : 'were'} dropped.`,
     reading.droppedSteering > 0 && `  ${plural(reading.droppedSteering, 'steering line')} the model named failed the check against the files.`,
@@ -482,6 +505,17 @@ function renderPause(item: QueueItem): string {
   );
 }
 
+/** Why the model reader sent a policy change, when it isn't that the policy reads differently. */
+function changeWhyNote(item: QueueItem): string | false {
+  if (item.changeWhy === 'ban_unconfirmed') {
+    return "The model reader read a move into a ban that it could not confirm: the ban's line didn't check out in the file, its two tiers disagreed, or a second reading of the same docs didn't agree. The listing stays live while you read its docs. Pause it if they ban AI help.";
+  }
+  if (item.changeWhy === 'no_verdict') {
+    return "The model reader gave no verdict on three weekly reads in a row, so it can't read these docs. The listing stays live while you read them yourself.";
+  }
+  return false;
+}
+
 /** A listing whose policy the crawler reads differently now, and how to decide it. */
 function renderPolicyChange(item: QueueItem): string {
   const facts = item.facts;
@@ -494,15 +528,18 @@ function renderPolicyChange(item: QueueItem): string {
       `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`,
     delisted !== null && delistedNote(delisted),
     item.onDoNotList && doNotListNote(item.kind),
+    changeWhyNote(item),
     item.modelReading && describeSteering(item.modelReading),
     delisted === null && (listed === null ? 'It is not listed from a policy now.' : describePolicy(listed, 'listed from')),
     delisted === null &&
       (item.policy
         ? describePolicy(item.policy, 'its docs now')
-        : "The crawler's rules read no policy in its docs now that welcomes AI help."),
+        : item.madeBy === 'model'
+          ? 'The model reader read no policy in its docs now that welcomes AI help.'
+          : "The crawler's rules read no policy in its docs now that welcomes AI help."),
     describeSources(item.sources),
     describeAiSentences(item.aiSentences, item.moreAiSentences),
-    item.modelReading && describeModelReading(item.modelReading),
+    item.modelReading && describeModelReading(item.modelReading, item),
     'its settings now, which approving keeps, with label names in quotes:',
     indent(renderSettings(withDefaults(item.settings), [], { quoteLabels: true }), 2),
     'Approve it to list the project from the policy its docs give now, with the tier you confirm and the settings you change, or reject it with a reason to keep the listing as it is.',
@@ -535,14 +572,15 @@ function renderQueueItem(item: QueueItem): string {
       `labels that could mean ready for help, each name in quotes as the repo spells it: ${item.suggestedTags
         .map((tag) => `${JSON.stringify(tag.name)} (${tag.openIssues.toLocaleString('en-US')} open)`)
         .join(', ')}`,
-    item.kind === 'candidate' && item.modelReading?.labels && describeModelTags(item.modelReading.labels),
+    // A find the model made sets its tags from its own label check, above.
+    item.kind === 'candidate' && item.madeBy !== 'model' && item.modelReading?.labels && describeModelTags(item.modelReading.labels),
     item.kind === 'candidate'
       ? lines(
           'suggested settings, the rest at their defaults, with label names in quotes:',
           indent(renderSettings(withDefaults(item.settings), [], { quoteLabels: true }), 2),
           describeSources(item.sources),
           describeAiSentences(item.aiSentences, item.moreAiSentences),
-          item.modelReading && describeModelReading(item.modelReading),
+          item.modelReading && describeModelReading(item.modelReading, item),
         )
       : item.kind === 'registration' && indent(renderSettings(withDefaults(item.settings)), 2),
   );

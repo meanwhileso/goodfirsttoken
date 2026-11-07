@@ -260,6 +260,8 @@ async function candidateItem(candidate: CrawlCandidate, now: number): Promise<Qu
     aiSentences: candidate.aiSentences,
     moreAiSentences: candidate.moreAiSentences,
     modelReading,
+    madeBy: candidate.madeBy,
+    rulesTier: candidate.rulesTier,
     ...removals,
   };
 }
@@ -342,6 +344,9 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
     aiSentences: shown ? change.aiSentences : [],
     moreAiSentences: shown ? change.moreAiSentences : 0,
     modelReading: shown ? modelReading : null,
+    madeBy: change.madeBy,
+    rulesTier: change.rulesTier,
+    changeWhy: change.why,
     change: { listed: shown ? project.policy : null, status: project.status, delisted },
   };
 }
@@ -778,7 +783,7 @@ async function decidePolicyChangeItem(
   if (change.policy === null) {
     return refuse(
       'repo_not_eligible',
-      `The crawler's rules read no policy in the docs of ${change.repo} that welcomes AI help, so there is none to list it from. Reject this change to keep the listing as it is, or pause or remove the project.`,
+      `The crawler read no policy in the docs of ${change.repo} that welcomes AI help, so there is none to list it from. Reject this change to keep the listing as it is, or pause or remove the project.`,
     );
   }
   const policy = { ...change.policy, tier: input.tier ?? change.policy.tier };

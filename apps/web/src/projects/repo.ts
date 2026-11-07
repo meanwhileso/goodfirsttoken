@@ -1,6 +1,8 @@
 import type { ManagedRepo } from '../auth/permissions';
 import { GitHubError, gitHubGraphQL, gitHubRest } from '../github';
 import { docFolderFields, findDocs, type DocKind, type RepoDocs, type TreeEntry } from './docs';
+import { readLabelsWith, RepoFailed, type LabelPage } from '../crawl/reads';
+import type { RepoLabel } from '../crawl/rules';
 import { OUR_LABEL } from './rules';
 
 // What registering a project reads from GitHub, and the one thing it writes
@@ -134,23 +136,21 @@ export async function readStanding(token: string, repo: string): Promise<{ repo:
   return { repo: found, standing };
 }
 
-const LABEL_PAGE = 100;
-const LABEL_PAGES = 10;
-
-/** The names of the repo's labels, the first 1,000. */
-// https://docs.github.com/en/rest/issues/labels#list-labels-for-a-repository
-export async function readLabels(token: string, repo: string): Promise<string[]> {
-  const names: string[] = [];
-  for (let page = 1; page <= LABEL_PAGES; page++) {
-    const labels = await gitHubRest<{ name: string }[]>(
-      token,
-      'GET',
-      `/repos/${repo}/labels?per_page=${String(LABEL_PAGE)}&page=${String(page)}`,
-    );
-    names.push(...labels.map((label) => label.name));
-    if (labels.length < LABEL_PAGE) break;
+/**
+ * The repo's labels, the first 1,000, each with its description and how many
+ * open issues carry it, read with the maintainer's token by the crawler's
+ * GraphQL read. Throws when GitHub doesn't show the repo, or fails.
+ */
+export async function readLabels(token: string, repo: string): Promise<RepoLabel[]> {
+  let labels: RepoLabel[] | null;
+  try {
+    labels = await readLabelsWith((query, variables) => gitHubGraphQL<LabelPage>(token, query, variables), repo);
+  } catch (error) {
+    if (error instanceof RepoFailed) throw new Error(error.message, { cause: error });
+    throw error;
   }
-  return names;
+  if (labels === null) throw new Error(`GitHub didn't show ${repo} when asked for its labels.`);
+  return labels;
 }
 
 export { MAX_DOC_BYTES, type RepoDocs, type RepoFile } from './docs';

@@ -97,6 +97,21 @@ export type DocsHash = z.infer<typeof docsHashSchema>;
 /** The tiers a reading of a repo's docs can give: the two a listing can have, a ban, and no policy. */
 export const crawlTiers = ['invites_agents', 'allows_with_conditions', 'bans_or_restricts', 'no_policy'] as const;
 export const crawlTierSchema = z.enum(crawlTiers);
+export type CrawlReadTier = z.infer<typeof crawlTierSchema>;
+
+/** Who made a find or a policy change: the crawler's rules, or the model policy reader once it decides. */
+export const findMakers = z.enum(['rules', 'model']);
+export type FindMaker = z.infer<typeof findMakers>;
+
+/**
+ * Why a policy change went to the admin queue: its policy reads
+ * differently, the model reader read a move into a ban that didn't check
+ * out or that a second reading didn't agree with, so the listing stays live
+ * while an admin reads the docs, or the model reader gave no verdict on
+ * three weekly reads in a row.
+ */
+export const policyChangeWhys = ['changed', 'ban_unconfirmed', 'no_verdict'] as const;
+export type PolicyChangeWhy = (typeof policyChangeWhys)[number];
 
 /** What a statement in a model reading says, from docs/specs/model-policy-reader.md, under What the model returns. */
 export const modelStatementAbouts = [
@@ -221,6 +236,10 @@ export const crawlCandidateSchema = z
     moreAiSentences: count.default(0),
     /** What the crawler read in the docs it found the repo in, as a docs hash, or null for a find made before. */
     docsHash: docsHashSchema.nullable().default(null),
+    /** Who made the find: the crawler's rules, or the model policy reader once it decides. */
+    madeBy: findMakers.default('rules'),
+    /** For a find the model reader made, the tier the rules read in the same docs, when it differs from the model's. Null otherwise. */
+    rulesTier: crawlTierSchema.nullable().default(null),
     status: candidateStatusSchema,
     /** The admin who decided, or null while it waits. */
     decidedBy: githubId.nullable(),
@@ -373,6 +392,12 @@ export const policyChangeSchema = z
     moreAiSentences: count.default(0),
     /** What the crawler read in the docs, as a docs hash, or null for a change found before. */
     docsHash: docsHashSchema.nullable().default(null),
+    /** Who sent it: the crawler's rules, or the model policy reader once it decides. */
+    madeBy: findMakers.default('rules'),
+    /** For a change the model reader sent, the tier the rules read in the same docs, when it differs from the model's. Null otherwise. */
+    rulesTier: crawlTierSchema.nullable().default(null),
+    /** Why it was sent, under policyChangeWhys. */
+    why: z.enum(policyChangeWhys).default('changed'),
     status: candidateStatusSchema,
     decidedBy: githubId.nullable(),
     decidedAt: epochMs.nullable(),

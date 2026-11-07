@@ -39,6 +39,7 @@ import {
 } from '../db';
 import { GitHubError } from '../github';
 import { readDelisting } from '../project/shown';
+import { checkLabels } from '../projects/label-check';
 import { proposeSettings } from '../projects/proposal';
 import {
   createOurLabel,
@@ -183,7 +184,12 @@ export async function registerProject(
 
   if (input.settings === undefined) {
     const [labels, docs] = await Promise.all([readLabels(token, repo), readDocs(token, repo)]);
-    const { settings, reasons } = proposeSettings(labels, docs);
+    const checked = await checkLabels(env.DB, { caller: caller.githubId, repo, labels, now });
+    const { settings, reasons } = proposeSettings(
+      labels.map((label) => label.name),
+      docs,
+      checked ?? undefined,
+    );
     return answer(
       toolResult('register_project', { repo, saved: false, status: null, settings, reasons, createdLabels: [] }),
     );

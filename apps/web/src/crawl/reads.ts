@@ -445,7 +445,7 @@ interface LabelConnection {
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
 }
 
-interface LabelPage {
+export interface LabelPage {
   repository: { labels: LabelConnection | null } | null;
 }
 
@@ -457,6 +457,9 @@ export class RepoFailed extends Error {
   }
 }
 
+/** A GraphQL call, with the crawler's service token or a maintainer's own. */
+export type LabelQuery = (query: string, variables: Record<string, unknown>) => Promise<GraphQLResult<LabelPage>>;
+
 /**
  * The repo's labels, the first 1,000, each with its description and how
  * many open issues carry it, 100 to a GraphQL query. Null when GitHub doesn't show the repo. Throws
@@ -464,11 +467,16 @@ export class RepoFailed extends Error {
  */
 // https://docs.github.com/en/graphql/reference/labels#object-label
 export async function readLabels(github: ServiceGitHub, repo: string): Promise<RepoLabel[] | null> {
+  return readLabelsWith((query, variables) => github.query<LabelPage>(query, variables), repo);
+}
+
+/** The repo's labels, as readLabels reads them, with the GraphQL calls `query` makes. register_project reads them with the maintainer's token. */
+export async function readLabelsWith(query: LabelQuery, repo: string): Promise<RepoLabel[] | null> {
   const [owner, name] = split(repo);
   const labels: RepoLabel[] = [];
   let after: string | null = null;
   for (let page = 0; page < MAX_LABEL_PAGES; page++) {
-    const result: GraphQLResult<LabelPage> = await github.query<LabelPage>(
+    const result: GraphQLResult<LabelPage> = await query(
       `query ($owner: String!, $name: String!, $after: String) {
         repository(owner: $owner, name: $name) {
           labels(first: ${String(PAGE)}, after: $after) {

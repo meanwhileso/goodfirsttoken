@@ -187,8 +187,8 @@ variables. In a private repo, either works.
 | `GH_API_URL` | No | GitHub's REST and GraphQL API, as an `https` URL. Leave it empty, and the Worker calls `https://api.github.com`. |
 | `GH_WEB_URL` | No | github.com itself, which sign-in sends people to, as an `https` URL. Leave it empty, and the Worker uses `https://github.com`. |
 | `ANTHROPIC_API_URL` | No | The Anthropic API, as an `https` URL. Leave it empty, and the Worker calls `https://api.anthropic.com`. |
-| `POLICY_READER` | No | How the policy crawler reads a repo's AI policy, with [the model reader](#the-key-for-reading-policies): `rules`, `shadow`, or `model`. With `rules`, the word rules decide and the model reads nothing. With `shadow`, the rules decide, and the model reads too, and the admin queue shows its reading beside theirs. `model` reads as `shadow` does until the model may decide, in a later release. When it's empty, the crawler uses `rules`. |
-| `MODEL_DAILY_BUDGET_USD` | No | The most the model may spend in a UTC day, in US dollars, like `20`. Admin seeds get half of it, and weekly reads of listed projects a fifth, and from 18:00 UTC what the seeds left. When it's empty, the budget is 0, and the model reads nothing. |
+| `POLICY_READER` | No | How the policy crawler reads a repo's AI policy, with [the model reader](#the-key-for-reading-policies): `rules`, `shadow`, or `model`. With `rules`, the word rules decide and the model reads nothing. With `shadow`, the rules decide, and the model reads too, and the admin queue shows its reading beside theirs. With `model`, the model's reading decides: it makes the finds an admin decides, sends policy changes, pauses a listing on a ban two readings agree on, and proposes `register_project`'s tags. When it's empty, the crawler uses `rules`. |
+| `MODEL_DAILY_BUDGET_USD` | No | The most the model may spend in a UTC day, in US dollars, like `20`. Admin seeds get half of it, `register_project`'s label checks a tenth, and weekly reads of listed projects a fifth, and from 18:00 UTC what the others left. When it's empty, the budget is 0, and the model reads nothing. |
 
 ### Credential
 
@@ -280,19 +280,19 @@ Cloudflare plan that offers it. The Worker runs the same without the rule.
 
 ## The key for reading policies
 
-The model reader is still being built, as
-[the spec](specs/model-policy-reader.md) plans it. Until it ships, the policy
-crawler reads every policy with its word rules, and reads none of the
-settings below. The key and these settings can be set ahead of it.
-
-Once the reader ships, the crawler reads each repo's AI policy and labels
-with Claude Opus 5.5, through the Anthropic API, with an API key,
-`ANTHROPIC_API_KEY`. It is one of [the Worker's secrets](#the-workers-secrets),
-and it is optional. Without the key, the crawler will read no policies with
-the model. Seeds will wait for an admin, the weekly read of a listed project
-will run only its pull request check, and `register_project` will propose
+With `POLICY_READER` set to `shadow` or `model`, the crawler reads each
+repo's AI policy and labels with Claude Opus 5.5, through the Anthropic API,
+with an API key, `ANTHROPIC_API_KEY`, as [the spec](specs/model-policy-reader.md)
+plans it. It is one of [the Worker's secrets](#the-workers-secrets), and it
+is optional. Without the key, the crawler reads no policies with the model.
+With `model`, seeds then wait for an admin, the weekly read of a listed
+project runs only its pull request check, and `register_project` proposes
 tags from the label names. Admins list projects by hand with
 `admin_add_project`.
+
+Run `shadow` first. Each hourly run then logs the listed projects the
+switch to `model` would pause, from their shadow readings. Read that line
+before you switch.
 
 For each environment that will read policies with the model:
 

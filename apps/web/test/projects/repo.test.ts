@@ -61,15 +61,17 @@ test('a repo with none of the files reads as none, in one query', async () => {
   expect(github.calls.map((call) => [call.operation, call.token])).toEqual([['query repository', token]]);
 });
 
-test('labels are read page by page, 100 at a time', async () => {
+test("labels are read with the maintainer's token through GraphQL, 100 a page, each with its description and open issue count", async () => {
   const repo = github.state.repos['sample-owner/sample-harbor'];
   if (!repo) throw new Error('missing sample repo');
   for (let n = 0; n < 150; n++) repo.labels.push({ id: 7_000_000 + n, name: `area ${String(n)}`, color: 'ededed', description: null, default: false });
+  const token = github.tokenFor('octo-maintainer');
 
-  const labels = await readLabels(github.tokenFor('octo-maintainer'), REPO);
+  const labels = await readLabels(token, REPO);
 
   expect(labels).toHaveLength(154);
-  expect(labels).toContain('help wanted');
-  expect(labels).toContain('area 149');
-  expect(github.calls.filter((call) => call.operation === 'GET /repos/{owner}/{repo}/labels')).toHaveLength(2);
+  expect(labels).toContainEqual({ name: 'help wanted', description: 'Extra attention is needed', openIssues: 1 });
+  expect(labels).toContainEqual({ name: 'area 149', description: null, openIssues: 0 });
+  expect(github.calls.filter((call) => call.operation === 'GET /repos/{owner}/{repo}/labels')).toEqual([]);
+  expect(github.calls.filter((call) => call.operation === 'query repository').map((call) => call.token)).toEqual([token, token]);
 });

@@ -12,6 +12,9 @@ import {
   type CandidateSource,
   type CandidateStatus,
   type CrawlerPause,
+  type CrawlReadTier,
+  type FindMaker,
+  type PolicyChangeWhy,
   type Policy,
   type PolicyChange,
   type PolicyRead,
@@ -144,6 +147,9 @@ interface ChangeRow {
   decided_at: number | null;
   reason: string | null;
   docs_hash: string | null;
+  made_by: string;
+  rules_tier: string | null;
+  why: string;
 }
 
 function toChange(row: ChangeRow): PolicyChange {
@@ -159,6 +165,9 @@ function toChange(row: ChangeRow): PolicyChange {
       aiSentences: fromJson(row.ai_sentences),
       moreAiSentences: row.more_ai_sentences,
       docsHash: row.docs_hash,
+      madeBy: row.made_by,
+      rulesTier: row.rules_tier,
+      why: row.why,
       status: row.status,
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
@@ -177,6 +186,12 @@ export interface NewPolicyChange {
   moreAiSentences: number;
   /** What the crawler read in the docs, as a docs hash. None when left out. */
   docsHash?: string;
+  /** Who sent it: the rules, unless the model reader sent it. */
+  madeBy?: FindMaker;
+  /** For a change the model sent, the rules' tier for the same docs, when it differs from the model's. */
+  rulesTier?: CrawlReadTier | null;
+  /** Why it was sent: its policy changed, unless said. */
+  why?: PolicyChangeWhy;
 }
 
 /**
@@ -196,8 +211,8 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
     db
       .prepare(
         `INSERT INTO policy_changes (id, project, found_at, facts, policy, sources, ai_sentences, more_ai_sentences,
-           status, decided_by, decided_at, reason, docs_hash)
-         SELECT ?1, p.repo, ?3, ?4, ?5, ?6, ?7, ?8, 'waiting', NULL, NULL, NULL, ?9 FROM projects p WHERE p.repo = ?2`,
+           status, decided_by, decided_at, reason, docs_hash, made_by, rules_tier, why)
+         SELECT ?1, p.repo, ?3, ?4, ?5, ?6, ?7, ?8, 'waiting', NULL, NULL, NULL, ?9, ?10, ?11, ?12 FROM projects p WHERE p.repo = ?2`,
       )
       .bind(
         c.id,
@@ -209,6 +224,9 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
         JSON.stringify(c.aiSentences),
         c.moreAiSentences,
         c.docsHash,
+        c.madeBy,
+        c.rulesTier,
+        c.why,
       ),
   ]);
   return inserted?.meta.changes === 1 ? c : null;

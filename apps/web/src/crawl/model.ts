@@ -5,6 +5,7 @@ import {
   getModelReading,
   getReaderState,
   lastRejectedFind,
+  retirePending,
   setReaderState,
   stagePending,
   type ReadingPurpose,
@@ -23,8 +24,8 @@ import type { CrawlTier, PolicyFile, RepoLabel } from './rules';
 // the batch job never calls GitHub.
 //
 // With POLICY_READER=shadow the rules decide, as before, and the model's
-// reading is kept and shown beside theirs. `model` reads the same way until
-// the model may decide, in its own issue. Nothing is staged without an
+// reading is kept and shown beside theirs. With `model` the model's reading
+// decides (src/crawl/decide.ts). Nothing is staged without an
 // ANTHROPIC_API_KEY, or with a budget of 0.
 
 /** What the model's half of one crawl run did, for its log line. */
@@ -132,6 +133,8 @@ interface Stage {
   rulesTier: CrawlTier;
   /** For a label check on its own, the kept reading's output. */
   labelsFor?: { readingOutput: unknown };
+  /** For a second reading for a pause, on its own, the kept first reading's output. */
+  secondFor?: { firstOutput: unknown };
 }
 
 /** Stages a reading, or a label check on its own, with the repo's labels. False when GitHub didn't give the labels. */
@@ -165,6 +168,7 @@ async function stage(deps: StageDeps, run: ReaderRun, reads: SharedReads, what: 
       labels,
       files: what.files,
       ...(what.labelsFor === undefined ? {} : { labelsFor: what.labelsFor }),
+      ...(what.secondFor === undefined ? {} : { secondFor: what.secondFor }),
     },
     deps.now(),
   );
@@ -257,6 +261,8 @@ export async function stageReread(
   run: ReaderRun,
   reads: SharedReads,
   what: { project: string; repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash; rulesTier: CrawlTier },
+  // With the model deciding, a kept reading stands only with its output, which the decision reads again against the files.
+  decides = false,
 ): Promise<RereadStage> {
   const before = deps.calls();
   try {
@@ -265,16 +271,34 @@ export async function stageReread(
     const last = await getModelRead(deps.db, what.project);
     if (last !== null && last.docsHash === hash && last.readerVersion === READER_VERSION) {
       run.same += 1;
+      // A reading of other docs, still waiting, would decide on docs that are no longer the repo's.
+      await retirePending(deps.db, what.project);
       return 'same';
     }
     if (tooBig(run, repo.name, files)) return 'too_big';
     // Kept under the project's name, which a rename on GitHub doesn't change.
-    if (readsSame(await getModelReading(deps.db, what.project), hash)) {
+    const kept = await getModelReading(deps.db, what.project);
+    if (readsSame(kept, hash) && (!decides || kept?.output != null)) {
       run.cacheHits += 1;
+      await retirePending(deps.db, what.project);
       return 'cached';
     }
     return (await stage(deps, run, reads, { ...what, key: what.project, purpose: 'reread', share: 'weekly' })) ? 'staged' : 'none';
   } finally {
     run.githubCalls += deps.calls() - before;
   }
+}
+
+/**
+ * Stages a second reading of a listed project's docs, on its own, for a
+ * pause, when its kept reading of the same docs reads a move into a ban.
+ * False when GitHub didn't give the labels.
+ */
+export async function stageSecondReading(
+  deps: StageDeps,
+  run: ReaderRun,
+  reads: SharedReads,
+  what: { project: string; repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash; rulesTier: CrawlTier; firstOutput: unknown },
+): Promise<boolean> {
+  return stage(deps, run, reads, { ...what, key: what.project, purpose: 'reread', share: 'weekly', secondFor: { firstOutput: what.firstOutput } });
 }

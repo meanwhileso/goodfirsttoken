@@ -207,7 +207,7 @@ requests. #171, #172, and #173 can run at the same time.
 | [#173](https://github.com/meanwhileso/goodfirsttoken/issues/173) | Add the optional Anthropic key, the reader's variables, and the Anthropic API fake | Nothing | [#181](https://github.com/meanwhileso/goodfirsttoken/pull/181) |
 | [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | [#183](https://github.com/meanwhileso/goodfirsttoken/pull/183) |
 | [#175](https://github.com/meanwhileso/goodfirsttoken/issues/175) | Check labels with the model, in shadow | #174 | [#184](https://github.com/meanwhileso/goodfirsttoken/pull/184) |
-| [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | |
+| [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | [#186](https://github.com/meanwhileso/goodfirsttoken/pull/186) |
 | [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | |
 
 ## Dependency graph
@@ -395,7 +395,7 @@ flowchart TD
   n162 --> n164
   n154 --> n165
   n176 --> n165
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173,n174 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173,n174,n175 done
 ```
 
 ## Maintainer steps
