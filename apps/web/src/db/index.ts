@@ -15,6 +15,7 @@ export * from './projects';
 export * from './prs';
 export * from './reader';
 export * from './removals';
+export * from './requested-reads';
 export * from './requests';
 export * from './rereads';
 export * from './seeds';

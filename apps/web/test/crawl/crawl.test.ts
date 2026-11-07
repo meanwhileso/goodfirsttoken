@@ -8,19 +8,25 @@ import { crawlRepos, newCrawlProgress, newCrawlRun, readCrawlBatch } from '../..
 import { fillCrawlQueue } from '../../src/crawl/producer';
 import {
   addCandidate,
+  addRequest,
   addSeed,
   addToDoNotList,
+  blockDonor,
+  getRequestedRead,
   getSeed,
   listCandidates,
   listPending,
+  listRequestedToRead,
+  markRequestedRead,
   saveSeedEvidence,
+  withdrawRequest,
 } from '../../src/db';
 import worker from '../../src/server';
 import { ServiceGitHub, type Allowance } from '../../src/sync/github';
 import { ALLOWANCES } from '../../src/sync/allowances';
 import { startAnthropic } from '../anthropic';
 import { startGitHub } from '../auth/helpers';
-import { admin, db, emptyDatabase, maintainer, registeredProject, signIn } from '../db/helpers';
+import { admin, db, emptyDatabase, kenji, maintainer, priya, registeredProject, signIn } from '../db/helpers';
 import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { priorityEvidence } from '../priority-evidence';
 
@@ -492,8 +498,8 @@ describe('the cron job', () => {
     expect(requests).toEqual([]);
     expect(github.calls.slice(calls)).toEqual([]);
     expect(sent).toEqual([{ repos: [SEED] }, { repos: [INVITES], reread: true }]);
-    expect(run).toEqual({ seeds: 1, rereads: 1 });
-    expect(logged).toContain('The crawler queued seeds: 1, listed projects to read again: 1.');
+    expect(run).toEqual({ seeds: 1, requested: 0, requestedLeftOut: {}, rereads: 1 });
+    expect(logged).toContain('The crawler queued seeds: 1, requested: queued 0, listed projects to read again: 1.');
   });
 
   test('a send the queue refuses fails the run, and its seeds stay due for the next run', async () => {
@@ -513,7 +519,7 @@ describe('the cron job', () => {
     const run = await fill();
 
     expect(sent).toEqual([]);
-    expect(run).toEqual({ seeds: 0, rereads: 0 });
+    expect(run).toEqual({ seeds: 0, requested: 0, requestedLeftOut: {}, rereads: 0 });
   });
 });
 
@@ -1120,5 +1126,202 @@ describe('the seeds, told truly', () => {
     expect(sent[0]).toEqual({ repos: [SEED] });
     const outcomes = await Promise.all([SEED, INVITES, CONDITIONS, ARCHIVED].map(async (repo) => (await getSeed(db, repo))?.outcome));
     expect(outcomes).toEqual(['queued', 'project', 'proposed', 'do_not_list']);
+  });
+});
+
+describe('requested repos', () => {
+  const DAY = 24 * HOUR;
+
+  beforeEach(async () => {
+    await signIn(priya, kenji);
+  });
+
+  function idOf(repo: string): number {
+    const record = github.state.repos[repo.toLowerCase()];
+    if (!record) throw new Error(`missing sample repo ${repo}`);
+    return record.id;
+  }
+
+  /** A donor's request for the repo, as request_repo records it, at `at`. */
+  async function request(repo: string, at = start, person = priya) {
+    const added = await addRequest(db, { repoId: idOf(repo), repo, githubId: person.githubId }, at);
+    if (!('added' in added)) throw new Error(`no request recorded for ${repo}`);
+    return added.added;
+  }
+
+  /** The repos of the messages the cron job sent for requested repos. */
+  const requestedSent = () => sent.filter((m) => m.requested !== undefined);
+
+  test('a requested repo with 40 stars is queued and read, within its own share of the budget, and lands in the admin queue when its docs welcome AI help', async () => {
+    await request(SEED);
+
+    const run = await fill();
+
+    expect(sent).toEqual([{ repos: [SEED], requested: [idOf(SEED)] }]);
+    expect(run).toMatchObject({ seeds: 0, requested: 1 });
+    expect(logged).toContain('The crawler queued seeds: 0, requested: queued 1, listed projects to read again: 0.');
+    await consume(sent.splice(0));
+    const pending = await listPending(db);
+    expect(pending.map((p) => [p.repo, p.share])).toEqual([[SEED, 'requests']]);
+    await settle();
+    expect((await waiting()).get(SEED)).toMatchObject({ facts: { stars: 40 }, policy: { tier: 'invites_agents' } });
+    expect(await getRequestedRead(db, idOf(SEED))).toMatchObject({ repo: SEED, readAt: start, outcome: 'queued' });
+  });
+
+  test('the same repo with docs that say nothing about AI adds nothing to the admin queue, and is due again 30 days later', async () => {
+    github.commitFiles(SEED, { '.claude/skills/contributing/SKILL.md': '# Contributing\n\nRun the tests before you open a pull request.\n' }, maintainer.login);
+    anthropic.answer({ kind: 'reading' }, { output: { statements: [], tier: 'no_policy', steering: [], summary: 'Says nothing about AI.' } });
+    await request(SEED);
+
+    await fill();
+    await read(sent.splice(0));
+    expect(await everyFind()).toEqual([]);
+    // The reader's runs moved the clock on. The cron job read the repo at start.
+    vi.setSystemTime(start + 30 * DAY - 1);
+    await fill();
+    const justBefore = sent.splice(0);
+    vi.setSystemTime(start + 30 * DAY);
+    await fill();
+
+    expect(justBefore).toEqual([]);
+    expect(sent).toEqual([{ repos: [SEED], requested: [idOf(SEED)] }]);
+  });
+
+  test('come after the admin seeds and before the weekly reads, at most 5 a run: never read first by oldest request, then due again, longest since read first', async () => {
+    const [a, b, c, d, e, f, g] = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((name) => {
+      const repo = `sample-owner/requested-${name}`;
+      github.createRepo(repo);
+      return repo;
+    }) as [string, string, string, string, string, string, string];
+    await addSeed(db, { repo: INVITES, addedBy: admin.githubId }, start);
+    await registeredProject({ tags: ['help wanted'] }, CONDITIONS);
+    await request(a, start - 50 * DAY);
+    await request(b, start - 10 * DAY);
+    await request(c, start - 20 * DAY);
+    await request(g, start - 5 * DAY);
+    for (const repo of [d, e, f]) await request(repo, start - 60 * DAY);
+    await markRequestedRead(db, [{ repoId: idOf(d), repo: d, outcome: 'queued' }], start - 40 * DAY);
+    await markRequestedRead(db, [{ repoId: idOf(e), repo: e, outcome: 'queued' }], start - 35 * DAY);
+    await markRequestedRead(db, [{ repoId: idOf(f), repo: f, outcome: 'queued' }], start - 10 * DAY);
+
+    const run = await fill();
+    const first = sent.splice(0);
+    later(HOUR);
+    await fill();
+
+    expect(first).toEqual([
+      { repos: [INVITES] },
+      { repos: [a, c, b, g, d], requested: [a, c, b, g, d].map(idOf) },
+      { repos: [CONDITIONS], reread: true },
+    ]);
+    expect(run).toMatchObject({ seeds: 1, requested: 5, rereads: 1 });
+    expect(sent).toEqual([{ repos: [e], requested: [idOf(e)] }]);
+  });
+
+  test("a repo whose requests were all withdrawn, or whose only requester is blocked, isn't queued", async () => {
+    const withdrawn = await request(INVITES);
+    await withdrawRequest(db, withdrawn.id, start);
+    await request(CONDITIONS, start, kenji);
+    await blockDonor(db, { githubId: kenji.githubId, reason: null, blockedBy: admin.githubId }, start);
+    await request(SEED, start, kenji);
+    await request(SEED, start, priya);
+
+    await fill();
+
+    expect(requestedSent()).toEqual([{ repos: [SEED], requested: [idOf(SEED)] }]);
+    expect(await getRequestedRead(db, idOf(INVITES))).toBeNull();
+    expect(await getRequestedRead(db, idOf(CONDITIONS))).toBeNull();
+  });
+
+  test('leaves out what the seed list leaves out, and records why: the do-not-list, a project, and a find that waits or was approved', async () => {
+    const approved = 'sample-policies/mentions-ai';
+    const find = (repo: string) =>
+      addCandidate(
+        db,
+        {
+          repo,
+          facts: { stars: 2400, createdAt: start - YEAR, pushedAt: start - HOUR, ownerCreatedAt: start - 2 * YEAR },
+          policy: { quote: 'AI help is welcome.', url: `https://github.com/${repo}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' },
+          settings: {},
+          suggestedTags: [],
+        },
+        start - HOUR,
+      );
+    await registeredProject({ tags: ['help wanted'] }, INVITES);
+    await find(CONDITIONS);
+    await find(approved);
+    await db.prepare("UPDATE crawl_candidates SET status = 'approved' WHERE repo = ?").bind(approved).run();
+    await addToDoNotList(db, { repo: ARCHIVED, reason: null, addedBy: admin.githubId }, start);
+    for (const repo of [INVITES, CONDITIONS, approved, ARCHIVED, SEED]) await request(repo);
+
+    const run = await fill();
+
+    expect(requestedSent()).toEqual([{ repos: [SEED], requested: [idOf(SEED)] }]);
+    const outcomes = await Promise.all([SEED, INVITES, CONDITIONS, approved, ARCHIVED].map(async (repo) => (await getRequestedRead(db, idOf(repo)))?.outcome));
+    expect(outcomes).toEqual(['queued', 'project', 'proposed', 'proposed', 'do_not_list']);
+    expect(run.requestedLeftOut).toEqual({ project: 1, proposed: 2, do_not_list: 1 });
+    expect(logged.filter((line) => line.startsWith('The crawler queued'))).toEqual(['The crawler queued seeds: 0, requested: queued 1, left out 4 (do_not_list, project, proposed 2), listed projects to read again: 1.']);
+  });
+
+  test('a repo renamed after the request is read under its new name, from its repo ID', async () => {
+    const renamed = 'sample-policies/small-seed-next';
+    await request(SEED);
+    github.renameRepo(SEED, renamed);
+
+    await fill();
+    await read(sent.splice(0));
+
+    const finds = await waiting();
+    expect([...finds.keys()]).toEqual([renamed]);
+  });
+
+  test('a new repo made under the old name of a requested repo is not read for it', async () => {
+    const renamed = 'sample-policies/small-seed-next';
+    await request(SEED);
+    github.renameRepo(SEED, renamed);
+    github.createRepo(SEED);
+
+    await fill();
+    await consume(sent.splice(0));
+
+    expect((await listPending(db)).map((p) => p.repo)).toEqual([renamed]);
+  });
+
+  test('a requested repo GitHub no longer shows is read no further', async () => {
+    await request(SEED);
+    github.deleteRepo(SEED);
+
+    await fill();
+    const { acked, run } = await consume(sent.splice(0));
+
+    expect(acked).toEqual(['m0']);
+    expect(run?.skipped).toEqual({ not_public: 1 });
+    expect(await listPending(db)).toEqual([]);
+  });
+
+  test('a requested repo GitHub fails on goes back to the queue alone, with its repo ID', async () => {
+    await request(SEED);
+    await request(INVITES);
+    await fill();
+    const failing = idOf(SEED);
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith(`/repositories/${String(failing)}`)) return Response.json({ message: 'Repository access blocked' }, { status: 403 });
+      return network(request);
+    });
+
+    const { acked } = await consume(sent.splice(0));
+
+    expect(acked).toEqual(['m0']);
+    expect(resent.map((r) => r.body)).toEqual([{ repos: [SEED], requested: [failing] }]);
+  });
+
+  test('admin_seed_repo on a requested repo adds an admin seed, and the repo stays on the requested list', async () => {
+    await request(SEED);
+
+    await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
+
+    expect(await getSeed(db, SEED)).toMatchObject({ repo: SEED, addedBy: admin.githubId });
+    expect((await listRequestedToRead(db, 5, start)).map((r) => r.repo)).toEqual([SEED]);
   });
 });

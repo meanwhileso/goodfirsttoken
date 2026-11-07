@@ -885,7 +885,7 @@ export const checkPr = defineTool({
 export const requestRepo = defineTool({
   audience: 'donor',
   description:
-    `Ask Good First Token for a repo the donor wants to work on, or with withdraw: true, take the donor's request back. A request lists nothing. A repo is listed only when its docs welcome AI help or its maintainers register it. Call it only after the donor asks or says yes. The answer says whether the repo is listed, paused, or not listed yet. Tell the donor its message. Asking again for a repo the donor asked for records nothing. Nothing is written to GitHub, and no page shows who asked. One person sends at most ${String(MAX_REQUESTS_PER_DAY)} new requests a UTC day, withdrawn ones included, and has at most ${String(MAX_LIVE_REQUESTS)} live.`,
+    `Ask Good First Token for a repo the donor wants to work on, or with withdraw: true, take the donor's request back. A request lists nothing. Good First Token reads the repo's docs, and a repo is listed only when they welcome AI help or its maintainers register it. Call it only after the donor asks or says yes. The answer says whether the repo is listed, paused, or not listed yet. Tell the donor its message. Asking again for a repo the donor asked for records nothing. Nothing is written to GitHub, and no page shows who asked. One person sends at most ${String(MAX_REQUESTS_PER_DAY)} new requests a UTC day, withdrawn ones included, and has at most ${String(MAX_LIVE_REQUESTS)} live.`,
   refusals: ['donor_blocked', 'repo_not_eligible', 'rate_limited', 'invalid_input'],
   input: z.object({
     repo: z

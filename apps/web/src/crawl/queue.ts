@@ -1,5 +1,6 @@
-import { crawlMessageSchema, describeProblems, validate, type CrawlMessage } from '@goodfirsttoken/core';
+import { crawlMessageSchema, describeProblems, repoName, validate, type CrawlMessage } from '@goodfirsttoken/core';
 import { crawlerSkips, type CrawlerSkip } from '../db';
+import { GitHubError } from '../github';
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
 import { ALLOWANCES, serviceToken } from '../sync/allowances';
 import { newReaderRun, readerStatus, sharedReads, stageSeed, type ReaderRun } from './model';
@@ -8,7 +9,8 @@ import { readFiles, readLabels, readRepos, RepoFailed, whyNotListable, type Foun
 import { newRereadRun, rereadRepos, type RereadRun } from './reread';
 
 // The crawl queue's consumer (spec section 5). Each message holds a batch of
-// repos from the crawler's seed list (src/crawl/producer.ts).
+// repos from the crawler's seed list, or the repos donors requested, by
+// their GitHub IDs (src/crawl/producer.ts).
 // It reads each repo's docs from GitHub with the read-only service token,
 // and stages them for the model policy reader (src/crawl/model.ts), whose
 // hourly run reads them and puts the repos whose docs welcome AI help in the
@@ -120,6 +122,7 @@ export async function crawlRepos(
   repos: readonly string[],
   run: CrawlRun,
   progress: CrawlProgress = newCrawlProgress(),
+  { share = 'seeds' }: { share?: 'seeds' | 'requests' } = {},
 ): Promise<void> {
   const { db, github } = deps;
   const skip = (asked: string, why: Skip) => {
@@ -179,7 +182,7 @@ export async function crawlRepos(
     // Without the key, or with a budget of 0, a seed waits for an admin to list it by hand.
     if (reader.reads) {
       try {
-        await stageSeed(stage, run.reader, reads, { repo, files: result.files, hash: await docsHash(result.files, repo.vouch) });
+        await stageSeed(stage, run.reader, reads, { repo, files: result.files, hash: await docsHash(result.files, repo.vouch) }, share);
       } catch (error) {
         if (!(error instanceof RepoFailed)) throw error;
         fail(repo.asked, error.message);
@@ -187,6 +190,55 @@ export async function crawlRepos(
       }
     }
     progress.done.add(repo.asked);
+  }
+}
+
+/**
+ * Reads the repos donors requested, as crawlRepos reads seeds, within the
+ * requested repos' share of the model's budget. Each is read under the name
+ * GitHub gives its repo ID now, so a renamed repo is read under its new
+ * name, and a new repo under an old name isn't read for it. `progress`
+ * keeps the names the message gave.
+ */
+export async function crawlRequested(
+  deps: CrawlDeps,
+  repos: readonly string[],
+  ids: readonly number[],
+  run: CrawlRun,
+  progress: CrawlProgress = newCrawlProgress(),
+): Promise<void> {
+  const now = new Map<string, string>();
+  for (const [i, asked] of repos.entries()) {
+    const skip = (why: Skip) => {
+      run.repos += 1;
+      run.skipped[why] = (run.skipped[why] ?? 0) + 1;
+      progress.done.add(asked);
+    };
+    try {
+      // https://docs.github.com/en/rest/repos/repos#get-a-repository, by the repo's ID
+      const { data } = await deps.github.read<{ full_name?: unknown }>(`/repositories/${String(ids[i])}`);
+      const name = repoName.safeParse(data.full_name);
+      if (name.success) now.set(asked, name.data);
+      else skip('unreadable');
+    } catch (error) {
+      if (error instanceof GitHubError && (error.status === 404 || error.status === 451)) skip('not_public');
+      else if (error instanceof GitHubError) {
+        run.repos += 1;
+        progress.failed.set(asked, error.message);
+        run.failed.push(asked);
+        console.warn(`GitHub failed on ${asked}, so the crawler sends it back to the queue alone. ${error.message}`);
+      } else throw error;
+    }
+  }
+  const inner = newCrawlProgress();
+  try {
+    await crawlRepos(deps, [...new Set(now.values())], run, inner, { share: 'requests' });
+  } finally {
+    for (const [asked, name] of now) {
+      if (inner.done.has(name)) progress.done.add(asked);
+      const failed = inner.failed.get(name);
+      if (failed !== undefined) progress.failed.set(asked, failed);
+    }
   }
 }
 
@@ -244,8 +296,14 @@ export async function readCrawlBatch(
    */
   const sendBack = async (message: Message, body: CrawlMessage, repos: readonly string[], delaySeconds: number): Promise<boolean> => {
     if (repos.length === 0) return true;
+    // A requested repo goes back with its repo ID.
+    const requested = body.requested;
+    const ids = requested === undefined ? undefined : repos.map((repo) => requested[body.repos.indexOf(repo)] ?? 0);
     try {
-      await env.CRAWL_QUEUE.send({ repos: [...repos], ...(body.reread ? { reread: true } : {}) }, { delaySeconds });
+      await env.CRAWL_QUEUE.send(
+        { repos: [...repos], ...(body.reread ? { reread: true } : {}), ...(ids === undefined ? {} : { requested: ids }) },
+        { delaySeconds },
+      );
       return true;
     } catch (error) {
       console.error(`The crawler couldn't send repos from crawl message ${message.id} back to the queue.`, error);
@@ -270,8 +328,9 @@ export async function readCrawlBatch(
     }
     const progress = newCrawlProgress();
     try {
-      const read = body.reread ? rereadRepos : crawlRepos;
-      await read({ db: env.DB, github, now }, repos, run, progress);
+      const deps = { db: env.DB, github, now };
+      if (body.requested !== undefined) await crawlRequested(deps, repos, body.requested, run, progress);
+      else await (body.reread ? rereadRepos : crawlRepos)(deps, repos, run, progress);
     } catch (error) {
       if (!(error instanceof SyncStopped)) {
         console.error(`The crawler didn't finish crawl message ${message.id}. It will be tried again.`, error);
