@@ -543,7 +543,6 @@ export async function whyNotListable(github: ServiceGitHub, repo: string): Promi
   return 'failed' in facts ? facts.failed : whyNotEligible(facts, 'list');
 }
 
-/** A file on github.com, on the repo's default branch, with the branch and each part of the path URL-encoded. */
 /**
  * Whether the crawler reads the file at a path whenever the repo has one, so
  * a read without it means the repo has no such file: a contributing guide,
@@ -562,6 +561,7 @@ export function readsPath(path: string): boolean {
   return folder === '' && CLAUDE_MD.test(name);
 }
 
+/** A file on github.com, on the repo's default branch, with the branch and each part of the path URL-encoded. */
 export function fileUrl(repo: string, branch: string, path: string): string {
   const encoded = (text: string) => text.split('/').map(encodeURIComponent).join('/');
   return `https://github.com/${repo}/blob/${encoded(branch)}/${encoded(path)}`;

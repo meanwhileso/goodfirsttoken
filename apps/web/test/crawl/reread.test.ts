@@ -771,20 +771,36 @@ describe('a listing whose policy changes', () => {
     expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
   });
 
-  test('a listed file that still holds a welcome leaves the listing alone, when another file welcomes agents too', async () => {
-    const also = 'Agents are welcome to open pull requests.';
-    commit(INVITES, { 'CONTRIBUTING.md': `# Contributing\n\n${also}\n` });
-    const both = [statement('CONTRIBUTING.md', 3, also, 'welcomesAgents'), statement('AI_POLICY.md', 3, QUOTE, 'welcomesAgents')];
-    await listing();
-    reads(both, 'invites_agents');
-    await week();
-    commit(INVITES, { 'CONTRIBUTING.md': `# Contributing\n\n${also}\n\nRun the tests before you push.\n` });
-    reads(both, 'invites_agents');
+  test('a listed file that still holds the welcome leaves the listing alone when the reading cites the copy in another file, whatever else the file holds', async () => {
+    const linked = `https://github.com/${INVITES}/blob/main/CONTRIBUTING.md`;
+    commit(INVITES, { 'CONTRIBUTING.md': `# Contributing\n\n${QUOTE}\n` });
+    await listing(INVITES, { ...LISTED, url: linked });
+    // The reading's welcome is the copy in AI_POLICY.md, which comes first.
+    const cited = () => {
+      reads([statement('CONTRIBUTING.md', 3, QUOTE, 'welcomesAgents'), statement('AI_POLICY.md', 3, QUOTE, 'welcomesAgents')], 'invites_agents');
+    };
+    cited();
+    expect((await week()).changed).toEqual([]);
+    // A lone < and a later >, which aren't a tag around the welcome.
+    commit(INVITES, { 'CONTRIBUTING.md': `# Contributing\n\nKeep each pull request < 400 lines.\n\n${QUOTE}\n\n> Thanks.\n` });
+    cited();
 
     const { changed } = await week();
 
     expect(changed).toEqual([]);
     expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
+  });
+
+  test('a change waiting for a move is sent again at the next edit, since only a rejected one keeps a move out', async () => {
+    await listing();
+    await week();
+    moveWelcome();
+    expect((await week()).changed).toEqual([INVITES]);
+    commit(INVITES, { 'CHANGELOG.md': '# Changelog\n', 'CONTRIBUTING.md': `${MOVED}\nRun the tests before you push.\n` });
+    readsMoved();
+
+    expect((await week()).changed).toEqual([INVITES]);
+    expect(await listPolicyChanges(db, 'waiting')).toHaveLength(1);
   });
 
   test("removing the repo at its maintainers' request, or a maintainer taking the listing over, drops its policy change from the queue", async () => {
@@ -992,6 +1008,21 @@ describe('whether a welcome moved to another file', () => {
   test('a quote copied from the rendered page matches its file, links and tags and all', () => {
     const file = doc('AI_POLICY.md', 'Read [our guide](docs/guide.md) first. Agents <em>may</em> open pull requests.\n');
     expect(moved(at(blob('AI_POLICY.md'), 'Read our guide first. Agents may open pull requests.'), [file, holds('CONTRIBUTING.md')])).toBe(false);
+  });
+
+  test('a quote taken from its file matches it, whatever stray < and > are around it', () => {
+    const quote = 'Agents may open pull requests if a < b holds.';
+    for (const text of [
+      `Keep it < 400 lines.\n\n${quote}\n\n> Thanks.\n`,
+      `Agents may open pull requests if a < b holds.\n\n> Thanks.\n`,
+      `Use \`a <= b\`.\n\n${quote}\n\n\`\`\`\nf => g\n\`\`\`\n`,
+    ]) {
+      expect(moved(at(blob('AI_POLICY.md'), quote), [doc('AI_POLICY.md', text), holds('CONTRIBUTING.md')]), text).toBe(false);
+    }
+  });
+
+  test('a quote with no words, like one that is only markup, moves nothing', () => {
+    expect(moved(at(blob('AI_POLICY.md'), '<img src="policy.png">'), [other('AI_POLICY.md'), holds('CONTRIBUTING.md')])).toBe(false);
   });
 
   test("the link's owner and repo are read without case, its anchor and query left out, and its path decoded", () => {

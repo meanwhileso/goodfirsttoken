@@ -121,21 +121,22 @@ function linkedPath(url: string, repo: string, branch: string): string | null {
 }
 
 /**
- * A text's words for matching a quote: a Markdown link or image as its text,
- * and an HTML tag left out, so a quote copied from the rendered page matches
- * the file it was copied from.
+ * A text's words as a page shows them, more or less: an inline Markdown link
+ * or image as its text, and an HTML tag, one that starts with a letter after
+ * its <, left out.
  */
 function shownWords(text: string): string {
-  return wordsOf(
-    text
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/<[^>]*>/g, ' '),
-  );
+  return wordsOf(text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/<\/?[a-zA-Z][^<>]*>/g, ' '));
 }
 
-/** Whether a text holds the words of a quote, in order, as whole words. */
+/**
+ * Whether a text holds the words of a quote, in order, as whole words: as
+ * written, so a quote taken from the file always matches it, or as shown, so
+ * a quote an admin copied from the rendered page mostly does.
+ */
 function holdsWords(text: string, quote: string): boolean {
-  return ` ${shownWords(text)} `.includes(` ${shownWords(quote)} `);
+  const holds = (words: (text: string) => string) => ` ${words(text)} `.includes(` ${words(quote)} `);
+  return holds(wordsOf) || holds(shownWords);
 }
 
 /**

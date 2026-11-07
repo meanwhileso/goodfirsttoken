@@ -3485,8 +3485,8 @@ candidates. The rules are in
   sends no listing back to the queue for what it read. A welcome that moved
   to another file still sends its listing back, since `welcomeMoved` reads
   that from the linked file. A move an admin rejected, kept in
-  `policy_changes` with the link the listing had, stays out. For a listing made from a policy, by
-  hand or from a find, it still pauses on a move into a ban, read from
+  `policy_changes` with the link the listing had, stays out. For a listing
+  made from a policy, by hand or from a find, it still pauses on a move into a ban, read from
   `policy_reads.model_banned`, which no version touches. So a new reader
   can pause a listing it reads as a ban, and an admin reviews the pause,
   since a missed ban is the worse error. A registered project takes the

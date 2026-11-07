@@ -3394,12 +3394,15 @@ hash with none of the repo's text, and whether the reading read a ban:
   fingerprint says. A welcome moved and reworded at once counts too.
   - A linked file that still holds the quote's words moved nothing, so a
     reading that cites one of two copies of a welcome sends nothing.
-  - A Markdown link counts as its text, and an HTML tag is left out, so a
-    quote copied from the rendered page matches its file.
-  - A file the crawler doesn't read, like a README, is never gone. The
-    crawler reads a contributing guide, an AI policy, or a file with an AI
+  - The words match as the file has them, or with an inline Markdown link
+    read as its text and an HTML tag left out. So a quote taken from the
+    file always matches it, and one an admin copied from the rendered page
+    mostly does.
+  - Only a missing file the crawler would have read counts as gone: a
+    contributing guide, an AI policy, or a Markdown or text file with an AI
     word in its name, in the root, `.github/`, or `docs/`, and `AGENTS.md`
-    and `CLAUDE.md` in the root.
+    and `CLAUDE.md` in the root. Any other file, like a README, a template,
+    or a skill, is never gone.
   - It leaves out a line anchor or query in the link. A link to a
     maintainer's post, another repo, another branch, or a commit isn't
     checked.
