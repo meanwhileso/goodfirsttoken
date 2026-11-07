@@ -3,10 +3,10 @@ import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { createScheduledController } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { addPr, getPr, listIssues, saveClaim } from '../../src/db';
+import { addCandidate, addPr, getCandidate, getPr, getProject, keepModelReading, listIssues, saveClaim, savePerson } from '../../src/db';
 import { addConnection } from '../../src/mcp/connections';
 import worker from '../../src/server';
-import { LAPSED_CONNECTIONS_CRON } from '../../src/sync/scheduled';
+import { CRAWL_CRON, LAPSED_CONNECTIONS_CRON } from '../../src/sync/scheduled';
 import { startGitHub } from '../auth/helpers';
 import { db, emptyDatabase, maintainer, priya, registeredProject, repo, sha, signIn } from '../db/helpers';
 import { freshNumbers, knowServiceToken } from './helpers';
@@ -123,4 +123,57 @@ test('a cron no job answers to runs nothing, and says so', async () => {
 
   expect(github.calls).toEqual([]);
   expect(logged).toEqual([expect.stringContaining('No job runs on the cron 0 3 * * *')]);
+});
+
+test("the crawler's cron approves a find that waited from before, with more than 100 stars, on its own", async () => {
+  const configuredAdmins = env.ADMIN_GITHUB_IDS;
+  env.ADMIN_GITHUB_IDS = '1010';
+  try {
+    await savePerson(db, { githubId: 1010, login: 'sample-admin' }, Date.now());
+    const bundler = 'sample-owner/sample-bundler';
+    const docsHash = `docs-v1:${'a'.repeat(64)}`;
+    const now = Date.now();
+    const find = await addCandidate(
+      db,
+      {
+        repo: bundler,
+        facts: { stars: 1200, createdAt: now - 6 * 365 * 86_400_000, pushedAt: now - 7_200_000, ownerCreatedAt: now - 9 * 365 * 86_400_000 },
+        policy: { quote: 'AI help is welcome.', url: `https://github.com/${bundler}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' },
+        settings: { tags: ['contribution welcome'] },
+        suggestedTags: [{ name: 'contribution welcome', openIssues: 1 }],
+        docsHash,
+        madeBy: 'model',
+      },
+      now - 7 * 24 * 3_600_000,
+    );
+    await keepModelReading(
+      db,
+      {
+        repo: bundler,
+        fingerprint: `v1:${'b'.repeat(64)}`,
+        reading: {
+          readerVersion: 'claude-opus-5-5/p1/s1',
+          docsHash,
+          tier: 'allows_with_conditions',
+          modelTier: 'allows_with_conditions',
+          agree: true,
+          statements: [],
+          dropped: 0,
+          steering: [],
+          droppedSteering: 0,
+          summary: '',
+          labels: null,
+        },
+      },
+      now,
+    );
+    const bindings = { ...env, CRAWL_QUEUE: { sendBatch: () => Promise.resolve() } } as unknown as Env;
+
+    await runCron(CRAWL_CRON, bindings);
+
+    expect(await getProject(db, bundler)).toMatchObject({ status: 'approved', source: 'policy', addedBy: 1010 });
+    expect(await getCandidate(db, find?.id ?? '')).toMatchObject({ status: 'approved', decidedBy: 1010 });
+  } finally {
+    env.ADMIN_GITHUB_IDS = configuredAdmins;
+  }
 });

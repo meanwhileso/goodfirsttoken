@@ -245,7 +245,7 @@ export const crawlCandidateSchema = z
     /** The admin who decided, or null while it waits. */
     decidedBy: githubId.nullable(),
     decidedAt: epochMs.nullable(),
-    /** Why it was rejected. */
+    /** Why it was rejected, or for a find the crawler approved on its own, that it did. */
     reason: trimmedText(MAX_CRAWL_REASON).nullable(),
   })
   .superRefine((candidate, ctx) => {
@@ -260,8 +260,8 @@ export const crawlCandidateSchema = z
     if (candidate.status === 'rejected' && candidate.reason === null) {
       problem('reason', 'is required to reject');
     }
-    if (candidate.status !== 'rejected' && candidate.reason !== null) {
-      problem('reason', 'must be null unless the candidate was rejected');
+    if (waiting && candidate.reason !== null) {
+      problem('reason', 'must be null while the candidate waits');
     }
   });
 export type CrawlCandidate = z.infer<typeof crawlCandidateSchema>;

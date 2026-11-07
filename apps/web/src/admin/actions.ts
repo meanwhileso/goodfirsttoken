@@ -518,8 +518,22 @@ function anotherRepo(repo: string): { ok: false; refusal: Refusal } {
 }
 
 /**
+ * Who lists a repo from its policy: an admin, with their own GitHub token, or
+ * the crawler approving a find on its own (src/crawl/auto-approve.ts), for an
+ * admin, with the service token.
+ */
+export type Lister = Pick<Caller, 'githubId' | 'gitHubToken'>;
+
+interface ListingOptions {
+  /** Whether a new listing's tagged issues are read at once, or left for the next scheduled sync. */
+  readNow?: boolean;
+  /** Checked again just before the listing is written, after GitHub is read, with the refusal when it no longer holds. */
+  stillWanted?: () => Promise<{ ok: false; refusal: Refusal } | null>;
+}
+
+/**
  * Lists a repo from its written policy, or lists it again when it is already
- * listed that way, after checking it on GitHub with the admin's own token:
+ * listed that way, after checking it on GitHub with the lister's token:
  * it has to be public, not archived, and take pull requests from anyone.
  * Its issue repo, when it has one of its own, has to be public and not
  * archived. Each has to be the repo a project keeps under its name, by its
@@ -533,11 +547,12 @@ function anotherRepo(repo: string): { ok: false; refusal: Refusal } {
  * unlisted. The caller has checked `list_from_policy`.
  */
 async function listFromPolicy(
-  caller: Caller,
+  caller: Lister,
   repo: string,
   policy: Policy,
   settings: ProjectSettingsPatch,
   now: number,
+  { readNow = true, stillWanted }: ListingOptions = {},
 ): Promise<Outcome<'admin_add_project'>> {
   if ((await getDoNotListEntry(env.DB, repo)) !== null) return onTheList(repo);
   if ((await getWaitingRemoval(env.DB, repo)) !== null) return removalWaits(repo);
@@ -583,6 +598,8 @@ async function listFromPolicy(
   for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
     if ((await getDoNotListEntry(env.DB, name)) !== null) return onTheList(name);
     if ((await getWaitingRemoval(env.DB, name)) !== null) return removalWaits(name);
+    const unwanted = await stillWanted?.();
+    if (unwanted) return unwanted;
     const existing = await getProject(env.DB, name);
     if (existing?.source === 'registered') {
       return refuse(
@@ -595,7 +612,7 @@ async function listFromPolicy(
       if (relisted?.ok === false) return { ok: false, refusal: invalidSettings(relisted.problems) };
       if (relisted?.ok) {
         const { project } = relisted;
-        if (project.status === 'approved') startReadOnApproval(env, project.repo);
+        if (project.status === 'approved' && readNow) startReadOnApproval(env, project.repo);
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: true } };
       }
     } else {
@@ -607,7 +624,7 @@ async function listFromPolicy(
         now,
       );
       if (project !== null) {
-        startReadOnApproval(env, project.repo);
+        if (readNow) startReadOnApproval(env, project.repo);
         return { ok: true, value: { repo: project.repo, status: project.status, source: project.source, updated: false } };
       }
     }
@@ -705,12 +722,32 @@ async function decideCandidateItem(
     return { ok: true, value: { repo: decided.repo, kind: 'candidate', status: 'rejected' } };
   }
   await requirePermission(caller, 'list_from_policy');
-  const settings = validate(projectSettingsSchema, { ...candidate.settings, ...definedEntries(input.settings) }, 'settings');
+  return approveFind(caller, candidate, input, now);
+}
+
+/**
+ * Approves a waiting crawler find: lists it from its policy, with the tier
+ * and settings given, and the find's suggestion for each one left out, then
+ * records the find approved by the lister, with the reason given, if any. A
+ * refusal leaves the find waiting, and a find decided while GitHub was read
+ * is refused, unlisted. The caller has checked `list_from_policy`, or is the
+ * crawler approving a find on its own, which reads no tagged issues at once.
+ */
+export async function approveFind(
+  lister: Lister,
+  candidate: CrawlCandidate,
+  choice: Pick<ToolInput<'admin_decide'>, 'tier' | 'settings'>,
+  now: number,
+  { reason = null, readNow = true }: { reason?: string | null; readNow?: boolean } = {},
+): Promise<Outcome<'admin_decide'>> {
+  const settings = validate(projectSettingsSchema, { ...candidate.settings, ...definedEntries(choice.settings) }, 'settings');
   if (!settings.ok) return { ok: false, refusal: invalidSettings(settings.problems) };
-  const policy = { ...candidate.policy, tier: input.tier ?? candidate.policy.tier };
-  const listed = await listFromPolicy(caller, candidate.repo, policy, settings.value, now);
+  const policy = { ...candidate.policy, tier: choice.tier ?? candidate.policy.tier };
+  const stillWanted = async () => ((await getCandidate(env.DB, candidate.id))?.status === 'waiting' ? null : nothingWaits(candidate.id));
+  const listed = await listFromPolicy(lister, candidate.repo, policy, settings.value, now, { readNow, stillWanted });
   if (!listed.ok) return listed;
-  await decideCandidate(env.DB, candidate.id, { status: 'approved', decidedBy: caller.githubId, reason: null }, now);
+  const decided = await decideCandidate(env.DB, candidate.id, { status: 'approved', decidedBy: lister.githubId, reason }, now);
+  if (decided === null) console.warn(`${candidate.repo} was listed from its find, and the find was decided by someone else at the same moment.`);
   return { ok: true, value: { repo: listed.value.repo, kind: 'candidate', status: listed.value.status } };
 }
 

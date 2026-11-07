@@ -1696,7 +1696,9 @@ of them but a request to be removed.
   and every sentence in the repo's docs that names AI, the first 60 of
   them, each with the rest of its paragraph. The model can miss a ban, or
   be steered past one, so the admin reads those paragraphs before a
-  verdict. The [model policy reader](#the-model-policy-reader) makes them,
+  verdict. A find with more than 100 stars that the crawler approves on
+  its own never waits for that, under Approving a find on its own in
+  [The policy crawler](#the-policy-crawler). The [model policy reader](#the-model-policy-reader) makes them,
   and so does the sample data. The find shows the model's reading, and any
   lines it found that try to steer a reader, at the top. A find the
   crawler's rules made, before the model read policies, says so, and shows
@@ -1776,6 +1778,9 @@ of them but a request to be removed.
   A setting they leave out takes the crawler's suggestion, then its
   default. The tags are required, from the suggestion or from the admin,
   and without them it is refused with `invalid_settings`.
+- The crawler approves a find with more than 100 stars on its own, the same
+  way, under Approving a find on its own in
+  [The policy crawler](#the-policy-crawler).
 - Approving a crawler find for a repo its maintainers registered is refused
   with `already_registered`. Their settings and status stay, and the find
   keeps waiting until an admin rejects it.
@@ -3027,7 +3032,10 @@ A candidate is a repo the crawler found whose own docs welcome AI help. The
   back only when its docs read differently, under
   [Keeping listings current](#keeping-listings-current).
 - A candidate is decided once, approved or rejected, with who decided and
-  when. A rejection needs a reason.
+  when. A rejection needs a reason. A find the crawler approved on its own
+  names the admin it was approved for, with the reason "Approved on its
+  own, for more than 100 stars.", which tells it from an admin's
+  approval.
 
 **The do-not-list** holds repos whose maintainers asked to be removed, with
 the admin who added each one, when, and an optional note. A repo is found on
@@ -3059,8 +3067,10 @@ approving a maintainer's registration of it takes it off, under
 
 The crawler reads the repos admins seed. A model reads each repo's docs,
 and the crawler puts each one whose own docs welcome AI help in the admin
-queue as a [candidate](#crawl-candidates). It never lists a project. An
-admin does, under [The admin queue](#the-admin-queue).
+queue as a [candidate](#crawl-candidates). An admin lists it, under
+[The admin queue](#the-admin-queue), unless its repo has more than 100
+stars. Then the crawler approves the find on its own, under Approving a
+find on its own below.
 
 **Who reads the docs.** The model policy reader, under
 [The model policy reader](#the-model-policy-reader), reads every policy
@@ -3068,10 +3078,11 @@ and decides every find. Without the `ANTHROPIC_API_KEY` secret, the
 crawler reads no policy: seeds wait for an admin to list them by hand. A
 model can be steered or wrong, so the crawler also keeps every sentence in
 the repo's docs that names AI, with the rest of its paragraph, by a word
-list, under The word list below. The admin reads them before a verdict.
-Nothing is listed without an admin. The crawler reads public data only,
-with the service token, under [Calls to GitHub](#calls-to-github). With no
-service token it reads nothing, and the log names the secret.
+list, under The word list below. The admin reads them before a verdict,
+but for a find the crawler approves on its own, which no admin reads. The
+crawler reads public data only, with the service token, under
+[Calls to GitHub](#calls-to-github). With no service token it reads
+nothing, and the log names the secret.
 
 **Which repos it reads.** The crawler doesn't search GitHub. New repos come
 from maintainers who register them, under
@@ -3293,6 +3304,48 @@ that the paragraph starts earlier or goes on in the file. A line ends at
 any character a reader might break a line at: a line feed, a carriage
 return, a vertical tab, a form feed, a file, group, or record separator,
 a next-line character, or a line or paragraph separator.
+
+**Approving a find on its own.** Each run of the crawler's cron job, once
+an hour, after the model policy reader's run, approves the finds waiting
+in the admin queue whose repo had more than 100 stars when the crawler
+read it. That covers a find written in the same run and one that waited
+from before. The run goes on even when the cron job's other steps failed.
+
+- A find keeps waiting for an admin unless the model's reading of the docs
+  it was found in is kept, and in it the two tiers agree, no statement
+  failed its check, and no steering line, canary, or line that keeps
+  agents from working on their own checks out. These are the conditions
+  the [spec](specs/model-policy-reader.md#requested-repos) sets for
+  listing a requested repo at once, but for its check reading. A find
+  with no tags, or for a repo that is a project already, whatever its
+  status, keeps waiting too, so a listing an admin made by hand stays as
+  it is.
+- It approves the rest as an admin's `admin_decide` does, under
+  [The admin queue](#the-admin-queue), with the tier and settings the
+  crawler suggested. It checks the repo on GitHub with the service token
+  instead of an admin's own, and refuses what an admin's approval refuses:
+  a repo on the do-not-list, one whose removal waits, one its maintainers
+  registered, and one GitHub now shows private, archived, or closed to
+  pull requests from anyone. A find an admin decides while GitHub is read
+  isn't listed.
+- The listing and the find name an admin, since a listing names who added
+  it: the first ID in `ADMIN_GITHUB_IDS` of someone who has signed in. The
+  find's reason says it was approved on its own. With no such admin, it
+  approves nothing, and the log says how many finds wait.
+- It reads no tagged issues at once, as an admin's approval does. The next
+  run of the sync reads them, within 15 minutes.
+- A find it leaves, or one the approval refuses, keeps waiting, and is
+  tried again each hour, until an admin decides it.
+- One run checks at most 50 finds on GitHub, oldest first, each a read or
+  two. A find left before GitHub is asked takes none of the 50. A failure
+  of the token, a rate limit, or GitHub being down stops the run, and the
+  next one tries again. Any other error GitHub gives for one repo leaves
+  that find, and the run goes on.
+- No admin reads the sentences that name AI first. The weekly read, under
+  [Keeping listings current](#keeping-listings-current), is what catches a
+  ban afterward.
+- The run logs one line: the finds it approved, the admin they name, and
+  the first 20 finds it left, each with why, and how many more.
 
 **The queue.** The consumer takes up to 5 batches at a time, one run at a
 time, and first asks GitHub what is left of the budget.
@@ -3685,7 +3738,9 @@ earlier finds again, as the consumer does. A rejected find comes back only
 when its docs read differently: one with the same docs or the same
 fingerprint stays out, and one with a fingerprint of another version, as
 every find the crawler's rules made has, takes the reader's fingerprint
-and stays out. An admin decides every find, as before.
+and stays out. An admin decides every find the crawler doesn't approve on
+its own, under Approving a find on its own in
+[The policy crawler](#the-policy-crawler).
 
 **A weekly read.** The model's reading is compared with the model's last
 read, under [Keeping listings current](#keeping-listings-current), with
