@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { count, epochMs, githubId, httpsUrl, id, labelName, repoName, trimmedText } from './primitives';
+import { count, epochMs, githubId, githubRepoId, httpsUrl, id, labelName, repoName, trimmedText } from './primitives';
 import { MAX_TAGS, policySchema, projectSettingsPatchSchema } from './projects';
 import { crawlPrioritySchema } from './crawl-priority';
 
@@ -300,10 +300,28 @@ export const MAX_CRAWL_BATCH = 25;
  * Repos in the crawl queue, for a consumer to read. With `reread`, they are
  * listed projects, read again to keep their listings current.
  */
-export const crawlMessageSchema = z.object({
-  repos: z.array(repoName).min(1).max(MAX_CRAWL_BATCH),
-  reread: z.literal(true).optional(),
-});
+export const crawlMessageSchema = z
+  .object({
+    repos: z.array(repoName).min(1).max(MAX_CRAWL_BATCH),
+    reread: z.literal(true).optional(),
+    /**
+     * For repos donors requested, each one's GitHub repo ID, in the order of
+     * `repos`. The consumer reads each by its ID, under the name GitHub
+     * gives it now.
+     */
+    requested: z.array(githubRepoId).min(1).max(MAX_CRAWL_BATCH).optional(),
+  })
+  .refine(
+    (message) =>
+      message.requested === undefined ||
+      (message.reread === undefined &&
+        message.requested.length === message.repos.length &&
+        new Set(message.repos.map((repo) => repo.toLowerCase())).size === message.repos.length),
+    {
+      path: ['requested'],
+      message: 'must give one repo ID for each repo, each repo named once, and none for a weekly read',
+    },
+  );
 export type CrawlMessage = z.infer<typeof crawlMessageSchema>;
 
 /**

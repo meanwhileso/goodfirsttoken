@@ -1622,6 +1622,7 @@ in `people`.
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, who made it, the model reader or, before it, the crawler's rules, with the rules' tier for a find the model made while the rules still read, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
+| `requested_reads` | Repo donors requested that the crawler read: the name it queued it under, when, and whether it queued it or left it out, and why | `repo_id` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 | `repo_requests` | Donor's request for a repo they want to work on: GitHub's ID for the repo, the name GitHub gave when they asked, who asked and when, and when they withdrew it. It stores no status, which is worked out from `projects` when read | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, the crawler's rules' last fingerprint of its docs and whether they read a ban, from before the model read policies, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, how many weekly reads in a row gave no verdict, and whether it was read in shadow or while the model decided | `project` |
@@ -1759,6 +1760,11 @@ that break the rules, so it returns the problems for the caller to show.
 - **Migration `20261107211944_repo_requests.sql`** makes `repo_requests`,
   under [Requesting a repo](how-it-works.md#requesting-a-repo). Each
   person must be in `people`.
+- **Migration `20261107214222_requested_reads.sql`** makes
+  `requested_reads`, under Requested repos in
+  [The policy crawler](how-it-works.md#the-policy-crawler). It keeps
+  requested repos apart from `crawl_seeds`, whose `added_by` names an
+  admin.
 
 ### Who sees what
 
@@ -1900,6 +1906,7 @@ pruning after a sync, with no index of its own.
 | `repo_requests_live` | One live request per person per repo ID, and a person's live request for a repo, for `request_repo` |
 | `repo_requests_by_person` | A person's requests by when they asked, for the day's limit and their list |
 | `repo_requests_by_repo` | A repo's live requests, oldest first, for the crawler and the admin queue |
+| `requested_reads_by_read` | The requested repos due again, longest since read first |
 | `session_by_user` | A person's sessions, which signing out ends |
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
 | `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |
@@ -3474,6 +3481,13 @@ candidates. The rules are in
   `setProjectStatusFrom`, and the tables in `src/db/rereads.ts`. Nothing in
   `src/crawl/` creates a project, saves its settings, or writes any other
   status, which a test checks.
+- **Requested repos ride the crawl queue.** The cron job queues the repos
+  `listRequestedToRead` in `src/db/requested-reads.ts` gives, at most 5, in
+  a message whose `requested` gives each one's GitHub repo ID, and records
+  them with `markRequestedRead`. The consumer hands such a message to
+  `crawlRequested` in `src/crawl/queue.ts`, which reads each repo's name
+  now from `GET /repositories/{id}`, then calls `crawlRepos` with those
+  names and the `requests` share. A repo sent back keeps its ID.
 - **Weekly reads ride the crawl queue.** The cron job queues the projects
   `listProjectsToReread` gives, in messages with `reread: true`, before its
   search, and records `policy_reads.queued_at` with `markRereadsQueued`.

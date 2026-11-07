@@ -2986,7 +2986,9 @@ same words, so none of them shows.
   statement that records the request, so two calls at once can't pass
   them.
 - Nothing lists a request: no project, no admin queue item, no seed, and no
-  public page, feed, or JSON.
+  public page, feed, or JSON. The crawler reads a requested repo's docs,
+  under Requested repos in [The policy crawler](#the-policy-crawler), and
+  its find waits for an admin as any find does.
 
 **The answer** has `repo` as GitHub names it now, `status`, `requested`,
 whether the person has a live request for the repo after the call,
@@ -3145,7 +3147,8 @@ approving a maintainer's registration of it takes it off, under
 
 ## The policy crawler
 
-The crawler reads the repos admins seed. A model reads each repo's docs,
+The crawler reads the repos admins seed, and the repos donors request. A
+model reads each repo's docs,
 and the crawler puts each one whose own docs welcome AI help in the admin
 queue as a [candidate](#crawl-candidates). An admin lists it, under
 [The admin queue](#the-admin-queue), unless its repo has more than 100
@@ -3166,10 +3169,12 @@ nothing, and the log names the secret.
 
 **Which repos it reads.** The crawler doesn't search GitHub. New repos come
 from maintainers who register them, under
-[Registering a project](#registering-a-project), and from admins, who seed
-a repo or list one from its policy, under [The admin queue](#the-admin-queue).
+[Registering a project](#registering-a-project), from admins, who seed
+a repo or list one from its policy, under [The admin queue](#the-admin-queue),
+and from donors, who request one, under [Requesting a repo](#requesting-a-repo).
 Once an hour, at 52 minutes past, a scheduled run puts the seeds that are
-due in the crawl queue, 10 to a batch. It also puts the listed projects due
+due in the crawl queue, 10 to a batch, then the requested repos that are
+due, under Requested repos below. It also puts the listed projects due
 for their weekly read there, under
 [Keeping listings current](#keeping-listings-current). The run makes no
 call to GitHub.
@@ -3194,6 +3199,50 @@ call to GitHub.
 - It records a seed as handled after the queue takes the batch. A crash
   between the two, or two runs at once, as when one outlasts the hour, can
   queue a seed twice. A repo read twice is put in the admin queue once.
+
+**Requested repos.** The crawler reads the repos donors requested from
+their own list, after the admins' seeds in each run, whatever their stars.
+
+- A repo is on the list while it has at least one live request from a
+  donor who isn't blocked. Once every live request is withdrawn or comes
+  from a blocked donor, it is off.
+- Each run queues at most 5, in one message that gives each one's GitHub
+  repo ID. Repos never read come first, by their oldest live request. A
+  requested repo is due again 30 days after it was read, as a seed is, and
+  those come after the new ones, longest since read first.
+- It leaves out what the seed list leaves out, with the same checks: a
+  repo on the do-not-list, a project already, or a repo whose find waits
+  or was approved. It checks a project by the repo's ID, and the
+  do-not-list and finds by the name GitHub gave last, which is the name at
+  the crawler's last read, or at the newest live request when one came
+  after. Of the first 100 repos due, the ones it leaves out take none of
+  the 5. It records for each repo, by its ID, whether it queued it or left
+  it out, and why, and the repo is due again 30 days later either way.
+- Two repo IDs under one name, as after a rename and a new repo under the
+  old name, go in separate runs, so a message names each repo once.
+- It records a requested repo as read after the queue takes the message,
+  as for a seed. A reading waiting on the model's budget stays pending
+  until the budget has room, under The budget in
+  [The model policy reader](#the-model-policy-reader). A message that
+  ends in the dead-letter queue, a read with no `ANTHROPIC_API_KEY`, and a
+  repo whose labels GitHub didn't give all wait the 30 days, as for a
+  seed.
+- The consumer reads each repo by its ID first, with the service token,
+  and reads its docs under the name GitHub gives it now. So a renamed repo
+  is read under its new name, and a new repo made under the old name isn't
+  read for the request. It checks the do-not-list, projects, and finds
+  again under that name, and records the name, and why it left the repo
+  out when it does. A repo GitHub no longer shows is read no further. A
+  repo GitHub fails on goes back to the queue alone, with its ID.
+- Its readings come out of the requested repos' share of the model's
+  budget, 20% of the day. A reading past the share waits for a later run,
+  and at the latest for the next UTC day.
+- From there the rules are a seed's: a repo whose docs welcome AI help
+  waits in the admin queue as a find, and an admin decides.
+- `admin_seed_repo` on a requested repo adds an admin seed as it does for
+  any repo. The requested repo stays on its own list.
+- The run's log line adds what it did, like
+  `requested: queued 3, left out 1 (project)`.
 
 **What it reads in each repo.** The crawl queue's consumer reads each batch
 from the repo's default branch. It lists the folders, then reads every
@@ -3755,9 +3804,10 @@ other shares left unspent, up to the whole day, so before then a seed
 always finds its half. A reading past its share waits for a later run, and
 at the latest for the next UTC day. Each share is sent in turn, so one that
 is spent holds no other back. A label check spends from its reading's
-share, the seeds' today, and the requested repos' once they read. Only
-seeds, their label checks, and weekly reads use the reader so far. A reading is kept under the project's name for a weekly read, so a
-repo GitHub renamed keeps its reading.
+share: the seeds' for a seed, and the requested repos' for a requested
+repo. Seeds, requested repos, their label checks, and weekly reads use the
+reader so far. A reading is kept under the project's name for a weekly
+read, so a repo GitHub renamed keeps its reading.
 
 **When it can't read.** It pauses nothing and lists nothing for a repo the
 model hasn't read.

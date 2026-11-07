@@ -189,6 +189,8 @@ export async function stageSeed(
   run: ReaderRun,
   reads: SharedReads,
   what: { repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash },
+  /** The share of the model's budget it reads within: admin seeds', or requested repos'. */
+  share: Extract<Share, 'seeds' | 'requests'> = 'seeds',
 ): Promise<void> {
   const before = deps.calls();
   try {
@@ -207,7 +209,7 @@ export async function stageSeed(
         (await lastRejectedFind(deps.db, repo.name))?.docsHash !== hash &&
         (await reads.listable(repo.name)) === null
       ) {
-        await stage(deps, run, reads, { ...what, key: repo.name, purpose: 'seed', share: 'seeds', labelsFor: { readingOutput: kept.output } });
+        await stage(deps, run, reads, { ...what, key: repo.name, purpose: 'seed', share, labelsFor: { readingOutput: kept.output } });
       }
       return;
     }
@@ -219,7 +221,7 @@ export async function stageSeed(
       run.notListable += 1;
       return;
     }
-    await stage(deps, run, reads, { ...what, key: repo.name, purpose: 'seed', share: 'seeds' });
+    await stage(deps, run, reads, { ...what, key: repo.name, purpose: 'seed', share });
   } finally {
     run.githubCalls += deps.calls() - before;
   }
