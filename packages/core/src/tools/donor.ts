@@ -22,6 +22,7 @@ import { interestsSchema, type Interests } from '../people';
 import { prModes, projectSettingsSchema } from '../projects';
 import { prStateSchema } from '../prs';
 import { refusalCodeSchema } from '../refusals';
+import { MAX_LIVE_REQUESTS, MAX_REQUEST_INPUT, MAX_REQUESTS_PER_DAY, requestStatusSchema } from '../requests';
 import { budgetSchema, queueSchema, type Budget } from '../sessions';
 import {
   branchName,
@@ -878,5 +879,38 @@ export const checkPr = defineTool({
         out.state === 'open' &&
         out.newFollowUps === 0 &&
         "GitHub shows it open, with nothing new from a maintainer. A review from someone who can't push to the repo isn't a follow-up.",
+    ),
+});
+
+export const requestRepo = defineTool({
+  audience: 'donor',
+  description:
+    `Ask Good First Token for a repo the donor wants to work on, or with withdraw: true, take the donor's request back. A request lists nothing. A repo is listed only when its docs welcome AI help or its maintainers register it. Call it only after the donor asks or says yes. The answer says whether the repo is listed, paused, or not listed yet. Tell the donor its message. Asking again for a repo the donor asked for records nothing. Nothing is written to GitHub, and no page shows who asked. One person sends at most ${String(MAX_REQUESTS_PER_DAY)} new requests a UTC day, withdrawn ones included, and has at most ${String(MAX_LIVE_REQUESTS)} live.`,
+  refusals: ['donor_blocked', 'repo_not_eligible', 'rate_limited', 'invalid_input'],
+  input: z.object({
+    repo: z
+      .string({ error: 'must be text' })
+      .trim()
+      .min(1, 'must not be empty')
+      .max(MAX_REQUEST_INPUT, `must be at most ${String(MAX_REQUEST_INPUT)} characters`)
+      .describe('The repo as owner/repo, a GitHub repo link, or a Good First Token project link.'),
+    withdraw: z.boolean().optional().describe("True to take back the donor's request for the repo."),
+  }),
+  output: z.object({
+    /** The repo as GitHub names it now. */
+    repo: repoName,
+    status: requestStatusSchema,
+    /** Whether this person has a live request for the repo, after the call. */
+    requested: z.boolean(),
+    /** The repo's project page, when it has one. */
+    projectUrl: webUrl.optional(),
+    /** The words for the person. */
+    message: z.string().min(1),
+  }),
+  text: (out) =>
+    lines(
+      `${out.repo}: ${out.message}`,
+      out.projectUrl && `Project page: ${out.projectUrl}`,
+      out.requested ? `The donor's request for ${out.repo} is live.` : `The donor has no request for ${out.repo}.`,
     ),
 });

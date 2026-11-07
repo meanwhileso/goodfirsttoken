@@ -292,5 +292,15 @@ export const SAMPLE_HISTORY: SampleHistory[] = [
   { id: 'c_samplehistory13', person: SAMPLE_PEOPLE.rowan, agent: 'codex', project: DESKTOP, issue: 1309, pr: 1310, outcome: 'merged', daysAgo: 0 },
 ];
 
+/**
+ * Sample donors' requests for repos they want to work on: one for a listed
+ * project, made before it was listed, and one for a repo that isn't listed.
+ * The seed reads each repo's ID from the GitHub fake.
+ */
+export const SAMPLE_REQUESTS: { person: SamplePerson; repo: string }[] = [
+  { person: SAMPLE_PEOPLE.priya, repo: 'sample-owner/sample-app' },
+  { person: SAMPLE_PEOPLE.kenji, repo: 'meanwhileso/goodfirsttoken' },
+];
+
 /** The donor the sample work has sample-admin block. */
 export const SAMPLE_BLOCKED: SamplePerson = SAMPLE_PEOPLE.rowan;

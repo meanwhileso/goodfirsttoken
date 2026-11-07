@@ -2316,14 +2316,16 @@ the first question included.
 
 ## The donor's tools
 
-A donor's agent spends their tokens through eleven tools: `start_session`,
+A donor's agent works through twelve tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
-`submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, and
-`check_pr`. Each acts as the caller alone, and reads and writes GitHub with
-the caller's own token, for their own claim only. The service token reads
-for them only in `check_pr`, which reads their own claim's PR, under
-Checked on request in [PRs](#prs). No maintainer's token or other donor's
-ever does their work.
+`submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`,
+`check_pr`, and `request_repo`, which asks for a repo that isn't listed,
+under [Requesting a repo](#requesting-a-repo). Each acts as the caller
+alone, and reads and writes GitHub with the caller's own token, for their
+own claim only. `request_repo` only reads, for the caller's own request.
+The service token reads for them only in `check_pr`, which reads their own
+claim's PR, under Checked on request in [PRs](#prs). No maintainer's
+token or other donor's ever does their work.
 
 **Sessions**
 
@@ -2913,6 +2915,84 @@ GitHub. [/me](#your-queue-on-me) shows the same queue.
   the reason, and the text doesn't say the work is cleared. When GitHub
   can't be read for cleared work, it is `openable: false` too, and the
   reason says to try again in a minute.
+
+## Requesting a repo
+
+A donor can ask for a repo they want to work on, with `request_repo` from
+their agent. A request lists nothing. It records who asked for which repo,
+and reports only what the site already shows: whether the repo has a
+project page. The request is one function, `requestRepo` in
+`src/requests/request.ts`, which takes the caller as the site's pages do,
+so the site's request pages can call it too. The design is in
+[the add a repo spec](specs/add-a-repo.md), under Requesting a repo.
+
+**The input.** `repo` is `owner/repo`, a GitHub repo link, or a Good First
+Token project link. A link names the repo by its first two path parts, so
+an issue's link works too. A GitHub link may end in `.git`, and a link may
+leave out `https://`. A link to one of the site's own pages, like
+`/maintainers/add`, names no repo. Anything else is refused with
+`invalid_input`. `withdraw: true` takes the person's request back.
+
+**The checks**, in order:
+
+- A blocked donor is refused with `donor_blocked`. A blocked donor can
+  still withdraw a request.
+- The request reads the repo from GitHub once, with the requester's own
+  token, under [Calls to GitHub](#calls-to-github). It is refused with
+  `repo_not_eligible`, naming the reason, when GitHub shows no public repo
+  by that name, or shows it private, archived, with pull requests turned
+  off, or letting only collaborators open them. A repo GitHub says nothing
+  about on pull requests passes, since a request lists nothing, and
+  registering or listing the repo checks again.
+- Nothing is written to GitHub.
+
+**The status** is worked out when it is read, by the rule under Which
+projects have a page in [the project page](#the-project-page), and stored
+nowhere. A project matches when its code repo or its issue repo has the
+repo's GitHub ID, under [Repo IDs](#repo-ids). A project stored before IDs
+were matches by the name GitHub gives now, when GitHub made the repo before
+the project took the name.
+
+| Status | When | Words for the person |
+|---|---|---|
+| `listed` | A matching project has a page and is approved | "Listed. Find its issues on its project page." |
+| `paused` | A matching project has a page and is paused | "Listed and paused. It takes no claims right now." |
+| `not_listed` | No matching project has a page | "Not listed on Good First Token yet. Its maintainers can register it at /maintainers." |
+
+`not_listed` covers a repo that isn't a project, pending and rejected
+projects, the do-not-list, and projects the sync delisted alike, with the
+same words, so none of them shows.
+
+**What it records.**
+
+- A repo that is `listed` or `paused` records nothing. The answer has the
+  status and the project page.
+- A `not_listed` repo records a request, whatever the reason. The request
+  keeps the repo by GitHub's ID, with the name GitHub gave when the person
+  asked, the person's GitHub ID, and when they asked. A renamed repo is the
+  same request.
+- A person has at most one live request for a repo. Asking again while it's
+  live records nothing, counts toward no limit, and answers with the
+  status.
+- `withdraw: true` marks the person's live request withdrawn, and keeps
+  it, so it still counts toward the day's requests. A repo GitHub no longer
+  shows is found by the name GitHub gave when the person asked. The person
+  can ask again later, which records a new request.
+- One person sends at most 10 new requests a UTC day, withdrawn ones
+  included, and has at most 50 live. A request past either is refused with
+  `rate_limited`, whose message names the limit and when the next request
+  can go in: midnight UTC for the day's, and once one is withdrawn for the
+  live ones. The limits and the live request are checked in the one
+  statement that records the request, so two calls at once can't pass
+  them.
+- Nothing lists a request: no project, no admin queue item, no seed, and no
+  public page, feed, or JSON.
+
+**The answer** has `repo` as GitHub names it now, `status`, `requested`,
+whether the person has a live request for the repo after the call,
+`projectUrl` when the repo has a page, and `message`, the words in the
+table. When GitHub doesn't answer, the tool says so as the other donor
+tools do.
 
 ## Your queue on /me
 
@@ -3823,9 +3903,10 @@ what the day used of its budget.
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves all twenty-three, with the
-inputs, outputs, and descriptions defined here: the donor's eleven, under
-[The donor's tools](#the-donors-tools), the maintainer's five, under
+a description for agents. The MCP server serves all twenty-four, with the
+inputs, outputs, and descriptions defined here: the donor's twelve, under
+[The donor's tools](#the-donors-tools) and
+[Requesting a repo](#requesting-a-repo), the maintainer's five, under
 [Registering a project](#registering-a-project),
 [Managing a project](#managing-a-project), and
 [Asking to be removed](#asking-to-be-removed), and the admins' seven, under
@@ -3833,7 +3914,7 @@ inputs, outputs, and descriptions defined here: the donor's eleven, under
 
 | Who | Tools |
 |---|---|
-| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `check_pr`, `set_interests` |
+| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `check_pr`, `set_interests`, `request_repo` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project`, `request_removal` |
 | Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project`, `admin_seed_repo` |
 
@@ -3925,7 +4006,8 @@ tools return the room's, and `not_found`, `donor_blocked`, `budget_spent`,
 `not_vouched`, `pr_closed`, `description_required`, `skill_outdated`,
 `no_changes`, `branch_moved`, `github_refused`, `branch_not_found`,
 `branch_elsewhere`, `not_from_start`, `trailer_missing`, `not_cleared`, and
-`pr_mismatch`.
+`pr_mismatch`. `request_repo` returns `donor_blocked`, `repo_not_eligible`,
+`rate_limited`, and `invalid_input`.
 
 Every tool lists the refusals an agent can get from it, in its spec in
 `packages/core`, and answers an agent with no other. The skills that use a
@@ -3955,6 +4037,7 @@ tool say what to do with each one on its list, under
 | `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `skill_outdated`, `no_changes`, `github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`, `trailer_missing` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `branch_moved` |
 | `record_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_cleared`, `pr_mismatch`, `pr_already_opened` |
+| `request_repo` | `donor_blocked`, `repo_not_eligible`, `rate_limited`, `invalid_input` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
   tools only to an agent whose person is an admin, read on every request,
@@ -4008,14 +4091,15 @@ tool say what to do with each one on its list, under
 | `not_cleared` | Recording a PR for work `open_pr` hasn't cleared to open |
 | `pr_mismatch` | The PR to record isn't the cleared one: another repo, base, branch, head, or author, closed without merging, a body without the closing line or the disclosure text, words with a key or token, or a link that isn't a PR |
 | `not_maintainer` | The caller isn't an admin or maintainer of the repo, as GitHub says, or GitHub doesn't show them the repo or blocked access to it |
-| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy or the crawler's seed list, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting |
+| `repo_not_eligible` | The repo is private or archived, has PRs turned off, or limits PRs to collaborators, or, for a listing from a policy or the crawler's seed list, is on the do-not-list, or, for a listing or a registration's approval, has a request to be removed waiting. For a repo request, GitHub shows no public repo by the name either |
 | `already_registered` | Registering a repo that is already a registered project, or listing one from its policy |
 | `listed_from_policy` | Changing the settings of a listing made from a policy with `update_project`, which takes `register_project` first |
 | `label_not_created` | GitHub refused to create the `goodfirsttoken` label in the issue repo with the maintainer's token, so nothing saved |
 | `invalid_settings` | Settings failed their checks, or came with the approval of a registration, which keeps its maintainer's |
 | `not_admin` | The caller isn't a Good First Token admin |
 | `not_found` | The claim, issue, project, session, queue item, or person to block doesn't exist, the queue item no longer waits, or no pick is left in the session's queue |
-| `invalid_input` | A malformed claim, event, or time reached the claim state machine, a malformed argument reached an issue room, a rejection came with no reason, or `admin_decide` got the ID of a request to be removed |
+| `invalid_input` | A malformed claim, event, or time reached the claim state machine, a malformed argument reached an issue room, a rejection came with no reason, `admin_decide` got the ID of a request to be removed, or a repo request named no repo |
+| `rate_limited` | A person sent 10 new repo requests in a UTC day, withdrawn ones included, or has 50 live. The message names the limit and when the next request can go in |
 
 ## Views in MCP Apps hosts
 
@@ -5115,6 +5199,9 @@ Each limit the schemas enforce, other than those under project settings:
 | Pause, reject, block, and do-not-list reasons | 500 characters | Us |
 | A reason to be removed | 500 characters once folded, and 2,000 before | Us |
 | Interests | 20 per list, 50 characters each | Us |
+| New repo requests from one person | 10 a UTC day, withdrawn ones included | Us |
+| Live repo requests one person has | 50 | Us |
+| A repo request's `repo`, as typed | 300 characters | Us |
 | A reviewer's text in a follow-up | 1,000 graphemes, folded to one line | Us |
 | A comment's file path in a follow-up | 4,096 graphemes, folded to one line | Us |
 | Follow-ups `start_session` and `my_work` list at once | 20, with a count of the rest | Us |
@@ -5626,6 +5713,9 @@ A deployment can serve them from a static host, on a hostname of its own.
   to GitHub: the donor's own tools push the branch and open the PR. A test
   runs every donor tool path against the GitHub fake and fails on any call
   but a read.
+- `request_repo` reads the repo once with the donor's own token, by its
+  name, which GitHub sends on to a renamed repo. It writes nothing, and a
+  test fails on any call it makes but a read with the donor's token.
 - `submit_work` reads the code repo as claiming does, the issue, the
   branch's repo when it is a fork, the branch, comparisons of its head with
   the start commit and with the default branch, the issue's linked PRs,

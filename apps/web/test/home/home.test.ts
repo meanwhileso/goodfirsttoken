@@ -10,7 +10,7 @@ import { loadHome } from '../../src/home/load';
 import { homeFeed } from '../../src/rooms/feed';
 import { storedEvents } from '../feed/helpers';
 import { admin, DAY, emptyDatabase, HOUR, kenji, priya, signIn } from '../db/helpers';
-import { LOCAL_FAKE, runAsDevelopment, setEnv } from '../auth/helpers';
+import { LOCAL_FAKE, runAsDevelopment, setEnv, startGitHub } from '../auth/helpers';
 import { workerFetch } from '../worker';
 
 // What the homepage loads, and the dev-only route that gives a local site
@@ -188,10 +188,16 @@ describe('the dev-only seed', () => {
 
   test('in development, gives the site sample projects and work, and seeding again makes no second copy', async () => {
     restore = runAsDevelopment();
+    startGitHub();
 
     const first = await seed();
     expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({ projects: 6, candidates: 1, claims: 10, lines: 10, merged: 5, history: 13 });
+    expect(await first.json()).toEqual({ projects: 6, candidates: 1, requests: 2, claims: 10, lines: 10, merged: 5, history: 13 });
+    // One request for a listed project, and one for a repo that isn't listed.
+    const requested = await env.DB.prepare('SELECT repo FROM repo_requests WHERE withdrawn_at IS NULL ORDER BY repo').all<{ repo: string }>();
+    expect(requested.results.map((row) => row.repo)).toEqual(['meanwhileso/goodfirsttoken', 'sample-owner/sample-app']);
+    expect(await getProject(env.DB, 'meanwhileso/goodfirsttoken')).toBeNull();
+    expect((await getProject(env.DB, 'sample-owner/sample-app'))?.status).toBe('approved');
 
     const help = await listProjectsAskingForHelp(env.DB, 5, Date.now());
     expect(help.projects.map(({ project, waiting }) => [project.repo, waiting])).toEqual([
@@ -217,7 +223,7 @@ describe('the dev-only seed', () => {
     );
 
     const again = await seed();
-    expect(await again.json()).toMatchObject({ projects: 0, candidates: 0, claims: 0, merged: 0, history: 0 });
+    expect(await again.json()).toMatchObject({ projects: 0, candidates: 0, requests: 0, claims: 0, merged: 0, history: 0 });
   });
 
   test("names only the GitHub fake's own sample people, and its made-up repos and their open issues", () => {
