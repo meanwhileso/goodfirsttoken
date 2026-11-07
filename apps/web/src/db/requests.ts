@@ -120,12 +120,3 @@ export async function withdrawRequest(db: D1Database, id: string, now: number): 
     .run();
   return result.meta.changes === 1;
 }
-
-/** Every request the person made, live or withdrawn, newest first. */
-export async function listPersonRequests(db: D1Database, person: number): Promise<RepoRequest[]> {
-  const { results } = await db
-    .prepare('SELECT * FROM repo_requests WHERE github_id = ? ORDER BY requested_at DESC, id DESC')
-    .bind(mustParse(githubId, person, 'githubId'))
-    .all<RequestRow>();
-  return results.map(toRequest);
-}

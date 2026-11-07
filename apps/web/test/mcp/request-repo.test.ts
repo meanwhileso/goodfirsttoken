@@ -2,7 +2,7 @@ import { REQUEST_STATUS_WORDS } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { addToDoNotList, blockDonor, createProject, savePerson, setProjectStatus } from '../../src/db';
+import { addToDoNotList, blockDonor, createProject, savePerson, setDelisted, setProjectStatus } from '../../src/db';
 import { requestRepo } from '../../src/requests/request';
 import { ORIGIN, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
@@ -77,7 +77,7 @@ async function rows(): Promise<Row[]> {
   return results;
 }
 
-async function project(repo: string, status: 'approved' | 'pending' | 'rejected' | 'paused', ids: { repo: number; issueRepo?: number }, issueRepo?: string) {
+async function project(repo: string, status: 'approved' | 'pending' | 'rejected' | 'paused', ids: { repo: number; issueRepo?: number } | null, issueRepo?: string) {
   await createProject(
     env.DB,
     {
@@ -87,7 +87,7 @@ async function project(repo: string, status: 'approved' | 'pending' | 'rejected'
       policy: null,
       settings: { tags: ['help wanted'], ...(issueRepo === undefined ? {} : { issueRepo }) },
       addedBy: MAINTAINER.githubId,
-      repoIds: ids,
+      ...(ids === null ? {} : { repoIds: ids }),
     },
     Date.now(),
   );
@@ -97,8 +97,8 @@ async function project(repo: string, status: 'approved' | 'pending' | 'rejected'
 }
 
 /** The shared request, as priya, with her token on the GitHub fake, at `now`. */
-function asPriya(repo: string, now: number, withdraw?: boolean) {
-  const token = github.tokenFor(PRIYA.login);
+function asPriya(repo: string, now: number, withdraw?: boolean, scopes?: string[]) {
+  const token = github.tokenFor(PRIYA.login, scopes);
   const caller = { ...PRIYA, gitHubToken: () => Promise.resolve(token) };
   return requestRepo(env.DB, caller, { repo, ...(withdraw === undefined ? {} : { withdraw }) }, ORIGIN, now);
 }
@@ -187,6 +187,53 @@ describe('request_repo', () => {
     expect((await rows()).map((row) => row.repo)).toEqual([NOTES, PARSER, harbor]);
   });
 
+  test('an approved project with no page answers not_listed with the same words: its repo or issue repo on the do-not-list, or delisted by the sync', async () => {
+    const harbor = 'sample-owner/sample-harbor';
+    await project(APP, 'approved', { repo: idOf(APP) });
+    await addToDoNotList(env.DB, { repo: APP, reason: null, addedBy: ADMIN.githubId }, Date.now());
+    await project(NOTES, 'approved', { repo: idOf(NOTES), issueRepo: idOf(harbor) }, harbor);
+    await addToDoNotList(env.DB, { repo: harbor, reason: null, addedBy: ADMIN.githubId }, Date.now());
+    await project(PARSER, 'approved', { repo: idOf(PARSER) });
+    await setDelisted(env.DB, PARSER, `GitHub shows ${PARSER} archived.`, Date.now());
+    const priya = await connectAgent(github, PRIYA.login);
+
+    for (const repo of [APP, NOTES, PARSER]) {
+      const result = await call(priya, { repo });
+      expect(result.structuredContent, repo).toEqual({ repo, status: 'not_listed', requested: true, message: REQUEST_STATUS_WORDS.not_listed });
+    }
+  });
+
+  test('a project stored before repo IDs were matches by the name GitHub gives now', async () => {
+    await project(APP, 'approved', null);
+    const priya = await connectAgent(github, PRIYA.login);
+
+    const result = await call(priya, { repo: APP });
+
+    expect(result.structuredContent).toMatchObject({ repo: APP, status: 'listed', projectUrl: `${ORIGIN}/${APP}` });
+    expect(await rows()).toEqual([]);
+  });
+
+  test("a private repo GitHub shows the donor, as a collaborator, is refused with repo_not_eligible", async () => {
+    repoRecord(NOTES).private = true;
+    repoRecord(NOTES).collaborators.priya = 'write';
+
+    const refused = await asPriya(NOTES, NOON, undefined, ['repo']);
+
+    expect(refused).toEqual({ code: 'repo_not_eligible', message: "sample-owner/sample-notes isn't public, so agents can't work on it." });
+    expect(await rows()).toEqual([]);
+  });
+
+  test('a blocked donor can still withdraw a request', async () => {
+    const priya = await connectAgent(github, PRIYA.login);
+    await call(priya, { repo: NOTES });
+    await blockDonor(env.DB, { githubId: PRIYA.githubId, reason: null, blockedBy: ADMIN.githubId }, Date.now());
+
+    const withdrawn = await call(priya, { repo: NOTES, withdraw: true });
+
+    expect(withdrawn.structuredContent).toMatchObject({ repo: NOTES, requested: false });
+    expect((await rows())[0]?.withdrawn_at).not.toBeNull();
+  });
+
   test('a request lists nothing, and adds nothing to the admin queue or the seed list', async () => {
     const priya = await connectAgent(github, PRIYA.login);
 
@@ -208,7 +255,7 @@ describe('request_repo', () => {
     await call(priya, { repo: NOTES, withdraw: true });
     await call(priya, { repo: 'sample-owner/no-such-repo' });
 
-    const calls = github.calls.slice(from).filter((c) => c.url.startsWith(github.apiUrl));
+    const calls = github.calls.slice(from);
     expect(calls.length).toBeGreaterThan(0);
     for (const c of calls) {
       expect(c.method, c.operation).toBe('GET');
@@ -289,10 +336,24 @@ describe('request_repo', () => {
     expect((await rows()).map((row) => row.repo)).toEqual([NOTES, PARSER]);
   });
 
+  test('takes a GitHub link with no scheme', async () => {
+    const priya = await connectAgent(github, PRIYA.login);
+
+    const result = await call(priya, { repo: `${new URL(github.webUrl).host}/${NOTES}` });
+
+    expect(result.structuredContent).toMatchObject({ repo: NOTES, requested: true });
+  });
+
   test('a repo it can read as no repo is refused with invalid_input', async () => {
     const priya = await connectAgent(github, PRIYA.login);
 
-    for (const repo of ['not a repo', 'https://elsewhere.example/sample-owner/sample-notes', `${github.webUrl}/sample-owner`]) {
+    for (const repo of [
+      'not a repo',
+      'https://elsewhere.example/sample-owner/sample-notes',
+      `${github.webUrl}/sample-owner`,
+      `${ORIGIN}/maintainers/add?repo=${NOTES}`,
+      `${ORIGIN}/admin/queue`,
+    ]) {
       const result = await call(priya, { repo });
       expect(refusalOf(result), repo).toBe('invalid_input');
       expect(textOf(result)).toContain('Name a repo as owner/repo, a GitHub repo link, or a Good First Token project link.');
@@ -381,6 +442,15 @@ describe('the limits on requests', () => {
     for (let i = 0; i < 5; i++) await asPriya(repos[0] ?? '', NOON + HOUR);
 
     expect(await asPriya(repos[9] ?? '', NOON + 2 * HOUR)).toMatchObject({ requested: true });
+  });
+
+  test('asking again for a live request at either limit answers that it is live, not rate_limited', async () => {
+    const repos = newRepos('full', 50);
+    for (const [i, repo] of repos.entries()) await asPriya(repo, NOON + Math.floor(i / 10) * DAY);
+    const lastDay = NOON + 4 * DAY;
+
+    expect(await asPriya(repos[49] ?? '', lastDay + HOUR)).toMatchObject({ repo: repos[49], requested: true });
+    expect(await asPriya(repos[0] ?? '', lastDay + 5 * DAY)).toMatchObject({ repo: repos[0], requested: true });
   });
 
   test('a 51st live request is refused with rate_limited, and goes in once one is withdrawn', async () => {

@@ -1,7 +1,6 @@
-import { newClaim, nextClaimState, type ClaimRecord } from '@goodfirsttoken/core';
+import { githubRepoId, newClaim, nextClaimState, type ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
-import { githubRepoId } from '@goodfirsttoken/core';
 import {
   addCandidate,
   addPr,

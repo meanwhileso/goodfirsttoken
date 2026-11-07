@@ -2316,15 +2316,16 @@ the first question included.
 
 ## The donor's tools
 
-A donor's agent spends their tokens through eleven tools: `start_session`,
+A donor's agent works through twelve tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
-`submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, and
-`check_pr`. A twelfth, `request_repo`, asks for a repo that isn't listed,
-under [Requesting a repo](#requesting-a-repo). Each acts as the caller alone, and reads and writes GitHub with
-the caller's own token, for their own claim only. The service token reads
-for them only in `check_pr`, which reads their own claim's PR, under
-Checked on request in [PRs](#prs). No maintainer's token or other donor's
-ever does their work.
+`submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`,
+`check_pr`, and `request_repo`, which asks for a repo that isn't listed,
+under [Requesting a repo](#requesting-a-repo). Each acts as the caller
+alone, and reads and writes GitHub with the caller's own token, for their
+own claim only. `request_repo` only reads, for the caller's own request.
+The service token reads for them only in `check_pr`, which reads their own
+claim's PR, under Checked on request in [PRs](#prs). No maintainer's
+token or other donor's ever does their work.
 
 **Sessions**
 
@@ -2920,19 +2921,22 @@ GitHub. [/me](#your-queue-on-me) shows the same queue.
 A donor can ask for a repo they want to work on, with `request_repo` from
 their agent. A request lists nothing. It records who asked for which repo,
 and reports only what the site already shows: whether the repo has a
-project page. The site's own request form calls the same function,
-`requestRepo` in `src/requests/request.ts`. The design is in
+project page. The request is one function, `requestRepo` in
+`src/requests/request.ts`, which takes the caller as the site's pages do,
+so the site's request pages can call it too. The design is in
 [the add a repo spec](specs/add-a-repo.md), under Requesting a repo.
 
 **The input.** `repo` is `owner/repo`, a GitHub repo link, or a Good First
 Token project link. A link names the repo by its first two path parts, so
-an issue's link works too, and a GitHub link may end in `.git`. Anything
-else is refused with `invalid_input`. `withdraw: true` takes the person's
-request back.
+an issue's link works too. A GitHub link may end in `.git`, and a link may
+leave out `https://`. A link to one of the site's own pages, like
+`/maintainers/add`, names no repo. Anything else is refused with
+`invalid_input`. `withdraw: true` takes the person's request back.
 
 **The checks**, in order:
 
-- A blocked donor is refused with `donor_blocked`.
+- A blocked donor is refused with `donor_blocked`. A blocked donor can
+  still withdraw a request.
 - The request reads the repo from GitHub once, with the requester's own
   token, under [Calls to GitHub](#calls-to-github). It is refused with
   `repo_not_eligible`, naming the reason, when GitHub shows no public repo

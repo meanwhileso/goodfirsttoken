@@ -1772,7 +1772,8 @@ on, with no verdict on it, and a find it couldn't write. The reason an admin giv
 rejecting a registration reaches the maintainer's agent, and so does the
 reason a removed project is rejected with. The note an admin keeps with a
 do-not-list entry reaches no one else. A maintainer's reason for asking to
-be removed reaches the admins alone, in `admin_queue` and on `/admin`. Who asked for a repo in `repo_requests` reaches no page, feed, or JSON,
+be removed reaches the admins alone, in `admin_queue` and on `/admin`.
+Who asked for a repo in `repo_requests` reaches no page, feed, or JSON,
 and a request answers only what the site already shows, whether the repo
 has a project page.
 

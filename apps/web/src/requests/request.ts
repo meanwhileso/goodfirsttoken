@@ -21,6 +21,7 @@ import {
   withdrawRequest,
 } from '../db';
 import { gitHubUrls } from '../github';
+import { ownedBySite } from '../issue/path';
 import { hasPage } from '../project/shown';
 import { readRepo, type ListedRepo } from '../projects/repo';
 import { compareRepo, identityOf, type RepoIdentity } from '../projects/repo-id';
@@ -50,20 +51,25 @@ export interface RequestInput {
   withdraw?: boolean | undefined;
 }
 
+/** The site's own pages, whose paths name no project, beside the owners ownedBySite gives. */
+const SITE_PAGES = new Set(['design', 'healthz', 'leaderboard', 'live', 'maintainers', 'me', 'projects', 'request', 'sign-in']);
+
 /**
  * The repo a person named, as `owner/repo`, from `owner/repo`, a GitHub repo
  * link, or a Good First Token project link. `origins` are the sites whose
  * links name a repo by their first two path parts: GitHub's and the site's
  * own. A link may go on past the repo, like an issue's, and a GitHub link
- * may end in `.git`. Null for anything else.
+ * may end in `.git`, and a link may leave out its scheme. A link to one of
+ * the site's own pages names no repo. Null for anything else.
  */
-export function repoFromRequest(text: string, origins: readonly string[]): string | null {
+export function repoFromRequest(text: string, origins: readonly string[], site: string): string | null {
   const typed = text.trim();
   const named = repoName.safeParse(typed);
   if (named.success) return named.data;
   let url: URL;
   try {
-    url = new URL(typed);
+    // A link typed with no scheme, like github.com/owner/repo, is an https one.
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(typed) ? typed : `https://${typed}`);
   } catch {
     return null;
   }
@@ -80,6 +86,8 @@ export function repoFromRequest(text: string, origins: readonly string[]): strin
   if (!hosts.includes(bare(url.host))) return null;
   const [owner, repo] = url.pathname.split('/').filter((part) => part !== '');
   if (owner === undefined || repo === undefined) return null;
+  // On the site, a page of its own, like /maintainers/add, names no project.
+  if (bare(url.host) === bare(new URL(site).host) && (ownedBySite(owner) || SITE_PAGES.has(owner.toLowerCase()))) return null;
   const parsed = repoName.safeParse(`${owner}/${repo.replace(/\.git$/, '')}`);
   return parsed.success ? parsed.data : null;
 }
@@ -160,7 +168,8 @@ function hhmm(time: number): string {
  * Records, or with `withdraw` takes back, the caller's request for a repo.
  * `origin` is the site's, whose project links name a repo. Returns the
  * answer, or a refusal: `invalid_input` for a repo it can't read as one,
- * `donor_blocked`, `repo_not_eligible`, or `rate_limited`. A GitHub error
+ * `donor_blocked` for a new request from a blocked donor,
+ * `repo_not_eligible`, or `rate_limited`. A GitHub error
  * goes on up, as for the other donor tools.
  */
 export async function requestRepo(
@@ -170,11 +179,12 @@ export async function requestRepo(
   origin: string,
   now: number,
 ): Promise<RequestAnswer | Refusal> {
-  const asked = repoFromRequest(input.repo, [gitHubUrls().web, 'https://github.com', origin]);
+  const asked = repoFromRequest(input.repo, [gitHubUrls().web, 'https://github.com', origin], origin);
   if (asked === null) {
     return refusal('invalid_input', `Name a repo as owner/repo, a GitHub repo link, or a ${productName} project link.`);
   }
-  if ((await getBlock(db, caller.githubId)) !== null) {
+  // A blocked donor can still take a request back, as anyone can at any time.
+  if (input.withdraw !== true && (await getBlock(db, caller.githubId)) !== null) {
     const login = (await getPerson(db, caller.githubId))?.login ?? caller.login;
     return refusal('donor_blocked', `A ${productName} admin blocked @${login}, so ${productName} takes no requests from them.`);
   }
