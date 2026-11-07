@@ -40,7 +40,6 @@ jobs:
       OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
       OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
       OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID }}
-      POLICY_READER: ${{ secrets.POLICY_READER }}
       PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN }}
       REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS }}
       SIGN_IN_LIMITER_NAMESPACE_ID: ${{ secrets.SIGN_IN_LIMITER_NAMESPACE_ID }}
@@ -75,7 +74,6 @@ jobs:
       OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
       OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
       OAUTH_KV_ID: ${{ secrets.OAUTH_KV_ID }}
-      POLICY_READER: ${{ secrets.POLICY_READER }}
       PRIMARY_DOMAIN: ${{ secrets.PRIMARY_DOMAIN }}
       REDIRECT_DOMAINS: ${{ secrets.REDIRECT_DOMAINS }}
       SIGN_IN_LIMITER_NAMESPACE_ID: ${{ secrets.SIGN_IN_LIMITER_NAMESPACE_ID }}

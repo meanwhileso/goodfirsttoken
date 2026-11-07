@@ -7,7 +7,7 @@ import { getProject, keepCrawlerPause, setProjectStatusFrom } from '../db';
 // why for the admin queue. The weekly read makes it for a move into a ban,
 // and for pull requests limited to collaborators.
 
-/** The reason for a pause on a ban the rules read. The project's maintainers read it with project_status. It holds no text of the repo's. */
+/** The reason for a pause on a ban the crawler's rules read, before the model read policies, which those pauses still have. The project's maintainers read it with project_status. It holds no text of the repo's. */
 export const BAN_REASON =
   "Its docs now read as a ban on AI help, by the policy crawler's rules. An admin checks them before agents can claim its issues again.";
 

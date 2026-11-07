@@ -147,8 +147,7 @@ const queueItemSchema = z.object({
   /**
    * For a crawler find, the first sentences in the repo's docs that name AI,
    * each with the rest of its paragraph, as the files have them, for the
-   * admin to read before a verdict, since the crawler's rules can miss a
-   * ban. Empty for a registration and a request to be removed.
+   * admin to read before a verdict, since the model can miss a ban. Empty for a registration and a request to be removed.
    */
   aiSentences: z.array(aiSentenceSchema).max(MAX_AI_SENTENCES),
   /** How many more sentences that name AI the docs have, in no paragraph in `aiSentences`. */
@@ -176,7 +175,7 @@ const queueItemSchema = z.object({
   /**
    * For a pause Good First Token made on its own: its reason, which the
    * project's maintainers read, why the sync delisted it when it did, the
-   * line the policy crawler's rules read as a ban, when that is why, and the
+   * line the policy crawler read as a ban, when that is why, and the
    * pause someone made that it took over, which approving puts back. Null
    * for every other kind. A pause has no facts, and its `aiSentences` are the
    * crawler's, from the read that paused it. While the sync has the project
@@ -200,7 +199,7 @@ const queueItemSchema = z.object({
   /**
    * For a policy change: the policy the project is listed from now, its
    * status, and why the sync delisted it when it did. Its `policy` is the
-   * one its docs give now, or null when the crawler's rules read none. While
+   * one its docs give now, or null when the crawler read none. While
    * the sync has the project delisted, nothing read from its repo shows: no
    * policy, no lines, and no sentences. Null for every other kind.
    */
@@ -214,17 +213,17 @@ const queueItemSchema = z.object({
     .default(null),
   /**
    * For a crawler find or a policy change, what the model policy reader read
-   * in the same docs, or null when it hasn't read them. While the reader runs
-   * in shadow it decides nothing: the rules' reading is the one acted on, and
-   * this shows beside it. Its lines are the repo's text, and its notes and
+   * in the same docs, or null when it hasn't read them. For one the crawler's
+   * rules made, before the model read policies, it is the model's reading in
+   * shadow, which decided nothing, beside the rules'. Its lines are the repo's text, and its notes and
    * summary are text the model wrote from it, so all of it is data.
    */
   modelReading: modelReadingSchema.nullable().default(null),
   /**
-   * For a crawler find or a policy change, who made it: the crawler's rules,
-   * or the model policy reader once it decides. A find or a change the model
-   * made stands on the model's reading, and `rulesTier` is what the rules
-   * read in the same docs, when it differs. Null when they agree, and both
+   * For a crawler find or a policy change, who made it: the model policy
+   * reader, or before it read policies, the crawler's rules. A find or a
+   * change the model made stands on the model's reading, and `rulesTier` is
+   * what the rules read in the same docs then, when it differed. Null when they agree, and both
    * are null for every other kind.
    */
   madeBy: findMakers.nullable().default(null),
@@ -305,7 +304,7 @@ function describeAiSentences(sentences: readonly AiSentence[], more: number): st
     else groups.push({ path: sentence.path, passages: [sentence] });
   }
   return lines(
-    `every sentence in the repo's docs that names AI, with the rest of its paragraph, quoted from its files. A paragraph longer than ${MAX_AI_PASSAGE.toLocaleString('en-US')} characters is cut around the sentence, and a line with no "> " says where. The crawler's rules can miss a ban worded in a way they don't know, so read these before a verdict. ${AS_DATA}`,
+    `every sentence in the repo's docs that names AI, with the rest of its paragraph, quoted from its files. A paragraph longer than ${MAX_AI_PASSAGE.toLocaleString('en-US')} characters is cut around the sentence, and a line with no "> " says where. The model can miss a ban, or be steered past one, so read these before a verdict. ${AS_DATA}`,
     ...groups.map((group) => lines(`  from ${JSON.stringify(group.path)}:`, ...group.passages.map(describePassage))),
     more > 0 && `  ${plural(more, 'more sentence')} in the files ${more === 1 ? 'names' : 'name'} AI. Read them there.`,
   );
@@ -386,10 +385,10 @@ function describeRemoval(repo: string, removal: z.infer<typeof removalSchema>): 
   );
 }
 
-/** The line the crawler's rules read as a ban, marked as the repo's words, with its file's link. */
+/** The line the crawler read as a ban, marked as the repo's words, with its file's link. */
 function describeBan(ban: BanLine): string {
   return lines(
-    `the line the policy crawler's rules read as a ban, quoted from ${JSON.stringify(ban.path)}: ${ban.url}. ${AS_DATA}`,
+    `the line the policy crawler read as a ban, quoted from ${JSON.stringify(ban.path)}: ${ban.url}. ${AS_DATA}`,
     ban.line === null ? '    The line is blank.' : indent(repoWords(ban.line), 4),
   );
 }
@@ -433,7 +432,8 @@ function describeSteering(reading: ModelReading): string | false {
 }
 
 /**
- * What the model policy reader read in the same docs, in shadow: the tiers,
+ * What the model policy reader read in the docs, for an item it made, or in
+ * shadow, for one the crawler's rules made before it read policies: the tiers,
  * the statements with their lines and the model's note on each, and the
  * model's summary, all marked as data.
  */
@@ -442,7 +442,7 @@ function describeModelReading(reading: ModelReading, item: Pick<QueueItem, 'kind
   const heading =
     item.madeBy === 'model'
       ? `the model policy reader's reading, which made ${made}, with ${reading.readerVersion}.${item.rulesTier === null ? '' : ` The crawler's rules read the same docs as ${TIER_WORDS[item.rulesTier]}.`}`
-      : `the model policy reader's reading of the same docs, with ${reading.readerVersion}. It runs in shadow and decides nothing: the rules' reading above is the one acted on.`;
+      : `the model policy reader's reading of the same docs, with ${reading.readerVersion}. It was read in shadow, before the model decided, and the rules' reading above is the one acted on.`;
   const tiers =
     reading.tier === reading.modelTier
       ? `the tier its statements give, and the model gave: ${TIER_WORDS[reading.tier]}`
@@ -470,8 +470,8 @@ function describeModelReading(reading: ModelReading, item: Pick<QueueItem, 'kind
 }
 
 /**
- * The model reader's suggested tags for a find, from its label check, in
- * shadow, beside the rules': each with its open issue count, the tags it
+ * The model reader's suggested tags for a find the crawler's rules made,
+ * from its label check, in shadow, beside the rules': each with its open issue count, the tags it
  * would set, and how many names it gave that were dropped. Label names are
  * the repo's text, quoted as the repo spells them.
  */

@@ -1,8 +1,10 @@
+import type { AnthropicFake } from '@goodfirsttoken/anthropic-fake';
 import { verifyCrawlPriority, type CrawlCandidate, type CrawlMessage } from '@goodfirsttoken/core';
 import type { GitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { crawlRepos, newCrawlRun, readCrawlBatch } from '../../src/crawl/queue';
+import { runReader } from '../../src/crawl/batches';
+import { crawlRepos, newCrawlProgress, newCrawlRun, readCrawlBatch } from '../../src/crawl/queue';
 import { fillCrawlQueue } from '../../src/crawl/producer';
 import {
   addCandidate,
@@ -10,22 +12,27 @@ import {
   addToDoNotList,
   getSeed,
   listCandidates,
+  listPending,
   saveSeedEvidence,
 } from '../../src/db';
 import worker from '../../src/server';
 import { ServiceGitHub, type Allowance } from '../../src/sync/github';
 import { ALLOWANCES } from '../../src/sync/allowances';
+import { startAnthropic } from '../anthropic';
 import { startGitHub } from '../auth/helpers';
 import { admin, db, emptyDatabase, maintainer, registeredProject, signIn } from '../db/helpers';
 import { knowServiceToken, SERVICE_LOGIN } from '../sync/helpers';
 import { priorityEvidence } from '../priority-evidence';
 
 // The policy crawler end to end: its cron job fills the crawl queue with the
-// seeds admins added, and the queue's consumer reads each repo from the
-// GitHub fake and puts the ones whose docs welcome AI help in the admin
-// queue. The repos are the fake's
-// made-up sample-policies repos, and its sample-owner ones. Every line of
-// policy text is made up, and says nothing about a real project.
+// seeds admins added, the queue's consumer reads each repo from the GitHub
+// fake and stages its docs for the model policy reader, and the reader's
+// hourly runs, against the Anthropic fake, put the ones whose docs the model
+// reads as a welcome in the admin queue. The fake answers from the readings
+// recorded for the GitHub fake's sample repos, and a test scripts any other.
+// The repos are the made-up sample-policies repos, and the sample-owner
+// ones. Every line of policy text is made up, and says nothing about a real
+// project.
 
 const INVITES = 'sample-policies/invites-agents';
 const CONDITIONS = 'sample-policies/with-conditions';
@@ -41,6 +48,7 @@ const YEAR = 365 * 24 * HOUR;
 const start = Date.UTC(2100, 3, 1, 12, 0, 0);
 
 let github: GitHubFake;
+let anthropic: AnthropicFake;
 let sent: CrawlMessage[];
 let resent: { body: CrawlMessage; delaySeconds: number | undefined }[];
 let logged: string[];
@@ -64,6 +72,7 @@ beforeEach(async () => {
   vi.spyOn(console, 'error').mockImplementation(keep);
   github = startGitHub();
   knowServiceToken(github);
+  anthropic = startAnthropic(github);
   sent = [];
   resent = [];
 });
@@ -73,6 +82,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** Sends a request to the fake it is for, as a test's own fetch hands calls on. */
+function network(request: Request): Promise<Response> {
+  return request.url.startsWith(anthropic.url) ? anthropic.fetch(request) : github.fetch(request);
+}
 
 function later(ms: number): void {
   vi.setSystemTime(Date.now() + ms);
@@ -132,11 +146,64 @@ async function consume(
   return { acked, retried, run, ids: messages.map((m) => m.id) };
 }
 
-/** A whole crawl: the sample repos are seeds, the cron job fills the queue, and the consumer reads what it queued. */
+/** The reader's hourly runs, an hour apart, until the readings and label checks are back and nothing waits to be sent. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 6; i++) {
+    later(HOUR);
+    await runReader({ db, now: () => Date.now() });
+    if ((await listPending(db)).length === 0) return;
+  }
+  throw new Error('The reader left readings pending.');
+}
+
+/** Runs the consumer on a batch, then the reader until its readings are back, so the finds are written. */
+async function read(bodies: unknown[], options?: Parameters<typeof consume>[1]) {
+  const result = await consume(bodies, options);
+  await settle();
+  return result;
+}
+
+/** A whole crawl: the sample repos are seeds, the cron job fills the queue, the consumer reads what it queued, and the reader reads that. */
 async function crawl() {
   await seedSamples();
   await fill();
-  return consume(sent.splice(0));
+  return read(sent.splice(0));
+}
+
+/** The files staged for the model to read for a repo, by path, with their text, in the order they go to the model. */
+async function staged(repo: string): Promise<{ path: string; text: string }[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT f.path, f.text FROM model_staged_files f JOIN model_pending p ON p.id = f.reading_id
+       WHERE p.repo = ? AND p.replaced = 0 ORDER BY f.position`,
+    )
+    .bind(repo)
+    .all<{ path: string; text: string }>();
+  return results;
+}
+
+async function stagedPaths(repo: string): Promise<string[]> {
+  return (await staged(repo)).map((f) => f.path);
+}
+
+/** The model's next reading: a ban on the line given, which it reads as bans_or_restricts. */
+function readsBan(path: string, line: number, quote: string): void {
+  anthropic.answer(
+    { kind: 'reading' },
+    {
+      output: {
+        statements: [{ path, startLine: line, endLine: line, quote, about: 'bansAi', label: null, value: null, why: 'It says no.' }],
+        tier: 'bans_or_restricts',
+        steering: [],
+        summary: 'Refuses AI help.',
+      },
+    },
+  );
+}
+
+/** How many policy readings the model was asked for. */
+function readingsAsked(): number {
+  return anthropic.requests.filter((r) => r.kind === 'reading').length;
 }
 
 async function waiting(): Promise<Map<string, CrawlCandidate>> {
@@ -155,10 +222,10 @@ async function everyFind(): Promise<string[]> {
  */
 function recordRequests(): string[] {
   const seen: string[] = [];
-  const answer = github.fetch;
+  const answer = network;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    seen.push(`${request.url}\n${await request.clone().text()}`);
+    if (!request.url.startsWith(anthropic.url)) seen.push(`${request.url}\n${await request.clone().text()}`);
     return answer(request);
   });
   return seen;
@@ -176,24 +243,23 @@ describe('a crawl', () => {
     expect(acked).toEqual(ids);
     expect(found.get(INVITES)).toMatchObject({
       status: 'waiting',
-      foundAt: start,
+      madeBy: 'model',
       facts: { stars: 3100 },
       policy: {
         quote: 'Agents may open pull requests on their own, on issues labeled `agent ready`.',
         url: `https://github.com/${INVITES}/blob/main/AI_POLICY.md`,
         tier: 'invites_agents',
       },
+      // Its docs keep agents to issues labeled agent ready, so that is the only tag.
       settings: {
         prMode: 'automatic',
-        tags: ['agent ready', 'help wanted'],
+        tags: ['agent ready'],
         disclosure: { trailer: 'Assisted-by' },
       },
-      suggestedTags: [
-        { name: 'agent ready', openIssues: 2 },
-        { name: 'good first issue', openIssues: 1 },
-        { name: 'help wanted', openIssues: 0 },
-      ],
+      suggestedTags: [{ name: 'agent ready', openIssues: 2 }],
     });
+    // Written by an hourly run once the reading and its label check are back, after the crawl.
+    expect(found.get(INVITES)?.foundAt).toBeGreaterThan(start + HOUR);
     const facts = found.get(INVITES)?.facts;
     expect(start - (facts?.createdAt ?? 0)).toBeGreaterThan(2.9 * YEAR);
     expect(start - (facts?.pushedAt ?? 0)).toBe(2 * HOUR);
@@ -206,15 +272,16 @@ describe('a crawl', () => {
       },
       settings: {
         prMode: 'reviewed',
-        tags: ['help wanted', 'contributor friendly'],
+        // In the order the label check gave them.
+        tags: ['contributor friendly', 'help wanted'],
         excludedTags: ['good first issue'],
         whoCanClaim: 'vouched',
         personWrittenDescription: true,
         claUrl: 'https://cla.example.org/sample-policies',
       },
       suggestedTags: [
-        { name: 'help wanted', openIssues: 0 },
         { name: 'contributor friendly', openIssues: 0 },
+        { name: 'help wanted', openIssues: 0 },
       ],
       sources: [
         { about: 'excludedTags', path: 'CONTRIBUTING.md', line: 'Issues labeled `good first issue` are reserved for people new to the project.' },
@@ -256,21 +323,32 @@ describe('a crawl', () => {
     expect(await rows('project_status_changes')).toBe(0);
   });
 
-  test('a policy that bans AI never reaches the admin queue, though the crawler read it', async () => {
-    const { run } = await crawl();
+  test('a policy the model reads as a ban never reaches the admin queue, though the crawler read it for the model', async () => {
+    await seedSamples();
+    await fill();
+    await consume(sent.splice(0));
+    for (const repo of BANS) expect((await stagedPaths(repo)).length, repo).toBeGreaterThan(0);
+
+    await settle();
 
     const finds = await everyFind();
     for (const repo of BANS) expect(finds).not.toContain(repo);
-    expect(run?.tiers.bans_or_restricts).toBe(BANS.length);
+    // The welcomes the model read made finds, so the bans stayed out for their readings, not for want of a reading.
+    expect(finds).toContain(INVITES);
   });
 
   test('docs that say nothing about AI, or only mention it, never reach the admin queue', async () => {
-    const { run } = await crawl();
+    await seedSamples();
+    await fill();
+    await consume(sent.splice(0));
+    expect((await stagedPaths('sample-policies/silent')).length).toBeGreaterThan(0);
+    expect((await stagedPaths('sample-policies/mentions-ai')).length).toBeGreaterThan(0);
+
+    await settle();
 
     const finds = await everyFind();
     expect(finds).not.toContain('sample-policies/silent');
     expect(finds).not.toContain('sample-policies/mentions-ai');
-    expect(run?.tiers.no_policy).toBeGreaterThanOrEqual(2);
   });
 
   test('reads through GitHub with the service token only, and asks GitHub what is left first', async () => {
@@ -302,9 +380,10 @@ describe('what the crawler skips', () => {
     await addToDoNotList(db, { repo: INVITES, reason: null, addedBy: admin.githubId }, start);
     const requests = recordRequests();
 
-    const { run } = await consume(sent.splice(0));
+    const { run } = await read(sent.splice(0));
 
     expect(await everyFind()).not.toContain(INVITES);
+    expect(await everyFind()).toContain(CONDITIONS);
     expect(run?.skipped.do_not_list).toBe(1);
     expect(requests.filter((request) => request.includes('invites-agents'))).toEqual([]);
     expect(requests.some((request) => request.includes('with-conditions'))).toBe(true);
@@ -322,15 +401,18 @@ describe('what the crawler skips', () => {
   test.each([
     ['lets only collaborators open pull requests', (repo: GitHubFake['state']['repos'][string]) => (repo.pullRequestCreationPolicy = 'collaborators_only')],
     ['has pull requests turned off', (repo: GitHubFake['state']['repos'][string]) => (repo.hasPullRequests = false)],
-  ])('a repo that %s is never queued for an admin', async (_what, change) => {
+  ])('a repo that %s is never read by the model or queued for an admin', async (_what, change) => {
     const repo = github.state.repos[INVITES];
     if (!repo) throw new Error('missing sample repo');
     change(repo);
 
     const { run } = await consume([{ repos: [INVITES] }]);
+    expect(run?.reader.notListable).toBe(1);
+    expect(await stagedPaths(INVITES)).toEqual([]);
+    await settle();
 
     expect(await everyFind()).not.toContain(INVITES);
-    expect(run?.skipped.not_listable).toBe(1);
+    expect(readingsAsked()).toBe(0);
   });
 
   test('the sample repo that invites agents but limits pull requests to collaborators stays out of a whole crawl', async () => {
@@ -354,7 +436,7 @@ describe('what the crawler skips', () => {
     );
     const requests = recordRequests();
 
-    const { run } = await consume([{ repos: [INVITES, CONDITIONS, NO_AUTONOMY] }]);
+    const { run } = await read([{ repos: [INVITES, CONDITIONS, NO_AUTONOMY] }]);
 
     expect(run?.skipped).toMatchObject({ project: 1, proposed: 1 });
     expect((await listCandidates(db, 'waiting')).map((c) => c.repo).sort()).toEqual([NO_AUTONOMY, CONDITIONS]);
@@ -385,7 +467,7 @@ describe('the seed list', () => {
     expect(first).toEqual([{ repos: [SEED] }]);
     expect(nextHour).toEqual([]);
     expect(sent).toEqual([{ repos: [SEED] }]);
-    await consume(first);
+    await read(first);
     expect((await waiting()).get(SEED)).toMatchObject({
       facts: { stars: 40 },
       policy: {
@@ -442,7 +524,7 @@ describe('the consumer', () => {
     const stopped = await consume([{ repos: [INVITES] }, { repos: [CONDITIONS] }], { attempts: 90 });
     const back = resent.splice(0);
     later(HOUR + MINUTE);
-    const resumed = await consume(back.map((message) => message.body));
+    const resumed = await read(back.map((message) => message.body));
 
     expect(stopped.acked).toEqual(['m0', 'm1']);
     expect(stopped.retried).toEqual([]);
@@ -458,18 +540,20 @@ describe('the consumer', () => {
   test('when the run has made its calls partway through a message, sends back only the repos it has not finished, at once, and acknowledges the message', async () => {
     const bindings = { ...env, CRAWL_QUEUE: crawlQueue };
     const repos = [INVITES, CONDITIONS, 'sample-policies/silent'];
-    // Enough calls for the budget check, the listing, the files, and the first find, and no more.
+    // Enough calls for the budget check, the listing, the files, and staging the first repo for the model, and no more.
     const allowances: { crawlRead: Allowance } = ALLOWANCES;
     const kept = allowances.crawlRead;
     allowances.crawlRead = { ...kept, maxCalls: 5 };
     const { acked, retried, run } = await consume([{ repos }], { attempts: 1, bindings }).finally(() => {
       allowances.crawlRead = kept;
     });
+    await settle();
 
     expect(run?.stopped).toBe('calls');
     expect(acked).toEqual(['m0']);
     expect(retried).toEqual([]);
-    expect(resent).toEqual([{ body: { repos: [CONDITIONS] }, delaySeconds: 0 }]);
+    // The repos are staged in order, so the ones after the stop go back too.
+    expect(resent).toEqual([{ body: { repos: [CONDITIONS, 'sample-policies/silent'] }, delaySeconds: 0 }]);
     expect([...(await waiting()).keys()]).toEqual([INVITES]);
   });
 
@@ -483,28 +567,32 @@ describe('the consumer', () => {
     expect(retried).toEqual([{ id: 'm0', delaySeconds: 3600 }]);
   });
 
-  test('a batch that stops partway keeps what it put in the queue, and when it comes back reads only the rest', async () => {
+  test('a batch that stops partway keeps what it staged, says which repos it finished, and the rest read later make their finds too', async () => {
     const first = new ServiceGitHub(env.GH_SERVICE_TOKEN, { leave: 0, maxCalls: 5 });
-    const stopped = await crawlRepos({ db, github: first, now: () => Date.now() }, [INVITES, CONDITIONS], newCrawlRun()).catch(
+    const progress = newCrawlProgress();
+    const stopped = await crawlRepos({ db, github: first, now: () => Date.now() }, [INVITES, CONDITIONS], newCrawlRun(), progress).catch(
       (error: unknown) => error,
     );
-    const afterStop = [...(await waiting()).keys()];
+    const finished = [...progress.done];
+    const pending = (await listPending(db)).map((p) => p.repo);
     const requests = recordRequests();
 
     await crawlRepos(
       { db, github: new ServiceGitHub(env.GH_SERVICE_TOKEN, ALLOWANCES.crawlRead), now: () => Date.now() },
-      [INVITES, CONDITIONS],
+      [INVITES, CONDITIONS].filter((repo) => !finished.includes(repo)),
       newCrawlRun(),
     );
+    await settle();
 
     expect(stopped).toMatchObject({ reason: 'calls' });
-    expect(afterStop).toEqual([INVITES]);
+    expect(finished).toEqual([INVITES]);
+    expect(pending).toEqual([INVITES]);
     expect([...(await waiting()).keys()].sort()).toEqual([INVITES, CONDITIONS]);
     expect(requests.filter((request) => request.includes('invites-agents'))).toEqual([]);
   });
 
   test('a batch GitHub fails to read goes back to the queue, later on each try', async () => {
-    const answer = github.fetch;
+    const answer = network;
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       if (new URL(request.url).pathname.endsWith('/graphql')) return new Response('Bad gateway', { status: 502 });
@@ -531,7 +619,7 @@ describe('the consumer', () => {
     await fill();
     const duplicated = sent.filter((message) => message.repos.includes(INVITES));
     expect(duplicated).toHaveLength(2);
-    const { acked } = await consume(duplicated);
+    const { acked } = await read(duplicated);
     expect(acked).toHaveLength(2);
     expect((await listCandidates(db, 'waiting')).filter((candidate) => candidate.repo === INVITES)).toHaveLength(1);
   });
@@ -564,6 +652,7 @@ describe('the consumer', () => {
     } as unknown as MessageBatch;
 
     await worker.queue(batch, env);
+    await settle();
 
     expect(acked).toEqual(['m0']);
     expect((await waiting()).has(INVITES)).toBe(true);
@@ -594,12 +683,12 @@ interface Sent {
  * query the Worker sends and the fake's answer, which it may change in place.
  */
 function changeGraphQL(change: (sent: Sent, answer: Answer) => void | Promise<void>): void {
-  const answer = github.fetch;
+  const answer = network;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const text = await request.clone().text();
+    if (!new URL(request.url).pathname.endsWith('/graphql')) return answer(request);
     const response = await answer(request);
-    if (!new URL(request.url).pathname.endsWith('/graphql')) return response;
     const body = await response.json<Answer>();
     await change(JSON.parse(text) as Sent, body);
     return new Response(JSON.stringify(body), { status: response.status, headers: response.headers });
@@ -625,15 +714,18 @@ async function waitingTiers(): Promise<Record<string, string>> {
 
 describe('what the crawler reads, and when it gives no verdict', () => {
   test.each([
-    ['set off by "however"', '# AI policy\n\nYou may use AI tools to help you understand the codebase.\n\nAI-generated code, however, will not be merged.\n'],
-    ['with "cannot"', '# AI policy\n\nAI help is fine for questions.\n\nWe cannot accept AI-generated contributions.\n'],
-  ])('an AI policy with a ban %s never reaches the admin queue', async (_how, text) => {
+    ['set off by "however"', 'AI-generated code, however, will not be merged.', '# AI policy\n\nYou may use AI tools to help you understand the codebase.\n\nAI-generated code, however, will not be merged.\n'],
+    ['with "cannot"', 'We cannot accept AI-generated contributions.', '# AI policy\n\nAI help is fine for questions.\n\nWe cannot accept AI-generated contributions.\n'],
+  ])('an AI policy with a ban %s goes to the model whole, and its reading of the ban makes no find', async (_how, ban, text) => {
     github.commitFiles(SILENT, { 'AI_POLICY.md': text }, 'sample-maintainer');
+    readsBan('AI_POLICY.md', 5, ban);
 
-    const { run } = await consume([{ repos: [SILENT] }]);
+    await consume([{ repos: [SILENT] }]);
+    expect((await staged(SILENT)).find((f) => f.path === 'AI_POLICY.md')?.text).toBe(text);
+    await settle();
 
+    expect(readingsAsked()).toBe(1);
     expect(await waitingTiers()).toEqual({});
-    expect(run?.tiers).toEqual({ bans_or_restricts: 1 });
   });
 
   test('a policy file over the size limit gives the repo no verdict, and the log says why, whatever the other files say', async () => {
@@ -646,12 +738,13 @@ describe('what the crawler reads, and when it gives no verdict', () => {
       'sample-maintainer',
     );
 
-    const { run, acked } = await consume([{ repos: [SILENT] }]);
+    const { run, acked } = await read([{ repos: [SILENT] }]);
 
     expect(acked).toEqual(['m0']);
     expect(await waitingTiers()).toEqual({});
     expect(run?.skipped).toEqual({ unreadable_docs: 1 });
-    expect(run?.tiers).toEqual({});
+    expect(run?.reader.staged).toBe(0);
+    expect(readingsAsked()).toBe(0);
     expect(logged).toContain(`The crawler gave ${SILENT} no verdict: CONTRIBUTING.md is over the size limit.`);
   });
 
@@ -668,8 +761,10 @@ describe('what the crawler reads, and when it gives no verdict', () => {
 
     const { run } = await consume([{ repos: [SILENT, CONDITIONS] }]);
 
-    expect(await waitingTiers()).toEqual({});
-    expect(run?.tiers).toEqual({ bans_or_restricts: 1 });
+    const paths = await stagedPaths(SILENT);
+    for (let i = 0; i < 4; i++) expect(paths).toContain(`.github/ISSUE_TEMPLATE/t${String(i).padStart(2, '0')}.md`);
+    expect(await stagedPaths(CONDITIONS)).toEqual([]);
+    expect(run?.reader.staged).toBe(1);
     expect(run?.skipped).toEqual({ unreadable_docs: 1 });
     expect(logged).toContain(`The crawler gave ${CONDITIONS} no verdict: .github/ISSUE_TEMPLATE has more than 10 templates.`);
   });
@@ -685,10 +780,11 @@ describe('what the crawler reads, and when it gives no verdict', () => {
       'sample-maintainer',
     );
 
-    const { run } = await consume([{ repos: [SILENT] }]);
+    await consume([{ repos: [SILENT] }]);
 
-    expect(await waitingTiers()).toEqual({});
-    expect(run?.tiers).toEqual({ bans_or_restricts: 1 });
+    const paths = await stagedPaths(SILENT);
+    expect(paths).toContain('.github/PULL_REQUEST_TEMPLATE/feature.md');
+    expect(paths).toContain('.github/pull_request_template/fix.md');
   });
 
   test.each([
@@ -696,13 +792,16 @@ describe('what the crawler reads, and when it gives no verdict', () => {
     ['a pull request template in .github/PULL_REQUEST_TEMPLATE/', '.github/PULL_REQUEST_TEMPLATE/feature.md', '- [ ] I understand AI-generated code will be closed.'],
     ['a pull request template in PULL_REQUEST_TEMPLATE/ at the root', 'PULL_REQUEST_TEMPLATE/fix.md', 'AI-generated fixes are rejected.'],
     ['an agent skill', 'skills/review/SKILL.md', 'Contributions written by AI are declined.'],
-  ])('a ban in %s is read', async (_where, path, ban) => {
+  ])('a ban in %s is read for the model, and its reading of the ban makes no find', async (_where, path, ban) => {
     github.commitFiles(SILENT, { 'CONTRIBUTING.md': '# Contributing\n\nAgent pull requests are welcome.\n', [path]: ban }, 'sample-maintainer');
+    readsBan(path, 1, ban.replace(/^- \[ \] /, ''));
 
-    const { run } = await consume([{ repos: [SILENT] }]);
+    await consume([{ repos: [SILENT] }]);
+    expect((await staged(SILENT)).find((f) => f.path === path)?.text).toBe(ban);
+    await settle();
 
+    expect(readingsAsked()).toBe(1);
     expect(await waitingTiers()).toEqual({});
-    expect(run?.tiers).toEqual({ bans_or_restricts: 1 });
   });
 
   test.each([
@@ -755,7 +854,10 @@ describe('what the crawler reads, and when it gives no verdict', () => {
     });
 
     await consume([{ repos: [INVITES] }]);
+    const policy = (await staged(INVITES)).find((f) => f.path === 'AI_POLICY.md')?.text ?? '';
+    await settle();
 
+    expect(policy).not.toContain('will be closed');
     expect(typeof commit).toBe('string');
     expect(expressions.length).toBeGreaterThan(0);
     for (const expression of expressions) expect(expression).toMatch(new RegExp(`^${String(commit)}:`));
@@ -788,7 +890,7 @@ describe('when GitHub fails on a repo', () => {
       answer.errors = [{ type: 'FORBIDDEN', path: [`r${n}`], message: 'Repository access blocked' }];
     });
 
-    const first = await consume([{ repos: [INVITES, SILENT] }]);
+    const first = await read([{ repos: [INVITES, SILENT] }]);
     const back = resent.splice(0);
     const alone = [];
     for (const attempts of [1, 2, 3]) alone.push(await consume([back[0]?.body], { attempts }));
@@ -810,7 +912,7 @@ describe('when GitHub fails on a repo', () => {
       answer.errors = [{ ...(type === undefined ? {} : { type }), path: ['r0'], message: 'Something went wrong' }];
     });
 
-    const { acked, run } = await consume([{ repos: [INVITES, CONDITIONS] }]);
+    const { acked, run } = await read([{ repos: [INVITES, CONDITIONS] }]);
 
     expect(acked).toEqual(['m0']);
     expect(run?.skipped).toEqual({});
@@ -819,7 +921,7 @@ describe('when GitHub fails on a repo', () => {
   });
 
   test('a repo GitHub shows as not found is skipped as not public, and the rest is read', async () => {
-    const { acked, run } = await consume([{ repos: ['sample-policies/no-such-repo', INVITES] }]);
+    const { acked, run } = await read([{ repos: ['sample-policies/no-such-repo', INVITES] }]);
 
     expect(acked).toEqual(['m0']);
     expect(run?.skipped).toEqual({ not_public: 1 });
@@ -844,13 +946,13 @@ describe('when GitHub fails on a repo', () => {
       if (fileRead(sent)) answer.errors = [{ type: 'INTERNAL', path: ['r1', 'f3'], message: 'Something went wrong' }];
     });
 
-    await consume([{ repos: [INVITES, CONDITIONS] }]);
+    await read([{ repos: [INVITES, CONDITIONS] }]);
 
     expect(resent).toEqual([{ body: { repos: [CONDITIONS] }, delaySeconds: 30 }]);
     expect([...(await waiting()).keys()]).toEqual([INVITES]);
   });
 
-  test("an error reading a repo's labels sends it back alone, and GitHub not finding it skips it as not public", async () => {
+  test("an error reading a repo's labels sends it back alone, and GitHub not finding them stages nothing, with a line in the log", async () => {
     let label = 0;
     changeGraphQL((sent, answer) => {
       if (!labelRead(sent)) return;
@@ -859,16 +961,19 @@ describe('when GitHub fails on a repo', () => {
       answer.errors = [{ type: label === 1 ? 'FORBIDDEN' : 'NOT_FOUND', path: ['repository'], message: 'Could not read it' }];
     });
 
-    const { run } = await consume([{ repos: [INVITES, CONDITIONS] }]);
+    const { run } = await read([{ repos: [INVITES, CONDITIONS] }]);
 
-    expect(await waitingTiers()).toEqual({});
     expect(resent).toEqual([{ body: { repos: [INVITES] }, delaySeconds: 30 }]);
-    expect(run?.skipped).toEqual({ not_public: 1 });
+    expect(run?.reader.noLabels).toEqual([CONDITIONS]);
+    expect(run?.reader.staged).toBe(0);
+    expect(readingsAsked()).toBe(0);
+    expect(await waitingTiers()).toEqual({});
+    expect(logged).toContain(`The policy reader staged nothing for ${CONDITIONS}, since GitHub didn't give its labels. It reads it at its next read.`);
   });
 });
 
 describe('the checks the crawler makes again', () => {
-  test('a repo GitHub names differently now is checked again under its new name, and one that is a project under it is left alone', async () => {
+  test('a repo GitHub names differently now is checked again under its new name before its find is written, and one that is a project under it is left alone', async () => {
     const renamed = 'sample-policies/renamed-invites';
     const record = github.state.repos[INVITES];
     if (!record) throw new Error('missing sample repo');
@@ -879,11 +984,14 @@ describe('the checks the crawler makes again', () => {
       if (listing(sent) && repo) repo.nameWithOwner = renamed;
     });
 
-    const { run } = await consume([{ repos: [INVITES] }]);
+    await consume([{ repos: [INVITES] }]);
+    // Staged under the name GitHub gives now.
+    expect((await stagedPaths(renamed)).length).toBeGreaterThan(0);
+    await settle();
 
-    expect(run?.tiers).toEqual({ invites_agents: 1 });
-    expect(run?.skipped).toEqual({ project: 1 });
+    expect(readingsAsked()).toBe(1);
     expect(await everyFind()).toEqual([]);
+    expect(logged).toContain(`The policy reader wrote no find for ${renamed}, since the crawler leaves it alone: project.`);
   });
 
   test('a repo GitHub shows as private is skipped as not public', async () => {
@@ -899,44 +1007,28 @@ describe('the checks the crawler makes again', () => {
   });
 });
 
-describe("the second review's pipeline cases, and the files named for AI", () => {
+describe('the files named for AI', () => {
   test.each([
-    ['a second sentence that bans generated code, after one that names AI', { 'CONTRIBUTING.md': '# Contributing\n\nAI tools are fine for questions. Generated code will not be merged into the main branch.\n' }],
+    ['an AI policy file named AI_USAGE.md', 'AI_USAGE.md', '# AI usage\n\nAI-generated code will not be merged.\n', 3, 'AI-generated code will not be merged.'],
+    ['docs/LLM_POLICY.md', 'docs/LLM_POLICY.md', '# LLMs\n\nWe will not merge it.\n', 3, 'We will not merge it.'],
+    ['.github/GENAI-CONTRIBUTIONS.md', '.github/GENAI-CONTRIBUTIONS.md', 'Please keep these out of pull requests.\n', 1, 'Please keep these out of pull requests.'],
     [
-      'an AGENTS.md that prohibits AI tools',
-      { 'CONTRIBUTING.md': '# Contributing\n\nAI help is fine for questions.\n', 'AGENTS.md': '# AGENTS.md\n\nThe use of AI tools is prohibited in this project.\n' },
+      "the issue templates' config.yml",
+      '.github/ISSUE_TEMPLATE/config.yml',
+      'contact_links:\n  - name: Questions\n    url: https://forum.example.org\n    about: Issues written by AI will be closed.\n',
+      4,
+      'Issues written by AI will be closed.',
     ],
-    ['a ban phrased around disclosure', { 'CONTRIBUTING.md': '# Contributing\n\nAI help is fine for questions.\n\nDo not submit AI-generated code, with or without disclosing it.\n' }],
-    [
-      'a welcome for AI-assisted work, then a sentence that closes generated pull requests',
-      { 'CONTRIBUTING.md': '# Contributing\n\nWe welcome AI-assisted contributions. Fully generated pull requests will be closed without review.\n' },
-    ],
-    [
-      'a ban in an AI policy file named AI_USAGE.md',
-      { 'CONTRIBUTING.md': '# Contributing\n\nYou may use AI tools. Read AI_USAGE.md first.\n', 'AI_USAGE.md': '# AI usage\n\nAI-generated code will not be merged.\n' },
-    ],
-    [
-      'a ban in docs/LLM_POLICY.md',
-      { 'CONTRIBUTING.md': '# Contributing\n\nYou may use AI tools.\n', 'docs/LLM_POLICY.md': '# LLMs\n\nWe will not merge it.\n' },
-    ],
-    [
-      'a ban in .github/GENAI-CONTRIBUTIONS.md',
-      { 'CONTRIBUTING.md': '# Contributing\n\nYou may use AI tools.\n', '.github/GENAI-CONTRIBUTIONS.md': 'Please keep these out of pull requests.\n' },
-    ],
-    [
-      "a ban in the issue templates' config.yml",
-      {
-        'CONTRIBUTING.md': '# Contributing\n\nAI help is fine.\n',
-        '.github/ISSUE_TEMPLATE/config.yml': 'contact_links:\n  - name: Questions\n    url: https://forum.example.org\n    about: Issues written by AI will be closed.\n',
-      },
-    ],
-  ])('%s keeps the repo out of the admin queue', async (_what, files) => {
-    github.commitFiles(SILENT, files, 'sample-maintainer');
+  ])('a ban in %s is read for the model, and its reading of the ban keeps the repo out of the admin queue', async (_what, path, text, line, ban) => {
+    github.commitFiles(SILENT, { 'CONTRIBUTING.md': '# Contributing\n\nYou may use AI tools.\n', [path]: text }, 'sample-maintainer');
+    readsBan(path, line, ban);
 
-    const { run } = await consume([{ repos: [SILENT] }]);
+    await consume([{ repos: [SILENT] }]);
+    expect((await staged(SILENT)).find((f) => f.path === path)?.text).toBe(text);
+    await settle();
 
+    expect(readingsAsked()).toBe(1);
     expect(await waitingTiers()).toEqual({});
-    expect(run?.tiers).toEqual({ bans_or_restricts: 1 });
   });
 
   test('a repo with more than ten files named for AI in one folder gets no verdict', async () => {
@@ -949,7 +1041,7 @@ describe("the second review's pipeline cases, and the files named for AI", () =>
     expect(run?.skipped).toEqual({ unreadable_docs: 1 });
   });
 
-  test('a file whose name only has the letters of an AI word in it is no AI policy', async () => {
+  test('a file whose name only has the letters of an AI word in it is no AI policy, and the model never reads it', async () => {
     github.commitFiles(
       SILENT,
       { 'CONTRIBUTING.md': '# Contributing\n\nAgents may open pull requests here.\n', 'MAINTAINERS.md': 'We will not merge it.\n', 'docs/FAIRNESS.md': 'No.\n' },
@@ -958,11 +1050,14 @@ describe("the second review's pipeline cases, and the files named for AI", () =>
 
     await consume([{ repos: [SILENT] }]);
 
-    expect(await waitingTiers()).toEqual({ [SILENT]: 'invites_agents' });
+    const paths = await stagedPaths(SILENT);
+    expect(paths).toContain('CONTRIBUTING.md');
+    expect(paths).not.toContain('MAINTAINERS.md');
+    expect(paths).not.toContain('docs/FAIRNESS.md');
   });
 
   test('a find keeps every sentence in the docs that names AI, with the rest of its paragraph, for the admin to read', async () => {
-    await consume([{ repos: [CONDITIONS] }]);
+    await read([{ repos: [CONDITIONS] }]);
 
     const whole = { cutBefore: false, cutAfter: false };
     expect((await waiting()).get(CONDITIONS)).toMatchObject({
@@ -981,17 +1076,24 @@ describe("the second review's pipeline cases, and the files named for AI", () =>
     });
   });
 
-  test('a batch of 10 repos costs 3 GraphQL queries, one for the listings and two for the files, and each find one more for its labels', async () => {
+  test('a batch of 10 repos costs 3 GraphQL queries, one for the listings and two for the files, and each repo staged for the model one more for its labels', async () => {
     const repos = [INVITES, CONDITIONS, NO_AUTONOMY, ...BANS, SILENT, 'sample-policies/mentions-ai', COLLABORATORS];
     const before = github.calls.length;
 
-    await consume([{ repos }]);
+    const { run } = await consume([{ repos }]);
 
     const graphql = github.calls.slice(before).filter((call) => call.operation.startsWith('query'));
-    const finds = (await listCandidates(db, 'waiting')).length;
+    const staging = run?.reader.staged ?? 0;
     expect(repos).toHaveLength(10);
-    expect(finds).toBe(3);
-    expect(graphql.length - finds).toBe(3);
+    // Every repo but the one that lets only collaborators open pull requests.
+    expect(staging).toBe(9);
+    expect(run?.reader.notListable).toBe(1);
+    expect(graphql.length - staging).toBe(3);
+    // The reader's runs call no GitHub at all.
+    const calls = github.calls.length;
+    await settle();
+    expect(github.calls.length).toBe(calls);
+    expect((await listCandidates(db, 'waiting')).length).toBe(3);
   });
 });
 

@@ -87,7 +87,6 @@ export default defineConfig(async () => {
             GH_WEB_URL: 'https://github.test',
             ANTHROPIC_API_KEY: 'test-only-anthropic-key',
             ANTHROPIC_API_URL: 'https://api.anthropic.test',
-            POLICY_READER: 'rules',
             MODEL_DAILY_BUDGET_USD: '5',
             TEST_MIGRATIONS: migrations,
             TEST_CRONS: crons,

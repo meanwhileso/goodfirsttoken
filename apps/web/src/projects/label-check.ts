@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { MAX_TAGS } from '@goodfirsttoken/core';
-import { anthropicApiKey, anthropicUrl, modelDailyBudgetUsd, policyReader } from '../anthropic';
+import { anthropicApiKey, anthropicUrl, modelDailyBudgetUsd } from '../anthropic';
 import { reserveSpend, settleSpend, getRegisterLabelCheck, keepRegisterLabelCheck, countRegisterLabelCheck } from '../db';
 import { costOf, jsonOf, labelRequest, readLabelOutput, reservationOf, SHARES, utcDay } from '../crawl/reader';
 import { READER_VERSION } from '../crawl/reader/version';
@@ -15,7 +15,7 @@ import { keptForPeople } from './rules';
 // the SDK's two retries inside that time. It only suggests: the maintainer
 // confirms or changes every tag before anything saves.
 //
-// It runs only with POLICY_READER=model and a key. One check is kept per
+// It runs only with a key. One check is kept per
 // label set, by a hash of the repo, its label names and descriptions, and
 // the reader version. One caller gets at most 10 checks a UTC day, and one
 // repo at most 3. It spends from register_project's share of the day's
@@ -59,15 +59,12 @@ function tagsOf(check: { ready: readonly RepoLabel[]; agentsOnly: readonly RepoL
 
 /**
  * The tags the model reads as ready for outside help in the repo's labels,
- * for register_project's proposal, or why it falls back to meansReady. Null
- * while the model decides nothing, so the proposal reads the labels by name
- * as it always has.
+ * for register_project's proposal, or why it falls back to meansReady.
  */
 export async function checkLabels(
   db: D1Database,
   ask: { caller: number; repo: string; labels: readonly RepoLabel[]; now: number },
-): Promise<LabelCheckOutcome | null> {
-  if (policyReader() !== 'model') return null;
+): Promise<LabelCheckOutcome> {
   const apiKey = anthropicApiKey();
   if (apiKey === null) return { fallback: 'the model reader has no key' };
   const budget = modelDailyBudgetUsd();

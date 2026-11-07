@@ -7,14 +7,18 @@ import { runReader } from '../../src/crawl/batches';
 import { fillCrawlQueue } from '../../src/crawl/producer';
 import { readCrawlBatch, type CrawlRun } from '../../src/crawl/queue';
 import { MAX_DOCS_BYTES } from '../../src/crawl/reader/docs';
+import { READER_FINGERPRINT_VERSION } from '../../src/crawl/reader/fingerprint';
 import { MODEL_BAN_REASON } from '../../src/crawl/reread';
 import {
+  addCandidate,
   addSeed,
   addToDoNotList,
   createProject,
   decideCandidate,
   getModelRead,
   getProject,
+  keepFingerprint,
+  lastRejectedFind,
   listCandidates,
   listPending,
   listPolicyChanges,
@@ -27,11 +31,10 @@ import { db, emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from '../mcp/helpers';
 import { knowServiceToken } from '../sync/helpers';
 
-// The model policy reader deciding, with POLICY_READER=model, end to end:
-// the crawl consumer reads a seed's or a listed project's docs from the
-// GitHub fake, the rules read them too, and the model's reading, sent and
-// collected through the Message Batches API of the Anthropic fake, is the
-// one acted on. A find waits for its label check, and a move into a ban
+// The model policy reader deciding, end to end: the crawl consumer reads a
+// seed's or a listed project's docs from the GitHub fake, and the model's
+// reading, sent and collected through the Message Batches API of the
+// Anthropic fake, is the one acted on. A find waits for its label check, and a move into a ban
 // pauses a listing only with two agreeing readings, a ban line that checks
 // out, and the newest docs staged. The repos are the GitHub fake's made-up
 // sample-policies repos.
@@ -70,7 +73,7 @@ beforeEach(async () => {
   github = startGitHub();
   knowServiceToken(github);
   anthropic = startAnthropic(github);
-  restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20' });
+  restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20' });
   env.ADMIN_GITHUB_IDS = String(ADMIN.githubId);
   vi.spyOn(env.MCP_LIMITER, 'limit').mockResolvedValue({ success: true });
   logged = [];
@@ -180,19 +183,19 @@ async function listedAndRead(repo = INVITES, source: 'policy' | 'registered' = '
   expect(await getModelRead(db, repo)).toMatchObject({ banned: false, readIn: 'model' });
 }
 
-/** The docs now hold a ban on line 3, in AI_POLICY.md, which the rules read as a ban too. */
+/** The docs now hold a ban on line 3, in AI_POLICY.md. */
 function banCommitted(repo = INVITES): void {
   commit(repo, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
 }
 
 describe('with the model deciding, a seed', () => {
-  test("is found from the model's reading once its label check is back, with the rules' verdict beside it when they differ", async () => {
+  test("is found from the model's reading once its label check is back", async () => {
     commit(BANS_AI, { 'AGENTS.md': `# Agents\n\n${WELCOME}\n` });
     reads([statement('AGENTS.md', 3, WELCOME, 'welcomesAi')], 'allows_with_conditions');
     anthropic.answer({ kind: 'labels' }, { output: { labels: [{ name: 'help wanted', meaning: 'readyForOutsideHelp', evidence: 'name', statement: null, why: 'Its name.' }] } });
 
-    const run = await crawlSeed(BANS_AI);
-    expect(run.proposed).toEqual([]);
+    await crawlSeed(BANS_AI);
+    expect(await listCandidates(db, 'waiting')).toEqual([]);
     await hourly();
     await hourly();
     // The reading is back, and the find waits for its label check.
@@ -203,24 +206,23 @@ describe('with the model deciding, a seed', () => {
     expect(find).toMatchObject({
       repo: BANS_AI,
       madeBy: 'model',
-      rulesTier: 'bans_or_restricts',
+      rulesTier: null,
       policy: { quote: WELCOME, url: `https://github.com/${BANS_AI}/blob/main/AGENTS.md`, tier: 'allows_with_conditions' },
       settings: { prMode: 'reviewed', tags: ['help wanted'] },
       suggestedTags: [{ name: 'help wanted', openIssues: 0 }],
     });
     const { text } = await queueItem('candidate', BANS_AI);
     expect(text).toContain("the model policy reader's reading, which made this find");
-    expect(text).toContain("The crawler's rules read the same docs as bans or restricts.");
+    expect(text).not.toContain("The crawler's rules read");
     expect(text).not.toContain('It runs in shadow');
   });
 
-  test('a welcome only the rules read makes no find', async () => {
+  test('docs the model reads as a ban make no find', async () => {
     reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts');
 
-    const run = await crawlSeed(INVITES);
+    await crawlSeed(INVITES);
     await settle();
 
-    expect(run.proposed).toEqual([]);
     expect(await listCandidates(db, 'waiting')).toEqual([]);
   });
 
@@ -234,21 +236,27 @@ describe('with the model deciding, a seed', () => {
     expect(await listCandidates(db, 'waiting')).toEqual([]);
   });
 
-  test("a find the rules made and an admin rejected stays out when the model reads the same docs", async () => {
-    restore();
-    restore = setEnv({ POLICY_READER: 'rules', MODEL_DAILY_BUDGET_USD: '20' });
-    await crawlSeed(INVITES);
-    const [rejected] = await listCandidates(db, 'waiting');
-    if (rejected === undefined) throw new Error('no find');
+  test("a find the crawler's rules made before, which an admin rejected, stays out and takes the reader's fingerprint", async () => {
+    const rejected = await addCandidate(
+      db,
+      {
+        repo: INVITES,
+        facts: { stars: 3100, createdAt: clock - WEEK, pushedAt: clock - HOUR, ownerCreatedAt: clock - WEEK },
+        policy: LISTED,
+        settings: { tags: ['agent ready'], prMode: 'automatic' },
+        suggestedTags: [],
+        fingerprint: `v1:${'0'.repeat(64)}`,
+      },
+      clock - HOUR,
+    );
+    if (rejected === null) throw new Error('no find');
     await decideCandidate(db, rejected.id, { status: 'rejected', decidedBy: ADMIN.githubId, reason: 'Not now.' }, clock);
-    restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20' });
 
-    await consume([INVITES]);
+    await crawlSeed(INVITES);
     await settle();
 
-    expect(readingsAsked()).toBe(0);
     expect(await listCandidates(db, 'waiting')).toEqual([]);
+    expect((await lastRejectedFind(db, INVITES))?.fingerprint).toMatch(new RegExp(`^v${String(READER_FINGERPRINT_VERSION)}:`));
   });
 });
 
@@ -259,7 +267,7 @@ describe('with the model deciding, a move into a ban', () => {
     reads([statement('AI_POLICY.md', 3, BAN, 'bansAi')], 'bans_or_restricts', 2);
 
     const run = await week();
-    // The rules read a ban too, and pause nothing: the model decides.
+    // The weekly read itself pauses nothing: the model's readings decide.
     expect(run.reread.paused).toEqual([]);
     await hourly();
     await hourly();
@@ -399,7 +407,7 @@ describe('with the model deciding, a move into a ban', () => {
     expect((await getProject(db, INVITES))?.status).toBe('approved');
   });
 
-  test('that only the rules read pauses nothing', async () => {
+  test('a ban sentence the model reads past pauses nothing', async () => {
     await listedAndRead();
     commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${QUOTE}\n\n${BAN}\n` });
     reads([statement('AI_POLICY.md', 3, QUOTE, 'welcomesAgents')], 'invites_agents');
@@ -435,7 +443,7 @@ describe('with the model deciding, a move into a ban', () => {
 });
 
 describe('with the model deciding, a weekly read', () => {
-  test("whose policy changed sends a policy change from the model's reading, with the rules' tier beside it when they differ", async () => {
+  test("whose policy changed sends a policy change from the model's reading", async () => {
     await listedAndRead();
     const more = 'Agents may open pull requests on their own, on issues labeled `agent ready` or `help wanted`.';
     commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${more}\n\nDisclose it with an Assisted-by: trailer.\n` });
@@ -448,7 +456,7 @@ describe('with the model deciding, a weekly read', () => {
     expect(change).toMatchObject({
       madeBy: 'model',
       why: 'changed',
-      rulesTier: 'invites_agents',
+      rulesTier: null,
       policy: { quote: more, tier: 'allows_with_conditions' },
     });
   });
@@ -486,45 +494,88 @@ describe('with the model deciding, docs past the size cap', () => {
   });
 });
 
-describe('the switch from shadow to the model', () => {
-  test('is listed before the switch, from the shadow readings, and a ban read in shadow pauses at the first weekly read after it', async () => {
-    restore();
-    restore = setEnv({ POLICY_READER: 'shadow', MODEL_DAILY_BUDGET_USD: '20' });
+describe('the switch from the rules to the model', () => {
+  /** A listing whose last weekly read the rules made, before the model decided: their fingerprint, and no ban. */
+  async function readByTheRules(): Promise<void> {
     await listing();
-    reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts');
-    await week();
-    await settle();
-    expect((await getProject(db, INVITES))?.status).toBe('approved');
-    expect(logged.some((line) => line.includes(`Listed projects the switch to the model would pause, from their shadow readings: ${INVITES}.`))).toBe(true);
+    await fillCrawlQueue({ db, queue, now: () => clock });
+    sent.splice(0);
+    await keepFingerprint(db, INVITES, { fingerprint: `v1:${'0'.repeat(64)}`, banned: false }, clock);
+  }
 
-    restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20' });
-    reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts');
-    await week();
-    await settle();
+  test("takes the rules' last verdict as the model's last read, so a ban the model reads at the first weekly read after it pauses", async () => {
+    await readByTheRules();
+    reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts', 2);
 
-    // The kept reading of the same docs stood for the first, and only the second reading called the model.
-    expect(readingsAsked()).toBe(2);
-    expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusReason: MODEL_BAN_REASON });
-  });
-
-  test('a weekly reading staged in shadow and collected after the switch hands over the rules\' verdict too, so a ban the model read in shadow pauses', async () => {
-    restore();
-    restore = setEnv({ POLICY_READER: 'shadow', MODEL_DAILY_BUDGET_USD: '20' });
-    await listing();
-    reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts');
     await week();
-    await settle();
-    // The docs change in a way that says nothing new about AI, and a reading is staged in shadow.
-    commit(INVITES, { 'AGENTS.md': '# Agents\n\nRun the tests.\n' });
-    reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts', 3);
-    await week();
-
-    restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20' });
     await settle();
 
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusReason: MODEL_BAN_REASON });
     expect(await getModelRead(db, INVITES)).toMatchObject({ banned: true, readIn: 'model' });
+  });
+
+  test("a weekly reading staged before the switch and collected after it hands over the rules' verdict too", async () => {
+    await readByTheRules();
+    reads([statement('AI_POLICY.md', 3, QUOTE, 'bansAi')], 'bans_or_restricts', 2);
+    await week();
+    // As a reading staged in shadow, before the switch, would find it.
+    await db.prepare("UPDATE policy_reads SET model_read_in = 'shadow', model_banned = NULL, model_fingerprint = NULL WHERE project = ?").bind(INVITES).run();
+
+    await settle();
+
+    expect(await getProject(db, INVITES)).toMatchObject({ status: 'paused', statusReason: MODEL_BAN_REASON });
+    expect(await getModelRead(db, INVITES)).toMatchObject({ banned: true, readIn: 'model' });
+  });
+});
+
+describe('with the key alone', () => {
+  test('the model decides: a crawl writes no find, and the find comes from the model once its label check is back', async () => {
+    await crawlSeed(INVITES);
+
+    expect(await listCandidates(db, 'waiting')).toEqual([]);
+    await settle();
+    expect(await listCandidates(db, 'waiting')).toMatchObject([{ repo: INVITES, madeBy: 'model', rulesTier: null }]);
+  });
+
+  test('docs the model reads as no ban pause nothing, though they hold a ban sentence', async () => {
+    await listedAndRead();
+    banCommitted();
+    reads([], 'no_policy', 2);
+
+    const run = await week();
+    await settle();
+
+    expect(run.reread.paused).toEqual([]);
+    expect((await getProject(db, INVITES))?.status).toBe('approved');
+  });
+
+  test('without the key, a seed waits: no find, and the log says an admin lists it by hand', async () => {
+    restore();
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20', ANTHROPIC_API_KEY: '' });
+
+    await crawlSeed(INVITES);
+    await settle();
+
+    expect(await listCandidates(db, 'waiting')).toEqual([]);
+    expect(readingsAsked()).toBe(0);
+    expect(logged.some((line) => line.includes('so seeds wait for an admin to list them by hand'))).toBe(true);
+  });
+
+  test('without the key, a weekly read pauses nothing for docs that now ban AI, and still pauses for pull requests limited to collaborators', async () => {
+    await listing();
+    restore();
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20', ANTHROPIC_API_KEY: '' });
+    await week();
+    banCommitted();
+
+    const run = await week();
+
+    expect(run.reread.paused).toEqual([]);
+    expect((await getProject(db, INVITES))?.status).toBe('approved');
+    const repo = github.state.repos[INVITES];
+    if (!repo) throw new Error('missing sample repo');
+    repo.pullRequestCreationPolicy = 'collaborators_only';
+    const next = await week();
+    expect(next.reread.paused).toEqual([INVITES]);
   });
 });

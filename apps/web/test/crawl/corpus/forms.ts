@@ -5,10 +5,10 @@ import { contributing, file, LISTING_TIERS, type Expected, type LineSpan, type P
 const RELABELED_ON = '2026-11-06';
 
 // The tests that read a sentence both ways: the forms known to say no to
-// something else, and the other wordings the rules tests read as a ban one
-// way and no ban the other. Each side holds the docs, the tier the rules
-// read today, and the tier a reading should have. The rules tests check
-// what the rules read, and the eval checks what the model reads.
+// something else, and the other wordings the crawler's rules read as a ban
+// one way and no ban the other. Each side holds the docs, the tier a
+// reading should have, which the eval checks, and what the rules read
+// before the model read policies, kept as a record that nothing checks.
 //
 // Some ban sides are bans only for rules that err toward one, like a rule
 // about pushing to a branch with a word added. They keep their ban here,
@@ -19,12 +19,12 @@ export interface FormSide {
   /** The sentence the test is about, as it sits in the files. */
   sentence: string;
   files: PolicyFile[];
-  /** The tier the rules read today. */
+  /** The tier the rules read, before the model read policies. A record: nothing checks it. */
   rules: CrawlTier;
-  /** What safeForm reads the sentence as, when the rules test checks it, and whether it is a checkbox's first sentence. */
+  /** The rules' form for the sentence, and whether it is a checkbox's first sentence. A record, as `rules` is. */
   form?: number | null;
   choice?: boolean;
-  /** What else the rules read, when the test checks it: a line that contains the text, or label names. */
+  /** What else the rules read: a line that contains the text, or label names. A record, as `rules` is. */
   reads?: { noAutonomy?: string; personInLoop?: string; reserved?: string[] };
   /** For a safe side, the tier a reading should have, when it isn't any listing tier. */
   tier?: CrawlTier;
@@ -33,8 +33,8 @@ export interface FormSide {
   note?: string;
   /**
    * Why the owner relabeled a ban side as no ban. Its case then expects a
-   * listing tier, and keeps what it expected before. The rules test still
-   * holds the rules to `rules`.
+   * listing tier, and keeps what it expected before. `rules` keeps what the
+   * rules read.
    */
   relabel?: string;
 }

@@ -4,9 +4,9 @@ import { contributing, file, type CaseLabel, type Expected, type PolicyCase } fr
 
 // The suggested-settings cases: the excluded tags, the only label, the
 // trailer, the CLA link, the person-written description, the vouch file,
-// and the canary. Each holds what the rules' suggestSettings gives today,
-// which the rules tests check, and what a reading must find, which the eval
-// checks.
+// and the canary. Each holds what a reading must find, which the eval
+// checks, and what the crawler's rules suggested before the model read
+// policies, kept as a record that nothing checks.
 
 export interface SettingsCase {
   key: string;

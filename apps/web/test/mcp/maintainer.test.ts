@@ -14,6 +14,7 @@ import {
   settingsHistory,
   statusHistory,
 } from '../../src/db';
+import { startAnthropic } from '../anthropic';
 import { APP, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
 import { connectAgent, emptyKv, type ConnectedAgent } from './helpers';
@@ -38,6 +39,8 @@ beforeEach(async () => {
   await emptyDatabase();
   await emptyKv();
   github = startGitHub();
+  // register_project's label check asks the model, which the Anthropic fake answers from its recordings.
+  startAnthropic(github);
   // The limit of 120 calls a minute counts each person's calls across every
   // test in the file, and these tests make more than that as the same few
   // maintainers. They test the tools, so every call gets through here.
@@ -168,7 +171,7 @@ describe('register_project', () => {
       status: null,
       settings: { tags: ['help wanted'], personWrittenDescription: true, prMode: 'reviewed' },
       reasons: [
-        { setting: 'tags', reason: 'a label the repo has for outside help' },
+        { setting: 'tags', reason: 'a label the model reader read as ready for outside help, from their names and descriptions' },
         {
           setting: 'personWrittenDescription',
           reason: 'CONTRIBUTING.md asks contributors to write the PR description themselves',

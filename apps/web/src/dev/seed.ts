@@ -139,6 +139,8 @@ export async function seedSampleWork(): Promise<{
         settings: candidate.settings,
         suggestedTags: candidate.suggestedTags,
         sources: [],
+        // The model reader makes every find now.
+        madeBy: 'model',
       },
       now,
     );

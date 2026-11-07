@@ -29,7 +29,6 @@ type Setting =
   | 'AUTH_SECRET'
   | 'ANTHROPIC_API_KEY'
   | 'ANTHROPIC_API_URL'
-  | 'POLICY_READER'
   | 'MODEL_DAILY_BUDGET_USD';
 
 /**

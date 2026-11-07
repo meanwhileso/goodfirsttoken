@@ -89,8 +89,8 @@ The repo is a pnpm workspace.
   live in `src/projects/`,** described under
   [The maintainer's tools](#the-maintainers-tools), with the rules for who
   may change a project's status. The files a repo's docs are read from, in
-  `docs.ts`, and the rules for what they say, in `rules.ts`, are shared
-  with the policy crawler.
+  `docs.ts`, are shared with the policy crawler, and the rules for what
+  they say are in `rules.ts`.
 - **What the donor's tools check, read, and write on GitHub, and how they
   order suggestions, live in `src/donor/`,** described under
   [The donor's tools](#the-donors-tools).
@@ -370,7 +370,7 @@ The rules are in [how-it-works.md](how-it-works.md#registering-a-project).
 | `src/mcp/maintainer.ts` | `register_project`, `update_project`, `project_status`, `pause_project`, and `request_removal`. `project_status` with `refresh` runs the sync for its project, by `refreshIssues` in `src/sync/read-now.ts`, under [The sync](#the-sync) |
 | `src/projects/repo.ts` | What registration reads from GitHub, the eligibility rule, and creating the `goodfirsttoken` label |
 | `src/projects/docs.ts` | The files a repo's docs are read from, where each is looked for, and the size limit, for the proposal and the policy crawler alike |
-| `src/projects/rules.ts` | The rules the proposal and the crawler share: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link |
+| `src/projects/rules.ts` | The proposal's rules over the text: labels that mean ready for help, the disclosure trailer, the person-written description, and the CLA link. The crawler shares only the labels kept for people |
 | `src/projects/proposal.ts` | The proposal's rules, as a pure function of the labels, the files, and the label check's tags when it ran |
 | `src/projects/label-check.ts` | `register_project`'s label check with the model, through the Messages API, streamed, with its cache, its limits, and its share of the budget |
 | `src/projects/status.ts` | Who can lift a pause, the status a resume puts back, for the maintainer's tools and the admin's alike, and the pause an admin's resume puts back when Good First Token's pause took it over |
@@ -1547,9 +1547,8 @@ Anthropic API itself when it is empty.
 | `GH_API_URL` | Variable: GitHub's REST and GraphQL API. The GitHub fake locally. Empty means `https://api.github.com` | Now, by `src/github.ts` |
 | `GH_WEB_URL` | Variable: github.com itself, for OAuth sign-in. The GitHub fake locally. Empty means `https://github.com` | Now, by `src/auth/` |
 | `ANTHROPIC_API_URL` | Variable: the Anthropic API. The Anthropic fake locally. Empty means `https://api.anthropic.com` | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
-| `POLICY_READER` | Variable: `rules`, `shadow`, or `model`. Empty means `rules` | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
 | `MODEL_DAILY_BUDGET_USD` | Variable: the most the model may spend in a UTC day, in US dollars. Empty means 0 | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
-| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. Declared in `src/optional-secrets.d.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
+| `ANTHROPIC_API_KEY` | Optional secret, which a deploy puts when the environment has it. With it, the model reads every policy, and without it, nothing does. Declared in `src/optional-secrets.d.ts`, since `wrangler types` knows only `secrets.required`. Locally, the fake's stand-in | The policy reader, through `src/anthropic.ts`: `src/crawl/model.ts` and `src/crawl/batches.ts` |
 | `DB` | D1 | Now, by `src/db/`, Better Auth, `src/mcp/connections.ts`, the issue room, the feeds, the text streams, the scheduled jobs, and the crawler |
 | `SIGN_IN_LIMITER` | Rate limiter: 20 requests a minute for each client address. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/auth/rate-limit.ts` |
 | `MCP_LIMITER` | Rate limiter: 120 requests to `/mcp` a minute for each person. Its namespace ID is a placeholder locally, which a deploy replaces | Now, by `src/mcp/server.ts` |
@@ -1621,13 +1620,13 @@ in `people`.
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
-| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, who made it, the rules or the model reader, with the rules' tier when the model's differs, status, and the admin's decision | `id` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, who made it, the model reader or, before it, the crawler's rules, with the rules' tier for a find the model made while the rules still read, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
-| `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, a hash of what the rules read in its docs at the last whole read and whether they read a ban, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, how many weekly reads in a row gave no verdict, and whether it was read in shadow or while the model decided | `project` |
-| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier when the model's differs, status, and the admin's decision | `id` |
+| `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, the crawler's rules' last fingerprint of its docs and whether they read a ban, from before the model read policies, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, how many weekly reads in a row gave no verdict, and whether it was read in shadow or while the model decided | `project` |
+| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier for a change the model sent while the rules still read, status, and the admin's decision | `id` |
 | `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, with the label check's tags and suggested tags once back, the model's output as JSON, which a later label check reads its statements from, its outcome fingerprint, and when | `repo` |
-| `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, the rules' tier, the commit, branch, facts, vouch file, and labels with their descriptions, and while in a batch, the batch and what it reserved on which day. After a seed's reading that would make a find, it waits on the label check, with the model's policy reading. After a weekly read's move into a ban, it waits on the second reading, with the first | `id` |
+| `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, an empty `rules_tier` that nothing reads, the commit, branch, facts, vouch file, and labels with their descriptions, and while in a batch, the batch and what it reserved on which day. After a seed's reading that would make a find, it waits on the label check, with the model's policy reading. After a weekly read's move into a ban, it waits on the second reading, with the first | `id` |
 | `model_staged_files` | File a pending reading reads, in the crawler's order | `reading_id`, `position` |
 | `model_batches` | Batch the reader sent and hasn't collected | `id` |
 | `model_spend` | What the model spent and reserved, on a UTC day, for a share of the budget | `day`, `share` |
@@ -3337,25 +3336,26 @@ measured on real GitHub yet. The run logs are how to measure it.
 
 ## The policy crawler
 
-The crawler reads the repos admins seed, and puts the ones whose docs
-welcome AI help in the admin queue as crawl candidates. The rules are in
+The crawler reads the repos admins seed, the model reads their docs, and
+the ones whose docs welcome AI help go in the admin queue as crawl
+candidates. The rules are in
 [how-it-works.md](how-it-works.md#the-policy-crawler).
 
 | File | What it does |
 |---|---|
 | `src/crawl/producer.ts` | The cron job: queues the seeds that are due and the listed projects due for their weekly read. It makes no call to GitHub |
-| `src/crawl/queue.ts` | The crawl queue's consumer: reads each batch, sorts each repo, and writes the finds |
+| `src/crawl/queue.ts` | The crawl queue's consumer: reads each batch, and stages each repo's docs for the model |
 | `src/crawl/reads.ts` | What the consumer reads from GitHub: each repo's facts and folders, its files, its labels, and its pull request settings |
-| `src/crawl/rules.ts` | The tiers and the suggestions, as pure functions of the files and labels |
+| `src/crawl/rules.ts` | The word list: the sentences that name AI, for the admin's net and the reader's fingerprint, and the sentence and paragraph scan the reader's checks use. It decides nothing |
 | `src/db/seeds.ts` | The `crawl_seeds` table, the seed list |
 | `packages/core/src/crawl-priority.ts` | Strict input and stored evidence schemas, action-clock validation, and pure qualification rules |
-| `src/crawl/reread.ts` | The weekly read of a listed project: compares what the rules read with the last read, and pauses the project or puts a policy change in the admin queue. With the model deciding, it hands the decision to `src/crawl/decide.ts` |
-| `src/crawl/decide.ts` | What the model reader decides with `POLICY_READER=model`: a seed's find, and a weekly reading's policy change, second reading, or pause |
+| `src/crawl/reread.ts` | The weekly read of a listed project: the pull request check, then the docs staged for the model, and `compare`, which `src/crawl/decide.ts` uses to act on the reading |
+| `src/crawl/decide.ts` | What the model reader decides: a seed's find, and a weekly reading's policy change, second reading, or pause |
 | `src/crawl/pause.ts` | The pause the crawler makes on its own, and its reasons |
-| `src/crawl/fingerprint.ts` | The hash of what the rules read in a repo's docs, which a weekly read and a crawler find keep |
+| `src/crawl/fingerprint.ts` | What the fingerprints share: the rules' last version, which the reader's versions count up from, and the words a fingerprint hashes |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
 | `src/crawl/reader/` | The model policy reader's core: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, the price table, the docs hash, and the day's budget with its shares. It makes no network calls |
-| `src/crawl/model.ts` | The crawl consumer's half of the model reader: after the rules read a repo, decides whether the model reads it too, and stages its files and labels in D1 |
+| `src/crawl/model.ts` | The crawl consumer's half of the model reader: decides whether the model reads a repo's docs, and stages its files and labels in D1 |
 | `src/crawl/batches.ts` | The model reader's hourly run: collects the batches that ended by `custom_id`, checks and keeps each reading, drops what kept failing for 7 days, and sends what is pending as one batch, inside the day's budget. A find's label check goes in the batch after its reading |
 | `src/db/reader.ts` | The model reader's tables: the last reading of each repo, the pending readings and their staged files, the batches in flight, each day's spend, and the reader's state between runs |
 
@@ -3390,7 +3390,8 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   longest, so its consumer leaves the most for the others: it stops while
   less than three fifths of an hourly budget is left, 500 above where a
   maintainer's refresh stops. Its cap of 60 calls covers a run of 5
-  batches, about 3 queries each and 2 calls for each find, with room left.
+  batches, about 3 queries each and 2 calls for each repo staged, with room
+  left.
   The cron job queues at most 500 seeds a run, about 150 GraphQL points of
   reads, and at most 500 listed projects for their weekly reads, about 150
   GraphQL points and 500 REST calls.
@@ -3421,18 +3422,18 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   `src/projects/docs.ts`, which a proposal uses too. Beyond them it reads
   each text file in the root, `.github/`, and `docs/` with `ai`, `llm`,
   `llms`, or `genai` among the parts of its name, as an AI policy file,
-  and `config.yml` among the issue templates. Only a repo in a
-  listed tier costs more: `GET /repos/{owner}/{repo}`, since GitHub's
-  GraphQL doesn't give who can open pull requests, checked with the
-  `whyNotEligible` an admin's listing uses, then its labels, 100 to a
-  query, each with `issues(states: [OPEN]) { totalCount }`.
+  and `config.yml` among the issue templates. A repo staged for the model
+  costs more: `GET /repos/{owner}/{repo}`, since GitHub's GraphQL doesn't
+  give who can open pull requests, checked with the `whyNotEligible` an
+  admin's listing uses, then its labels, 100 to a query, each with its
+  description and `issues(states: [OPEN]) { totalCount }`.
 - **No verdict on what it can't read.** `readRepos` and `readFiles` say
   why a repo can't be read whole: a file over the size limit, a symbolic
   link by its mode, `0o120000`, more templates, skills, or files named for
   AI than it reads, no text or a NUL character, or a folder whose `oid`
   differs at the commit.
   The consumer counts such a repo as `unreadable_docs`, logs why, and
-  gives it no tier. A symbolic link in a folder the crawler doesn't list,
+  stages nothing for the model. A symbolic link in a folder the crawler doesn't list,
   like a linked `.claude/`, isn't seen, so a skill behind one is not read.
 - **Errors, repo by repo.** GitHub puts each error at the path of the
   alias it came from, like `r3`. A `NOT_FOUND` at a repo's own alias means
@@ -3452,12 +3453,13 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   })`, which takes a try. Each wait is an hour at most, and `max_retries`
   is 90, so the last retry comes inside the 4 days a queue keeps a message
   by default, as for the feed. When sending back fails, the batch is asked
-  for again. `crawlerSkips` leaves out the finds a batch wrote before it
-  stopped, before any read, so a repo that comes back after it was proposed
-  costs no reads.
-- **Only candidates, and pauses.** A crawl writes with `addCandidate`
-  alone, whose insert checks the do-not-list in the same statement. A
-  weekly read writes a pause that names no one, through
+  for again. The repos a batch staged before it stopped are done, and
+  aren't sent back. A GitHub error on a repo's labels, as staging reads
+  them, sends that repo back alone too.
+- **Only candidates, and pauses.** A find is written with `addCandidate`
+  alone, from the model's reading in `src/crawl/decide.ts`, whose insert
+  checks the do-not-list in the same statement. A weekly read writes a
+  pause that names no one, through
   `setProjectStatusFrom`, and the tables in `src/db/rereads.ts`. Nothing in
   `src/crawl/` creates a project, saves its settings, or writes any other
   status, which a test checks.
@@ -3468,33 +3470,28 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   `src/crawl/reread.ts`, and sends one back marked the same way, so the
   budget, the retries, and the dead-letter queue work as for a crawl. It
   adds no cron, queue, or binding.
-- **The same reads and rules.** `rereadRepos` calls `readRepos`,
-  `readFiles`, and `readPolicy`, as `crawlRepos` does, and `readRepoFacts`
-  in `src/crawl/reads.ts` for the REST answer, which `whyNotListable` now
-  reads through too. It calls the rules only through `readPolicy` and
-  `suggestSettings`, so a change to the rules reaches it.
-- **The hash.** `policyFingerprint` in `src/crawl/fingerprint.ts` hashes
-  with SHA-256 a JSON object of what the rules read: the tier, the words of
-  the quote and the path of its file, the words of each passage that names
-  AI, sorted, the conditions `suggestSettings` reads with no labels, the
-  label names, and the canary's words. The passages are the first
-  `MAX_AI_SENTENCES` that `readPolicy` keeps, with the count of the rest,
-  since the rules give no more. It keeps a string like `v1:` and 64 hex
-  digits, and none of the text. `FINGERPRINT_VERSION` goes up when what it
-  covers changes, like a change to the rules that reads most repos
-  differently. `compare` in `src/crawl/reread.ts` reads a hash of another
-  version, by `comparable`, as a new baseline: it keeps the new hash, so a
-  change like that sends no listing back to the queue. For a listing made
-  from a policy, by hand or from a find, it still pauses on a move into a
-  ban, read from `policy_reads.banned`, which no version touches. So a
-  change to the rules can pause a listing that the new rules read as a
-  ban, and an admin reviews the pause, since a missed ban is the worse
-  error. A registered project takes the new rules' ban as it takes one at
-  its first read, and isn't paused. Hashing the files whole would send a listing back for every
-  build step added to its CONTRIBUTING. Hashing the quote and tier alone
-  would miss a new condition, like a CLA, and a new sentence that names AI,
-  which the rules can misread, and which an admin reads when a change comes
-  back.
+- **The same reads.** `rereadRepos` calls `readRepos` and `readFiles`, as
+  `crawlRepos` does, and `readRepoFacts` in `src/crawl/reads.ts` for the
+  REST answer, which `whyNotListable` now reads through too.
+- **The fingerprint.** `readerFingerprint` in
+  `src/crawl/reader/fingerprint.ts` hashes with SHA-256 a JSON object of
+  what a model reading decided: the tier, the conditions, the reserved and
+  only label names, the trailer, the CLA link, whether there is a vouch
+  file or a canary, and the words of each passage the word list keeps that
+  names AI, sorted. It keeps a string like `v8:` and 64 hex digits, and
+  none of the text. `READER_FINGERPRINT_VERSION` goes up with every reader
+  version. `compare` in `src/crawl/reread.ts` reads a fingerprint of
+  another version as a new baseline: it keeps the new one, so a new reader
+  sends no listing back to the queue. For a listing made from a policy, by
+  hand or from a find, it still pauses on a move into a ban, read from
+  `policy_reads.model_banned`, which no version touches. So a new reader
+  can pause a listing it reads as a ban, and an admin reviews the pause,
+  since a missed ban is the worse error. A registered project takes the
+  new reader's ban as it takes one at its first read, and isn't paused.
+  Hashing the files whole would send a listing back for every build step
+  added to its CONTRIBUTING. Hashing the quote and tier alone would miss a
+  new condition, like a CLA, and a new sentence that names AI, which the
+  model can misread, and which an admin reads when a change comes back.
 - **Who can open pull requests is read each week,** in one REST call,
   since GitHub's GraphQL doesn't give it. The sync reads the same REST
   answer for each approved project every 15 minutes, and doesn't look at
@@ -3504,18 +3501,21 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   private, or gone, by GraphQL or REST, does nothing more. The sync's own
   read sets the mark and pauses, so the reason, the mark, and the pause
   come from one place.
-- **A pause on a move into a ban.** `policy_reads.banned` keeps whether
-  the last whole read was a ban, beside its hash, and `compare` pauses only
-  when this read is a ban and that one wasn't, across a change of the
-  hash's version only for a listing. A hash that changed while the docs
+- **A pause on a move into a ban.** `policy_reads.model_banned` keeps
+  whether the last reading was a ban, beside its fingerprint, and
+  `compare` reads a move into one only when this reading is a ban and that
+  one wasn't, across a change of the fingerprint's version only for a
+  listing. The pause waits for a second reading that agrees, under
+  `src/crawl/decide.ts`. A hash that changed while the docs
   stay a ban pauses nothing, so an admin's resume and a first read's ban
   stay as they are.
 - **A find behind a listing.** With no read kept, `compare` pauses on a ban
   only for a listing made from a crawler find, since the find read its
   docs as a welcome. `hasApprovedFind` in `src/db/candidates.ts` asks
   whether an admin approved a find of the repo, since approving one lists
-  it, and no project is deleted. Only a listing's first read asks. A listing made by hand, and a registered project, take a ban at
-  their first read as it is, and `policy_reads.banned` keeps it.
+  it, and no project is deleted. Only a listing's first read asks. A
+  listing made by hand, and a registered project, take a ban at their
+  first read as it is, and `policy_reads.model_banned` keeps it.
 - **A ban's pause takes over any pause.** `pauseForCrawler` with
   `anyPause` lands on an approved or a paused project, whoever paused it,
   through the compare-and-set, since the move into a ban is found only
@@ -3554,34 +3554,36 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
 - **Rejected finds, read again.** `crawlerSkips` takes `readRejected`,
   which the cron job, the consumer, and `admin_seed_repo` pass, so a repo
   whose finds were all rejected is read, and `lastRejectedFind` gives the
-  hash to compare. A find with no hash, or one of another version, takes
-  the new one through `setFindFingerprint`. `admin_seed_repo` on such a
+  docs hash and fingerprint that `writeModelFind` compares. A find with no
+  fingerprint, or one of another version, as the rules' finds have, takes
+  the reader's through `setFindFingerprint`. `admin_seed_repo` on such a
   repo adds the seed, or makes it due, and answers `rejectedBefore`.
 - **The link** is on `https://github.com`, as the sample data's are,
   whatever `GH_WEB_URL` says, since the policy schema takes https links
   only and the GitHub fake serves plain http locally. The branch and each
   part of the path are URL-encoded.
 - **Every sentence that names AI goes to the admin, with its paragraph.**
-  Plain rules can miss a ban worded in a way they don't know, even in the
-  sentence after one that names AI, so `readPolicy` keeps each sentence
-  that names AI, that the rules read for a ban, or that bans AI with no AI
-  word, with the rest of its paragraph as the file has it. A paragraph
-  longer than `MAX_AI_PASSAGE`, 1,000 characters, is cut to that length
-  centered on the sentence's first word that names AI, so a long sentence
-  that names AI near its end still shows it, and `cutBefore` and
-  `cutAfter` say where. A sentence inside the last passage
-  kept from its file is not kept again. It keeps the first `MAX_AI_SENTENCES`, 60, and counts
-  the rest. A find stores them in `crawl_candidates.ai_sentences` and
-  `more_ai_sentences`, and `admin_queue`, the admin page, and the admin
+  The model can miss a ban, or be steered past one, so `aiPassages` in
+  `src/crawl/rules.ts` keeps each sentence that names AI by the word list,
+  that the word list reads as about AI, or that bans AI with no AI word,
+  with the rest of its paragraph as the file has it, whatever the model
+  said. A paragraph longer than `MAX_AI_PASSAGE`, 1,000 characters, is cut
+  to that length centered on the sentence's first word that names AI, so a
+  long sentence that names AI near its end still shows it, and `cutBefore`
+  and `cutAfter` say where. A sentence inside the last passage kept from
+  its file is not kept again. It keeps the first `MAX_AI_SENTENCES`, 60,
+  and counts the rest. A find stores them in `crawl_candidates.ai_sentences`
+  and `more_ai_sentences`, and `admin_queue`, the admin page, and the admin
   skill show them before a verdict, marked as the repo's words, with each
-  cut said in our own words. The rules' tests hold a corpus of every ban
-  wording six reviews found, 93, all read as bans, 38 made-up welcoming
-  policies written alongside the rules, of which the rules read 4 as bans,
-  and 12 held out from the rules, of which they read 9 as bans.
-- **The corpus is shared.** The cases live in `test/crawl/corpus/`, and
-  `rules.test.ts` holds the rules to what they read today. Each case also
-  says what a model reading must find, and cases written for the model
-  join them. `pnpm eval:policy` runs every case three times through
+  cut said in our own words. The word list decides nothing.
+- **The corpus is the eval.** The cases live in `test/crawl/corpus/`: every
+  ban wording six reviews found, 93, each beside a welcome and beside an
+  invitation, 50 made-up welcoming policies, the sentences read both ways,
+  the settings cases, and the cases written for the model, 458 in all. Each
+  says what a model reading must find. Some keep the tier the crawler's
+  rules read, from before the model read policies, as a record. Nothing
+  checks it. `rules.test.ts` checks that every case is one the eval runs.
+  `pnpm eval:policy` runs every case three times through
   `src/crawl/reader/` with the Message Batches API, scores the runs
   against the pass bar in
   [the model policy reader spec](specs/model-policy-reader.md#the-pass-bar),
@@ -3589,22 +3591,11 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   results go to `apps/web/.eval/`, which git ignores, since they hold real repos'
   text. `apps/web/scripts/ts-resolve.mjs` lets Node run the Worker's
   TypeScript, whose imports leave out the extension.
-- **The safe forms are whole sentences.** `judge` in `src/crawl/rules.ts`
-  reads a sentence that names AI and says no as a ban unless all of it,
-  but for a list mark in front, matches one of the forms: fixed words with
-  slots that each take a closed set of words, a label in quotes, or a
-  path. Reviews found bans that rode along with a form that took a phrase
-  out of a sentence and read the rest, so no form does that now. A test
-  checks each form's example, and that no sentence that says no in the ban
-  corpus is a form. The cost is more welcoming sentences read as bans,
-  where a form has words added.
-- **The rules' speed.** Every pattern runs on one sentence, with a few
-  words of slack at most, and a sentence's end is one mark before a space,
-  so no pattern tries a start again after it fails. Each file's lines are
-  found once, each heading is read once, and the label names are looked
-  for in the first 2,000 characters of the welcome. A label kept for
-  people is kept once, whatever the number of sentences that name it. So
-  the time a file takes grows with its length alone. A test reads a file at the size limit
+- **The word list's speed.** Every pattern runs on one sentence, with a
+  few words of slack at most, and a sentence's end is one mark before a
+  space, so no pattern tries a start again after it fails. Each file's
+  lines are found once, and each heading is read once. So the time a file
+  takes grows with its length alone. A test reads a file at the size limit
   for each run of space and mark and each phrase a pattern starts with, as
   an AI policy, an `AGENTS.md`, and a PR template, and each takes well
   under a second.
@@ -3618,25 +3609,21 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   no line of a repo's text can pass for a line of the result. It breaks a
   line at a vertical tab, a form feed, and the file, group, and record
   separators too, as some readers do.
-- **The model reader, in shadow and deciding.** With `POLICY_READER` set
-  to `shadow` or `model`, the consumer's half (`src/crawl/model.ts`)
-  stages a repo's docs after the rules read them, and the hourly run
+- **The model reader.** With the key and a budget, the consumer's half
+  (`src/crawl/model.ts`) stages a repo's docs, and the hourly run
   (`src/crawl/batches.ts`) sends them through the Message Batches API with
   `@anthropic-ai/sdk` and collects the readings an hour later. The reading
   is kept in `model_readings` and joined to a find or a policy change by
-  the docs hash. In shadow the rules decide, and it shows beside theirs.
-  With `model`, `src/crawl/decide.ts` acts on it, and the consumer writes
-  no find and makes no pause or policy change from the rules. The SDK client has no retries of its own, since
-  the next hourly run is the retry, and takes the fetch of the moment, so a
-  test's fakes answer. Results are read by `custom_id`, never by position.
-  The design is the
-  [model policy reader spec](specs/model-policy-reader.md), and the rules are in
-  [how-it-works.md](how-it-works.md#the-model-policy-reader).
-- **Shared reads.** A seed's find and its staging both ask who can open
-  pull requests and read the labels. `sharedReads` in `src/crawl/model.ts`
-  makes each read once a repo, so staging adds a call only for a seed the
-  rules make no find of. The consumer stages after the rules' finds are
-  written, so a stop on GitHub's budget loses no find.
+  the docs hash, and `src/crawl/decide.ts` acts on it. The consumer writes
+  no find, and a weekly read makes no pause on a ban or policy change of
+  its own. The SDK client has no retries of its own, since the next hourly
+  run is the retry, and takes the fetch of the moment, so a test's fakes
+  answer. Results are read by `custom_id`, never by position. The design
+  is the [model policy reader spec](specs/model-policy-reader.md), and the
+  rules are in [how-it-works.md](how-it-works.md#the-model-policy-reader).
+- **Shared reads.** Staging asks who can open pull requests and reads the
+  labels. `sharedReads` in `src/crawl/model.ts` makes each read once a
+  repo.
 - **Reservations.** Before a batch is sent, each request reserves the most
   it could cost in `model_spend`, for its share of the day. Collecting a
   result settles it, on the day it was reserved, to what its usage says it
@@ -3656,9 +3643,8 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   row only when its docs hash is still the check's. A seed whose docs hit
   the cache stages a label check on its own, with `step = 'labels'` and
   the output kept in `model_readings`, so its tags are fresh and a check
-  that failed once isn't lost for good. The find is written, in shadow
-  the log's count of seeds the model would have found, once the check is
-  settled, whatever its verdict.
+  that failed once isn't lost for good. The find is written once the check
+  is settled, whatever its verdict.
 - **The second reading rides the first's row.** A weekly reading that reads
   a move into a ban stays in `model_pending` with the first reading's
   output in `first_output`, keeps its staged files, and goes in the next
@@ -3666,13 +3652,16 @@ welcome AI help in the admin queue as crawl candidates. The rules are in
   both outputs against the files again. A newer reading of the repo marks
   it replaced and takes its files, so the collector drops it, and a second
   reading of docs that changed since pauses nothing.
-- **The switch hands over the rules' verdict.** `policy_reads.model_read_in`
-  says whether the model's last read was kept in shadow or while it
-  decided. At a project's first weekly read with `model`,
-  `adoptRulesRead` makes the rules' last fingerprint and ban the model's,
-  and drops the docs hash, so the model's kept reading of the same docs
-  decides once. The hourly run's log lists, from `listShadowReads`, the
-  listings that would pause.
+- **The switch hands over the rules' verdict.** Before the model read
+  policies, the crawler's rules decided, and the model read in shadow.
+  `policy_reads.model_read_in` says whether the model's last read was kept
+  in shadow or while it decided. At a project's first weekly read with the
+  model deciding, `adoptRulesRead` makes the rules' last fingerprint and
+  ban the model's, and drops the docs hash, so the model's kept reading of
+  the same docs decides once. `decideReread` does the same for a reading
+  staged in shadow and collected after. The hourly run's log lists, from
+  `listShadowReads`, the listings still waiting for that read whose shadow
+  reading reads a ban.
 - **One result can't stall the run.** An error keeping one result, like a
   D1 error, makes that reading no verdict, and the run goes on. A kept
   reading over 1,500,000 bytes of JSON is no verdict too, under D1's 2 MB
@@ -3711,13 +3700,13 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
     about two for its files and the checks on its folders, none asking for
     a connection, so about 3,000 points. A test counts 3 queries for a
     batch of 10 of the GitHub fake's sample repos, beyond each find's own.
-  - Each repo whose docs welcome AI help: one REST call, and a GraphQL query
-    for each 100 of its labels, which asks for 100 labels and a count on
-    each, about a point.
+  - Each repo staged for the model: one REST call, and a GraphQL query for
+    each 100 of its labels, which asks for 100 labels and a count on each,
+    about a point.
 - **Per run.** The cron job runs once an hour and queues at most 500 seeds,
   50 batches. The consumer reads a batch soon after it is queued, and
   spends about 3 points for each batch of 10 repos: about 150 points for a
-  run's seeds, plus 2 calls for each find.
+  run's seeds, plus 2 calls for each repo staged.
 - **How it shares the hour with the other jobs.** Each job stops at its own
   share of what is left, so the jobs that matter most get the last of it.
 
@@ -4365,13 +4354,12 @@ The rules for tests are in [CONTRIBUTING.md](../CONTRIBUTING.md#tests).
   and the other private, gone, and blocked cases use the issue repo. A mark in
   other words is made by running `0006_delisting.sql`'s own `INSERT` again,
   on a row from before it.
-- **Crawler tests** are in `apps/web/test/crawl/`. The rules' tests call
-  them directly on made-up files, for every tier and condition. The rest
-  seed the GitHub fake's repos and run the cron job with a stand-in for the
+- **Crawler tests** are in `apps/web/test/crawl/`. The word list's tests
+  call it directly on made-up files. The rest seed the GitHub fake's repos and run the cron job with a stand-in for the
   crawl queue that records each batch, then hand the batches to the consumer the
   way Queues does, with a stand-in for `CRAWL_QUEUE` that records what the
-  consumer sends back, with D1 as it runs deployed, and read the admin
-  queue. They use the fake's made-up `sample-policies` repos, commit
+  consumer sends back, with D1 as it runs deployed, run the reader's hourly
+  runs against the Anthropic fake, and read the admin queue. They use the fake's made-up `sample-policies` repos, commit
   made-up files to them, and add made-up repos to its state. A stand-in for `fetch` records every request, so a test shows
   which repos the crawler read, or changes GitHub's answer, to stand in for
   a symbolic link, a binary file, a push while the crawler reads, or an
@@ -4711,8 +4699,8 @@ something new.
   `GH_SERVICE_TOKEN`, and the optional `ANTHROPIC_API_KEY`, and the deploy
   credentials.
 - **What a listing says about a repo:** that it welcomes AI help, and that
-  agents may claim its issues. With the model reader deciding, a reading
-  can pause a listing and write a find.
+  agents may claim its issues. A model reading can pause a listing and
+  write a find.
 - **The admin surface:** the admin tools and `/admin`.
 - **Budgets:** the model reader's daily dollar budget and its shares, the
   service token's GitHub budget, each person's own GitHub budget, D1, `OAUTH_KV`, the feeds and rooms, the homepage's feed above all,
@@ -4750,7 +4738,7 @@ something new.
 
 ### What holds
 
-**The model policy reader,** once it decides (`src/crawl/decide.ts`,
+**The model policy reader** (`src/crawl/decide.ts`,
 `src/crawl/reader/`, `src/projects/label-check.ts`). A repo's docs and
 labels are text its maintainers wrote, and the design assumes some will
 try to steer the reader.
@@ -4776,8 +4764,9 @@ try to steer the reader.
   first or the second. Then a listing made from a policy still goes to an
   admin, with the ban in the word-list net, but a registered project gets
   only a line in the log, since its docs stay its maintainers' call.
-- A ban only the rules read pauses nothing, and when the API is down or
-  the budget is spent, nothing falls back to the rules. The crawler waits.
+- Nothing else reads a policy. When the API is down or the day's share is
+  spent, the readings stay pending and the crawler waits. With no key, or a
+  budget of 0, a weekly read runs only the pull request check.
 - `register_project`'s tags only suggest, each one a label the repo has,
   and the maintainer confirms every value. One caller gets 10 checks a UTC
   day, and one repo 3, so a maintainer can't spend the day's budget on

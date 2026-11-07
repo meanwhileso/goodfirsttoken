@@ -126,8 +126,6 @@ export interface NewPending {
   purpose: ReadingPurpose;
   share: Share;
   docsHash: DocsHash;
-  /** What the rules read in the same files, for the log. */
-  rulesTier: string;
   commit: string;
   branch: string;
   facts: RepoFacts;
@@ -162,7 +160,6 @@ interface PendingRow {
   purpose: string;
   share: string;
   docs_hash: string;
-  rules_tier: string;
   commit_sha: string;
   branch: string;
   facts: string;
@@ -210,7 +207,6 @@ function toPending(row: PendingRow): Pending {
     purpose: row.purpose === 'reread' ? 'reread' : 'seed',
     share: shareOf(row.share),
     docsHash: mustParse(docsHashSchema, row.docs_hash, 'docsHash'),
-    rulesTier: row.rules_tier,
     commit: row.commit_sha,
     branch: row.branch,
     facts: mustParse(repoFactsSchema, fromJson(row.facts), 'facts'),
@@ -247,10 +243,14 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
     ).bind(repo),
     db.prepare('DELETE FROM model_pending WHERE repo = ?1 AND batch_id IS NULL').bind(repo),
     db.prepare('UPDATE model_pending SET replaced = 1 WHERE repo = ?1').bind(repo),
+    // rules_tier held what the crawler's rules read, before the model read
+    // every policy. Nothing reads it now. It stays, written empty, since a
+    // migration that dropped it would run before the new Worker is deployed,
+    // and break the one still running.
     db
       .prepare(
         `INSERT INTO model_pending (id, repo, purpose, share, docs_hash, rules_tier, commit_sha, branch, facts, vouch, labels, staged_at, step, reading_output, first_output)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+         VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
       )
       .bind(
         id,
@@ -258,7 +258,6 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
         pending.purpose === 'reread' ? 'reread' : 'seed',
         share,
         mustParse(docsHashSchema, pending.docsHash, 'docsHash'),
-        pending.rulesTier,
         pending.commit,
         pending.branch,
         JSON.stringify(facts),

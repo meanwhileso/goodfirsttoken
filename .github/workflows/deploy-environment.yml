@@ -45,8 +45,6 @@ on:
         required: false
       OAUTH_KV_ID:
         required: false
-      POLICY_READER:
-        required: false
       PRIMARY_DOMAIN:
         required: false
       REDIRECT_DOMAINS:
@@ -109,7 +107,6 @@ jobs:
           GH_API_URL: ${{ secrets.GH_API_URL || vars.GH_API_URL }}
           GH_WEB_URL: ${{ secrets.GH_WEB_URL || vars.GH_WEB_URL }}
           ANTHROPIC_API_URL: ${{ secrets.ANTHROPIC_API_URL || vars.ANTHROPIC_API_URL }}
-          POLICY_READER: ${{ secrets.POLICY_READER || vars.POLICY_READER }}
           MODEL_DAILY_BUDGET_USD: ${{ secrets.MODEL_DAILY_BUDGET_USD || vars.MODEL_DAILY_BUDGET_USD }}
           STATIC_ORIGIN: ${{ secrets.STATIC_ORIGIN || vars.STATIC_ORIGIN }}
         run: node scripts/deploy-config.mjs "$TARGET"

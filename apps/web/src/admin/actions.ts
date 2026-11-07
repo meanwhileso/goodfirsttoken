@@ -269,8 +269,8 @@ async function candidateItem(candidate: CrawlCandidate, now: number): Promise<Qu
 /**
  * A pause Good First Token made on its own, with its reason, why the sync
  * delisted the project when it did, the pause someone made that it took
- * over, and for the policy crawler's pause on a ban, the line its rules read
- * as one and the sentences that name AI, from the read that paused it. While
+ * over, and for the policy crawler's pause on a ban, the line it read as
+ * one and the sentences that name AI, from the read that paused it. While
  * the sync has the project delisted, nothing read from its repo shows: no
  * ban line, no sentences, and no policy. It reads nothing from GitHub.
  */

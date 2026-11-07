@@ -1,4 +1,4 @@
-import { crawlTiers, type CrawlReadTier, type DocsHash, type ProjectRecord, type RepoFacts } from '@goodfirsttoken/core';
+import type { DocsHash, ProjectRecord, RepoFacts } from '@goodfirsttoken/core';
 import {
   addCandidate,
   addPolicyChange,
@@ -13,18 +13,15 @@ import {
   setFindFingerprint,
 } from '../db';
 import { MODEL_BAN_REASON, pauseForCrawler } from './pause';
-import { findTier, readerFingerprint, readerSettings, readsBan, toPolicyReading, type LabelCheck, type ModelReading } from './reader';
+import { findTier, readerFingerprint, readerSettings, readsBan, toPolicyReading, type LabelCheck, type ModelReading, type PolicyReading } from './reader';
 import { READER_FINGERPRINT_VERSION } from './reader/fingerprint';
 import { fileUrl } from './reads';
 import { compare } from './reread';
-import { readPolicy, type PolicyFile, type PolicyReading, type RepoLabel } from './rules';
+import { aiPassages, type AiPassages, type PolicyFile, type RepoLabel } from './rules';
 
-// What the model policy reader decides once POLICY_READER=model
-// (docs/specs/model-policy-reader.md, under The rules during the rollout,
-// Pausing a listing, and When it can't read): the find a seed's reading
-// makes, and what a listed project's weekly reading does. The rules still
-// read every repo the model reads, and their tier shows beside the model's
-// when the two differ, but nothing they read is acted on.
+// What the model policy reader decides (docs/specs/model-policy-reader.md,
+// under Pausing a listing and When it can't read): the find a seed's reading
+// makes, and what a listed project's weekly reading does.
 //
 // A move into a ban pauses a listing only when the worked-out tier and the
 // model's tier both read a ban, a ban line checks out in the file, a second
@@ -51,8 +48,6 @@ export interface RereadDocs {
   vouch: string | null;
   labels: RepoLabel[];
   docsHash: DocsHash;
-  /** What the rules read in the same docs. */
-  rulesTier: string;
 }
 
 export interface DecideDeps {
@@ -60,18 +55,12 @@ export interface DecideDeps {
   now: () => number;
 }
 
-/** The rules' tier, kept beside the model's only when the two differ. */
-function rulesBeside(rulesTier: string, modelTier: CrawlReadTier): CrawlReadTier | null {
-  const tier = crawlTiers.find((t) => t === rulesTier);
-  return tier === undefined || tier === modelTier ? null : tier;
-}
-
 /** Whether a fingerprint is of the reader's version, so a change to it is a change in the docs. */
 function readerComparable(fingerprint: string | null): boolean {
   return fingerprint?.startsWith(`v${String(READER_FINGERPRINT_VERSION)}:`) === true;
 }
 
-function passages(reading: PolicyReading) {
+function passages(reading: AiPassages) {
   return reading.aiSentences.map(({ file, ...passage }) => ({ path: file.path, ...passage }));
 }
 
@@ -85,12 +74,13 @@ function listedOrPaused(project: ProjectRecord | null): project is ProjectRecord
  * the projects, and the earlier finds again, as the crawl consumer does. A
  * rejected find comes back only when its docs read differently: one with
  * the same docs, or the same fingerprint, stays out, and one with an older
- * fingerprint, as the rules' finds have, takes the reader's and stays out.
+ * fingerprint, as the finds the crawler's rules made have, takes the reader's
+ * and stays out.
  * Returns the repo when it wrote the find.
  */
 export async function writeModelFind(
   deps: DecideDeps,
-  seed: { repo: string; branch: string; facts: RepoFacts; vouch: string | null; labels: RepoLabel[]; docsHash: DocsHash; rulesTier: string },
+  seed: { repo: string; branch: string; facts: RepoFacts; vouch: string | null; labels: RepoLabel[]; docsHash: DocsHash },
   files: readonly PolicyFile[],
   reading: ModelReading,
   check: LabelCheck | null,
@@ -127,7 +117,6 @@ export async function writeModelFind(
       fingerprint,
       docsHash: seed.docsHash,
       madeBy: 'model',
-      rulesTier: rulesBeside(seed.rulesTier, tier),
     },
     deps.now(),
   );
@@ -147,9 +136,11 @@ async function sendChange(
   reading: ModelReading | null,
   why: 'changed' | 'ban_unconfirmed' | 'no_verdict',
 ): Promise<void> {
-  const policyReading = reading === null ? readPolicy(files) : toPolicyReading(files, reading);
-  const welcome = reading === null ? null : policyReading.welcome;
-  const tier = policyReading.tier;
+  const policyReading: PolicyReading | null = reading === null ? null : toPolicyReading(files, reading);
+  // With no reading, the admin sees the sentences that name AI, from the word list.
+  const net = policyReading ?? aiPassages(files);
+  const welcome = policyReading?.welcome ?? null;
+  const tier = policyReading?.tier;
   const policy =
     welcome !== null && (tier === 'invites_agents' || tier === 'allows_with_conditions')
       ? { quote: welcome.quote, url: fileUrl(docs.repo, docs.branch, welcome.file.path), tier }
@@ -161,11 +152,10 @@ async function sendChange(
       facts: docs.facts,
       policy,
       sources: reading === null ? [] : readerSettings(reading, docs.labels, null, docs.vouch).sources,
-      aiSentences: passages(policyReading),
-      moreAiSentences: policyReading.moreAiSentences,
+      aiSentences: passages(net),
+      moreAiSentences: net.moreAiSentences,
       docsHash: docs.docsHash,
       madeBy: 'model',
-      rulesTier: reading === null ? null : rulesBeside(docs.rulesTier, tier),
       why,
     },
     deps.now(),
@@ -208,7 +198,7 @@ async function unconfirmedBan(
 
 /**
  * Acts on the model's reading of a listed project's docs at a weekly read:
- * compares it with the last read, as the rules' reading was compared. A
+ * compares it with the last read. A
  * listing whose policy changed goes to the admin queue as a policy change.
  * A move into a ban that both tiers read, with a ban line that checks out,
  * returns 'second', and the caller stages a second reading of the same docs.
