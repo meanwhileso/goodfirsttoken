@@ -6,7 +6,7 @@ import { AUTO_APPROVED_REASON, approveStarredFinds } from '../../src/crawl/auto-
 import { runReader } from '../../src/crawl/batches';
 import { fillCrawlQueue } from '../../src/crawl/producer';
 import { readCrawlBatch } from '../../src/crawl/queue';
-import { addRequest, getProject, listCandidates, listPending } from '../../src/db';
+import { addRequest, getProject, getRequestedRead, listCandidates, listPending } from '../../src/db';
 import { startAnthropic } from '../anthropic';
 import { startGitHub } from '../auth/helpers';
 import { admin, db, emptyDatabase, priya, signIn } from '../db/helpers';
@@ -16,13 +16,11 @@ import { knowServiceToken } from '../sync/helpers';
 // requests it, the cron job queues it, the consumer reads its docs from the
 // GitHub fake, the model policy reader reads them through the Anthropic
 // fake, and the hourly approval lists a find whose repo has more than 100
-// stars. A repo with 100 stars or fewer waits for an admin. The repos are
+// stars. A repo with 100 stars waits for an admin. The repos are
 // the GitHub fake's made-up sample-policies repos, whose docs welcome AI
 // help, and the Anthropic fake answers from the readings recorded for them.
 
 const INVITES = 'sample-policies/invites-agents';
-const CONDITIONS = 'sample-policies/with-conditions';
-const SEED = 'sample-policies/small-seed';
 const HOUR = 3_600_000;
 const start = Date.UTC(2100, 3, 1, 12, 0, 0);
 const configuredAdmins = env.ADMIN_GITHUB_IDS;
@@ -87,31 +85,42 @@ function approve() {
   return approveStarredFinds({ db, token: env.GH_SERVICE_TOKEN, now: () => clock });
 }
 
+/** Sets the repo's stars on the GitHub fake, as the crawler will read them. */
+function starred(repo: string, stars: number): void {
+  const record = github.state.repos[repo.toLowerCase()];
+  if (!record) throw new Error(`missing sample repo ${repo}`);
+  record.stars = stars;
+}
+
+/** Whether the consumer read the repo by its GitHub ID, as it reads a requested repo. */
+function readById(repo: string): boolean {
+  return github.calls.some((call) => call.url.endsWith(`/repositories/${String(idOf(repo))}`));
+}
+
 test('a requested repo with more than 100 stars and welcoming docs is read by the crawler and listed by the hourly approval', async () => {
+  starred(INVITES, 101);
   await requestAndRead([INVITES]);
-  expect((await listCandidates(db, 'waiting')).map((find) => [find.repo, find.facts.stars])).toEqual([[INVITES, 3100]]);
+  expect(readById(INVITES)).toBe(true);
+  expect(await getRequestedRead(db, idOf(INVITES))).toMatchObject({ outcome: 'queued' });
+  expect((await listCandidates(db, 'waiting')).map((find) => [find.repo, find.facts.stars])).toEqual([[INVITES, 101]]);
 
   const run = await approve();
 
-  expect(run?.approved).toEqual([INVITES]);
+  expect(run).toMatchObject({ approver: admin.githubId, approved: [INVITES], left: [] });
   // The listing takes the settings the crawler suggested, as an admin's approval does.
   expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', source: 'policy', addedBy: admin.githubId });
   expect(await listCandidates(db, 'approved')).toMatchObject([{ repo: INVITES, reason: AUTO_APPROVED_REASON }]);
 });
 
-test('a requested repo with 100 stars or fewer is read, and its find waits for an admin', async () => {
-  const conditions = github.state.repos[CONDITIONS.toLowerCase()];
-  if (!conditions) throw new Error(`missing sample repo ${CONDITIONS}`);
-  conditions.stars = 100;
-  await requestAndRead([SEED, CONDITIONS]);
-  const found = (await listCandidates(db, 'waiting')).map((find) => [find.repo, find.facts.stars]);
-  expect(found).toEqual(expect.arrayContaining([[SEED, 40], [CONDITIONS, 100]]));
-  expect(found).toHaveLength(2);
+test('a requested repo with 100 stars, and the same welcoming docs, is read, and its find waits for an admin', async () => {
+  starred(INVITES, 100);
+  await requestAndRead([INVITES]);
+  expect(readById(INVITES)).toBe(true);
+  expect((await listCandidates(db, 'waiting')).map((find) => [find.repo, find.facts.stars])).toEqual([[INVITES, 100]]);
 
   const run = await approve();
 
-  expect(run?.approved ?? []).toEqual([]);
-  expect(await getProject(db, SEED)).toBeNull();
-  expect(await getProject(db, CONDITIONS)).toBeNull();
-  expect((await listCandidates(db, 'waiting')).map((find) => find.repo).sort()).toEqual([CONDITIONS, SEED].sort());
+  expect(run).toEqual({ approver: null, approved: [], left: [] });
+  expect(await getProject(db, INVITES)).toBeNull();
+  expect((await listCandidates(db, 'waiting')).map((find) => find.repo)).toEqual([INVITES]);
 });

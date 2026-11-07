@@ -170,8 +170,10 @@ PR with GitHub reads, and records them. The last item removes the server's write
 The [add a repo spec](docs/specs/add-a-repo.md) lets a maintainer register from a form on
 `/maintainers` and manage the project from its settings page, and lets a donor ask for a repo from the
 homepage, from `/request`, or through their agent with `request_repo`. A request lists nothing. The
-crawler reads requested repos after the admins' seeds. A requested repo with 100 stars or more whose
-docs welcome AI help is listed without waiting for an admin, and an admin reviews it afterward.
+crawler reads requested repos after the admins' seeds. Its find goes through the hourly approval
+[#191](https://github.com/meanwhileso/goodfirsttoken/pull/191) added for every find: a repo with more
+than 100 stars whose docs welcome AI help, and whose reading has none of that approval's reasons to wait,
+is listed without waiting for an admin.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
@@ -187,7 +189,7 @@ docs welcome AI help is listed without waiting for an admin, and an admin review
 | [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 | |
 | [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 | |
 | [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 | |
-| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154, #176 | [#191](https://github.com/meanwhileso/goodfirsttoken/pull/191) approves every find over 100 stars, requested ones included, as [#194](https://github.com/meanwhileso/goodfirsttoken/pull/194)'s test shows |
+| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154, #176 | [#194](https://github.com/meanwhileso/goodfirsttoken/pull/194) |
 
 ## M11 Model policy reader
 
