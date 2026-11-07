@@ -248,6 +248,27 @@ describe('the marks around a sentence', () => {
   });
 });
 
+describe('the sentences of a file', () => {
+  test("a numbered list item's number stays with its item, as a bullet's mark does", () => {
+    const text = '1. Agents may open pull requests\n2) Run the tests first. Then push.\n- Disclose AI help\n';
+    expect(scan(text).sentences.map((s) => s.text)).toEqual(['1. Agents may open pull requests', '2) Run the tests first.', 'Then push.', '- Disclose AI help']);
+  });
+
+  test("a numbered item's number isn't one of its words, as a bullet's mark isn't", () => {
+    // Over 1000 characters, so the paragraph is cut into passages, and a
+    // short item after a sentence that names AI is kept with it.
+    const long = (mark: (index: number) => string) =>
+      ['AI help is welcome here.', ...Array.from({ length: 12 }, (_, i) => `${mark(i)} Keep each change small and focused, with a clear description of what moved and why the change was needed now.`), `${mark(12)} Never push to main`].join('\n');
+    const passages = (text: string) => aiPassages([contributing(text)]).aiSentences.map((p) => p.text.includes('Never push to main'));
+    expect(passages(long(() => '-'))).toEqual([false, true]);
+    expect(passages(long((i) => `${String(i + 1)}.`))).toEqual([false, true]);
+  });
+
+  test('a number that ends a sentence in running text still ends it', () => {
+    expect(scan('We read PRs within 2. Agents are welcome.\n').sentences.map((s) => s.text)).toEqual(['We read PRs within 2.', 'Agents are welcome.']);
+  });
+});
+
 describe('quotes', () => {
   test('a heading is quoted with the paragraph under it', () => {
     expect(quoteAt(contributing('## AI help is welcome\n\nDisclose it with an Assisted-by: trailer.\n\n## Tests\n\nRun them.'), 'AI help is welcome')).toBe(
