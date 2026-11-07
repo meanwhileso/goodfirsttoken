@@ -311,10 +311,17 @@ export const crawlMessageSchema = z
      */
     requested: z.array(githubRepoId).min(1).max(MAX_CRAWL_BATCH).optional(),
   })
-  .refine((message) => message.requested === undefined || (message.reread === undefined && message.requested.length === message.repos.length), {
-    path: ['requested'],
-    message: 'must give one repo ID for each repo, and only for a message that is no weekly read',
-  });
+  .refine(
+    (message) =>
+      message.requested === undefined ||
+      (message.reread === undefined &&
+        message.requested.length === message.repos.length &&
+        new Set(message.repos.map((repo) => repo.toLowerCase())).size === message.repos.length),
+    {
+      path: ['requested'],
+      message: 'must give one repo ID for each repo, each repo named once, and none for a weekly read',
+    },
+  );
 export type CrawlMessage = z.infer<typeof crawlMessageSchema>;
 
 /**

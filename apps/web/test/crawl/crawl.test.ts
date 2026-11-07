@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { runReader } from '../../src/crawl/batches';
 import { crawlRepos, newCrawlProgress, newCrawlRun, readCrawlBatch } from '../../src/crawl/queue';
+import { adminSeedRepo } from '../../src/admin/actions';
 import { fillCrawlQueue } from '../../src/crawl/producer';
 import {
   addCandidate,
@@ -12,6 +13,7 @@ import {
   addSeed,
   addToDoNotList,
   blockDonor,
+  createProject,
   getRequestedRead,
   getSeed,
   listCandidates,
@@ -1317,11 +1319,113 @@ describe('requested repos', () => {
   });
 
   test('admin_seed_repo on a requested repo adds an admin seed, and the repo stays on the requested list', async () => {
+    const configured = env.ADMIN_GITHUB_IDS;
+    env.ADMIN_GITHUB_IDS = String(admin.githubId);
+    try {
+      await request(SEED);
+      const caller = { ...admin, gitHubToken: () => Promise.resolve(github.tokenFor(admin.login)) };
+
+      const seeded = await adminSeedRepo(caller, { repo: SEED }, start);
+      await fill();
+
+      expect(seeded).toMatchObject({ ok: true, value: { repo: SEED, added: true } });
+      expect(await getSeed(db, SEED)).toMatchObject({ addedBy: admin.githubId, outcome: 'queued' });
+      expect(await getRequestedRead(db, idOf(SEED))).toMatchObject({ outcome: 'queued' });
+      expect(sent).toEqual([{ repos: [SEED] }, { repos: [SEED], requested: [idOf(SEED)] }]);
+      vi.setSystemTime(start + 30 * DAY);
+      expect((await listRequestedToRead(db, 5, Date.now())).map((r) => r.repo)).toEqual([SEED]);
+    } finally {
+      env.ADMIN_GITHUB_IDS = configured;
+    }
+  });
+
+  test('repos it leaves out take none of the 5', async () => {
+    const repos = ['a', 'b', 'c', 'd', 'e', 'f'].map((name) => {
+      const repo = `sample-owner/queued-${name}`;
+      github.createRepo(repo);
+      return repo;
+    });
+    await addToDoNotList(db, { repo: ARCHIVED, reason: null, addedBy: admin.githubId }, start);
+    await request(ARCHIVED, start - 10 * DAY);
+    for (const [i, repo] of repos.entries()) await request(repo, start - 9 * DAY + i * HOUR);
+
+    await fill();
+
+    expect(requestedSent()).toEqual([{ repos: repos.slice(0, 5), requested: repos.slice(0, 5).map(idOf) }]);
+    expect(await getRequestedRead(db, idOf(ARCHIVED))).toMatchObject({ outcome: 'do_not_list' });
+  });
+
+  test('a repo with live requests under two names is queued under the newest one', async () => {
+    const renamed = 'sample-policies/small-seed-next';
+    await request(SEED, start - 2 * DAY, kenji);
+    github.renameRepo(SEED, renamed);
+    await addRequest(db, { repoId: idOf(renamed), repo: renamed, githubId: priya.githubId }, start - DAY);
+
+    await fill();
+
+    expect(requestedSent()).toEqual([{ repos: [renamed], requested: [idOf(renamed)] }]);
+  });
+
+  test('two repo IDs under one name go in separate runs, so each is read', async () => {
+    const renamed = 'sample-policies/small-seed-next';
+    const first = idOf(SEED);
+    await request(SEED, start - 2 * DAY, kenji);
+    github.renameRepo(SEED, renamed);
+    github.createRepo(SEED);
+    const second = idOf(SEED);
+    await addRequest(db, { repoId: second, repo: SEED, githubId: priya.githubId }, start - DAY);
+
+    await fill();
+    const one = requestedSent();
+    sent.splice(0);
+    later(HOUR);
+    await fill();
+
+    expect(one).toEqual([{ repos: [SEED], requested: [first] }]);
+    expect(requestedSent()).toEqual([{ repos: [SEED], requested: [second] }]);
+  });
+
+  test("a project under a repo's old name, which is another repo now, doesn't leave the requested repo out", async () => {
+    const renamed = 'sample-policies/small-seed-next';
     await request(SEED);
+    github.renameRepo(SEED, renamed);
+    const other = github.createRepo(SEED);
+    await createProject(
+      db,
+      { repo: SEED, status: 'approved', source: 'registered', policy: null, settings: { tags: ['help wanted'] }, addedBy: maintainer.githubId, repoIds: { repo: other } },
+      start,
+    );
 
-    await addSeed(db, { repo: SEED, addedBy: admin.githubId }, start);
+    await fill();
+    await consume(sent.filter((m) => m.requested !== undefined));
 
-    expect(await getSeed(db, SEED)).toMatchObject({ repo: SEED, addedBy: admin.githubId });
-    expect((await listRequestedToRead(db, 5, start)).map((r) => r.repo)).toEqual([SEED]);
+    expect((await listPending(db)).map((p) => p.repo)).toEqual([renamed]);
+  });
+
+  test('a repo whose name now is a project is left out by the consumer, which records why under that name', async () => {
+    const renamed = 'sample-policies/small-seed-next';
+    await request(SEED);
+    github.renameRepo(SEED, renamed);
+    await registeredProject({ tags: ['help wanted'] }, renamed);
+
+    await fill();
+    await consume(sent.filter((m) => m.requested !== undefined));
+
+    expect(await listPending(db)).toEqual([]);
+    expect(await getRequestedRead(db, idOf(renamed))).toMatchObject({ repo: renamed, outcome: 'project' });
+  });
+
+  test("a requested repo's label check, for docs the model read before, comes out of the requested repos' share", async () => {
+    await request(SEED);
+    await fill();
+    await read(sent.splice(0));
+    // The find is gone from the queue, so its next read stages a label check from the kept reading.
+    await db.prepare('DELETE FROM crawl_candidates WHERE repo = ?').bind(SEED).run();
+    vi.setSystemTime(start + 30 * DAY);
+
+    await fill();
+    await consume(sent.filter((m) => m.requested !== undefined));
+
+    expect((await listPending(db)).map((p) => [p.repo, p.share])).toEqual([[SEED, 'requests']]);
   });
 });

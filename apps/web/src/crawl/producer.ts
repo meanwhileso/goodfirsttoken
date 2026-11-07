@@ -5,6 +5,7 @@ import {
   listRequestedToRead,
   listSeedsToHandle,
   markRequestedRead,
+  requestedProjects,
   markRereadsQueued,
   markSeedsHandled,
 } from '../db';
@@ -85,23 +86,44 @@ async function queueSeeds(deps: FillDeps): Promise<number> {
  * Queues at most REQUESTED_PER_RUN requested repos that are due, in one
  * message that gives each one's repo ID, so the consumer reads it under its
  * name now. It leaves out what the seed list leaves out, with the same
- * checks, by the name GitHub gave at the newest request, and records for
- * each repo it looked at whether it queued it or left it out, and why, once
- * the queue took the message.
+ * checks: the do-not-list and finds by the name GitHub gave last, and
+ * projects by the repo's ID. It records for each repo it left out, and each
+ * it queued, whether it queued it or left it out, and why, once the queue
+ * took the message. The consumer checks again under the name now.
  */
 async function queueRequested(deps: FillDeps): Promise<Pick<FillRun, 'requested' | 'requestedLeftOut'>> {
   const due = await listRequestedToRead(deps.db, REQUESTED_LOOKED_AT, deps.now());
-  const skips = await crawlerSkips(
+  const byName = await crawlerSkips(
     deps.db,
     due.map((repo) => repo.repo),
     { readRejected: true },
   );
-  const leftOut = due.filter((repo) => skips.has(repo.repo.toLowerCase()));
-  const queued = due.filter((repo) => !skips.has(repo.repo.toLowerCase())).slice(0, REQUESTED_PER_RUN);
+  // A project is checked by the repo's ID, so a project under an old name
+  // that another repo took now doesn't leave the requested repo out.
+  const projects = await requestedProjects(deps.db, due);
+  const skips = new Map<number, Exclude<CrawlSeedOutcome, 'queued'>>();
+  for (const repo of due) {
+    const named = byName.get(repo.repo.toLowerCase());
+    const why = named === 'project' ? undefined : named;
+    if (why === 'do_not_list') skips.set(repo.repoId, why);
+    else if (projects.has(repo.repoId)) skips.set(repo.repoId, 'project');
+    else if (why !== undefined) skips.set(repo.repoId, why);
+  }
+  const leftOut = due.filter((repo) => skips.has(repo.repoId));
+  // Two repo IDs under one name, as after a rename and a new repo under the
+  // old name, go in separate runs, so a message names each repo once.
+  const names = new Set<string>();
+  const queued = due
+    .filter((repo) => {
+      if (skips.has(repo.repoId) || names.has(repo.repo.toLowerCase())) return false;
+      names.add(repo.repo.toLowerCase());
+      return true;
+    })
+    .slice(0, REQUESTED_PER_RUN);
   if (queued.length > 0) {
     await deps.queue.sendBatch([{ body: { repos: queued.map((repo) => repo.repo), requested: queued.map((repo) => repo.repoId) } }]);
   }
-  const why = (repo: { repo: string }) => skips.get(repo.repo.toLowerCase()) ?? 'queued';
+  const why = (repo: { repoId: number }): CrawlSeedOutcome => skips.get(repo.repoId) ?? 'queued';
   await markRequestedRead(
     deps.db,
     [...queued, ...leftOut].map((repo) => ({ repoId: repo.repoId, repo: repo.repo, outcome: why(repo) })),

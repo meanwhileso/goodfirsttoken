@@ -1,5 +1,5 @@
 import { crawlMessageSchema, describeProblems, repoName, validate, type CrawlMessage } from '@goodfirsttoken/core';
-import { crawlerSkips, type CrawlerSkip } from '../db';
+import { crawlerSkips, noteRequestedRead, type CrawlerSkip } from '../db';
 import { GitHubError } from '../github';
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
 import { ALLOWANCES, serviceToken } from '../sync/allowances';
@@ -230,6 +230,22 @@ export async function crawlRequested(
       } else throw error;
     }
   }
+  // What the crawler leaves out under the name now, it records under that
+  // name, as the cron job does under the name it knew.
+  const named = repos.flatMap((asked, i) => {
+    const name = now.get(asked);
+    const repoId = ids[i];
+    return name === undefined || repoId === undefined ? [] : [{ repoId, repo: name }];
+  });
+  const skips = await crawlerSkips(
+    deps.db,
+    named.map((repo) => repo.repo),
+    { readRejected: true },
+  );
+  await noteRequestedRead(
+    deps.db,
+    named.map((repo) => ({ ...repo, outcome: skips.get(repo.repo.toLowerCase()) ?? 'queued' })),
+  );
   const inner = newCrawlProgress();
   try {
     await crawlRepos(deps, [...new Set(now.values())], run, inner, { share: 'requests' });
@@ -298,7 +314,14 @@ export async function readCrawlBatch(
     if (repos.length === 0) return true;
     // A requested repo goes back with its repo ID.
     const requested = body.requested;
-    const ids = requested === undefined ? undefined : repos.map((repo) => requested[body.repos.indexOf(repo)] ?? 0);
+    const ids =
+      requested === undefined
+        ? undefined
+        : repos.map((repo) => {
+            const id = requested[body.repos.indexOf(repo)];
+            if (id === undefined) throw new Error(`Crawl message ${message.id} gives no repo ID for ${repo}.`);
+            return id;
+          });
     try {
       await env.CRAWL_QUEUE.send(
         { repos: [...repos], ...(body.reread ? { reread: true } : {}), ...(ids === undefined ? {} : { requested: ids }) },

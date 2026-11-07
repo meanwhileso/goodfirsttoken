@@ -3204,27 +3204,36 @@ call to GitHub.
 their own list, after the admins' seeds in each run, whatever their stars.
 
 - A repo is on the list while it has at least one live request from a
-  donor who isn't blocked. A withdrawn last request, or a block on its
-  last requester, takes it off.
+  donor who isn't blocked. Once every live request is withdrawn or comes
+  from a blocked donor, it is off.
 - Each run queues at most 5, in one message that gives each one's GitHub
   repo ID. Repos never read come first, by their oldest live request. A
   requested repo is due again 30 days after it was read, as a seed is, and
   those come after the new ones, longest since read first.
-- It leaves out what the seed list leaves out, with the same checks, by
-  the name GitHub gave at the newest live request: a repo on the
-  do-not-list, a project already, or a repo whose find waits or was
-  approved. Repos it leaves out take none of the 5. It records for each
-  repo, by its ID, whether it queued it or left it out, and why, and the
-  repo is due again 30 days later either way.
+- It leaves out what the seed list leaves out, with the same checks: a
+  repo on the do-not-list, a project already, or a repo whose find waits
+  or was approved. It checks a project by the repo's ID, and the
+  do-not-list and finds by the name GitHub gave last, which is the name at
+  the crawler's last read, or at the newest live request when one came
+  after. Of the first 100 repos due, the ones it leaves out take none of
+  the 5. It records for each repo, by its ID, whether it queued it or left
+  it out, and why, and the repo is due again 30 days later either way.
+- Two repo IDs under one name, as after a rename and a new repo under the
+  old name, go in separate runs, so a message names each repo once.
 - It records a requested repo as read after the queue takes the message,
   as for a seed. A reading waiting on the model's budget stays pending
   until the budget has room, under The budget in
-  [The model policy reader](#the-model-policy-reader).
+  [The model policy reader](#the-model-policy-reader). A message that
+  ends in the dead-letter queue, a read with no `ANTHROPIC_API_KEY`, and a
+  repo whose labels GitHub didn't give all wait the 30 days, as for a
+  seed.
 - The consumer reads each repo by its ID first, with the service token,
   and reads its docs under the name GitHub gives it now. So a renamed repo
   is read under its new name, and a new repo made under the old name isn't
-  read for the request. A repo GitHub no longer shows is read no further.
-  A repo GitHub fails on goes back to the queue alone, with its ID.
+  read for the request. It checks the do-not-list, projects, and finds
+  again under that name, and records the name, and why it left the repo
+  out when it does. A repo GitHub no longer shows is read no further. A
+  repo GitHub fails on goes back to the queue alone, with its ID.
 - Its readings come out of the requested repos' share of the model's
   budget, 20% of the day. A reading past the share waits for a later run,
   and at the latest for the next UTC day.

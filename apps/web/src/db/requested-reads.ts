@@ -12,7 +12,11 @@ export const REQUESTED_EVERY_MS = 30 * 86_400_000;
 /** A requested repo due for a read. */
 export interface RequestedRepo {
   repoId: number;
-  /** The name GitHub gave at the newest live request. The consumer reads the repo under its name now. */
+  /**
+   * The name GitHub gave last: at the crawler's last read, or at the newest
+   * live request when one came after. The consumer reads the repo under its
+   * name now.
+   */
   repo: string;
   /** When the crawler last read it, or null when it never did. */
   readAt: number | null;
@@ -34,7 +38,9 @@ export async function listRequestedToRead(db: D1Database, limit: number, now: nu
            AND NOT EXISTS (SELECT 1 FROM donor_blocks b WHERE b.github_id = q.github_id)
        )
        SELECT l.repo_id,
-         (SELECT n.repo FROM live n WHERE n.repo_id = l.repo_id ORDER BY n.requested_at DESC LIMIT 1) AS repo,
+         -- The name GitHub gave last: the consumer's, at its last read, unless a request came after.
+         CASE WHEN r.read_at IS NOT NULL AND r.read_at >= MAX(l.requested_at) THEN r.repo
+           ELSE (SELECT n.repo FROM live n WHERE n.repo_id = l.repo_id ORDER BY n.requested_at DESC LIMIT 1) END AS repo,
          MIN(l.requested_at) AS first_asked,
          r.read_at
        FROM live l LEFT JOIN requested_reads r ON r.repo_id = l.repo_id
@@ -92,6 +98,45 @@ export async function markRequestedRead(
           mustParse(crawlSeedOutcomeSchema, outcome, 'outcome'),
           at - REQUESTED_EVERY_MS,
         ),
+    ),
+  );
+}
+
+/**
+ * Which of these requested repos are a project already, by repo ID: a
+ * project keeps the repo's ID as its code repo, or keeps the name with no ID
+ * stored yet. A project under the name that keeps another repo's ID is
+ * another repo's, so it doesn't count.
+ */
+export async function requestedProjects(db: D1Database, repos: readonly { repoId: number; repo: string }[]): Promise<Set<number>> {
+  if (repos.length === 0) return new Set();
+  const { results } = await db
+    .prepare(
+      `SELECT json_extract(j.value, '$.id') AS repo_id FROM json_each(?1) j
+       WHERE EXISTS (SELECT 1 FROM projects p
+         WHERE p.repo_id = json_extract(j.value, '$.id')
+           OR (p.repo_id IS NULL AND p.repo = json_extract(j.value, '$.repo')))`,
+    )
+    .bind(JSON.stringify(repos.map((r) => ({ id: mustParse(githubRepoId, r.repoId, 'repoId'), repo: mustParse(repoName, r.repo, 'repo') }))))
+    .all<{ repo_id: number }>();
+  return new Set(results.map((row) => row.repo_id));
+}
+
+/**
+ * What the consumer found when it read each requested repo by its ID: the
+ * name GitHub gives it now, and, when the crawler leaves it out under that
+ * name, why. The time of the read stays the cron job's.
+ */
+export async function noteRequestedRead(
+  db: D1Database,
+  read: readonly { repoId: number; repo: string; outcome: CrawlSeedOutcome }[],
+): Promise<void> {
+  if (read.length === 0) return;
+  await db.batch(
+    read.map(({ repoId, repo, outcome }) =>
+      db
+        .prepare('UPDATE requested_reads SET repo = ?, outcome = ? WHERE repo_id = ?')
+        .bind(mustParse(repoName, repo, 'repo'), mustParse(crawlSeedOutcomeSchema, outcome, 'outcome'), mustParse(githubRepoId, repoId, 'repoId')),
     ),
   );
 }
