@@ -193,6 +193,7 @@ export interface Sentence {
 // wrapped in the middle of a sentence.
 const BLOCK_START = /^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|>|\|)/;
 const LIST_ITEM = /^\s*(?:[-*+]\s|\d+[.)]\s)/;
+const NUMBERED_MARK = /^\s*\d+[.)]\s/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 // A sentence ends at the last of its closing marks, before a space. One
 // mark at a time, so a long run of them takes one step each.
@@ -238,7 +239,10 @@ export function scan(text: string): { paragraphs: { start: number; end: number }
         sentences.push({ text: plain(trimmed), start: s, end: s + trimmed.length, paragraph: paragraphs.length, underAi, item });
       }
     };
+    // A numbered item's mark, like "1. ", isn't the end of a sentence.
+    const mark = NUMBERED_MARK.exec(original)?.[0].length ?? 0;
     for (const match of original.matchAll(SENTENCE_END)) {
+      if (match.index < mark) continue;
       add(match.index + match[0].length);
       from = match.index + match[0].length;
     }
@@ -363,8 +367,9 @@ export function linesOf(file: PolicyFile): (index: number) => SourceLine {
   };
 }
 
+/** A sentence's words, without its list mark, so "1. Never push to main" has four, as "- Never push to main" does. */
 function words(text: string): number {
-  return text.split(' ').filter((word) => /\w/.test(word)).length;
+  return bare(text).split(' ').filter((word) => /\w/.test(word)).length;
 }
 
 /**

@@ -3191,7 +3191,9 @@ sentences and paragraphs the Worker's checks use.
   file's own text.
 - A sentence ends at a period, question mark, or exclamation mark followed
   by a space, at a blank line, or where a list item, a heading, a quote, or
-  a table row starts. It runs on over a line that is only wrapped.
+  a table row starts. It runs on over a line that is only wrapped. The
+  period in a numbered item's mark, like `1. `, doesn't end one, so the
+  number stays with its item, as a bullet's mark does.
 - **A sentence names AI** when it has `AI` in capitals or `A.I.`, `ai-`
   before a word like generated, assisted, written, tools, or agents in any
   case, `LLM`, `language model`, `artificial intelligence`, `genAI`,

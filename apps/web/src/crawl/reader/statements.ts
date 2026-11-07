@@ -76,23 +76,57 @@ export class Files {
     const to = endLine < starts.length ? (starts[endLine] ?? file.text.length) - 1 : file.text.length;
     const lines = file.text.slice(from, to);
 
+    // The quote matches with each sentence's marks off, or with each
+    // sentence's marks kept or left out, one sentence at a time, and line
+    // breaks folded. The second is for a numbered list folded onto one
+    // line, as "lead-in: 1. First 2. Second", where the quote's own scan
+    // can't tell the numbers from sentence ends.
     const quote = canonical(scan(pointer.quote).sentences);
+    const asWritten = plain(pointer.quote);
     if (quote === '') return { ok: false, failure: 'quote' };
+    const longest = Math.max(quote.length, asWritten.length);
     const within = sentences.filter((s) => s.start >= from && s.end <= to);
     for (let first = 0; first < within.length; first++) {
       for (let last = first; last < within.length; last++) {
         const run = within.slice(first, last + 1);
         const text = canonical(run);
-        if (text === quote) {
+        const marked = run.map((s) => s.text).join(' ');
+        if (text === quote || spells(run, asWritten)) {
           return { ok: true, pointer: { file, startLine, endLine, lines, sentences: run, source: sourceAt(run[0]?.start ?? from) } };
         }
-        if (text.length > quote.length) break;
+        if (text.length > longest && marked.length > longest) break;
       }
     }
     // Found, but not as whole sentences: cut from one, like "AI help is
     // fine" from "We don't think AI help is fine."
     return { ok: false, failure: plain(lines).includes(plain(pointer.quote)) ? 'sentences' : 'quote' };
   }
+}
+
+/**
+ * Whether a text is the sentences in order, each as the file has it or
+ * without its marks, joined by single spaces. Each sentence is whole: the
+ * text can't stop partway through one.
+ */
+function spells(sentences: readonly { text: string }[], text: string): boolean {
+  const forms = sentences.map((s) => [...new Set([s.text, bare(s.text).trim()])].filter((form) => form !== ''));
+  const failed = new Set<string>();
+  const from = (index: number, at: number): boolean => {
+    if (index === forms.length) return at === text.length;
+    const key = `${String(index)}:${String(at)}`;
+    if (failed.has(key)) return false;
+    const options = forms[index] ?? [];
+    // A sentence that is only marks may be left out whole.
+    if (options.length === 0 && from(index + 1, at)) return true;
+    for (const form of options) {
+      const start = at === 0 ? 0 : at + 1;
+      if (at !== 0 && text.charAt(at) !== ' ') continue;
+      if (text.startsWith(form, start) && from(index + 1, start + form.length)) return true;
+    }
+    failed.add(key);
+    return false;
+  };
+  return from(0, 0);
 }
 
 /** Sentences as one text, each without the marks around it, so a quote with or without list and heading marks matches. */

@@ -120,6 +120,50 @@ describe('the checks on a statement', () => {
     expect(failure(statement('AI_POLICY.md', 6, 6, 'Agents may only work on issues labeled `agent ready`.', 'onlyLabel', { label: 'agent ready' }))).toBeNull();
   });
 
+  test('a numbered list is quoted with or without its marks, as the prompt allows', () => {
+    // From a reading of a real agents.md that lost its review condition: the
+    // checker read each item's number as a sentence of its own.
+    const guide = file(
+      'agents',
+      [
+        'When working with AI assistants:', // 1
+        '', // 2
+        '1. **Reference this document** - Point agents to the sections for your task', // 3
+        '2. **Verify compliance** - Ensure agent output follows these guidelines', // 4
+        '3. **Provide feedback** - Report issues with these guidelines', // 5
+      ].join('\n'),
+    );
+    const at = (quote: string, endLine: number) => {
+      const result = checkStatement(new Files([guide]), statement(guide.path, 1, endLine, quote, 'personInLoop') as Statement, 0);
+      return result.ok ? result.statement.sentences.map((s) => s.text) : result.failure;
+    };
+    const bare = 'When working with AI assistants: Reference this document - Point agents to the sections for your task Verify compliance - Ensure agent output follows these guidelines';
+    const marked = 'When working with AI assistants: 1. **Reference this document** - Point agents to the sections for your task 2. **Verify compliance** - Ensure agent output follows these guidelines';
+    const sentences = [
+      'When working with AI assistants:',
+      '1. Reference this document - Point agents to the sections for your task',
+      '2. Verify compliance - Ensure agent output follows these guidelines',
+    ];
+    expect(at(bare, 4)).toEqual(sentences);
+    expect(at(marked, 4)).toEqual(sentences);
+    // Still whole items: half of one is cut from it.
+    expect(at('Verify compliance', 4)).toBe('sentences');
+  });
+
+  test('a quote may keep some marks and leave out others, sentence by sentence', () => {
+    const rules = (lead: string) =>
+      file('agents', [lead, '1. Open a draft pull request first.', '2. A maintainer must review every change.'].join('\n'));
+    const kept = (doc: PolicyFile, quote: string) => {
+      const result = checkStatement(new Files([doc]), statement(doc.path, 1, 3, quote, 'personInLoop') as Statement, 0);
+      return result.ok ? null : result.failure;
+    };
+    const items = '1. Open a draft pull request first. 2. A maintainer must review every change.';
+    expect(kept(rules('- When working with AI assistants:'), `When working with AI assistants: ${items}`)).toBeNull();
+    expect(kept(rules('## AI rules'), `AI rules ${items}`)).toBeNull();
+    expect(kept(rules('## AI rules'), `## AI rules Open a draft pull request first. 2. A maintainer must review every change.`)).toBeNull();
+    expect(kept(rules('## AI rules'), `AI rules 1. Open a draft pull request first. 2. A maintainer must review`)).toBe('sentences');
+  });
+
   test('a sentence wrapped over two lines is kept with both lines, and dropped with one', () => {
     expect(failure(statement('AI_POLICY.md', 10, 11, 'Agent pull requests are welcome on any issue.', 'welcomesAgents'))).toBeNull();
     expect(failure(statement('AI_POLICY.md', 10, 10, 'Agent pull requests are welcome on any issue.', 'welcomesAgents'))).toBe('quote');
