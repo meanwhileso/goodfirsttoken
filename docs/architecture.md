@@ -1624,7 +1624,7 @@ in `people`.
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, the crawler's rules' last fingerprint of its docs and whether they read a ban, from before the model read policies, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, how many weekly reads in a row gave no verdict, and whether it was read in shadow or while the model decided | `project` |
-| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier for a change the model sent while the rules still read, status, and the admin's decision | `id` |
+| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier for a change the model sent while the rules still read, the link the listing had when its welcome moved to another file, status, and the admin's decision | `id` |
 | `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, with the label check's tags and suggested tags once back, the model's output as JSON, which a later label check reads its statements from, its outcome fingerprint, and when | `repo` |
 | `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, an empty `rules_tier` that nothing reads, the commit, branch, facts, vouch file, and labels with their descriptions, and while in a batch, the batch and what it reserved on which day. After a seed's reading that would make a find, it waits on the label check, with the model's policy reading. After a weekly read's move into a ban, it waits on the second reading, with the first | `id` |
 | `model_staged_files` | File a pending reading reads, in the crawler's order | `reading_id`, `position` |
@@ -3484,8 +3484,8 @@ candidates. The rules are in
   another version as a new baseline: it keeps the new one, so a new reader
   sends no listing back to the queue for what it read. A welcome that moved
   to another file still sends its listing back, since `welcomeMoved` reads
-  that from the files, and a move an admin rejected, kept in
-  `policy_changes`, stays out. For a listing made from a policy, by
+  that from the linked file. A move an admin rejected, kept in
+  `policy_changes` with the link the listing had, stays out. For a listing made from a policy, by
   hand or from a find, it still pauses on a move into a ban, read from
   `policy_reads.model_banned`, which no version touches. So a new reader
   can pause a listing it reads as a ban, and an admin reviews the pause,

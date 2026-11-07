@@ -10,7 +10,7 @@ import { pauseForCrawler } from './pause';
 import { readPolicyOutput, type PolicyReading } from './reader';
 import { docsHash } from './reader/docs';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
-import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
+import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, readsPath, RepoFailed, type FoundRepo } from './reads';
 import type { PolicyFile } from './rules';
 
 // Keeping listings current (spec section 5): the crawl queue's consumer
@@ -120,29 +120,42 @@ function linkedPath(url: string, repo: string, branch: string): string | null {
   }
 }
 
+/**
+ * A text's words for matching a quote: a Markdown link or image as its text,
+ * and an HTML tag left out, so a quote copied from the rendered page matches
+ * the file it was copied from.
+ */
+function shownWords(text: string): string {
+  return wordsOf(
+    text
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/<[^>]*>/g, ' '),
+  );
+}
+
 /** Whether a text holds the words of a quote, in order, as whole words. */
 function holdsWords(text: string, quote: string): boolean {
-  return ` ${wordsOf(text)} `.includes(` ${wordsOf(quote)} `);
+  return ` ${shownWords(text)} `.includes(` ${shownWords(quote)} `);
 }
 
 /**
  * Whether the welcome a listing was made from moved to another file: the
- * file the listing links to holds the quote's words no more, or is gone,
- * and another file the crawler read holds them, while the reading still
- * finds a welcome. The fingerprint leaves out which file a welcome is in,
- * so this is what sends the listing back to the queue for a new link. It
- * reads the files, not the lines the model cited, so a reading that cites
- * one copy of a welcome and not another moves nothing. A quote with other
- * words is the fingerprint's to catch, and docs that welcome nothing now
- * are the tier's. A link elsewhere, as linkedPath says, says nothing here.
+ * file the listing links to no longer holds the quote's words, or is gone,
+ * and the reading's welcome is in another file. The fingerprint leaves out
+ * which file a welcome is in, so this is what sends the listing back to the
+ * queue for a new link. A linked file that still holds the words moved
+ * nothing, whichever copy of a welcome the model cites. A file the crawler
+ * doesn't read, like a README, is never gone, as readsPath says. Docs with
+ * no welcome now are the tier's to catch, and a link elsewhere, as
+ * linkedPath says, isn't checked. `welcomeFile` is the path of the
+ * reading's welcome, or null.
  */
-export function welcomeMoved(policy: Policy | null, repo: string, branch: string, files: readonly PolicyFile[], welcomes: boolean): boolean {
-  if (policy === null || !welcomes || wordsOf(policy.quote) === '') return false;
+export function welcomeMoved(policy: Policy | null, repo: string, branch: string, files: readonly PolicyFile[], welcomeFile: string | null): boolean {
+  if (policy === null || welcomeFile === null || shownWords(policy.quote) === '') return false;
   const path = linkedPath(policy.url, repo, branch);
-  if (path === null) return false;
+  if (path === null || path === welcomeFile) return false;
   const linked = files.find((file) => file.path === path);
-  if (linked !== undefined && holdsWords(linked.text, policy.quote)) return false;
-  return files.some((file) => file.path !== path && holdsWords(file.text, policy.quote));
+  return linked === undefined ? readsPath(path) : !holdsWords(linked.text, policy.quote);
 }
 
 /**
@@ -176,7 +189,7 @@ function pullRequestsFrom(facts: RepoFacts): 'open' | 'unknown' | { limited: str
  * - With a last read of another version, as after a new reader version, it
  *   takes the new one and reads as no change, so a new reader sends nothing
  *   back to the queue for what it read. A welcome that moved still counts,
- *   since that is in the files, not the reading.
+ *   since the linked file shows it.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
  * - A listing made from a maintainer's post reads as no change at its first

@@ -355,10 +355,10 @@ admin sees.
    the policy changed. So a build step added to `AGENTS.md` costs one model
    call and sends nothing to the admin queue. The fingerprint leaves out
    which file a welcome is in, so a weekly read also checks the listing's
-   link. When the linked file no longer holds the quote's words and
-   another file the crawler reads does, the welcome moved, and the listing
-   goes back to the queue for a new link, once. A move an admin rejected
-   doesn't come back.
+   link. When the linked file no longer holds the quote's words, or is
+   gone, and the reading's welcome is in another file, the welcome moved,
+   and the listing goes back to the queue for a new link. A move an admin
+   rejected, from the same link to the same new one, doesn't come back.
 8. **The fingerprint version follows the reader version.** A fingerprint
    is `v` and a number, so `FINGERPRINT_VERSION` goes up by one with every
    reader version, and the reading keeps the reader version's name. A new
