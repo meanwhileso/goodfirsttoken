@@ -3482,7 +3482,10 @@ candidates. The rules are in
   none of the text. `READER_FINGERPRINT_VERSION` goes up with every reader
   version. `compare` in `src/crawl/reread.ts` reads a fingerprint of
   another version as a new baseline: it keeps the new one, so a new reader
-  sends no listing back to the queue. For a listing made from a policy, by
+  sends no listing back to the queue for what it read. A welcome that moved
+  to another file still sends its listing back, since `welcomeMoved` reads
+  that from the files, and a move an admin rejected, kept in
+  `policy_changes`, stays out. For a listing made from a policy, by
   hand or from a find, it still pauses on a move into a ban, read from
   `policy_reads.model_banned`, which no version touches. So a new reader
   can pause a listing it reads as a ban, and an admin reviews the pause,

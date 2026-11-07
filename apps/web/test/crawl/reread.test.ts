@@ -7,6 +7,7 @@ import { runReader } from '../../src/crawl/batches';
 import { readCrawlBatch } from '../../src/crawl/queue';
 import { READER_FINGERPRINT_VERSION } from '../../src/crawl/reader/fingerprint';
 import { MODEL_BAN_REASON, welcomeMoved } from '../../src/crawl/reread';
+import type { PolicyFile } from '../../src/crawl/rules';
 import { fillCrawlQueue } from '../../src/crawl/producer';
 import {
   addCandidate,
@@ -274,6 +275,27 @@ function reads(statements: ReturnType<typeof statement>[], tier: string, times =
 /** The model reads the ban on line 3 of AI_POLICY.md, for the first reading and the second a pause takes. */
 function readsBan(times = 2): void {
   reads([statement('AI_POLICY.md', 3, BAN, 'bansAi')], 'bans_or_restricts', times);
+}
+
+/** CONTRIBUTING.md once the AI policy moved into it, with the same words. */
+const MOVED = `# Contributing\n\n## AI policy\n\n${QUOTE}\n\nDisclose it with an Assisted-by: trailer.\n`;
+
+/** The model's next reading of the docs once the AI policy moved into CONTRIBUTING.md: the same outcome, in another file. */
+function readsMoved(): void {
+  reads(
+    [
+      statement('CONTRIBUTING.md', 5, QUOTE, 'welcomesAgents'),
+      statement('CONTRIBUTING.md', 5, QUOTE, 'onlyLabel', { label: 'agent ready' }),
+      statement('CONTRIBUTING.md', 7, 'Disclose it with an Assisted-by: trailer.', 'disclosureTrailer', { value: 'Assisted-by' }),
+    ],
+    'invites_agents',
+  );
+}
+
+/** Moves INVITES's AI policy from AI_POLICY.md into CONTRIBUTING.md, and has the model read it there. */
+function moveWelcome(): void {
+  commit(INVITES, { 'AI_POLICY.md': null, 'CONTRIBUTING.md': MOVED });
+  readsMoved();
 }
 
 /** How many policy readings the model was asked for. */
@@ -632,19 +654,7 @@ describe('a listing whose policy changes', () => {
   test('a welcome that moves to another file goes back to the queue, since the listing links to the file', async () => {
     await listing();
     await week();
-    commit(INVITES, {
-      'AI_POLICY.md': null,
-      'CONTRIBUTING.md': `# Contributing\n\n## AI policy\n\n${QUOTE}\n\nDisclose it with an Assisted-by: trailer.\n`,
-    });
-    // The same words, so the same outcome, in another file.
-    reads(
-      [
-        statement('CONTRIBUTING.md', 5, QUOTE, 'welcomesAgents'),
-        statement('CONTRIBUTING.md', 5, QUOTE, 'onlyLabel', { label: 'agent ready' }),
-        statement('CONTRIBUTING.md', 7, 'Disclose it with an Assisted-by: trailer.', 'disclosureTrailer', { value: 'Assisted-by' }),
-      ],
-      'invites_agents',
-    );
+    moveWelcome();
 
     const { changed } = await week();
 
@@ -652,6 +662,64 @@ describe('a listing whose policy changes', () => {
     const [change] = await listPolicyChanges(db, 'waiting');
     expect(change?.policy).toMatchObject({ quote: QUOTE, url: `https://github.com/${INVITES}/blob/main/CONTRIBUTING.md` });
     expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', policy: LISTED });
+  });
+
+  test('a move an admin rejected stays out of the queue at later edits and at a new reader version, until the welcome moves again', async () => {
+    await listing();
+    await week();
+    moveWelcome();
+    await week();
+    const admin = await connectAgent(github, ADMIN.login);
+    const { item } = await onlyItem(admin, 'policy_change', INVITES);
+    await call(admin, 'admin_decide', { id: item.id, decision: 'reject', reason: 'The old link is fine.' });
+
+    commit(INVITES, { 'CHANGELOG.md': '# Changelog\n', 'CONTRIBUTING.md': `${MOVED}\nRun the tests before you push.\n` });
+    readsMoved();
+    const edited = await week();
+    // As after a new reader version: the same docs are read again, against a fingerprint of the old one.
+    await db.prepare("UPDATE policy_reads SET model_fingerprint = ?, reader_version = 'an older reader' WHERE project = ?").bind(OTHER_VERSION, INVITES).run();
+    const bumped = await week();
+    commit(INVITES, { 'CONTRIBUTING.md': '# Contributing\n\nRun the tests before you push.\n', 'docs/AI_POLICY.md': AI_POLICY });
+    reads(
+      [
+        statement('docs/AI_POLICY.md', 3, QUOTE, 'welcomesAgents'),
+        statement('docs/AI_POLICY.md', 3, QUOTE, 'onlyLabel', { label: 'agent ready' }),
+        statement('docs/AI_POLICY.md', 5, 'Disclose it with an Assisted-by: trailer.', 'disclosureTrailer', { value: 'Assisted-by' }),
+      ],
+      'invites_agents',
+    );
+    const again = await week();
+
+    expect({ edited: edited.changed, bumped: bumped.changed, again: again.changed }).toEqual({ edited: [], bumped: [], again: [INVITES] });
+    const [change] = await listPolicyChanges(db, 'waiting');
+    expect(change?.policy?.url).toBe(`https://github.com/${INVITES}/blob/main/docs/AI_POLICY.md`);
+  });
+
+  test('a welcome that moved is a change at a new reader version, and at the first read of a listing made by hand', async () => {
+    await listing();
+    await week();
+    moveWelcome();
+    await db.prepare("UPDATE policy_reads SET model_fingerprint = ?, reader_version = 'an older reader' WHERE project = ?").bind(OTHER_VERSION, INVITES).run();
+    expect((await week()).changed).toEqual([INVITES]);
+
+    await listing(CONDITIONS, { ...LISTED, url: `https://github.com/${CONDITIONS}/blob/main/AI_POLICY.md` });
+    commit(CONDITIONS, { 'CONTRIBUTING.md': `# Contributing\n\n${QUOTE}\n` });
+    reads([statement('CONTRIBUTING.md', 3, QUOTE, 'welcomesAgents')], 'invites_agents', 1, QUOTE);
+    expect((await week()).changed).toContain(CONDITIONS);
+  });
+
+  test('a listing whose linked file reads a ban now gets no policy change for a welcome in another file', async () => {
+    await listing();
+    commit(INVITES, { 'CONTRIBUTING.md': `# Contributing\n\n${QUOTE}\n` });
+    await week();
+    commit(INVITES, { 'AI_POLICY.md': `# AI policy\n\n${BAN}\n` });
+    reads([statement('AI_POLICY.md', 3, BAN, 'bansAi'), statement('CONTRIBUTING.md', 3, QUOTE, 'welcomesAgents')], 'bans_or_restricts', 2);
+    expect((await week()).paused).toEqual([INVITES]);
+    commit(INVITES, { 'CONTRIBUTING.md': `# Contributing\n\n${QUOTE}\n\nRun the tests before you push.\n` });
+    reads([statement('AI_POLICY.md', 3, BAN, 'bansAi'), statement('CONTRIBUTING.md', 3, QUOTE, 'welcomesAgents')], 'bans_or_restricts', 2);
+
+    expect((await week()).changed).toEqual([]);
+    expect(await listPolicyChanges(db, 'waiting')).toEqual([]);
   });
 
   test('a listed file that still holds a welcome leaves the listing alone, when another file welcomes agents too', async () => {
@@ -843,27 +911,44 @@ describe("a listing made from a maintainer's post", () => {
 describe('whether a welcome moved to another file', () => {
   const at = (url: string): Policy => ({ quote: QUOTE, url, tier: 'invites_agents' });
   const blob = (path: string, branch = 'main', repo = INVITES) => `https://github.com/${repo}/blob/${branch}/${path}`;
+  const doc = (path: string, text: string): PolicyFile => ({ kind: 'contributing', path, text });
+  const holds = (path: string) => doc(path, `# Docs\n\n**Agents** may open pull requests\non their own, on issues labeled \`agent ready\`.\n`);
+  const other = (path: string) => doc(path, '# Docs\n\nRun the tests first.\n');
+  const moved = (policy: Policy | null, files: PolicyFile[], welcomes = true) => welcomeMoved(policy, INVITES, 'main', files, welcomes);
 
-  test('a linked file that holds no welcome now, while another does, moved', () => {
-    expect(welcomeMoved(at(blob('AI_POLICY.md')), INVITES, 'main', ['CONTRIBUTING.md'])).toBe(true);
-    expect(welcomeMoved(at(blob('AI_POLICY.md')), INVITES, 'main', ['CONTRIBUTING.md', 'AI_POLICY.md'])).toBe(false);
+  test("a linked file without the quote's words, or gone, while another file holds them, moved", () => {
+    expect(moved(at(blob('AI_POLICY.md')), [holds('CONTRIBUTING.md')])).toBe(true);
+    expect(moved(at(blob('AI_POLICY.md')), [other('AI_POLICY.md'), holds('CONTRIBUTING.md')])).toBe(true);
     // Paths are read with case, as GitHub reads them.
-    expect(welcomeMoved(at(blob('ai_policy.md')), INVITES, 'main', ['AI_POLICY.md'])).toBe(true);
+    expect(moved(at(blob('ai_policy.md')), [holds('AI_POLICY.md')])).toBe(true);
   });
 
-  test("the owner and repo in the link are read without case, and a path's spaces as the link spells them", () => {
-    expect(welcomeMoved(at(blob('AI_POLICY.md', 'main', INVITES.toUpperCase())), INVITES, 'main', ['AI_POLICY.md'])).toBe(false);
-    expect(welcomeMoved(at(blob('docs/AI%20policy.md')), INVITES, 'main', ['docs/AI policy.md'])).toBe(false);
-    expect(welcomeMoved(at(blob('docs/AI%20policy.md')), INVITES, 'main', ['docs/other.md'])).toBe(true);
+  test('a linked file that still holds the words, reformatted, moved nothing, whatever another file holds', () => {
+    expect(moved(at(blob('AI_POLICY.md')), [holds('AI_POLICY.md'), holds('CONTRIBUTING.md')])).toBe(false);
+    expect(moved(at(blob('AI_POLICY.md')), [holds('AI_POLICY.md')])).toBe(false);
+  });
+
+  test("the link's owner and repo are read without case, its anchor and query left out, and its path decoded", () => {
+    const files = [holds('docs/AI policy.md'), holds('CONTRIBUTING.md')];
+    expect(moved(at(blob('docs/AI%20policy.md', 'main', INVITES.toUpperCase())), files)).toBe(false);
+    expect(moved(at(`${blob('docs/AI%20policy.md')}#L3`), files)).toBe(false);
+    expect(moved(at(`${blob('docs/AI%20policy.md')}?plain=1#L3`), files)).toBe(false);
+    expect(moved(at(`${blob('docs/other.md')}#L3`), files)).toBe(true);
+  });
+
+  test("a quote no file the crawler read holds, as in a README, or with other words, moved nothing: the fingerprint has other words", () => {
+    expect(moved(at(blob('README.md')), [other('CONTRIBUTING.md')])).toBe(false);
+    expect(moved({ ...at(blob('AI_POLICY.md')), quote: 'Agents may open pull requests anywhere.' }, [holds('CONTRIBUTING.md')])).toBe(false);
   });
 
   test("docs that welcome nothing, a maintainer's post, another branch, a commit, or another repo say nothing", () => {
-    expect(welcomeMoved(at(blob('AI_POLICY.md')), INVITES, 'main', [])).toBe(false);
-    expect(welcomeMoved(null, INVITES, 'main', ['CONTRIBUTING.md'])).toBe(false);
-    expect(welcomeMoved(at('https://x.com/maintainer/status/1'), INVITES, 'main', ['CONTRIBUTING.md'])).toBe(false);
-    expect(welcomeMoved(at(blob('AI_POLICY.md', 'dev')), INVITES, 'main', ['CONTRIBUTING.md'])).toBe(false);
-    expect(welcomeMoved(at(blob('AI_POLICY.md', '0123abc')), INVITES, 'main', ['CONTRIBUTING.md'])).toBe(false);
-    expect(welcomeMoved(at(blob('AI_POLICY.md', 'main', `${INVITES}-fork`)), INVITES, 'main', ['CONTRIBUTING.md'])).toBe(false);
+    const files = [holds('CONTRIBUTING.md')];
+    expect(moved(at(blob('AI_POLICY.md')), files, false)).toBe(false);
+    expect(moved(null, files)).toBe(false);
+    expect(moved(at('https://x.com/maintainer/status/1'), files)).toBe(false);
+    expect(moved(at(blob('AI_POLICY.md', 'dev')), files)).toBe(false);
+    expect(moved(at(blob('AI_POLICY.md', '0123abc')), files)).toBe(false);
+    expect(moved(at(blob('AI_POLICY.md', 'main', `${INVITES}-fork`)), files)).toBe(false);
   });
 });
 

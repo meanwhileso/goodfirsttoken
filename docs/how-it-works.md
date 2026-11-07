@@ -3386,13 +3386,22 @@ hash with none of the repo's text, and whether the reading read a ban:
   changelog, changes nothing, and costs no call.
 - Each reading compares its fingerprint with the last one's, and keeps its
   own, with whether it read a ban.
-- The fingerprint leaves out which file a welcome is in. So a listing made
-  from a policy whose welcome moved to another file is a change, whatever
-  the fingerprint says, at any read and across reader versions: the file
-  it links to on the default branch holds no welcome that checked out, and
-  another file does. Its link needs an admin. A link to a maintainer's
-  post, another branch, or a commit isn't checked. Docs that welcome
-  nothing now are another tier.
+- The fingerprint leaves out which file a welcome is in, so each read
+  also checks the link of a listing made from a policy. The welcome moved
+  when the file the link names on the default branch no longer holds the
+  quote's words, or is gone, and another file the crawler reads holds
+  them. Then the listing goes back to the queue for a new link, whatever
+  the fingerprint says.
+  - It reads the files, not the lines the model cited, so a reading that
+    cites one of two copies of a welcome moves nothing.
+  - It leaves out a line anchor or query in the link. A link to a
+    maintainer's post, another repo, another branch, or a commit isn't
+    checked, and neither is a quote no file the crawler reads holds.
+  - It counts only while the reading finds a welcome. Docs that welcome
+    nothing now, a ban included, are another tier.
+  - An admin who rejects the change keeps the listing as it is. The same
+    move doesn't come back, at later edits or a new reader version, until
+    the welcome moves again.
 - The first read of a project has nothing to compare with. A listing made
   from a policy then compares with the policy it was listed from: another
   tier, or other words in its quote, is a change.
@@ -3413,8 +3422,9 @@ hash with none of the repo's text, and whether the reading read a ban:
 - Each reader version, a new prompt, schema, or model, has a new
   fingerprint version. A fingerprint of another version compares with
   nothing: the read takes the new one, and sends nothing to the queue for
-  what it read. So a new reader sends no listing back. The pull request
-  settings are checked as on every read.
+  what it read. So a new reader sends no listing back, except one whose
+  welcome moved, which the files show. The pull request settings are
+  checked as on every read.
   - Whether the last read was a ban is kept apart from the fingerprint. So
     a listing made from a policy, by hand or from a find, whose docs the
     new reader reads as a ban, and the last didn't, is a move into a ban,

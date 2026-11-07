@@ -102,24 +102,47 @@ function readsOtherwise(policy: Policy | null, reading: PolicyReading): boolean 
 }
 
 /**
- * Whether the welcome moved to another file: a listing links to one of the
- * repo's files on its default branch that holds no welcome now, and another
- * file does. The fingerprint leaves out which file a welcome is in, so this
- * is what sends the listing back to the queue for a new link. Docs that
- * welcome nothing now are the tier's to catch. A policy that links
- * elsewhere, like a maintainer's post, or to another branch or a commit,
- * says nothing here. `welcomeFiles` are the paths of the files whose welcome
- * statements checked out.
+ * The path a policy links to among the repo's files on its default branch,
+ * without a line anchor or query, or null for a link elsewhere: a
+ * maintainer's post, another repo, another branch, or a commit. GitHub reads
+ * the owner and repo in a link without case, and the branch and path with it.
  */
-export function welcomeMoved(policy: Policy | null, repo: string, branch: string, welcomeFiles: readonly string[]): boolean {
-  if (policy === null || welcomeFiles.length === 0) return false;
+function linkedPath(url: string, repo: string, branch: string): string | null {
   const prefix = fileUrl(repo, branch, '');
-  // GitHub reads the owner and repo in a link without case, and the branch and path with it.
   const site = `https://github.com/${repo}/`.length;
-  const { url } = policy;
-  if (url.length <= prefix.length || url.slice(0, site).toLowerCase() !== prefix.slice(0, site).toLowerCase()) return false;
-  if (url.slice(site, prefix.length) !== prefix.slice(site)) return false;
-  return !welcomeFiles.some((path) => url.slice(prefix.length) === fileUrl(repo, branch, path).slice(prefix.length));
+  const link = url.replace(/[?#].*$/s, '');
+  if (link.length <= prefix.length || link.slice(0, site).toLowerCase() !== prefix.slice(0, site).toLowerCase()) return null;
+  if (link.slice(site, prefix.length) !== prefix.slice(site)) return null;
+  try {
+    return link.slice(prefix.length).split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a text holds the words of a quote, in order, as whole words. */
+function holdsWords(text: string, quote: string): boolean {
+  return ` ${wordsOf(text)} `.includes(` ${wordsOf(quote)} `);
+}
+
+/**
+ * Whether the welcome a listing was made from moved to another file: the
+ * file the listing links to holds the quote's words no more, or is gone,
+ * and another file the crawler read holds them, while the reading still
+ * finds a welcome. The fingerprint leaves out which file a welcome is in,
+ * so this is what sends the listing back to the queue for a new link. It
+ * reads the files, not the lines the model cited, so a reading that cites
+ * one copy of a welcome and not another moves nothing. A quote with other
+ * words is the fingerprint's to catch, and docs that welcome nothing now
+ * are the tier's. A link elsewhere, as linkedPath says, says nothing here.
+ */
+export function welcomeMoved(policy: Policy | null, repo: string, branch: string, files: readonly PolicyFile[], welcomes: boolean): boolean {
+  if (policy === null || !welcomes || wordsOf(policy.quote) === '') return false;
+  const path = linkedPath(policy.url, repo, branch);
+  if (path === null) return false;
+  const linked = files.find((file) => file.path === path);
+  if (linked !== undefined && holdsWords(linked.text, policy.quote)) return false;
+  return files.some((file) => file.path !== path && holdsWords(file.text, policy.quote));
 }
 
 /**
@@ -152,7 +175,8 @@ function pullRequestsFrom(facts: RepoFacts): 'open' | 'unknown' | { limited: str
  * - With a last read of this version, it changed when the hashes differ.
  * - With a last read of another version, as after a new reader version, it
  *   takes the new one and reads as no change, so a new reader sends nothing
- *   back to the queue.
+ *   back to the queue for what it read. A welcome that moved still counts,
+ *   since that is in the files, not the reading.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
  * - A listing made from a maintainer's post reads as no change at its first

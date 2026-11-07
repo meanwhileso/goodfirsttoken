@@ -10,6 +10,7 @@ import {
   hasApprovedFind,
   keepModelRead,
   lastRejectedFind,
+  rejectedPolicyLink,
   setFindFingerprint,
 } from '../db';
 import { MODEL_BAN_REASON, pauseForCrawler } from './pause';
@@ -234,11 +235,7 @@ export async function decideReread(
     policyReading,
     fingerprint,
     fromFind,
-    {
-      sameVersion: readerComparable(last?.fingerprint ?? null),
-      banned,
-      welcomeMoved: welcomeMoved(project.policy, docs.repo, docs.branch, welcomeFiles(reading)),
-    },
+    { sameVersion: readerComparable(last?.fingerprint ?? null), banned, welcomeMoved: await movedWelcome(db, project, docs, files, policyReading) },
   );
   if (intoBan) {
     if (readsBan(reading)) return 'second';
@@ -255,9 +252,16 @@ export async function decideReread(
   return 'kept';
 }
 
-/** The paths of the files whose welcome statements checked out, each once. */
-function welcomeFiles(reading: ModelReading): string[] {
-  return [...new Set(reading.statements.filter((s) => s.about === 'welcomesAgents' || s.about === 'welcomesAi').map((s) => s.file.path))];
+/**
+ * Whether the project's welcome moved to another file, as welcomeMoved says,
+ * and an admin hasn't already kept the listing as it is rather than list it
+ * from the policy at the new link. A rejected move stays rejected until the
+ * welcome moves again.
+ */
+async function movedWelcome(db: D1Database, project: ProjectRecord, docs: RereadDocs, files: readonly PolicyFile[], policy: PolicyReading): Promise<boolean> {
+  const welcome = policy.welcome;
+  if (welcome === null || !welcomeMoved(project.policy, docs.repo, docs.branch, files, true)) return false;
+  return !(await rejectedPolicyLink(db, docs.repo, fileUrl(docs.repo, docs.branch, welcome.file.path)));
 }
 
 /**

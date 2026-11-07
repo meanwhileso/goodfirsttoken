@@ -255,6 +255,15 @@ export async function getPolicyChange(db: D1Database, changeId: string): Promise
   return row === null ? null : toChange(row);
 }
 
+/** Whether an admin rejected a policy change for the project that would list it from a policy with this link. */
+export async function rejectedPolicyLink(db: D1Database, project: string, url: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 FROM policy_changes WHERE project = ? AND status = 'rejected' AND json_extract(policy, '$.url') = ? LIMIT 1")
+    .bind(mustParse(repoName, project, 'project'), url)
+    .first();
+  return row !== null;
+}
+
 /** Every policy change with `status`, oldest first. */
 export async function listPolicyChanges(db: D1Database, status: CandidateStatus): Promise<PolicyChange[]> {
   const { results } = await db
