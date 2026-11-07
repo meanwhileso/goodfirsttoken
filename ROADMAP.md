@@ -207,7 +207,7 @@ requests. #171, #172, and #173 can run at the same time.
 | [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | [#183](https://github.com/meanwhileso/goodfirsttoken/pull/183) |
 | [#175](https://github.com/meanwhileso/goodfirsttoken/issues/175) | Check labels with the model, in shadow | #174 | [#184](https://github.com/meanwhileso/goodfirsttoken/pull/184) |
 | [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | [#186](https://github.com/meanwhileso/goodfirsttoken/pull/186) |
-| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | |
+| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | [#187](https://github.com/meanwhileso/goodfirsttoken/pull/187) |
 
 ## Dependency graph
 
