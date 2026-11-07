@@ -21,6 +21,6 @@ if (!res.ok) {
 }
 const made = await res.json();
 console.log(
-  `Seeded the local site: ${String(made.projects)} new projects, ${String(made.claims)} new claims, ` +
+  `Seeded the local site: ${String(made.projects)} new projects, ${String(made.requests)} new repo requests, ${String(made.claims)} new claims, ` +
     `${String(made.lines)} new lines, and ${String(made.merged)} merged PRs.`,
 );

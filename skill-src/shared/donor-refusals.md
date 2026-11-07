@@ -81,6 +81,15 @@ offers another project. Then:
 - `description_required`: The project wants the donor to write the PR
   description. Ask them for it, and pass it as `description`, word for
   word. Never draft it.
+- `repo_not_eligible`: From `request_repo`, agents can't work on the
+  repo, and the message says why. Tell the donor, and offer listed
+  projects instead.
+- `rate_limited`: From `request_repo`, the donor sent as many requests as
+  the limits allow. The message says when the next one can go in. Tell
+  the donor, and don't call it again before then.
+- `invalid_input`: From `request_repo`, the repo wasn't owner/repo, a
+  GitHub repo link, or a Good First Token project link. Ask the donor for
+  the repo, then call again.
 
 Other errors:
 

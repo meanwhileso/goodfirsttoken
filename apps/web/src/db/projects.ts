@@ -270,6 +270,20 @@ export async function getProject(db: D1Database, repo: string): Promise<ProjectR
   return row === null ? null : toProject(row);
 }
 
+/**
+ * Every project whose code repo or issue repo has this GitHub repo ID,
+ * whatever its status, oldest first. A project stored before IDs were, with
+ * neither ID filled in yet, isn't among them.
+ */
+export async function listProjectsWithRepoId(db: D1Database, repoId: number): Promise<ProjectRecord[]> {
+  const id = mustParse(githubRepoId, repoId, 'repoId');
+  const { results } = await db
+    .prepare(`${SELECT_PROJECT} WHERE p.repo_id = ?1 OR p.issue_repo_id = ?1 ORDER BY p.added_at, p.repo`)
+    .bind(id)
+    .all<ProjectRow>();
+  return results.map(toProject);
+}
+
 /** Every project with `status`, oldest first. */
 export async function listProjects(db: D1Database, status: ProjectStatus): Promise<ProjectRecord[]> {
   const { results } = await db

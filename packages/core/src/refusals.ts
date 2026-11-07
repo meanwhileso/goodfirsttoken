@@ -66,6 +66,9 @@ export const refusalCodes = [
   'invalid_settings',
   'not_admin',
   'not_found',
+  // A person sent as many repo requests as the limits allow, for the day or
+  // all at once.
+  'rate_limited',
   // A malformed claim, event, or time reached the claim state machine, or a
   // malformed argument reached an issue room.
   'invalid_input',

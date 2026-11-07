@@ -49,6 +49,7 @@ describe('the tool list', () => {
         'record_pr',
         'check_pr',
         'set_interests',
+        'request_repo',
         'register_project',
         'update_project',
         'project_status',

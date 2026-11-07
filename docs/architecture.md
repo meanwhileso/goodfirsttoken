@@ -1623,6 +1623,7 @@ in `people`.
 | `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, who made it, the model reader or, before it, the crawler's rules, with the rules' tier for a find the model made while the rules still read, status, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
+| `repo_requests` | Donor's request for a repo they want to work on: GitHub's ID for the repo, the name GitHub gave when they asked, who asked and when, and when they withdrew it. It stores no status, which is worked out from `projects` when read | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, the crawler's rules' last fingerprint of its docs and whether they read a ban, from before the model read policies, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, how many weekly reads in a row gave no verdict, and whether it was read in shadow or while the model decided | `project` |
 | `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier for a change the model sent while the rules still read, status, and the admin's decision | `id` |
 | `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, with the label check's tags and suggested tags once back, the model's output as JSON, which a later label check reads its statements from, its outcome fingerprint, and when | `repo` |
@@ -1755,6 +1756,9 @@ that break the rules, so it returns the problems for the caller to show.
   `crawl_queued_repos`, made in `0014_popular_crawls.sql`, once the crawler
   stopped searching. `crawl_queued_repos` goes first, since it names
   `crawl_passes`.
+- **Migration `20261107211944_repo_requests.sql`** makes `repo_requests`,
+  under [Requesting a repo](how-it-works.md#requesting-a-repo). Each
+  person must be in `people`.
 
 ### Who sees what
 
@@ -1768,7 +1772,9 @@ on, with no verdict on it, and a find it couldn't write. The reason an admin giv
 rejecting a registration reaches the maintainer's agent, and so does the
 reason a removed project is rejected with. The note an admin keeps with a
 do-not-list entry reaches no one else. A maintainer's reason for asking to
-be removed reaches the admins alone, in `admin_queue` and on `/admin`.
+be removed reaches the admins alone, in `admin_queue` and on `/admin`. Who asked for a repo in `repo_requests` reaches no page, feed, or JSON,
+and a request answers only what the site already shows, whether the repo
+has a project page.
 
 These columns are not public GitHub data, and the spec says nothing more
 about who sees them: `people.interests`, `donor_sessions.budget`,
@@ -1890,6 +1896,9 @@ pruning after a sync, with no index of its own.
 | `removal_requests_waiting` | One waiting request to be removed per repo, and a repo's waiting request, for `request_removal`, a removal, and the check before a listing or an approval |
 | `removal_requests_queue` | The admin queue's requests to be removed, oldest first |
 | `removal_requests_by_repo` | A repo's requests to be removed that someone other than their asker withdrew, for a registration or crawler find in the queue, and one person's last request for a repo, for `request_removal` to say who withdrew it |
+| `repo_requests_live` | One live request per person per repo ID, and a person's live request for a repo, for `request_repo` |
+| `repo_requests_by_person` | A person's requests by when they asked, for the day's limit and their list |
+| `repo_requests_by_repo` | A repo's live requests, oldest first, for the crawler and the admin queue |
 | `session_by_user` | A person's sessions, which signing out ends |
 | `account_by_user` | A user's GitHub account, which every signed-in page view reads to find who they are |
 | `account_by_provider` | The user for a GitHub account at sign-in, and one user per GitHub account |

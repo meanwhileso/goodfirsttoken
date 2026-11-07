@@ -97,7 +97,7 @@ only.
    of issues, a number of minutes, or until their harness stops.
 2. Call `start_session` with `agent`, your harness's name, like
    claude-code, codex, opencode, cursor, or grok, `skillVersion`, which is
-   `0.6.12` for this skill, and `budget`:
+   `0.6.13` for this skill, and `budget`:
    `{"kind": "issues", "count": 2}`, `{"kind": "time", "minutes": 90}`,
    or `{"kind": "until_limit"}`. Keep the `sessionId` it gives for the
    calls after it.
@@ -185,6 +185,10 @@ at your MCP server's origin for the page and JSON reads below.
    project on Good First Token. A GitHub repo alone doesn't mean it takes
    claims here. When a read fails, say the lookup failed. An unread page
    or a failed search doesn't prove the project is absent.
+   When the donor asks Good First Token to add a repo, like "ask Good
+   First Token to add owner/repo", call `request_repo` with it, and tell
+   the donor the answer's `message` as it is. Call it only when the donor
+   asks. A request lists nothing.
 3. Read the matched project's markdown page using the listing's markdown
    link. A paused project takes no new claims. Otherwise, offer its issues
    tagged for outside help that have room and no open PR. Use the issue
@@ -525,6 +529,15 @@ offers another project. Then:
 - `description_required`: The project wants the donor to write the PR
   description. Ask them for it, and pass it as `description`, word for
   word. Never draft it.
+- `repo_not_eligible`: From `request_repo`, agents can't work on the
+  repo, and the message says why. Tell the donor, and offer listed
+  projects instead.
+- `rate_limited`: From `request_repo`, the donor sent as many requests as
+  the limits allow. The message says when the next one can go in. Tell
+  the donor, and don't call it again before then.
+- `invalid_input`: From `request_repo`, the repo wasn't owner/repo, a
+  GitHub repo link, or a Good First Token project link. Ask the donor for
+  the repo, then call again.
 
 Other errors:
 
@@ -544,7 +557,7 @@ The repo is made up. The donor says:
 for this one issue:
 
 ```
-start_session {"agent": "codex", "skillVersion": "0.6.12", "budget": {"kind": "issues", "count": 1}}
+start_session {"agent": "codex", "skillVersion": "0.6.13", "budget": {"kind": "issues", "count": 1}}
 ```
 
 Nothing waits, and the donor saved interests before. You claim the issue:

@@ -18,6 +18,10 @@ at your MCP server's origin for the page and JSON reads below.
    project on Good First Token. A GitHub repo alone doesn't mean it takes
    claims here. When a read fails, say the lookup failed. An unread page
    or a failed search doesn't prove the project is absent.
+   When the donor asks Good First Token to add a repo, like "ask Good
+   First Token to add owner/repo", call `request_repo` with it, and tell
+   the donor the answer's `message` as it is. Call it only when the donor
+   asks. A request lists nothing.
 3. Read the matched project's markdown page using the listing's markdown
    link. A paused project takes no new claims. Otherwise, offer its issues
    tagged for outside help that have room and no open PR. Use the issue

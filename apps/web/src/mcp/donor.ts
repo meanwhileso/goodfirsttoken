@@ -76,6 +76,7 @@ import { prChecker } from '../sync/pr-checker';
 import { isFollowed } from '../sync/prs';
 import type { GitHubReader } from '../sync/github';
 import plugins from '../../../../skill-src/plugins.json';
+import { requestRepo as makeRequest } from '../requests/request';
 import { readyToOpen } from './submit';
 
 // The donor's tools: start_session, set_interests, suggest_issues,
@@ -426,6 +427,16 @@ export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now:
     now(),
   );
   return answer(taken.size === ended.length ? answered : result([]));
+}
+
+/**
+ * request_repo: records the caller's request for a repo, or withdraws it,
+ * through the request the site makes too (src/requests/request.ts).
+ */
+export async function requestRepo(caller: Caller, input: ToolInput<'request_repo'>, origin: string, now: number): Promise<Answer> {
+  const made = await makeRequest(env.DB, caller, input, origin, now);
+  if (isRefusal(made)) return refuse(made);
+  return answer(toolResult('request_repo', made));
 }
 
 /** The claim, found by its ID in the claims table, once the caller is the one who made it. */

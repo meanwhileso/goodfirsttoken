@@ -1,13 +1,16 @@
 import { newClaim, nextClaimState, type ClaimRecord } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { siteOrigin } from '../auth/settings';
+import { githubRepoId } from '@goodfirsttoken/core';
 import {
   addCandidate,
   addPr,
+  addRequest,
   blockDonor,
   createProject,
   getBlock,
   getClaim,
+  getLiveRequest,
   listIssueClaims,
   markEndedOffered,
   rereadDone,
@@ -16,6 +19,7 @@ import {
   savePerson,
   setPrState,
 } from '../db';
+import { readRepo } from '../projects/repo';
 import { issueRoom } from '../rooms/issue-room';
 import { devOnlyRequest } from './gate';
 import {
@@ -25,6 +29,7 @@ import {
   SAMPLE_HISTORY,
   SAMPLE_PEOPLE,
   SAMPLE_PROJECTS,
+  SAMPLE_REQUESTS,
   type SampleClaim,
   type SampleHistory,
 } from './sample-work';
@@ -73,10 +78,11 @@ export async function handleDevSeed(request: Request): Promise<Response> {
   return Response.json(await seedSampleWork(), { headers: { 'cache-control': 'no-store' } });
 }
 
-/** Adds the sample people, projects, issues, crawler finds, and work. Returns what it made. */
+/** Adds the sample people, projects, issues, crawler finds, repo requests, and work. Returns what it made. */
 export async function seedSampleWork(): Promise<{
   projects: number;
   candidates: number;
+  requests: number;
   claims: number;
   lines: number;
   merged: number;
@@ -147,6 +153,19 @@ export async function seedSampleWork(): Promise<{
     if (found) candidates += 1;
   }
 
+  // A request keeps its repo by GitHub's ID, so the seed reads it from the
+  // GitHub fake, as anyone may read a public repo. A request for a listed
+  // project goes in directly, as one made before the project was listed.
+  let requests = 0;
+  for (const sample of SAMPLE_REQUESTS) {
+    const found = await readRepo('', sample.repo);
+    const id = githubRepoId.safeParse(found?.id);
+    if (found === null || !id.success) throw new Error(`The GitHub fake has no repo ${sample.repo} to request.`);
+    if ((await getLiveRequest(env.DB, sample.person.githubId, id.data)) !== null) continue;
+    const added = await addRequest(env.DB, { repoId: id.data, repo: found.full_name, githubId: sample.person.githubId }, now);
+    if ('added' in added) requests += 1;
+  }
+
   const made = { claims: 0, lines: 0, merged: 0 };
   for (const sample of SAMPLE_CLAIMS) {
     const result = await work(sample);
@@ -159,7 +178,7 @@ export async function seedSampleWork(): Promise<{
   }
   let history = 0;
   for (const sample of SAMPLE_HISTORY) history += (await addHistory(sample, now)) ? 1 : 0;
-  return { projects, candidates, ...made, history };
+  return { projects, candidates, requests, ...made, history };
 }
 
 // Stores a claim whose PR opened and then merged or closed `daysAgo` days

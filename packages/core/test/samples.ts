@@ -274,6 +274,16 @@ export const samples: Samples = {
     },
     mentions: [`Read: PR #957 on ${repo} for ${issue}, claim c_2, is merged.`, `PR #957 merged: ${pr.url}`, 'Share it', 'Post nothing for them.'],
   },
+  request_repo: {
+    output: {
+      repo,
+      status: 'listed',
+      requested: false,
+      projectUrl: `https://goodfirsttoken.test/${repo}`,
+      message: 'Listed. Find its issues on its project page.',
+    },
+    mentions: [`${repo}: Listed. Find its issues on its project page.`, `Project page: https://goodfirsttoken.test/${repo}`, 'has no request'],
+  },
   set_interests: {
     output: { interests: { languages: ['rust'], projects: [repo], kinds: ['docs'] } },
     mentions: ['rust', repo, 'docs'],
