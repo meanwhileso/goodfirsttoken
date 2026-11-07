@@ -195,6 +195,8 @@ export interface NewPolicyChange {
   rulesTier?: CrawlReadTier | null;
   /** Why it was sent: its policy changed, unless said. */
   why?: PolicyChangeWhy;
+  /** For a change sent because the welcome moved to another file, the link the listing had. */
+  movedFrom?: string | null;
 }
 
 /**
@@ -203,7 +205,7 @@ export interface NewPolicyChange {
  * transaction, so the queue holds the latest reading once, under a new ID.
  * Null when the project is gone.
  */
-export async function addPolicyChange(db: D1Database, change: NewPolicyChange, now: number): Promise<PolicyChange | null> {
+export async function addPolicyChange(db: D1Database, { movedFrom = null, ...change }: NewPolicyChange, now: number): Promise<PolicyChange | null> {
   const c = mustParse(
     policyChangeSchema,
     { ...change, id: newId('pchg'), foundAt: checkTime(now), status: 'waiting', decidedBy: null, decidedAt: null, reason: null },
@@ -214,8 +216,8 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
     db
       .prepare(
         `INSERT INTO policy_changes (id, project, found_at, facts, policy, sources, ai_sentences, more_ai_sentences,
-           status, decided_by, decided_at, reason, docs_hash, made_by, rules_tier, why)
-         SELECT ?1, p.repo, ?3, ?4, ?5, ?6, ?7, ?8, 'waiting', NULL, NULL, NULL, ?9, ?10, ?11, ?12 FROM projects p WHERE p.repo = ?2`,
+           status, decided_by, decided_at, reason, docs_hash, made_by, rules_tier, why, moved_from)
+         SELECT ?1, p.repo, ?3, ?4, ?5, ?6, ?7, ?8, 'waiting', NULL, NULL, NULL, ?9, ?10, ?11, ?12, ?13 FROM projects p WHERE p.repo = ?2`,
       )
       .bind(
         c.id,
@@ -230,6 +232,7 @@ export async function addPolicyChange(db: D1Database, change: NewPolicyChange, n
         c.madeBy,
         c.rulesTier,
         c.why,
+        movedFrom,
       ),
   ]);
   return inserted?.meta.changes === 1 ? c : null;
@@ -253,6 +256,19 @@ export async function getPolicyChange(db: D1Database, changeId: string): Promise
     .bind(mustParse(id, changeId, 'changeId'))
     .first<ChangeRow>();
   return row === null ? null : toChange(row);
+}
+
+/**
+ * Whether an admin rejected a policy change sent for the same move: the
+ * welcome moved while the listing linked to `from`, and the change would
+ * list it from a policy at `to`.
+ */
+export async function rejectedMove(db: D1Database, project: string, from: string, to: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 FROM policy_changes WHERE project = ? AND status = 'rejected' AND moved_from = ? AND json_extract(policy, '$.url') = ? LIMIT 1")
+    .bind(mustParse(repoName, project, 'project'), from, to)
+    .first();
+  return row !== null;
 }
 
 /** Every policy change with `status`, oldest first. */

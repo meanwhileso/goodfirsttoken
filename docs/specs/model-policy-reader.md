@@ -353,13 +353,19 @@ admin sees.
    for agents, like Omarchy's line, which the admin still sees. The docs
    hash decides whether the model reads. The fingerprint decides whether
    the policy changed. So a build step added to `AGENTS.md` costs one model
-   call and sends nothing to the admin queue.
+   call and sends nothing to the admin queue. The fingerprint leaves out
+   which file a welcome is in, so a weekly read also checks the listing's
+   link. When the linked file no longer holds the quote's words, or is
+   gone, and the reading's welcome is in another file, the welcome moved,
+   and the listing goes back to the queue for a new link. A move an admin
+   rejected, from the same link to the same new one, doesn't come back.
 8. **The fingerprint version follows the reader version.** A fingerprint
    is `v` and a number, so `FINGERPRINT_VERSION` goes up by one with every
    reader version, and the reading keeps the reader version's name. A new
    prompt, schema, or model is a new fingerprint version. Under today's rule for a
-   change to the rules, no listing reads as changed for it, and a listing
-   made from a policy that now reads as a ban is a move into one. So it
+   change to the rules, no listing reads as changed for it, except one
+   whose welcome moved to another file. A listing made from a policy that
+   now reads as a ban is a move into one. So it
    pauses, with the conditions under [Pausing a listing](#pausing-a-listing).
 
 ## The label check
