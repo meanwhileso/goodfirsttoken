@@ -11,8 +11,10 @@ import type { Allowance } from './github';
  * projects it reads no issues for, and how long a read on approval reads.
  * docs/how-it-works.md gives the rule, under Tagged issues, and
  * docs/architecture.md, under The sync and The policy crawler, why these
- * numbers. The crawler's cron job makes no call, and each run of its
- * queue's consumer spends from the token's budget.
+ * numbers. The crawler's cron job queues its repos with no call, and each
+ * run of its queue's consumer spends from the token's budget. The finds the
+ * cron approves on their own (src/crawl/auto-approve.ts) make a read or two
+ * each, at most 50 finds a run, outside these allowances.
  */
 export const ALLOWANCES = {
   sync: { leave: 0.2, maxCalls: 1000, checkCalls: 100 },

@@ -1,4 +1,5 @@
 import { authSecret, oauthApp, SignInNotSetUp } from '../auth/settings';
+import { approveStarredFinds } from '../crawl/auto-approve';
 import { runReader } from '../crawl/batches';
 import { fillCrawlQueue } from '../crawl/producer';
 import { endEveryLapsedConnection } from '../mcp/connections';
@@ -27,7 +28,8 @@ export const PR_JOB_CRON = '7,37 * * * *';
  * Once an hour, apart from both: the policy crawler's cron job
  * (src/crawl/producer.ts), which queues its seeds and weekly reads, then the
  * model policy reader's run (src/crawl/batches.ts), which collects and sends
- * its batches.
+ * its batches, then the approval of the waiting finds with more than 100
+ * stars (src/crawl/auto-approve.ts).
  */
 export const CRAWL_CRON = '52 * * * *';
 /** Once a day, apart from the others: ending lapsed connections (src/mcp/connections.ts). */
@@ -87,8 +89,13 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       await recordClearedPrs({ db: env.DB, github: new ServiceGitHub(token, ALLOWANCES.cleared), now });
       return;
     case CRAWL_CRON:
-      await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, now });
-      await runReader({ db: env.DB, now });
+      try {
+        await fillCrawlQueue({ db: env.DB, queue: env.CRAWL_QUEUE, now });
+        await runReader({ db: env.DB, now });
+      } finally {
+        // A failure above still fails the cron, and the waiting finds are approved anyway.
+        await approveStarredFinds({ db: env.DB, token, now });
+      }
       return;
     default:
       console.error(`No job runs on the cron ${cron}. Each cron trigger in wrangler.jsonc needs one in src/sync/scheduled.ts.`);

@@ -178,12 +178,12 @@ describe('crawl candidates', () => {
     ]);
   });
 
-  test('a rejected candidate needs a reason, and only a rejected one has one', () => {
+  test('a rejected candidate needs a reason, an approved one may have one, and a waiting one has none', () => {
     const decided = { ...candidate, decidedBy: 9001, decidedAt: at + DAY };
     expect(fields(validate(crawlCandidateSchema, { ...decided, status: 'rejected' }))).toEqual(['reason']);
-    expect(fields(validate(crawlCandidateSchema, { ...decided, status: 'approved', reason: 'Fine.' }))).toEqual([
-      'reason',
-    ]);
+    expect(fields(validate(crawlCandidateSchema, { ...decided, status: 'approved', reason: 'Approved on its own.' }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...decided, status: 'approved', reason: null }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, reason: 'Fine.' }))).toEqual(['reason']);
   });
 
   test('a crawler may suggest settings without tags, which the admin picks', () => {

@@ -3352,6 +3352,7 @@ candidates. The rules are in
 | `src/crawl/reread.ts` | The weekly read of a listed project: the pull request check, then the docs staged for the model, and `compare`, which `src/crawl/decide.ts` uses to act on the reading |
 | `src/crawl/decide.ts` | What the model reader decides: a seed's find, and a weekly reading's policy change, second reading, or pause |
 | `src/crawl/pause.ts` | The pause the crawler makes on its own, and its reasons |
+| `src/crawl/auto-approve.ts` | Approving the waiting finds with more than 100 stars on their own, after the reader's hourly run, through the same approval as `admin_decide` in `src/admin/actions.ts` |
 | `src/crawl/fingerprint.ts` | What the fingerprints share: the rules' last version, which the reader's versions count up from, and the words a fingerprint hashes |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
 | `src/crawl/reader/` | The model policy reader's core: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, the price table, the docs hash, and the day's budget with its shares. It makes no network calls |
@@ -4733,7 +4734,7 @@ something new.
 | The Worker to the feeds and rooms | Read-only, hibernating sockets that close when they send, at most 100 from one address on one feed or room |
 | The repo to a deploy | `scripts/deploy-config.mjs`, which writes the deploy's config from the GitHub environment |
 | A pull request to CI | A read-only token, no secrets, and pinned actions and tools |
-| A repo's docs and labels to a listing | The model's claims checked against the files (`src/crawl/reader/`), an admin for every find, and two agreeing readings for a pause (`src/crawl/decide.ts`) |
+| A repo's docs and labels to a listing | The model's claims checked against the files (`src/crawl/reader/`), an admin for every find of 100 stars or fewer, and two agreeing readings for a pause (`src/crawl/decide.ts`) |
 | A maintainer's proposal to the model's budget | Limits per caller and per repo, a cache by label set, and a share of the day reserved before the call (`src/projects/label-check.ts`) |
 
 ### What holds
@@ -4752,9 +4753,20 @@ try to steer the reader.
   model's own tier only cross-checks it. So an injected line can't make up
   a welcome or a ban the repo didn't write, though it can get the model to
   misread a line.
-- A find never lists anything: an admin decides every one, reads the
-  steering lines at the top, and reads every paragraph that names AI by
-  the word list, whatever the model said.
+- A find of a repo with 100 stars or fewer never lists anything: an admin
+  decides it, reads the steering lines at the top, and reads every
+  paragraph that names AI by the word list, whatever the model said.
+- A find of a repo with more than 100 stars is approved on its own
+  (`src/crawl/auto-approve.ts`) when its two tiers agree, no statement was
+  dropped, and no steering line, canary, or line that keeps agents from
+  working on their own checks out. No admin reads its word-list net first,
+  and no check reading looks for what the first reading missed. So one
+  reading steered or wrong past a ban lists the repo, and the weekly read
+  is what catches the ban later. The reader's prompt still tells the model
+  that an admin reads the files before anything is listed, which is no
+  longer true for these finds. Changing it means a new run of the eval.
+- The find and the listing name an admin who didn't read it. The find's
+  reason says it was approved on its own.
 - A pause needs both tiers to read a ban, a ban line that checks out, a
   second reading of the same staged docs that agrees, and those docs still
   the newest staged. A steered or unlucky reading that misses one leaves
