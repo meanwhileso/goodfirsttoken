@@ -2815,8 +2815,14 @@ the same rules, and show the link to GitHub's form.
   replaced. Then comes a line that closes the issue, `Closes #<number>`,
   with the issue's repo too when the project keeps its issues in another
   repo. Then the project's disclosure text for the PR body, word for word,
-  when it has one. Calling again clears again, with the new body. A later
-  submit ends the clearance.
+  when it has one. The first "Good First Token" in it, as a word of its
+  own, becomes a link to https://goodfirsttoken.org, unless the text has
+  markup like a code span, a link, or HTML, or the site's address already.
+  A body whose disclosure doesn't link the site that way ends with
+  `Opened through [Good First Token](https://goodfirsttoken.org).`, so every
+  PR links back. The address is the public site's in every environment,
+  since the PR is public. Calling again clears again, with the new body. A
+  later submit ends the clearance.
 - The answer has the PR's repo, its head as `<owner>:<branch>`, its base,
   title, and body, the GitHub CLI command that opens it, which reads the
   body on standard input, and a link to GitHub's compare page, whose form
@@ -2843,7 +2849,8 @@ the PR with the donor's token, and checks it against the clearance.
   cleared head, and opened by the claim's GitHub ID. A PR whose fork was
   deleted is judged by its branch name, head, and author. Its body must
   have the closing line as a line of its own, the disclosure text word for
-  word when the project sets one, and the description the donor wrote when
+  word when the project sets one, with the site's name as plain words or
+  linked as `open_pr` writes it, and the description the donor wrote when
   the project asks for one, compared line by line with line breaks and
   indents ignored. Its title and body must have nothing the secret scrubber
   finds. A PR
@@ -5046,7 +5053,7 @@ Each limit the schemas enforce, other than those under project settings:
 | What | Limit | Set by |
 |---|---|---|
 | PR description | 65,536 characters | GitHub |
-| PR description the donor writes | 60,000 characters, leaving room for the closing line and the disclosure | Us |
+| PR description the donor writes | 60,000 characters, leaving room for the closing line, the disclosure, and the link to the site | Us |
 | PR title, and a submit's title | 256 characters | GitHub |
 | Posted update | 200 characters once folded, and 800 before | Us |
 | An issue's title | 256 graphemes once folded, cut to fit | GitHub takes 256 characters. The cut by graphemes is ours |

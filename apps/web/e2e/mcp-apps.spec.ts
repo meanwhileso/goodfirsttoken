@@ -247,7 +247,7 @@ const toOpen = {
   head: 'priya:goodfirsttoken/issue-7-c_e2eclaim3',
   base: 'main',
   title: 'Fix the parser',
-  body: 'Fixes the parser on empty input.\n\nCloses #7\n\nWritten with a coding agent through Good First Token.',
+  body: 'Fixes the parser on empty input.\n\nCloses #7\n\nWritten with a coding agent through [Good First Token](https://goodfirsttoken.org).',
   command: "gh pr create --repo sample-owner/sample-app --head priya:goodfirsttoken/issue-7-c_e2eclaim3 --base 'main' --title 'Fix the parser' --body-file -",
   compareUrl: 'https://github.example/sample-owner/sample-app/compare/main...priya:goodfirsttoken/issue-7-c_e2eclaim3?quick_pull=1&title=Fix+the+parser&body=Fixes',
   bodyInLink: true,

@@ -140,7 +140,7 @@ export function pullMismatch(
   const closing = closingLine(cleared.issue, cleared.codeRepo);
   if (!holdsLines(pull.body, closing)) return `${pull.url}'s description lacks the line "${closing}". Add it with gh pr edit.`;
   const disclosure = cleared.disclosure.prBody;
-  if (disclosure !== null && !holdsLines(pull.body, disclosure)) {
+  if (disclosure !== null && !holdsLines(pull.body, disclosure) && !holdsLines(pull.body, linkName(disclosure))) {
     return `${pull.url}'s description lacks the project's disclosure text, word for word. Add it with gh pr edit.`;
   }
   if (cleared.description !== null && !holdsLines(pull.body, cleared.description)) {
@@ -168,11 +168,35 @@ export function closingLine(issue: string, codeRepo: string): string {
   return repo.toLowerCase() === codeRepo.toLowerCase() ? `Closes ${issue.slice(hash)}` : `Closes ${issue}`;
 }
 
+/** The site every PR links back to. It is the public site's address, as the PR is public. */
+const SITE_URL = 'https://goodfirsttoken.org';
+const SITE_ADDRESS = /https:\/\/goodfirsttoken\.org(?![\w.-])/i;
+const NAME = /\bgood first token\b/i;
+/** Markdown or HTML a link could land inside of, like a code span, another link, or a comment. */
+const MARKUP = /[`[\]<>]/;
+
+/**
+ * Disclosure text with the site's name, the first time it comes up, as a
+ * link to the site, so the words still read as the project wrote them.
+ * Text with markup in it, or with the site's address, stays as written.
+ */
+function linkName(text: string): string {
+  if (MARKUP.test(text) || SITE_ADDRESS.test(text)) return text;
+  return text.replace(NAME, (name) => `[${name}](${SITE_URL})`);
+}
+
+/** Whether text links the site where GitHub shows it: its address, outside code and HTML. */
+function linksSite(text: string): boolean {
+  return SITE_ADDRESS.test(text) && !/[`<]/.test(text);
+}
+
 /**
  * The PR's description. A description the donor wrote comes first, as they
  * wrote it, in place of the agent's summary and notes. Then the line that
  * links the issue, and the project's disclosure, word for word, when the
- * project asks for one in the PR body.
+ * project asks for one in the PR body, with the site's name in it linked to
+ * the site. When the disclosure doesn't link the site, a line of its own
+ * does.
  */
 export function prBody(input: {
   description?: string | undefined;
@@ -186,7 +210,9 @@ export function prBody(input: {
 }): string {
   const opening =
     input.description ?? `${input.summary}\n\nWhat ${input.agent} (${input.model}) checked: ${input.checks}`;
-  return [opening, closingLine(input.issue, input.codeRepo), input.disclosure.prBody]
+  const disclosure = input.disclosure.prBody === null ? null : linkName(input.disclosure.prBody);
+  const linkBack = disclosure !== null && linksSite(disclosure) ? null : `Opened through [Good First Token](${SITE_URL}).`;
+  return [opening, closingLine(input.issue, input.codeRepo), disclosure, linkBack]
     .filter((part): part is string => part !== null)
     .join('\n\n');
 }

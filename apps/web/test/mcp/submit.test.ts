@@ -59,7 +59,8 @@ const people = {
 type Login = keyof typeof people;
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
-const DISCLOSURE = 'Written with a coding agent through Good First Token.';
+/** The default disclosure as open_pr writes it in a PR body, with the site's name linked. */
+const DISCLOSURE = 'Written with a coding agent through [Good First Token](https://goodfirsttoken.org).';
 const NOTES = {
   summary: 'Keeps the trailing slash when a rewrite runs.',
   checks: 'pnpm test: 12 passing.',

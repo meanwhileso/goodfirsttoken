@@ -1,3 +1,4 @@
+import { defaultDisclosure } from '@goodfirsttoken/core';
 import { describe, expect, test } from 'vitest';
 import {
   branchFor,
@@ -98,16 +99,72 @@ describe('the branch and the PR', () => {
       disclosure: { trailer: 'Assisted-by', prBody: 'This PR was written with an AI agent.' },
     };
     expect(prBody(base)).toBe(
-      'Keeps the slash.\n\nWhat claude-code (claude-opus-5-5) checked: pnpm test\n\nCloses #311\n\nThis PR was written with an AI agent.',
+      `Keeps the slash.\n\nWhat claude-code (claude-opus-5-5) checked: pnpm test\n\nCloses #311\n\nThis PR was written with an AI agent.\n\n${LINK_BACK}`,
     );
     expect(prBody({ ...base, description: 'I wrote this myself.' })).toBe(
-      'I wrote this myself.\n\nCloses #311\n\nThis PR was written with an AI agent.',
+      `I wrote this myself.\n\nCloses #311\n\nThis PR was written with an AI agent.\n\n${LINK_BACK}`,
     );
     expect(prBody({ ...base, disclosure: { trailer: 'Assisted-by', prBody: null } })).toBe(
-      'Keeps the slash.\n\nWhat claude-code (claude-opus-5-5) checked: pnpm test\n\nCloses #311',
+      `Keeps the slash.\n\nWhat claude-code (claude-opus-5-5) checked: pnpm test\n\nCloses #311\n\n${LINK_BACK}`,
     );
   });
+
+  test('every PR links back to the site: by its name in the disclosure, or by a line of its own when the disclosure names it nowhere', () => {
+    const base = {
+      summary: 'Keeps the slash.',
+      checks: 'pnpm test',
+      agent: 'claude-code',
+      model: 'claude-opus-5-5',
+      issue: 'sample-owner/sample-app#311',
+      codeRepo: 'sample-owner/sample-app',
+    };
+    const ending = (prBodyText: string | null) => {
+      const body = prBody({ ...base, disclosure: { trailer: 'Assisted-by', prBody: prBodyText } });
+      return body.slice(body.indexOf('Closes #311\n\n') + 'Closes #311\n\n'.length);
+    };
+    expect(ending(defaultDisclosure.prBody)).toBe(`Written with a coding agent through [Good First Token](${SITE}).`);
+    expect(ending('Made through good first token, and read by a person.')).toBe(
+      `Made through [good first token](${SITE}), and read by a person.`,
+    );
+    expect(ending(`Made through [Good First Token](${SITE}).`)).toBe(`Made through [Good First Token](${SITE}).`);
+    expect(ending('Made through [Good First Token](https://example.com).')).toBe(
+      `Made through [Good First Token](https://example.com).\n\n${LINK_BACK}`,
+    );
+    expect(ending('Made with an agent.')).toBe(`Made with an agent.\n\n${LINK_BACK}`);
+  });
+
+  test("a disclosure with markup in it, or the name as part of another word, stays as the project wrote it, and the PR still links back", () => {
+    const base = {
+      summary: 'Keeps the slash.',
+      checks: 'pnpm test',
+      agent: 'claude-code',
+      model: 'claude-opus-5-5',
+      issue: 'sample-owner/sample-app#311',
+      codeRepo: 'sample-owner/sample-app',
+    };
+    const ending = (prBodyText: string) => {
+      const body = prBody({ ...base, disclosure: { trailer: 'Assisted-by', prBody: prBodyText } });
+      return body.slice(body.indexOf('Closes #311\n\n') + 'Closes #311\n\n'.length);
+    };
+    for (const written of [
+      'Tag the PR `good first token` in the title.',
+      '```\nAI: Good First Token\n```',
+      '<!-- Opened through Good First Token -->',
+      'Opened by Good First Tokens volunteers.',
+      'Made via [Good First Token, a site](https://example.com).',
+      `Tag it \`${SITE}\`.`,
+      '[GFT](https://goodfirsttoken.org.example.com)',
+    ]) {
+      expect(ending(written)).toBe(`${written}\n\n${LINK_BACK}`);
+    }
+    for (const linked of [`Made via [the Good First Token site](${SITE}).`, `Made via Good First Token, ${SITE}/start.md.`]) {
+      expect(ending(linked)).toBe(linked);
+    }
+  });
 });
+
+const SITE = 'https://goodfirsttoken.org';
+const LINK_BACK = `Opened through [Good First Token](${SITE}).`;
 
 describe('whether a PR is the one a clearance allows', () => {
   const issue = 'sample-owner/sample-app#12';
@@ -143,6 +200,16 @@ describe('whether a PR is the one a clearance allows', () => {
   test('the closing line must be a line of its own, naming this issue and no other', () => {
     expect(pullMismatch({ ...pull, body: pull.body.replace('Closes #12', 'Closes #123') }, cleared)).toContain('lacks the line "Closes #12"');
     expect(pullMismatch({ ...pull, body: pull.body.replace('Closes #12', 'This Closes #12 too') }, cleared)).toContain('lacks the line');
+  });
+
+  test('the disclosure matches with the site named as a link, as open_pr writes it, or as plain words, as older PRs have it', () => {
+    const named = { ...cleared, disclosure: { ...defaultDisclosure } };
+    const body = (ending: string) => `Keeps the slash.\n\nCloses #12\n\n${ending}`;
+    expect(pullMismatch({ ...pull, body: body(`Written with a coding agent through [Good First Token](${SITE}).\n\n${LINK_BACK}`) }, named)).toBeNull();
+    expect(pullMismatch({ ...pull, body: body('Written with a coding agent through Good First Token.') }, named)).toBeNull();
+    expect(pullMismatch({ ...pull, body: body(`Written with a coding agent through [Good First Token](https://example.com).`) }, named)).toContain(
+      "lacks the project's disclosure text",
+    );
   });
 
   test('line breaks from a web form, and indented lines, still match the disclosure', () => {

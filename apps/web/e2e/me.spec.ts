@@ -298,7 +298,7 @@ test("a project that asks for the donor's own description starts the form empty,
   const branch = `goodfirsttoken/issue-120-${claims.get(BUNDLER) ?? ''}`;
   expect(`${form.origin}${form.pathname}`).toBe(`${LOCAL_WEB_URL}/sample-owner/sample-bundler/compare/main...priya:${branch}`);
   const body = form.searchParams.get('body');
-  expect(body).toBe(`${words}\n\nCloses #120\n\nWritten with a coding agent through Good First Token.`);
+  expect(body).toBe(`${words}\n\nCloses #120\n\nWritten with a coding agent through [Good First Token](https://goodfirsttoken.org).`);
   // priya opens the PR on GitHub's form, with her own token, and her agent
   // records it. The site's tokens open no PR.
   const opened = await request.post(`${LOCAL_API_URL}/repos/sample-owner/sample-bundler/pulls`, {
