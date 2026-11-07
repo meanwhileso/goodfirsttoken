@@ -1,7 +1,7 @@
 import { createGitHubFake } from '@goodfirsttoken/github-fake';
 import { env } from 'cloudflare:workers';
 import { afterEach, expect, test, vi } from 'vitest';
-import { ANTHROPIC_API, anthropicApiKey, anthropicUrl, modelDailyBudgetUsd, policyReader } from '../src/anthropic';
+import { ANTHROPIC_API, anthropicApiKey, anthropicUrl, modelDailyBudgetUsd } from '../src/anthropic';
 import { startAnthropic } from './anthropic';
 import { setEnv } from './auth/helpers';
 
@@ -113,26 +113,6 @@ test('with no key, the reader has none, except in development against the fake o
     expect(anthropicApiKey()).toBe('a-key-of-its-own');
   } finally {
     restore();
-  }
-});
-
-test('POLICY_READER is rules, shadow, or model, and empty or anything else means rules', () => {
-  const cases: [string | undefined, string][] = [
-    ['rules', 'rules'],
-    ['shadow', 'shadow'],
-    ['model', 'model'],
-    [' model ', 'model'],
-    ['', 'rules'],
-    [undefined, 'rules'],
-    ['Model', 'rules'],
-  ];
-  for (const [value, expected] of cases) {
-    const restore = setEnv({ POLICY_READER: value });
-    try {
-      expect(policyReader(), String(value)).toBe(expected);
-    } finally {
-      restore();
-    }
   }
 });
 

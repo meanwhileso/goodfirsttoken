@@ -188,7 +188,7 @@ export async function registerProject(
     const { settings, reasons } = proposeSettings(
       labels.map((label) => label.name),
       docs,
-      checked ?? undefined,
+      checked,
     );
     return answer(
       toolResult('register_project', { repo, saved: false, status: null, settings, reasons, createdLabels: [] }),

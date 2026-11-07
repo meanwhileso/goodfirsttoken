@@ -1,50 +1,43 @@
-import type { AiSentence, Policy, PolicyTier, ProjectRecord } from '@goodfirsttoken/core';
-import {
-  addPolicyChange,
-  adoptRulesRead,
-  getModelRead,
-  getModelReading,
-  getDoNotListEntry,
-  getIssueSync,
-  getPolicyRead,
-  getProject,
-  hasApprovedFind,
-  keepFingerprint,
-} from '../db';
+import type { Policy, ProjectRecord } from '@goodfirsttoken/core';
+import { adoptRulesRead, getModelRead, getModelReading, getDoNotListEntry, getIssueSync, getPolicyRead, getProject } from '../db';
 import { whyNotEligible, type RepoFacts } from '../projects/repo';
 import { isProjectRepo } from '../projects/repo-id';
-import { policyReader } from '../anthropic';
-import { countRereadNoVerdict, rereadFromKept } from './batches';
+import { countRereadNoVerdict } from './batches';
 import { decideReread, type RereadDocs } from './decide';
-import { comparable, policyFingerprint, wordsOf } from './fingerprint';
+import { wordsOf } from './fingerprint';
 import { readerStatus, sharedReads, stageReread, stageSecondReading, type ReaderRun, type ReaderStatus } from './model';
-import { pauseForCrawler, BAN_REASON } from './pause';
-import { readPolicyOutput } from './reader';
+import { pauseForCrawler } from './pause';
+import { readPolicyOutput, type PolicyReading } from './reader';
 import { docsHash } from './reader/docs';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
-import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
-import { readPolicy, suggestSettings, type CrawlTier, type PolicyFile, type PolicyReading } from './rules';
+import { readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
+import type { PolicyFile } from './rules';
 
 // Keeping listings current (spec section 5): the crawl queue's consumer
-// reads each listed project's docs again every week, with the same reads and
-// the same rules as a crawl, and compares what the rules read with the last
-// read. The crawler's cron job queues them (src/crawl/producer.ts).
+// reads each listed project's docs again every week, with the same reads as
+// a crawl, and stages them for the model policy reader, whose reading is
+// compared with the last read (src/crawl/decide.ts). The crawler's cron job
+// queues them (src/crawl/producer.ts).
 //
 // - Docs that move into a ban on AI help, from a last read that wasn't one,
-//   pause the project at once. A ban the docs had at the first read of a
-//   registered project, or of a listing an admin made by hand, is taken as
-//   it is. So is one a change to the rules reads in a registered project.
+//   pause the project, once a second reading agrees. A ban the docs had at
+//   the first read of a registered project, or of a listing an admin made
+//   by hand, is taken as it is. So is one a new reader version reads in a
+//   registered project.
 // - A repo that now lets only collaborators open pull requests, or has them
-//   turned off, pauses an approved project at once.
+//   turned off, pauses an approved project at once, with or without the
+//   model.
 // - A listing made from a policy whose policy reads differently otherwise
 //   goes back to the admin queue as a policy change, and stays listed while
 //   it waits. A listing made from a maintainer's post on X stands on the
 //   post, so its first read sends nothing while its docs name no AI, and a
 //   ban then pauses it.
+// - Without an ANTHROPIC_API_KEY, the weekly read runs only the pull request
+//   check.
 //
 // Each pause is the one the sync makes: a pause that names no one, so only
 // an admin lifts it, kept in the status history. The admin queue shows every
-// such pause, with the line the rules read as a ban. A repo GitHub shows
+// such pause, with the line the model read as a ban. A repo GitHub shows
 // archived, private, or gone is the sync's, which pauses and delists it, so
 // the crawler leaves it alone. So is another repo under the project's name,
 // by its GitHub ID, as src/projects/repo-id.ts says. Nothing here approves,
@@ -86,10 +79,6 @@ export function newRereadRun(): RereadRun {
   return { read: 0, changed: [], paused: [], skipped: {} };
 }
 
-function listedTier(tier: CrawlTier): tier is PolicyTier {
-  return tier === 'invites_agents' || tier === 'allows_with_conditions';
-}
-
 /** Why the weekly read leaves the project alone, or null when it reads it. */
 async function whyNotRead(db: D1Database, project: ProjectRecord | null): Promise<RereadSkip | null> {
   if (project === null || (project.status !== 'approved' && project.status !== 'paused')) return 'not_listed';
@@ -125,33 +114,32 @@ function pullRequestsFrom(facts: RepoFacts): 'open' | 'unknown' | { limited: str
   return facts.pullRequestCreationPolicy === 'all' ? 'open' : limited();
 }
 
-function passages(reading: PolicyReading): AiSentence[] {
-  return reading.aiSentences.map(({ file, ...passage }) => ({ path: file.path, ...passage }));
-}
-
 /**
- * What the rules read now, against the last whole read: whether it changed,
+ * What the model reads now, against the last whole read: whether it changed,
  * and whether it moved into the ban tier.
  *
  * - It moved into a ban when it reads a ban now and the last read didn't.
- *   Across a change to the rules, that holds for a listing made from a
+ *   Across a new reader version, that holds for a listing made from a
  *   policy, since a missed ban is the worse error and an admin reviews the
- *   pause. A registered project takes its docs as the new rules read them,
- *   as at its first read.
+ *   pause. A registered project takes its docs as the new reader reads
+ *   them, as at its first read.
  * - When no read kept whether it was a ban, as before the first, only a
  *   listing made from a crawler find moved into one, `fromFind`: the find
  *   read its docs as a welcome. A listing an admin made by hand, and a
  *   registered project, take their docs as they are, since an admin or its
  *   maintainers listed it with its docs as they were.
  * - With a last read of this version, it changed when the hashes differ.
- * - With a last read of another version, as after a change to the rules, it
- *   takes the new one and reads as no change, so a change to the rules sends
- *   nothing back to the queue.
+ * - With a last read of another version, as after a new reader version, it
+ *   takes the new one and reads as no change, so a new reader sends nothing
+ *   back to the queue.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
  * - A listing made from a maintainer's post reads as no change at its first
  *   read while its docs name no AI at all, and a ban then is a move into
  *   one. Later reads compare hashes, as for any listing.
+ *
+ * `read` says whether the last read is of the reader's version, and whether
+ * either of the reading's tiers reads a ban.
  */
 export function compare(
   project: ProjectRecord,
@@ -159,17 +147,13 @@ export function compare(
   reading: PolicyReading,
   fingerprint: string,
   fromFind: boolean,
-  // For the model reader, which tells the reader's versions apart and reads
-  // a ban from either of its tiers. The rules' version and tier otherwise.
-  model?: { sameVersion: boolean; banned: boolean },
+  read: { sameVersion: boolean; banned: boolean },
 ): { changed: boolean; intoBan: boolean } {
-  const banned = model?.banned ?? reading.tier === 'bans_or_restricts';
-  const sameRules = model?.sameVersion ?? comparable(last?.fingerprint ?? null);
   // A listing made from a maintainer's post stood on docs that said nothing
   // about AI, so a ban at its first read is a move into one, as for a find.
   const fromPost = project.policy?.maintainerPost !== undefined;
   const intoBan =
-    banned && (last?.banned == null ? fromFind || fromPost : !last.banned && (sameRules || project.source === 'policy'));
+    read.banned && (last?.banned == null ? fromFind || fromPost : !last.banned && (read.sameVersion || project.source === 'policy'));
   if (last?.fingerprint == null) {
     // Its first read is no change while the docs still name no AI at all.
     // Docs that name it, even to restrict agents without a ban, go to an
@@ -177,17 +161,18 @@ export function compare(
     if (fromPost && reading.tier === 'no_policy' && reading.aiSentences.length === 0) return { changed: false, intoBan };
     return { changed: readsOtherwise(project.policy, reading), intoBan };
   }
-  if (!sameRules) return { changed: false, intoBan };
+  if (!read.sameVersion) return { changed: false, intoBan };
   return { changed: last.fingerprint !== fingerprint, intoBan };
 }
 
 /**
- * Compares what the rules read in a listed project's docs now with the last
- * read, and acts on it: docs that move into a ban pause the project, a
- * listing whose policy changed otherwise goes back to the admin queue, and
- * pull requests limited to collaborators pause an approved project. Then it
- * keeps what they read now for the next read. Throws RepoFailed when GitHub
- * fails on the repo's labels, which a change reads.
+ * Pauses an approved project whose pull requests are limited to
+ * collaborators, then stages the docs for the model, whose reading decides
+ * the rest (src/crawl/decide.ts): docs that move into a ban pause the
+ * project once a second reading agrees, and a listing whose policy changed
+ * otherwise goes back to the admin queue. Without the key, only the pull
+ * request check runs. Throws RepoFailed when GitHub fails on the repo's
+ * labels, which a reading needs.
  */
 async function keepCurrent(
   deps: CrawlDeps,
@@ -199,51 +184,6 @@ async function keepCurrent(
   model: { status: ReaderStatus; run: ReaderRun },
 ): Promise<'read' | 'gone'> {
   const { db, github, now } = deps;
-  const reading = readPolicy(files);
-  const fingerprint = await policyFingerprint(reading, files, repo.vouch);
-  const hash = await docsHash(files, repo.vouch);
-  const reads = sharedReads({ listable: () => Promise.resolve(null), labels: (name) => readLabels(github, name) });
-  const last = await getPolicyRead(db, project.repo);
-  // Only the first read of a listing asks whether a find is behind it.
-  const fromFind = last?.banned == null && project.source === 'policy' && (await hasApprovedFind(db, project.repo));
-  const { changed, intoBan } = compare(project, last, reading, fingerprint, fromFind);
-  // With the model deciding, the rules' reading acts on nothing: a ban only the rules read pauses nothing.
-  const decides = policyReader() === 'model';
-
-  if (decides) {
-    // The model's half below decides.
-  } else if (intoBan) {
-    const ban =
-      reading.ban === null
-        ? null
-        : { path: reading.ban.file.path, line: reading.ban.line || null, url: fileUrl(repo.name, repo.branch, reading.ban.file.path) };
-    const why = { ban, aiSentences: passages(reading), moreAiSentences: reading.moreAiSentences };
-    if (await pauseForCrawler(deps, project.repo, BAN_REASON, why, true)) run.paused.push(project.repo);
-  } else if (changed && project.source === 'policy') {
-    const labels = await reads.labels(repo.name);
-    if (labels === null) return 'gone';
-    const welcome = reading.welcome;
-    const policy =
-      listedTier(reading.tier) && welcome !== null
-        ? { quote: welcome.quote, url: fileUrl(repo.name, repo.branch, welcome.file.path), tier: reading.tier }
-        : null;
-    const { sources } = suggestSettings(reading, files, labels, repo.vouch);
-    const change = await addPolicyChange(
-      db,
-      {
-        repo: project.repo,
-        facts: repo.standing,
-        policy,
-        sources,
-        aiSentences: passages(reading),
-        moreAiSentences: reading.moreAiSentences,
-        docsHash: hash,
-      },
-      now(),
-    );
-    if (change !== null) run.changed.push(project.repo);
-  }
-
   const pullRequests = pullRequestsFrom(facts);
   if (pullRequests === 'unknown') {
     console.warn(`GitHub didn't say who can open pull requests on ${repo.name}, so the crawler's weekly read paused nothing for them.`);
@@ -251,38 +191,40 @@ async function keepCurrent(
     const why = { ban: null, aiSentences: [], moreAiSentences: 0 };
     if (await pauseForCrawler(deps, project.repo, pullRequests.limited, why, false)) run.paused.push(project.repo);
   }
-  await keepFingerprint(db, project.repo, { fingerprint, banned: reading.tier === 'bans_or_restricts' }, now());
-  // The model reads the same files. In shadow its reading shows beside the
-  // rules' and acts on nothing. With the model deciding, it is the one acted on.
-  if (model.status.reads) {
-    // At the first weekly read with the model deciding, the rules' last verdict, the one acted on, is the model's last read.
-    if (decides && (await getModelRead(db, project.repo))?.readIn !== 'model') {
-      await adoptRulesRead(db, project.repo, { fingerprint: last?.fingerprint ?? null, banned: last?.banned ?? null });
-    }
-    const stage = { db, now, calls: () => github.calls };
-    const what = { project: project.repo, repo, files, hash, rulesTier: reading.tier };
-    const staged = await stageReread(stage, model.run, reads, what, decides);
-    const docsFor = async (): Promise<RereadDocs | null> => {
+  if (!model.status.reads) return 'read';
+
+  // At a project's first weekly read with the model deciding, the rules' last verdict, the one acted on, is the model's last read.
+  if ((await getModelRead(db, project.repo))?.readIn !== 'model') {
+    const last = await getPolicyRead(db, project.repo);
+    await adoptRulesRead(db, project.repo, { fingerprint: last?.fingerprint ?? null, banned: last?.banned ?? null });
+  }
+  const hash = await docsHash(files, repo.vouch);
+  const reads = sharedReads({ listable: () => Promise.resolve(null), labels: (name) => readLabels(github, name) });
+  const stage = { db, now, calls: () => github.calls };
+  const what = { project: project.repo, repo, files, hash };
+  const docs = (labels: RereadDocs['labels']): RereadDocs => ({
+    repo: project.repo,
+    branch: repo.branch,
+    facts: repo.standing,
+    vouch: repo.vouch,
+    labels,
+    docsHash: hash,
+  });
+  const staged = await stageReread(stage, model.run, reads, what);
+  if (staged === 'cached') {
+    const kept = await getModelReading(db, project.repo);
+    const read = kept === null ? null : readPolicyOutput(files, kept.output);
+    if (read?.ok === true && kept !== null) {
+      // The kept reading of the same docs stands for the first reading, and a move into a ban stages the second.
       const labels = await reads.labels(repo.name);
-      if (labels === null) return null;
-      return { repo: project.repo, branch: repo.branch, facts: repo.standing, vouch: repo.vouch, labels, docsHash: hash, rulesTier: reading.tier };
-    };
-    if (staged === 'cached') {
-      const kept = await getModelReading(db, project.repo);
-      const read = decides && kept !== null ? readPolicyOutput(files, kept.output) : null;
-      if (read?.ok === true && kept !== null) {
-        // The kept reading of the same docs stands for the first reading, and a move into a ban stages the second.
-        const docs = await docsFor();
-        if (docs === null) return 'gone';
-        if ((await decideReread(deps, run, docs, files, read.reading)) === 'second') {
-          await stageSecondReading(stage, model.run, reads, { ...what, firstOutput: kept.output });
-        }
-      } else if (kept !== null && !decides) await rereadFromKept(deps, model.run, project.repo, kept);
-    } else if (staged === 'too_big') {
-      // A report of docs it can't read needs no labels, so this reads none from GitHub.
-      const docs: RereadDocs = { repo: project.repo, branch: repo.branch, facts: repo.standing, vouch: repo.vouch, labels: [], docsHash: hash, rulesTier: reading.tier };
-      await countRereadNoVerdict(deps, project.repo, 'docs past the size cap', decides ? { run, docs, files } : undefined);
+      if (labels === null) return 'gone';
+      if ((await decideReread(deps, run, docs(labels), files, read.reading)) === 'second') {
+        await stageSecondReading(stage, model.run, reads, { ...what, firstOutput: kept.output });
+      }
     }
+  } else if (staged === 'too_big') {
+    // A report of docs it can't read needs no labels, so this reads none from GitHub.
+    await countRereadNoVerdict(deps, project.repo, 'docs past the size cap', { run, docs: docs([]), files });
   }
   return 'read';
 }

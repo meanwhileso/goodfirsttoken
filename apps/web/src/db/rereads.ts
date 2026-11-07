@@ -98,8 +98,11 @@ export async function getPolicyRead(db: D1Database, project: string): Promise<Po
 }
 
 /**
- * Keeps what the rules read in the project's docs, read whole at `now`, for
- * the next read to compare with: the hash, and whether they read a ban.
+ * Keeps what the crawler's rules read in the project's docs, read whole at
+ * `now`: the hash, and whether they read a ban. The rules wrote it before
+ * the model read policies, and the first weekly read with the model takes
+ * it as the model's last read. Only the tests write it now, to set up a
+ * listing the rules read last.
  */
 export async function keepFingerprint(
   db: D1Database,
@@ -186,7 +189,7 @@ export interface NewPolicyChange {
   moreAiSentences: number;
   /** What the crawler read in the docs, as a docs hash. None when left out. */
   docsHash?: string;
-  /** Who sent it: the rules, unless the model reader sent it. */
+  /** Who sent it: the model reader, or before it read policies, the crawler's rules, which a change left unsaid defaults to. */
   madeBy?: FindMaker;
   /** For a change the model sent, the rules' tier for the same docs, when it differs from the model's. */
   rulesTier?: CrawlReadTier | null;

@@ -1,20 +1,20 @@
 import type { PolicyFingerprint } from '@goodfirsttoken/core';
 import { FINGERPRINT_VERSION, wordsOf } from '../fingerprint';
-import { forAgents, namesAiByWordList, type PolicyFile, type PolicyReading } from '../rules';
-import { toPolicyReading, type ModelReading } from './reading';
+import { forAgents, namesAiByWordList, type PolicyFile } from '../rules';
+import { toPolicyReading, type ModelReading, type PolicyReading } from './reading';
 
 // The fingerprint of what a model reading decided, so a later read can tell
 // whether the policy changed. The docs hash decides whether the model
 // reads. This decides whether the policy changed. It covers outcomes: the
 // tier, which conditions hold, the reserved and only label names, the
 // trailer, the CLA link, whether there is a vouch file or a canary, and the
-// passages with a sentence that names AI by the rules' word list. In a file
-// written for agents, that is as the rules read it there, plus each
+// passages with a sentence that names AI by the word list. In a file
+// written for agents, that is as the word list reads it there, plus each
 // passage that holds a kept statement, like the welcome. It leaves
 // out which lines the model cited and the welcome's quote, since a new
 // reading can cite other lines for the same policy. An edit to the welcome
 // still shows, since the welcome names AI and its paragraph is one of those
-// passages. It also leaves out the passages the rules keep only because
+// passages. It also leaves out the passages the admin's net keeps only because
 // they talk about contributing in a file for agents, like Omarchy's
 // "does not run graphical acceptance tests", which the admin still sees. So
 // a build step added to AGENTS.md costs one model call and sends nothing to
@@ -34,7 +34,7 @@ function names(labels: readonly { name: string }[]): string[] {
   return [...new Set(labels.map((label) => label.name.toLowerCase()))].sort();
 }
 
-/** Whether a passage the rules kept goes in the fingerprint. */
+/** Whether a passage the admin's net kept goes in the fingerprint. */
 function counts(passage: PolicyReading['aiSentences'][number], reading: ModelReading): boolean {
   if (!forAgents(passage.file.kind)) return namesAiByWordList(passage.text);
   if (namesAiByWordList(passage.text, true)) return true;

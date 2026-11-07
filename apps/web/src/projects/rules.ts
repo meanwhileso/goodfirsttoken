@@ -1,10 +1,11 @@
 import { httpsUrl } from '@goodfirsttoken/core';
 import type { RepoFile } from './docs';
 
-// The rules a maintainer's proposal (src/projects/proposal.ts) and the
-// policy crawler (src/crawl/) share for what a repo's docs and labels say.
-// Plain rules over the text, each one written in docs/how-it-works.md, under
-// Registering a project.
+// The rules a maintainer's proposal (src/projects/proposal.ts) follows for
+// what a repo's docs and labels say. Plain rules over the text, each one
+// written in docs/how-it-works.md, under Registering a project. The policy
+// crawler takes its settings from the model's reading, and shares only
+// keptForPeople, for the labels kept for people.
 
 /** The label Good First Token creates when a maintainer picks the tag. */
 export const OUR_LABEL = {
@@ -50,14 +51,14 @@ const LINK = /https:\/\/[^\s<>()[\]"'`]+/;
 const CLOSING = '.,;:!?';
 
 /** What a rule found in a text, and where. */
-export interface Found<T> {
+interface Found<T> {
   found: T;
   /** Where in the text it was found. */
   index: number;
 }
 
 /** The trailer a text names for AI help, spelled as the text spells it, and where, or null. */
-export function findTrailer(text: string): Found<string> | null {
+function findTrailer(text: string): Found<string> | null {
   const match = TRAILER.exec(text);
   return match?.[1] === undefined ? null : { found: match[1], index: match.index };
 }
@@ -68,7 +69,7 @@ export function disclosureTrailer(text: string): string | null {
 }
 
 /** Where a sentence names the PR description, then says the contributor writes it, or null. */
-export function findPersonWritten(text: string): Found<true> | null {
+function findPersonWritten(text: string): Found<true> | null {
   let offset = 0;
   for (const sentence of text.split(/[.\n]/)) {
     const named = DESCRIPTION.exec(sentence);
@@ -97,7 +98,7 @@ function trimClosing(link: string): string {
  * signed, and where, or null. A line that says there is no CLA, or that it
  * isn't needed, gives none, whatever link it has.
  */
-export function findClaLink(text: string): Found<string> | null {
+function findClaLink(text: string): Found<string> | null {
   let offset = 0;
   for (const line of text.split('\n')) {
     if (CLA.test(line) && MUST_SIGN.test(line) && !NONE.test(line)) {

@@ -1,5 +1,5 @@
 import type { DocsHash, RepoFacts } from '@goodfirsttoken/core';
-import { anthropicApiKey, modelDailyBudgetUsd, policyReader } from '../anthropic';
+import { anthropicApiKey, modelDailyBudgetUsd } from '../anthropic';
 import {
   getModelRead,
   getModelReading,
@@ -12,21 +12,17 @@ import {
 } from '../db';
 import { readsSame, docsBytes, findTier, MAX_DOCS_BYTES, utcDay, type Share } from './reader';
 import { READER_VERSION } from './reader/version';
-import { RepoFailed } from './reads';
-import type { CrawlTier, PolicyFile, RepoLabel } from './rules';
+import type { PolicyFile, RepoLabel } from './rules';
 
 // The crawl consumer's half of the model policy reader
 // (docs/specs/model-policy-reader.md, under When the model reads and Where it
-// runs). After the rules read a repo's docs, this decides whether the model
-// reads them too, and if so stages them in D1, with the repo's labels, for
+// runs). Once the crawler has read a repo's docs, this decides whether the
+// model reads them, and if so stages them in D1, with the repo's labels, for
 // the hourly run to send through the Message Batches API
 // (src/crawl/batches.ts). It makes every GitHub read the reading needs, so
-// the batch job never calls GitHub.
-//
-// With POLICY_READER=shadow the rules decide, as before, and the model's
-// reading is kept and shown beside theirs. With `model` the model's reading
-// decides (src/crawl/decide.ts). Nothing is staged without an
-// ANTHROPIC_API_KEY, or with a budget of 0.
+// the batch job never calls GitHub. The model's reading decides
+// (src/crawl/decide.ts). Nothing is staged without an ANTHROPIC_API_KEY, or
+// with a budget of 0.
 
 /** What the model's half of one crawl run did, for its log line. */
 export interface ReaderRun {
@@ -46,28 +42,24 @@ export interface ReaderRun {
   noLabels: string[];
   /** Calls to GitHub the model's half made for its staging. */
   githubCalls: number;
-  /** Listings whose docs the model read before, which it reads as moved into a ban, or as changed, where the rules may not. */
-  wouldPause: string[];
-  wouldChange: string[];
 }
 
 export function newReaderRun(): ReaderRun {
-  return { staged: 0, cacheHits: 0, same: 0, rejectedSame: 0, notListable: 0, tooBig: [], noLabels: [], githubCalls: 0, wouldPause: [], wouldChange: [] };
+  return { staged: 0, cacheHits: 0, same: 0, rejectedSame: 0, notListable: 0, tooBig: [], noLabels: [], githubCalls: 0 };
 }
 
 /** Whether the model reads, and when it doesn't, why. */
-export type ReaderStatus = { reads: true } | { reads: false; why: 'rules' | 'no_key' | 'no_budget' };
+export type ReaderStatus = { reads: true } | { reads: false; why: 'no_key' | 'no_budget' };
 
 /** The last UTC day the log said the reader has no key or no budget, so it says so once a day. */
 const SAID_WAITING = 'said_waiting_on';
 
 /**
- * Whether the model reads in this run: POLICY_READER is shadow or model,
- * the key is set, and the day's budget is more than 0. Without the key or
- * the budget, the log says so once a UTC day.
+ * Whether the model reads in this run: the key is set, and the day's budget
+ * is more than 0. Without the key or the budget, the log says so once a UTC
+ * day.
  */
 export async function readerStatus(db: D1Database, now: number): Promise<ReaderStatus> {
-  if (policyReader() === 'rules') return { reads: false, why: 'rules' };
   const why = anthropicApiKey() === null ? 'no_key' : modelDailyBudgetUsd() <= 0 ? 'no_budget' : null;
   if (why === null) return { reads: true };
   const day = utcDay(now);
@@ -75,7 +67,7 @@ export async function readerStatus(db: D1Database, now: number): Promise<ReaderS
     await setReaderState(db, SAID_WAITING, day);
     console.warn(
       why === 'no_key'
-        ? `The policy reader read nothing with the model. The ANTHROPIC_API_KEY secret is not set, ${policyReader() === 'shadow' ? 'so the rules decide alone, as they do in shadow anyway' : 'so seeds wait for an admin to list them by hand, and weekly reads run only the pull request check'}. docs/self-hosting.md says how to set it.`
+        ? 'The policy reader read nothing with the model. The ANTHROPIC_API_KEY secret is not set, so seeds wait for an admin to list them by hand, and weekly reads run only the pull request check. docs/self-hosting.md says how to set it.'
         : 'The policy reader read nothing with the model. MODEL_DAILY_BUDGET_USD is 0 or not set, so the model may spend nothing. docs/self-hosting.md says how to set it.',
     );
   }
@@ -91,7 +83,7 @@ export interface ReadRepo {
   vouch: string | null;
 }
 
-/** GitHub reads that the rules may make too, made once for both. */
+/** GitHub reads the staging makes, each once per repo. */
 export interface SharedReads {
   /** Why the repo can't be listed, or null when it can. */
   listable: (repo: string) => Promise<string | null>;
@@ -130,24 +122,21 @@ interface Stage {
   repo: ReadRepo;
   files: readonly PolicyFile[];
   hash: DocsHash;
-  rulesTier: CrawlTier;
   /** For a label check on its own, the kept reading's output. */
   labelsFor?: { readingOutput: unknown };
   /** For a second reading for a pause, on its own, the kept first reading's output. */
   secondFor?: { firstOutput: unknown };
 }
 
-/** Stages a reading, or a label check on its own, with the repo's labels. False when GitHub didn't give the labels. */
+/**
+ * Stages a reading, or a label check on its own, with the repo's labels.
+ * False when GitHub doesn't show the labels. Throws RepoFailed when GitHub
+ * fails on them, so the consumer sends the repo back alone.
+ */
 async function stage(deps: StageDeps, run: ReaderRun, reads: SharedReads, what: Stage): Promise<boolean> {
   const { repo } = what;
   if (repo.commit === null || repo.branch === null || repo.standing === null) return false;
-  let labels: RepoLabel[] | null;
-  try {
-    labels = await reads.labels(repo.name);
-  } catch (error) {
-    if (!(error instanceof RepoFailed)) throw error;
-    labels = null;
-  }
+  const labels = await reads.labels(repo.name);
   if (labels === null) {
     run.noLabels.push(repo.name);
     console.warn(`The policy reader staged nothing for ${repo.name}, since GitHub didn't give its labels. It reads it at its next read.`);
@@ -160,7 +149,6 @@ async function stage(deps: StageDeps, run: ReaderRun, reads: SharedReads, what: 
       purpose: what.purpose,
       share: what.share,
       docsHash: what.hash,
-      rulesTier: what.rulesTier,
       commit: repo.commit,
       branch: repo.branch,
       facts: repo.standing,
@@ -193,13 +181,14 @@ function tooBig(run: ReaderRun, repo: string, files: readonly PolicyFile[]): boo
  * when that reading would make a find, they get a fresh label check. A seed
  * whose rejected find has the same docs stays out. Past the size cap, or for
  * a seed that takes no outside pull requests, the model reads nothing. Then
- * it reads the labels, which the rules' find reads too, and stages both.
+ * it reads the labels, and stages both. Throws RepoFailed when GitHub fails
+ * on the labels.
  */
 export async function stageSeed(
   deps: StageDeps,
   run: ReaderRun,
   reads: SharedReads,
-  what: { repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash; rulesTier: CrawlTier },
+  what: { repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash },
 ): Promise<void> {
   const before = deps.calls();
   try {
@@ -260,9 +249,7 @@ export async function stageReread(
   deps: StageDeps,
   run: ReaderRun,
   reads: SharedReads,
-  what: { project: string; repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash; rulesTier: CrawlTier },
-  // With the model deciding, a kept reading stands only with its output, which the decision reads again against the files.
-  decides = false,
+  what: { project: string; repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash },
 ): Promise<RereadStage> {
   const before = deps.calls();
   try {
@@ -278,7 +265,8 @@ export async function stageReread(
     if (tooBig(run, repo.name, files)) return 'too_big';
     // Kept under the project's name, which a rename on GitHub doesn't change.
     const kept = await getModelReading(deps.db, what.project);
-    if (readsSame(kept, hash) && (!decides || kept?.output != null)) {
+    // A kept reading stands only with its output, which the decision reads again against the files.
+    if (readsSame(kept, hash) && kept?.output != null) {
       run.cacheHits += 1;
       await retirePending(deps.db, what.project);
       return 'cached';
@@ -298,7 +286,7 @@ export async function stageSecondReading(
   deps: StageDeps,
   run: ReaderRun,
   reads: SharedReads,
-  what: { project: string; repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash; rulesTier: CrawlTier; firstOutput: unknown },
+  what: { project: string; repo: ReadRepo; files: readonly PolicyFile[]; hash: DocsHash; firstOutput: unknown },
 ): Promise<boolean> {
   return stage(deps, run, reads, { ...what, key: what.project, purpose: 'reread', share: 'weekly', secondFor: { firstOutput: what.firstOutput } });
 }

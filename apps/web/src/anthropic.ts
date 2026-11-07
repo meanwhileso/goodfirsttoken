@@ -11,11 +11,9 @@ import { env } from 'cloudflare:workers';
 // gets an empty value, and then calls go to the Anthropic API itself.
 //
 // ANTHROPIC_API_KEY is optional, and declared in src/optional-secrets.d.ts.
+// With it, the model reads every policy. Without it, the crawler reads none.
 
 export const ANTHROPIC_API = 'https://api.anthropic.com';
-
-export const POLICY_READERS = ['rules', 'shadow', 'model'] as const;
-export type PolicyReader = (typeof POLICY_READERS)[number];
 
 // A stand-in key for `pnpm dev`, which the Anthropic fake takes and the API
 // never would. It is public, so it applies only in development, with the
@@ -24,7 +22,7 @@ const LOCAL_API_KEY = 'local-only-not-a-real-anthropic-key';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
-type Settings = Partial<Pick<Env, 'ENVIRONMENT' | 'ANTHROPIC_API_KEY' | 'ANTHROPIC_API_URL' | 'POLICY_READER' | 'MODEL_DAILY_BUDGET_USD'>>;
+type Settings = Partial<Pick<Env, 'ENVIRONMENT' | 'ANTHROPIC_API_KEY' | 'ANTHROPIC_API_URL' | 'MODEL_DAILY_BUDGET_USD'>>;
 
 /** The Anthropic API's base URL, from ANTHROPIC_API_URL, or the API itself when it is empty. */
 export function anthropicUrl(): string {
@@ -56,12 +54,6 @@ export function anthropicApiKey(): string | null {
   if (key) return key;
   if (settings.ENVIRONMENT === 'development' && apiIsLocalFake(anthropicUrl())) return LOCAL_API_KEY;
   return null;
-}
-
-/** How the crawler reads a repo's policy, from POLICY_READER. Empty, or anything else, means rules. */
-export function policyReader(): PolicyReader {
-  const value = ((env as Settings).POLICY_READER ?? '').trim();
-  return POLICY_READERS.find((mode) => mode === value) ?? 'rules';
 }
 
 /**

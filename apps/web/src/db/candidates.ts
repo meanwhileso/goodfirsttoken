@@ -89,11 +89,11 @@ export interface NewCandidate {
   /** The sentences in the docs that name AI, for the admin to read, and how many more there are. None when left out. */
   aiSentences?: AiSentence[];
   moreAiSentences?: number;
-  /** What the crawler's rules read in the repo's docs, from src/crawl/fingerprint.ts. None when left out. */
+  /** What the reading of the repo's docs decided, from src/crawl/reader/fingerprint.ts. None when left out. */
   fingerprint?: string;
   /** What the crawler read in the docs, as a docs hash (src/crawl/reader/docs.ts). None when left out. */
   docsHash?: string;
-  /** Who made the find: the rules, unless the model reader made it. */
+  /** Who made the find: the model reader, or before it read policies, the crawler's rules, which a find left unsaid defaults to. */
   madeBy?: FindMaker;
   /** For a find the model made, the rules' tier for the same docs, when it differs from the model's. */
   rulesTier?: CrawlReadTier | null;
@@ -204,7 +204,7 @@ export async function crawlerSkips(
 }
 
 /**
- * The repo's find an admin rejected last, with what the crawler's rules
+ * The repo's find an admin rejected last, with the fingerprint of what was
  * read in its docs then, and the docs hash of those docs, or null when an
  * admin rejected none. The fingerprint is null for a find stored before
  * finds kept one, and the docs hash for one stored before finds kept it.
@@ -242,7 +242,7 @@ export async function hasApprovedFind(db: D1Database, repo: string): Promise<boo
 }
 
 /**
- * Keeps what the rules read in a find's repo now, as the one to compare the
+ * Keeps what the reader read in a find's repo now, as the one to compare the
  * next read with, for a find that kept none, or one of an older version,
  * with the docs hash of the docs read now, when given.
  */

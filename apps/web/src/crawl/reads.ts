@@ -116,7 +116,7 @@ export interface FoundRepo {
   branch: string | null;
   /** The commit on the default branch the files are read from, or null for a repo with no commits. */
   commit: string | null;
-  /** The files to read, in the order the rules read them. */
+  /** The files to read, in the order the model reads them. */
   paths: { path: string; kind: PolicyFileKind }[];
   /** Why the crawler can't read every file that could hold the repo's policy, or null when it can. */
   unreadable: string | null;
@@ -173,8 +173,8 @@ function whyUnreadable(entry: Entry, path: string): string | null {
 }
 
 /**
- * The files the rules read in a repo, in the order they read them, from its
- * folder listings, and why it can't be read whole, if it can't.
+ * The files the crawler reads in a repo, in the order the model reads them,
+ * from its folder listings, and why it can't be read whole, if it can't.
  */
 function pathsOf(listed: ListedRepo): Pick<FoundRepo, 'paths' | 'unreadable' | 'vouch' | 'folders'> {
   const listings = new Map(FOLDERS.map(({ alias }) => [alias, listed[alias] as Listing | null | undefined]));
@@ -432,7 +432,7 @@ export async function readFiles(github: ServiceGitHub, repos: readonly FoundRepo
       if (read === null) unreadable = `GitHub gave nothing for ${item.path} at the commit`;
       else if (read.isBinary === true || typeof text !== 'string') unreadable = `GitHub gave no text for ${item.path}`;
       else if (read.isTruncated === true) unreadable = `GitHub cut ${item.path} short`;
-      else if (text.includes('\u0000')) unreadable = `${item.path} isn't text the rules can read`;
+      else if (text.includes('\u0000')) unreadable = `${item.path} isn't text the crawler can read`;
       else files.push({ path: item.path, kind: item.kind, text });
     }
     results.set(repo, unreadable === null ? { files } : { unreadable });

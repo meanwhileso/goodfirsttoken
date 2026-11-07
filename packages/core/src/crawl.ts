@@ -99,7 +99,7 @@ export const crawlTiers = ['invites_agents', 'allows_with_conditions', 'bans_or_
 export const crawlTierSchema = z.enum(crawlTiers);
 export type CrawlReadTier = z.infer<typeof crawlTierSchema>;
 
-/** Who made a find or a policy change: the crawler's rules, or the model policy reader once it decides. */
+/** Who made a find or a policy change: the model policy reader, or before it read policies, the crawler's rules. */
 export const findMakers = z.enum(['rules', 'model']);
 export type FindMaker = z.infer<typeof findMakers>;
 
@@ -159,7 +159,8 @@ export const readingPointerSchema = z.object({
  * checked out, the tier the Worker worked out from the statements and the one
  * the model gave, and the model's summary. The lines are the repo's text, and
  * the notes and the summary are text the model wrote from it, so all of it is
- * data to the admin. In shadow it decides nothing.
+ * data to the admin. A reading kept in shadow, before the model decided,
+ * decided nothing.
  */
 export const modelReadingSchema = z.object({
   /** The model, the prompt, and the output schema, like claude-opus-5-5/p1/s1. */
@@ -221,7 +222,7 @@ export const crawlCandidateSchema = z
     facts: repoFactsSchema,
     /** The policy text that welcomes agent work, with its link and tier. */
     policy: policySchema,
-    /** The settings the crawler's rules suggest. The admin confirms them and picks the tags. */
+    /** The settings the crawler suggests. The admin confirms them and picks the tags. */
     settings: projectSettingsPatchSchema,
     suggestedTags: z.array(suggestedTagSchema),
     /** The line behind each suggestion the docs gave, and any canary. */
@@ -236,9 +237,9 @@ export const crawlCandidateSchema = z
     moreAiSentences: count.default(0),
     /** What the crawler read in the docs it found the repo in, as a docs hash, or null for a find made before. */
     docsHash: docsHashSchema.nullable().default(null),
-    /** Who made the find: the crawler's rules, or the model policy reader once it decides. */
+    /** Who made the find: the model policy reader, or before it read policies, the crawler's rules. */
     madeBy: findMakers.default('rules'),
-    /** For a find the model reader made, the tier the rules read in the same docs, when it differs from the model's. Null otherwise. */
+    /** For a find the model reader made while the rules still read, the tier the rules read in the same docs, when it differed from the model's. Null otherwise. */
     rulesTier: crawlTierSchema.nullable().default(null),
     status: candidateStatusSchema,
     /** The admin who decided, or null while it waits. */
@@ -320,17 +321,16 @@ export const doNotListEntrySchema = z.object({
 export type DoNotListEntry = z.infer<typeof doNotListEntrySchema>;
 
 /**
- * What the crawler's rules read in a repo's docs, as a version and a hash:
- * the tier, the words of the quote, of each sentence that names AI with its
- * paragraph, and of the conditions the settings follow. The repo's text
- * isn't kept, only the hash.
+ * What a reading of a repo's docs decided, as a version and a hash, from
+ * src/crawl/reader/fingerprint.ts, or from the crawler's rules before the
+ * model read policies. The repo's text isn't kept, only the hash.
  */
 export const policyFingerprintSchema = z
   .string({ error: 'must be a policy fingerprint' })
   .regex(/^v[1-9][0-9]{0,3}:[0-9a-f]{64}$/, 'must be a policy fingerprint');
 export type PolicyFingerprint = z.infer<typeof policyFingerprintSchema>;
 
-/** The line in a repo's docs the crawler's rules read as a ban, with a link to its file. */
+/** The line in a repo's docs the crawler read as a ban, with a link to its file. */
 export const banLineSchema = z.object({
   /** The file's path in the repo. */
   path: trimmedText(MAX_SOURCE_LINE),
@@ -361,9 +361,9 @@ export const policyReadSchema = z.object({
   project: repoName,
   /** When the crawler's cron job last put it in the crawl queue. */
   queuedAt: epochMs,
-  /** What the rules read in its docs the last time the crawler read them whole, or null before. */
+  /** What the crawler's rules read in its docs the last time they read them, before the model read policies, or null. */
   fingerprint: policyFingerprintSchema.nullable(),
-  /** Whether the rules read a ban in its docs then, or null before. */
+  /** Whether the rules read a ban in its docs then, or null. */
   banned: z.boolean().nullable(),
   /** The crawler's last pause of the project, or null. */
   pause: crawlerPauseSchema.nullable(),
@@ -371,8 +371,8 @@ export const policyReadSchema = z.object({
 export type PolicyRead = z.infer<typeof policyReadSchema>;
 
 /**
- * A listed project whose policy, as the crawler's rules read it, changed
- * since the crawler last read it, waiting for an admin or decided by one.
+ * A listed project whose policy, as the crawler reads it, changed since the
+ * crawler last read it, waiting for an admin or decided by one.
  */
 export const policyChangeSchema = z
   .object({
@@ -383,7 +383,7 @@ export const policyChangeSchema = z
     facts: repoFactsSchema,
     /**
      * The policy text that welcomes agent work now, with its link and tier,
-     * or null when the rules read none.
+     * or null when the crawler read none.
      */
     policy: policySchema.nullable(),
     /** The line behind each setting the docs give now, and any canary. */
@@ -392,9 +392,9 @@ export const policyChangeSchema = z
     moreAiSentences: count.default(0),
     /** What the crawler read in the docs, as a docs hash, or null for a change found before. */
     docsHash: docsHashSchema.nullable().default(null),
-    /** Who sent it: the crawler's rules, or the model policy reader once it decides. */
+    /** Who sent it: the model policy reader, or before it read policies, the crawler's rules. */
     madeBy: findMakers.default('rules'),
-    /** For a change the model reader sent, the tier the rules read in the same docs, when it differs from the model's. Null otherwise. */
+    /** For a change the model reader sent while the rules still read, the tier the rules read in the same docs, when it differed from the model's. Null otherwise. */
     rulesTier: crawlTierSchema.nullable().default(null),
     /** Why it was sent, under policyChangeWhys. */
     why: z.enum(policyChangeWhys).default('changed'),

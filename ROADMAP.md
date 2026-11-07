@@ -10,7 +10,7 @@ The build for the first launch is complete. The last build issue, the security r
 [#34](https://github.com/meanwhileso/goodfirsttoken/issues/34), closed in
 [#105](https://github.com/meanwhileso/goodfirsttoken/pull/105).
 
-The open roadmap issues #76, #77, #86, #87, #88, #89, #94, #95, and #98 are follow-ups.
+The open roadmap issues #86, #87, #88, #89, #94, #95, and #98 are follow-ups.
 They stay open for work after launch. The milestone tables group them by the part of the system
 they change.
 
@@ -118,8 +118,6 @@ Finding projects whose own docs welcome AI, and keeping listings current.
 |---|---|---|---|
 | [#30](https://github.com/meanwhileso/goodfirsttoken/issues/30) | Crawl for written AI policies and queue candidates for admins | #11 | [#69](https://github.com/meanwhileso/goodfirsttoken/pull/69) |
 | [#31](https://github.com/meanwhileso/goodfirsttoken/issues/31) | Re-crawl listed projects and pause on negative signals | #30 | [#81](https://github.com/meanwhileso/goodfirsttoken/pull/81) |
-| [#76](https://github.com/meanwhileso/goodfirsttoken/issues/76) | Catch the policy wordings the crawler misses | #30 | |
-| [#77](https://github.com/meanwhileso/goodfirsttoken/issues/77) | Read fewer welcoming policies as bans | #76 | |
 | [#98](https://github.com/meanwhileso/goodfirsttoken/issues/98) | Show pauses and policy changes on /admin | #31 | |
 
 ### Popular projects and maintainers on X
@@ -133,7 +131,8 @@ priority signal. Build the popular sample first, then seed evidence and admin de
 | [#112](https://github.com/meanwhileso/goodfirsttoken/issues/112) | Sample popular projects early without stopping broad discovery | Nothing | [#114](https://github.com/meanwhileso/goodfirsttoken/pull/114) |
 | [#113](https://github.com/meanwhileso/goodfirsttoken/issues/113) | Prioritize seeds from verified maintainer activity on X | #112 | [#115](https://github.com/meanwhileso/goodfirsttoken/pull/115) |
 
-The classifier fixes #76 and #77 remain separate and can proceed alongside it.
+The classifier fixes #76 and #77 closed unbuilt, since the model policy reader in M11 replaced the
+crawler's rules, under #177.
 
 ## M8 Launch readiness
 
@@ -208,7 +207,7 @@ requests. #171, #172, and #173 can run at the same time.
 | [#174](https://github.com/meanwhileso/goodfirsttoken/issues/174) | Read docs with the model in shadow, through the Message Batches API | #172, #173 | [#183](https://github.com/meanwhileso/goodfirsttoken/pull/183) |
 | [#175](https://github.com/meanwhileso/goodfirsttoken/issues/175) | Check labels with the model, in shadow | #174 | [#184](https://github.com/meanwhileso/goodfirsttoken/pull/184) |
 | [#176](https://github.com/meanwhileso/goodfirsttoken/issues/176) | Let the model decide finds, weekly reads, pauses, and proposed tags | #175, and an eval run that meets the pass bar | [#186](https://github.com/meanwhileso/goodfirsttoken/pull/186) |
-| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | |
+| [#177](https://github.com/meanwhileso/goodfirsttoken/issues/177) | Remove the rules' classification code | #176, right after it | [#187](https://github.com/meanwhileso/goodfirsttoken/pull/187) |
 
 ## Dependency graph
 
@@ -266,8 +265,6 @@ flowchart TD
   n95["#95 Follow-ups and claims on /me"]:::m6
   n30["#30 Policy crawler"]:::m7
   n31["#31 Re-crawls"]:::m7
-  n76["#76 Missed ban wordings"]:::m7
-  n77["#77 Fewer false bans"]:::m7
   n98["#98 Pauses on /admin"]:::m7
   n32["#32 Deploy workflow"]:::m8
   n33["#33 Static host"]:::m8
@@ -364,10 +361,8 @@ flowchart TD
   n27 --> n95
   n28 --> n34
   n30 --> n31
-  n30 --> n76
   n31 --> n34
   n31 --> n98
-  n76 --> n77
   n32 --> n33
   n124 --> n125
   n125 --> n126
@@ -395,7 +390,7 @@ flowchart TD
   n162 --> n164
   n154 --> n165
   n176 --> n165
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173,n174,n175 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173,n174,n175,n176,n177 done
 ```
 
 ## Maintainer steps

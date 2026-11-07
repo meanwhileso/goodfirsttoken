@@ -7,8 +7,8 @@ import { MAX_STATEMENT_LINES } from './version';
 // the Worker decides what they say: a claim is kept only when its file is
 // one the Worker sent, its lines exist and span at most
 // MAX_STATEMENT_LINES, and its quote is one or more whole sentences of
-// those lines, as the rules' scan splits them, with both reduced the way
-// the rules reduce text. These checks prove a line is in the file. They
+// those lines, as the word list's scan splits them, with both reduced the
+// way it reduces text. These checks prove a line is in the file. They
 // don't prove what it means: the admin's read, the eval, and for a pause a
 // second reading cover that.
 
@@ -25,7 +25,7 @@ export interface CheckedPointer {
   lines: string;
   /** The sentences the quote matched, in order. */
   sentences: Sentence[];
-  /** The line the first sentence starts on, trimmed and cut, as the rules keep a source line. */
+  /** The line the first sentence starts on, trimmed and cut, as a source line is kept. */
   source: SourceLine;
 }
 

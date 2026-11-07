@@ -36,10 +36,6 @@
     // starts (packages/anthropic-fake). A deploy that leaves it empty calls
     // https://api.anthropic.com (src/anthropic.ts).
     "ANTHROPIC_API_URL": "http://127.0.0.1:8945",
-    // How the policy crawler will read a repo's AI policy once the model
-    // reader ships: rules, shadow, or model, as
-    // docs/specs/model-policy-reader.md describes. Empty means rules.
-    "POLICY_READER": "rules",
     // The most the model may spend in a UTC day, in US dollars. Empty means
     // 0, which reads nothing with the model. The fake charges nothing.
     "MODEL_DAILY_BUDGET_USD": "20"

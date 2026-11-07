@@ -3,15 +3,15 @@ import { file, type Expected, type PolicyCase } from './cases';
 
 // Made-up welcoming AI policies, written the way real ones read, many with
 // ordinary rules for how to work. Each has the tier and conditions it
-// should have, and the tier the rules read today, which the rules tests
-// hold them to.
+// should have, which the eval checks, and the tier the crawler's rules read
+// before the model read policies, kept as a record that nothing checks.
 
 interface Welcoming {
   kind: PolicyFileKind;
   text: string;
   /** The tier it should have. */
   tier: 'invites_agents' | 'allows_with_conditions';
-  /** The tier the rules read today. */
+  /** The tier the rules read. A record: nothing checks it. */
   rules: CrawlTier;
   /** A person in the loop, when the text asks for one. */
   personInLoop?: true;

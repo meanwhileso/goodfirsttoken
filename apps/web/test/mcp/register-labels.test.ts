@@ -32,7 +32,7 @@ beforeEach(async () => {
   await emptyKv();
   github = startGitHub();
   anthropic = startAnthropic(github);
-  restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20' });
+  restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20' });
   vi.spyOn(env.MCP_LIMITER, 'limit').mockResolvedValue({ success: true });
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -117,7 +117,7 @@ describe('register_project, with the model deciding', () => {
 
   test('falls back to meansReady with no key, and says the labels were read by name', async () => {
     restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20', ANTHROPIC_API_KEY: '' });
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20', ANTHROPIC_API_KEY: '' });
 
     const result = await propose();
 
@@ -162,7 +162,7 @@ describe('register_project, with the model deciding', () => {
   test("falls back to meansReady, with no call, when register_project's share of the day is spent", async () => {
     // A budget whose 10% share can't hold one check.
     restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '1' });
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '1' });
 
     const result = await propose();
 
@@ -171,15 +171,15 @@ describe('register_project, with the model deciding', () => {
     expect(tagReason(result)).toContain("spent its share of today's budget for registrations");
   });
 
-  test('reads the labels by name as before while the model decides nothing', async () => {
+  test('checks the labels with the model whenever the key is set, with no other setting', async () => {
     restore();
-    restore = setEnv({ POLICY_READER: 'shadow', MODEL_DAILY_BUDGET_USD: '20' });
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20' });
+    labelsAnswer([{ name: 'up-for-grabs', meaning: 'readyForOutsideHelp' }]);
 
     const result = await propose();
 
-    expect(checks()).toBe(0);
-    expect(result.structuredContent?.settings?.tags).toEqual(['help wanted']);
-    expect(tagReason(result)).toBe('a label the repo has for outside help');
+    expect(checks()).toBe(1);
+    expect(result.structuredContent?.settings?.tags).toEqual(['up-for-grabs']);
   });
 });
 
@@ -210,12 +210,12 @@ describe('the label check limits', () => {
     labelsAnswer([], Infinity);
     const now = Date.UTC(2100, 3, 1, 12);
     restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '1' });
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '1' });
     for (let n = 0; n < 4; n++) {
       expect(await checkLabels(db, { caller: MAINTAINER_ID, repo: HARBOR, labels: labels(n), now })).toMatchObject({ fallback: expect.stringContaining('share') as unknown });
     }
     restore();
-    restore = setEnv({ POLICY_READER: 'model', MODEL_DAILY_BUDGET_USD: '20' });
+    restore = setEnv({ MODEL_DAILY_BUDGET_USD: '20' });
 
     expect(await checkLabels(db, { caller: MAINTAINER_ID, repo: HARBOR, labels: labels(5), now })).toEqual({ tags: [] });
     expect((await daySpend(db, utcDay(now))).reserved).toBe(0);
@@ -227,7 +227,7 @@ describe('the label check limits', () => {
     const outcomes = [];
     for (let n = 0; n < 11; n++) outcomes.push(await checkLabels(db, { caller: MAINTAINER_ID, repo: `sample-owner/repo-${String(n)}`, labels: labels(n), now }));
 
-    expect(outcomes.filter((o) => o !== null && 'tags' in o)).toHaveLength(10);
+    expect(outcomes.filter((o) => 'tags' in o)).toHaveLength(10);
     expect(outcomes[10]).toMatchObject({ fallback: expect.stringContaining('as many times today') as unknown });
     expect(await checkLabels(db, { caller: MAINTAINER_ID + 1, repo: 'sample-owner/repo-x', labels: labels(99), now })).toEqual({ tags: [] });
   });

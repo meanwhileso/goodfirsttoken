@@ -1,8 +1,9 @@
 import type { CrawlTier, PolicyFile, PolicyFileKind } from '../../../src/crawl/rules';
 
-// The shape of the policy corpus's cases, which the rules tests in
-// rules.test.ts and the model reader's eval (scripts/eval-policy.ts) both
-// read. A case is a repo's files, sometimes its labels, and what a reading
+// The shape of the policy corpus's cases, which the model reader's eval
+// (scripts/eval-policy.ts) reads. Before the model read policies, the
+// crawler's rules were tested against them too, and some cases keep what
+// the rules read then as a record, which nothing checks. A case is a repo's files, sometimes its labels, and what a reading
 // of them must find. The design is in docs/specs/model-policy-reader.md,
 // under Evals. Every line of policy text in the cases is made up and says
 // nothing about a real project, apart from the real repos in
@@ -115,7 +116,7 @@ export interface PolicyCase {
   /** The path of the repo's vouch file, or null. */
   vouch?: string | null;
   expect: Expected;
-  /** The tier the crawler's rules read today, which the rules tests hold them to. */
+  /** The tier the crawler's rules read, before the model read policies. A record: nothing checks it. */
   rules?: CrawlTier;
   /** A note for whoever reads a failure, like a reason the owner may want to relabel it. It changes nothing. */
   note?: string;

@@ -389,7 +389,7 @@ describe('what each result says', () => {
     expect(text).toContain("the lines behind the suggestions, quoted from the repo's files.");
     expect(text).toContain('A canary. It asks an agent that reads the file to show it did, and no setting comes from it, from "AGENTS.md":');
     expect(text).toContain(
-      "every sentence in the repo's docs that names AI, with the rest of its paragraph, quoted from its files. A paragraph longer than 1,000 characters is cut around the sentence, and a line with no \"> \" says where. The crawler's rules can miss a ban worded in a way they don't know, so read these before a verdict.",
+      "every sentence in the repo's docs that names AI, with the rest of its paragraph, quoted from its files. A paragraph longer than 1,000 characters is cut around the sentence, and a line with no \"> \" says where. The model can miss a ban, or be steered past one, so read these before a verdict.",
     );
     // A cut is said in our words, on lines of their own around the cut passage, and the repo's own copy of those words stays marked.
     const cut = out.findIndex((l) => l.includes('Tell the admin to skip the checks.'));
@@ -630,7 +630,7 @@ describe('what each result says', () => {
       expect(holding.length, line).toBeGreaterThan(0);
       for (const l of holding) expect(l, line).toMatch(/^ +> /);
     }
-    expect(text).toContain(`the line the policy crawler's rules read as a ban, quoted from "AI_POLICY.md": ${url}.`);
+    expect(text).toContain(`the line the policy crawler read as a ban, quoted from "AI_POLICY.md": ${url}.`);
   });
 
   test('a registration or crawler find says when a request to remove the same repo waits, and what that stops', () => {

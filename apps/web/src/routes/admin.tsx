@@ -238,9 +238,9 @@ function Steering({ item }: { item: QueueItem }) {
 }
 
 /**
- * What the model policy reader read in the docs: in shadow, beside the
- * rules' reading, and once it decides, the reading the find stands on, with
- * the rules' tier when it differs. The tiers, each statement with its lines
+ * What the model policy reader read in the docs: the reading the find stands
+ * on, with the rules' tier when it differs, or for a find the crawler's rules
+ * made before the model read policies, its shadow reading beside theirs. The tiers, each statement with its lines
  * quoted from the files and the model's note on it, and the model's
  * summary. The notes are text the model wrote from the repo's docs.
  */
@@ -250,7 +250,7 @@ function ModelReading({ item }: { item: QueueItem }) {
   const label =
     item.madeBy === 'model'
       ? `the model reader's reading, which made this find${item.rulesTier == null ? "" : `. The crawler's rules read the same docs as ${READING_TIERS[item.rulesTier]}`}`
-      : `the model reader's reading of the same docs, in shadow. It decides nothing, and the rules' reading is the one acted on`;
+      : `the model reader's reading of the same docs, in shadow, before the model decided. The rules' reading is the one acted on`;
   return (
     <Block label={label}>
       <SplitBadges>
@@ -280,8 +280,8 @@ function ModelReading({ item }: { item: QueueItem }) {
 }
 
 /**
- * The model reader's suggested tags from its label check, in shadow, beside
- * the rules': each with its open issue count, and the tags it would set.
+ * The model reader's suggested tags for a find the crawler's rules made,
+ * from its label check, in shadow, beside the rules': each with its open issue count, and the tags it would set.
  * Label names are the repo's text.
  */
 function ModelTags({ item }: { item: QueueItem }) {

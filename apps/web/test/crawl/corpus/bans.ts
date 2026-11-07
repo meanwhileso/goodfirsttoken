@@ -148,7 +148,7 @@ export const BAN_CORPUS: { review: string; key: string; cases: [PolicyFileKind, 
 
 /**
  * Wordings the owner relabeled as no ban on 2026-11-06, since they are rules
- * for how to work, with why. The rules tests still read them as bans.
+ * for how to work, with why. The crawler's rules read them as bans.
  */
 const PUSH_WHY = "A rule about pushing or committing to the repo's own branches. Outside contributors push to and commit in their forks, and only a rule against opening pull requests keeps them out.";
 const RELABELED = new Map([

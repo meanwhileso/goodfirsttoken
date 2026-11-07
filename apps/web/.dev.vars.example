@@ -44,15 +44,10 @@ ADMIN_GITHUB_IDS=
 GH_API_URL=http://127.0.0.1:8944/api
 GH_WEB_URL=http://127.0.0.1:8944
 
-# The Anthropic API, which the policy crawler will read repos' AI policies
-# with once the model reader ships. The default points at the Anthropic fake
-# that `pnpm dev` starts.
+# The Anthropic API, which the policy crawler reads repos' AI policies with.
+# The default points at the Anthropic fake that `pnpm dev` starts.
 # Left empty, the app calls https://api.anthropic.com.
 ANTHROPIC_API_URL=http://127.0.0.1:8945
-
-# How the crawler will read a repo's AI policy: rules, shadow, or model, as
-# docs/self-hosting.md describes. Empty means rules.
-POLICY_READER=rules
 
 # The most the model may spend in a UTC day, in US dollars. Empty means 0,
 # which reads nothing. The fake charges nothing.

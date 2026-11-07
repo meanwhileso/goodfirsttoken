@@ -1,6 +1,6 @@
 import { MAX_TAGS, defaultDisclosure, type CandidateSource, type ProjectSettingsPatch, type SuggestedTag } from '@goodfirsttoken/core';
 import { keptForPeople } from '../../projects/rules';
-import { quoteOf, readPolicy, scan, type CrawlTier, type PolicyFile, type PolicyReading, type RepoLabel, type SourceLine } from '../rules';
+import { aiPassages, quoteOf, scan, type AiPassages, type CrawlTier, type PolicyFile, type RepoLabel, type SourceLine } from '../rules';
 import type { LabelCheck } from './labels';
 import { parsePolicyOutput, type ModelTier, type PolicyOutput, type StatementKind } from './schemas';
 import { checkStatement, Files, type CheckedPointer, type CheckedStatement, type StatementFailure } from './statements';
@@ -10,7 +10,7 @@ import { READER_VERSION } from './version';
 // and the Worker decides what they say and what the admin sees: it checks
 // each statement against the files, works out the tier from the ones that
 // check out, checks the model's own tier against it, and maps the reading
-// onto the PolicyReading and the settings the rules give today. The design
+// onto a PolicyReading and the settings a find suggests. The design
 // is in docs/specs/model-policy-reader.md, under What the Worker does with
 // it.
 
@@ -39,6 +39,31 @@ export interface ModelReading {
 }
 
 export type ReadingResult = { ok: true; reading: ModelReading } | { ok: false; reason: string };
+
+/** What a reading says the docs say, as the crawl queue and the weekly read act on it, with the admin's net from the word list. */
+export interface PolicyReading extends AiPassages {
+  tier: CrawlTier;
+  /**
+   * The first sentence of the first statement that invites agents, or else
+   * of the first that welcomes AI help, with the text quoted around it.
+   * Null unless the tier is one a listing can have.
+   */
+  welcome: { file: PolicyFile; sentence: string; quote: string } | null;
+  /** The first ban line, when the tier is a ban. */
+  ban: SourceLine | null;
+  /** A line that keeps agents from working on their own, or null. */
+  noAutonomy: SourceLine | null;
+  /** A line that asks for a person in the loop, or null. */
+  personInLoop: SourceLine | null;
+  /** A line that asks contributors to write the PR description themselves, or null. */
+  personWritten: SourceLine | null;
+  /** A line in AGENTS.md or CLAUDE.md with instructions for an agent to prove it read the file, or null. */
+  canary: SourceLine | null;
+  /** Label names the docs keep away from AI or keep for people, as they spell them, each once, with its first line. */
+  reserved: { name: string; source: SourceLine }[];
+  /** Label names the docs keep agents to, as they spell them, each once, with its first line. */
+  onlyLabels: { name: string; source: SourceLine }[];
+}
 
 /**
  * The tier from the statements that checked out, in today's order: a ban,
@@ -114,7 +139,7 @@ export function agreeOnBan(first: ModelReading, second: ModelReading): boolean {
   return readsBan(first) && readsBan(second);
 }
 
-/** The first statement of a kind, as the rules keep a source line. */
+/** The first statement of a kind, whose line is kept as its source. */
 function first(reading: ModelReading, kinds: readonly StatementKind[]): CheckedStatement | null {
   return reading.statements.find((s) => kinds.includes(s.about)) ?? null;
 }
@@ -145,16 +170,16 @@ export function policyTier(reading: ModelReading): CrawlTier {
 }
 
 /**
- * The reading as the PolicyReading the rules give today, so the Worker's
- * queue and weekly read take either. What the admin sees comes from the
- * files: each source line is the line the first quoted sentence starts on,
- * and the welcome's quote is its paragraph, as quoteOf gives it. The
- * sentences that name AI come from the rules' word list, whatever the model
- * said, so a ban the model missed is still in front of the admin.
+ * The reading as a PolicyReading, which a find, a policy change, and a pause
+ * are made from. What the admin sees comes from the files: each source line
+ * is the line the first quoted sentence starts on, and the welcome's quote
+ * is its paragraph, as quoteOf gives it. The sentences that name AI come
+ * from the word list, whatever the model said, so a ban the model missed is
+ * still in front of the admin.
  */
 export function toPolicyReading(files: readonly PolicyFile[], reading: ModelReading): PolicyReading {
   const tier = policyTier(reading);
-  const net = readPolicy(files);
+  const net = aiPassages(files);
   const welcomed = first(reading, ['welcomesAgents']) ?? first(reading, ['welcomesAi']);
   let welcome: PolicyReading['welcome'] = null;
   const sentence = welcomed?.sentences[0];
@@ -194,9 +219,8 @@ function source(about: CandidateSource['about'], line: SourceLine): CandidateSou
 }
 
 /**
- * The settings and tags a reading suggests, as suggestSettings does for the
- * rules, with the statements in place of the rules and the label check in
- * place of the label names: excluded tags from reservedLabel, the only tag
+ * The settings and tags a reading suggests, from its statements, with the
+ * label check for the tags: excluded tags from reservedLabel, the only tag
  * from onlyLabel, the trailer, the CLA link, the person-written
  * description, the PR mode from the tier, and who can claim from the vouch
  * file. Nothing from the repo goes in a setting but a label name, a trailer
@@ -286,7 +310,7 @@ function dedupe(sources: readonly CandidateSource[]): CandidateSource[] {
  * say: both tiers agree on a listing tier, no statement was dropped, no
  * steering line checks out, and the check reading found nothing. The
  * Worker adds the rest: add-a-repo's own conditions, a docs hash that is
- * still the newest, and during the rollout the rules' agreement.
+ * still the newest.
  */
 export function readerListsAtOnce(reading: ModelReading, check: { clears: boolean } | null): boolean {
   return (

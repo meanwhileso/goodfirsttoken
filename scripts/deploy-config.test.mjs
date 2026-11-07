@@ -447,15 +447,11 @@ test("the local config points the Worker at the Anthropic fake's own port", () =
   assert.equal(realLocal().vars.ANTHROPIC_API_URL, ANTHROPIC_FAKE_URL);
 });
 
-test("the policy reader's mode is rules, shadow, or model, and empty means rules", () => {
+test('there is no setting for how the policy crawler reads: the Anthropic key alone turns the model on', () => {
   const real = realLocal();
-  assert.equal(deployConfig(real, 'production', withLimiter).config.vars.POLICY_READER, '');
-  for (const mode of ['rules', 'shadow', 'model']) {
-    assert.equal(deployConfig(real, 'production', { ...withLimiter, POLICY_READER: mode }).config.vars.POLICY_READER, mode);
-  }
-  for (const bad of ['Model', 'on', 'rules,model', ' shadow x']) {
-    assert.throws(() => deployConfig(real, 'production', { ...withLimiter, POLICY_READER: bad }), /POLICY_READER/, bad);
-  }
+  assert.equal('POLICY_READER' in real.vars, false);
+  const { config } = deployConfig(real, 'production', { ...withLimiter, POLICY_READER: 'rules' });
+  assert.equal('POLICY_READER' in config.vars, false);
 });
 
 test("the model's daily budget is a number of dollars, and empty means 0", () => {
