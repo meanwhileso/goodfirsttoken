@@ -118,8 +118,8 @@ export async function keepModelLabels(db: D1Database, repo: string, hash: DocsHa
 
 export type ReadingPurpose = 'seed' | 'reread';
 
-/** Which call a pending reading waits on: the policy reading, or a find's label check after it. */
-export type PendingStep = 'reading' | 'labels';
+/** Which call a pending reading waits on: the policy reading, a find's label check after it, or a second reading for a pause. */
+export type PendingStep = 'reading' | 'labels' | 'second';
 
 export interface NewPending {
   repo: string;
@@ -136,9 +136,11 @@ export interface NewPending {
   files: readonly PolicyFile[];
   /** A label check staged on its own, for docs whose kept reading would make a find, with that reading's output. */
   labelsFor?: { readingOutput: unknown };
+  /** A second reading for a pause, staged on its own, for docs whose kept reading reads a move into a ban, with that reading's output. */
+  secondFor?: { firstOutput: unknown };
 }
 
-export interface Pending extends Omit<NewPending, 'files' | 'labelsFor'> {
+export interface Pending extends Omit<NewPending, 'files' | 'labelsFor' | 'secondFor'> {
   id: string;
   stagedAt: number;
   batchId: string | null;
@@ -150,6 +152,8 @@ export interface Pending extends Omit<NewPending, 'files' | 'labelsFor'> {
   step: PendingStep;
   /** The model's policy reading, as JSON that passed the checks, while the label check waits. */
   readingOutput: unknown;
+  /** The model's first reading of the same files, as JSON that passed the checks, while a second reading for a pause waits. */
+  firstOutput: unknown;
 }
 
 interface PendingRow {
@@ -172,6 +176,7 @@ interface PendingRow {
   replaced: number;
   step: string;
   reading_output: string | null;
+  first_output: string | null;
 }
 
 /** Labels as they were staged, each with its description, or a throw for a row in another form. */
@@ -217,8 +222,9 @@ function toPending(row: PendingRow): Pending {
     reservedUsd: row.reserved_usd,
     reservedDay: row.reserved_day,
     replaced: row.replaced === 1,
-    step: row.step === 'labels' ? 'labels' : 'reading',
+    step: row.step === 'labels' ? 'labels' : row.first_output !== null ? 'second' : 'reading',
     readingOutput: row.reading_output === null ? null : fromJson(row.reading_output),
+    firstOutput: row.first_output === null ? null : fromJson(row.first_output),
   };
 }
 
@@ -243,8 +249,8 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
     db.prepare('UPDATE model_pending SET replaced = 1 WHERE repo = ?1').bind(repo),
     db
       .prepare(
-        `INSERT INTO model_pending (id, repo, purpose, share, docs_hash, rules_tier, commit_sha, branch, facts, vouch, labels, staged_at, step, reading_output)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
+        `INSERT INTO model_pending (id, repo, purpose, share, docs_hash, rules_tier, commit_sha, branch, facts, vouch, labels, staged_at, step, reading_output, first_output)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
       )
       .bind(
         id,
@@ -261,6 +267,7 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
         checkTime(now),
         pending.labelsFor === undefined ? 'reading' : 'labels',
         pending.labelsFor === undefined ? null : JSON.stringify(pending.labelsFor.readingOutput),
+        pending.secondFor === undefined ? null : JSON.stringify(pending.secondFor.firstOutput),
       ),
     ...pending.files.map((file, position) =>
       db
@@ -269,6 +276,22 @@ export async function stagePending(db: D1Database, pending: NewPending, now: num
     ),
   ]);
   return id;
+}
+
+/**
+ * Retires the repo's pending readings, as staging a newer one does, when a
+ * weekly read finds docs it already read: one not sent goes, with its files,
+ * and one sent stays, marked as replaced and without its files, so the
+ * collector settles it and acts on nothing. So a reading of docs that are no
+ * longer the repo's never decides.
+ */
+export async function retirePending(db: D1Database, repo: string): Promise<void> {
+  const name = mustParse(repoName, repo, 'repo');
+  await db.batch([
+    db.prepare('DELETE FROM model_staged_files WHERE reading_id IN (SELECT id FROM model_pending WHERE repo = ?1)').bind(name),
+    db.prepare('DELETE FROM model_pending WHERE repo = ?1 AND batch_id IS NULL').bind(name),
+    db.prepare('UPDATE model_pending SET replaced = 1 WHERE repo = ?1').bind(name),
+  ]);
 }
 
 /** A share's pending readings not in a batch, the one staged first first, at most `limit`. */
@@ -398,6 +421,51 @@ export async function awaitLabelCheck(db: D1Database, pending: Pending, cost: nu
 }
 
 /**
+ * Settles what a reading cost, on the day it reserved it, and keeps it
+ * pending as the second reading of the same staged files, for a pause, with
+ * the model's first reading, to go in the next batch.
+ */
+export async function awaitSecondReading(db: D1Database, pending: Pending, cost: number, firstOutput: unknown): Promise<void> {
+  const statements: D1PreparedStatement[] = [];
+  if (pending.reservedDay !== null) statements.push(addSpend(db, pending.reservedDay, pending.share, { spent: cost, reserved: -pending.reservedUsd }));
+  statements.push(
+    db
+      .prepare('UPDATE model_pending SET first_output = ?, batch_id = NULL, sent_at = NULL, reserved_usd = 0, reserved_day = NULL WHERE id = ?')
+      .bind(JSON.stringify(firstOutput), pending.id),
+  );
+  await db.batch(statements);
+}
+
+/**
+ * Reserves `cost` from a share of a UTC day's budget, in one statement, so
+ * two calls at once can't both take the last of it: only when what every
+ * share used that day, with the cost, stays within `budget`, and what this
+ * share used stays within `shareBudget`. True when it reserved it.
+ */
+export async function reserveSpend(
+  db: D1Database,
+  reservation: { day: string; share: Share; cost: number; budget: number; shareBudget: number },
+): Promise<boolean> {
+  const share = shareOf(reservation.share);
+  const result = await db
+    .prepare(
+      `INSERT INTO model_spend (day, share, spent_usd, reserved_usd)
+       SELECT ?1, ?2, 0, ?3
+       WHERE (SELECT COALESCE(SUM(spent_usd + reserved_usd), 0) FROM model_spend WHERE day = ?1) + ?3 <= ?4
+         AND (SELECT COALESCE(SUM(spent_usd + reserved_usd), 0) FROM model_spend WHERE day = ?1 AND share = ?2) + ?3 <= ?5
+       ON CONFLICT (day, share) DO UPDATE SET reserved_usd = reserved_usd + excluded.reserved_usd`,
+    )
+    .bind(reservation.day, share, reservation.cost, reservation.budget, reservation.shareBudget)
+    .run();
+  return result.meta.changes === 1;
+}
+
+/** Settles a reservation made with reserveSpend, on the day it was made, to what the call cost. */
+export async function settleSpend(db: D1Database, settled: { day: string; share: Share; reserved: number; spent: number }): Promise<void> {
+  await addSpend(db, settled.day, shareOf(settled.share), { spent: settled.spent, reserved: -settled.reserved }).run();
+}
+
+/**
  * The pending readings that have waited since before `before` and aren't
  * waiting on a batch sent since `sentAfter`: the ones that kept failing.
  */
@@ -475,13 +543,15 @@ export interface ModelRead {
   banned: boolean | null;
   noVerdicts: number;
   noVerdictsReported: boolean;
+  /** Whether the last reading was kept while the model decided, or in shadow, as for every one kept before. */
+  readIn: 'shadow' | 'model';
 }
 
 /** Where the model stands with a listed project's weekly reads, or null before the crawler first queued it. */
 export async function getModelRead(db: D1Database, project: string): Promise<ModelRead | null> {
   const row = await db
     .prepare(
-      `SELECT docs_hash, reader_version, model_fingerprint, model_banned, model_no_verdicts, model_no_verdicts_reported
+      `SELECT docs_hash, reader_version, model_fingerprint, model_banned, model_no_verdicts, model_no_verdicts_reported, model_read_in
        FROM policy_reads WHERE project = ?`,
     )
     .bind(mustParse(repoName, project, 'project'))
@@ -492,6 +562,7 @@ export async function getModelRead(db: D1Database, project: string): Promise<Mod
       model_banned: number | null;
       model_no_verdicts: number;
       model_no_verdicts_reported: number;
+      model_read_in: string | null;
     }>();
   if (row === null) return null;
   return {
@@ -501,23 +572,118 @@ export async function getModelRead(db: D1Database, project: string): Promise<Mod
     banned: row.model_banned === null ? null : row.model_banned === 1,
     noVerdicts: row.model_no_verdicts,
     noVerdictsReported: row.model_no_verdicts_reported === 1,
+    readIn: row.model_read_in === 'model' ? 'model' : 'shadow',
   };
 }
 
-/** Keeps a model reading of a listed project's docs that counted, and starts the count of no verdicts over. */
+/**
+ * Keeps a model reading of a listed project's docs that counted, and starts
+ * the count of no verdicts over. `readIn` says whether the model decided
+ * when it was read, or read in shadow.
+ */
 export async function keepModelRead(
   db: D1Database,
   project: string,
-  read: { docsHash: DocsHash; readerVersion: string; fingerprint: string; banned: boolean },
+  read: { docsHash: DocsHash; readerVersion: string; fingerprint: string; banned: boolean; readIn: 'shadow' | 'model' },
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE policy_reads SET docs_hash = ?2, reader_version = ?3, model_fingerprint = ?4, model_banned = ?5,
-         model_no_verdicts = 0, model_no_verdicts_reported = 0
+         model_no_verdicts = 0, model_no_verdicts_reported = 0, model_read_in = ?6
        WHERE project = ?1`,
     )
-    .bind(mustParse(repoName, project, 'project'), read.docsHash, read.readerVersion, read.fingerprint, read.banned ? 1 : 0)
+    .bind(mustParse(repoName, project, 'project'), read.docsHash, read.readerVersion, read.fingerprint, read.banned ? 1 : 0, read.readIn)
     .run();
+}
+
+/**
+ * At a listed project's first weekly read with the model deciding, makes
+ * the last verdict that was acted on, the rules', the model's last read: its
+ * fingerprint, which compares with no model reading, and whether it read a
+ * ban. The docs hash goes, so the model reads, or uses its kept reading,
+ * and decides. Nothing the model read in shadow carries over.
+ */
+export async function adoptRulesRead(db: D1Database, project: string, read: { fingerprint: string | null; banned: boolean | null }): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE policy_reads SET docs_hash = NULL, reader_version = NULL, model_fingerprint = ?2, model_banned = ?3,
+         model_no_verdicts = 0, model_no_verdicts_reported = 0, model_read_in = 'model'
+       WHERE project = ?1`,
+    )
+    .bind(mustParse(repoName, project, 'project'), read.fingerprint, read.banned === null ? null : read.banned ? 1 : 0)
+    .run();
+}
+
+/**
+ * The listed projects whose last model reading was kept in shadow, each with
+ * the model's kept reading of its docs, if any, and whether the rules' last
+ * read was a ban, for the list of what the switch to the model would pause.
+ */
+export async function listShadowReads(
+  db: D1Database,
+): Promise<{ project: string; source: string; status: string; rulesBanned: boolean | null; reading: ModelReading | null; docsMatch: boolean }[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.repo, p.source, p.status, r.banned, m.reading, (m.docs_hash IS NOT NULL AND m.docs_hash = r.docs_hash) AS docs_match
+       FROM projects p
+       JOIN policy_reads r ON r.project = p.repo
+       LEFT JOIN model_readings m ON m.repo = p.repo
+       WHERE p.status IN ('approved', 'paused') AND (r.model_read_in IS NULL OR r.model_read_in = 'shadow')
+       ORDER BY p.repo`,
+    )
+    .all<{ repo: string; source: string; status: string; banned: number | null; reading: string | null; docs_match: number }>();
+  return results.map((row) => ({
+    project: mustParse(repoName, row.repo, 'project'),
+    source: row.source,
+    status: row.status,
+    rulesBanned: row.banned === null ? null : row.banned === 1,
+    reading: row.reading === null ? null : mustParse(modelReadingSchema, fromJson(row.reading), 'reading'),
+    docsMatch: row.docs_match === 1,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// register_project's label checks.
+
+/** The tags a label check gave for this key, or null when none was kept. */
+export async function getRegisterLabelCheck(db: D1Database, key: string): Promise<string[] | null> {
+  const row = await db.prepare('SELECT tags FROM register_label_checks WHERE key = ?').bind(key).first<{ tags: string }>();
+  if (row === null) return null;
+  const tags = fromJson(row.tags);
+  return Array.isArray(tags) && tags.every((tag) => typeof tag === 'string') ? tags : null;
+}
+
+/** Keeps the tags a label check gave, by its key. */
+export async function keepRegisterLabelCheck(db: D1Database, check: { key: string; repo: string; tags: readonly string[] }, now: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO register_label_checks (key, repo, tags, checked_at) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (key) DO UPDATE SET tags = ?3, checked_at = ?4`,
+    )
+    .bind(check.key, mustParse(repoName, check.repo, 'repo'), JSON.stringify(check.tags), checkTime(now))
+    .run();
+}
+
+/**
+ * Counts one label check for the caller and the repo on a UTC day, in one
+ * statement, only when the caller made fewer than `perCaller` that day and
+ * the repo had fewer than `perRepo`. True when it counted it.
+ */
+export async function countRegisterLabelCheck(
+  db: D1Database,
+  use: { day: string; caller: number; repo: string; perCaller: number; perRepo: number },
+  now: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO register_label_uses (id, day, caller, repo, at)
+       SELECT ?1, ?2, ?3, ?4, ?5
+       WHERE (SELECT COUNT(*) FROM register_label_uses WHERE day = ?2 AND caller = ?3) < ?6
+         AND (SELECT COUNT(*) FROM register_label_uses WHERE day = ?2 AND repo = ?4) < ?7`,
+    )
+    .bind(newId('rlc'), use.day, use.caller, mustParse(repoName, use.repo, 'repo'), checkTime(now), use.perCaller, use.perRepo)
+    .run();
+  return result.meta.changes === 1;
 }
 
 /** Counts one more weekly read in a row with no verdict from the model, and returns the count and whether it was reported. */

@@ -761,7 +761,7 @@ describe('the permission check', () => {
 
     const made = github.calls.slice(start);
     expect(made.map((c) => c.operation)).toEqual(
-      expect.arrayContaining(['GET /repos/{owner}/{repo}', 'GET /repos/{owner}/{repo}/labels', 'query repository', 'POST /repos/{owner}/{repo}/labels']),
+      expect.arrayContaining(['GET /repos/{owner}/{repo}', 'query repository', 'POST /repos/{owner}/{repo}/labels']),
     );
     expect(made.filter((c) => c.token !== token)).toEqual([]);
   });

@@ -1,3 +1,4 @@
+import { policyReader } from '../anthropic';
 import { crawlMessageSchema, describeProblems, validate, type CrawlMessage, type PolicyTier } from '@goodfirsttoken/core';
 import { addCandidate, crawlerSkips, lastRejectedFind, setFindFingerprint, type CrawlerSkip } from '../db';
 import { ServiceGitHub, SyncStopped, type StopReason } from '../sync/github';
@@ -176,6 +177,7 @@ export async function crawlRepos(
   // requests and read the labels, once for both.
   const reads = sharedReads({ listable: (name) => whyNotListable(github, name), labels: (name) => readLabels(github, name) });
   const reader = await readerStatus(db, deps.now());
+  const decides = policyReader() === 'model';
   const toStage: { repo: FoundRepo; files: PolicyFile[]; hash: string; tier: CrawlTier }[] = [];
   const welcoming: { repo: FoundRepo; reading: PolicyReading; files: PolicyFile[]; fingerprint: string; hash: string }[] = [];
   for (const repo of readable) {
@@ -192,7 +194,8 @@ export async function crawlRepos(
     run.tiers[reading.tier] = (run.tiers[reading.tier] ?? 0) + 1;
     const hash = await docsHash(result.files, repo.vouch);
     if (reader.reads) toStage.push({ repo, files: result.files, hash, tier: reading.tier });
-    if (listed(reading.tier) && reading.welcome !== null) {
+    // With the model deciding, the rules make no find: the model's reading does, once it is back (src/crawl/batches.ts).
+    if (!decides && listed(reading.tier) && reading.welcome !== null) {
       welcoming.push({ repo, reading, files: result.files, fingerprint: await policyFingerprint(reading, result.files, repo.vouch), hash });
     } else progress.done.add(repo.asked);
   }

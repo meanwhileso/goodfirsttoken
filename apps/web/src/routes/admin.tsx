@@ -238,17 +238,21 @@ function Steering({ item }: { item: QueueItem }) {
 }
 
 /**
- * What the model policy reader read in the same docs, beside the rules'
- * reading, while it runs in shadow and decides nothing: the tiers, each
- * statement with its lines quoted from the files and the model's note on
- * it, and the model's summary. The notes are text the model wrote from the
- * repo's docs.
+ * What the model policy reader read in the docs: in shadow, beside the
+ * rules' reading, and once it decides, the reading the find stands on, with
+ * the rules' tier when it differs. The tiers, each statement with its lines
+ * quoted from the files and the model's note on it, and the model's
+ * summary. The notes are text the model wrote from the repo's docs.
  */
 function ModelReading({ item }: { item: QueueItem }) {
   const reading = item.modelReading;
   if (!reading) return null;
+  const label =
+    item.madeBy === 'model'
+      ? `the model reader's reading, which made this find${item.rulesTier == null ? "" : `. The crawler's rules read the same docs as ${READING_TIERS[item.rulesTier]}`}`
+      : `the model reader's reading of the same docs, in shadow. It decides nothing, and the rules' reading is the one acted on`;
   return (
-    <Block label={`the model reader's reading of the same docs, in shadow. It decides nothing, and the rules' reading is the one acted on`}>
+    <Block label={label}>
       <SplitBadges>
         <SplitBadge rule="from its statements" value={READING_TIERS[reading.tier]} />
         <SplitBadge rule="the model said" value={READING_TIERS[reading.modelTier]} />
@@ -282,7 +286,8 @@ function ModelReading({ item }: { item: QueueItem }) {
  */
 function ModelTags({ item }: { item: QueueItem }) {
   const labels = item.modelReading?.labels;
-  if (!labels) return null;
+  // A find the model made suggests its own tags, above.
+  if (!labels || item.madeBy === 'model') return null;
   return (
     <Block label="the model reader's suggested tags from the same labels, in shadow">
       {labels.suggestedTags.length === 0 ? (
@@ -389,7 +394,7 @@ function Candidate({ item, now, signInAgain }: { item: QueueItem; now: number; s
           </a>
         </Quote>
       )}
-      <Block label="what the crawler read from it">
+      <Block label={item.madeBy === 'model' ? 'what the model reader read from it' : "what the crawler's rules read from it"}>
         <SplitBadges>
           {policy && <SplitBadge rule="tier" value={tierName(policy.tier)} strict />}
         </SplitBadges>

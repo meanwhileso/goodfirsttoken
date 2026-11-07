@@ -1297,8 +1297,9 @@ GitHub's spelling.
 
 **The proposal.** With no settings, it reads the repo and proposes settings,
 each with the reason it differs from its default. It saves nothing, and
-creates no label. It reads the repo's labels, the first 1,000, and these
-files from the default branch, each found without case:
+creates no label. It reads the repo's labels, the first 1,000, with one
+GraphQL call for each 100, each with its description and open issue count,
+and these files from the default branch, each found without case:
 
 | File | Names | Where |
 |---|---|---|
@@ -1318,6 +1319,10 @@ table, and each takes its value from the first file that gives one:
   shows admins `good first issue`, but the plan names it as a label projects
   keep for people, so the proposal leaves it out. With none of them, the
   tag is `goodfirsttoken`, which is created if the maintainer keeps it.
+  With `POLICY_READER=model`, the model reader's label check proposes the
+  tags in place of these names, under
+  [The label check in register_project](#the-label-check-in-register_project),
+  and these names are its fallback.
 - **Disclosure** uses the trailer a file names for AI help, `Assisted-by` or
   `Generated-by` followed by a colon, spelled as the file spells it. A name
   that is part of a longer one, like `AI-Assisted-by:`, doesn't count. The
@@ -3509,6 +3514,11 @@ The policy crawler reads each listed project's docs again every week, with
 the reads and the rules of a crawl, under
 [The policy crawler](#the-policy-crawler), and acts on what changed. It can
 pause a project on its own. It never lists, approves, adds, or resumes one.
+This section says what the rules decide. With `POLICY_READER=model`, the
+model reader's reading decides in their place, with the same comparisons
+and stricter conditions for a pause, under
+[When the model decides](#when-the-model-decides). The pull request check
+below runs either way.
 
 **Which projects, and when.** Each run of the crawler's cron job, once an
 hour, queues the listed projects due for a read, after its seeds.
@@ -3698,19 +3708,23 @@ paused. The cron job's line says how many it queued.
 ## The model policy reader
 
 A model, Claude Opus 5.5, reads a repo's docs beside the rules. The design
-is the [model policy reader spec](specs/model-policy-reader.md). It is
-built in steps, and for now it runs in shadow: the rules decide everything
-they decided before, and the model decides nothing. Its reading is kept and
-shown beside the rules', so the shadow run measures how often the two
-agree and what the model costs.
+is the [model policy reader spec](specs/model-policy-reader.md). In shadow
+the rules decide everything they decided before, and the model decides
+nothing: its reading is kept and shown beside the rules', so the shadow run
+measures how often the two agree and what the model costs. Once it
+decides, the model's reading makes the finds, sends the policy changes,
+pauses listings, and proposes `register_project`'s tags, under
+[When the model decides](#when-the-model-decides).
 
 **When it runs.** `POLICY_READER` says how the crawler reads a policy:
 `rules`, `shadow`, or `model`. Empty means `rules`, and the model reads
-nothing. `shadow` and `model` both read with the model, and both let the
-rules decide until the model may, in a later step. The model also needs
+nothing. `shadow` and `model` both read with the model. With `shadow` the
+rules decide, and with `model` the model does. The model also needs
 the `ANTHROPIC_API_KEY` secret and a day's budget, `MODEL_DAILY_BUDGET_USD`,
 of more than 0. Without either, it reads nothing, and the log says so once
-a UTC day.
+a UTC day. With `model` and no key, the rules decide nothing either: seeds
+wait for an admin to list them by hand, and weekly reads run only the pull
+request check.
 
 **When the model reads.** The crawl consumer reads a seed's or a listed
 project's files as before, and the rules read them. Then, for the model:
@@ -3726,7 +3740,8 @@ project's files as before, and the rules read them. Then, for the model:
   label check, under [The label check](#the-model-policy-reader).
 - **A weekly read of the same docs decides nothing.** When the docs hash
   and reader version are the last weekly read's, the model's half does
-  nothing more.
+  nothing more. A reading of other docs that still waits is dropped then,
+  as one a newer staging replaces, so it decides nothing.
 - **A rejected find with the same docs.** A seed whose last rejected find
   has the same docs hash stays out, with no model call.
 - **A seed that takes no outside pull requests** stays out, with no model
@@ -3782,10 +3797,11 @@ Worker:
   when the repo doesn't have it.
 
 The suggested tags are the tags and the labels kept for people, each with
-its open issue count. The model's find is written once the check is back.
-In shadow that means its tags and suggested tags are kept on its reading of
-the same docs, and the log names a seed the model would have found that
-the rules didn't. A weekly read makes no label check, since a policy
+its open issue count. The model's find is written once the check is back,
+under [When the model decides](#when-the-model-decides). In shadow that
+means its tags and suggested tags are kept on its reading of the same
+docs, and the log names a seed the model would have found that the rules
+didn't. A weekly read makes no label check, since a policy
 change shows no suggested tags. A label check that comes back after newer
 docs were staged for the repo is dropped. A seed read again with docs the
 model read before gets no new reading, but when that reading would make a
@@ -3826,10 +3842,13 @@ model hasn't read.
 | A label check with `refusal`, `max_tokens`, an invalid request error, or output that fails the checks | No verdict on the labels. The log says why, and the reading is kept without the model's suggested tags |
 
 After three weekly reads in a row with no verdict, the log says so once.
-Once the model decides, a listing made from a policy goes to the admin
-queue then, as a policy change that says the reader can't read its docs.
-A read that never reached the model, as with no key, doesn't count. The
-size cap does.
+With the model deciding, a listing made from a policy goes to the admin
+queue then, once, as a policy change that says the reader can't read its
+docs. A registered project gets only the line in the log. A read that
+never reached the model, as with no key, doesn't count. The size cap does.
+A second reading for a pause with no verdict pauses nothing, and counts as
+a weekly read with no verdict. The docs hash isn't kept, so the next weekly
+read tries again, from the kept first reading, with a new second reading.
 
 **What the admin sees.** A crawler find, and a policy change, show the
 model's reading of the same docs, when it has read them: the tier its
@@ -3839,11 +3858,108 @@ statements failed the check and were dropped, and the model's summary. The
 lines are the repo's text, and the notes are text the model wrote from it,
 so `admin_queue` marks all of it as data, as it marks the repo's text.
 Lines that try to steer a reader, like one that says how to classify the
-repo, show at the top of the item. Once its label check is back, a find
+repo, show at the top of the item. In shadow, once its label check is back, a find
 also shows the model's suggested tags beside the rules', each with its open
 issue count, the tags it would set, and how many label names it gave were
-dropped. Label names are the repo's text, so `admin_queue` quotes each one
+dropped. A find or a policy change the model made says so, with the rules'
+tier when it differs, and its suggested tags are the model's own. A policy
+change the model sent for a ban it couldn't confirm, or for docs it can't
+read, says why at the top. Label names are the repo's text, so `admin_queue` quotes each one
 as the repo spells it.
+
+### When the model decides
+
+With `POLICY_READER=model`, the model's reading is the one acted on. The
+rules still read every repo the model reads, and when their tier differs
+from the model's, the find or the policy change says so, as "the crawler's
+rules read the same docs as" their tier. Nothing the rules read alone is
+acted on: a welcome only the rules read makes no find, and a ban only the
+rules read pauses nothing. When the API is down or the budget is spent,
+nothing falls back to the rules. The crawler waits.
+
+**A seed's find.** The crawl consumer writes no find from the rules. A
+seed's reading that would make a find waits for its label check, and when
+the check is settled, whatever its verdict, the hourly run writes the find
+from the model's reading: the welcome's paragraph quoted from the file, the
+tier the [reader works out](specs/model-policy-reader.md#what-the-worker-does-with-it),
+the settings and the line behind each from the reading's statements, and
+the tags and suggested tags from the label check, or none when it gave no
+verdict. Before it writes, it checks the do-not-list, the projects, and the
+earlier finds again, as the consumer does. A rejected find comes back only
+when its docs read differently: one with the same docs or the same
+fingerprint stays out, and one with a fingerprint of another version, as
+every find the rules made has, takes the reader's fingerprint and stays
+out. An admin decides every find, as before.
+
+**A weekly read.** The model's reading is compared with the model's last
+read the way the rules' reading was compared with theirs, under
+[Keeping listings current](#keeping-listings-current), with the reader's
+fingerprint and either of its tiers reading a ban:
+
+- A listing made from a policy whose policy reads differently goes to the
+  admin queue as a policy change, from the model's reading.
+- A move into a ban pauses the listing only when all of these hold: the
+  tier its statements give and the tier the model gave both read a ban, a
+  `bansAi` or `refusesOutsidePrs` line checks out in the file, a second
+  reading of the same staged files agrees on both, in the next batch, and
+  those docs are still the newest staged for the repo when it comes back.
+  The pause names no one, takes over any other pause, and only an admin
+  lifts it. Its reason is "Its docs now read as a ban on AI help. An admin
+  checks them before agents can claim its issues again." This holds for a
+  registered project too.
+- When the first reading's ban line doesn't check out, its two tiers
+  disagree, or the second reading doesn't agree, the listing stays live. A
+  listing made from a policy goes to the admin queue once, as a policy
+  change that says the reader read a move into a ban it couldn't confirm,
+  and a registered project gets a line in the log. The weekly read keeps
+  the docs hash and the first reading, as one that read no ban, so the
+  same docs aren't read again.
+- A ban that stays a ban, reworded or moved, is no move into one, so a
+  listing an admin resumed stays live.
+
+**The switch.** At a project's first weekly read with the model deciding,
+the rules' last verdict, the one acted on, becomes the model's last read.
+So what the model read in shadow decides nothing by itself, and a ban the
+model read in shadow, in a listing made from a policy that the rules read
+as a welcome, is a move into one. Its docs read the same, so the kept
+reading stands for the first reading, and only the second costs a call.
+Before the switch, each hourly run in shadow logs the listed projects the
+switch would pause, from their shadow readings: each listing made from a
+policy, approved or paused, whose rules' last read was no ban and whose
+model reading of the same docs reads a ban. With the model deciding, the line names the ones
+still waiting for that first weekly read.
+
+### The label check in register_project
+
+With `POLICY_READER=model`, `register_project`'s proposal asks the model
+which of the repo's labels mean ready for outside help. A maintainer's
+agent waits on it, so it goes to the Messages API directly, not a batch,
+streamed, at `medium` effort, with at most 90 seconds for the call and the
+SDK's two retries. It sends the labels alone, with each one's name,
+description, and open issue count, as the crawler's label check does. The
+tags are the labels the model reads as ready for outside help or for
+agents only, leaving out `good first issue`, up to 20, and replace the
+ones the label names give. With none, the tag is `goodfirsttoken`, as
+before.
+
+- **One check per label set.** The tags are kept by a hash of the repo,
+  its label names and descriptions, and the reader version, so a second
+  proposal for the same labels makes no call.
+- **Limits.** One caller gets at most 10 checks a UTC day, and one repo at
+  most 3. A kept check doesn't count.
+- **Its share of the budget.** It spends from `register_project`'s 10% of
+  the day, at full price. It reserves the most the call could cost before
+  it calls, in one statement with the check of the share, and settles to
+  the real cost when the call ends. A call that timed out or was cut off
+  counts what it reserved, since it may have been billed.
+- **When it can't run**, with no key, a budget of 0, no labels, a limit reached, its
+  share spent, a failure, a timeout, a refusal, or output that fails the
+  checks, the proposal falls back to the label names above, and the
+  reason says the labels were read by name, and why.
+
+The maintainer confirms or changes every value before anything saves, as
+before. The labels' names and descriptions are the repo's text, and a tag
+is only ever one of the repo's labels, checked against the ones sent.
 
 **The log.** The consumer's line says how many readings it staged, how
 many it skipped as read before, as the same docs, as a rejected find, or
@@ -3854,7 +3970,9 @@ readings counted, where the model and the rules agree on the tier and where
 they disagree, the readings with no verdict and why, the seeds the model
 would have found that the rules didn't, the listings the model reads as
 moved into a ban or as changed, what it sent and what waits, the cost, the
-prompt cache hits, and what the day used of its budget.
+prompt cache hits, and what the day used of its budget. With the model
+deciding, it also names the finds it wrote, the listings it paused, and
+the ones it sent to the admin queue.
 
 ## MCP tools
 

@@ -10,6 +10,8 @@ import {
   type CandidateSource,
   type CandidateStatus,
   type CrawlCandidate,
+  type CrawlReadTier,
+  type FindMaker,
   type Policy,
   type ProjectSettingsPatch,
   type RepoFacts,
@@ -41,6 +43,8 @@ interface CandidateRow {
   decided_at: number | null;
   reason: string | null;
   docs_hash: string | null;
+  made_by: string;
+  rules_tier: string | null;
 }
 
 function toCandidate(row: CandidateRow): CrawlCandidate {
@@ -63,6 +67,8 @@ function toCandidate(row: CandidateRow): CrawlCandidate {
       aiSentences: fromJson(row.ai_sentences),
       moreAiSentences: row.more_ai_sentences,
       docsHash: row.docs_hash,
+      madeBy: row.made_by,
+      rulesTier: row.rules_tier,
       status: row.status,
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
@@ -87,6 +93,10 @@ export interface NewCandidate {
   fingerprint?: string;
   /** What the crawler read in the docs, as a docs hash (src/crawl/reader/docs.ts). None when left out. */
   docsHash?: string;
+  /** Who made the find: the rules, unless the model reader made it. */
+  madeBy?: FindMaker;
+  /** For a find the model made, the rules' tier for the same docs, when it differs from the model's. */
+  rulesTier?: CrawlReadTier | null;
 }
 
 /**
@@ -119,8 +129,8 @@ export async function addCandidate(
     .prepare(
       `INSERT INTO crawl_candidates (id, repo, found_at, stars, repo_created_at, repo_pushed_at,
          owner_created_at, policy_quote, policy_url, policy_tier, settings, suggested_tags, sources, ai_sentences,
-         more_ai_sentences, status, decided_by, decided_at, reason, fingerprint, docs_hash)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL, ?16, ?17
+         more_ai_sentences, status, decided_by, decided_at, reason, fingerprint, docs_hash, made_by, rules_tier)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'waiting', NULL, NULL, NULL, ?16, ?17, ?18, ?19
        WHERE NOT EXISTS (SELECT 1 FROM do_not_list WHERE repo = ?2)
        ON CONFLICT DO NOTHING`,
     )
@@ -142,6 +152,8 @@ export async function addCandidate(
       c.moreAiSentences,
       fingerprint,
       c.docsHash,
+      c.madeBy,
+      c.rulesTier,
     )
     .run();
   return result.meta.changes === 1 ? c : null;

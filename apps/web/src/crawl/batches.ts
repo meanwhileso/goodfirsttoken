@@ -1,8 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { DocsHash } from '@goodfirsttoken/core';
-import { anthropicApiKey, anthropicUrl, modelDailyBudgetUsd } from '../anthropic';
+import { anthropicApiKey, anthropicUrl, modelDailyBudgetUsd, policyReader } from '../anthropic';
 import {
   awaitLabelCheck,
+  awaitSecondReading,
   countNoVerdict,
   countUnsent,
   dayUse,
@@ -17,6 +18,7 @@ import {
   keepModelReading,
   listBatches,
   listPendingInBatch,
+  listShadowReads,
   listStale,
   listUnsent,
   markNoVerdictsReported,
@@ -27,6 +29,7 @@ import {
   type KeptReading,
   type Pending,
 } from '../db';
+import { decideReread, decideSecond, reportNoVerdicts, writeModelFind, type DecideRun, type RereadDocs } from './decide';
 import { readerStatus } from './model';
 import {
   DayBudget,
@@ -48,11 +51,13 @@ import {
   storedReading,
   utcDay,
   type CheckedLabel,
+  type LabelCheck,
   type LabelStatement,
   type ModelReading,
   type ReaderRequest,
 } from './reader';
 import { READER_FINGERPRINT_VERSION } from './reader/fingerprint';
+import type { PolicyFile } from './rules';
 
 // The model policy reader's hourly run (docs/specs/model-policy-reader.md,
 // under Where it runs, Cost and limits, and When it can't read). It runs on
@@ -72,6 +77,13 @@ import { READER_FINGERPRINT_VERSION } from './reader/fingerprint';
 // the admin queue beside the rules' reading of the same docs, and counted
 // in the log. The label check's suggested tags are kept on the reading, and
 // shown beside the rules'. It lists nothing and pauses nothing.
+//
+// With POLICY_READER=model the reading decides, under src/crawl/decide.ts:
+// a seed's find is written once its label check is back, and a weekly
+// reading sends a policy change or, on a move into a ban, a second reading
+// of the same staged files in the next batch, which pauses the listing when
+// it agrees. A result is acted on only while its docs are the newest staged
+// for the repo.
 
 /** The most readings one batch sends, which bounds the text one run holds. */
 export const MAX_BATCH_READINGS = 50;
@@ -124,6 +136,10 @@ export interface BatchRun {
   /** Listings the model reads as moved into a ban, or as changed, where the rules didn't. */
   wouldPause: string[];
   wouldChange: string[];
+  /** With the model deciding: the finds it wrote, the listings it paused, and the ones it sent to the admin queue. */
+  found: string[];
+  paused: string[];
+  changed: string[];
   /** Why the run stopped calling the API, or null. */
   stopped: string | null;
 }
@@ -148,6 +164,9 @@ export function newBatchRun(): BatchRun {
     wouldFind: [],
     wouldPause: [],
     wouldChange: [],
+    found: [],
+    paused: [],
+    changed: [],
     stopped: null,
   };
 }
@@ -236,23 +255,30 @@ export async function keepRereadReading(
   const comparable = last.fingerprint?.startsWith(`v${String(READER_FINGERPRINT_VERSION)}:`) === true;
   if (kept.banned && last.banned !== true) run.wouldPause.push(project);
   else if (comparable && last.fingerprint !== kept.fingerprint) run.wouldChange.push(project);
-  await keepModelRead(deps.db, project, kept);
+  await keepModelRead(deps.db, project, { ...kept, readIn: 'shadow' });
 }
 
 /**
  * Counts a weekly read the model gave no verdict for. After three in a row,
- * a listing made from a policy would go to the admin queue once, as a policy
+ * a listing made from a policy goes to the admin queue once, as a policy
  * change that says the reader can't read its docs, and a registered project
  * gets a line in the log. In shadow both are a line in the log.
  */
-export async function countRereadNoVerdict(deps: BatchDeps, project: string, why: string): Promise<void> {
+export async function countRereadNoVerdict(
+  deps: BatchDeps,
+  project: string,
+  why: string,
+  read?: { run: DecideRun; docs: RereadDocs; files: readonly PolicyFile[] },
+): Promise<void> {
   const { count, reported } = await countNoVerdict(deps.db, project);
   if (count < NO_VERDICTS_TO_REPORT || reported) return;
   await markNoVerdictsReported(deps.db, project);
   const listing = await getProject(deps.db, project);
+  const decides = policyReader() === 'model';
+  if (listing?.source === 'policy' && decides && read !== undefined) await reportNoVerdicts(deps, read.run, read.docs, read.files);
   console.warn(
     listing?.source === 'policy'
-      ? `The policy reader gave ${project} no verdict on ${String(count)} weekly reads in a row, the last for ${why}. In shadow the rules still read it. Once the model decides, it goes to the admin queue as a policy change.`
+      ? `The policy reader gave ${project} no verdict on ${String(count)} weekly reads in a row, the last for ${why}. ${decides ? 'It goes to the admin queue as a policy change.' : 'In shadow the rules still read it. Once the model decides, it goes to the admin queue as a policy change.'}`
       : `The policy reader gave ${project} no verdict on ${String(count)} weekly reads in a row, the last for ${why}. Its docs stay its maintainers' call.`,
   );
 }
@@ -267,52 +293,91 @@ export async function rereadFromKept(deps: BatchDeps, run: { wouldPause: string[
   });
 }
 
+/** What a weekly read's pending reading holds, for the decisions on it. */
+function docsOf(pending: Pending): RereadDocs {
+  return {
+    repo: pending.repo,
+    branch: pending.branch,
+    facts: pending.facts,
+    vouch: pending.vouch,
+    labels: pending.labels,
+    docsHash: pending.docsHash,
+    rulesTier: pending.rulesTier,
+  };
+}
+
 /** Records a reading or a label check with no verdict: the log says why, and a weekly read counts it. */
 async function noVerdict(deps: BatchDeps, run: BatchRun, pending: Pending, why: string): Promise<void> {
-  const key = pending.step === 'labels' ? `labels: ${why}` : why;
+  const key = pending.step === 'labels' ? `labels: ${why}` : pending.step === 'second' ? `second reading: ${why}` : why;
   run.noVerdict[key] = (run.noVerdict[key] ?? 0) + 1;
   if (pending.step === 'labels') {
     console.warn(`The policy reader gave ${pending.repo}'s labels no verdict: ${why}. Its reading is kept without the model's suggested tags.`);
     return;
   }
-  console.warn(`The policy reader gave ${pending.repo} no verdict: ${why}.`);
-  if (pending.purpose === 'reread') await countRereadNoVerdict(deps, pending.repo, why);
+  console.warn(
+    pending.step === 'second'
+      ? `The policy reader's second reading of ${pending.repo} gave no verdict: ${why}. It pauses nothing, and the docs hash isn't kept, so the next weekly read tries again.`
+      : `The policy reader gave ${pending.repo} no verdict: ${why}.`,
+  );
+  if (pending.purpose === 'reread') {
+    await countRereadNoVerdict(deps, pending.repo, why, { run, docs: docsOf(pending), files: await stagedFiles(deps.db, pending.id) });
+  }
 }
 
 /**
- * Keeps a reading that counted, and what it would do. Returns true when it
- * is a seed's reading that would make a find, so its label check follows.
+ * Keeps a reading that counted, and what it would do, or with the model
+ * deciding, does. Returns 'labels' when it is a seed's reading that would
+ * make a find, so its label check follows, and 'second' when it is a move
+ * into a ban, so a second reading follows.
  */
-async function counted(deps: BatchDeps, run: BatchRun, pending: Pending, reading: ModelReading, output: unknown): Promise<boolean> {
-  const files = await stagedFiles(deps.db, pending.id);
+async function counted(
+  deps: BatchDeps,
+  run: BatchRun,
+  pending: Pending,
+  files: readonly PolicyFile[],
+  reading: ModelReading,
+  output: unknown,
+): Promise<'labels' | 'second' | null> {
   const fingerprint = await readerFingerprint(files, reading, pending.vouch);
   const stored = storedReading(reading, pending.docsHash);
   const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
   if (bytes(stored) + bytes(output) > MAX_KEPT_BYTES) {
     await noVerdict(deps, run, pending, 'a reading too large to keep');
-    return false;
+    return null;
   }
   await keepModelReading(deps.db, { repo: pending.repo, reading: stored, fingerprint, output }, deps.now());
   run.read += 1;
   countAgreement(run, pending.rulesTier, reading);
-  if (pending.purpose === 'seed') return findTier(reading) !== null;
+  if (pending.purpose === 'seed') return findTier(reading) !== null ? 'labels' : null;
+  if (policyReader() === 'model') return (await decideReread(deps, run, docsOf(pending), files, reading)) === 'second' ? 'second' : null;
   await keepRereadReading(deps, run, pending.repo, {
     docsHash: pending.docsHash,
     readerVersion: reading.readerVersion,
     fingerprint,
     banned: readsBan(reading),
   });
-  return false;
+  return null;
 }
 
 /**
- * What a seed's find would be once its label check is done. In shadow the
- * rules write the finds, so the log names a seed the model would have found
- * that the rules didn't.
+ * A seed's find, once its label check is settled, whatever its verdict,
+ * from the reading and the check, or null for a check with no verdict. With
+ * the model deciding, the find is written. In shadow the rules write the
+ * finds, so the log names a seed the model would have found that the rules
+ * didn't. Call it before the pending reading is settled, while its staged
+ * files are kept.
  */
-function findWritten(run: BatchRun, pending: Pending): void {
-  const rulesFind = pending.rulesTier === 'invites_agents' || pending.rulesTier === 'allows_with_conditions';
-  if (!rulesFind) run.wouldFind.push(pending.repo);
+async function findWritten(deps: BatchDeps, run: BatchRun, pending: Pending, labels: LabelCheck | null): Promise<void> {
+  if (policyReader() !== 'model') {
+    const rulesFind = pending.rulesTier === 'invites_agents' || pending.rulesTier === 'allows_with_conditions';
+    if (!rulesFind) run.wouldFind.push(pending.repo);
+    return;
+  }
+  const files = await stagedFiles(deps.db, pending.id);
+  const read = readPolicyOutput(files, pending.readingOutput);
+  if (!read.ok) return;
+  const found = await writeModelFind(deps, pending, files, read.reading, labels);
+  if (found !== null) run.found.push(found);
 }
 
 /** A find's label check, rebuilt from the staged files and the model's policy reading, so a send and a collect read the same statements. */
@@ -339,23 +404,51 @@ async function labelCheckOf(deps: BatchDeps, pending: Pending): Promise<LabelChe
  * label the only tag (readerSettings), then keeps the tags and suggested
  * tags on the kept reading of the same docs. With no verdict the reading
  * stays without them. Either way the find is written then, by the caller,
- * once the check is settled.
+ * once the check is settled. Returns the check, or null with no verdict.
  */
-async function collectLabels(deps: BatchDeps, run: BatchRun, pending: Pending, message: Anthropic.Messages.Message): Promise<void> {
+async function collectLabels(deps: BatchDeps, run: BatchRun, pending: Pending, message: Anthropic.Messages.Message): Promise<LabelCheck | null> {
   const json = jsonOf(message);
   if (!json.ok) {
     await noVerdict(deps, run, pending, json.reason);
-  } else {
-    const check = await labelCheckOf(deps, pending);
-    const read = check === null ? null : readLabelOutput(check.sent, check.statements.length, json.json);
-    if (check === null || read === null) await noVerdict(deps, run, pending, 'a reading that no longer checks out against its files');
-    else if (!read.ok) await noVerdict(deps, run, pending, `output that fails the checks (${read.reason})`);
-    else {
-      const { settings, suggestedTags } = readerSettings(check.reading, pending.labels, read.check, pending.vouch);
-      const labels = { tags: settings.tags ?? [], suggestedTags, dropped: read.check.dropped };
-      if (await keepModelLabels(deps.db, pending.repo, pending.docsHash, labels)) run.labelsRead += 1;
-      else run.replaced += 1;
-    }
+    return null;
+  }
+  const check = await labelCheckOf(deps, pending);
+  const read = check === null ? null : readLabelOutput(check.sent, check.statements.length, json.json);
+  if (check === null || read === null) {
+    await noVerdict(deps, run, pending, 'a reading that no longer checks out against its files');
+    return null;
+  }
+  if (!read.ok) {
+    await noVerdict(deps, run, pending, `output that fails the checks (${read.reason})`);
+    return null;
+  }
+  const { settings, suggestedTags } = readerSettings(check.reading, pending.labels, read.check, pending.vouch);
+  const labels = { tags: settings.tags ?? [], suggestedTags, dropped: read.check.dropped };
+  if (await keepModelLabels(deps.db, pending.repo, pending.docsHash, labels)) run.labelsRead += 1;
+  else run.replaced += 1;
+  return read.check;
+}
+
+/**
+ * Acts on a second reading for a pause that came back: with the first
+ * reading of the same staged files, it pauses the listing when both read the
+ * ban, and leaves it live otherwise. With no verdict it pauses nothing, and
+ * counts as a weekly read with no verdict.
+ */
+async function collectSecond(deps: BatchDeps, run: BatchRun, pending: Pending, message: Anthropic.Messages.Message): Promise<void> {
+  const json = jsonOf(message);
+  if (!json.ok) {
+    await noVerdict(deps, run, pending, json.reason);
+    return;
+  }
+  const files = await stagedFiles(deps.db, pending.id);
+  const first = readPolicyOutput(files, pending.firstOutput);
+  const second = readPolicyOutput(files, json.json);
+  if (!first.ok) await noVerdict(deps, run, pending, 'a first reading that no longer checks out against its files');
+  else if (!second.ok) await noVerdict(deps, run, pending, `output that fails the checks (${second.reason})`);
+  else {
+    run.read += 1;
+    await decideSecond(deps, run, docsOf(pending), files, first.reading, second.reading);
   }
 }
 
@@ -382,22 +475,28 @@ async function collectOne(deps: BatchDeps, run: BatchRun, pending: Pending, resu
   switch (result.type) {
     case 'succeeded': {
       if (pending.step === 'labels') {
-        await collectLabels(deps, run, pending, result.message);
+        const check = await collectLabels(deps, run, pending, result.message);
+        await findWritten(deps, run, pending, check);
         await settlePending(deps.db, pending, cost, { retry: false });
-        findWritten(run, pending);
+        return;
+      }
+      if (pending.step === 'second') {
+        await collectSecond(deps, run, pending, result.message);
+        await settlePending(deps.db, pending, cost, { retry: false });
         return;
       }
       const json = jsonOf(result.message);
-      let labelsNext = false;
+      let next: 'labels' | 'second' | null = null;
       if (!json.ok) await noVerdict(deps, run, pending, json.reason);
       else {
         const files = await stagedFiles(deps.db, pending.id);
         const read = readPolicyOutput(files, json.json);
-        if (read.ok) labelsNext = await counted(deps, run, pending, read.reading, json.json);
+        if (read.ok) next = await counted(deps, run, pending, files, read.reading, json.json);
         else await noVerdict(deps, run, pending, `output that fails the checks (${read.reason})`);
       }
-      // A reading that would make a find waits for its label check, in the next batch.
-      if (labelsNext && json.ok) await awaitLabelCheck(deps.db, pending, cost, json.json);
+      // A reading that would make a find waits for its label check, and a move into a ban for its second reading, in the next batch.
+      if (next === 'labels' && json.ok) await awaitLabelCheck(deps.db, pending, cost, json.json);
+      else if (next === 'second' && json.ok) await awaitSecondReading(deps.db, pending, cost, json.json);
       else await settlePending(deps.db, pending, cost, { retry: false });
       return;
     }
@@ -406,9 +505,9 @@ async function collectOne(deps: BatchDeps, run: BatchRun, pending: Pending, resu
       // An invalid request would fail again, so it is no verdict. Anything else goes in a later batch.
       if (type === 'invalid_request_error' || type === 'not_found_error') {
         await noVerdict(deps, run, pending, `an error in the result, ${type}`);
-        await settlePending(deps.db, pending, 0, { retry: false });
         // A label check that won't run again: the find is written without the model's suggested tags.
-        if (pending.step === 'labels') findWritten(run, pending);
+        if (pending.step === 'labels') await findWritten(deps, run, pending, null);
+        await settlePending(deps.db, pending, 0, { retry: false });
       } else {
         run.retried += 1;
         await settlePending(deps.db, pending, 0, { retry: true });
@@ -457,11 +556,16 @@ async function collect(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<
           const key = labels ? 'labels: an error keeping it' : 'an error keeping it';
           run.noVerdict[key] = (run.noVerdict[key] ?? 0) + 1;
           try {
+            // A label check that failed to keep: the find is still written, without the model's suggested tags.
+            if (labels) await findWritten(deps, run, pending, null);
+          } catch (writing) {
+            console.error(`The policy reader couldn't write the find for ${pending.repo}.`, writing);
+          }
+          try {
             await settlePending(deps.db, pending, 0, { retry: false });
           } catch (settling) {
             console.error(`The policy reader couldn't drop its ${labels ? 'label check' : 'reading'} of ${pending.repo}.`, settling);
           }
-          if (labels) findWritten(run, pending);
         }
       }
       for (const pending of held.values()) {
@@ -530,7 +634,7 @@ async function send(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<voi
         if (check === null) {
           // Can't happen for a reading that checked out when it came back, unless its files changed under it.
           await noVerdict(deps, run, pending, 'a reading that no longer checks out against its files');
-          findWritten(run, pending);
+          await findWritten(deps, run, pending, null);
           await settlePending(deps.db, pending, 0, { retry: false });
           continue;
         }
@@ -571,6 +675,47 @@ async function send(deps: BatchDeps, run: BatchRun, api: Anthropic): Promise<voi
   run.sent = chosen.length;
 }
 
+/** Whether a reading kept in the database reads a ban that may pause a listing: both tiers say ban, and a ban line checks out. */
+function keptReadsBan(reading: KeptReading['reading']): boolean {
+  return reading.agree && reading.tier === 'bans_or_restricts' && reading.statements.some((s) => s.about === 'bansAi' || s.about === 'refusesOutsidePrs');
+}
+
+/**
+ * The listed projects the switch to the model would pause, from their
+ * shadow readings, for the log each hourly run: a listing made from a
+ * policy, whose rules' last read was no ban, and whose model reading of the
+ * docs its last weekly read read reads a ban. A new reader version that
+ * reads a ban pauses such a listing, with a second reading that agrees. With
+ * the model deciding, these are the ones it will read that way at their next
+ * weekly read, which takes the rules' last verdict as the model's.
+ */
+export async function switchWouldPause(db: D1Database): Promise<string[]> {
+  const reads = await listShadowReads(db);
+  return reads
+    .filter((read) => read.source === 'policy' && read.rulesBanned === false && read.docsMatch && read.reading !== null && keptReadsBan(read.reading))
+    .map((read) => read.project);
+}
+
+/** Logs switchWouldPause. A failure to read it is a line in the log, and holds back nothing else in the run. */
+async function logSwitchPauses(deps: BatchDeps): Promise<void> {
+  const mode = policyReader();
+  if (mode === 'rules') return;
+  let projects: string[];
+  try {
+    projects = await switchWouldPause(deps.db);
+  } catch (error) {
+    console.error('The policy reader couldn\'t list the projects the switch to the model would pause.', error);
+    return;
+  }
+  if (mode === 'shadow') {
+    console.log(`Listed projects the switch to the model would pause, from their shadow readings: ${projects.length === 0 ? 'none' : projects.join(', ')}.`);
+  } else if (projects.length > 0) {
+    console.log(
+      `Listed projects whose shadow readings read a ban, which the model pauses at their next weekly read when a second reading agrees: ${projects.join(', ')}.`,
+    );
+  }
+}
+
 /**
  * The hourly run: collects the batches that ended, drops what kept failing
  * for 7 days, and sends what is pending. With no key, a budget of 0, or the
@@ -599,9 +744,10 @@ export async function runReader(deps: BatchDeps): Promise<BatchRun | null> {
     }
   }
   const list = (repos: string[]) => (repos.length === 0 ? 'none' : repos.join(', '));
+  await logSwitchPauses(deps);
   const spent = await dayUse(deps.db, utcDay(now));
   console.log(
-    `The policy reader collected ${String(run.collected)} batches, with ${String(run.inProgress)} still in progress. Readings that counted: ${String(run.read)}, label checks that counted: ${String(run.labelsRead)}, where the model and the rules agree on the tier: ${String(run.agree)}, disagree: ${String(run.disagree)}. No verdict: ${JSON.stringify(run.noVerdict)}. Tried again later: ${String(run.retried)}, dropped for newer docs: ${String(run.replaced)}. Seeds the model would have found that the rules didn't: ${list(run.wouldFind)}. Listings the model reads as moved into a ban: ${list(run.wouldPause)}, as changed: ${list(run.wouldChange)}. Sent: ${String(run.sent)}, waiting: ${String(run.waiting)}${run.held === null ? '' : `, held by ${run.held}`}. Cost: $${run.cost.toFixed(4)}, with ${String(run.promptCacheHits)} prompt cache hits. Used today: $${Object.values(spent).reduce((a, b) => a + b, 0).toFixed(4)} of $${modelDailyBudgetUsd().toFixed(2)}, ${JSON.stringify(spent)}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The policy reader collected ${String(run.collected)} batches, with ${String(run.inProgress)} still in progress. Readings that counted: ${String(run.read)}, label checks that counted: ${String(run.labelsRead)}, where the model and the rules agree on the tier: ${String(run.agree)}, disagree: ${String(run.disagree)}. No verdict: ${JSON.stringify(run.noVerdict)}. Tried again later: ${String(run.retried)}, dropped for newer docs: ${String(run.replaced)}. Seeds the model would have found that the rules didn't: ${list(run.wouldFind)}. Listings the model reads as moved into a ban: ${list(run.wouldPause)}, as changed: ${list(run.wouldChange)}.${policyReader() === 'model' ? ` With the model deciding, finds written: ${list(run.found)}, listings paused: ${list(run.paused)}, sent to the admin queue: ${list(run.changed)}.` : ''} Sent: ${String(run.sent)}, waiting: ${String(run.waiting)}${run.held === null ? '' : `, held by ${run.held}`}. Cost: $${run.cost.toFixed(4)}, with ${String(run.promptCacheHits)} prompt cache hits. Used today: $${Object.values(spent).reduce((a, b) => a + b, 0).toFixed(4)} of $${modelDailyBudgetUsd().toFixed(2)}, ${JSON.stringify(spent)}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }
