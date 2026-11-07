@@ -353,7 +353,10 @@ admin sees.
    for agents, like Omarchy's line, which the admin still sees. The docs
    hash decides whether the model reads. The fingerprint decides whether
    the policy changed. So a build step added to `AGENTS.md` costs one model
-   call and sends nothing to the admin queue.
+   call and sends nothing to the admin queue. The fingerprint leaves out
+   which file a welcome is in, so a weekly read also checks the listing's
+   link: a welcome that moved to another file, away from the file a
+   listing links to, sends the listing back to the queue for a new link.
 8. **The fingerprint version follows the reader version.** A fingerprint
    is `v` and a number, so `FINGERPRINT_VERSION` goes up by one with every
    reader version, and the reading keeps the reader version's name. A new

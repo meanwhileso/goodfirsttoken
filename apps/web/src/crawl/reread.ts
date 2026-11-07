@@ -10,7 +10,7 @@ import { pauseForCrawler } from './pause';
 import { readPolicyOutput, type PolicyReading } from './reader';
 import { docsHash } from './reader/docs';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
-import { readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
+import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
 import type { PolicyFile } from './rules';
 
 // Keeping listings current (spec section 5): the crawl queue's consumer
@@ -102,6 +102,27 @@ function readsOtherwise(policy: Policy | null, reading: PolicyReading): boolean 
 }
 
 /**
+ * Whether the welcome moved to another file: a listing links to one of the
+ * repo's files on its default branch that holds no welcome now, and another
+ * file does. The fingerprint leaves out which file a welcome is in, so this
+ * is what sends the listing back to the queue for a new link. Docs that
+ * welcome nothing now are the tier's to catch. A policy that links
+ * elsewhere, like a maintainer's post, or to another branch or a commit,
+ * says nothing here. `welcomeFiles` are the paths of the files whose welcome
+ * statements checked out.
+ */
+export function welcomeMoved(policy: Policy | null, repo: string, branch: string, welcomeFiles: readonly string[]): boolean {
+  if (policy === null || welcomeFiles.length === 0) return false;
+  const prefix = fileUrl(repo, branch, '');
+  // GitHub reads the owner and repo in a link without case, and the branch and path with it.
+  const site = `https://github.com/${repo}/`.length;
+  const { url } = policy;
+  if (url.length <= prefix.length || url.slice(0, site).toLowerCase() !== prefix.slice(0, site).toLowerCase()) return false;
+  if (url.slice(site, prefix.length) !== prefix.slice(site)) return false;
+  return !welcomeFiles.some((path) => url.slice(prefix.length) === fileUrl(repo, branch, path).slice(prefix.length));
+}
+
+/**
  * Whether anyone can open a pull request on the repo: `open` when anyone
  * can, the reason when they are turned off or only collaborators can open
  * them, and `unknown` when GitHub didn't say, which pauses nothing, since a
@@ -137,9 +158,11 @@ function pullRequestsFrom(facts: RepoFacts): 'open' | 'unknown' | { limited: str
  * - A listing made from a maintainer's post reads as no change at its first
  *   read while its docs name no AI at all, and a ban then is a move into
  *   one. Later reads compare hashes, as for any listing.
+ * - Whatever the hashes say, a listing whose welcome moved to another file
+ *   changed, as welcomeMoved says, since its link needs an admin.
  *
- * `read` says whether the last read is of the reader's version, and whether
- * either of the reading's tiers reads a ban.
+ * `read` says whether the last read is of the reader's version, whether
+ * either of the reading's tiers reads a ban, and whether the welcome moved.
  */
 export function compare(
   project: ProjectRecord,
@@ -147,7 +170,7 @@ export function compare(
   reading: PolicyReading,
   fingerprint: string,
   fromFind: boolean,
-  read: { sameVersion: boolean; banned: boolean },
+  read: { sameVersion: boolean; banned: boolean; welcomeMoved: boolean },
 ): { changed: boolean; intoBan: boolean } {
   // A listing made from a maintainer's post stood on docs that said nothing
   // about AI, so a ban at its first read is a move into one, as for a find.
@@ -159,10 +182,10 @@ export function compare(
     // Docs that name it, even to restrict agents without a ban, go to an
     // admin once, and later reads compare hashes as for any listing.
     if (fromPost && reading.tier === 'no_policy' && reading.aiSentences.length === 0) return { changed: false, intoBan };
-    return { changed: readsOtherwise(project.policy, reading), intoBan };
+    return { changed: readsOtherwise(project.policy, reading) || read.welcomeMoved, intoBan };
   }
-  if (!read.sameVersion) return { changed: false, intoBan };
-  return { changed: last.fingerprint !== fingerprint, intoBan };
+  if (!read.sameVersion) return { changed: read.welcomeMoved, intoBan };
+  return { changed: last.fingerprint !== fingerprint || read.welcomeMoved, intoBan };
 }
 
 /**

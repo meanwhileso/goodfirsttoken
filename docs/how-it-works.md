@@ -3386,6 +3386,13 @@ hash with none of the repo's text, and whether the reading read a ban:
   changelog, changes nothing, and costs no call.
 - Each reading compares its fingerprint with the last one's, and keeps its
   own, with whether it read a ban.
+- The fingerprint leaves out which file a welcome is in. So a listing made
+  from a policy whose welcome moved to another file is a change, whatever
+  the fingerprint says, at any read and across reader versions: the file
+  it links to on the default branch holds no welcome that checked out, and
+  another file does. Its link needs an admin. A link to a maintainer's
+  post, another branch, or a commit isn't checked. Docs that welcome
+  nothing now are another tier.
 - The first read of a project has nothing to compare with. A listing made
   from a policy then compares with the policy it was listed from: another
   tier, or other words in its quote, is a change.

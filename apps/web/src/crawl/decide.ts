@@ -16,7 +16,7 @@ import { MODEL_BAN_REASON, pauseForCrawler } from './pause';
 import { findTier, readerFingerprint, readerSettings, readsBan, toPolicyReading, type LabelCheck, type ModelReading, type PolicyReading } from './reader';
 import { READER_FINGERPRINT_VERSION } from './reader/fingerprint';
 import { fileUrl } from './reads';
-import { compare } from './reread';
+import { compare, welcomeMoved } from './reread';
 import { aiPassages, type AiPassages, type PolicyFile, type RepoLabel } from './rules';
 
 // What the model policy reader decides (docs/specs/model-policy-reader.md,
@@ -234,7 +234,11 @@ export async function decideReread(
     policyReading,
     fingerprint,
     fromFind,
-    { sameVersion: readerComparable(last?.fingerprint ?? null), banned },
+    {
+      sameVersion: readerComparable(last?.fingerprint ?? null),
+      banned,
+      welcomeMoved: welcomeMoved(project.policy, docs.repo, docs.branch, welcomeFiles(reading)),
+    },
   );
   if (intoBan) {
     if (readsBan(reading)) return 'second';
@@ -249,6 +253,11 @@ export async function decideReread(
   if (changed && project.source === 'policy') await sendChange(deps, run, docs, files, reading, 'changed');
   await keepModelRead(db, docs.repo, { docsHash: docs.docsHash, readerVersion: reading.readerVersion, fingerprint, banned: readsBan(reading), readIn: 'model' });
   return 'kept';
+}
+
+/** The paths of the files whose welcome statements checked out, each once. */
+function welcomeFiles(reading: ModelReading): string[] {
+  return [...new Set(reading.statements.filter((s) => s.about === 'welcomesAgents' || s.about === 'welcomesAi').map((s) => s.file.path))];
 }
 
 /**
