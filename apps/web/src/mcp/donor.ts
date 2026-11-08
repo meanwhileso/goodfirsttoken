@@ -256,6 +256,7 @@ export async function startSession(
   const followThrough = await followThroughFor(caller.githubId, modes, open, { level: null, newForWake: new Set() }, now);
   const openPrs = openPrsOf(open, modes, followThrough);
   const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).map(wakeOut);
+  const wakes = (await listWakes(env.DB, caller.githubId)).map(wakeOut);
   const resultWith = (offered: readonly EndedToOffer[]) =>
     toolResult('start_session', {
       sessionId: session.id,
@@ -270,6 +271,7 @@ export async function startSession(
       openPrs,
       followMode: modes.choice,
       stoppedWakes,
+      wakes,
       followThrough,
       skillUpdate: skillUpdateFor(input.skillVersion),
     });
@@ -559,6 +561,10 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
     wake: wake === null ? null : wakeOut({ ...wake, lastRunAt: Math.max(wake.lastRunAt ?? now, now) }),
     newForWake,
     stoppedWakes: stoppedWakes.map(wakeOut),
+    // The wake this run is shows the run, as recorded once the answer is made.
+    wakes: (await listWakes(env.DB, caller.githubId)).map((each) =>
+      wakeOut(each.id === wake?.id ? { ...each, lastRunAt: Math.max(each.lastRunAt ?? now, now) } : each),
+    ),
     followThrough,
   });
   // Marked, and the run recorded, only once the answer is made.
@@ -569,11 +575,12 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
 }
 
 /**
- * set_follow_through: saves the donor's mode for all their PRs or one, and
- * saves or removes their wakes. Every check comes first, and the change is
- * made in one batch, so a refusal changes nothing. A PR takes a mode only
- * while it is open, on the donor's own claim. A wake is removed only when
- * it is the donor's.
+ * set_follow_through: saves the donor's mode for all their PRs or one,
+ * saves or removes their wakes, and lets a PR go on past its round limits
+ * once the donor says to. Every check comes first, and the change is made
+ * in one batch, so a refusal changes nothing. A PR takes a mode, or goes
+ * on, only while it is open, on the donor's own claim. A wake is removed
+ * only when it is the donor's.
  */
 export async function setFollowThrough(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<Answer> {
   if ((await getPerson(env.DB, caller.githubId)) === null) {
@@ -610,6 +617,7 @@ export async function setFollowThrough(caller: Caller, input: ToolInput<'set_fol
       mode: input.mode === undefined ? undefined : { mode: input.mode, claimId: input.claimId },
       remove: input.removeWake,
       save: input.wake,
+      goOn: input.goOn === undefined ? undefined : input.claimId,
     },
     now,
   );
@@ -629,6 +637,7 @@ export async function setFollowThrough(caller: Caller, input: ToolInput<'set_fol
       prs,
       savedWake: changed.saved === null ? null : wakeOut(changed.saved),
       removedWake: changed.removed ? (input.removeWake ?? null) : null,
+      wentOn: changed.wentOn ? (input.claimId ?? null) : null,
       wakes: (await listWakes(env.DB, caller.githubId)).map(wakeOut),
     }),
   );

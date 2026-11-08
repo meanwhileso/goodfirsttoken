@@ -28,15 +28,29 @@
    - `outcome` `closed`: the PR closed without merging. While the issue is
      open and tagged, it takes claims again, so the donor can take another
      crack at it.
-6. Offer what waits before anything new, in this order:
-   - `followUps`: what maintainers wrote on the donor's open PRs. Answer
-     them as in Follow-ups.
-   - `unfinishedClaims`, the paused ones first. Resume one with
-     `claim_issue`, `sessionId`, and its `issue`. The answer has `resumed`
-     `true`, and the commit the claim started from.
-   When the donor named a project, say which waiting work is in another
-   project. Resume or answer that work only when the donor chooses it.
-7. When `readInPart` names a PR, read its reviews on GitHub at its link
+6. When `openPrs` lists a PR, follow the donor's open PRs before anything
+   new:
+   - When `followMode` shows the donor hasn't chosen, tell them what
+     `go_ahead` means before anything acts as them: their agent replies on
+     GitHub as them, pushes to the PR's branch, and spends their tokens on
+     scheduled runs. With `ask_first`, their agent tells them what came in
+     and decides with them. Ask with `go_ahead` first, and save the answer
+     with `set_follow_through` and `mode`. When they don't answer, save
+     nothing. A donor who never chose follows `go_ahead`.
+   - Run the follow skill for them in this session, with no wake ID:
+     `/goodfirsttoken:follow` in Claude Code, `$goodfirsttoken-follow` in
+     Codex, and `/goodfirsttoken-follow` elsewhere. When your harness can't
+     start one skill from another, read the follow skill's file and follow
+     its run. The `followUps` are what it takes.
+   - When `stoppedWakes` lists a wake, tell the donor when it last ran.
+     When this harness has no wake for the donor, set one up as in the
+     follow skill's Set the wake up.
+   With no PR open, and a Good First Token follow wake in this harness,
+   turn it off as the follow skill's Turning it off says.
+7. Then offer `unfinishedClaims`, the paused ones first. Resume one with
+   `claim_issue`, `sessionId`, and its `issue`. The answer has `resumed`
+   `true`, and the commit the claim started from. When the donor named a
+   project, say which waiting work is in another project. Resume or answer
+   that work only when the donor chooses it.
+8. When `readInPart` names a PR, read its reviews on GitHub at its link
    before you answer them. Good First Token read only some of them.
-8. When `openPrs` lists a PR, check it as in Check open PRs.
-

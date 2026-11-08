@@ -107,6 +107,8 @@ export interface FollowThroughChange {
   remove?: string | undefined;
   /** A wake to save. */
   save?: NewWake | undefined;
+  /** A claim whose open PR goes on past its round limits: its rounds today and in all start again from 0. */
+  goOn?: string | undefined;
 }
 
 /**
@@ -115,15 +117,17 @@ export interface FollowThroughChange {
  * ask_first, and a PR they stopped following stays off. A wake that isn't
  * the donor's is not removed. A new wake is saved only while the donor
  * keeps fewer than MAX_WAKES, not counting the one the change removes.
- * When it isn't, nothing changes, and `saved` is null. The donor must be
- * in the people table, and a claim in the claims table.
+ * When it isn't, nothing changes, and `saved` is null. A PR that goes on
+ * keeps its bot rounds, and the UTC day of its last round. `wentOn` is
+ * true when the donor's open PR went on. The donor must
+ * be in the people table, and a claim in the claims table.
  */
 export async function saveFollowThrough(
   db: D1Database,
   person: number,
   change: FollowThroughChange,
   now: number,
-): Promise<{ removed: boolean; saved: WakeRecord | null }> {
+): Promise<{ removed: boolean; saved: WakeRecord | null; wentOn: boolean }> {
   const who = mustParse(githubId, person, 'githubId');
   const at = checkTime(now);
   const removing = change.remove === undefined ? null : mustParse(id, change.remove, 'wakeId');
@@ -195,14 +199,28 @@ export async function saveFollowThrough(
       );
     }
   }
-  if (statements.length === 0) return { removed: false, saved: null };
+  if (change.goOn !== undefined) {
+    statements.push(
+      bind(
+        db.prepare(
+          `UPDATE prs SET rounds = 0, rounds_on_day = 0
+           WHERE claim_id = ?4 AND state = 'open' AND claim_id IN (SELECT id FROM claims WHERE github_id = ?1) AND ${saved}
+           RETURNING claim_id AS id`,
+        ),
+        mustParse(id, change.goOn, 'claimId'),
+      ),
+    );
+  }
+  if (statements.length === 0) return { removed: false, saved: null, wentOn: false };
   const results = await db.batch<{ id: string }>(statements);
   const removedRows = removing === null ? [] : (results[change.save === undefined ? 1 : 2]?.results ?? []);
   const wake =
     wakeId === null
       ? null
       : await db.prepare('SELECT * FROM wakes WHERE id = ?').bind(wakeId).first<WakeRow>();
-  return { removed: removedRows.length > 0, saved: wake === null ? null : toWake(wake) };
+  // The go on is the batch's last statement when there is one.
+  const wentOn = change.goOn !== undefined && (results[results.length - 1]?.results.length ?? 0) > 0;
+  return { removed: removedRows.length > 0, saved: wake === null ? null : toWake(wake), wentOn };
 }
 
 /** One of the donor's wakes, or null when they have no such wake. */

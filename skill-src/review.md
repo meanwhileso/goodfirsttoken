@@ -29,17 +29,20 @@ only.
 
 1. Call `my_work`. It needs no session. It lists `followUps`, the work in
    `readyToOpen`, and the claims in progress in `working`.
-2. Take the follow-ups first, as in Follow-ups. Then the review queue, as
-   in The review queue. Then the claims in progress.
+2. Follow the donor's open PRs first, as in Start a session's step 6,
+   with this `my_work` answer: tell a donor who hasn't chosen what
+   `go_ahead` means, run the follow skill for the follow-ups, as in
+   Follow-ups, and set the wake up. Then the review queue, as in The
+   review queue. Then the claims in progress.
 3. Each claim in progress is marked `resumable`. When it is false, its
    `reason` says why the claim can't go on. Release it with
    `release_claim`, as the reason says.
 4. To go on with a claim that is resumable, start a session as in Start a
    session, claim its issue again with `claim_issue`, and work it as in
    Work the claim.
-5. When `openPrs` lists a PR, check it as in Check open PRs. How the
-   donor's PRs ended, merged or closed, comes from `check_pr` when it finds
-   the end, or else with their next `start_session`, once.
+5. The follow skill's run checks each PR in `openPrs`, as in Check open
+   PRs. How the donor's PRs ended, merged or closed, comes from `check_pr`
+   when it finds the end, or else with their next `start_session`, once.
 6. The donor can also open a PR from the review queue on /me, their own
    page on Good First Token.
 

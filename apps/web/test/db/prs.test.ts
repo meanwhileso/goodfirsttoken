@@ -419,7 +419,7 @@ describe("a donor's open PRs", () => {
     await setPrState(db, 'c_1', 'merged', t0 + 3 * HOUR);
 
     expect(await listOpenPrsOf(db, priya.githubId)).toEqual([
-      { claimId: 'c_2', issue: `${repo}#18`, pr: prRef(58), reviews: 2 },
+      { claimId: 'c_2', issue: `${repo}#18`, pr: prRef(58), reviews: 2, conversation: 0 },
     ]);
   });
 

@@ -344,6 +344,8 @@ export interface OpenPrOf {
   pr: PrRef;
   /** The reviews GitHub counted on the PR at the last read, pending and dismissed ones left out. */
   reviews: number;
+  /** The comments GitHub counted in the PR's conversation at the last read, anyone's. */
+  conversation: number;
 }
 
 /**
@@ -356,19 +358,29 @@ export interface OpenPrOf {
 export async function listOpenPrsOf(db: D1Database, person: number): Promise<OpenPrOf[]> {
   const { results } = await db
     .prepare(
-      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews
+      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews, p.conversation
        FROM prs p JOIN claims c ON c.id = p.claim_id
        WHERE c.github_id = ? AND p.state = 'open' AND ${SHOWN}
          AND NOT EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = c.project AND u.delisted IS NOT NULL)
        ORDER BY p.opened_at, p.claim_id LIMIT ?`,
     )
     .bind(mustParse(githubId, person, 'githubId'), OPEN_PRS_LISTED)
-    .all<{ claim_id: string; issue_repo: string; issue_number: number; repo: string; number: number; url: string; reviews: number }>();
+    .all<{
+      claim_id: string;
+      issue_repo: string;
+      issue_number: number;
+      repo: string;
+      number: number;
+      url: string;
+      reviews: number;
+      conversation: number;
+    }>();
   return results.map((row) => ({
     claimId: mustParse(id, row.claim_id, 'claimId'),
     issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
     pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
     reviews: mustParse(count, row.reviews, 'reviews'),
+    conversation: mustParse(count, row.conversation, 'conversation'),
   }));
 }
 

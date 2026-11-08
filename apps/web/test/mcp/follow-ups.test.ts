@@ -14,6 +14,7 @@ import {
   holdProject,
   listClaimFollowUps,
   releaseProject,
+  saveFollowThrough,
   saveIssues,
   savePerson,
   setDelisted,
@@ -1107,6 +1108,26 @@ describe('follow-through', () => {
     expect(ran.structuredContent?.stoppedWakes).toEqual([]);
   });
 
+  test("start_session and my_work list every wake of the donor's, with its harness, so a session can tell whether its harness has one, and no other donor's", async () => {
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const first = await wakeOf(priya, desktop);
+    const second = await wakeOf(priya, chatgpt);
+    await wakeOf(kenji, desktop);
+
+    const session = await startSession(priya);
+    const listed = await call(priya, 'my_work');
+
+    const wakes = [
+      expect.objectContaining({ wakeId: first, ...desktop, lastRunAt: null }),
+      expect.objectContaining({ wakeId: second, ...chatgpt, lastRunAt: null }),
+    ];
+    expect(session.structuredContent?.wakes).toEqual(wakes);
+    expect(listed.structuredContent?.wakes).toEqual(wakes);
+    expect(textOf(listed)).toContain(`The donor's wakes (2):`);
+    expect(textOf(listed)).toContain(`wake ${first}: claude-code-desktop, full, every 15 minutes, no run yet`);
+  });
+
   test("my_work with a wake ID the donor doesn't have is refused, and records no run", async () => {
     const priya = await donor('priya');
     const kenji = await donor('kenji');
@@ -1489,6 +1510,57 @@ describe('leases and rounds', () => {
     });
     expect(textOf(work)).toContain('It had 3 rounds today, the most in a UTC day, so no run is due on it until tomorrow.');
     expect(textOf(work)).toContain('It had 10 rounds, the most in all, so no run is due on it again.');
+    expect(textOf(work)).toContain('When they say to, call set_follow_through with its claimId and goOn.');
+  });
+
+  test("the donor's go on lets a PR at a round limit go on: its rounds start again, its bot rounds stay, and it is due", async () => {
+    await project();
+    const priya = await donor('priya');
+    const today = await openedPr(priya);
+    const total = await openedPr(priya);
+    await reviewed(priya, today.pr.number, 'Please add a test.');
+    await reviewed(priya, total.pr.number, 'Add a changelog line.');
+    const day = Math.floor(Date.now() / (24 * HOUR));
+    await env.DB.prepare('UPDATE prs SET rounds = 3, rounds_day = ?, rounds_on_day = 3, bot_rounds = 3 WHERE claim_id = ?').bind(day, today.claimId).run();
+    await env.DB.prepare('UPDATE prs SET rounds = 10, rounds_day = ?, rounds_on_day = 1 WHERE claim_id = ?').bind(day - 3, total.claimId).run();
+
+    const wentOn = await call(priya, 'set_follow_through', { claimId: today.claimId, goOn: true });
+    await call(priya, 'set_follow_through', { claimId: total.claimId, goOn: true, mode: 'ask_first' });
+
+    expect(wentOn.structuredContent).toMatchObject({ wentOn: today.claimId, followMode: { chosen: false } });
+    expect(textOf(wentOn)).toContain(`Claim ${today.claimId}'s PR goes on: its rounds start again from 0`);
+    expect(ftOf(await call(priya, 'my_work'))).toMatchObject({
+      dueNow: true,
+      prs: [
+        { claimId: today.claimId, due: true, roundLimit: null, rounds: { today: 0, total: 0, bots: 3 }, botLimit: true },
+        { claimId: total.claimId, due: true, roundLimit: null, rounds: { today: 0, total: 0 } },
+      ],
+    });
+    const openPrs = (await call(priya, 'my_work')).structuredContent?.openPrs as { followMode: string }[];
+    expect(openPrs.map((open) => open.followMode)).toEqual(['go_ahead', 'ask_first']);
+  });
+
+  test("only the claim's donor lets its PR go on, and a refusal or a call with no go on changes no round", async () => {
+    await project();
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const { claimId } = await openedPr(priya);
+    const day = Math.floor(Date.now() / (24 * HOUR));
+    await env.DB.prepare('UPDATE prs SET rounds = 10, rounds_day = ?, rounds_on_day = 3 WHERE claim_id = ?').bind(day, claimId).run();
+
+    const notTheirs = await call(kenji, 'set_follow_through', { claimId, goOn: true });
+    const modeAlone = await call(priya, 'set_follow_through', { claimId, mode: 'ask_first' });
+
+    await env.DB.prepare("UPDATE prs SET state = 'merged' WHERE claim_id = ?").bind(claimId).run();
+    const person = await env.DB.prepare('SELECT github_id FROM people WHERE login = ?').bind('priya').first<{ github_id: number }>();
+    const ended = await saveFollowThrough(env.DB, person?.github_id ?? 0, { goOn: claimId }, Date.now());
+    await env.DB.prepare("UPDATE prs SET state = 'open' WHERE claim_id = ?").bind(claimId).run();
+
+    expect(refusalOf(notTheirs)).toBe('not_claim_owner');
+    expect(modeAlone.structuredContent).toMatchObject({ wentOn: null });
+    // A PR that ended between the checks and the batch goes on with nothing, and the answer says so.
+    expect(ended.wentOn).toBe(false);
+    expect(await prFt(priya, claimId)).toMatchObject({ roundLimit: 'total', rounds: { today: 3, total: 10 } });
   });
 });
 
@@ -1740,11 +1812,14 @@ describe('checking a PR on request', () => {
   };
   const serviceCalls = () => github.calls.filter((c) => c.login === SERVICE_LOGIN).length;
 
-  test("start_session and my_work list the donor's open PRs, with the reviews GitHub counted at the last read, and no longer once a PR merged", async () => {
+  test("start_session and my_work list the donor's open PRs, with the reviews and conversation comments GitHub counted at the last read, and no longer once a PR merged", async () => {
     await project();
     const priya = await donor('priya');
     const { issue, claimId, pr } = await openedPr(priya);
     github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'Looks close.' });
+    // Anyone's comment counts, as GitHub counts them, so the agent compares the same count.
+    github.commentOnIssue(APP, pr.number, { by: 'sam', body: 'Nice one.' });
+    github.commentOnIssue(APP, pr.number, { by: BY, body: 'Could this keep the old flag?' });
     await runPrJob();
 
     const session = await startSession(priya);
@@ -1753,10 +1828,10 @@ describe('checking a PR on request', () => {
     await runPrJob();
     const after = await call(priya, 'my_work');
 
-    expect(session.structuredContent?.openPrs).toEqual([{ claimId, issue, pr, reviews: 1, followMode: 'go_ahead' }]);
-    expect(listed.structuredContent?.openPrs).toEqual([{ claimId, issue, pr, reviews: 1, followMode: 'go_ahead' }]);
-    expect(textOf(listed)).toContain(`claim ${claimId} · reviews counted: 1`);
-    expect(textOf(listed)).toContain('Call check_pr only for one that merged, closed, or has more reviews than counted here');
+    expect(session.structuredContent?.openPrs).toEqual([{ claimId, issue, pr, reviews: 1, conversation: 2, followMode: 'go_ahead' }]);
+    expect(listed.structuredContent?.openPrs).toEqual([{ claimId, issue, pr, reviews: 1, conversation: 2, followMode: 'go_ahead' }]);
+    expect(textOf(listed)).toContain(`claim ${claimId} · reviews counted: 1 · conversation comments counted: 2`);
+    expect(textOf(listed)).toContain('Call check_pr only for one that merged, closed, or has more reviews or conversation comments than counted here');
     expect(after.structuredContent?.openPrs).toEqual([]);
   });
 

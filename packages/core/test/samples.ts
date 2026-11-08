@@ -64,7 +64,7 @@ const askedDonor = {
 
 const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3, conversation: 4, conversationRead: 4 };
 
-const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2, followMode: 'ask_first' as const };
+const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2, conversation: 3, followMode: 'ask_first' as const };
 
 const unchosen = { mode: 'go_ahead' as const, chosen: false };
 
@@ -138,6 +138,7 @@ export const samples: Samples = {
       openPrs: [openPr],
       followMode: unchosen,
       stoppedWakes: [stoppedWake],
+      wakes: [stoppedWake],
       followThrough,
       skillUpdate: { latest: '0.6.10', yours: '0.6.5' },
     },
@@ -171,7 +172,7 @@ export const samples: Samples = {
       "Good First Token read 10 of the PR's 12 reviews and left out 3 comments on lines. Read the rest on GitHub",
       'Resume a claim with claim_issue and its issue.',
       "Open PRs (1). Read each one on GitHub with the donor's own account. Call check_pr only for one that merged",
-      'claim c_0 · reviews counted: 2',
+      'claim c_0 · reviews counted: 2 · conversation comments counted: 3',
     ],
   },
   suggest_issues: {
@@ -311,6 +312,7 @@ export const samples: Samples = {
       wake: { ...stoppedWake, wakeId: 'w_cloud', harness: 'claude-code-cloud', level: 'notify', intervalMinutes: 60, lastRunAt: later },
       newForWake: [{ claimId: 'c_0', followUpId: 'IC_kwDOAbc2' }],
       stoppedWakes: [stoppedWake],
+      wakes: [stoppedWake],
       followThrough: { ...followThrough, prs: [{ ...stalledPr, reportOnly: true }, { ...heldPr, schedule: 'stopped' as const, nextCheckAt: null }] },
     },
     mentions: [
@@ -323,6 +325,7 @@ export const samples: Samples = {
       'this call marked no follow-up shown',
       'New for wake w_cloud (1): claim c_0 · follow-up IC_kwDOAbc2',
       'wake w_desktop: claude-code-desktop, full',
+      "The donor's wakes (1):",
       '> Can the formatter skip events with an empty text field?',
       'claim c_0 · follow-up PRRC_kwDOAbc1 · PR',
       'claim c_0 · follow-up IC_kwDOAbc2 · PR',
@@ -340,7 +343,7 @@ export const samples: Samples = {
       'Ask the donor to write the PR description.',
       'working',
       `${repo}#912  PR #957: ${pr.url}`,
-      'Call check_pr only for one that merged, closed, or has more reviews than counted here',
+      'Call check_pr only for one that merged, closed, or has more reviews or conversation comments than counted here',
     ],
   },
   open_pr: {
@@ -422,9 +425,11 @@ export const samples: Samples = {
       ],
       savedWake: { ...stoppedWake, wakeId: 'w_new', lastRunAt: null },
       removedWake: 'w_old',
+      wentOn: 'c_0',
       wakes: [stoppedWake, { ...stoppedWake, wakeId: 'w_new', lastRunAt: null }],
     },
     mentions: [
+      "Claim c_0's PR goes on: its rounds start again from 0, so it takes 3 more today and 10 more in all.",
       "The donor's PRs follow go_ahead: the agent answers follow-ups, pushes fixes, and replies on GitHub as the donor",
       "The donor's open PRs (2):",
       'claim c_0 · off: the donor stopped following it, set for this PR',

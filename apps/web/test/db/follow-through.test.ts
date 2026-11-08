@@ -119,8 +119,8 @@ describe('wakes', () => {
     const byKenji = await changeWakes(kenji.githubId, { remove: first.id }, t0 + HOUR);
     const replaced = await changeWakes(priya.githubId, { remove: first.id, save: { ...desktop, intervalMinutes: 30 } }, t0 + HOUR);
 
-    expect(byKenji).toEqual({ removed: false, saved: null });
-    expect(replaced).toEqual({ removed: true, saved: expect.objectContaining({ intervalMinutes: 30 }) as unknown });
+    expect(byKenji).toEqual({ removed: false, saved: null, wentOn: false });
+    expect(replaced).toEqual({ removed: true, saved: expect.objectContaining({ intervalMinutes: 30 }) as unknown, wentOn: false });
     expect((await listWakes(db, priya.githubId)).map((wake) => wake.intervalMinutes)).toEqual([30]);
     const given = await db.prepare('SELECT COUNT(*) AS n FROM wake_follow_ups WHERE wake_id = ?').bind(first.id).first<number>('n');
     expect(given).toBe(0);
@@ -134,7 +134,7 @@ describe('wakes', () => {
     const kept = { wakes: (await listWakes(db, priya.githubId)).length, mode: await getFollowMode(db, priya.githubId) };
     const swapped = await saveFollowThrough(db, priya.githubId, { mode: { mode: 'ask_first' }, remove: ten[0], save: desktop }, t0 + HOUR);
 
-    expect(eleventh).toEqual({ removed: false, saved: null });
+    expect(eleventh).toEqual({ removed: false, saved: null, wentOn: false });
     expect(kept).toEqual({ wakes: 10, mode: { mode: 'go_ahead', chosen: false } });
     expect(swapped).toMatchObject({ removed: true, saved: { createdAt: t0 + HOUR } });
     expect((await listWakes(db, priya.githubId)).map((wake) => wake.id)).not.toContain(ten[0]);

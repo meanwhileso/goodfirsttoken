@@ -696,7 +696,9 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `saveFollowThrough` makes the whole change in one batch: the new wake
   first, saved only while the donor keeps fewer than 10, and each other
   statement only once the new wake is there, so a wake past the limit
-  changes nothing. `follow_pr` takes a lease with `takeLease`, one
+  changes nothing. With `goOn`, one more statement in the batch sets the
+  claim's open PR's `rounds` and `rounds_on_day` to 0, only on the
+  donor's own claim, and leaves `bot_rounds` and `rounds_day`. `follow_pr` takes a lease with `takeLease`, one
   `UPDATE ... RETURNING` whose `WHERE` takes it only when no run holds it,
   the run holds it, or its time passed, so two runs at once never both
   hold it. `countRound` counts a round in one `UPDATE`, whose every `SET`
@@ -1271,7 +1273,8 @@ its version did not go up.
   OpenCode, Cursor, Grok Bot, and any other harness, which every skill
   shows, the Claude Code step that installs the `goodfirsttoken` plugin,
   which every skill but admin shows, and the donor's rules, steps, and
-  refusals, which give, work, and review share. A line of its own,
+  refusals, which give, work, and review share, and follow takes the
+  rules and the steps to check open PRs. A line of its own,
   `{{include <part>}}`, in a skill's body becomes the part's text, before
   `{{MCP_URL}}` is filled in. A part can't include another. A missing part,
   a name that isn't a part's, or an include inside other text fails the
@@ -1323,7 +1326,7 @@ together.
   reads in Node from `plugins/*/skills/` and passes in as `TEST_SKILLS`.
   `pnpm skills:check` fails when those differ from what `skill-src/`
   builds. It connects the agent of the person the skill is for, a sample
-  donor for give, work, and review, a maintainer with no admin role for
+  donor for give, work, review, and follow, a maintainer with no admin role for
   maintain, and the sample admin for admin, and lists that
   agent's tools from the server with their schemas. The tools a skill calls
   are the ones of its own audience, from their specs in `packages/core`.
@@ -1370,8 +1373,16 @@ together.
     checked. At least one sentence
     across the skills has to be checked, so the test can't pass on none.
   - The skill calls every tool of its audience, and each tool it calls has
-    a `refusals` list.
-  - give, work, and review each carry the donor's contract in their
+    a `refusals` list. The follow skill calls the tools a run calls
+    instead: `my_work`, `follow_pr`, `check_pr`, `post_update`,
+    `submit_work`, `sort_follow_ups`, and `set_follow_through`. Its
+    Refusals section answers for those alone, since the Rules it shares
+    name others it never calls.
+  - In the follow skill alone, a few names in GitHub's and the
+    harnesses' own terms, which no schema has, may appear: the
+    `public_repo` scope, the `requested_reviewers` endpoint, and the
+    Claude Code desktop app's scheduled tasks tools.
+  - give, work, review, and follow each carry the donor's contract in their
     `## Rules` section, each rule in its own words, so a skill that drops
     the shared rules, or a rule dropped from them, fails.
 - **Every tool call in the MCP tests** goes through `mcpClient` in
@@ -1558,6 +1569,62 @@ was tried in a live harness from this repo.
   First Token's server needs no client ID, since it registers clients
   dynamically. Whether Grok Bot completes the flow stays open until someone
   tries it.
+
+### The follow skill in each harness
+
+`skill-src/follow.md` sets a wake up in each harness the spec's table
+names, under Harnesses in
+[Follow each PR to its end](specs/follow-through.md). The spec marks
+what each product's docs don't say as "Check", and asks the builder to try
+each one in the harness. None of them was tried in the product yet. The
+skill tries each one when it sets a wake up, uses the lower level until
+it works, and tells the donor.
+
+| Harness | What wasn't tried | Until it is |
+|---|---|---|
+| Claude Code desktop app | How a scheduled task's run meets a permission prompt, and the push notification tool from a scheduled task | `notify` when a first run can't get its permissions. The run's session in the app carries the status |
+| Claude Code in a terminal | Nothing the skill relies on. `/loop` is Claude Code's own | `session` |
+| Claude Code cloud scheduled tasks | Good First Token's server as a claude.ai connector in a run | `notify`, its highest |
+| Codex in the ChatGPT desktop app | Good First Token's server in a scheduled task, and how a run there meets a permission prompt | `notify` |
+| Grok Bot | The GitHub CLI signed in as the donor on the Bot's computer, how a routine meets an approval card, and which channel its notice comes on | `notify` |
+| Cursor Automations | A donor token in Cursor's secrets as `GH_TOKEN`, and how a run meets a permission prompt | `notify` |
+| ChatGPT on the web and phone | Good First Token's server in a scheduled task | `session` |
+| Grok's Automations | Good First Token's server in an automation | `session` |
+
+- **The Claude Code desktop app's tools.** The skill names the app's
+  scheduled tasks tools, `create_scheduled_task`, `list_scheduled_tasks`,
+  and `delete_scheduled_task`, from their own descriptions in a desktop
+  session. Those say a task runs while the app is open, runs on the next
+  launch when the app was closed at its time, takes a cron expression in
+  local time, and saves in the session's permission mode when that is
+  Auto or Bypass. A run of one wasn't tried.
+- **How a skill is started.** `/goodfirsttoken:follow` is the plugin's
+  form in Claude Code, as for the other skills. `$goodfirsttoken-follow`
+  in Codex and `/goodfirsttoken-follow` elsewhere are the standalone
+  skill's name in each harness's form, from the spec, and weren't tried
+  in a scheduled run.
+- **GitHub.** Whether GitHub lets the author of a PR from a fork ask a
+  maintainer to review again, and how a workflow run that waits for a
+  maintainer's approval shows, weren't tried. The skill asks, and says
+  the changes are in when GitHub refuses. It takes a run that ran no step
+  and says it waits for approval as one that needs no fix. A `checks`
+  follow-up it sorts that way is known by its head, so a failure on the
+  same head after the approval brings no new follow-up.
+- **Cost.** The spec asks for the tokens a run that ends at step 1 and a
+  typical round spend. Neither was measured, so the skill says what a run
+  calls and gives no number.
+- **Trying a "Check".** The skill saves the wake at the harness's level,
+  then starts one run where the harness lets the donor, and reads what it
+  said. When a step failed, it removes the wake, saves it again at the
+  lower level, and puts the new ID in the harness's wake. When no run can
+  start then, the donor's next session does this after the first run.
+  Each run also checks itself: one with no tools ends and says so, and
+  one whose GitHub CLI isn't the donor only reports.
+- **Run IDs.** A run makes its ID from its wake's ID and the time, so two
+  wakes that start in the same minute never share a lease.
+- **The trigger.** Step 5 of Setting the wake up, a trigger Good First
+  Token calls when a follow-up comes, waits for build step 9. The skill
+  skips it.
 
 ## Bindings
 

@@ -1028,11 +1028,16 @@ seconds of the ask.
 - The skills read the donor's open PRs on GitHub with the donor's own
   account first, `gh pr view` for each one `openPrs` lists, under
   [The donor's tools](#the-donors-tools). They call `check_pr` only for a
-  PR that merged, closed, or has more reviews than `openPrs` counted. So in
-  the usual case, when nothing changed, the service token reads nothing.
+  PR that merged, closed, has more reviews or conversation comments than
+  `openPrs` counted, or has failed checks or a conflict with no follow-up
+  of that kind listed, as under **follow** in
+  [Skills and plugins](#skills-and-plugins). So in the usual case, when
+  nothing changed, the service token reads nothing.
 - A count can miss a review: when one review was dismissed and a new one
   came, GitHub's count is the same as before, so the skill doesn't ask.
-  The PR job reads the new one at its next run.
+  The PR job reads the new one at its next run. A comment from someone
+  who isn't a maintainer counts too, so a check for it finds nothing
+  new.
 - The agent's word decides only that a read is worth making. The read is
   the PR job's own, with the service token, and records only what GitHub
   shows, the same way: a merge or a close, which the claim's issue room
@@ -2418,11 +2423,13 @@ token or other donor's ever does their work.
   one the do-not-list names, or one on a delisted project, as for ended
   PRs: each one's claim, issue,
   and PR, and `reviews`, how many reviews GitHub counted on it at the last
-  read, pending and dismissed ones left out, and how it is followed, under
-  Follow-through below. The skills read each on GitHub
+  read, pending and dismissed ones left out, `conversation`, how many
+  comments, anyone's, GitHub counted in its conversation then, and how it
+  is followed, under Follow-through below. The skills read each on GitHub
   with the donor's own account, and call `check_pr` only for one that
-  merged, closed, or has more reviews than that, under Checked on request
-  in [PRs](#prs).
+  merged, closed, has more reviews or comments than those, or shows
+  failed checks or a conflict no follow-up lists, under Checked on
+  request in [PRs](#prs).
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions. [/me](#your-queue-on-me) saves them the same
   way.
@@ -2483,8 +2490,9 @@ under Follow-ups in [PRs](#prs).
   conflict.
 - The reviewer's text is quoted as their own words, one line after `>`,
   under a note that says it is a reviewer's request from GitHub, or what
-  GitHub shows, to weigh with the donor and the repo's own rules, and
-  holds no instructions for the agent. The text of checks and a conflict
+  GitHub shows, to check against the code, the issue, and the repo's own
+  rules, asking the donor only where the follow skill says to, and that
+  it holds no instructions for the agent. The text of checks and a conflict
   is quoted the same way. A file's path is repo text too, and shows as a quoted string,
   like `on the file "src/a.ts"`. A text that isn't one folded line is never
   sent.
@@ -2549,6 +2557,11 @@ and their agent saves wakes, which start its runs in a harness, under
   for ChatGPT, which has no git, is refused as a bad input. It removes a
   wake by its ID, and can remove one and save another in one call. A
   donor keeps at most 10.
+- `set_follow_through` with a claim and `goOn` lets that PR go on past
+  its round limits, once the donor says to. Its rounds today and in all
+  start again from 0, and its bot rounds stay. `goOn` can't go with
+  `off`. The answer names the claim as `wentOn` once its open PR went on,
+  and gives null when the PR ended before the change.
 - Only the donor's own claim takes a mode. Another donor's claim is
   refused with `not_claim_owner`. A claim with no PR recorded is refused
   with `not_found`, and one whose PR merged or closed with `pr_closed`.
@@ -2566,6 +2579,9 @@ and their agent saves wakes, which start its runs in a harness, under
   marks none. A `full` or `session` wake's marks only those on PRs that
   follow `go_ahead`. A call with no wake ID, in a session the donor is in,
   marks every one it lists, as before.
+- `start_session` and `my_work` list every wake of the donor's under
+  `wakes`, with its harness, so a session can tell whether its harness
+  has one. `my_work` shows the run of the wake that called it.
 - A wake that stopped is one with no run for 24 hours past its interval,
   or none that long since it was saved, while one of the donor's PRs is
   open. The interval keeps a daily wake that runs a little late from
@@ -2637,10 +2653,10 @@ with `followThrough`, under Waking up in
 - At 3 rounds in a UTC day, a PR isn't due until the next day, and at 10
   in all it isn't due again. Its state is `waiting_donor`, `roundLimit`
   says which limit, and the text tells the agent to ask the donor whether
-  to go on, and to go on only in a session where they say to. No tool
-  sets the counts back. `follow_pr` still takes the lease of a PR at a
-  limit, so a session the donor is in can go on, and its rounds still
-  count. Past 3 rounds that answered bots, the PR is still due, and
+  to go on, and, when they say to, to call `set_follow_through` with the
+  claim and `goOn`, which sets the counts back. `follow_pr` still takes
+  the lease of a PR at a limit, so a session the donor is in can go on,
+  and its rounds still count. Past 3 rounds that answered bots, the PR is still due, and
   `botLimit` and the text tell the agent to settle its bot follow-ups as
   `no_change` and tell the donor once.
 - A run that only reports is due for a PR when its wake has follow-ups
@@ -5613,15 +5629,16 @@ The limits we set are our choice, so any of them can change.
 
 ## Skills and plugins
 
-The skills tell an agent how to use Good First Token: give, work, and
-review for donors, maintain for maintainers, and admin for Good First
-Token's admins.
+The skills tell an agent how to use Good First Token: give, work,
+review, and follow for donors, maintain for maintainers, and admin for
+Good First Token's admins.
 
 | Skill | In the Claude Code plugin | Standalone skill |
 |---|---|---|
 | give | `/goodfirsttoken:give` | `goodfirsttoken-give` |
 | work | `/goodfirsttoken:work` | `goodfirsttoken-work` |
 | review | `/goodfirsttoken:review` | `goodfirsttoken-review` |
+| follow | `/goodfirsttoken:follow` | `goodfirsttoken-follow`, started as `$goodfirsttoken-follow` in Codex and `/goodfirsttoken-follow` elsewhere |
 | maintain | `/goodfirsttoken:maintain` | `goodfirsttoken-maintain` |
 | admin | `/goodfirsttoken-admin:admin` | Not published |
 
@@ -5651,6 +5668,7 @@ Token's admins.
 - Each names only the tools the server serves the person it is for, and the
   fields, values, and refusals of those tools. Its Refusals section has one
   entry for each refusal the tools of its own audience can give an agent,
+  or for follow, the tools a run calls,
   under [Refusals](#refusals), with what to do about it. Each call it shows
   as an example is to one of those tools, and one the tool takes, and each
   sentence it quotes from the server is the server's own.
@@ -5659,7 +5677,7 @@ Token's admins.
 
 **What the donor's skills share.** give, work, and review carry the same
 rules, steps, and refusals, so an agent that starts in any of them can
-finish the work.
+finish the work. follow carries the same rules too.
 
 - The contract: work only issues the server gives, once the donor picked
   or named one. Follow the repo's AGENTS.md and CONTRIBUTING and the
@@ -5686,9 +5704,11 @@ finish the work.
   this session is saved only when the donor asks. It tells the donor how each PR in `endedPrs` ended,
   since each is listed once. For a merged one it gives the donor the link
   to post it on X, and posts nothing. For one closed without merging it
-  says the issue takes claims again while it is open and tagged. Then it
-  offers the follow-ups and the unfinished claims, paused ones first,
-  before anything new.
+  says the issue takes claims again while it is open and tagged. When the
+  donor has a PR open, it tells a donor who hasn't chosen what `go_ahead`
+  means, runs the follow skill for the open PRs in the session, and sets
+  the wake up when the harness has none. Then it offers the unfinished
+  claims, paused ones first, before anything new.
 - Once a claim lands, the agent asks the donor "Any special instructions
   for this one?" The answer stays in the harness, and is never posted.
 - When the donor names a project, the agent resolves its name or repo URL
@@ -5755,10 +5775,115 @@ the review queue from `my_work`, even when each PR opened at once.
 session of its own. A project named without an issue goes to give to find
 the project and offer its tagged issues.
 
-**review** starts from `my_work`: follow-ups first, then the work waiting
-to open as a PR, then the claims in progress. A claim that isn't
-resumable is released, as its reason says. It tells the donor they can
-also open a PR from /me, under [Your queue on /me](#your-queue-on-me).
+**review** starts from `my_work`: the donor's open PRs first, through the
+follow skill, then the work waiting to open as a PR, then the claims in
+progress. A claim that isn't resumable is released, as its reason says.
+It tells the donor they can also open a PR from /me, under
+[Your queue on /me](#your-queue-on-me).
+
+**follow** follows the donor's open PRs until they merge or close, under
+[Follow each PR to its end](specs/follow-through.md). It carries the
+donor's Rules and the steps to check open PRs that give, work, and
+review carry. It names only the tools a run calls: `my_work`,
+`follow_pr`, `check_pr`, `post_update`, `submit_work`,
+`sort_follow_ups`, and `set_follow_through`, and its Refusals section
+has an entry for each refusal those can give.
+
+- A run starts three ways: a wake in the donor's harness starts it on a
+  schedule, with the wake's ID, the harness, and a work folder for clones
+  in its prompt. Or give, work, or review runs it at the start of a
+  session, for the donor's open PRs. Or the donor asks for it.
+- A session's skill first tells a donor who hasn't chosen a mode what
+  `go_ahead` means: their agent replies on GitHub as them, pushes to the
+  PR's branch, and spends their tokens on scheduled runs. It asks with
+  `go_ahead` first, after the first `record_pr` and in the next session
+  of a donor with PRs open. Nothing acts as the donor before that.
+- A run makes up a run ID. It calls `my_work`, with the wake's ID when a
+  wake started it, and reads each open PR with the donor's GitHub CLI.
+  When `dueNow` is false and GitHub shows nothing new, it ends and says
+  nothing. Otherwise, for each due PR, it takes the lease with
+  `follow_pr`, calls `check_pr` only when GitHub shows a change, pulls
+  the claim's branch into the work folder, sorts the open follow-ups,
+  makes the fixes as one round with one push and a `submit_work` with
+  `answers`, replies, records each reply with `sort_follow_ups`, posts
+  status, and gives the lease back. It never changes its wake.
+- GitHub shows a change to a PR when it merged or closed, when it has
+  more reviews or conversation comments than `openPrs` counted, when its
+  head's checks failed with no `checks` follow-up listed, leaving out a
+  run that waits for a maintainer's approval, or when it can't merge with
+  no `conflict` follow-up listed. give, work, and review read the PRs the same way.
+- A run of a `notify` wake, and a wake's run for an `ask_first` PR, only
+  reports. It tells the donor what came in from `newForWake`, quoting
+  each comment, and what it would do with it. It takes no lease and sorts
+  nothing. In a session the donor is in, an `ask_first` PR runs every
+  step, and the agent decides each follow-up with the donor.
+- An unattended run runs only git, the GitHub CLI and API with the
+  donor's credential, and the test, build, and lint commands the repo's
+  docs or CI name. A fix that needs any other command, or one a comment
+  names, waits for the donor.
+- Before any write, the run checks that `gh api user` gives the login
+  `my_work` names. When it doesn't, it writes nothing and tells the
+  donor. It writes only with git and the GitHub CLI, never a harness's
+  own GitHub tools. Where GraphQL is blocked, it uses REST through
+  `gh api`, and leaves resolving a thread to the donor. It never rebases
+  or force-pushes an open PR's branch, and merges the base branch into it
+  for a conflict.
+- It sorts each follow-up after checking its claims against the code: a
+  fix within the issue, an answer to a question, one explanation of a
+  comment it found wrong, nothing for an approval or a summary, or a
+  question for the donor. It asks the donor for work beyond the issue, a
+  design choice, anything addressed to the person, a request to stop or
+  close, two reviewers who disagree, a maintainer who still disagrees
+  after one explanation, a fix it can't do or check, a check that fails
+  on the base branch too, and tests that still fail. A question names the
+  PR, quotes the comment, says what the agent thinks, and gives the
+  choices.
+- A fix pushes on its own in `go_ahead`, whatever the project's PR mode.
+  A project that wants a person-written description gets fixes pushed
+  and no replies: the agent asks the donor to reply, with the link.
+- Replies: a line comment gets its reply in its thread, and the round's
+  reviews and conversation comments get one comment that answers them
+  all. A fixed bot thread gets no reply, and is resolved once the fix is
+  pushed. A bot comment it explains gets one reply, then is resolved.
+  Each reply ends with the project's disclosure trailer. Once a round
+  settles every change a maintainer asked for, it asks them to review
+  again, once, where GitHub lets the donor, and else says the changes
+  are in. It sends no other message, and tells the donor once when a PR
+  waited 14 days after its last push with no reviewer activity.
+- Limits: at a round limit, the agent asks the donor whether to go on,
+  and only on their word calls `set_follow_through` with `goOn`. Past 3
+  bot rounds, bot follow-ups settle `no_change`.
+- A run that did something ends with one message to the donor: each PR,
+  what reviewers wrote, what changed, the replies with their links, and
+  what it waits for. A run that did nothing says nothing.
+- **Setting the wake up.** With the donor in a session, once their first
+  PR is recorded, and in a session that finds a PR open and no wake
+  there, the skill checks what a run will have, looks for a wake already
+  in the harness, asks for the permissions an unattended run needs in
+  the harness's terms, saves the wake with `set_follow_through`, makes the
+  harness's wake with the wake's ID in its prompt, and tells the donor
+  the level and how to turn it off. One wake per harness: it removes
+  another of the same harness that no longer runs, as a loop from an
+  ended session. A session that finds no PR open turns the wake off and
+  removes it. The trigger, under Waking a run when a follow-up comes in
+  the spec, isn't built yet, so the skill skips that step.
+- Each harness gets its own steps and level:
+  - The Claude Code desktop app: a scheduled task every 15 minutes,
+    `full`.
+  - Claude Code in a terminal: a loop in the session, `session`.
+  - Claude Code's cloud scheduled tasks: hourly, `notify`.
+  - Codex's scheduled task in the ChatGPT desktop app: `full` once tried.
+  - Grok Bot's routine and Cursor's Automations: `full` with a donor's
+    GitHub credential there, and else `notify`. Before a donor puts a
+    token there, the skill warns them, as the spec lists, and asks for a
+    classic token with only the `public_repo` scope.
+  - ChatGPT's and Grok's scheduled tasks: `notify` once tried.
+  - Codex's CLI, Cursor's editor and CLI, OpenCode, and Grok Build:
+    `session`, with no wake.
+- Where the spec marks a fact to check, the skill tries it with one run,
+  and saves the wake again at the lower level when it fails. What was
+  tried is under
+  [The follow skill in each harness](architecture.md#the-follow-skill-in-each-harness).
 
 **maintain** acts for an admin or maintainer of a repo on GitHub.
 

@@ -858,6 +858,12 @@ describe('tool inputs', () => {
     expect(problemFields(set({}))).toEqual(['mode']);
     expect(problemFields(set({ mode: 'off' }))).toEqual(['claimId']);
     expect(problemFields(set({ claimId: 'c_1', wake }))).toEqual(['claimId']);
+    // The donor's go on past a PR's round limits names that PR, and can't go with stopping it.
+    expect(set({ goOn: true, claimId: 'c_1' }).ok).toBe(true);
+    expect(set({ goOn: true, claimId: 'c_1', mode: 'ask_first' }).ok).toBe(true);
+    expect(problemFields(set({ goOn: true }))).toEqual(['claimId']);
+    expect(problemFields(set({ goOn: true, claimId: 'c_1', mode: 'off' }))).toEqual(['goOn']);
+    expect(problemFields(set({ goOn: false, claimId: 'c_1' }))).toEqual(['goOn']);
     // ChatGPT has no git, and Claude Code in a terminal no wake but a loop in the session.
     expect(problemFields(set({ wake: { ...wake, harness: 'chatgpt' } }))).toEqual(['wake.level']);
     expect(problemFields(set({ wake: { ...wake, harness: 'claude-code-terminal' } }))).toEqual(['wake.level']);
