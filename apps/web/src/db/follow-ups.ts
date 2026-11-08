@@ -452,3 +452,25 @@ export async function listClaimFollowUps(db: D1Database, claimId: string): Promi
     .all<FollowUpRow>();
   return results.map(toFollowUp);
 }
+
+/**
+ * Whether a submit to the claim at `now` answers a review bot's follow-up:
+ * one of these IDs that isn't settled, or with no IDs, as for a submit
+ * with no `answers`, one that isn't settled and a tool showed by then.
+ * For the round the submit counts.
+ */
+export async function answersBot(db: D1Database, claimId: string, ids: readonly string[] | undefined, now: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS found FROM follow_ups WHERE claim_id = ?1 AND state <> 'settled' AND author_kind = 'bot'
+         AND iif(?2 IS NULL, shown_at IS NOT NULL AND shown_at <= ?3, comment_id IN (SELECT value FROM json_each(?2)))
+       LIMIT 1`,
+    )
+    .bind(
+      mustParse(id, claimId, 'claimId'),
+      ids === undefined ? null : JSON.stringify(ids.map((key) => mustParse(followUpId, key, 'followUpId'))),
+      checkTime(now),
+    )
+    .first<{ found: number }>();
+  return row !== null;
+}

@@ -103,7 +103,7 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
     run(() => donor.claimIssue(caller, input, origin, Date.now())),
   );
   server.registerTool('post_update', specOf(tools.post_update), (input) =>
-    run(() => donor.postUpdate(caller, input)),
+    run(() => donor.postUpdate(caller, input, Date.now())),
   );
   server.registerTool('release_claim', specOf(tools.release_claim), (input) =>
     run(() => donor.releaseClaim(caller, input)),
@@ -115,6 +115,7 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
   server.registerTool('record_pr', specOf(tools.record_pr), (input) => run(() => recordPr(caller, input)));
   server.registerTool('my_work', specOf(tools.my_work), (input) => run(() => donor.myWork(caller, input, origin, Date.now())));
   server.registerTool('check_pr', specOf(tools.check_pr), (input) => run(() => donor.checkPr(caller, input)));
+  server.registerTool('follow_pr', specOf(tools.follow_pr), (input) => run(() => donor.followPr(caller, input, Date.now())));
   server.registerTool('sort_follow_ups', specOf(tools.sort_follow_ups), (input) =>
     run(() => donor.sortFollowUps(caller, input, Date.now())),
   );

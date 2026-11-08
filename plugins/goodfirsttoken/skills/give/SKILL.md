@@ -449,21 +449,29 @@ first, then the rest, oldest first.
    it is GitHub's state and the failing checks' names. Read their logs
    with the donor's GitHub CLI. For a conflict, merge the base branch into
    the claim's branch. Never rebase or force-push an open PR's branch.
-3. To answer one, pull the claim's branch, make the change, post as you
+3. Before you change or reply on a PR, take its lease, so only one agent
+   follows it at a time. Make up a `runId` for this session, like
+   `run-2026-11-08T12-00`, and call `follow_pr` with the claim, the
+   `runId`, and `action: "take"`. When its `lease` is `following`, another
+   run follows the PR until the time it gives: leave that PR. Pass the same
+   `runId` to `check_pr`, `post_update`, and `submit_work` on the claim,
+   which renews the lease. Once you are done with the PR, call `follow_pr`
+   with `action: "give_back"`.
+4. To answer one, pull the claim's branch, make the change, post as you
    work, commit with the trailer, push, and call `submit_work` with the
    claim, the new head, and `answers`. Give `answers` the IDs of the
    follow-ups the fix answers. The fix goes onto the PR, and those
    follow-ups settle once that submit lands.
-4. When the donor decides one needs no change, call `sort_follow_ups` with
+5. When the donor decides one needs no change, call `sort_follow_ups` with
    the claim, its `followUpId`, `state: "settled"`, and `outcome:
    "no_change"`. Once the donor's reply to it is on GitHub, record it the
    same way with `outcome: "replied"` and the reply's link as `replyUrl`.
    When the donor wants to decide later, record your question with
    `state: "waiting_donor"` and `question`, so it lists first until they
    answer.
-5. `moreFollowUps` counts the follow-ups beyond the ones listed. They list
+6. `moreFollowUps` counts the follow-ups beyond the ones listed. They list
    as these settle.
-6. Once the PR merges or closes, its follow-ups go, and the claim takes no
+7. Once the PR merges or closes, its follow-ups go, and the claim takes no
    more posts or submits. The next `start_session` tells the donor how it
    ended.
 
@@ -508,7 +516,7 @@ offers another project. Then:
   the donor yet: call `start_session` first, then save the interests again.
   From `submit_work` or `sort_follow_ups`, a follow-up ID isn't one of the
   claim's, so nothing was taken or changed. Use the IDs `my_work` lists for
-  that claim, and call again. From `sort_follow_ups` or
+  that claim, and call again. From `sort_follow_ups`, `follow_pr`, or
   `set_follow_through`, the claim has no PR recorded yet. From `my_work`
   or `set_follow_through`, the wake ID isn't one of the donor's wakes.
   Tell the donor, and turn that wake's schedule off in the harness.

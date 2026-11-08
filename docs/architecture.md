@@ -541,7 +541,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 
 | File | What it does |
 |---|---|
-| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `sort_follow_ups`, `set_follow_through`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list, and `followModesOf` adds each one's mode from `src/db/follow-through.ts` |
+| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `follow_pr`, `sort_follow_ups`, `set_follow_through`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list, and `followModesOf` adds each one's mode from `src/db/follow-through.ts`. `followThroughFor` joins them with `listFollowFacts` from `src/db/follow-prs.ts` and gives them to `followThroughOf` in `packages/core` for `followThrough` |
 | `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
@@ -696,7 +696,17 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `saveFollowThrough` makes the whole change in one batch: the new wake
   first, saved only while the donor keeps fewer than 10, and each other
   statement only once the new wake is there, so a wake past the limit
-  changes nothing. `listEndedToOffer` in
+  changes nothing. `follow_pr` takes a lease with `takeLease`, one
+  `UPDATE ... RETURNING` whose `WHERE` takes it only when no run holds it,
+  the run holds it, or its time passed, so two runs at once never both
+  hold it. `countRound` counts a round in one `UPDATE`, whose every `SET`
+  reads the row before it, only while a lease is live. `submit_work` calls
+  it once a submit lands on an open PR, after `answersBot` says whether
+  the submit settles a bot's follow-up, and `sort_follow_ups` once it
+  records a reply. `listFollowFacts` reads each open PR's facts in one
+  query, with a subquery each over `follow_ups`, by the filter
+  `listOpenPrsOf` uses, and counts follow-ups only while the project asks
+  for help, by `ASKING_FOR_HELP`. `listEndedToOffer` in
   `src/db/prs.ts` reads the donor's merged and closed PRs no session
   offered, by `SHOWN`, the rule for the merged PRs the site shows, and
   once `start_session`'s answer is made, `markEndedOffered` marks them in
@@ -1209,7 +1219,11 @@ that is taken and against a site that never answers.
   interests, and blocks, `sessions.ts` donor sessions and budgets,
   `characters.ts` the characters that could break a line or change what a
   terminal shows, and the ones a reader can't see, `follow-ups.ts` what
-  reviewers wrote on a donor's PR and how it is folded, `removals.ts`
+  reviewers wrote on a donor's PR and how it is folded, `follow-through.ts`
+  the donor's modes and wakes, and `followThroughOf` and `nextCheck`, which
+  say when each PR is due, its next check, its round limits, and when it
+  is stalled, from facts and a time the caller passes, so its tests run
+  on a fake clock, `removals.ts`
   maintainers' requests to be removed, `crawl.ts` crawl candidates and
   the do-not-list, `feed.ts` feed events, `refusals.ts` the refusal codes,
   `secrets.ts` the check that replaces keys and tokens in posted text, and
@@ -1632,7 +1646,7 @@ in `people`.
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and since when, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
-| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
+| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, whether its issue waits to be read again, and when that read last failed, and for follow-through, when a run last checked it, the run that holds its lease and until when, what that run's round did, and its rounds in all, on the UTC day of the last one, and that answered bots | `claim_id` |
 | `follow_ups` | What the PR job read on a claim's open PR that a donor's agent answers: a maintainer's or a review bot's review, comment on a line, or comment in the conversation, or the PR's failed checks or conflict. Its kind, GitHub's ID for it, or the SHAs for checks and a conflict, the author and whether a maintainer or a bot, the text folded and cut, the file, the link, when it was written and read, when a tool showed it and when it settled, its state and outcome, the agent's question for the donor, and the link of the agent's reply | `claim_id`, `comment_id` |
 | `repo_pushers` | Login whose review on a PR in a repo showed push access when the PR job read it, and when it last did. A comment in the conversation counts as a maintainer's by it, for 90 days | `repo`, `login` |
 | `follow_modes` | The follow-through mode a donor chose for all their PRs, `go_ahead` or `ask_first`, and when. A donor with no row follows `go_ahead` | `github_id` |
@@ -1788,6 +1802,14 @@ that break the rules, so it returns the problems for the caller to show.
   interval from 1 to 1,440 minutes. `wake_follow_ups` names a follow-up by
   its claim and ID with no foreign key to `follow_ups`, which migrations
   make again.
+- **Migration `20261108205250_pr_leases.sql`** adds to `prs`
+  `checked_at`, `lease_run`, `lease_until`, `lease_round`, `lease_pushed`,
+  `lease_bot`, `rounds`, `rounds_day`, `rounds_on_day`, and `bot_rounds`,
+  owned by `src/db/follow-prs.ts`. `rounds_day` is the UTC day as whole
+  days since the epoch. The agent's last push and the last reviewer
+  activity get no column: `listFollowFacts` reads them from
+  `submissions.submitted_at`, which each landed submit sets, and from the
+  newest `follow_ups.written_at` with an author.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -1859,7 +1881,8 @@ only its donor's `start_session` and `my_work` show it. `prs.offered_at`,
 the donor's own tools show a follow-up's state, its `question`, which
 their agent wrote for them, and its `reply_url`, a link to a reply on
 GitHub. Only the donor's own tools show their follow-through modes and
-their wakes, with when each last ran.
+their wakes, with when each last ran, and their PRs' leases, with the run
+IDs their agents made up, and rounds.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -3021,6 +3044,7 @@ and count the hour's reads in one place. The rules are in
 | `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, what the donor's tools showed, and where each follow-up stands, as a submit, `sort_follow_ups`, or a read that superseded it left it |
+| `src/db/follow-prs.ts` | Follow-through's columns on `prs`: `takeLease`, `giveBackLease`, and `renewLease` for a run's lease, `countRound` for its rounds, and `listFollowFacts`, what `followThroughOf` reads of each open PR |
 | `src/db/follow-through.ts` | The `follow_modes`, `pr_follow_modes`, `wakes`, and `wake_follow_ups` tables: the donor's mode for all their PRs and for one, their wakes and when each last ran, what `my_work` gave each wake, and `listStoppedWakes`, the wakes with no run for 24 hours past their interval while a PR of the donor's is open, which `start_session` and `my_work` list and `/me` can |
 | `src/db/pushers.ts` | The `repo_pushers` table: who showed push access to each repo in a review, for the PR job's reads of conversation comments |
 | `src/sync/scheduled.ts` | The crons, and the job each cron runs |

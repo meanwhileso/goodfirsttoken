@@ -77,6 +77,47 @@ const stoppedWake = {
   lastRunAt: at,
 };
 
+/** A PR a follow-up waited on for 24 hours with no run to sort it. */
+const stalledPr = {
+  claimId: 'c_0',
+  issue: `${repo}#912`,
+  pr,
+  followMode: 'go_ahead' as const,
+  state: 'stalled' as const,
+  due: true,
+  reportOnly: false,
+  open: 1,
+  waitingDonor: 1,
+  lease: null,
+  rounds: { today: 1, total: 4, bots: 3 },
+  roundLimit: null,
+  botLimit: true,
+  lastPushAt: at,
+  lastReviewerActivityAt: at,
+  nextCheckAt: later,
+  schedule: 'hourly' as const,
+  stalledSince: later,
+};
+
+/** A PR another run holds, at its round limit for the day. */
+const heldPr = {
+  ...stalledPr,
+  claimId: 'c_2',
+  issue,
+  pr: { ...pr, number: 958, url: `https://github.com/${repo}/pull/958` },
+  state: 'agent_on_it' as const,
+  due: false,
+  open: 0,
+  waitingDonor: 0,
+  lease: { runId: 'run-desktop-1', until: later },
+  rounds: { today: 3, total: 3, bots: 0 },
+  roundLimit: 'day' as const,
+  botLimit: false,
+  stalledSince: null,
+};
+
+const followThrough = { dueNow: true, nextCheckAt: later, prs: [stalledPr, heldPr] };
+
 const counts = { taggedIssues: 3, working: 2, openPrs: 1, merged: 14 };
 
 export const samples: Samples = {
@@ -97,9 +138,19 @@ export const samples: Samples = {
       openPrs: [openPr],
       followMode: unchosen,
       stoppedWakes: [stoppedWake],
+      followThrough,
       skillUpdate: { latest: '0.6.10', yours: '0.6.5' },
     },
     mentions: [
+      'Stalled PRs (1). Each has an open follow-up no run sorted for 24 hours. Tell the donor, and take these first:',
+      'claim c_0 · stalled since 2026-09-27 12:00 UTC',
+      'Follow-through: a PR is due now. The next check comes 2026-09-27 12:00 UTC.',
+      'claim c_0 · stalled · due now · next check 2026-09-27 12:00 UTC, every hour',
+      'rounds: 1 of 3 today, 4 of 10 in all, 3 of 3 answered bots · open: 1 · waiting for the donor: 1',
+      'Settle its bot follow-ups as no_change with sort_follow_ups, and tell the donor once.',
+      'claim c_2 · your agent is on it · not due',
+      'Run run-desktop-1 holds its lease until 2026-09-27 12:00 UTC.',
+      'It had 3 rounds today, the most in a UTC day, so no run is due on it until tomorrow. Ask the donor whether to go on',
       "The donor hasn't chosen how their agent follows their PRs, so they follow go_ahead.",
       "Wakes that stopped (1). None ran for 24 hours past its interval while one of the donor's PRs is open.",
       'wake w_desktop: claude-code-desktop, full, every 15 minutes, last ran 2026-09-26 12:00 UTC',
@@ -260,9 +311,14 @@ export const samples: Samples = {
       wake: { ...stoppedWake, wakeId: 'w_cloud', harness: 'claude-code-cloud', level: 'notify', intervalMinutes: 60, lastRunAt: later },
       newForWake: [{ claimId: 'c_0', followUpId: 'IC_kwDOAbc2' }],
       stoppedWakes: [stoppedWake],
+      followThrough: { ...followThrough, prs: [{ ...stalledPr, reportOnly: true }, { ...heldPr, schedule: 'stopped' as const, nextCheckAt: null }] },
     },
     mentions: [
       'Signed in as @priya.',
+      'Stalled PRs (1).',
+      'claim c_0 · stalled · due to report',
+      'no check scheduled',
+      'No reviewer activity for 30 days, so it is checked on no schedule. Tell the donor once.',
       'This run is wake w_cloud: claude-code-cloud, notify, every 60 minutes, last ran 2026-09-27 12:00 UTC.',
       'this call marked no follow-up shown',
       'New for wake w_cloud (1): claim c_0 · follow-up IC_kwDOAbc2',
@@ -319,8 +375,21 @@ export const samples: Samples = {
       read: 'now',
       newFollowUps: 0,
       endedPr: { issue, title, pr, outcome: 'merged', shareUrl: 'https://x.com/intent/tweet?text=merged' },
+      followThrough: { dueNow: false, nextCheckAt: null, prs: [{ ...heldPr, claimId: 'c_3', lease: null, roundLimit: 'total' as const, nextCheckAt: null, state: 'waiting_donor' as const }] },
     },
-    mentions: [`Read: PR #957 on ${repo} for ${issue}, claim c_2, is merged.`, `PR #957 merged: ${pr.url}`, 'Share it', 'Post nothing for them.'],
+    mentions: [
+      'Follow-through: nothing is due now. No check is scheduled.',
+      'It had 10 rounds, the most in all, so no run is due on it again. Ask the donor whether to go on',
+      `Read: PR #957 on ${repo} for ${issue}, claim c_2, is merged.`, `PR #957 merged: ${pr.url}`, 'Share it', 'Post nothing for them.'],
+  },
+  follow_pr: {
+    output: { claimId: 'c_2', issue, pr, runId: 'run-desktop-1', lease: 'held', until: later, followThrough: heldPr },
+    mentions: [
+      `Run run-desktop-1 holds the lease on PR #957 for ${issue}, claim c_2 until 2026-09-27 12:00 UTC.`,
+      'Each follow_pr, check_pr, post_update, or submit_work with runId run-desktop-1 renews it.',
+      'Give it back with follow_pr and action give_back',
+      'claim c_2 · your agent is on it',
+    ],
   },
   sort_follow_ups: {
     output: {

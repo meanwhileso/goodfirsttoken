@@ -48,6 +48,7 @@ describe('the tool list', () => {
         'open_pr',
         'record_pr',
         'check_pr',
+        'follow_pr',
         'sort_follow_ups',
         'set_follow_through',
         'set_interests',

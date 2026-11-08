@@ -12,6 +12,7 @@ import {
 import {
   checkPr,
   claimIssue,
+  followPr,
   myWork,
   openPr,
   recordPr,
@@ -40,6 +41,7 @@ export const tools = {
   open_pr: openPr,
   record_pr: recordPr,
   check_pr: checkPr,
+  follow_pr: followPr,
   sort_follow_ups: sortFollowUps,
   set_follow_through: setFollowThrough,
   set_interests: setInterests,

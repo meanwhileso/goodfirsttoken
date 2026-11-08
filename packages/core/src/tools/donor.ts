@@ -34,11 +34,19 @@ import {
 } from '../submissions';
 import { defineTool } from './spec';
 import {
+  checkScheduleSchema,
   followModeSchema,
   levelFits,
+  MAX_BOT_ROUNDS,
+  MAX_ROUNDS,
   MAX_WAKE_INTERVAL,
   MAX_WAKES,
   prFollowModeSchema,
+  prFollowStateSchema,
+  ROUNDS_PER_DAY,
+  runIdSchema,
+  type CheckSchedule,
+  type PrFollowState,
   wakeHarnessSchema,
   wakeInterval,
   wakeLevelSchema,
@@ -197,6 +205,145 @@ function renderStoppedWakes(wakes: readonly Wake[]): string {
   );
 }
 
+/** A run's lease on a PR: the ID the run made up, and when the lease ends unless the run renews it. */
+const leaseSchema = z.object({ runId: runIdSchema, until: isoTime });
+
+/** Where one of the donor's open PRs stands in follow-through, for the run that asked. */
+const prFollowThroughSchema = z.object({
+  claimId: id,
+  issue: issueRef,
+  pr: prRefSchema,
+  followMode: prFollowModeSchema,
+  /** For the donor: waiting_reviewer, agent_on_it, waiting_donor, stalled, or off. */
+  state: prFollowStateSchema,
+  /** Whether this run has work on the PR now. */
+  due: z.boolean(),
+  /** True when this run only reports on the PR: a notify wake's, or any wake's run for an ask_first PR. */
+  reportOnly: z.boolean(),
+  /** Its follow-ups that are open, which no run sorted. */
+  open: count,
+  /** Its follow-ups that wait for the donor. */
+  waitingDonor: count,
+  /** The lease a run holds on it now, or null. */
+  lease: leaseSchema.nullable(),
+  /** Its rounds today, UTC, in all, and those that answered review bots. */
+  rounds: z.object({ today: count, total: count, bots: count }),
+  /** `day` after 3 rounds today, `total` after 10 in all, which hold the PR for the donor, or null. */
+  roundLimit: z.enum(['day', 'total']).nullable(),
+  /** True once 3 rounds answered review bots, so its bot follow-ups settle no_change. */
+  botLimit: z.boolean(),
+  /** When the agent's last submit landed, or null. */
+  lastPushAt: isoTime.nullable(),
+  /** When a maintainer or a review bot last wrote a follow-up on it, as GitHub gives it, or null. */
+  lastReviewerActivityAt: isoTime.nullable(),
+  /** When its next check comes, or null when it is checked on no schedule now. */
+  nextCheckAt: isoTime.nullable(),
+  /** How often its checks come now, or stopped after 30 days with no reviewer activity. */
+  schedule: checkScheduleSchema,
+  /** When it became stalled, with a follow-up no run sorted for 24 hours, or null. */
+  stalledSince: isoTime.nullable(),
+});
+type PrFollowThroughOut = z.infer<typeof prFollowThroughSchema>;
+
+/** Follow-through across the donor's open PRs, for the run that asked. */
+const followThroughSchema = z.object({
+  /** Whether any PR is due for this run. When false, a scheduled run ends. */
+  dueNow: z.boolean(),
+  /** The earliest check to come after now, across the PRs this run follows in full, or null. */
+  nextCheckAt: isoTime.nullable(),
+  /** Each open PR, the stalled ones first, then oldest first. */
+  prs: z.array(prFollowThroughSchema).max(MAX_OPEN_PRS),
+});
+type FollowThroughOut = z.infer<typeof followThroughSchema>;
+
+function describeState(state: PrFollowState): string {
+  switch (state) {
+    case 'waiting_reviewer':
+      return 'waiting for a reviewer';
+    case 'agent_on_it':
+      return 'your agent is on it';
+    case 'waiting_donor':
+      return 'waiting for the donor';
+    case 'stalled':
+      return 'stalled';
+    case 'off':
+      return 'off, the donor stopped following it';
+  }
+}
+
+function describeSchedule(schedule: CheckSchedule): string {
+  switch (schedule) {
+    case 'every_15_minutes':
+      return 'every 15 minutes';
+    case 'hourly':
+      return 'every hour';
+    case 'every_4_hours':
+      return 'every 4 hours';
+    case 'daily':
+      return 'once a day';
+    case 'stopped':
+      return 'on no schedule';
+  }
+}
+
+function renderPrFollowThrough(pr: PrFollowThroughOut): string {
+  const due = pr.due ? (pr.reportOnly ? 'due to report' : 'due now') : 'not due';
+  const next = pr.nextCheckAt === null ? 'no check scheduled' : `next check ${when(pr.nextCheckAt)}, ${describeSchedule(pr.schedule)}`;
+  return lines(
+    `${pr.issue}  PR #${String(pr.pr.number)}: ${pr.pr.url}`,
+    `claim ${pr.claimId} · ${describeState(pr.state)} · ${due} · ${next}`,
+    `rounds: ${String(pr.rounds.today)} of ${String(ROUNDS_PER_DAY)} today, ${String(pr.rounds.total)} of ${String(MAX_ROUNDS)} in all, ${String(pr.rounds.bots)} of ${String(MAX_BOT_ROUNDS)} answered bots · open: ${String(pr.open)} · waiting for the donor: ${String(pr.waitingDonor)}`,
+    pr.lease !== null && `Run ${pr.lease.runId} holds its lease until ${when(pr.lease.until)}.`,
+    pr.stalledSince !== null &&
+      `Stalled since ${when(pr.stalledSince)}: an open follow-up waited 24 hours with no run to sort it. Tell the donor, and sort it first.`,
+    pr.roundLimit === 'day' &&
+      `It had ${String(ROUNDS_PER_DAY)} rounds today, the most in a UTC day, so no run is due on it until tomorrow. Ask the donor whether to go on, and go on today only in a session where they say to.`,
+    pr.roundLimit === 'total' &&
+      `It had ${String(MAX_ROUNDS)} rounds, the most in all, so no run is due on it again. Ask the donor whether to go on, and go on only in a session where they say to.`,
+    pr.botLimit &&
+      `${String(MAX_BOT_ROUNDS)} rounds answered review bots, the most. Settle its bot follow-ups as no_change with sort_follow_ups, and tell the donor once.`,
+    pr.schedule === 'stopped' &&
+      pr.followMode !== 'off' &&
+      'No reviewer activity for 30 days, so it is checked on no schedule. Tell the donor once.',
+  );
+}
+
+/** What start_session and my_work say first of the donor's stalled PRs, or false with none. */
+function renderStalled(ft: FollowThroughOut): string | false {
+  const stalled = ft.prs.filter((pr) => pr.state === 'stalled');
+  return (
+    stalled.length > 0 &&
+    lines(
+      `Stalled PRs (${String(stalled.length)}). Each has an open follow-up no run sorted for 24 hours. Tell the donor, and take these first:`,
+      indent(
+        numbered(stalled, (pr) =>
+          lines(`${pr.issue}  PR #${String(pr.pr.number)}: ${pr.pr.url}`, `claim ${pr.claimId}${pr.stalledSince === null ? '' : ` · stalled since ${when(pr.stalledSince)}`}`),
+        ),
+        2,
+      ),
+    )
+  );
+}
+
+/** The follow-through block, or false when the donor has no open PR. */
+function renderFollowThrough(ft: FollowThroughOut): string | false {
+  return (
+    ft.prs.length > 0 &&
+    lines(
+      `Follow-through: ${ft.dueNow ? 'a PR is due now' : 'nothing is due now'}. ${
+        ft.nextCheckAt === null ? 'No check is scheduled.' : `The next check comes ${when(ft.nextCheckAt)}.`
+      } Before you change or reply on a due PR, take its lease with follow_pr, and leave one another run holds. A run that only reports takes no lease.`,
+      indent(numbered(ft.prs, renderPrFollowThrough), 2),
+    )
+  );
+}
+
+/** The run ID a tool takes, to renew the run's lease on the claim's PR. */
+const renewsLease = (tool: string) =>
+  runIdSchema
+    .optional()
+    .describe(`The ID your run made up, when it holds the claim's PR's lease from follow_pr. ${tool} renews the lease for 30 minutes.`);
+
 /** A skill's version, its plugin's, like 0.6.7. */
 const skillVersion = z.string().regex(/^\d+\.\d+\.\d+$/, 'must be a version like 0.6.7');
 
@@ -246,6 +393,8 @@ export const startSession = defineTool({
     followMode: followModeChoiceSchema,
     /** The donor's wakes with no run for 24 hours while one of their PRs is open. */
     stoppedWakes: z.array(wakeSchema).max(MAX_WAKES),
+    /** Which of the donor's open PRs are due, when the next check comes, and where each stands. */
+    followThrough: followThroughSchema,
     /**
      * Set when the skill is older than the one Good First Token publishes,
      * or sent no version, as skills before this field did: the latest
@@ -257,6 +406,7 @@ export const startSession = defineTool({
     lines(
       `Signed in as @${out.login}. Session ${out.sessionId}. Budget: ${describeBudget(out.budget)}.`,
       out.skillUpdate !== null && renderSkillUpdate(out.skillUpdate),
+      renderStalled(out.followThrough),
       out.interests
         ? `Interests: ${describeInterests(out.interests)}.`
         : 'No saved interests. Ask the donor which languages, projects, and kinds of work they like, then call set_interests.',
@@ -271,6 +421,7 @@ export const startSession = defineTool({
       out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
       out.openPrs.length > 0 && unchosenText(out.followMode),
       out.stoppedWakes.length > 0 && renderStoppedWakes(out.stoppedWakes),
+      renderFollowThrough(out.followThrough),
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
         'Offer the follow-ups and paused claims first, then the other unfinished claims, before new issues.',
       out.unfinishedClaims.length > 0 && 'Resume a claim with claim_issue and its issue.',
@@ -492,6 +643,7 @@ export const postUpdate = defineTool({
     claimId: id,
     text: updateText,
     job: jobName.optional().describe("A subagent's job, like tests. Leave it out for the main agent."),
+    runId: renewsLease('The post'),
   }),
   output: z.object({
     posted: z.boolean(),
@@ -671,6 +823,7 @@ export const submitWork = defineTool({
         .describe(
           "The IDs of the claim's follow-ups this fix answers, as start_session and my_work list them. They settle as fixed once the submit lands, and no others do. Leave it out to settle every follow-up on the claim that a tool showed before this submit.",
         ),
+      runId: renewsLease('The submit'),
     })
     .superRefine((input, ctx) => {
       if (input.branch === undefined && input.files === undefined) {
@@ -862,6 +1015,8 @@ export const myWork = defineTool({
     newForWake: z.array(givenFollowUpSchema).max(MAX_FOLLOW_UPS).nullable(),
     /** The donor's wakes with no run for 24 hours while one of their PRs is open. */
     stoppedWakes: z.array(wakeSchema).max(MAX_WAKES),
+    /** Which of the donor's open PRs are due for this run, when the next check comes, and where each stands. */
+    followThrough: followThroughSchema,
   }),
   text: (out) => {
     const nothing =
@@ -881,6 +1036,7 @@ export const myWork = defineTool({
                   .join('; ')}`),
         ),
       out.stoppedWakes.length > 0 && renderStoppedWakes(out.stoppedWakes),
+      renderStalled(out.followThrough),
       nothing
         ? 'Nothing waiting: no follow-ups, no work to open, no claims in progress, and no open PRs.'
         : lines(
@@ -893,6 +1049,7 @@ export const myWork = defineTool({
               `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
             out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
             out.openPrs.length > 0 && unchosenText(out.followMode),
+            renderFollowThrough(out.followThrough),
           ),
     );
   },
@@ -988,7 +1145,7 @@ export const checkPr = defineTool({
   description:
     "Ask Good First Token to read a claim's PR on GitHub now. Call it only when your own read of the PR on GitHub, with the donor's account, shows what openPrs from start_session or my_work doesn't: it merged, it closed, or it has more reviews than counted there. The server reads the PR itself and records only what GitHub shows. It reads a PR at most once in 30 seconds, takes at most 30 checks an hour from one donor, and when it is busy it leaves the read to its own read of every open PR, twice an hour.",
   refusals: ['not_found', 'not_claim_owner', 'donor_blocked'],
-  input: z.object({ claimId: id }),
+  input: z.object({ claimId: id, runId: renewsLease('The check') }),
   output: z.object({
     claimId: id,
     issue: issueRef,
@@ -1006,6 +1163,8 @@ export const checkPr = defineTool({
     newFollowUps: count,
     /** The PR, when it merged or closed and no session offered it yet. Offered here, once. */
     endedPr: endedPrSchema.nullable(),
+    /** Which of the donor's open PRs are due, when the next check comes, and where each stands, after the check. */
+    followThrough: followThroughSchema,
   }),
   text: (out) =>
     lines(
@@ -1024,7 +1183,46 @@ export const checkPr = defineTool({
         out.state === 'open' &&
         out.newFollowUps === 0 &&
         "GitHub shows it open, with nothing new from a maintainer, a review bot, or its checks. A review from someone who can't push to the repo isn't a follow-up.",
+      renderFollowThrough(out.followThrough),
     ),
+});
+
+/** What follow_pr did with the lease. */
+export const leaseOutcomes = ['held', 'following', 'given_back'] as const;
+
+export const followPr = defineTool({
+  audience: 'donor',
+  description:
+    "Take or give back the lease on a claim's open PR, so only one agent follows it at a time. Make up a run ID when the run starts, and pass it to every call. action take gives the run the lease for 30 minutes, and follow_pr, check_pr, post_update, or submit_work on the claim with the same runId renews it. When another run holds it, the answer is following, with when its lease ends: leave that PR. action give_back gives it back once the run is done with the PR. my_work takes no lease. A round is what one run does on one PR in one lease: at most one push and one set of replies.",
+  refusals: ['not_found', 'not_claim_owner', 'donor_blocked', 'pr_closed'],
+  input: z.object({
+    claimId: id,
+    runId: runIdSchema.describe('An ID your run made up when it started, like run-2026-11-08T12-00. Use the same one for every call of the run.'),
+    action: z.enum(['take', 'give_back']).describe('take to take or renew the lease, or give_back once the run is done with the PR.'),
+  }),
+  output: z.object({
+    claimId: id,
+    issue: issueRef,
+    pr: prRefSchema,
+    runId: runIdSchema,
+    /** `held`: this run holds the lease. `following`: another run holds it. `given_back`: no run holds it now. */
+    lease: z.enum(leaseOutcomes),
+    /** When the lease held, or another run's, ends, or null once given back. */
+    until: isoTime.nullable(),
+    /** Where the PR stands for this run, or null when it isn't open. */
+    followThrough: prFollowThroughSchema.nullable(),
+  }),
+  text: (out) => {
+    const which = `PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}`;
+    return lines(
+      out.lease === 'held'
+        ? `Run ${out.runId} holds the lease on ${which}${out.until === null ? '' : ` until ${when(out.until)}`}. Each follow_pr, check_pr, post_update, or submit_work with runId ${out.runId} renews it. Give it back with follow_pr and action give_back once the run is done with the PR.`
+        : out.lease === 'following'
+          ? `Another run holds the lease on ${which}${out.until === null ? '' : ` until ${when(out.until)}`}, so it follows the PR. Leave this PR.`
+          : `Run ${out.runId} holds no lease on ${which} now.`,
+      out.followThrough !== null && renderPrFollowThrough(out.followThrough),
+    );
+  },
 });
 
 /** How sort_follow_ups sets one follow-up. */

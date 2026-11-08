@@ -12,7 +12,7 @@ offers another project. Then:
   the donor yet: call `start_session` first, then save the interests again.
   From `submit_work` or `sort_follow_ups`, a follow-up ID isn't one of the
   claim's, so nothing was taken or changed. Use the IDs `my_work` lists for
-  that claim, and call again. From `sort_follow_ups` or
+  that claim, and call again. From `sort_follow_ups`, `follow_pr`, or
   `set_follow_through`, the claim has no PR recorded yet. From `my_work`
   or `set_follow_through`, the wake ID isn't one of the donor's wakes.
   Tell the donor, and turn that wake's schedule off in the harness.

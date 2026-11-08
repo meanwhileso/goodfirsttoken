@@ -23,6 +23,8 @@ import {
   addPr,
   answerFollowUps,
   answerFollowUpsById,
+  answersBot,
+  countRound,
   countOpenPrsByProject,
   getFollowMode,
   getIssue,
@@ -34,6 +36,7 @@ import {
   listPersonClaims,
   saveSubmission,
   setClearance,
+  renewLease,
   unknownFollowUps,
 } from '../db';
 import { checkIssueFacts, linkedPrs, readIssue, readRepoFacts, type GitHubIssue, type IssueRules, type RepoFacts } from '../donor/github';
@@ -183,6 +186,8 @@ export async function submitWork(
   const work = await workOn(caller, input.claimId, { kind: 'submit' }, now);
   if (isRefusal(work)) return refuse(work);
   const { claim, project, donor } = work;
+  // The run's own lease on the claim's PR is renewed.
+  if (input.runId !== undefined) await renewLease(env.DB, claim.id, input.runId, now, false);
   const earlier = await getSubmission(env.DB, claim.id);
   // Nothing an older skill sent with files is read, and nothing reaches GitHub.
   if (input.files !== undefined || input.branch === undefined) return refuse(skillOutdated(earlier?.branch ?? branchFor(claim)));
@@ -392,9 +397,13 @@ async function submitPushed(
   // A claim whose PR is open takes the fixes on that PR's branch. The
   // follow-ups named in answers settle as fixed, or with no answers, every
   // one on it a tool showed before this submit.
+  // The push is its run's round, under a live lease, which answered a bot
+  // when it settles a bot's follow-up.
   if (recorded.claim.state === 'pr_opened') {
+    const bot = await answersBot(env.DB, claim.id, input.answers, now);
     if (input.answers === undefined) await answerFollowUps(env.DB, claim.id, now);
     else await answerFollowUpsById(env.DB, claim.id, input.answers, now);
+    await countRound(env.DB, claim.id, { push: true, bot }, now);
     return result('pr_opened', recorded.claim.pr, null);
   }
   return result(recorded.claim.state, null, reason);

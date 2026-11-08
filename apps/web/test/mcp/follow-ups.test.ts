@@ -1122,6 +1122,376 @@ describe('follow-through', () => {
   });
 });
 
+describe('leases and rounds', () => {
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+
+  interface PrFt {
+    claimId: string;
+    state: string;
+    due: boolean;
+    reportOnly: boolean;
+    open: number;
+    waitingDonor: number;
+    lease: { runId: string; until: string } | null;
+    rounds: { today: number; total: number; bots: number };
+    roundLimit: string | null;
+    botLimit: boolean;
+    lastPushAt: string | null;
+    lastReviewerActivityAt: string | null;
+    nextCheckAt: string | null;
+    schedule: string;
+    stalledSince: string | null;
+  }
+
+  function ftOf(result: Result): { dueNow: boolean; nextCheckAt: string | null; prs: PrFt[] } {
+    const ft = result.structuredContent?.followThrough as { dueNow: boolean; nextCheckAt: string | null; prs: PrFt[] } | undefined;
+    if (ft === undefined) throw new Error(textOf(result));
+    return ft;
+  }
+
+  async function prFt(d: Donor, claimId: string): Promise<PrFt> {
+    const found = ftOf(await call(d, 'my_work')).prs.find((pr) => pr.claimId === claimId);
+    if (found === undefined) throw new Error(`no followThrough for ${claimId}`);
+    return found;
+  }
+
+  const take = (d: Donor, claimId: string, runId: string) => call(d, 'follow_pr', { claimId, runId, action: 'take' });
+  /** check_pr from a run. Its read uses the service token, so its calls are the job's here. */
+  const checkFrom = (d: Donor, claimId: string, runId: string) => {
+    knowServiceToken(github);
+    return asJob(() => call(d, 'check_pr', { claimId, runId }));
+  };
+  const giveBack = (d: Donor, claimId: string, runId: string) => call(d, 'follow_pr', { claimId, runId, action: 'give_back' });
+
+  async function leaseRow(claimId: string) {
+    return env.DB.prepare('SELECT lease_run, lease_until, checked_at FROM prs WHERE claim_id = ?')
+      .bind(claimId)
+      .first<{ lease_run: string | null; lease_until: number | null; checked_at: number | null }>();
+  }
+
+  /** A maintainer's review on the PR, read by the PR job, and its ID. */
+  async function reviewed(d: Donor, number: number, body: string, login = BY): Promise<string> {
+    github.reviewPullRequest(APP, number, { login, state: 'COMMENTED', body });
+    await runPrJob();
+    const found = ((await call(d, 'my_work')).structuredContent?.followUps as { followUpId: string; comment: string }[]).find(
+      (f) => f.comment === body,
+    );
+    if (!found) throw new Error(`no follow-up "${body}"`);
+    return found.followUpId;
+  }
+
+  test('follow_pr gives one run the lease, another run that asks gets following with when it ends, and once it is given back the next run takes it', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId } = await openedPr(priya);
+
+    const first = await take(priya, claimId, 'run-a');
+    const second = await take(priya, claimId, 'run-b');
+    const notHeld = await giveBack(priya, claimId, 'run-b');
+    const given = await giveBack(priya, claimId, 'run-a');
+    const after = await take(priya, claimId, 'run-b');
+
+    expect(first.structuredContent).toMatchObject({ claimId, runId: 'run-a', lease: 'held', followThrough: { lease: { runId: 'run-a' } } });
+    const until = (first.structuredContent as { until: string }).until;
+    expect(Date.parse(until) - Date.now()).toBeGreaterThan(29 * MINUTE);
+    expect(Date.parse(until) - Date.now()).toBeLessThanOrEqual(30 * MINUTE);
+    expect(second.structuredContent).toMatchObject({ lease: 'following', until });
+    expect(textOf(second)).toContain('Another run holds the lease');
+    expect(notHeld.structuredContent).toMatchObject({ lease: 'following', until });
+    expect(given.structuredContent).toMatchObject({ lease: 'given_back', until: null });
+    expect(after.structuredContent).toMatchObject({ lease: 'held', runId: 'run-b' });
+  });
+
+  test('a lease ends 30 minutes after its last renewal, and then another run takes it', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId } = await openedPr(priya);
+    await take(priya, claimId, 'run-a');
+    await env.DB.prepare('UPDATE prs SET lease_until = ? WHERE claim_id = ?').bind(Date.now() - 1, claimId).run();
+
+    const taken = await take(priya, claimId, 'run-b');
+
+    expect(taken.structuredContent).toMatchObject({ lease: 'held', runId: 'run-b' });
+    expect((await leaseRow(claimId))?.lease_run).toBe('run-b');
+  });
+
+  test("check_pr, post_update, and submit_work from the run that holds the lease renew it, and another run's ID renews nothing", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId } = await openedPr(priya);
+    await take(priya, claimId, 'run-a');
+    const soon = Date.now() + MINUTE;
+    const expire = () => env.DB.prepare('UPDATE prs SET lease_until = ? WHERE claim_id = ?').bind(soon, claimId).run();
+    const renewed = async () => ((await leaseRow(claimId))?.lease_until ?? 0) > soon + 28 * MINUTE;
+
+    await expire();
+    await checkFrom(priya, claimId, 'run-b');
+    const byOther = await renewed();
+    await checkFrom(priya, claimId, 'run-a');
+    const byCheck = await renewed();
+    await expire();
+    await call(priya, 'post_update', { claimId, text: 'read the review', runId: 'run-a' });
+    const byPost = await renewed();
+    await expire();
+    await submit(priya, claimId, { 'docs/a.md': 'A.\n' }, { runId: 'run-a' });
+    const bySubmit = await renewed();
+
+    expect({ byOther, byCheck, byPost, bySubmit }).toEqual({ byOther: false, byCheck: true, byPost: true, bySubmit: true });
+  });
+
+  test("my_work takes no lease, and only the claim's donor takes one: another donor's claim, a claim with no PR, and a merged PR are refused", async () => {
+    await project();
+    const priya = await donor('priya');
+    const kenji = await donor('kenji');
+    const { claimId, pr } = await openedPr(priya);
+    const claimed = await call(priya, 'claim_issue', { sessionId: priya.sessionId, issue: await tagged() });
+    const { claim } = claimed.structuredContent as { claim: { claimId: string } };
+
+    await call(priya, 'my_work');
+    const listed = await leaseRow(claimId);
+    const notTheirs = await take(kenji, claimId, 'run-k');
+    const noPr = await take(priya, claim.claimId, 'run-a');
+    github.mergePullRequest(APP, pr.number, BY);
+    await runPrJob();
+    const merged = await take(priya, claimId, 'run-a');
+
+    expect(listed).toMatchObject({ lease_run: null, lease_until: null });
+    expect(refusalOf(notTheirs)).toBe('not_claim_owner');
+    expect(refusalOf(noPr)).toBe('not_found');
+    expect(refusalOf(merged)).toBe('pr_closed');
+    expect((await leaseRow(claimId))?.lease_run).toBeNull();
+  });
+
+  test('a submit under a lease counts a round, a reply recorded after it is the same round, a second push is another, and a push with no lease counts none', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    const id = await reviewed(priya, pr.number, 'Please add a test.');
+
+    await submit(priya, claimId, { 'docs/none.md': 'None.\n' });
+    const noLease = (await prFt(priya, claimId)).rounds;
+    await take(priya, claimId, 'run-a');
+    await submit(priya, claimId, { 'src/rewrite.test.ts': 'test("slash", () => {});\n' }, { answers: [], runId: 'run-a' });
+    await call(priya, 'sort_follow_ups', {
+      claimId,
+      followUps: [{ followUpId: id, state: 'waiting_reviewer', replyUrl: `${pr.url}#issuecomment-9` }],
+    });
+    const oneRound = (await prFt(priya, claimId)).rounds;
+    await submit(priya, claimId, { 'docs/b.md': 'B.\n' }, { answers: [], runId: 'run-a' });
+    const twoRounds = (await prFt(priya, claimId)).rounds;
+
+    expect(noLease).toEqual({ today: 0, total: 0, bots: 0 });
+    expect(oneRound).toEqual({ today: 1, total: 1, bots: 0 });
+    expect(twoRounds).toEqual({ today: 2, total: 2, bots: 0 });
+  });
+
+  test("a round that fixes or replies to a review bot's follow-up counts as a bot round, once a round", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    const bot = await reviewed(priya, pr.number, 'Found one problem.', 'sample-ci[bot]');
+    const person = await reviewed(priya, pr.number, 'Please add a test.');
+
+    await take(priya, claimId, 'run-a');
+    await submit(priya, claimId, { 'docs/a.md': 'A.\n' }, { answers: [person], runId: 'run-a' });
+    const maintainerOnly = (await prFt(priya, claimId)).rounds;
+    await call(priya, 'sort_follow_ups', { claimId, followUps: [{ followUpId: bot, state: 'settled', outcome: 'replied', replyUrl: `${pr.url}#r1` }] });
+    await giveBack(priya, claimId, 'run-a');
+    const afterReply = (await prFt(priya, claimId)).rounds;
+
+    expect(maintainerOnly).toEqual({ today: 1, total: 1, bots: 0 });
+    expect(afterReply).toEqual({ today: 1, total: 1, bots: 1 });
+  });
+
+  test("a round on a new UTC day is that day's first, and a push under a lease whose time passed counts none", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId } = await openedPr(priya);
+    const day = Math.floor(Date.now() / (24 * HOUR));
+    await env.DB.prepare('UPDATE prs SET rounds = 3, rounds_day = ?, rounds_on_day = 3 WHERE claim_id = ?').bind(day - 1, claimId).run();
+
+    await take(priya, claimId, 'run-a');
+    await submit(priya, claimId, { 'docs/a.md': 'A.\n' }, { answers: [], runId: 'run-a' });
+    const nextDay = (await prFt(priya, claimId)).rounds;
+    await env.DB.prepare('UPDATE prs SET lease_until = ? WHERE claim_id = ?').bind(Date.now() - 1, claimId).run();
+    await submit(priya, claimId, { 'docs/b.md': 'B.\n' }, { answers: [] });
+
+    expect(nextDay).toEqual({ today: 1, total: 4, bots: 0 });
+    expect((await prFt(priya, claimId)).rounds).toEqual({ today: 1, total: 4, bots: 0 });
+  });
+
+  test('a submit with no answers that settles a bot follow-up a tool showed is a bot round, and a reply to another bot in that round counts no second', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    await reviewed(priya, pr.number, 'Found one problem.', 'sample-ci[bot]');
+    const second = await reviewed(priya, pr.number, 'Found another problem.', 'sample-ci[bot]');
+
+    await take(priya, claimId, 'run-a');
+    await submit(priya, claimId, { 'docs/a.md': 'A.\n' }, { runId: 'run-a' });
+    const pushed = (await prFt(priya, claimId)).rounds;
+    github.reviewPullRequest(APP, pr.number, { login: 'sample-ci[bot]', state: 'COMMENTED', body: 'One more.' });
+    await runPrJob();
+    const third = ((await call(priya, 'my_work')).structuredContent?.followUps as { followUpId: string }[])[0]?.followUpId;
+    await call(priya, 'sort_follow_ups', { claimId, followUps: [{ followUpId: third, state: 'settled', outcome: 'replied', replyUrl: `${pr.url}#r2` }] });
+
+    expect(second).toEqual(expect.any(String));
+    expect(pushed).toEqual({ today: 1, total: 1, bots: 1 });
+    expect((await prFt(priya, claimId)).rounds).toEqual({ today: 1, total: 1, bots: 1 });
+  });
+
+  test('recording a reply again in a later lease, with nothing new, counts no round', async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    const id = await reviewed(priya, pr.number, 'Why keep the old flag?');
+    const reply = [{ followUpId: id, state: 'waiting_reviewer', replyUrl: `${pr.url}#issuecomment-9` }];
+
+    await take(priya, claimId, 'run-a');
+    await call(priya, 'sort_follow_ups', { claimId, followUps: reply });
+    await giveBack(priya, claimId, 'run-a');
+    await take(priya, claimId, 'run-b');
+    await call(priya, 'sort_follow_ups', { claimId, followUps: reply });
+
+    expect((await prFt(priya, claimId)).rounds).toEqual({ today: 1, total: 1, bots: 0 });
+  });
+
+  test("followThrough: a PR with an open follow-up is due, and once its run sorts it, it waits for a reviewer until its next check, with the agent's last push and the reviewer's last activity", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    const quiet = ftOf(await call(priya, 'my_work'));
+    const id = await reviewed(priya, pr.number, 'Please add a test.');
+
+    const due = ftOf(await call(priya, 'my_work'));
+    await take(priya, claimId, 'run-a');
+    await call(priya, 'sort_follow_ups', { claimId, followUps: [{ followUpId: id, state: 'waiting_reviewer' }] });
+    await giveBack(priya, claimId, 'run-a');
+    const sorted = await call(priya, 'my_work');
+    const [review] = await listClaimFollowUps(env.DB, claimId);
+    const submission = await getSubmission(env.DB, claimId);
+
+    expect(quiet).toMatchObject({ dueNow: false, prs: [{ claimId, state: 'waiting_reviewer', due: false, schedule: 'every_15_minutes' }] });
+    expect(due).toMatchObject({ dueNow: true, prs: [{ claimId, state: 'agent_on_it', due: true, open: 1 }] });
+    const after = ftOf(sorted);
+    expect(after).toMatchObject({ dueNow: false, prs: [{ claimId, state: 'waiting_reviewer', due: false, open: 0, lease: null }] });
+    const checkedAt = (await leaseRow(claimId))?.checked_at ?? 0;
+    expect(Date.parse(after.nextCheckAt ?? '')).toBeGreaterThan(checkedAt);
+    expect(Date.parse(after.nextCheckAt ?? '')).toBeLessThanOrEqual(checkedAt + 15 * MINUTE);
+    expect(after.prs[0]).toMatchObject({
+      lastPushAt: new Date(submission?.submittedAt ?? 0).toISOString(),
+      lastReviewerActivityAt: new Date(review?.writtenAt ?? 0).toISOString(),
+    });
+    expect(textOf(sorted)).toContain('Follow-through: nothing is due now.');
+    expect(textOf(sorted)).toContain(`claim ${claimId} · waiting for a reviewer · not due`);
+  });
+
+  test("a PR whose follow-ups all wait for the donor isn't due, nor one the donor stopped following, and neither has a next check", async () => {
+    await project();
+    const priya = await donor('priya');
+    const asked = await openedPr(priya);
+    const stopped = await openedPr(priya);
+    const askedId = await reviewed(priya, asked.pr.number, 'Could this cover the admin feed?');
+    await reviewed(priya, stopped.pr.number, 'Add a changelog line.');
+    await call(priya, 'sort_follow_ups', {
+      claimId: asked.claimId,
+      followUps: [{ followUpId: askedId, state: 'waiting_donor', question: 'Cover the admin feed here?' }],
+    });
+    await call(priya, 'set_follow_through', { mode: 'off', claimId: stopped.claimId });
+
+    const ft = ftOf(await checkFrom(priya, asked.claimId, 'run-b'));
+
+    expect(ft).toMatchObject({ dueNow: false, nextCheckAt: null });
+    expect(ft.prs.map((pr) => [pr.claimId, pr.state, pr.due, pr.nextCheckAt])).toEqual([
+      [asked.claimId, 'waiting_donor', false, null],
+      [stopped.claimId, 'off', false, null],
+    ]);
+  });
+
+  test("a PR another run holds isn't due for any other run, and is for the run that holds it", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    await reviewed(priya, pr.number, 'Please add a test.');
+    await take(priya, claimId, 'run-a');
+
+    const listed = ftOf(await call(priya, 'my_work'));
+    const other = ftOf(await checkFrom(priya, claimId, 'run-b'));
+    const own = ftOf(await checkFrom(priya, claimId, 'run-a'));
+
+    expect(listed).toMatchObject({ dueNow: false, prs: [{ claimId, state: 'agent_on_it', due: false, lease: { runId: 'run-a' } }] });
+    expect(other.dueNow).toBe(false);
+    expect(own).toMatchObject({ dueNow: true, prs: [{ claimId, due: true }] });
+  });
+
+  test("a notify wake is due only when it has follow-ups it wasn't given", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    const saved = await call(priya, 'set_follow_through', { wake: { harness: 'chatgpt', level: 'notify', intervalMinutes: 60 } });
+    const wakeId = (saved.structuredContent?.savedWake as { wakeId: string }).wakeId;
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'Please add a test.' });
+    await runPrJob();
+
+    const first = ftOf(await call(priya, 'my_work', { wakeId }));
+    const again = ftOf(await call(priya, 'my_work', { wakeId }));
+
+    expect(first).toMatchObject({ dueNow: true, nextCheckAt: null, prs: [{ claimId, due: true, reportOnly: true }] });
+    expect(again).toMatchObject({ dueNow: false, prs: [{ claimId, due: false, reportOnly: true, open: 1 }] });
+  });
+
+  test('a PR with an open follow-up no run sorted for 24 hours is stalled, and start_session and my_work list it first', async () => {
+    await project();
+    const priya = await donor('priya');
+    const fresh = await openedPr(priya);
+    const old = await openedPr(priya);
+    await reviewed(priya, fresh.pr.number, 'Please add a test.');
+    await reviewed(priya, old.pr.number, 'Add a changelog line.');
+    const dayAgo = Date.now() - 24 * HOUR - MINUTE;
+    await env.DB.prepare('UPDATE follow_ups SET read_at = ? WHERE claim_id = ?').bind(dayAgo, old.claimId).run();
+
+    const session = await startSession(priya);
+    const work = await call(priya, 'my_work');
+
+    for (const result of [session, work]) {
+      expect(ftOf(result).prs.map((pr) => [pr.claimId, pr.state])).toEqual([
+        [old.claimId, 'stalled'],
+        [fresh.claimId, 'agent_on_it'],
+      ]);
+      expect(ftOf(result).prs[0]?.stalledSince).toBe(new Date(dayAgo + 24 * HOUR).toISOString());
+      expect((result.structuredContent?.openPrs as { claimId: string }[]).map((open) => open.claimId)).toEqual([old.claimId, fresh.claimId]);
+      expect(textOf(result)).toContain('Stalled PRs (1).');
+    }
+    const text = textOf(session);
+    expect(text.indexOf('Stalled PRs (1).')).toBeLessThan(text.indexOf('Follow-ups'));
+  });
+
+  test('a PR with 3 rounds today, or 10 in all, is not due, and followThrough says it waits for the donor', async () => {
+    await project();
+    const priya = await donor('priya');
+    const today = await openedPr(priya);
+    const total = await openedPr(priya);
+    await reviewed(priya, today.pr.number, 'Please add a test.');
+    await reviewed(priya, total.pr.number, 'Add a changelog line.');
+    const day = Math.floor(Date.now() / (24 * HOUR));
+    await env.DB.prepare('UPDATE prs SET rounds = 3, rounds_day = ?, rounds_on_day = 3 WHERE claim_id = ?').bind(day, today.claimId).run();
+    await env.DB.prepare('UPDATE prs SET rounds = 10, rounds_day = ?, rounds_on_day = 1 WHERE claim_id = ?').bind(day - 3, total.claimId).run();
+
+    const work = await call(priya, 'my_work');
+
+    expect(ftOf(work)).toMatchObject({
+      dueNow: false,
+      prs: [
+        { claimId: today.claimId, due: false, state: 'waiting_donor', roundLimit: 'day', rounds: { today: 3, total: 3 } },
+        { claimId: total.claimId, due: false, state: 'waiting_donor', roundLimit: 'total', nextCheckAt: null },
+      ],
+    });
+    expect(textOf(work)).toContain('It had 3 rounds today, the most in a UTC day, so no run is due on it until tomorrow.');
+    expect(textOf(work)).toContain('It had 10 rounds, the most in all, so no run is due on it again.');
+  });
+});
+
 describe('a merged PR', () => {
   test('the next session offers a link to post it on X, once, and nothing is posted', async () => {
     await project();
