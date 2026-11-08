@@ -7,6 +7,7 @@ export * from './candidates';
 export * from './cla';
 export * from './claims';
 export * from './do-not-list';
+export * from './follow-through';
 export * from './follow-ups';
 export * from './issues';
 export * from './leaderboard';

@@ -30,7 +30,7 @@ function idsIn(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(idsIn);
   if (value === null || typeof value !== 'object') return [];
   return Object.entries(value).flatMap(([key, inner]) =>
-    ['sessionId', 'claimId', 'id', 'followUpId'].includes(key) && typeof inner === 'string' ? [inner] : idsIn(inner),
+    ['sessionId', 'claimId', 'id', 'followUpId', 'wakeId'].includes(key) && typeof inner === 'string' ? [inner] : idsIn(inner),
   );
 }
 
@@ -49,6 +49,7 @@ describe('the tool list', () => {
         'record_pr',
         'check_pr',
         'sort_follow_ups',
+        'set_follow_through',
         'set_interests',
         'request_repo',
         'register_project',
@@ -837,6 +838,40 @@ describe('tool inputs', () => {
     expect(problemFields(sort({ followUpId: 'a', state: 'open' }))).toEqual(['followUps[0].state']);
     expect(problemFields(sort({ followUpId: 'a', state: 'waiting_reviewer' }, { followUpId: 'a', state: 'waiting_reviewer' }))).toEqual(['followUps']);
     expect(problemFields(sort())).toEqual(['followUps']);
+  });
+
+  test('set_follow_through takes off for one PR alone, a claim with a mode alone, and a wake at a level its harness can run', () => {
+    const set = (input: Record<string, unknown>) => validate(tools.set_follow_through.input, input);
+    const wake = { harness: 'claude-code-desktop', level: 'full', intervalMinutes: 15 };
+
+    expect(set({ mode: 'ask_first' }).ok).toBe(true);
+    expect(set({ mode: 'go_ahead', claimId: 'c_1' }).ok).toBe(true);
+    expect(set({ mode: 'off', claimId: 'c_1' }).ok).toBe(true);
+    expect(set({ wake }).ok).toBe(true);
+    expect(set({ mode: 'ask_first', wake, removeWake: 'w_1' }).ok).toBe(true);
+    expect(set({ removeWake: 'w_1' }).ok).toBe(true);
+    expect(set({ wake: { harness: 'chatgpt', level: 'notify', intervalMinutes: 60 } }).ok).toBe(true);
+    expect(set({ wake: { harness: 'grok-bot', level: 'session', intervalMinutes: 5 } }).ok).toBe(true);
+    expect(set({ wake: { harness: 'grok-automations', level: 'notify', intervalMinutes: 1440 } }).ok).toBe(true);
+
+    expect(problemFields(set({}))).toEqual(['mode']);
+    expect(problemFields(set({ mode: 'off' }))).toEqual(['claimId']);
+    expect(problemFields(set({ claimId: 'c_1', wake }))).toEqual(['claimId']);
+    // ChatGPT has no git, and Claude Code in a terminal no wake but a loop in the session.
+    expect(problemFields(set({ wake: { ...wake, harness: 'chatgpt' } }))).toEqual(['wake.level']);
+    expect(problemFields(set({ wake: { ...wake, harness: 'claude-code-terminal' } }))).toEqual(['wake.level']);
+    expect(problemFields(set({ wake: { ...wake, harness: 'claude-code-cloud' } }))).toEqual(['wake.level']);
+    expect(problemFields(set({ wake: { ...wake, intervalMinutes: 0 } }))).toEqual(['wake.intervalMinutes']);
+    expect(problemFields(set({ wake: { ...wake, intervalMinutes: 1441 } }))).toEqual(['wake.intervalMinutes']);
+    expect(problemFields(set({ wake: { ...wake, intervalMinutes: 7.5 } }))).toEqual(['wake.intervalMinutes']);
+    expect(problemFields(set({ wake: { ...wake, harness: 'claude-code' } }))).toEqual(['wake.harness']);
+  });
+
+  test('my_work takes a wake ID, and start_session takes chatgpt as an agent', () => {
+    expect(validate(tools.my_work.input, { wakeId: 'w_1' })).toMatchObject({ ok: true, value: { wakeId: 'w_1' } });
+    expect(validate(tools.my_work.input, {}).ok).toBe(true);
+    expect(problemFields(validate(tools.my_work.input, { wakeId: 'w 1' }))).toEqual(['wakeId']);
+    expect(validate(tools.start_session.input, { agent: 'chatgpt', budget: { kind: 'until_limit' } }).ok).toBe(true);
   });
 
   test("a question for the donor folds to one line, so it can't add a line to a tool text", () => {

@@ -4,6 +4,7 @@ import {
   foldIssueTitle,
   holdsSlot,
   MAX_FOLLOW_UPS,
+  MAX_WAKES,
   nextClaimState,
   shareOnXUrl,
   toolRefusal,
@@ -11,6 +12,7 @@ import {
   type ClaimRecord,
   type ClaimState,
   type ClaimSummary,
+  type FollowMode,
   type FollowUp,
   type Interests,
   type ProjectRecord,
@@ -22,6 +24,7 @@ import {
   type ToolOutput,
   type ToolRefusal,
   type ToolResult,
+  type WakeRecord,
 } from '@goodfirsttoken/core';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
@@ -35,22 +38,30 @@ import {
   doNotListedProjects,
   editSessionQueue,
   getClaim,
+  getFollowMode,
+  getWake,
   getIssue,
   getPerson,
   getPr,
   getProject,
   getSession,
+  giveToWake,
   listClaimFollowUps,
   listClaimsOn,
   listOpenPrLinksByProject,
   listEndedToOffer,
   listOpenPrsOf,
   listPersonClaims,
+  listPrFollowModes,
   listReadInPart,
+  listStoppedWakes,
   listWaitingFollowUps,
   listWaitingIssues,
+  listWakes,
   markEndedOffered,
   markFollowUpsShown,
+  recordWakeRun,
+  saveFollowThrough,
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
@@ -83,7 +94,8 @@ import { requestRepo as makeRequest } from '../requests/request';
 import { readyToOpen } from './submit';
 
 // The donor's tools: start_session, set_interests, suggest_issues,
-// claim_issue, post_update, release_claim, and my_work. submit_work and
+// claim_issue, post_update, release_claim, my_work, check_pr,
+// sort_follow_ups, set_follow_through, and request_repo. submit_work and
 // open_pr are in ./submit.ts. Each acts only as the caller, and reads GitHub
 // only with the caller's own token. Claims go through the issue's room,
 // which holds them and is the lock for the cap. The rules are in
@@ -225,16 +237,15 @@ export async function startSession(
   origin: string,
   now: number,
 ): Promise<Answer> {
-  const token = await tokenOf(caller);
-  const profile = await gitHubRest<{ id: number; login: string }>(token, 'GET', '/user');
-  if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
-  const person = await savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, now);
+  const person = await signedIn(caller, now);
   const session = await createSession(env.DB, { githubId: caller.githubId, agent: input.agent, budget: input.budget }, now);
   const followUps = await followUpsFor(caller.githubId);
   const readInPart = await listReadInPart(env.DB, caller.githubId);
   const unfinishedClaims = await offeredToResume(caller.githubId, origin, now);
   const ended = await listEndedToOffer(env.DB, caller.githubId);
-  const openPrs = await listOpenPrsOf(env.DB, caller.githubId);
+  const modes = await followModesOf(caller.githubId);
+  const openPrs = await openPrsOf(caller.githubId, modes);
+  const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).map(wakeOut);
   const resultWith = (offered: readonly EndedToOffer[]) =>
     toolResult('start_session', {
       sessionId: session.id,
@@ -247,6 +258,8 @@ export async function startSession(
       unfinishedClaims,
       endedPrs: offered.map(endedPrOf),
       openPrs,
+      followMode: modes.choice,
+      stoppedWakes,
       skillUpdate: skillUpdateFor(input.skillVersion),
     });
   const result = resultWith(ended);
@@ -261,6 +274,43 @@ export async function startSession(
   );
   // A session that started at the same moment marked the others first, and offers them.
   return answer(taken.size === ended.length ? result : resultWith(ended.filter((pr) => taken.has(pr.claimId))));
+}
+
+/** The caller as GitHub gives them now, with their own token, recorded under People. */
+async function signedIn(caller: Caller, now: number) {
+  const profile = await gitHubRest<{ id: number; login: string }>(await tokenOf(caller), 'GET', '/user');
+  if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
+  return savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, now);
+}
+
+/** The donor's mode for all their PRs, and the mode of each PR that has its own. */
+interface FollowModes {
+  choice: { mode: FollowMode; chosen: boolean };
+  own: Map<string, 'go_ahead' | 'ask_first' | 'off'>;
+  /** How the claim's PR is followed: its own mode, or else the donor's. */
+  of: (claimId: string) => 'go_ahead' | 'ask_first' | 'off';
+}
+
+async function followModesOf(person: number): Promise<FollowModes> {
+  const [choice, own] = await Promise.all([getFollowMode(env.DB, person), listPrFollowModes(env.DB, person)]);
+  return { choice, own, of: (claimId) => own.get(claimId) ?? choice.mode };
+}
+
+/** The donor's open PRs, as start_session and my_work list them, each with how it is followed. */
+async function openPrsOf(person: number, modes: FollowModes) {
+  return (await listOpenPrsOf(env.DB, person)).map((open) => ({ ...open, followMode: modes.of(open.claimId) }));
+}
+
+/** A wake as the tools give it. */
+function wakeOut(wake: WakeRecord) {
+  return {
+    wakeId: wake.id,
+    harness: wake.harness,
+    level: wake.level,
+    intervalMinutes: wake.intervalMinutes,
+    createdAt: new Date(wake.createdAt).toISOString(),
+    lastRunAt: iso(wake.lastRunAt),
+  };
 }
 
 /**
@@ -288,23 +338,28 @@ function compareVersions(a: string, b: string): number {
  * What maintainers and review bots wrote on the donor's open PRs, and their
  * failed checks and conflicts, that are open or wait for the donor, as
  * start_session and my_work list them, and how many more wait.
- * `markShown` marks the ones listed shown, once the answer is made. A
- * submit to the claim with no `answers` settles the ones shown before it.
+ * `markShown` marks the ones listed shown, once the answer is made, or
+ * only those on the claims `onClaim` names. A submit to the claim with no
+ * `answers` settles the ones shown before it.
  * Only a follow-up submit_work could take a fix for shows: its PR open,
  * its project asking for help, and the donor not blocked.
  */
 async function followUpsFor(
   person: number,
-): Promise<{ followUps: FollowUp[]; moreFollowUps: number; markShown: (now: number) => Promise<void> }> {
+): Promise<{
+  followUps: FollowUp[];
+  moreFollowUps: number;
+  markShown: (now: number, onClaim?: (claimId: string) => boolean) => Promise<void>;
+}> {
   const { followUps: waiting, waiting: all } = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
   const titles = new Map<string, string>();
   for (const { project, issue } of waiting) {
     if (!titles.has(lower(issue))) titles.set(lower(issue), (await getIssue(env.DB, project, issue))?.title ?? issue);
   }
-  const markShown = (now: number) =>
+  const markShown = (now: number, onClaim: (claimId: string) => boolean = () => true) =>
     markFollowUpsShown(
       env.DB,
-      waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
+      waiting.flatMap(({ record }) => (onClaim(record.claimId) ? [{ claimId: record.claimId, commentId: record.commentId }] : [])),
       now,
     );
   const followUps = waiting.map(({ record, issue, pr, branch }) => ({
@@ -358,7 +413,29 @@ export async function setInterests(caller: Caller, input: ToolInput<'set_interes
   return answer(toolResult('set_interests', { interests: person.interests ?? input }));
 }
 
-export async function myWork(caller: Caller, origin: string, now: number): Promise<Answer> {
+/**
+ * my_work. A call with a wake's ID gives the wake the follow-ups it lists
+ * that the wake wasn't given, on PRs the donor still follows, and records
+ * the wake's run once the answer is made, so a run that fails leaves the
+ * wake to show as stopped. A run that only reports marks no follow-up
+ * shown, so a submit with no answers can't settle one the donor never saw:
+ * a notify wake marks none, and a full or session wake marks only those
+ * on PRs that follow go_ahead. A call with no wake ID is a session the
+ * donor is in, and marks every one it lists.
+ */
+export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin: string, now: number): Promise<Answer> {
+  const wake = input.wakeId === undefined ? null : await getWake(env.DB, caller.githubId, input.wakeId);
+  if (input.wakeId !== undefined && wake === null) {
+    return refuse(
+      refusal(
+        'not_found',
+        `There is no wake ${input.wakeId} for you, so nothing is listed. It may have been removed. Tell the donor to turn its schedule off in the harness.`,
+      ),
+    );
+  }
+  // The login as the donor's last sign-in or session recorded it, so a run
+  // reads GitHub no more than before. A run checks it against gh api user.
+  const { login } = await donorOf(caller);
   // Every unfinished claim is the donor's own record, so each is listed, and
   // one on a project on the do-not-list says to release it.
   const claims = await unfinishedClaims(caller.githubId, now);
@@ -378,16 +455,101 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
     }),
   );
   const followUps = await followUpsFor(caller.githubId);
+  const modes = await followModesOf(caller.githubId);
+  const readInPart = await listReadInPart(env.DB, caller.githubId);
+  const ready = await readyToOpen(caller, origin, now);
+  const openPrs = await openPrsOf(caller.githubId, modes);
+  // This run is the wake's latest, so the wake isn't among those that stopped.
+  const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).filter((stoppedWake) => stoppedWake.id !== wake?.id);
+  const followed = followUps.followUps
+    .filter((followUp) => modes.of(followUp.claimId) !== 'off')
+    .map((followUp) => ({ claimId: followUp.claimId, followUpId: followUp.followUpId }));
+  // Given in one statement, so two runs of the wake at once don't both report one.
+  const newForWake = wake === null ? null : await giveToWake(env.DB, wake.id, followed, now);
   const result = toolResult('my_work', {
+    login,
     followUps: followUps.followUps,
     moreFollowUps: followUps.moreFollowUps,
-    readInPart: await listReadInPart(env.DB, caller.githubId),
-    readyToOpen: await readyToOpen(caller, origin, now),
+    readInPart,
+    readyToOpen: ready,
     working,
-    openPrs: await listOpenPrsOf(env.DB, caller.githubId),
+    openPrs,
+    followMode: modes.choice,
+    wake: wake === null ? null : wakeOut({ ...wake, lastRunAt: Math.max(wake.lastRunAt ?? now, now) }),
+    newForWake,
+    stoppedWakes: stoppedWakes.map(wakeOut),
   });
-  await followUps.markShown(now);
+  // Marked, and the run recorded, only once the answer is made.
+  if (wake === null) await followUps.markShown(now);
+  else if (wake.level !== 'notify') await followUps.markShown(now, (claimId) => modes.of(claimId) === 'go_ahead');
+  if (wake !== null) await recordWakeRun(env.DB, caller.githubId, wake.id, now);
   return answer(result);
+}
+
+/**
+ * set_follow_through: saves the donor's mode for all their PRs or one, and
+ * saves or removes their wakes. Every check comes first, and the change is
+ * made in one batch, so a refusal changes nothing. A PR takes a mode only
+ * while it is open, on the donor's own claim. A wake is removed only when
+ * it is the donor's.
+ */
+export async function setFollowThrough(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<Answer> {
+  if ((await getPerson(env.DB, caller.githubId)) === null) {
+    return refuse(refusal('not_found', 'Call start_session first, then save follow-through.'));
+  }
+  if (input.claimId !== undefined) {
+    const claim = await ownClaim(caller, input.claimId);
+    if (isRefusal(claim)) return refuse(claim);
+    const pr = await getPr(env.DB, claim.id);
+    if (pr === null) {
+      return refuse(
+        refusal('not_found', `Claim ${claim.id} has no PR recorded, so it has no PR to follow. Once its PR is open on GitHub, record it with record_pr. Nothing changed.`),
+      );
+    }
+    if (pr.state !== 'open') {
+      const ended = pr.state === 'merged' ? 'merged' : 'closed without merging';
+      return refuse(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so there is nothing to follow. Nothing changed.`));
+    }
+  }
+  const wakes = await listWakes(env.DB, caller.githubId);
+  if (input.removeWake !== undefined && !wakes.some((wake) => wake.id === input.removeWake)) {
+    return refuse(refusal('not_found', `There is no wake ${input.removeWake} for you, so nothing changed.`));
+  }
+  const full = refusal(
+    'rate_limited',
+    `The donor has ${String(MAX_WAKES)} wakes, the most one donor keeps, so nothing changed. Remove one with removeWake in the same call.`,
+  );
+  const kept = wakes.length - (input.removeWake === undefined ? 0 : 1);
+  if (input.wake !== undefined && kept >= MAX_WAKES) return refuse(full);
+  const changed = await saveFollowThrough(
+    env.DB,
+    caller.githubId,
+    {
+      mode: input.mode === undefined ? undefined : { mode: input.mode, claimId: input.claimId },
+      remove: input.removeWake,
+      save: input.wake,
+    },
+    now,
+  );
+  // Another call saved a wake meanwhile and took the last place, so the batch changed nothing.
+  if (input.wake !== undefined && changed.saved === null) return refuse(full);
+  const modes = await followModesOf(caller.githubId);
+  const prs = (await listOpenPrsOf(env.DB, caller.githubId)).map((open) => ({
+    claimId: open.claimId,
+    issue: open.issue,
+    pr: open.pr,
+    followMode: modes.of(open.claimId),
+    own: modes.own.has(open.claimId),
+  }));
+  return answer(
+    toolResult('set_follow_through', {
+      followMode: modes.choice,
+      prs,
+      savedWake: changed.saved === null ? null : wakeOut(changed.saved),
+      removedWake: changed.removed ? (input.removeWake ?? null) : null,
+      wakes: (await listWakes(env.DB, caller.githubId)).map(wakeOut),
+    }),
+  );
 }
 
 /**

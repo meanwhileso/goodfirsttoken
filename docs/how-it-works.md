@@ -2368,10 +2368,10 @@ the first question included.
 
 ## The donor's tools
 
-A donor's agent works through thirteen tools: `start_session`,
+A donor's agent works through fourteen tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
 `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`,
-`check_pr`, `sort_follow_ups`, and `request_repo`, which asks for a repo that isn't listed,
+`check_pr`, `sort_follow_ups`, `set_follow_through`, and `request_repo`, which asks for a repo that isn't listed,
 under [Requesting a repo](#requesting-a-repo). Each acts as the caller
 alone, and reads and writes GitHub with the caller's own token, for their
 own claim only. `request_repo` only reads, for the caller's own request.
@@ -2414,7 +2414,8 @@ token or other donor's ever does their work.
   one the do-not-list names, or one on a delisted project, as for ended
   PRs: each one's claim, issue,
   and PR, and `reviews`, how many reviews GitHub counted on it at the last
-  read, pending and dismissed ones left out. The skills read each on GitHub
+  read, pending and dismissed ones left out, and how it is followed, under
+  Follow-through below. The skills read each on GitHub
   with the donor's own account, and call `check_pr` only for one that
   merged, closed, or has more reviews than that, under Checked on request
   in [PRs](#prs).
@@ -2429,7 +2430,10 @@ token or other donor's ever does their work.
   delisted project is titled by its issue alone, like `owner/repo#n`,
   since nothing cached from the repo shows. It also lists the donor's work
   waiting to open as a PR, under The review queue below, and the same
-  follow-ups and PRs read in part `start_session` gives.
+  follow-ups and PRs read in part `start_session` gives. It names the
+  donor's login as their last sign-in or `start_session` recorded it,
+  under [People](#people), so a run can check that `gh api user` gives
+  the same login before it writes to GitHub.
 - A session belongs to the donor who started it. Another donor who names it
   finds no session, and is refused with `not_found`.
 
@@ -2514,6 +2518,56 @@ under Follow-ups in [PRs](#prs).
   the branch, commits the fix with the project's trailer, pushes it, and
   submits the new head with `submit_work`, under Submitting below.
 - Once the PR merges or closes, its follow-ups show no more.
+
+**Follow-through.** The donor chooses how their agent follows their PRs,
+and their agent saves wakes, which start its runs in a harness, under
+[Follow each PR to its end](specs/follow-through.md).
+
+- A mode is `go_ahead`, where the agent answers follow-ups, pushes fixes,
+  and replies on GitHub as the donor, then tells them, or `ask_first`,
+  where it tells the donor what came in and decides with them. A donor
+  who never chose follows `go_ahead`.
+- `set_follow_through` saves the donor's mode for all their PRs, which
+  takes the place of each PR's own `go_ahead` or `ask_first`. With a
+  claim, it saves a mode for that claim's PR alone, or `off`, which stops
+  following it. A PR the donor stopped following stays `off` when they
+  set a mode for all their PRs. The answer gives the donor's mode, whether
+  they chose it, and each open PR's mode, and whether that mode is the
+  PR's own.
+- `start_session`, `my_work`, and `record_pr` give the donor's mode and
+  whether they chose it. When they haven't, and have a PR open, the text
+  tells the agent to ask them. Each open PR `start_session` and `my_work`
+  list gives how it is followed.
+- `set_follow_through` also saves a wake: its harness, the level a run
+  there has, `full`, `notify`, or `session`, and how often it runs, from
+  1 to 1,440 minutes. The answer gives the wake's ID, which goes in the
+  wake's prompt. A level above the one the harness can have, as `full`
+  for ChatGPT, which has no git, is refused as a bad input. It removes a
+  wake by its ID, and can remove one and save another in one call. A
+  donor keeps at most 10.
+- Only the donor's own claim takes a mode. Another donor's claim is
+  refused with `not_claim_owner`. A claim with no PR recorded is refused
+  with `not_found`, and one whose PR merged or closed with `pr_closed`.
+  A wake ID that isn't the donor's is refused with `not_found`, and an
+  11th wake with `rate_limited`. Every check comes before any change, and
+  the change is made in one batch, so a refusal changes nothing.
+- A run a wake started passes the wake's ID to `my_work`, which lists
+  `newForWake`: the follow-ups it lists that the wake wasn't given before,
+  on PRs the donor still follows. Each wake is given a follow-up once,
+  even when two of its runs call at once. Once the answer is made,
+  `my_work` records when the wake last ran. An ID that names no wake of
+  the donor's is refused with `not_found`.
+- A run that only reports marks no follow-up shown, so a submit with no
+  `answers` can't settle one the donor never saw. A `notify` wake's call
+  marks none. A `full` or `session` wake's marks only those on PRs that
+  follow `go_ahead`. A call with no wake ID, in a session the donor is in,
+  marks every one it lists, as before.
+- A wake that stopped is one with no run for 24 hours past its interval,
+  or none that long since it was saved, while one of the donor's PRs is
+  open. The interval keeps a daily wake that runs a little late from
+  looking stopped. A `session` wake is never stopped, since it runs only
+  while a session does. `start_session` and `my_work` list each, with
+  when it last ran.
 
 **When the donor's PR ends.** Once the PR job or a check records a claim's
 PR merged, or closed without merging, the donor's next `start_session`
@@ -4138,8 +4192,8 @@ what the day used of its budget.
 ## MCP tools
 
 The input and output of every tool are defined in `packages/core`, each with
-a description for agents. The MCP server serves all twenty-four, with the
-inputs, outputs, and descriptions defined here: the donor's twelve, under
+a description for agents. The MCP server serves all twenty-six, with the
+inputs, outputs, and descriptions defined here: the donor's fourteen, under
 [The donor's tools](#the-donors-tools) and
 [Requesting a repo](#requesting-a-repo), the maintainer's five, under
 [Registering a project](#registering-a-project),
@@ -4149,7 +4203,7 @@ inputs, outputs, and descriptions defined here: the donor's twelve, under
 
 | Who | Tools |
 |---|---|
-| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `check_pr`, `set_interests`, `request_repo` |
+| Donors | `start_session`, `suggest_issues`, `claim_issue`, `post_update`, `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`, `check_pr`, `sort_follow_ups`, `set_follow_through`, `set_interests`, `request_repo` |
 | Maintainers | `register_project`, `update_project`, `project_status`, `pause_project`, `request_removal` |
 | Admins only | `admin_queue`, `admin_decide`, `admin_add_project`, `admin_block_donor`, `admin_pause_project`, `admin_remove_project`, `admin_seed_repo` |
 
@@ -4268,10 +4322,13 @@ tool say what to do with each one on its list, under
 | `claim_issue` | `not_found`, `donor_blocked`, `budget_spent`, `project_not_open`, `issue_not_eligible`, `pr_exists`, `issue_full`, `open_pr_cap`, `not_vouched`, `cla_required` |
 | `post_update` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_closed` |
 | `release_claim` | `not_found`, `not_claim_owner`, `claim_released`, `claim_expired`, `pr_already_opened` |
-| `my_work` | None |
+| `my_work` | `not_found` |
 | `submit_work` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `pr_closed`, `issue_not_eligible`, `skill_outdated`, `no_changes`, `github_refused`, `branch_not_found`, `branch_elsewhere`, `not_from_start`, `trailer_missing` |
 | `open_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_submitted`, `pr_already_opened`, `description_required`, `open_pr_cap`, `issue_not_eligible`, `branch_moved` |
 | `record_pr` | `not_found`, `not_claim_owner`, `donor_blocked`, `project_not_open`, `claim_released`, `claim_expired`, `not_cleared`, `pr_mismatch`, `pr_already_opened` |
+| `check_pr` | `not_found`, `not_claim_owner`, `donor_blocked` |
+| `sort_follow_ups` | `not_found`, `not_claim_owner`, `donor_blocked`, `pr_closed` |
+| `set_follow_through` | `not_found`, `not_claim_owner`, `pr_closed`, `rate_limited` |
 | `request_repo` | `donor_blocked`, `repo_not_eligible`, `rate_limited`, `invalid_input` |
 
 - No agent gets `not_admin` from an admin's tool. The server serves those
@@ -5445,6 +5502,9 @@ Each limit the schemas enforce, other than those under project settings:
 | Follow-ups one submit's `answers`, or one `sort_follow_ups`, names | 100 | Us |
 | A question for the donor on a follow-up | 2,000 characters once folded to one line, and 8,000 before | Us |
 | Open PRs `start_session` and `my_work` list | 50, oldest first | Us |
+| Wakes one donor keeps | 10 | Us |
+| How often a wake runs | Every 1 to 1,440 minutes | Us |
+| A wake with no run that `start_session` and `my_work` say stopped | 24 hours past its interval, while one of the donor's PRs is open | [Follow each PR to its end](specs/follow-through.md), and us for the interval |
 | Reads of PRs that `check_pr` asks for, across the whole site | One at a time, at most one every 2 seconds and 300 in any hour, 30 checks an hour from one donor, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, and only while more of the service token's budget is left than any scheduled job leaves | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
 | Suggestions left out with `exclude` | 100 | Us |

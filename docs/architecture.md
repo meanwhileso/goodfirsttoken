@@ -541,7 +541,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 
 | File | What it does |
 |---|---|
-| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `sort_follow_ups`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list |
+| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `sort_follow_ups`, `set_follow_through`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list, and `followModesOf` adds each one's mode from `src/db/follow-through.ts` |
 | `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
@@ -685,7 +685,18 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   that each ID in `answers` is the claim's. `sort_follow_ups` checks its
   IDs the same way, then sets them all in one `UPDATE ... FROM json_each
   ... RETURNING` with `sortFollowUps`, which leaves a follow-up settled as
-  `fixed` or `superseded` as it is and gives the IDs it changed. `listEndedToOffer` in
+  `fixed` or `superseded` as it is and gives the IDs it changed.
+  `my_work` with a wake's ID gives the wake what it lists with
+  `giveToWake`, one `INSERT ... ON CONFLICT DO NOTHING RETURNING`, so two
+  runs of one wake at once never both get a follow-up. Once the answer is
+  made, `markFollowUpsShown` marks only what the wake's level lets it:
+  none for `notify`, and only follow-ups on PRs that follow `go_ahead` for
+  `full` and `session`, and `recordWakeRun` records the run, keeping the
+  later of two times. `set_follow_through` makes its checks, then
+  `saveFollowThrough` makes the whole change in one batch: the new wake
+  first, saved only while the donor keeps fewer than 10, and each other
+  statement only once the new wake is there, so a wake past the limit
+  changes nothing. `listEndedToOffer` in
   `src/db/prs.ts` reads the donor's merged and closed PRs no session
   offered, by `SHOWN`, the rule for the merged PRs the site shows, and
   once `start_session`'s answer is made, `markEndedOffered` marks them in
@@ -1624,6 +1635,10 @@ in `people`.
 | `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
 | `follow_ups` | What the PR job read on a claim's open PR that a donor's agent answers: a maintainer's or a review bot's review, comment on a line, or comment in the conversation, or the PR's failed checks or conflict. Its kind, GitHub's ID for it, or the SHAs for checks and a conflict, the author and whether a maintainer or a bot, the text folded and cut, the file, the link, when it was written and read, when a tool showed it and when it settled, its state and outcome, the agent's question for the donor, and the link of the agent's reply | `claim_id`, `comment_id` |
 | `repo_pushers` | Login whose review on a PR in a repo showed push access when the PR job read it, and when it last did. A comment in the conversation counts as a maintainer's by it, for 90 days | `repo`, `login` |
+| `follow_modes` | The follow-through mode a donor chose for all their PRs, `go_ahead` or `ask_first`, and when. A donor with no row follows `go_ahead` | `github_id` |
+| `pr_follow_modes` | The mode a donor chose for one claim's PR, `go_ahead`, `ask_first`, or `off`, and when | `claim_id` |
+| `wakes` | What starts a donor's follow-through runs: its harness, its level, how often it runs, when it was saved, and when a run last called `my_work` with its ID | `id` |
+| `wake_follow_ups` | The follow-ups `my_work` gave each wake as `newForWake`, and when | `wake_id`, `claim_id`, `comment_id` |
 | `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, `open_pr`'s clearance of pushed work, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
@@ -1766,6 +1781,13 @@ that break the rules, so it returns the problems for the caller to show.
   link on each `replied`, and `superseded` on checks and a conflict alone.
   Its test makes the table as the migration before made it, stores rows
   that way, and runs the new migration from `TEST_MIGRATIONS`.
+- **Migration `20261108202229_follow_through.sql`** makes `follow_modes`,
+  `pr_follow_modes`, `wakes`, and `wake_follow_ups`, owned by
+  `src/db/follow-through.ts`. `CHECK`s keep each mode, harness, and level
+  to the names `packages/core/src/follow-through.ts` gives, and a wake's
+  interval from 1 to 1,440 minutes. `wake_follow_ups` names a follow-up by
+  its claim and ID with no foreign key to `follow_ups`, which migrations
+  make again.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -1836,7 +1858,8 @@ only its donor's `start_session` and `my_work` show it. `prs.offered_at`,
 `follow_ups.outcome` say what the donor's agent was shown and did. Only
 the donor's own tools show a follow-up's state, its `question`, which
 their agent wrote for them, and its `reply_url`, a link to a reply on
-GitHub.
+GitHub. Only the donor's own tools show their follow-through modes and
+their wakes, with when each last ran.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -1934,6 +1957,7 @@ pruning after a sync, with no index of its own.
 | `prs_by_opened` | PRs opened in a time range, like this week |
 | `prs_by_closed` | PRs merged or closed in a time range, like this week, and the PRs closed in the last 14 days the PR job reads |
 | `prs_reread_due` | The issues of PRs closed without merging that wait for the PR job to read them again: those whose read never failed, oldest close first, then the rest, oldest failure first |
+| `wakes_by_person` | A donor's wakes, oldest first, for `set_follow_through`, and those that stopped, for `start_session` and `my_work` |
 | `donor_sessions_by_person` | A donor's last session, and in migration `0010_follow_ups.sql`, whether a merged PR's donor started a session since it merged |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
@@ -2997,6 +3021,7 @@ and count the hour's reads in one place. The rules are in
 | `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, what the donor's tools showed, and where each follow-up stands, as a submit, `sort_follow_ups`, or a read that superseded it left it |
+| `src/db/follow-through.ts` | The `follow_modes`, `pr_follow_modes`, `wakes`, and `wake_follow_ups` tables: the donor's mode for all their PRs and for one, their wakes and when each last ran, what `my_work` gave each wake, and `listStoppedWakes`, the wakes with no run for 24 hours past their interval while a PR of the donor's is open, which `start_session` and `my_work` list and `/me` can |
 | `src/db/pushers.ts` | The `repo_pushers` table: who showed push access to each repo in a review, for the PR job's reads of conversation comments |
 | `src/sync/scheduled.ts` | The crons, and the job each cron runs |
 | `src/sync/allowances.ts` | What each job that reads GitHub with the service token may spend, in `ALLOWANCES`, and the token itself |

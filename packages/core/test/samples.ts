@@ -64,7 +64,18 @@ const askedDonor = {
 
 const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3, conversation: 4, conversationRead: 4 };
 
-const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2 };
+const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2, followMode: 'ask_first' as const };
+
+const unchosen = { mode: 'go_ahead' as const, chosen: false };
+
+const stoppedWake = {
+  wakeId: 'w_desktop',
+  harness: 'claude-code-desktop' as const,
+  level: 'full' as const,
+  intervalMinutes: 15,
+  createdAt: at,
+  lastRunAt: at,
+};
 
 const counts = { taggedIssues: 3, working: 2, openPrs: 1, merged: 14 };
 
@@ -84,9 +95,15 @@ export const samples: Samples = {
         { issue: `${repo}#912`, title, pr: { ...pr, number: 958, url: `https://github.com/${repo}/pull/958` }, outcome: 'closed', shareUrl: null },
       ],
       openPrs: [openPr],
+      followMode: unchosen,
+      stoppedWakes: [stoppedWake],
       skillUpdate: { latest: '0.6.10', yours: '0.6.5' },
     },
     mentions: [
+      "The donor hasn't chosen how their agent follows their PRs, so they follow go_ahead.",
+      "Wakes that stopped (1). None ran for 24 hours past its interval while one of the donor's PRs is open.",
+      'wake w_desktop: claude-code-desktop, full, every 15 minutes, last ran 2026-09-26 12:00 UTC',
+      'follow-through: ask_first',
       '@priya',
       'A newer Good First Token skill is out: 0.6.10. This one is 0.6.5. Tell the donor before you claim anything.',
       'claude plugin update goodfirsttoken@goodfirsttoken',
@@ -238,8 +255,18 @@ export const samples: Samples = {
       ],
       working: [{ ...claim, resumable: true, reason: null }],
       openPrs: [openPr],
+      login: 'priya',
+      followMode: { mode: 'ask_first', chosen: true },
+      wake: { ...stoppedWake, wakeId: 'w_cloud', harness: 'claude-code-cloud', level: 'notify', intervalMinutes: 60, lastRunAt: later },
+      newForWake: [{ claimId: 'c_0', followUpId: 'IC_kwDOAbc2' }],
+      stoppedWakes: [stoppedWake],
     },
     mentions: [
+      'Signed in as @priya.',
+      'This run is wake w_cloud: claude-code-cloud, notify, every 60 minutes, last ran 2026-09-27 12:00 UTC.',
+      'this call marked no follow-up shown',
+      'New for wake w_cloud (1): claim c_0 · follow-up IC_kwDOAbc2',
+      'wake w_desktop: claude-code-desktop, full',
       '> Can the formatter skip events with an empty text field?',
       'claim c_0 · follow-up PRRC_kwDOAbc1 · PR',
       'claim c_0 · follow-up IC_kwDOAbc2 · PR',
@@ -280,8 +307,8 @@ export const samples: Samples = {
     mentions: ['Cleared claim c_2', 'gh pr create', 'Then call record_pr'],
   },
   record_pr: {
-    output: { claimId: 'c_2', issue, state: 'pr_opened', pr },
-    mentions: ['Recorded PR #957', pr.url],
+    output: { claimId: 'c_2', issue, state: 'pr_opened', pr, followMode: unchosen },
+    mentions: ['Recorded PR #957', pr.url, 'Ask the donor, then save the choice with set_follow_through.'],
   },
   check_pr: {
     output: {
@@ -315,6 +342,28 @@ export const samples: Samples = {
       'follow-up PRR_kwDOAbc3 (review): settled, replied',
       'follow-up abc1234 (checks): settled, superseded, left as it was, since a new read superseded it',
       'Tell the donor each question.',
+    ],
+  },
+  set_follow_through: {
+    output: {
+      followMode: { mode: 'go_ahead', chosen: true },
+      prs: [
+        { claimId: 'c_0', issue: `${repo}#912`, pr, followMode: 'off', own: true },
+        { claimId: 'c_2', issue, pr: { ...pr, number: 958, url: `${pr.url.slice(0, -3)}958` }, followMode: 'go_ahead', own: false },
+      ],
+      savedWake: { ...stoppedWake, wakeId: 'w_new', lastRunAt: null },
+      removedWake: 'w_old',
+      wakes: [stoppedWake, { ...stoppedWake, wakeId: 'w_new', lastRunAt: null }],
+    },
+    mentions: [
+      "The donor's PRs follow go_ahead: the agent answers follow-ups, pushes fixes, and replies on GitHub as the donor",
+      "The donor's open PRs (2):",
+      'claim c_0 · off: the donor stopped following it, set for this PR',
+      "claim c_2 · go_ahead, the donor's mode",
+      'Removed wake w_old. Turn its schedule off in the harness too',
+      'Saved wake w_new: claude-code-desktop, full, every 15 minutes, no run yet.',
+      "Put the ID w_new in the wake's prompt",
+      "The donor's wakes (2):",
     ],
   },
   request_repo: {

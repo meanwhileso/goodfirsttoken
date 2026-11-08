@@ -33,6 +33,13 @@ and you open its PR at once.
    the donor the body to paste. When the GitHub CLI says a PR already
    exists for the branch, that is the one to record. Then call `record_pr`
    with the PR's link, and tell the donor the link.
+   When its answer says the donor hasn't chosen how their agent follows
+   their PRs, ask them now, with `go_ahead` first. Say what it means: their
+   agent replies on GitHub as them, pushes to the PR's branch, and spends
+   their tokens on scheduled runs. With `ask_first`, their agent tells them
+   what came in and decides with them. Save their answer with
+   `set_follow_through` and `mode`. When they don't answer, save nothing.
+   A donor who never chose follows `go_ahead`.
 7. Cleared work stays under `readyToOpen`, waiting as `ready_to_open`,
    until its PR is recorded. Its `toOpen` is the PR to open, as `open_pr`
    gave it. Open it as in step 6. Its body is in a fenced block. Send what

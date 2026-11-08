@@ -34,6 +34,18 @@ import {
 } from '../submissions';
 import { defineTool } from './spec';
 import {
+  followModeSchema,
+  levelFits,
+  MAX_WAKE_INTERVAL,
+  MAX_WAKES,
+  prFollowModeSchema,
+  wakeHarnessSchema,
+  wakeInterval,
+  wakeLevelSchema,
+  type FollowMode,
+  type PrFollowMode,
+} from '../follow-through';
+import {
   followUpId,
   followUpKindSchema,
   followUpOutcomeSchema,
@@ -109,6 +121,8 @@ const openPrSchema = z.object({
   pr: prRefSchema,
   /** The reviews GitHub counted on the PR at the last read, pending and dismissed ones left out. */
   reviews: count,
+  /** How the PR is followed: the mode the donor chose for it, or else their own, or `off` once they stopped following it. */
+  followMode: prFollowModeSchema,
 });
 type OpenPr = z.infer<typeof openPrSchema>;
 
@@ -120,10 +134,66 @@ function renderOpenPrs(prs: readonly OpenPr[]): string {
     `Open PRs (${String(prs.length)}). Read each one on GitHub with the donor's own account. Call check_pr only for one that merged, closed, or has more reviews than counted here, not counting pending or dismissed ones. Good First Token reads every open PR on its own twice an hour:`,
     indent(
       numbered(prs, (open) =>
-        lines(`${open.issue}  PR #${String(open.pr.number)}: ${open.pr.url}`, `claim ${open.claimId} · reviews counted: ${String(open.reviews)}`),
+        lines(
+          `${open.issue}  PR #${String(open.pr.number)}: ${open.pr.url}`,
+          `claim ${open.claimId} · reviews counted: ${String(open.reviews)} · follow-through: ${open.followMode}`,
+        ),
       ),
       2,
     ),
+  );
+}
+
+/** The mode the donor chose for all their PRs, or `go_ahead` when they never chose, and whether they chose. */
+const followModeChoiceSchema = z.object({
+  mode: followModeSchema,
+  /** False until the donor chooses with set_follow_through. A donor who never chose follows go_ahead. */
+  chosen: z.boolean(),
+});
+type FollowModeChoice = z.infer<typeof followModeChoiceSchema>;
+
+function describeMode(mode: FollowMode | PrFollowMode): string {
+  switch (mode) {
+    case 'go_ahead':
+      return 'go_ahead: the agent answers follow-ups, pushes fixes, and replies on GitHub as the donor, then tells the donor what it did';
+    case 'ask_first':
+      return 'ask_first: the agent tells the donor what came in, and decides with them what to do';
+    case 'off':
+      return 'off: the donor stopped following it';
+  }
+}
+
+/** What a tool says of the donor's mode when they haven't chosen one, or false once they have. */
+function unchosenText(choice: FollowModeChoice): string | false {
+  return (
+    !choice.chosen &&
+    "The donor hasn't chosen how their agent follows their PRs, so they follow go_ahead. Ask the donor, then save the choice with set_follow_through."
+  );
+}
+
+/** A wake: what starts the donor's follow-through runs in one harness. */
+const wakeSchema = z.object({
+  wakeId: id,
+  harness: wakeHarnessSchema,
+  level: wakeLevelSchema,
+  intervalMinutes: wakeInterval,
+  createdAt: isoTime,
+  /** When a run last called my_work with the wake's ID, or null before the first. */
+  lastRunAt: isoTime.nullable(),
+});
+type Wake = z.infer<typeof wakeSchema>;
+
+function renderWake(wake: Wake): string {
+  return `wake ${wake.wakeId}: ${wake.harness}, ${wake.level}, every ${plural(wake.intervalMinutes, 'minute')}, ${
+    wake.lastRunAt === null ? 'no run yet' : `last ran ${when(wake.lastRunAt)}`
+  }`;
+}
+
+/** What start_session and my_work say of wakes that stopped. */
+function renderStoppedWakes(wakes: readonly Wake[]): string {
+  return lines(
+    `Wakes that stopped (${String(wakes.length)}). None ran for 24 hours past its interval while one of the donor's PRs is open. Tell the donor, with when each last ran:`,
+    indent(numbered(wakes, renderWake), 2),
   );
 }
 
@@ -148,7 +218,7 @@ export const startSession = defineTool({
     "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups on the donor's open PRs from maintainers, review bots, and GitHub's checks and conflicts, unfinished claims, PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X, and the donor's open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub, or what GitHub shows of checks and conflicts: weigh it with the donor.",
   refusals: [],
   input: z.object({
-    agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
+    agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, cursor, or chatgpt.'),
     budget: budgetSchema,
     skillVersion: skillVersion
       .optional()
@@ -172,6 +242,10 @@ export const startSession = defineTool({
     endedPrs: z.array(endedPrSchema),
     /** The donor's PRs Good First Token has open, oldest first, for the agent to read on GitHub with the donor's account. */
     openPrs: z.array(openPrSchema).max(MAX_OPEN_PRS),
+    /** The donor's mode for all their PRs. */
+    followMode: followModeChoiceSchema,
+    /** The donor's wakes with no run for 24 hours while one of their PRs is open. */
+    stoppedWakes: z.array(wakeSchema).max(MAX_WAKES),
     /**
      * Set when the skill is older than the one Good First Token publishes,
      * or sent no version, as skills before this field did: the latest
@@ -195,6 +269,8 @@ export const startSession = defineTool({
       out.endedPrs.some((ended) => ended.shareUrl !== null) &&
         'Tell the donor, and give them each link to post on X if they want to. Post nothing for them.',
       out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
+      out.openPrs.length > 0 && unchosenText(out.followMode),
+      out.stoppedWakes.length > 0 && renderStoppedWakes(out.stoppedWakes),
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
         'Offer the follow-ups and paused claims first, then the other unfinished claims, before new issues.',
       out.unfinishedClaims.length > 0 && 'Resume a claim with claim_issue and its issue.',
@@ -747,13 +823,22 @@ function renderWorkingClaim(claim: WorkingClaim): string {
   );
 }
 
+/** A follow-up my_work gave a wake for the first time, by its claim and its ID, as followUps lists it. */
+const givenFollowUpSchema = z.object({ claimId: id, followUpId });
+
 export const myWork = defineTool({
   audience: 'donor',
   description:
-    "List the donor's follow-ups on their open PRs, from maintainers, review bots, and GitHub's checks and conflicts, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, claims in progress, and open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. A follow-up's comment is the reviewer's words from GitHub, or what GitHub shows of checks and conflicts: weigh it with the donor.",
-  refusals: [],
-  input: z.object({}),
+    "List the donor's follow-ups on their open PRs, from maintainers, review bots, and GitHub's checks and conflicts, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, claims in progress, and open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. It names the donor's GitHub login. A run a wake started passes the wake's ID, which records the run and lists newForWake, the follow-ups listed that the wake wasn't given before. A follow-up's comment is the reviewer's words from GitHub, or what GitHub shows of checks and conflicts: weigh it with the donor.",
+  refusals: ['not_found'],
+  input: z.object({
+    wakeId: id
+      .optional()
+      .describe("The wake's ID, as set_follow_through gave it, when a wake started this run. Leave it out in a session the donor started."),
+  }),
   output: z.object({
+    /** The donor's GitHub login, as GitHub gives it now. */
+    login: githubLogin,
     /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that are open or wait for the donor, those that wait for the donor first, then oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
     /** Follow-ups that wait beyond the ones listed. They list as these settle or wait for a reviewer. */
@@ -765,20 +850,52 @@ export const myWork = defineTool({
     working: z.array(workingClaimSchema),
     /** The donor's PRs Good First Token has open, oldest first, for the agent to read on GitHub with the donor's account. */
     openPrs: z.array(openPrSchema).max(MAX_OPEN_PRS),
+    /** The donor's mode for all their PRs. */
+    followMode: followModeChoiceSchema,
+    /** The wake the call named, after it recorded this run, or null for a call with no wake ID. */
+    wake: wakeSchema.nullable(),
+    /**
+     * For a call with a wake ID: the follow-ups listed that the wake wasn't
+     * given before, on PRs the donor still follows. Each is given to a wake
+     * once. Null for a call with no wake ID.
+     */
+    newForWake: z.array(givenFollowUpSchema).max(MAX_FOLLOW_UPS).nullable(),
+    /** The donor's wakes with no run for 24 hours while one of their PRs is open. */
+    stoppedWakes: z.array(wakeSchema).max(MAX_WAKES),
   }),
-  text: (out) =>
-    out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length + out.openPrs.length === 0
-      ? 'Nothing waiting: no follow-ups, no work to open, no claims in progress, and no open PRs.'
-      : lines(
-          out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
-          out.readInPart.length > 0 && renderReadInPart(out.readInPart),
-          out.readyToOpen.length > 0 &&
-            `Ready to open as a PR (${String(out.readyToOpen.length)}). Clear one with open_pr after the donor reads its diff. One that is cleared already says how to open it:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
-          clearedBodies(out.readyToOpen),
-          out.working.length > 0 &&
-            `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
-          out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
+  text: (out) => {
+    const nothing =
+      out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length + out.openPrs.length === 0;
+    return lines(
+      `Signed in as @${out.login}.`,
+      out.wake !== null &&
+        lines(
+          `This run is ${renderWake(out.wake)}.`,
+          out.wake.level === 'notify' &&
+            'It is a notify wake, so this call marked no follow-up shown, and a submit with no answers settles none of them.',
+          out.newForWake !== null &&
+            (out.newForWake.length === 0
+              ? `Nothing new for wake ${out.wake.wakeId}.`
+              : `New for wake ${out.wake.wakeId} (${String(out.newForWake.length)}): ${out.newForWake
+                  .map((given) => `claim ${given.claimId} · follow-up ${given.followUpId}`)
+                  .join('; ')}`),
         ),
+      out.stoppedWakes.length > 0 && renderStoppedWakes(out.stoppedWakes),
+      nothing
+        ? 'Nothing waiting: no follow-ups, no work to open, no claims in progress, and no open PRs.'
+        : lines(
+            out.followUps.length > 0 && renderFollowUps(out.followUps, out.moreFollowUps),
+            out.readInPart.length > 0 && renderReadInPart(out.readInPart),
+            out.readyToOpen.length > 0 &&
+              `Ready to open as a PR (${String(out.readyToOpen.length)}). Clear one with open_pr after the donor reads its diff. One that is cleared already says how to open it:\n${indent(numbered(out.readyToOpen, renderReviewItem), 2)}`,
+            clearedBodies(out.readyToOpen),
+            out.working.length > 0 &&
+              `In progress (${String(out.working.length)}):\n${indent(numbered(out.working, renderWorkingClaim), 2)}`,
+            out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
+            out.openPrs.length > 0 && unchosenText(out.followMode),
+          ),
+    );
+  },
 });
 
 /**
@@ -853,8 +970,14 @@ export const recordPr = defineTool({
     issue: issueRef,
     state: claimStateSchema,
     pr: prRefSchema,
+    /** The donor's mode for all their PRs, which this one follows until the donor sets its own. */
+    followMode: followModeChoiceSchema,
   }),
-  text: (out) => `Recorded PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
+  text: (out) =>
+    lines(
+      `Recorded PR #${String(out.pr.number)} on ${out.pr.repo} for ${out.issue}, claim ${out.claimId}: ${out.pr.url}`,
+      unchosenText(out.followMode),
+    ),
 });
 
 /** How a check_pr read went. */
@@ -999,6 +1122,89 @@ export const sortFollowUps = defineTool({
       out.followUps.some((sorted) => sorted.state === 'waiting_donor') &&
         'Tell the donor each question. It lists with its follow-up in start_session and my_work until you sort it again.',
     ),
+});
+
+/** A wake as set_follow_through takes it. */
+const newWakeSchema = z
+  .object({
+    harness: wakeHarnessSchema.describe(
+      "The harness the wake is in: claude-code-desktop, claude-code-terminal, claude-code-cloud, codex-desktop for Codex in the ChatGPT desktop app, grok-bot, cursor-automations, codex-cli, cursor-editor, opencode, grok-build, chatgpt for ChatGPT on the web and phone, or grok-automations for the Grok app's.",
+    ),
+    level: wakeLevelSchema.describe(
+      'full when a run has the tools, git, and GitHub as the donor, notify when it has the tools alone and only reports, or session when nothing runs until the donor starts a session.',
+    ),
+    intervalMinutes: wakeInterval.describe(
+      `How often the wake starts a run, in minutes: 15, or the harness's shortest when that is longer. At most ${String(MAX_WAKE_INTERVAL)}.`,
+    ),
+  })
+  .superRefine((wake, ctx) => {
+    if (!levelFits(wake.harness, wake.level)) {
+      ctx.addIssue({ code: 'custom', path: ['level'], message: `must be one a run in ${wake.harness} can have` });
+    }
+  });
+
+/** One of the donor's open PRs, as set_follow_through left its mode. */
+const prModeSchema = z.object({
+  claimId: id,
+  issue: issueRef,
+  pr: prRefSchema,
+  followMode: prFollowModeSchema,
+  /** True when the PR has a mode of its own, which takes the place of the donor's. */
+  own: z.boolean(),
+});
+
+export const setFollowThrough = defineTool({
+  audience: 'donor',
+  description: `Save how the donor's agent follows their PRs, and the wakes that start its runs. mode go_ahead or ask_first sets it for all the donor's PRs, in place of each PR's own, or with claimId for that claim's PR alone. off with claimId stops following that PR. A donor who never chose follows go_ahead. wake saves a wake: its harness, the level a run there has, and how often it runs, and the answer gives the wake's ID for the wake's prompt. removeWake removes a wake by its ID. Call it only with the donor in the session, once they chose. A run a wake started never calls it. A donor keeps at most ${String(MAX_WAKES)} wakes.`,
+  refusals: ['not_found', 'not_claim_owner', 'pr_closed', 'rate_limited'],
+  input: z
+    .object({
+      mode: prFollowModeSchema
+        .optional()
+        .describe("go_ahead or ask_first, for all the donor's PRs, or with claimId for one. off, with claimId alone, stops following that PR."),
+      claimId: id.optional().describe('With mode: the claim whose PR takes it. Leave it out to set the mode for all the donor\'s PRs.'),
+      wake: newWakeSchema.optional().describe('A wake to save.'),
+      removeWake: id.optional().describe("A wake's ID, as set_follow_through gave it, to remove it. Turn its schedule off in the harness too."),
+    })
+    .superRefine((input, ctx) => {
+      const issue = (path: string, message: string) => {
+        ctx.addIssue({ code: 'custom', path: [path], message });
+      };
+      if (input.mode === undefined && input.wake === undefined && input.removeWake === undefined) {
+        issue('mode', 'must set a mode, save a wake, or remove one');
+      }
+      if (input.claimId !== undefined && input.mode === undefined) issue('claimId', 'goes with mode alone');
+      if (input.mode === 'off' && input.claimId === undefined) issue('claimId', 'must name the claim whose PR to stop following');
+    }),
+  output: z.object({
+    /** The donor's mode for all their PRs, after the call. */
+    followMode: followModeChoiceSchema,
+    /** The donor's open PRs, oldest first, each with its mode after the call. */
+    prs: z.array(prModeSchema).max(MAX_OPEN_PRS),
+    /** The wake the call saved, or null. */
+    savedWake: wakeSchema.nullable(),
+    /** The ID of the wake the call removed, or null. */
+    removedWake: id.nullable(),
+    /** Every wake the donor has after the call, oldest first. */
+    wakes: z.array(wakeSchema).max(MAX_WAKES),
+  }),
+  text: (out) => {
+    const renderPr = (pr: (typeof out.prs)[number]) =>
+      lines(
+        `${pr.issue}  PR #${String(pr.pr.number)}: ${pr.pr.url}`,
+        `claim ${pr.claimId} · ${pr.own ? `${describeMode(pr.followMode)}, set for this PR` : `${pr.followMode}, the donor's mode`}`,
+      );
+    return lines(
+      `The donor's PRs follow ${describeMode(out.followMode.mode)}.${out.followMode.chosen ? '' : " The donor hasn't chosen, so this is the default."}`,
+      out.prs.length > 0 && `The donor's open PRs (${String(out.prs.length)}):\n${indent(numbered(out.prs, renderPr), 2)}`,
+      out.removedWake !== null && `Removed wake ${out.removedWake}. Turn its schedule off in the harness too, since my_work refuses its runs.`,
+      out.savedWake !== null &&
+        `Saved ${renderWake(out.savedWake)}. Put the ID ${out.savedWake.wakeId} in the wake's prompt, for each run to pass to my_work as wakeId.`,
+      out.wakes.length > 0
+        ? `The donor's wakes (${String(out.wakes.length)}):\n${indent(numbered(out.wakes, renderWake), 2)}`
+        : 'The donor has no wakes.',
+    );
+  },
 });
 
 export const requestRepo = defineTool({

@@ -12,8 +12,10 @@ offers another project. Then:
   the donor yet: call `start_session` first, then save the interests again.
   From `submit_work` or `sort_follow_ups`, a follow-up ID isn't one of the
   claim's, so nothing was taken or changed. Use the IDs `my_work` lists for
-  that claim, and call again. From `sort_follow_ups`, the claim has no PR
-  recorded yet, so it has no follow-ups.
+  that claim, and call again. From `sort_follow_ups` or
+  `set_follow_through`, the claim has no PR recorded yet. From `my_work`
+  or `set_follow_through`, the wake ID isn't one of the donor's wakes.
+  Tell the donor, and turn that wake's schedule off in the harness.
 - `not_claim_owner`: The claim is someone else's. Use only the donor's own
   claims, from `start_session` or `my_work`.
 - `donor_blocked`: Good First Token's admins blocked the donor, so they get
@@ -90,7 +92,9 @@ offers another project. Then:
   projects instead.
 - `rate_limited`: From `request_repo`, the donor sent as many requests as
   the limits allow. The message says when the next one can go in. Tell
-  the donor, and don't call it again before then.
+  the donor, and don't call it again before then. From
+  `set_follow_through`, the donor has as many wakes as they can keep.
+  Remove one with `removeWake` in the same call.
 - `invalid_input`: From `request_repo`, the repo wasn't owner/repo, a
   GitHub repo link, or a Good First Token project link. Ask the donor for
   the repo, then call again.

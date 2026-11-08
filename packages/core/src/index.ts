@@ -7,6 +7,7 @@ export * from './claims';
 export * from './crawl';
 export * from './crawl-priority';
 export * from './feed';
+export * from './follow-through';
 export * from './follow-ups';
 export * from './issues';
 export * from './maintainer-post';

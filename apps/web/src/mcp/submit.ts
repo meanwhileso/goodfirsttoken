@@ -24,6 +24,7 @@ import {
   answerFollowUps,
   answerFollowUpsById,
   countOpenPrsByProject,
+  getFollowMode,
   getIssue,
   getPr,
   getProject,
@@ -620,8 +621,11 @@ export async function recordPr(caller: Caller, input: ToolInput<'record_pr'>): P
   const project = await getProject(env.DB, found.project);
   if (project === null) return refuse(refusal('not_found', `${found.project} is no longer a project.`));
   const claim = (await issueRoom(env.ISSUE_ROOM, found.issue).snapshot()).claims.find((held) => held.id === found.id) ?? found;
+  // The PR follows the donor's mode, which the answer gives, so the skill
+  // can ask a donor who never chose.
+  const followMode = await getFollowMode(env.DB, caller.githubId);
   const result = (recorded: { claim: ClaimRecord; pr: PrRef }) =>
-    answer(toolResult('record_pr', { claimId: claim.id, issue: claim.issue, state: recorded.claim.state, pr: recorded.pr }));
+    answer(toolResult('record_pr', { claimId: claim.id, issue: claim.issue, state: recorded.claim.state, pr: recorded.pr, followMode }));
   const named = pullOf(input.pr);
   if (named === null) {
     return refuse(refusal('pr_mismatch', `${input.pr} isn't a link to a PR on GitHub, so nothing was recorded. Send the PR's link, like ${gitHubUrls().web}/owner/repo/pull/12.`));

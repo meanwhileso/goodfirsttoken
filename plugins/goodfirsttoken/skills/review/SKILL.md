@@ -142,6 +142,13 @@ and you open its PR at once.
    the donor the body to paste. When the GitHub CLI says a PR already
    exists for the branch, that is the one to record. Then call `record_pr`
    with the PR's link, and tell the donor the link.
+   When its answer says the donor hasn't chosen how their agent follows
+   their PRs, ask them now, with `go_ahead` first. Say what it means: their
+   agent replies on GitHub as them, pushes to the PR's branch, and spends
+   their tokens on scheduled runs. With `ask_first`, their agent tells them
+   what came in and decides with them. Save their answer with
+   `set_follow_through` and `mode`. When they don't answer, save nothing.
+   A donor who never chose follows `go_ahead`.
 7. Cleared work stays under `readyToOpen`, waiting as `ready_to_open`,
    until its PR is recorded. Its `toOpen` is the PR to open, as `open_pr`
    gave it. Open it as in step 6. Its body is in a fenced block. Send what
@@ -472,8 +479,10 @@ offers another project. Then:
   the donor yet: call `start_session` first, then save the interests again.
   From `submit_work` or `sort_follow_ups`, a follow-up ID isn't one of the
   claim's, so nothing was taken or changed. Use the IDs `my_work` lists for
-  that claim, and call again. From `sort_follow_ups`, the claim has no PR
-  recorded yet, so it has no follow-ups.
+  that claim, and call again. From `sort_follow_ups` or
+  `set_follow_through`, the claim has no PR recorded yet. From `my_work`
+  or `set_follow_through`, the wake ID isn't one of the donor's wakes.
+  Tell the donor, and turn that wake's schedule off in the harness.
 - `not_claim_owner`: The claim is someone else's. Use only the donor's own
   claims, from `start_session` or `my_work`.
 - `donor_blocked`: Good First Token's admins blocked the donor, so they get
@@ -550,7 +559,9 @@ offers another project. Then:
   projects instead.
 - `rate_limited`: From `request_repo`, the donor sent as many requests as
   the limits allow. The message says when the next one can go in. Tell
-  the donor, and don't call it again before then.
+  the donor, and don't call it again before then. From
+  `set_follow_through`, the donor has as many wakes as they can keep.
+  Remove one with `removeWake` in the same call.
 - `invalid_input`: From `request_repo`, the repo wasn't owner/repo, a
   GitHub repo link, or a Good First Token project link. Ask the donor for
   the repo, then call again.
