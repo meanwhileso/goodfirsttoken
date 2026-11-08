@@ -64,7 +64,16 @@ const askedDonor = {
 
 const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3, conversation: 4, conversationRead: 4 };
 
-const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2, conversation: 3, followMode: 'ask_first' as const };
+const openPr = {
+  claimId: 'c_0',
+  issue: `${repo}#912`,
+  pr,
+  reviews: 2,
+  conversation: 3,
+  failedChecksHead: 'f'.repeat(40),
+  conflictHead: null,
+  followMode: 'ask_first' as const,
+};
 
 const unchosen = { mode: 'go_ahead' as const, chosen: false };
 
@@ -118,6 +127,9 @@ const stalledPr = {
   nextCheckAt: later,
   schedule: 'hourly' as const,
   stalledSince: later,
+  tellDonorWaiting: true,
+  waitingToldAt: null,
+  reviewAskedAt: at,
 };
 
 /** A PR another run holds, at its round limit for the day. */
@@ -135,6 +147,7 @@ const heldPr = {
   roundLimit: 'day' as const,
   botLimit: false,
   stalledSince: null,
+  tellDonorWaiting: false,
 };
 
 const followThrough = { dueNow: true, nextCheckAt: later, prs: [stalledPr, heldPr] };

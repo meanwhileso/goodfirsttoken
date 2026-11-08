@@ -149,6 +149,9 @@ export const STALLED_AFTER_MS = DAY;
 /** A PR with no reviewer activity for this long is checked on no schedule. */
 export const QUIET_AFTER_MS = 30 * DAY;
 
+/** A PR that waits this many days after the agent's last push with no reviewer activity is the donor's to nudge. */
+export const WAITING_TOLD_AFTER_DAYS = 14;
+
 /** The ID a run makes up when it starts, which keys its leases. */
 export const runIdSchema = z
   .string({ error: 'must be an ID you make up for this run, like run-2026-11-08T12-00' })
@@ -233,6 +236,10 @@ export interface PrFacts extends CheckFacts {
   lease: { runId: string; until: number } | null;
   /** Its rounds in all, the UTC day of its last round, the rounds on that day, and those that answered bots. */
   rounds: { total: number; day: number | null; onDay: number; bots: number };
+  /** When a run last told the donor it waited 14 days, or null. */
+  waitingToldAt: number | null;
+  /** When a run last asked a maintainer to review it again, or null. */
+  reviewAskedAt: number | null;
 }
 
 /** The run asking: its wake's level, or null in a session the donor is in, its run ID, and the claims with follow-ups new for its wake. */
@@ -262,6 +269,13 @@ export interface PrFollowThrough {
   schedule: CheckSchedule;
   /** When it became stalled, or null when it isn't. */
   stalledSince: number | null;
+  /**
+   * True when it waited 14 days after the agent's last push with no
+   * reviewer activity since, and no run told the donor since that push.
+   */
+  tellDonorWaiting: boolean;
+  waitingToldAt: number | null;
+  reviewAskedAt: number | null;
 }
 
 export interface FollowThrough {
@@ -305,6 +319,13 @@ function onePr(facts: PrFacts, run: RunContext, now: number): PrFollowThrough {
               : facts.waitingDonor > 0
                 ? 'waiting_donor'
                 : 'waiting_reviewer';
+  const push = facts.lastPushAt;
+  const tellDonorWaiting =
+    facts.mode !== 'off' &&
+    push !== null &&
+    now - push >= WAITING_TOLD_AFTER_DAYS * DAY &&
+    (facts.lastReviewerAt === null || facts.lastReviewerAt < push) &&
+    (facts.waitingToldAt === null || facts.waitingToldAt < push);
   return {
     claimId: facts.claimId,
     state,
@@ -317,6 +338,9 @@ function onePr(facts: PrFacts, run: RunContext, now: number): PrFollowThrough {
     nextCheckAt,
     schedule: check.schedule,
     stalledSince: state === 'stalled' ? stalledAt : null,
+    tellDonorWaiting,
+    waitingToldAt: facts.waitingToldAt,
+    reviewAskedAt: facts.reviewAskedAt,
   };
 }
 

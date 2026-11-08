@@ -215,21 +215,25 @@ export async function takeTriggerCall(db: D1Database, wakeId: string, now: numbe
 }
 
 /**
- * What a call's answer said: `fired`, a run started; `failed`, a timeout,
- * a 5xx, a redirect, or any other answer; `held`, a 429; `key`, the key is
- * wrong; or `gone`, the trigger is gone.
+ * What a call's answer said: `fired`, a run started; `timeout`, no answer
+ * in time, though the run may have started; `failed`, a 5xx, a redirect,
+ * no answer, or any other answer; `held`, a 429; `key`, the key is wrong;
+ * or `gone`, the trigger is gone, or its URL no longer fits its harness.
  */
-export type TriggerOutcome = 'fired' | 'failed' | 'held' | 'key' | 'gone';
+export type TriggerOutcome = 'fired' | 'timeout' | 'failed' | 'held' | 'key' | 'gone';
 
 /**
  * Records a call's outcome at `now`, on the trigger the call was made for,
  * by when it was saved, so a trigger the donor saved again meanwhile keeps
  * its own. A run that started records the follow-ups the call was for, and
  * ends the failures in a row. A failure, or a 429, counts one more, and a
- * 429 holds the wake's calls for an hour. The third in a row turns the
- * trigger off, keeping its key. A wrong key, or a trigger that is gone,
- * turns it off and drops its key, which can start nothing now. Gives
- * whether the call turned the trigger off.
+ * 429 holds the wake's calls for an hour. A timeout counts one more too,
+ * and records the follow-ups as called, since the harness may have started
+ * the run, and its routines take no key to tell a second call from the
+ * first. The third in a row turns the trigger off, keeping its key. A
+ * wrong key, or a trigger that is gone, turns it off and drops its key,
+ * which can start nothing now. Gives whether the call turned the trigger
+ * off.
  */
 export async function recordTriggerCall(
   db: D1Database,
@@ -241,19 +245,17 @@ export async function recordTriggerCall(
   const at = checkTime(now);
   const wake = mustParse(id, call.wakeId, 'wakeId');
   const which = 'WHERE id = ?1 AND trigger_saved_at = ?2';
+  const keys = JSON.stringify(followUps.map((key) => [mustParse(id, key.claimId, 'claimId'), key.followUpId]));
+  const called = db
+    .prepare(
+      `INSERT INTO trigger_follow_ups (wake_id, claim_id, comment_id, called_at)
+       SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), ?3 FROM json_each(?4)
+       WHERE EXISTS (SELECT 1 FROM wakes WHERE id = ?1 AND trigger_saved_at = ?2)
+       ON CONFLICT DO NOTHING`,
+    )
+    .bind(wake, call.savedAt, at, keys);
   if (outcome === 'fired') {
-    const keys = JSON.stringify(followUps.map((key) => [mustParse(id, key.claimId, 'claimId'), key.followUpId]));
-    await db.batch([
-      db.prepare(`UPDATE wakes SET trigger_fired_at = ?3, trigger_failures = 0 ${which}`).bind(wake, call.savedAt, at),
-      db
-        .prepare(
-          `INSERT INTO trigger_follow_ups (wake_id, claim_id, comment_id, called_at)
-           SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), ?3 FROM json_each(?4)
-           WHERE EXISTS (SELECT 1 FROM wakes WHERE id = ?1 AND trigger_saved_at = ?2)
-           ON CONFLICT DO NOTHING`,
-        )
-        .bind(wake, call.savedAt, at, keys),
-    ]);
+    await db.batch([db.prepare(`UPDATE wakes SET trigger_fired_at = ?3, trigger_failures = 0 ${which}`).bind(wake, call.savedAt, at), called]);
     return { turnedOff: false };
   }
   if (outcome === 'key' || outcome === 'gone') {
@@ -264,7 +266,7 @@ export async function recordTriggerCall(
     return { turnedOff: off !== null };
   }
   // SQLite reads every SET from the row before the update.
-  const row = await db
+  const failed = db
     .prepare(
       `UPDATE wakes SET trigger_failures = trigger_failures + 1,
          trigger_held_until = iif(?3, ?4 + ${String(TRIGGER_HOLD_MS)}, trigger_held_until),
@@ -272,7 +274,7 @@ export async function recordTriggerCall(
          trigger_off = iif(trigger_failures + 1 >= ${String(TRIGGER_FAILURES_OFF)}, 'failures', trigger_off)
        ${which} RETURNING trigger_on`,
     )
-    .bind(wake, call.savedAt, outcome === 'held' ? 1 : 0, at)
-    .first<{ trigger_on: number }>();
-  return { turnedOff: row?.trigger_on === 0 };
+    .bind(wake, call.savedAt, outcome === 'held' ? 1 : 0, at);
+  const [counted] = await db.batch<{ trigger_on: number }>(outcome === 'timeout' ? [failed, called] : [failed]);
+  return { turnedOff: counted?.results[0]?.trigger_on === 0 };
 }

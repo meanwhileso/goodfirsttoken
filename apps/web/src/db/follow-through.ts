@@ -7,6 +7,7 @@ import {
   MAX_WAKES,
   mustParse,
   prFollowModeSchema,
+  runIdSchema,
   WAKE_STOPPED_AFTER_MS,
   wakeHarnessSchema,
   wakeInterval,
@@ -287,20 +288,35 @@ function keysJson(keys: readonly WakeFollowUp[]): string {
 }
 
 /**
- * Gives the wake these follow-ups at `now`, in one statement, and returns
- * those it wasn't given before, in their order. So two runs of one wake
- * at once are each given a follow-up the other wasn't.
+ * Gives the wake these follow-ups at `now`, for the run `runId` when it
+ * names one, in one statement, and returns those it wasn't given before,
+ * and those it gave the same run, in their order. So a run that calls
+ * my_work again is given its follow-ups again, and two runs of one wake at
+ * once are each given a follow-up the other wasn't.
  */
-export async function giveToWake(db: D1Database, wakeId: string, keys: readonly WakeFollowUp[], now: number): Promise<WakeFollowUp[]> {
+export async function giveToWake(
+  db: D1Database,
+  wakeId: string,
+  keys: readonly WakeFollowUp[],
+  now: number,
+  runId?: string,
+): Promise<WakeFollowUp[]> {
   if (keys.length === 0) return [];
+  // A row given before takes the update, and so comes back, only when the
+  // same run was given it. NULL equals nothing, so a run with no ID never does.
   const { results } = await db
     .prepare(
-      `INSERT INTO wake_follow_ups (wake_id, claim_id, comment_id, given_at)
-       SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), ?3 FROM json_each(?2) WHERE true
-       ON CONFLICT DO NOTHING
+      `INSERT INTO wake_follow_ups (wake_id, claim_id, comment_id, given_at, run_id)
+       SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), ?3, ?4 FROM json_each(?2) WHERE true
+       ON CONFLICT DO UPDATE SET given_at = wake_follow_ups.given_at WHERE wake_follow_ups.run_id = excluded.run_id
        RETURNING claim_id, comment_id`,
     )
-    .bind(mustParse(id, wakeId, 'wakeId'), keysJson(keys), checkTime(now))
+    .bind(
+      mustParse(id, wakeId, 'wakeId'),
+      keysJson(keys),
+      checkTime(now),
+      runId === undefined ? null : mustParse(runIdSchema, runId, 'runId'),
+    )
     .all<{ claim_id: string; comment_id: string }>();
   const given = new Set(results.map((row) => JSON.stringify([row.claim_id, row.comment_id])));
   return keys.filter((key) => given.has(JSON.stringify([key.claimId, key.followUpId])));

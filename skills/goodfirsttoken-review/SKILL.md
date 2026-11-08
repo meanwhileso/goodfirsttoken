@@ -199,18 +199,21 @@ first, then the rest, oldest first.
    `runId`, and `action: "take"`. When its `lease` is `following`, another
    run follows the PR until the time it gives: leave that PR. Pass the same
    `runId` to `check_pr`, `post_update`, and `submit_work` on the claim,
-   which renews the lease. Once you are done with the PR, call `follow_pr`
-   with `action: "give_back"`.
+   which renews the lease, and to `sort_follow_ups`, so a push or a reply
+   counts in the PR's rounds. Once you are done with the PR, or when you
+   stop early for any reason, call `follow_pr` with
+   `action: "give_back"`.
 4. To answer one, pull the claim's branch, make the change, post as you
    work, commit with the trailer, push, and call `submit_work` with the
    claim, the new head, and `answers`. Give `answers` the IDs of the
    follow-ups the fix answers. The fix goes onto the PR, and those
    follow-ups settle once that submit lands.
 5. Reply on GitHub as the follow skill's Replies says. For one that needs
-   no change, call `sort_follow_ups` with the claim, its `followUpId`,
-   `state: "settled"`, and `outcome: "no_change"`. Once a reply to it is
-   on GitHub, record it the same way with `outcome: "replied"` and the
-   reply's link as `replyUrl`, or with `state: "waiting_reviewer"` and
+   no change, call `sort_follow_ups` with the claim, the `runId`, its
+   `followUpId`, `state: "settled"`, and `outcome: "no_change"`, with the
+   reply's link as `replyUrl` when you replied to explain. Once a reply to
+   it is on GitHub, record it the same way with `outcome: "replied"` and
+   the reply's link as `replyUrl`, or with `state: "waiting_reviewer"` and
    `replyUrl` when the reply waits for a maintainer. When the donor wants
    to decide later, record your question with `state: "waiting_donor"`
    and `question`, so it lists first until they answer.
@@ -286,7 +289,7 @@ it happens. Good First Token then reads GitHub only for a PR that
 changed.
 
 1. For each PR in `openPrs`, run
-   `gh pr view <its link> --json state,reviews,comments,statusCheckRollup,mergeable`.
+   `gh pr view <its link> --json state,reviews,comments,statusCheckRollup,mergeable,headRefOid`.
    The donor's own gh CLI reads it as the donor, from their own rate
    limit.
 2. The PR changed when any of these holds:
@@ -296,11 +299,13 @@ changed.
      Good First Token does.
    - Its comments in the conversation, anyone's, number more than its
      `conversation`.
-   - Its head's checks failed, and no follow-up of kind `checks` lists
-     for its claim. Leave out a run whose conclusion is ACTION_REQUIRED,
-     one that waits for a maintainer to approve it.
-   - GitHub shows it CONFLICTING, and no follow-up of kind `conflict`
-     lists for its claim.
+   - Its head's checks failed, and the head it gives isn't the PR's
+     `failedChecksHead`, the head whose failed checks Good First Token
+     already read, however that follow-up was sorted. Leave out a run whose
+     conclusion is ACTION_REQUIRED, one that waits for a maintainer to
+     approve it.
+   - GitHub shows it CONFLICTING, and the head it gives isn't the PR's
+     `conflictHead`.
 3. When it changed, call `check_pr` with its `claimId`, and the `runId`
    of your run when you hold its lease. When nothing changed, call
    nothing. That is the usual case.

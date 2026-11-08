@@ -1,4 +1,5 @@
 import {
+  checkTrigger,
   TRIGGER_CALLS_PER_PASS,
   TRIGGER_TIMEOUT_MS,
   type TriggerHarnessName,
@@ -51,7 +52,7 @@ export interface TriggerRun {
   called: number;
   /** Calls that started a run. */
   fired: number;
-  /** Timeouts, 5xx answers, redirects, and other answers. */
+  /** Timeouts, 5xx answers, redirects, no answer, and other answers. */
   failed: number;
   /** 429 answers, which hold the wake's calls for an hour. */
   held: number;
@@ -89,8 +90,15 @@ function outcomeOf(status: number): TriggerOutcome {
   return 'failed';
 }
 
-/** Makes one call, waiting at most `timeoutMs`, and gives what it came to. */
+/**
+ * Makes one call, waiting at most `timeoutMs`, and gives what it came to.
+ * The stored URL is checked against its harness's pattern again first, so
+ * one saved before the pattern changed reaches nowhere, and its trigger
+ * turns off as gone.
+ */
 async function callOnce(deps: TriggerDeps, call: TriggerCall): Promise<TriggerOutcome> {
+  const checked = checkTrigger(call.harness, call.url);
+  if (!checked.ok) return 'gone';
   let key: string;
   try {
     key = await (deps.openKey ?? openTriggerKey)(call.sealedKey);
@@ -105,11 +113,13 @@ async function callOnce(deps: TriggerDeps, call: TriggerCall): Promise<TriggerOu
     controller.abort();
   }, deps.timeoutMs ?? TRIGGER_TIMEOUT_MS);
   try {
-    const response = await deps.fetch(call.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal });
+    const response = await deps.fetch(checked.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal });
     await response.body?.cancel().catch(() => undefined);
     return outcomeOf(response.status);
   } catch {
-    return 'failed';
+    // Only the timer aborts, and a call that timed out may have reached
+    // the harness and started a run.
+    return controller.signal.aborted ? 'timeout' : 'failed';
   } finally {
     clearTimeout(timer);
   }
@@ -135,7 +145,7 @@ export async function callTriggers(deps: TriggerDeps): Promise<TriggerRun> {
     const { turnedOff } = await recordTriggerCall(deps.db, call, outcome, next.followUps, deps.now());
     if (outcome === 'fired') run.fired += 1;
     else if (outcome === 'held') run.held += 1;
-    else if (outcome === 'failed') run.failed += 1;
+    else if (outcome === 'failed' || outcome === 'timeout') run.failed += 1;
     if (turnedOff) run.turnedOff += 1;
   };
   const worker = async () => {

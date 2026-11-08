@@ -818,7 +818,7 @@ describe('tool inputs', () => {
     expect(problemFields(submit(['']))).toEqual(['answers[0]']);
   });
 
-  test('sort_follow_ups takes an outcome with settled alone, a question with waiting_donor alone, and a link with each reply', () => {
+  test('sort_follow_ups takes an outcome with settled alone, a question with waiting_donor alone, and a link with each reply, a bot comment explained as no_change too', () => {
     const sort = (...followUps: Record<string, unknown>[]) => validate(tools.sort_follow_ups.input, { claimId: 'c_1', followUps });
     const reply = 'https://github.com/octo/app/pull/7#issuecomment-1';
 
@@ -832,7 +832,9 @@ describe('tool inputs', () => {
     expect(problemFields(sort({ followUpId: 'a', state: 'waiting_donor' }))).toEqual(['followUps[0].question']);
     expect(problemFields(sort({ followUpId: 'a', state: 'settled', outcome: 'no_change', question: 'Why?' }))).toEqual(['followUps[0].question']);
     expect(problemFields(sort({ followUpId: 'a', state: 'settled', outcome: 'replied' }))).toEqual(['followUps[0].replyUrl']);
-    expect(problemFields(sort({ followUpId: 'a', state: 'settled', outcome: 'no_change', replyUrl: reply }))).toEqual(['followUps[0].replyUrl']);
+    expect(sort({ followUpId: 'a', state: 'settled', outcome: 'no_change', replyUrl: reply }).ok).toBe(true);
+    expect(problemFields(sort({ followUpId: 'a', state: 'settled', outcome: 'resolved', replyUrl: reply }))).toEqual(['followUps[0].replyUrl']);
+    expect(problemFields(sort({ followUpId: 'a', state: 'waiting_donor', question: 'Why?', replyUrl: reply }))).toEqual(['followUps[0].replyUrl']);
     // A submit settles a follow-up as fixed, a read as superseded, and only a read makes one open.
     expect(problemFields(sort({ followUpId: 'a', state: 'settled', outcome: 'fixed' }))).toEqual(['followUps[0].outcome']);
     expect(problemFields(sort({ followUpId: 'a', state: 'settled', outcome: 'superseded' }))).toEqual(['followUps[0].outcome']);

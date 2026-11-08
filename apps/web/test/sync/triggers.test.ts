@@ -497,7 +497,7 @@ describe('two passes, and a trigger saved again', () => {
 });
 
 describe('when a call fails', () => {
-  test('a timeout, a 5xx, a redirect it never follows, or no answer counts one failure, and the next pass tries again', async () => {
+  test('a 5xx or a redirect it never follows counts one failure, and the next pass tries again', async () => {
     const wakeId = await wakeWithTrigger();
     await followUp('c_1', 'r1', t0 + 90 * MINUTE);
     const { calls, fetch } = harness(503, 302, 200);
@@ -547,6 +547,37 @@ describe('when a call fails', () => {
     expect(aborted).not.toBeNull();
     expect(run).toMatchObject({ called: 1, failed: 1 });
     expect((await getWake(db, priya.githubId, wakeId))?.trigger?.failures).toBe(1);
+  });
+
+  test('a call that times out counts a failure, and its follow-ups count as called, since the run may have started, so the next pass calls only for a new one', async () => {
+    const wakeId = await wakeWithTrigger();
+    await followUp('c_1', 'r1', t0 + 90 * MINUTE);
+    const { calls, fetch } = harness('hang', 200);
+
+    const first = await call(fetch, { timeoutMs: 10 });
+    const afterOne = await getWake(db, priya.githubId, wakeId);
+    at(clock + 30 * MINUTE);
+    const again = await made(fetch);
+    await followUp('c_1', 'r2', clock);
+    const forNew = await made(fetch);
+
+    expect(first).toMatchObject({ called: 1, failed: 1, fired: 0 });
+    expect(afterOne?.trigger).toMatchObject({ on: true, failures: 1, firedAt: null });
+    expect([again, forNew]).toEqual([0, 1]);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("a stored URL that no longer fits its harness's pattern is never called, and turns the trigger off as gone", async () => {
+    const wakeId = await wakeWithTrigger();
+    await followUp('c_1', 'r1', t0 + 90 * MINUTE);
+    await db.prepare('UPDATE wakes SET trigger_url = ? WHERE id = ?').bind('https://elsewhere.example/v1/claude_code/routines/trig_1/fire', wakeId).run();
+    const { calls, fetch } = harness();
+
+    const run = await call(fetch);
+
+    expect(calls).toEqual([]);
+    expect(run).toMatchObject({ called: 1, turnedOff: 1, fired: 0 });
+    expect((await getWake(db, priya.githubId, wakeId))?.trigger).toMatchObject({ on: false, off: 'gone', hasKey: false });
   });
 
   test('three failed calls in a row turn the trigger off, keeping its key, and the donor can turn it on again', async () => {

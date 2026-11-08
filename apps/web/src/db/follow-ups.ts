@@ -78,43 +78,70 @@ export type NewFollowUp = Omit<
 const NEW_STATE = { shownAt: null, answeredAt: null, state: 'open', outcome: null, question: null, replyUrl: null } as const;
 
 /**
- * Stores what the PR job read on a claim's PR at `readAt`, in one
- * statement, in the order given, each one open. A follow-up read before,
- * by its comment ID, stays as it was first read, and as it stands. So
- * checks that fail again on the same head add none. A conflict adds none
- * while another on the claim isn't settled, since a base that moves on
- * gives the same conflict a new ID. supersedeFollowUps runs first, and
- * settles one for an older head. The claim must be in the claims table.
- * Returns how many are new.
+ * Stores what the PR job read on a claim's PR at `readAt`, in one batch,
+ * in the order given, each one open. A follow-up read before, by its
+ * comment ID, stays as it was first read, and as it stands. So checks that
+ * fail again on the same head add none. A conflict adds none while another
+ * on the claim isn't settled, since a base that moves on gives the same
+ * conflict a new ID. supersedeFollowUps runs first, and settles one for an
+ * older head. Checks or a conflict a read superseded, which a read finds
+ * again, as when the branch comes back to an earlier head, open again, with
+ * this read's times, shown to no one, and new to each wake and trigger.
+ * Checks and conflicts come only from the newest read of the PR's head:
+ * when a read made after `madeAt`, the time this read was made, already
+ * reached supersedeFollowUps, they add none, as supersedeFollowUps takes
+ * nothing a newer read stored. The claim must be in the claims table.
+ * Returns how many are new or open again.
  */
 export async function saveFollowUps(
   db: D1Database,
   claimId: string,
   followUps: readonly NewFollowUp[],
   readAt: number,
+  madeAt: number = readAt,
 ): Promise<number> {
   const rows = followUps.map((followUp) =>
     mustParse(followUpRecordSchema, { ...followUp, claimId, readAt, ...NEW_STATE }, 'follow-up'),
   );
   if (rows.length === 0) return 0;
+  const claim = mustParse(id, claimId, 'claimId');
+  const at = checkTime(readAt, 'readAt');
+  const json = JSON.stringify(rows);
   // The rows go in as one JSON array, so any number of them takes one
   // query. A WHERE lets SQLite read ON CONFLICT after a SELECT.
-  const result = await db
-    .prepare(
-      `INSERT INTO follow_ups (claim_id, comment_id, kind, reviewer, author_kind, body, path, url, written_at, read_at, shown_at,
-         answered_at, state, outcome, question, reply_url)
-       SELECT ?1, json_extract(j.value, '$.commentId'), json_extract(j.value, '$.kind'), json_extract(j.value, '$.reviewer'),
-         json_extract(j.value, '$.authorKind'), json_extract(j.value, '$.body'), json_extract(j.value, '$.path'),
-         json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'), ?2, NULL, NULL, 'open', NULL, NULL, NULL
-       FROM json_each(?3) j
-       WHERE json_extract(j.value, '$.kind') <> 'conflict' OR NOT EXISTS
-         (SELECT 1 FROM follow_ups w WHERE w.claim_id = ?1 AND w.kind = 'conflict' AND w.state <> 'settled')
-       ORDER BY j.key
-       ON CONFLICT (claim_id, comment_id) DO NOTHING`,
-    )
-    .bind(mustParse(id, claimId, 'claimId'), checkTime(readAt, 'readAt'), JSON.stringify(rows))
-    .run();
-  return result.meta.changes;
+  const [saved] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO follow_ups (claim_id, comment_id, kind, reviewer, author_kind, body, path, url, written_at, read_at, shown_at,
+           answered_at, state, outcome, question, reply_url)
+         SELECT ?1, json_extract(j.value, '$.commentId'), json_extract(j.value, '$.kind'), json_extract(j.value, '$.reviewer'),
+           json_extract(j.value, '$.authorKind'), json_extract(j.value, '$.body'), json_extract(j.value, '$.path'),
+           json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'), ?2, NULL, NULL, 'open', NULL, NULL, NULL
+         FROM json_each(?3) j
+         WHERE (json_extract(j.value, '$.kind') NOT IN ('checks', 'conflict') OR NOT EXISTS
+             (SELECT 1 FROM prs WHERE prs.claim_id = ?1 AND prs.head_read_at > ?4))
+           AND (json_extract(j.value, '$.kind') <> 'conflict' OR NOT EXISTS
+             (SELECT 1 FROM follow_ups w WHERE w.claim_id = ?1 AND w.kind = 'conflict' AND w.state <> 'settled'))
+         ORDER BY j.key
+         ON CONFLICT (claim_id, comment_id) DO UPDATE SET state = 'open', outcome = NULL, body = excluded.body, url = excluded.url,
+           written_at = excluded.written_at, read_at = excluded.read_at, shown_at = NULL, answered_at = NULL, question = NULL,
+           reply_url = NULL
+         WHERE follow_ups.kind IN ('checks', 'conflict') AND follow_ups.outcome IS 'superseded'`,
+      )
+      .bind(claim, at, json, checkTime(madeAt, 'madeAt')),
+    // A wake or a trigger that had one before it opened again has it as new.
+    ...['wake_follow_ups', 'trigger_follow_ups'].map((table) =>
+      db
+        .prepare(
+          `DELETE FROM ${table} WHERE claim_id = ?1 AND comment_id IN
+             (SELECT f.comment_id FROM follow_ups f JOIN json_each(?3) j ON f.comment_id = json_extract(j.value, '$.commentId')
+              WHERE f.claim_id = ?1 AND f.kind IN ('checks', 'conflict') AND f.state = 'open' AND f.read_at = ?2)
+             AND ${table === 'wake_follow_ups' ? 'given_at' : 'called_at'} < ?2`,
+        )
+        .bind(claim, at, json),
+    ),
+  ]);
+  return saved?.meta.changes ?? 0;
 }
 
 /** What a read of a claim's open PR showed of its head and whether it can merge. */
@@ -130,7 +157,8 @@ export interface HeadRead {
 
 /**
  * Settles as superseded, at `now`, the checks and conflicts these reads
- * replaced, in one statement for all of them: checks for any head but the
+ * replaced, in one batch for all of them, and records each read as the
+ * newest of its PR's head when it is: checks for any head but the
  * one read, every conflict on a PR the read found `MERGEABLE`, and a
  * conflict for another head on a PR it found `CONFLICTING`. A conflict on
  * the same head stays, since a base that moves on gives it a new ID.
@@ -147,20 +175,27 @@ export async function supersedeFollowUps(db: D1Database, reads: readonly HeadRea
     mergeable: read.mergeable,
     readAt: checkTime(read.readAt, 'readAt'),
   }));
-  const result = await db
-    .prepare(
-      `UPDATE follow_ups SET state = 'settled', outcome = 'superseded', answered_at = ?1, question = NULL
-       FROM (SELECT json_extract(j.value, '$.claimId') AS claim_id, json_extract(j.value, '$.head') AS head,
-               json_extract(j.value, '$.mergeable') AS mergeable, json_extract(j.value, '$.readAt') AS read_at
-             FROM json_each(?2) j) r
-       WHERE follow_ups.claim_id = r.claim_id AND follow_ups.state <> 'settled' AND follow_ups.read_at <= r.read_at
-         AND ((follow_ups.kind = 'checks' AND follow_ups.comment_id <> r.head)
-           OR (follow_ups.kind = 'conflict' AND (r.mergeable = 'MERGEABLE'
-             OR (r.mergeable = 'CONFLICTING' AND substr(follow_ups.comment_id, 1, length(r.head) + 1) <> r.head || ':'))))`,
-    )
-    .bind(checkTime(now), JSON.stringify(rows))
-    .run();
-  return result.meta.changes;
+  const json = JSON.stringify(rows);
+  const each = `(SELECT json_extract(j.value, '$.claimId') AS claim_id, json_extract(j.value, '$.head') AS head,
+      json_extract(j.value, '$.mergeable') AS mergeable, json_extract(j.value, '$.readAt') AS read_at
+    FROM json_each(?2) j) r`;
+  const [result] = await db.batch([
+    db
+      .prepare(
+        `UPDATE follow_ups SET state = 'settled', outcome = 'superseded', answered_at = ?1, question = NULL
+         FROM ${each}
+         WHERE follow_ups.claim_id = r.claim_id AND follow_ups.state <> 'settled' AND follow_ups.read_at <= r.read_at
+           AND ((follow_ups.kind = 'checks' AND follow_ups.comment_id <> r.head)
+             OR (follow_ups.kind = 'conflict' AND (r.mergeable = 'MERGEABLE'
+               OR (r.mergeable = 'CONFLICTING' AND substr(follow_ups.comment_id, 1, length(r.head) + 1) <> r.head || ':'))))`,
+      )
+      .bind(checkTime(now), json),
+    // The newest read of each PR's head, so an older one saves no checks or conflict.
+    db
+      .prepare(`UPDATE prs SET head_read_at = max(COALESCE(prs.head_read_at, r.read_at), r.read_at) FROM ${each} WHERE prs.claim_id = r.claim_id`)
+      .bind(checkTime(now), json),
+  ]);
+  return result?.meta.changes ?? 0;
 }
 
 /** A follow-up waiting for the donor, with what the tools show of its claim. */

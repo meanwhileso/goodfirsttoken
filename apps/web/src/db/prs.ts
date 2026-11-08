@@ -1,5 +1,6 @@
 import {
   agentName,
+  commitSha,
   count,
   githubId,
   githubLogin,
@@ -346,6 +347,16 @@ export interface OpenPrOf {
   reviews: number;
   /** The comments GitHub counted in the PR's conversation at the last read, anyone's. */
   conversation: number;
+  /** The head of the claim's newest checks follow-up, in any state, or null. */
+  failedChecksHead: string | null;
+  /** The head of the claim's newest conflict follow-up, in any state, or null. */
+  conflictHead: string | null;
+}
+
+/** A head's SHA as a follow-up's ID gives it, or null for one that isn't. */
+function headOf(value: string | null): string | null {
+  const parsed = commitSha.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -358,7 +369,11 @@ export interface OpenPrOf {
 export async function listOpenPrsOf(db: D1Database, person: number): Promise<OpenPrOf[]> {
   const { results } = await db
     .prepare(
-      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews, p.conversation
+      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews, p.conversation,
+         (SELECT f.comment_id FROM follow_ups f WHERE f.claim_id = p.claim_id AND f.kind = 'checks'
+           ORDER BY f.read_at DESC, f.rowid DESC LIMIT 1) AS checks_head,
+         (SELECT substr(f.comment_id, 1, instr(f.comment_id, ':') - 1) FROM follow_ups f WHERE f.claim_id = p.claim_id
+           AND f.kind = 'conflict' ORDER BY f.read_at DESC, f.rowid DESC LIMIT 1) AS conflict_head
        FROM prs p JOIN claims c ON c.id = p.claim_id
        WHERE c.github_id = ? AND p.state = 'open' AND ${SHOWN}
          AND NOT EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = c.project AND u.delisted IS NOT NULL)
@@ -374,6 +389,8 @@ export async function listOpenPrsOf(db: D1Database, person: number): Promise<Ope
       url: string;
       reviews: number;
       conversation: number;
+      checks_head: string | null;
+      conflict_head: string | null;
     }>();
   return results.map((row) => ({
     claimId: mustParse(id, row.claim_id, 'claimId'),
@@ -381,6 +398,8 @@ export async function listOpenPrsOf(db: D1Database, person: number): Promise<Ope
     pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
     reviews: mustParse(count, row.reviews, 'reviews'),
     conversation: mustParse(count, row.conversation, 'conversation'),
+    failedChecksHead: headOf(row.checks_head),
+    conflictHead: headOf(row.conflict_head),
   }));
 }
 

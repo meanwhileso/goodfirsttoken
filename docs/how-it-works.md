@@ -1029,8 +1029,8 @@ seconds of the ask.
   account first, `gh pr view` for each one `openPrs` lists, under
   [The donor's tools](#the-donors-tools). They call `check_pr` only for a
   PR that merged, closed, has more reviews or conversation comments than
-  `openPrs` counted, or has failed checks or a conflict with no follow-up
-  of that kind listed, as under **follow** in
+  `openPrs` counted, or has failed checks or a conflict on a head other
+  than the one Good First Token read them on, as under **follow** in
   [Skills and plugins](#skills-and-plugins). So in the usual case, when
   nothing changed, the service token reads nothing.
 - A count can miss a review: when one review was dismissed and a new one
@@ -1143,12 +1143,17 @@ conflict. Each follow-up has a kind: `review`, `line`, `conversation`,
   is that state and the names of up to 10 failing checks, of the first 100
   on the head, like `FAILURE: test, lint`, and its link is the PR's checks
   for the head. Checks that pass or still run are none. The same head's
-  checks failing again add none, and a new head's add a new one.
+  checks failing again add none, and a new head's add a new one. Checks a
+  read superseded come back open when a read finds that head failing
+  again, as when the branch goes back to it, with the new read's text and
+  times, shown to no one, and new to each wake and trigger.
 - A PR GitHub shows as `CONFLICTING` is one `conflict` follow-up for its
   head and its base, with the text `CONFLICTING with` and the base
   branch's name. While one on the claim isn't settled, a base that moves on
-  under the same head adds no other, and the one there keeps its state. `UNKNOWN`, which GitHub often gives before it has worked out
-  the merge, makes none, and the next run reads it again.
+  under the same head adds no other, and the one there keeps its state.
+  A conflict a read superseded comes back open, the same way, when a read
+  finds it again. `UNKNOWN`, which GitHub often gives before it has
+  worked out the merge, makes none, and the next run reads it again.
 - Checks and a conflict have no author. The tools name GitHub as their
   source, and say when the job first read them. The names of checks and
   branches are repo text, kept by the rules below.
@@ -1159,8 +1164,11 @@ conflict. Each follow-up has a kind: `review`, `line`, `conversation`,
   still conflicts supersedes the old head's conflict with the new one.
   `UNKNOWN` supersedes no conflict. A read supersedes only what was stored
   by the time it was made, so a check and a run that read the same PR at
-  once never supersede the newer read's follow-ups. A follow-up already
-  settled stays as it settled.
+  once never supersede the newer read's follow-ups. A read made before a
+  newer one that already superseded adds no checks or conflict, so it
+  can't bring back as open what the newer read found gone. It still adds
+  the reviews and comments it read. A follow-up already settled stays as
+  it settled, but for checks or a conflict a read superseded.
 - The text is untrusted repo text. Before it is kept, it becomes one
   line, with only what a person can see. Every character a person doesn't
   see goes, the same characters a removal's reason loses under
@@ -1266,9 +1274,14 @@ runs, and the wake's schedule stays as it was.
   link, and no GitHub login. Claude Code's takes `{"text": "Wake ID: <id>"}`,
   and Grok Bot's and Cursor's `{"wakeId": "<id>"}`. It follows no
   redirect.
-- A `2xx` answer started a run. A timeout, no answer, a redirect, a `5xx`,
-  or any other answer counts as one failed call, and the next run tries
-  again. A `429` counts as one too, and holds the wake's calls for an
+- Before each call, the stored URL is checked against its harness's
+  pattern again. One that no longer fits isn't called, and the trigger
+  turns off as gone.
+- A `2xx` answer started a run. No answer, a redirect, a `5xx`, or any
+  other answer counts as one failed call, and the next run tries again. A
+  timeout counts as one failed call too, but its follow-ups count as
+  called, since the harness may have started the run, and the next run
+  calls only for a new one. A `429` counts as one too, and holds the wake's calls for an
   hour. A `401` or `403`, which refuse the key, or a `404` or `410`,
   which say the trigger is gone, turn the trigger off and drop its key.
   So do three failed calls in a row, which keep the key. A key that can't
@@ -2466,11 +2479,13 @@ token or other donor's ever does their work.
   PRs: each one's claim, issue,
   and PR, and `reviews`, how many reviews GitHub counted on it at the last
   read, pending and dismissed ones left out, `conversation`, how many
-  comments, anyone's, GitHub counted in its conversation then, and how it
-  is followed, under Follow-through below. The skills read each on GitHub
-  with the donor's own account, and call `check_pr` only for one that
-  merged, closed, has more reviews or comments than those, or shows
-  failed checks or a conflict no follow-up lists, under Checked on
+  comments, anyone's, GitHub counted in its conversation then,
+  `failedChecksHead` and `conflictHead`, the heads of its newest checks
+  and conflict follow-ups in any state, or null, and how it is followed,
+  under Follow-through below. The skills read each on GitHub with the
+  donor's own account, and call `check_pr` only for one that merged,
+  closed, has more reviews or comments than those, or shows failed checks
+  or a conflict on a head other than those, under Checked on
   request in [PRs](#prs).
 - `set_interests` saves the donor's languages, projects, and kinds of work,
   which rank their suggestions. [/me](#your-queue-on-me) saves them the same
@@ -2557,7 +2572,8 @@ under Follow-ups in [PRs](#prs).
 - `sort_follow_ups` sets the state of follow-ups on one claim with no fix:
   `waiting_reviewer`, with the reply's link when there is one,
   `waiting_donor` with the question, or `settled` with `replied` and the
-  reply's link, `no_change`, or `resolved`. Only a submit settles one as
+  reply's link, `no_change`, with the reply's link when the agent replied
+  to explain, or `resolved`. Only a submit settles one as
   `fixed`, only a read as `superseded`, and only a read makes one `open`.
   A follow-up settled as `fixed` or `superseded` stays as it is, and the
   answer says so. Each other one takes its new state, and a sort again
@@ -2610,10 +2626,14 @@ and their agent saves wakes, which start its runs in a harness, under
   A wake ID that isn't the donor's is refused with `not_found`, and an
   11th wake with `rate_limited`. Every check comes before any change, and
   the change is made in one batch, so a refusal changes nothing.
-- A run a wake started passes the wake's ID to `my_work`, which lists
-  `newForWake`: the follow-ups it lists that the wake wasn't given before,
-  on PRs the donor still follows. Each wake is given a follow-up once,
-  even when two of its runs call at once. Once the answer is made,
+- `my_work` names the donor's GitHub login as their last sign-in or
+  `start_session` recorded it, which reads it from GitHub.
+- A run a wake started passes the wake's ID and its run ID to `my_work`,
+  which lists `newForWake`: the follow-ups it lists that the wake wasn't
+  given before, on PRs the donor still follows, and those it gave the
+  same run before, so a run that calls `my_work` again gets them again.
+  Each wake gives a follow-up to one run, even when two of its runs call
+  at once. A call with no run ID gets only those not given before. Once the answer is made,
   `my_work` records when the wake last ran. An ID that names no wake of
   the donor's is refused with `not_found`.
 - A run that only reports marks no follow-up shown, so a submit with no
@@ -2660,14 +2680,22 @@ agents at once in [Follow each PR to its end](specs/follow-through.md).
   `not_found`, and taking the lease of a PR that merged or closed with
   `pr_closed`.
 - A round is what one run does on one PR: at most one push and one set of
-  replies. A round counts while a lease on the PR is live, by whichever
-  run holds it. The lease's first push or reply counts a round. A push is
-  a submit that lands on the open PR. A reply is a follow-up
-  `sort_follow_ups` sets `waiting_reviewer` or settles as `replied`, and
-  one recorded again as it was is no new reply. A
-  reply after the round's push is the same round's, and a second push in
-  the same lease counts another round. A push or reply with no live lease
-  counts none. The PR keeps its rounds in all, the rounds on the UTC day
+  replies. A round counts only for the run that holds a live lease on the
+  PR, by the `runId` its `submit_work` or `sort_follow_ups` names. The
+  lease's first push or reply counts a round. A push is a submit that
+  lands on the open PR. A reply is a follow-up `sort_follow_ups` records a
+  new reply's link for, whatever the state: `waiting_reviewer`, `replied`,
+  or `no_change` for a comment the agent explained. A sort with no link,
+  as for checks that wait for a maintainer to approve their workflow, or
+  the link recorded before, is no reply. A reply after the round's push
+  is the same round's, and a second push in the same lease counts another
+  round. A push or reply with no `runId`, with another run's, or with no
+  live lease counts none.
+- `follow_pr` with `give_back` takes `noted`, what the run did once on the
+  PR: `told_waiting` once it told the donor the PR waited 14 days, and
+  `asked_review` once it asked a maintainer to review again. Each records
+  its time on the PR, whether or not the run still held the lease.
+  `noted` with `take` is a bad input. The PR keeps its rounds in all, the rounds on the UTC day
   of its last one, and those that answered a review bot: a push whose
   submit settles a bot's follow-up, or a reply to one. A round counts as a
   bot round once.
@@ -2681,12 +2709,17 @@ with `followThrough`, under Waking up in
   it is due for the run that asked, its open follow-ups and those that
   wait for the donor, the lease a run holds now, its rounds today, in
   all, and that answered bots, the agent's last push, the last reviewer
-  activity, its next check and how often checks come, and when it became
-  stalled. `dueNow` says whether any PR is due, and `nextCheckAt` gives
+  activity, its next check and how often checks come, when it became
+  stalled, when a run told the donor it waited and asked for another
+  review, as `follow_pr` noted them, and `tellDonorWaiting`. `dueNow` says whether any PR is due, and `nextCheckAt` gives
   the earliest check to come after now on a PR the run follows in full.
 - The agent's last push is when the claim's last submit landed. The last
   reviewer activity is when a maintainer or a review bot wrote the PR's
   newest follow-up, as GitHub gives it.
+- `tellDonorWaiting` is true once 14 days passed after the agent's last
+  push with no reviewer activity since, while the donor follows the PR,
+  and no run noted `told_waiting` since that push. The text tells the
+  agent to tell the donor once, since the PR is theirs to nudge.
 - A PR's checks count from the agent's last push, the PR job's read of
   its newest follow-up, or when it opened, whichever is last. A check
   comes every 15 minutes for 2 hours, then every hour until 24 hours,
@@ -5938,20 +5971,26 @@ has an entry for each refusal those can give.
   PR's branch, and spends their tokens on scheduled runs. It asks with
   `go_ahead` first, after the first `record_pr` and in the next session
   of a donor with PRs open. Nothing acts as the donor before that.
-- A run makes up a run ID. It calls `my_work`, with the wake's ID when a
-  wake started it, and reads each open PR with the donor's GitHub CLI.
+- A run makes up a run ID, and passes it to every call that takes one,
+  `my_work` and `sort_follow_ups` too. It calls `my_work`, with the wake's
+  ID when a wake started it, and reads each open PR with the donor's
+  GitHub CLI.
   When `dueNow` is false and GitHub shows nothing new, it ends and says
   nothing. Otherwise, for each due PR, it takes the lease with
   `follow_pr`, calls `check_pr` only when GitHub shows a change, pulls
   the claim's branch into the work folder, sorts the open follow-ups,
   makes the fixes as one round with one push and a `submit_work` with
   `answers`, replies, records each reply with `sort_follow_ups`, posts
-  status, and gives the lease back. It never changes its wake.
+  status, and gives the lease back. A run that stops early, for any
+  reason, gives back every lease it took first. It never changes its
+  wake.
 - GitHub shows a change to a PR when it merged or closed, when it has
   more reviews or conversation comments than `openPrs` counted, when its
-  head's checks failed with no `checks` follow-up listed, leaving out a
-  run that waits for a maintainer's approval, or when it can't merge with
-  no `conflict` follow-up listed. give, work, and review read the PRs the same way.
+  head's checks failed on a head other than `failedChecksHead`, leaving
+  out a run that waits for a maintainer's approval, or when it can't
+  merge on a head other than `conflictHead`. So checks or a conflict a
+  run already sorted bring no check. give, work, and review read the PRs
+  the same way.
 - A run of a `notify` wake, and a wake's run for an `ask_first` PR, only
   reports. It tells the donor what came in from `newForWake`, quoting
   each comment, and what it would do with it. It takes no lease and sorts
@@ -5962,8 +6001,10 @@ has an entry for each refusal those can give.
   docs or CI name. A fix that needs any other command, or one a comment
   names, waits for the donor.
 - Before any write, the run checks that `gh api user` gives the login
-  `my_work` names. When it doesn't, it writes nothing and tells the
-  donor. It writes only with git and the GitHub CLI, never a harness's
+  `my_work` names. When it doesn't, it writes nothing, gives back its
+  leases, and tells the donor. The login is the one the donor's last
+  sign-in or session recorded, so after a rename the skill asks the donor
+  to start a session, which records the new one. It writes only with git and the GitHub CLI, never a harness's
   own GitHub tools. Where GraphQL is blocked, it uses REST through
   `gh api`, and leaves resolving a thread to the donor. It never rebases
   or force-pushes an open PR's branch, and merges the base branch into it
@@ -5984,12 +6025,17 @@ has an entry for each refusal those can give.
 - Replies: a line comment gets its reply in its thread, and the round's
   reviews and conversation comments get one comment that answers them
   all. A fixed bot thread gets no reply, and is resolved once the fix is
-  pushed. A bot comment it explains gets one reply, then is resolved.
-  Each reply ends with the project's disclosure trailer. Once a round
-  settles every change a maintainer asked for, it asks them to review
-  again, once, where GitHub lets the donor, and else says the changes
-  are in. It sends no other message, and tells the donor once when a PR
-  waited 14 days after its last push with no reviewer activity.
+  pushed. A bot comment it explains gets one reply, then is resolved,
+  and settles `no_change` with the reply's link, which counts a bot
+  round. Each reply ends with the project's disclosure trailer. The run
+  writes the reply's text to a file in its work folder with the
+  harness's file tool and gives the file to `gh`. Once a round settles
+  every change a maintainer asked for, it asks them to review again,
+  once, where GitHub lets the donor, and else says the changes are in.
+  It asks only when `reviewAskedAt` is before that review, and notes it
+  with `follow_pr`. It sends no other message, and tells the donor once
+  when `tellDonorWaiting` says a PR waited 14 days after its last push
+  with no reviewer activity, then notes that too.
 - Limits: at a round limit, the agent asks the donor whether to go on,
   and only on their word calls `set_follow_through` with `goOn`. Past 3
   bot rounds, bot follow-ups settle `no_change`.

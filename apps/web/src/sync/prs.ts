@@ -604,7 +604,14 @@ async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun):
         pushers: pushers.get(record.pr.repo.toLowerCase()) ?? new Set(),
         owner: (record.pr.repo.split('/')[0] ?? '').toLowerCase(),
       };
-      run.followUps += await saveFollowUps(deps.db, record.claimId, followUpsOf(pull, record.pr.url, maintainers, readAt), deps.now());
+      // A newer read that reached supersedeFollowUps first leaves this one's checks and conflict out.
+      run.followUps += await saveFollowUps(
+        deps.db,
+        record.claimId,
+        followUpsOf(pull, record.pr.url, maintainers, readAt),
+        deps.now(),
+        readAt,
+      );
       run.withoutPush += withoutPushOf(pull);
       run.conversationLeftOut += conversationLeftOutOf(pull, maintainers);
       covered.push({ claimId: record.claimId, ...reviewsReadOf(pull), readAt });

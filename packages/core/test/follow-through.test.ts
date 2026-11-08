@@ -30,6 +30,8 @@ const pr = (more: Partial<PrFacts> = {}): PrFacts => ({
   oldestOpenAt: null,
   lease: null,
   rounds: { total: 0, day: null, onDay: 0, bots: 0 },
+  waitingToldAt: null,
+  reviewAskedAt: null,
   ...more,
 });
 
@@ -256,5 +258,22 @@ describe('a stalled PR', () => {
     const held = pr({ open: 1, oldestOpenAt: NOW - 2 * DAY, lease: { runId: 'run-a', until: NOW + MINUTE } });
 
     expect(followThroughOf([held], session, NOW).prs[0]).toMatchObject({ state: 'agent_on_it', stalledSince: null });
+  });
+});
+
+describe('a PR that waits for its reviewers', () => {
+  const at = (more: Partial<PrFacts>, now: number) => followThroughOf([pr(more)], session, now).prs[0]?.tellDonorWaiting;
+
+  test("says to tell the donor once it waited 14 days after the agent's last push with no reviewer activity, until a run told them", () => {
+    expect(at({}, PUSH + 14 * DAY - 1)).toBe(false);
+    expect(at({}, PUSH + 14 * DAY)).toBe(true);
+    expect(at({ waitingToldAt: PUSH + 14 * DAY }, PUSH + 15 * DAY)).toBe(false);
+  });
+
+  test('says nothing after reviewer activity since the push, and again after a new push since the donor was told', () => {
+    expect(at({ lastReviewerAt: PUSH + HOUR }, PUSH + 20 * DAY)).toBe(false);
+    expect(at({ lastReviewerAt: PUSH - HOUR }, PUSH + 20 * DAY)).toBe(true);
+    expect(at({ waitingToldAt: PUSH - DAY }, PUSH + 14 * DAY)).toBe(true);
+    expect(at({ mode: 'off' }, PUSH + 20 * DAY)).toBe(false);
   });
 });

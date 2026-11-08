@@ -12,7 +12,9 @@ import {
   listOpenPrs,
   listClaimFollowUps,
   listOpenPrsOf,
+  giveToWake,
   saveClaim,
+  saveFollowThrough,
   saveFollowUps,
   setReviewsRead,
   supersedeFollowUps,
@@ -22,7 +24,7 @@ import {
   setPrState,
   unblockDonor,
 } from '../../src/db';
-import { admin, DAY, db, emptyDatabase, HOUR, kenji, priya, refusal, repo, sha, signIn, t0, takeOffDoNotList } from './helpers';
+import { admin, DAY, db, emptyDatabase, HOUR, kenji, MINUTE, priya, refusal, repo, sha, signIn, t0, takeOffDoNotList } from './helpers';
 
 function prRef(number: number) {
   return { repo, number, url: `https://github.com/${repo}/pull/${String(number)}` };
@@ -378,6 +380,54 @@ describe('superseding checks and conflicts', () => {
     ]);
   });
 
+  test('checks that fail again on a head a push left, and a conflict again after the PR could merge, come back open, as new to each wake', async () => {
+    const [old, next, base] = ['a'.repeat(40), 'b'.repeat(40), 'c'.repeat(40)];
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    const wake = (await saveFollowThrough(db, priya.githubId, { save: { harness: 'chatgpt', level: 'notify', intervalMinutes: 60 } }, t0)).saved;
+    if (wake === null) throw new Error('no wake saved');
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: old, mergeable: 'CONFLICTING', readAt: t0 }], t0);
+    await saveFollowUps(db, 'c_1', [checks(old), conflict(old, base)], t0);
+    const keys = [old, `${old}:${base}`].map((followUpId) => ({ claimId: 'c_1', followUpId }));
+    await giveToWake(db, wake.id, keys, t0 + MINUTE);
+    // A push to a new head that passes and can merge supersedes both.
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: next, mergeable: 'MERGEABLE', readAt: t0 + HOUR }], t0 + HOUR);
+    // The branch goes back to the old head, which fails and conflicts again.
+    const back = t0 + 2 * HOUR;
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: old, mergeable: 'CONFLICTING', readAt: back }], back);
+    const added = await saveFollowUps(db, 'c_1', [{ ...checks(old), writtenAt: back }, { ...conflict(old, base), writtenAt: back }], back);
+
+    expect(added).toBe(2);
+    expect((await listClaimFollowUps(db, 'c_1')).map((f) => [f.commentId, f.state, f.outcome, f.writtenAt, f.readAt, f.shownAt, f.answeredAt])).toEqual([
+      [old, 'open', null, back, back, null, null],
+      [`${old}:${base}`, 'open', null, back, back, null, null],
+    ]);
+    expect(await giveToWake(db, wake.id, keys, back + MINUTE)).toEqual(keys);
+  });
+
+  test("checks on the same head that a run sorted stay as it sorted them when they fail again", async () => {
+    const head = 'a'.repeat(40);
+    await saveFollowUps(db, 'c_1', [checks(head)], t0);
+    await db.prepare("UPDATE follow_ups SET state = 'settled', outcome = 'no_change', answered_at = ?1").bind(t0).run();
+
+    const added = await saveFollowUps(db, 'c_1', [checks(head)], t0 + HOUR);
+
+    expect(added).toBe(0);
+    expect(await states()).toEqual([[head, 'settled', 'no_change']]);
+  });
+
+  test("a read made before another, that lands after it, adds no checks or conflict, and still adds its reviews", async () => {
+    const [old, next] = ['a'.repeat(40), 'b'.repeat(40)];
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    // The newer read, at t0 + 2 hours, finds a new head that passes and can merge.
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: next, mergeable: 'MERGEABLE', readAt: t0 + 2 * HOUR }], t0 + 2 * HOUR);
+    // The older read, made at t0 + 1 hour, lands now. It found the old head failing and conflicting, and a review.
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: old, mergeable: 'CONFLICTING', readAt: t0 + HOUR }], t0 + 3 * HOUR);
+    const review = { ...checks(old), commentId: 'PRR_1', kind: 'review' as const, reviewer: 'sample-maintainer', authorKind: 'maintainer' as const, body: 'Add a test.' };
+    await saveFollowUps(db, 'c_1', [checks(old), conflict(old, 'c'.repeat(40)), review], t0 + 3 * HOUR, t0 + HOUR);
+
+    expect(await states()).toEqual([['PRR_1', 'open', null]]);
+  });
+
   test("UNKNOWN supersedes no conflict, even on a new head, and a settled follow-up stays as it settled", async () => {
     const [head, next] = ['a'.repeat(40), 'e'.repeat(40)];
     await saveFollowUps(db, 'c_1', [conflict(head, 'c'.repeat(40)), checks('d'.repeat(40))], t0);
@@ -419,7 +469,7 @@ describe("a donor's open PRs", () => {
     await setPrState(db, 'c_1', 'merged', t0 + 3 * HOUR);
 
     expect(await listOpenPrsOf(db, priya.githubId)).toEqual([
-      { claimId: 'c_2', issue: `${repo}#18`, pr: prRef(58), reviews: 2, conversation: 0 },
+      { claimId: 'c_2', issue: `${repo}#18`, pr: prRef(58), reviews: 2, conversation: 0, failedChecksHead: null, conflictHead: null },
     ]);
   });
 

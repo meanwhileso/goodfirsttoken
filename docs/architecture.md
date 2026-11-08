@@ -541,7 +541,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 
 | File | What it does |
 |---|---|
-| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `follow_pr`, `sort_follow_ups`, `set_follow_through`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list, and `followModesOf` adds each one's mode from `src/db/follow-through.ts`. `followThroughFor` joins them with `listFollowFacts` from `src/db/follow-prs.ts` and gives them to `followThroughOf` in `packages/core` for `followThrough` |
+| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `follow_pr`, `sort_follow_ups`, `set_follow_through`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list, with the head of each claim's newest checks and conflict follow-up in any state, by a subquery each, and `followModesOf` adds each one's mode from `src/db/follow-through.ts`. `followThroughFor` joins them with `listFollowFacts` from `src/db/follow-prs.ts` and gives them to `followThroughOf` in `packages/core` for `followThrough` |
 | `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
@@ -687,8 +687,14 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   ... RETURNING` with `sortFollowUps`, which leaves a follow-up settled as
   `fixed` or `superseded` as it is and gives the IDs it changed.
   `my_work` with a wake's ID gives the wake what it lists with
-  `giveToWake`, one `INSERT ... ON CONFLICT DO NOTHING RETURNING`, so two
-  runs of one wake at once never both get a follow-up. Once the answer is
+  `giveToWake`, one `INSERT ... ON CONFLICT DO UPDATE ... WHERE ...
+  RETURNING`, which keeps the run's ID on each row. A row given before
+  comes back only when its `run_id` is the caller's, so a run that calls
+  `my_work` again gets its own follow-ups again, and two runs of one wake
+  at once never both get one. A call with no run ID matches no row, since
+  `NULL` equals nothing. The server keeps the run's follow-ups, so a skill
+  that calls `my_work` twice in a run needs nothing of its own to carry
+  them. Once the answer is
   made, `markFollowUpsShown` marks only what the wake's level lets it:
   none for `notify`, and only follow-ups on PRs that follow `go_ahead` for
   `full` and `session`, and `recordWakeRun` records the run, keeping the
@@ -702,10 +708,16 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   `UPDATE ... RETURNING` whose `WHERE` takes it only when no run holds it,
   the run holds it, or its time passed, so two runs at once never both
   hold it. `countRound` counts a round in one `UPDATE`, whose every `SET`
-  reads the row before it, only while a lease is live. `submit_work` calls
-  it once a submit lands on an open PR, after `answersBot` says whether
-  the submit settles a bot's follow-up, and `sort_follow_ups` once it
-  records a reply. `listFollowFacts` reads each open PR's facts in one
+  reads the row before it, only while the caller's run holds a live
+  lease: its `WHERE` matches `lease_run` to the run's ID. `submit_work`
+  calls it once a submit with a `runId` lands on an open PR, after
+  `answersBot` says whether the submit settles a bot's follow-up, and
+  `sort_follow_ups` with a `runId` once it records a reply's link that
+  wasn't recorded before, whatever the state. A call with no `runId`, or
+  another run's, counts none. `follow_pr` with `give_back` and `noted`
+  sets `waiting_told_at` or `review_asked_at` with `noteFollowThrough`,
+  whether or not the run still held the lease, and `listFollowFacts` reads
+  them for `tellDonorWaiting`. `listFollowFacts` reads each open PR's facts in one
   query, with a subquery each over `follow_ups`, by the filter
   `listOpenPrsOf` uses, and counts follow-ups only while the project asks
   for help, by `ASKING_FOR_HELP`. `listEndedToOffer` in
@@ -1675,7 +1687,12 @@ it works, and tells the donor.
     `https://api2.cursor.sh/automations/webhook/<id>`. Their docs say to
     copy the URL the app shows, with a key sent as
     `Authorization: Bearer`, and give no pattern. This one comes from
-    people's reports of using them, and both products appear to share it.
+    people's reports of using Cursor Automations. Grok Bot's pattern is
+    the same host and path, and that is plausible but unconfirmed: its
+    routines docs are on cursor.com, at cursor.com/help/grok-bot/routines,
+    and refer to the Cursor account that owns the Bot, but no one has seen
+    a Grok Bot routine's webhook URL. When it is wrong, `/me` refuses the
+    URL, as below.
     The body is `{"wakeId": "<id>"}`. Grok Bot's docs say a run gets the
     JSON body with its instruction, and Cursor's say nothing. Neither
     lists the answers for a wrong key or a trigger that is gone, so the
@@ -1771,13 +1788,13 @@ in `people`.
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and since when, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
-| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, whether its issue waits to be read again, and when that read last failed, and for follow-through, when a run last checked it, the run that holds its lease and until when, what that run's round did, and its rounds in all, on the UTC day of the last one, and that answered bots | `claim_id` |
+| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, whether its issue waits to be read again, and when that read last failed, and for follow-through, when a run last checked it, the run that holds its lease and until when, what that run's round did, and its rounds in all, on the UTC day of the last one, and that answered bots, when the newest read of its head was made, and when a run told the donor it waited 14 days and asked a maintainer to review again | `claim_id` |
 | `follow_ups` | What the PR job read on a claim's open PR that a donor's agent answers: a maintainer's or a review bot's review, comment on a line, or comment in the conversation, or the PR's failed checks or conflict. Its kind, GitHub's ID for it, or the SHAs for checks and a conflict, the author and whether a maintainer or a bot, the text folded and cut, the file, the link, when it was written and read, when a tool showed it and when it settled, its state and outcome, the agent's question for the donor, and the link of the agent's reply | `claim_id`, `comment_id` |
 | `repo_pushers` | Login whose review on a PR in a repo showed push access when the PR job read it, and when it last did. A comment in the conversation counts as a maintainer's by it, for 90 days | `repo`, `login` |
 | `follow_modes` | The follow-through mode a donor chose for all their PRs, `go_ahead` or `ask_first`, and when. A donor with no row follows `go_ahead` | `github_id` |
 | `pr_follow_modes` | The mode a donor chose for one claim's PR, `go_ahead`, `ask_first`, or `off`, and when | `claim_id` |
 | `wakes` | What starts a donor's follow-through runs: its harness, its level, how often it runs, when it was saved, and when a run last called `my_work` with its ID. Its trigger, when it has one: the URL, the key sealed with `AUTH_SECRET`, whether it is on and why it turned off, when it was saved, last called, and last fired, its failed calls in a row, until when a `429` holds it, and its calls on its last call's UTC day | `id` |
-| `wake_follow_ups` | The follow-ups `my_work` gave each wake as `newForWake`, and when | `wake_id`, `claim_id`, `comment_id` |
+| `wake_follow_ups` | The follow-ups `my_work` gave each wake as `newForWake`, when, and to which run | `wake_id`, `claim_id`, `comment_id` |
 | `trigger_follow_ups` | The follow-ups each wake's trigger was called for, and when, so each brings one call | `wake_id`, `claim_id`, `comment_id` |
 | `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, `open_pr`'s clearance of pushed work, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
@@ -1948,6 +1965,14 @@ that break the rules, so it returns the problems for the caller to show.
   `saveTrigger`, `takeTriggerCall`, and `recordTriggerCall` keep a URL and
   key on every trigger that is on. A wrong key or a trigger that is gone
   drops the key, and three failures in a row keep it, for Turn on again.
+- **Migration `20261108232556_follow_through_fixes.sql`** adds
+  `wake_follow_ups.run_id`, the run each follow-up was given to, null for
+  a run that named no ID, and to `prs` `head_read_at`, the time of the
+  newest read of the PR's head and merge, and `waiting_told_at` and
+  `review_asked_at`, when a run told the donor the PR waited 14 days and
+  when one asked a maintainer to review it again. Each is null on a row
+  from before, which reads as nothing given to a run, no read of the head
+  yet, and nothing told or asked.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -3411,6 +3436,21 @@ and count the hour's reads in one place. The rules are in
   don't settle. So `saveFollowUps` writes no conflict while another on the
   claim isn't settled, and a base that moves on under the same head adds
   none for the same conflict, and keeps the one there, with its state.
+- **Checks and a conflict that come back.** The ID of checks is the head,
+  so a branch that goes back to an earlier head reads the same ID again.
+  `saveFollowUps` is an `INSERT ... ON CONFLICT DO UPDATE` whose `WHERE`
+  takes only checks or a conflict settled as `superseded`: they open again
+  with the new read's text and times, shown to no one. In the same batch it
+  deletes their rows in `wake_follow_ups` and `trigger_follow_ups` given or
+  called before the read, so each wake reports them, and each trigger is
+  called for them, as new. One a run sorted, or a submit settled, stays as
+  it is.
+- **Reads out of order.** `supersedeFollowUps` also sets `prs.head_read_at`
+  to the newest read's time it was given, in the same batch. `saveFollowUps`
+  takes the time the read was made, and writes no checks or conflict when
+  `head_read_at` is later, so an older read that lands after a newer one
+  can't add checks or a conflict as open that the newer read found gone. A
+  review or a comment it read is still saved, by its ID.
 - **Superseding.** Once a batch's query answers, and before it saves any
   follow-up, `supersedeFollowUps` settles as `superseded` what the batch's
   reads replaced, in one `UPDATE ... FROM json_each` for the whole batch:
@@ -3421,7 +3461,8 @@ and count the hour's reads in one place. The rules are in
   that aren't settled and whose `read_at` is at or before the read, so a
   check and the PR job that read the same PR at once, landing out of
   order, never supersede what the newer read stored. The log line counts
-  them as `superseded`.
+  them as `superseded`. The batch's second statement records each read's
+  time in `prs.head_read_at`, keeping the later one.
 - **Checks and conflicts.** The head's checks come from the last of
   `commits(last: 1)`, as GitHub's CLI reads them for `gh pr checks`, and
   count only when that commit is `headRefOid`. A head whose `statusCheckRollup.state` is
@@ -3466,10 +3507,17 @@ and count the hour's reads in one place. The rules are in
   taken with `takeTriggerCall`, one `UPDATE ... RETURNING` that records
   the call and counts it on the UTC day only while the trigger may be
   called, so two passes at once never both call one. The call goes 10 at
-  a time, with `redirect: 'manual'` and a 5-second timeout, and
-  `recordTriggerCall` records its outcome on the trigger the call was
-  made for, by `trigger_saved_at`, so a trigger saved again meanwhile
-  keeps its own. A call D1 fails on is logged and counted as not
+  a time, with `redirect: 'manual'` and a 5-second timeout, to the stored
+  URL only once `checkTrigger` passes it again for its harness. A URL that
+  no longer fits, as one saved before a pattern changed, isn't called, and
+  turns the trigger off as `gone`. `recordTriggerCall` records the outcome
+  on the trigger the call was made for, by `trigger_saved_at`, so a
+  trigger saved again meanwhile keeps its own. A call that times out
+  counts a failure, and also records its follow-ups in
+  `trigger_follow_ups`, as one that started a run does. The harness may
+  have started the run before the 5 seconds ran out, and Claude Code's
+  routines API takes no idempotency key, so calling again could start a
+  second run. A follow-up that comes after it brings the next call. A call D1 fails on is logged and counted as not
   recorded, and the other calls go on. Its follow-ups go with a later
   call. Saving a trigger again, or turning it on again, keeps a `429`'s
   hold. The cost: no call to GitHub. One D1 query a pass, and

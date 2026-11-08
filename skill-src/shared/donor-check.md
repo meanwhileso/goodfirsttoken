@@ -8,7 +8,7 @@ it happens. Good First Token then reads GitHub only for a PR that
 changed.
 
 1. For each PR in `openPrs`, run
-   `gh pr view <its link> --json state,reviews,comments,statusCheckRollup,mergeable`.
+   `gh pr view <its link> --json state,reviews,comments,statusCheckRollup,mergeable,headRefOid`.
    The donor's own gh CLI reads it as the donor, from their own rate
    limit.
 2. The PR changed when any of these holds:
@@ -18,11 +18,13 @@ changed.
      Good First Token does.
    - Its comments in the conversation, anyone's, number more than its
      `conversation`.
-   - Its head's checks failed, and no follow-up of kind `checks` lists
-     for its claim. Leave out a run whose conclusion is ACTION_REQUIRED,
-     one that waits for a maintainer to approve it.
-   - GitHub shows it CONFLICTING, and no follow-up of kind `conflict`
-     lists for its claim.
+   - Its head's checks failed, and the head it gives isn't the PR's
+     `failedChecksHead`, the head whose failed checks Good First Token
+     already read, however that follow-up was sorted. Leave out a run whose
+     conclusion is ACTION_REQUIRED, one that waits for a maintainer to
+     approve it.
+   - GitHub shows it CONFLICTING, and the head it gives isn't the PR's
+     `conflictHead`.
 3. When it changed, call `check_pr` with its `claimId`, and the `runId`
    of your run when you hold its lease. When nothing changed, call
    nothing. That is the usual case.

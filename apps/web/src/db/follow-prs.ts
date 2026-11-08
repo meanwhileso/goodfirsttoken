@@ -97,19 +97,21 @@ export async function renewLease(db: D1Database, claimId: string, runId: string,
 }
 
 /**
- * Counts a round on the claim's open PR at `now`, for what a run did while
- * a lease on it is live: a submit that landed (`push`), or a reply it
- * recorded, which answered a review bot (`bot`) or not. A round is what
- * one run does on one PR, at most one push and one set of replies. So the
- * lease's first push or reply counts a round, and a push after that
- * round's push counts another. A reply after it is the same round's. A
- * round that answers a bot counts as a bot round once. A push or reply
- * with no live lease counts no round. One statement, so two at once count
- * each once. Returns whether it counted a new round.
+ * Counts a round on the claim's open PR at `now`, for what the run did
+ * while it holds a live lease on it: a submit that landed (`push`), or a
+ * reply it recorded, which answered a review bot (`bot`) or not. A round
+ * is what one run does on one PR, at most one push and one set of
+ * replies. So the lease's first push or reply counts a round, and a push
+ * after that round's push counts another. A reply after it is the same
+ * round's. A round that answers a bot counts as a bot round once. A push
+ * or reply from a run that holds no live lease on it, as another run's,
+ * counts no round. One statement, so two at once count each once. Returns
+ * whether it counted.
  */
 export async function countRound(
   db: D1Database,
   claimId: string,
+  runId: string,
   act: { push: boolean; bot: boolean },
   now: number,
 ): Promise<boolean> {
@@ -126,10 +128,10 @@ export async function countRound(
          lease_bot = iif(${fresh}, ?3, max(lease_bot, ?3)),
          lease_pushed = iif(${fresh}, ?2, max(lease_pushed, ?2)),
          lease_round = 1
-       WHERE claim_id = ?1 AND state = 'open' AND lease_run IS NOT NULL AND lease_until > ?4
+       WHERE claim_id = ?1 AND state = 'open' AND lease_run = ?6 AND lease_until > ?4
        RETURNING rounds`,
     )
-    .bind(mustParse(id, claimId, 'claimId'), act.push ? 1 : 0, act.bot ? 1 : 0, at, roundDay(at))
+    .bind(mustParse(id, claimId, 'claimId'), act.push ? 1 : 0, act.bot ? 1 : 0, at, roundDay(at), mustParse(runIdSchema, runId, 'runId'))
     .first<{ rounds: number }>();
   return row !== null;
 }
@@ -151,6 +153,8 @@ interface FactsRow {
   oldest_open: number | null;
   waiting_donor: number;
   asking: number;
+  waiting_told_at: number | null;
+  review_asked_at: number | null;
 }
 
 /** What followThroughOf reads of a PR, but its mode, which the donor's choices give. */
@@ -171,7 +175,7 @@ export async function listFollowFacts(db: D1Database, person: number): Promise<F
   const { results } = await db
     .prepare(
       `SELECT p.claim_id, p.opened_at, s.submitted_at AS pushed_at, p.checked_at, p.lease_run, p.lease_until, p.rounds,
-         p.rounds_day, p.rounds_on_day, p.bot_rounds,
+         p.rounds_day, p.rounds_on_day, p.bot_rounds, p.waiting_told_at, p.review_asked_at,
          (SELECT MAX(f.read_at) FROM follow_ups f WHERE f.claim_id = p.claim_id) AS newest_read,
          (SELECT MAX(f.written_at) FROM follow_ups f WHERE f.claim_id = p.claim_id AND f.author_kind IS NOT NULL) AS reviewer_at,
          (SELECT COUNT(*) FROM follow_ups f WHERE f.claim_id = p.claim_id AND f.state = 'open') AS open,
@@ -199,6 +203,27 @@ export async function listFollowFacts(db: D1Database, person: number): Promise<F
       oldestOpenAt: asking ? row.oldest_open : null,
       lease: leaseOf(row),
       rounds: { total: row.rounds, day: row.rounds_day, onDay: row.rounds_on_day, bots: row.bot_rounds },
+      waitingToldAt: row.waiting_told_at,
+      reviewAskedAt: row.review_asked_at,
     };
   });
+}
+
+/** What a run did once for a PR, as follow_pr notes it. */
+export type FollowNote = 'told_waiting' | 'asked_review';
+
+/**
+ * Records at `now` what a run did once for the claim's open PR, so no
+ * later run does it again: it told the donor the PR waited 14 days with no
+ * reviewer activity, or it asked a maintainer to review it again.
+ */
+export async function noteFollowThrough(db: D1Database, claimId: string, noted: readonly FollowNote[], now: number): Promise<void> {
+  if (noted.length === 0) return;
+  await db
+    .prepare(
+      `UPDATE prs SET waiting_told_at = iif(?2, ?4, waiting_told_at), review_asked_at = iif(?3, ?4, review_asked_at)
+       WHERE claim_id = ?1 AND state = 'open'`,
+    )
+    .bind(mustParse(id, claimId, 'claimId'), noted.includes('told_waiting') ? 1 : 0, noted.includes('asked_review') ? 1 : 0, checkTime(now))
+    .run();
 }

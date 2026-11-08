@@ -66,6 +66,7 @@ import {
   listWakes,
   markEndedOffered,
   markFollowUpsShown,
+  noteFollowThrough,
   recordWakeRun,
   renewLease,
   saveFollowThrough,
@@ -372,6 +373,9 @@ async function followThroughFor(
           nextCheckAt: iso(pr.nextCheckAt),
           schedule: pr.schedule,
           stalledSince: iso(pr.stalledSince),
+          tellDonorWaiting: pr.tellDonorWaiting,
+          waitingToldAt: iso(pr.waitingToldAt),
+          reviewAskedAt: iso(pr.reviewAskedAt),
         },
       ];
     }),
@@ -563,8 +567,9 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
   const followed = followUps.followUps
     .filter((followUp) => modes.of(followUp.claimId) !== 'off')
     .map((followUp) => ({ claimId: followUp.claimId, followUpId: followUp.followUpId }));
-  // Given in one statement, so two runs of the wake at once don't both report one.
-  const newForWake = wake === null ? null : await giveToWake(env.DB, wake.id, followed, now);
+  // Given in one statement, so two runs of the wake at once don't both
+  // report one. The same run's next call is given its own again.
+  const newForWake = wake === null ? null : await giveToWake(env.DB, wake.id, followed, now, input.runId);
   const followThrough = await followThroughFor(
     caller.githubId,
     modes,
@@ -778,17 +783,17 @@ export async function sortFollowUps(caller: Caller, input: ToolInput<'sort_follo
   const before = new Map((await listClaimFollowUps(env.DB, claim.id)).map((record) => [record.commentId, record]));
   const changed = await sortStoredFollowUps(env.DB, claim.id, input.followUps, now);
   const byId = new Map((await listClaimFollowUps(env.DB, claim.id)).map((record) => [record.commentId, record]));
-  // A reply the agent recorded is part of its run's round, under a live
-  // lease. One recorded again as it was is no new reply.
-  const replies = [...changed].flatMap((key) => {
-    const record = byId.get(key);
-    const was = before.get(key);
-    const replied = record !== undefined && (record.state === 'waiting_reviewer' || record.outcome === 'replied');
-    const same = was !== undefined && was.state === record?.state && was.outcome === record.outcome && was.replyUrl === record.replyUrl;
-    return replied && !same ? [record] : [];
+  // A sort that records a new reply's link, whatever its state, is a reply
+  // in its run's round, when the run names itself and holds the PR's live
+  // lease. A sort with no link, or the link recorded before, is no reply.
+  const replies = input.followUps.flatMap((sort) => {
+    const record = byId.get(sort.followUpId);
+    const was = before.get(sort.followUpId);
+    const fresh = sort.replyUrl !== undefined && changed.has(sort.followUpId) && was?.replyUrl !== sort.replyUrl;
+    return fresh && record !== undefined ? [record] : [];
   });
-  if (replies.length > 0) {
-    await countRound(env.DB, claim.id, { push: false, bot: replies.some((record) => record.authorKind === 'bot') }, now);
+  if (replies.length > 0 && input.runId !== undefined) {
+    await countRound(env.DB, claim.id, input.runId, { push: false, bot: replies.some((record) => record.authorKind === 'bot') }, now);
   }
   const followUps = ids.flatMap((key) => {
     const record = byId.get(key);
@@ -841,6 +846,8 @@ export async function followPr(caller: Caller, input: ToolInput<'follow_pr'>, no
     lease = took.taken ? 'held' : 'following';
     until = took.lease?.until ?? null;
   } else {
+    // What the run did once is recorded whether or not it still held the lease.
+    await noteFollowThrough(env.DB, claim.id, input.noted ?? [], now);
     const back = await giveBackLease(env.DB, claim.id, input.runId);
     const other = back.lease !== null && back.lease.until > now ? back.lease : null;
     lease = other === null ? 'given_back' : 'following';
