@@ -176,7 +176,7 @@ describe('who sees the admin tools', () => {
     const admin = await connectAgent(github, ADMIN.login);
 
     const names = (await admin.client.listTools()).tools.map((tool) => tool.name);
-    const refused = await adminQueue({ ...ADMIN, gitHubToken: () => Promise.resolve(null) }, { kind: 'all' }).catch(
+    const refused = await adminQueue({ ...ADMIN, gitHubToken: () => Promise.resolve(null) }, { kind: 'all', held: false }).catch(
       (error: unknown) => error,
     );
 
@@ -215,7 +215,7 @@ describe('who sees the admin tools', () => {
   });
 
   test.each([
-    ['admin_queue', (caller: Caller) => adminQueue(caller, { kind: 'all' })],
+    ['admin_queue', (caller: Caller) => adminQueue(caller, { kind: 'all', held: false })],
     ['admin_decide', (caller: Caller) => adminDecide(caller, { id: 'reg_1', decision: 'approve' }, Date.now())],
     [
       'admin_add_project',
@@ -273,6 +273,7 @@ describe('admin_queue', () => {
             ownerCreatedAt: new Date(github.state.accounts['sample-owner']?.createdAt ?? '').toISOString(),
           },
           factsMissing: null,
+          held: null,
           settings: expect.objectContaining({ tags: ['help wanted'], agentNotes: 'Run just test.' }) as unknown,
           policy: null,
           suggestedTags: [],
@@ -290,6 +291,7 @@ describe('admin_queue', () => {
       ],
       more: 0,
       next: null,
+      held: false,
     });
     expect(textOf(result)).toContain('4,200 stars');
     expect(textOf(result)).toContain('Run just test.');
@@ -466,7 +468,7 @@ describe('admin_decide on a registration', () => {
       statusReason: null,
     });
     expect(textOf(again)).toMatch(/^Refused \(not_found\)/);
-    expect(queue.structuredContent).toEqual({ items: [], more: 0, next: null });
+    expect(queue.structuredContent).toEqual({ items: [], more: 0, next: null, held: false });
   });
 
   test('a registration keeps the settings its maintainer chose: approving one with settings or a tier is refused', async () => {

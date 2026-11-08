@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   changedSettings,
   crawlCandidateSchema,
+  policyChangeSchema,
   crawlSeedSchema,
   mustParse,
   parseProjectSettings,
@@ -184,6 +185,36 @@ describe('crawl candidates', () => {
     expect(fields(validate(crawlCandidateSchema, { ...decided, status: 'approved', reason: 'Approved on its own.' }))).toEqual([]);
     expect(fields(validate(crawlCandidateSchema, { ...decided, status: 'approved', reason: null }))).toEqual([]);
     expect(fields(validate(crawlCandidateSchema, { ...candidate, reason: 'Fine.' }))).toEqual(['reason']);
+  });
+
+  test('a waiting candidate may be held, with when and why, and a decided one is not held', () => {
+    const held = { at: at + DAY, why: 'it has no tags' };
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, held }))).toEqual([]);
+    expect(fields(validate(crawlCandidateSchema, { ...candidate, held: { at: at + DAY, why: ' ' } }))).toEqual(['held.why']);
+    const decided = { ...candidate, status: 'rejected', decidedBy: 9001, decidedAt: at + DAY, reason: 'No.' };
+    expect(fields(validate(crawlCandidateSchema, { ...decided, held }))).toEqual(['held']);
+    const stored = validate(crawlCandidateSchema, candidate);
+    expect(stored.ok && stored.value.held).toBeNull();
+  });
+
+  test('a policy change may be held while it waits, and once approved may say it was applied on its own', () => {
+    const change = {
+      id: 'pchg_1',
+      repo: candidate.repo,
+      foundAt: at,
+      facts: candidate.facts,
+      policy: candidate.policy,
+      status: 'waiting',
+      decidedBy: null,
+      decidedAt: null,
+      reason: null,
+    };
+    const decided = { ...change, decidedBy: 9001, decidedAt: at + DAY };
+    expect(fields(validate(policyChangeSchema, { ...change, held: { at: at + DAY, why: 'its docs give no policy to list it from' } }))).toEqual([]);
+    expect(fields(validate(policyChangeSchema, { ...decided, status: 'approved', held: { at: at + DAY, why: 'No.' } }))).toEqual(['held']);
+    expect(fields(validate(policyChangeSchema, { ...decided, status: 'approved', reason: 'Applied on its own.' }))).toEqual([]);
+    expect(fields(validate(policyChangeSchema, { ...change, reason: 'Fine.' }))).toEqual(['reason']);
+    expect(fields(validate(policyChangeSchema, { ...decided, status: 'rejected' }))).toEqual(['reason']);
   });
 
   test('a crawler may suggest settings without tags, which the admin picks', () => {

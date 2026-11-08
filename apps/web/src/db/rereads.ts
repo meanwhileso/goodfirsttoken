@@ -2,6 +2,7 @@ import {
   candidateStatusSchema,
   count,
   crawlerPauseSchema,
+  heldSchema,
   id,
   mustParse,
   policyChangeSchema,
@@ -153,6 +154,8 @@ interface ChangeRow {
   made_by: string;
   rules_tier: string | null;
   why: string;
+  held_at: number | null;
+  held_why: string | null;
 }
 
 function toChange(row: ChangeRow): PolicyChange {
@@ -175,6 +178,7 @@ function toChange(row: ChangeRow): PolicyChange {
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
       reason: row.reason,
+      held: row.held_at === null || row.held_why === null ? null : { at: row.held_at, why: row.held_why },
     },
     'policy change',
   );
@@ -295,15 +299,41 @@ export async function decidePolicyChange(
   if (current?.status !== 'waiting') return null;
   const decided = mustParse(
     policyChangeSchema,
-    { ...current, status: decision.status, decidedBy: decision.decidedBy, decidedAt: checkTime(now), reason: decision.reason },
+    { ...current, status: decision.status, decidedBy: decision.decidedBy, decidedAt: checkTime(now), reason: decision.reason, held: null },
     'policy change',
   );
   const result = await db
     .prepare(
-      `UPDATE policy_changes SET status = ?, decided_by = ?, decided_at = ?, reason = ?
+      `UPDATE policy_changes SET status = ?, decided_by = ?, decided_at = ?, reason = ?, held_at = NULL, held_why = NULL
        WHERE id = ? AND status = 'waiting'`,
     )
     .bind(decided.status, decided.decidedBy, decided.decidedAt, decided.reason, decided.id)
     .run();
   return result.meta.changes === 1 ? decided : null;
+}
+
+/**
+ * Holds a waiting policy change out of the admin queue at `now`, for `why`,
+ * under docs/specs/held-items.md. False when it no longer waits, or is held
+ * already.
+ */
+export async function holdPolicyChange(db: D1Database, changeId: string, why: string, now: number): Promise<boolean> {
+  const held = mustParse(heldSchema, { at: checkTime(now), why }, 'held');
+  const result = await db
+    .prepare("UPDATE policy_changes SET held_at = ?, held_why = ? WHERE id = ? AND status = 'waiting' AND held_at IS NULL")
+    .bind(held.at, held.why, mustParse(id, changeId, 'changeId'))
+    .run();
+  return result.meta.changes === 1;
+}
+
+/**
+ * Stops holding the waiting policy changes held at or before `heldBy`, so
+ * the next check reads them again. Returns how many.
+ */
+export async function releaseHeldPolicyChanges(db: D1Database, heldBy: number): Promise<number> {
+  const result = await db
+    .prepare("UPDATE policy_changes SET held_at = NULL, held_why = NULL WHERE status = 'waiting' AND held_at <= ?")
+    .bind(heldBy)
+    .run();
+  return result.meta.changes;
 }

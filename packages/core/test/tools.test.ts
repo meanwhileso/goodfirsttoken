@@ -674,13 +674,28 @@ describe('what each result says', () => {
     expect(last).not.toContain('more wait');
   });
 
+  test('admin_queue lists the held finds and policy changes with held: true, and says why each is held and when it is checked again', () => {
+    const [candidate] = samples.admin_queue.output.items;
+    if (candidate === undefined) throw new Error('missing sample');
+    expect(validate(tools.admin_queue.input, { held: true })).toEqual({ ok: true, value: { kind: 'all', held: true } });
+    const held = { at: '2026-10-01T12:00:00.000Z', why: 'it has no tags', checkAgainAt: '2026-10-31T12:00:00.000Z' };
+    const text = textOf(toolResult('admin_queue', { items: [{ ...candidate, held }], held: true }));
+    expect(text).toMatch(/^1 held:/);
+    expect(text).toContain(
+      'held out of the queue on 2026-10-01 12:00 UTC: it has no tags. The crawler checks it again on 2026-10-31 12:00 UTC.',
+    );
+    expect(textOf(toolResult('admin_queue', { items: [], held: true }))).toBe('Nothing held.');
+    expect(textOf(toolResult('admin_queue', { items: [] }))).toBe('Nothing waiting.');
+    expect(textOf(toolResult('admin_queue', { items: [candidate] }))).not.toContain('held out of the queue');
+  });
+
   test("admin_queue takes an after only as an answer's next gives it, and a call without one gets the first page", () => {
     const [candidate] = samples.admin_queue.output.items;
     if (candidate === undefined) throw new Error('missing sample');
     const next = `${candidate.requestedAt}~${candidate.repo}~${candidate.id}`;
 
-    expect(validate(tools.admin_queue.input, {})).toEqual({ ok: true, value: { kind: 'all' } });
-    expect(validate(tools.admin_queue.input, { after: next })).toEqual({ ok: true, value: { kind: 'all', after: next } });
+    expect(validate(tools.admin_queue.input, {})).toEqual({ ok: true, value: { kind: 'all', held: false } });
+    expect(validate(tools.admin_queue.input, { after: next })).toEqual({ ok: true, value: { kind: 'all', held: false, after: next } });
     for (const after of ['2', `2026-09-26T12:00:00Z~${candidate.repo}~${candidate.id}`, `${candidate.requestedAt}~${candidate.repo}`, `${next}~x`]) {
       expect(problemFields(validate(tools.admin_queue.input, { after }))).toEqual(['after']);
     }

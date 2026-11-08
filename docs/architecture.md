@@ -1620,13 +1620,13 @@ in `people`.
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
 | `cla_confirmations` | Donor's confirmation that they signed a project's CLA: the link, and when | `github_id`, `project` |
 | `do_not_list` | Repo whose maintainers asked to be removed: note, admin, and time | `repo` |
-| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, who made it, the model reader or, before it, the crawler's rules, with the rules' tier for a find the model made while the rules still read, status, and the admin's decision | `id` |
+| `crawl_candidates` | Crawler find: repo facts, policy, suggested settings and tags, the line behind each suggestion, the sentences in its docs that name AI, the docs hash, who made it, the model reader or, before it, the crawler's rules, with the rules' tier for a find the model made while the rules still read, status, when and why it is held out of the queue, and the admin's decision | `id` |
 | `crawl_seeds` | Repo an admin added, its handling history, and optional validated discovery evidence with its verifier | `repo` |
 | `requested_reads` | Repo donors requested that the crawler read: the name it queued it under, when, and whether it queued it or left it out, and why | `repo_id` |
 | `removal_requests` | Maintainer's request to have a repo removed: the reason, who asked and when, whether it waits, and the admin who removed the repo and when | `id` |
 | `repo_requests` | Donor's request for a repo they want to work on: GitHub's ID for the repo, the name GitHub gave when they asked, who asked and when, and when they withdrew it. It stores no status, which is worked out from `projects` when read | `id` |
 | `policy_reads` | Listed project the crawler reads each week: when its cron job last queued it, the crawler's rules' last fingerprint of its docs and whether they read a ban, from before the model read policies, why the crawler last paused it, and for the model reader, the docs hash, reader version, and fingerprint of its last reading that counted, whether it read a ban, how many weekly reads in a row gave no verdict, and whether it was read in shadow or while the model decided | `project` |
-| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier for a change the model sent while the rules still read, the link the listing had when its welcome moved to another file, status, and the admin's decision | `id` |
+| `policy_changes` | Listing whose policy the crawler reads differently now: the facts it read, the policy the docs give now or none, the lines behind their settings, the sentences that name AI, the docs hash, who sent it and why, with the rules' tier for a change the model sent while the rules still read, the link the listing had when its welcome moved to another file, status, when and why it is held out of the queue, and the admin's decision | `id` |
 | `model_readings` | Repo the model policy reader read: the docs hash and reader version of its last reading, the reading as the admin queue shows it, with the label check's tags and suggested tags once back, the model's output as JSON, which a later label check reads its statements from, its outcome fingerprint, and when | `repo` |
 | `model_pending` | Reading waiting to be sent or collected: the repo, a seed or a weekly read, its share of the budget, the docs hash, an empty `rules_tier` that nothing reads, the commit, branch, facts, vouch file, and labels with their descriptions, and while in a batch, the batch and what it reserved on which day. After a seed's reading that would make a find, it waits on the label check, with the model's policy reading. After a weekly read's move into a ban, it waits on the second reading, with the first | `id` |
 | `model_staged_files` | File a pending reading reads, in the crawler's order | `reading_id`, `position` |
@@ -1765,6 +1765,12 @@ that break the rules, so it returns the problems for the caller to show.
   [The policy crawler](how-it-works.md#the-policy-crawler). It keeps
   requested repos apart from `crawl_seeds`, whose `added_by` names an
   admin.
+- **Migration `20261108160838_held_items.sql`** adds `held_at` and
+  `held_why` to `crawl_candidates` and `policy_changes`, null for an item
+  that isn't held, under Checking on its own in
+  [The policy crawler](how-it-works.md#the-policy-crawler). A held item
+  keeps its status, `waiting`, so the partial unique indexes still keep
+  one waiting for each repo.
 
 ### Who sees what
 
@@ -3369,7 +3375,7 @@ candidates. The rules are in
 | `src/crawl/reread.ts` | The weekly read of a listed project: the pull request check, then the docs staged for the model, and `compare`, which `src/crawl/decide.ts` uses to act on the reading |
 | `src/crawl/decide.ts` | What the model reader decides: a seed's find, and a weekly reading's policy change, second reading, or pause |
 | `src/crawl/pause.ts` | The pause the crawler makes on its own, and its reasons |
-| `src/crawl/auto-approve.ts` | Approving the waiting finds with more than 100 stars on their own, after the reader's hourly run, through the same approval as `admin_decide` in `src/admin/actions.ts` |
+| `src/crawl/auto-approve.ts` | Checking the waiting finds and policy changes on their own, after the reader's hourly run: approving or applying what passes through the same approval as `admin_decide` in `src/admin/actions.ts`, holding the rest out of the queue, and checking what was held 30 days ago again |
 | `src/crawl/fingerprint.ts` | What the fingerprints share: the rules' last version, which the reader's versions count up from, and the words a fingerprint hashes |
 | `src/db/rereads.ts` | The `policy_reads` and `policy_changes` tables: where the weekly reads stand for each listed project, and the policy changes in the admin queue |
 | `src/crawl/reader/` | The model policy reader's core: the requests, the output schemas, the checks on what the model points at, the tier it works out, the mapping onto `PolicyReading` and the settings, the outcome fingerprint, the price table, the docs hash, and the day's budget with its shares. It makes no network calls |
@@ -4761,7 +4767,7 @@ something new.
 | The Worker to the feeds and rooms | Read-only, hibernating sockets that close when they send, at most 100 from one address on one feed or room |
 | The repo to a deploy | `scripts/deploy-config.mjs`, which writes the deploy's config from the GitHub environment |
 | A pull request to CI | A read-only token, no secrets, and pinned actions and tools |
-| A repo's docs and labels to a listing | The model's claims checked against the files (`src/crawl/reader/`), an admin for every find of 100 stars or fewer, and two agreeing readings for a pause (`src/crawl/decide.ts`) |
+| A repo's docs and labels to a listing | The model's claims checked against the files (`src/crawl/reader/`), checks that hold a find or a policy change out of the queue (`src/crawl/auto-approve.ts`), and two agreeing readings for a pause (`src/crawl/decide.ts`) |
 | A maintainer's proposal to the model's budget | Limits per caller and per repo, a cache by label set, and a share of the day reserved before the call (`src/projects/label-check.ts`) |
 
 ### What holds
@@ -4780,20 +4786,26 @@ try to steer the reader.
   model's own tier only cross-checks it. So an injected line can't make up
   a welcome or a ban the repo didn't write, though it can get the model to
   misread a line.
-- A find of a repo with 100 stars or fewer never lists anything: an admin
-  decides it, reads the steering lines at the top, and reads every
-  paragraph that names AI by the word list, whatever the model said.
-- A find of a repo with more than 100 stars is approved on its own
-  (`src/crawl/auto-approve.ts`) when its two tiers agree, no statement was
-  dropped, and no steering line, canary, or line that keeps agents from
-  working on their own checks out. No admin reads its word-list net first,
-  and no check reading looks for what the first reading missed. So one
-  reading steered or wrong past a ban lists the repo, and the weekly read
-  is what catches the ban later. The reader's prompt still tells the model
-  that an admin reads the files before anything is listed, which is no
-  longer true for these finds. Changing it means a new run of the eval.
-- The find and the listing name an admin who didn't read it. The find's
-  reason says it was approved on its own.
+- A find of a repo with 100 stars or fewer never lists anything. It is
+  held out of the admin queue (`src/crawl/auto-approve.ts`), and checked
+  again each month, when the crawler reads its repo again.
+- A find of a repo with more than 100 stars is approved on its own when
+  its two tiers agree, no statement was dropped, and no steering line,
+  canary, or line that keeps agents from working on their own checks out.
+  A policy change is applied on its own under the same checks, when its
+  docs give a policy. No admin reads the word-list net first, and no check
+  reading looks for what the first reading missed. So one reading steered
+  or wrong past a ban lists the repo, or moves a listing to a new quote
+  and tier, and the weekly read is what catches the ban later. The
+  reader's prompt still tells the model that an admin reads the files
+  before anything is listed, which is no longer true. Changing it means a
+  new run of the eval.
+- Anything that fails a check is held, and no admin is asked to read it.
+  A policy change sent for a ban a second reading didn't confirm is held
+  too, so its listing stays live until a weekly read confirms the ban or
+  an admin reads the change with `admin_queue` and `held: true`.
+- The find or change and the listing name an admin who didn't read it.
+  The reason says it was approved, or applied, on its own.
 - A pause needs both tiers to read a ban, a ban line that checks out, a
   second reading of the same staged docs that agrees, and those docs still
   the newest staged. A steered or unlucky reading that misses one leaves

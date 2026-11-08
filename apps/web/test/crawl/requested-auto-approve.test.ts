@@ -82,7 +82,7 @@ async function requestAndRead(repos: string[]): Promise<void> {
 }
 
 function approve() {
-  return approveStarredFinds({ db, token: env.GH_SERVICE_TOKEN, now: () => clock });
+  return approveStarredFinds({ db, token: env.GH_SERVICE_TOKEN, queue, now: () => clock });
 }
 
 /** Sets the repo's stars on the GitHub fake, as the crawler will read them. */
@@ -106,13 +106,13 @@ test('a requested repo with more than 100 stars and welcoming docs is read by th
 
   const run = await approve();
 
-  expect(run).toMatchObject({ approver: admin.githubId, approved: [INVITES], left: [] });
+  expect(run).toMatchObject({ approver: admin.githubId, approved: [INVITES], held: [] });
   // The listing takes the settings the crawler suggested, as an admin's approval does.
   expect(await getProject(db, INVITES)).toMatchObject({ status: 'approved', source: 'policy', addedBy: admin.githubId });
   expect(await listCandidates(db, 'approved')).toMatchObject([{ repo: INVITES, reason: AUTO_APPROVED_REASON }]);
 });
 
-test('a requested repo with 100 stars, and the same welcoming docs, is read, and its find waits for an admin', async () => {
+test('a requested repo with 100 stars, and the same welcoming docs, is read, and its find is held out of the admin queue', async () => {
   starred(INVITES, 100);
   await requestAndRead([INVITES]);
   expect(readById(INVITES)).toBe(true);
@@ -120,7 +120,7 @@ test('a requested repo with 100 stars, and the same welcoming docs, is read, and
 
   const run = await approve();
 
-  expect(run).toEqual({ approver: null, approved: [], left: [] });
+  expect(run).toMatchObject({ approver: admin.githubId, approved: [], held: [{ repo: INVITES, kind: 'candidate', why: 'it has 100 stars or fewer' }] });
   expect(await getProject(db, INVITES)).toBeNull();
-  expect((await listCandidates(db, 'waiting')).map((find) => find.repo)).toEqual([INVITES]);
+  expect((await listCandidates(db, 'waiting')).map((find) => [find.repo, find.held?.why])).toEqual([[INVITES, 'it has 100 stars or fewer']]);
 });

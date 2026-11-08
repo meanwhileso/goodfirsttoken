@@ -173,7 +173,9 @@ homepage, from `/request`, or through their agent with `request_repo`. A request
 crawler reads requested repos after the admins' seeds. Its find goes through the hourly approval
 [#191](https://github.com/meanwhileso/goodfirsttoken/pull/191) added for every find: a repo with more
 than 100 stars whose docs welcome AI help, and whose reading has none of that approval's reasons to wait,
-is listed without waiting for an admin.
+is listed without waiting for an admin. Under the [held items spec](docs/specs/held-items.md), a find
+or a policy change that fails a check is held out of the admin queue, and the crawler checks it again
+each month.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|

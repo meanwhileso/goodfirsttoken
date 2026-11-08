@@ -14,7 +14,7 @@ import { readSignedIn, siteCaller } from '../auth/session';
 import { backWithNotice, verifiedNotice } from '../auth/notice';
 import type { NoticeParams } from '../auth/notice-params';
 import { siteOrigin } from '../auth/settings';
-import { listBlocks, listPolicyListings } from '../db';
+import { countHeldCandidates, listBlocks, listPolicyListings } from '../db';
 import { GitHubError } from '../github';
 import { ADMIN_PATH } from './paths';
 import {
@@ -76,6 +76,8 @@ export interface AdminPage {
   laterPage: boolean;
   /** Why no page of the queue shows, when the address asked for one that isn't. */
   badPage: string | null;
+  /** How many crawler finds the crawler held out of the queue, for failing a check. */
+  heldFinds: number;
 }
 
 /** What /admin's address can carry: a notice, and the page of the queue. */
@@ -142,7 +144,7 @@ export async function loadAdminPage(
   const after = place.ok ? place.value.after : undefined;
   let signInAgain = false;
   const none: KindCounts = { registration: 0, candidate: 0, removal: 0, pause: 0, policy_change: 0 };
-  const nothing: QueuePage = { ok: true, value: { items: [], more: 0, next: null }, waiting: none, later: none };
+  const nothing: QueuePage = { ok: true, value: { items: [], more: 0, next: null, held: false }, waiting: none, later: none };
   let queue =
     badPage !== null
       ? nothing
@@ -154,10 +156,11 @@ export async function loadAdminPage(
   // GitHub stopped taking the admin's token, so the queue shows no facts.
   queue ??= await queuePage({ ...caller, gitHubToken: () => Promise.resolve(null) }, { kinds: PAGE_KINDS, after });
   const items = queue.value.items;
-  const [listings, blocked, notice] = await Promise.all([
+  const [listings, blocked, notice, heldFinds] = await Promise.all([
     readListings(caller),
     readBlocked(caller),
     verifiedNotice(NOTICE_PURPOSE, params),
+    countHeldCandidates(env.DB),
   ]);
   return {
     result: {
@@ -177,6 +180,7 @@ export async function loadAdminPage(
         next: queue.value.next ?? null,
         laterPage: after !== undefined,
         badPage,
+        heldFinds,
       },
     },
     setCookies,

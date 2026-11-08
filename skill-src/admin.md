@@ -111,6 +111,13 @@ The same queue is at `/admin` on the Good First Token site.
 5. At the end, tell the admin which items were approved, rejected, and
    skipped.
 
+The crawler lists a find, or applies a policy change, on its own when it
+passes every check. It holds the rest out of the queue, and checks each one
+again 30 days after it was held. To work the held ones, when the admin asks,
+call `admin_queue` with `held: true`, and work them as above. Each held item
+has `held`, with when it was held, why, and when the crawler checks it
+again. Show the admin why it is held before you propose a verdict.
+
 ### Checks for a crawler find
 
 A crawler find is a repo whose own docs welcome AI or agent contributions.

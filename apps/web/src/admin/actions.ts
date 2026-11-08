@@ -1,5 +1,6 @@
 import {
   ADMIN_QUEUE_PAGE,
+  HELD_CHECK_AGAIN_MS,
   invalidSettings,
   projectSettingsSchema,
   queuePlaceText,
@@ -11,6 +12,7 @@ import {
   FuturePostTime,
   type QueuePlace,
   type CrawlCandidate,
+  type Held,
   type Policy,
   type PolicyChange,
   type ProjectRecord,
@@ -235,6 +237,11 @@ async function removalItem(token: string | null, request: RemovalRequest): Promi
   };
 }
 
+/** When a held find or policy change was held, why, and when the crawler checks it again, for the queue. */
+function heldOf(held: Held | null): QueueItem['held'] {
+  return held === null ? null : { at: iso(held.at), why: held.why, checkAgainAt: iso(held.at + HELD_CHECK_AGAIN_MS) };
+}
+
 async function candidateItem(candidate: CrawlCandidate, now: number): Promise<QueueItem> {
   const [doNotList, removals, seed, modelReading] = await Promise.all([
     getDoNotListEntry(env.DB, candidate.repo),
@@ -262,6 +269,7 @@ async function candidateItem(candidate: CrawlCandidate, now: number): Promise<Qu
     modelReading,
     madeBy: candidate.madeBy,
     rulesTier: candidate.rulesTier,
+    held: heldOf(candidate.held),
     ...removals,
   };
 }
@@ -347,6 +355,7 @@ async function policyChangeItem(change: PolicyChange): Promise<QueueItem> {
     madeBy: change.madeBy,
     rulesTier: change.rulesTier,
     changeWhy: change.why,
+    held: heldOf(change.held),
     change: { listed: shown ? project.policy : null, status: project.status, delisted },
   };
 }
@@ -355,6 +364,8 @@ type QueueKind = QueueItem['kind'];
 
 /** Every kind of item in the admin queue. */
 export const QUEUE_KINDS: readonly QueueKind[] = ['registration', 'candidate', 'removal', 'pause', 'policy_change'];
+/** The kinds the crawler holds out of the queue when they fail a check. */
+const HELD_KINDS: readonly QueueKind[] = ['candidate', 'policy_change'];
 
 /** An item waiting in the queue before it is built: its kind, where it sits in the queue, and how to build it. */
 interface Waiting extends QueuePlace {
@@ -404,20 +415,22 @@ function queueOrder(a: QueuePlace, b: QueuePlace): number {
  */
 export async function queuePage(
   caller: Caller,
-  { kinds, after }: { kinds: readonly QueueKind[]; after?: string | undefined },
+  { kinds, after, held = false }: { kinds: readonly QueueKind[]; after?: string | undefined; held?: boolean },
 ): Promise<QueuePage> {
   await requirePermission(caller, 'review_projects');
   const from = after === undefined ? null : readQueuePlace(after);
   if (after !== undefined && from === null) throw new Error(`${after} is no place in the admin queue.`);
   const token = await caller.gitHubToken();
   const now = Date.now();
-  const wants = (kind: QueueKind) => kinds.includes(kind);
+  // Held items are only finds and policy changes, listed apart from the queue.
+  const wants = (kind: QueueKind) => kinds.includes(kind) && (!held || HELD_KINDS.includes(kind));
+  const asked = (item: { held: Held | null }) => (item.held !== null) === held;
   const [pending, candidates, removals, paused, changes] = await Promise.all([
     wants('registration') ? listPendingProjects(env.DB) : [],
-    wants('candidate') ? listCandidates(env.DB, 'waiting') : [],
+    wants('candidate') ? listCandidates(env.DB, 'waiting').then((all) => all.filter(asked)) : [],
     wants('removal') ? listWaitingRemovals(env.DB) : [],
     wants('pause') ? listSelfPausedProjects(env.DB) : [],
-    wants('policy_change') ? listPolicyChanges(env.DB, 'waiting') : [],
+    wants('policy_change') ? listPolicyChanges(env.DB, 'waiting').then((all) => all.filter(asked)) : [],
   ]);
   const waiting: Waiting[] = [
     ...pending.map(({ project, changeId }) => ({
@@ -464,7 +477,7 @@ export async function queuePage(
   const last = shown.at(-1);
   return {
     ok: true,
-    value: { items, more, next: more > 0 && last !== undefined ? queuePlaceText(last) : null },
+    value: { items, more, next: more > 0 && last !== undefined ? queuePlaceText(last) : null, held },
     waiting: countKinds(waiting),
     later: countKinds(rest.slice(shown.length)),
   };
@@ -472,7 +485,7 @@ export async function queuePage(
 
 /** The admin queue, for `admin_queue`: one kind of item, or all of them, a page at a time. */
 export async function adminQueue(caller: Caller, input: ToolInput<'admin_queue'>): Promise<Outcome<'admin_queue'>> {
-  return queuePage(caller, { kinds: input.kind === 'all' ? QUEUE_KINDS : [input.kind], after: input.after });
+  return queuePage(caller, { kinds: input.kind === 'all' ? QUEUE_KINDS : [input.kind], after: input.after, held: input.held });
 }
 
 /** Settings left out of a patch, and sent as undefined, keep the value they had. */
@@ -823,10 +836,31 @@ async function decidePolicyChangeItem(
       `The crawler read no policy in the docs of ${change.repo} that welcomes AI help, so there is none to list it from. Reject this change to keep the listing as it is, or pause or remove the project.`,
     );
   }
-  const policy = { ...change.policy, tier: input.tier ?? change.policy.tier };
-  const listed = await listFromPolicy(caller, change.repo, policy, input.settings ?? {}, now);
+  return applyPolicyChange(caller, { ...change, policy: change.policy }, input, now);
+}
+
+/**
+ * Applies a waiting policy change: lists its project from the policy its
+ * docs give now, with the tier given, or the one read, and only the settings
+ * given changed, then records the change approved by the lister, with the
+ * reason given, if any. A refusal leaves the change waiting, and a change
+ * decided or replaced while GitHub was read is refused, unapplied. The
+ * caller has checked `list_from_policy`, or is the crawler applying a change
+ * on its own, which reads no tagged issues at once.
+ */
+export async function applyPolicyChange(
+  lister: Lister,
+  change: PolicyChange & { policy: NonNullable<PolicyChange['policy']> },
+  choice: Pick<ToolInput<'admin_decide'>, 'tier' | 'settings'>,
+  now: number,
+  { reason = null, readNow = true }: { reason?: string | null; readNow?: boolean } = {},
+): Promise<Outcome<'admin_decide'>> {
+  const policy = { ...change.policy, tier: choice.tier ?? change.policy.tier };
+  const stillWanted = async () => ((await getPolicyChange(env.DB, change.id))?.status === 'waiting' ? null : nothingWaits(change.id));
+  const listed = await listFromPolicy(lister, change.repo, policy, choice.settings ?? {}, now, { readNow, stillWanted });
   if (!listed.ok) return listed;
-  await decidePolicyChange(env.DB, change.id, { status: 'approved', decidedBy: caller.githubId, reason: null }, now);
+  const decided = await decidePolicyChange(env.DB, change.id, { status: 'approved', decidedBy: lister.githubId, reason }, now);
+  if (decided === null) console.warn(`${change.repo} was listed from its policy change, and the change was decided by someone else at the same moment.`);
   return { ok: true, value: { repo: listed.value.repo, kind: 'policy_change', status: listed.value.status, decision: 'approve' } };
 }
 
