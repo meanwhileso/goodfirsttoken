@@ -444,6 +444,56 @@ export async function sortFollowUps(
   return new Set(results.map((row) => row.comment_id));
 }
 
+/** The follow-ups /me shows of one PR. */
+export interface PrFollowUps {
+  /** Those that wait for the donor, with the agent's question, oldest first. */
+  waiting: FollowUpRecord[];
+  /** The newest of the rest, by when each settled, or else was written, newest first. */
+  latest: FollowUpRecord[];
+}
+
+/**
+ * What /me shows of the follow-ups on each of these claims' PRs, by claim:
+ * up to `limit` that wait for the donor, oldest first, and the newest
+ * `latest` of the rest, open, waiting for the reviewer, or settled. Only
+ * while the claim's project asks for help, as for the follow-ups the tools
+ * list, so a claim whose project doesn't has none. A claim with none is
+ * left out.
+ */
+export async function listPrFollowUps(
+  db: D1Database,
+  claimIds: readonly string[],
+  limits: { waiting: number; latest: number },
+): Promise<Map<string, PrFollowUps>> {
+  const byClaim = new Map<string, PrFollowUps>();
+  if (claimIds.length === 0) return byClaim;
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM (
+         SELECT f.*, f.state = 'waiting_donor' AS asks,
+           ROW_NUMBER() OVER (
+             PARTITION BY f.claim_id, f.state = 'waiting_donor'
+             ORDER BY iif(f.state = 'waiting_donor', -f.written_at, COALESCE(f.answered_at, f.written_at)) DESC,
+               iif(f.state = 'waiting_donor', -f.rowid, f.rowid) DESC) AS turn
+         FROM follow_ups f JOIN claims c ON c.id = f.claim_id JOIN projects p ON p.repo = c.project
+         WHERE f.claim_id IN (SELECT value FROM json_each(?1)) AND ${ASKING_FOR_HELP})
+       WHERE turn <= iif(asks, ?2, ?3)
+       ORDER BY claim_id, asks DESC, turn`,
+    )
+    .bind(
+      JSON.stringify(claimIds.map((claimId) => mustParse(id, claimId, 'claimId'))),
+      mustParse(count, limits.waiting, 'waiting'),
+      mustParse(count, limits.latest, 'latest'),
+    )
+    .all<FollowUpRow & { asks: number }>();
+  for (const row of results) {
+    const shown = byClaim.get(row.claim_id) ?? { waiting: [], latest: [] };
+    (row.asks === 1 ? shown.waiting : shown.latest).push(toFollowUp(row));
+    byClaim.set(row.claim_id, shown);
+  }
+  return byClaim;
+}
+
 /** Every follow-up read on a claim's PR, oldest first, answered or not. */
 export async function listClaimFollowUps(db: D1Database, claimId: string): Promise<FollowUpRecord[]> {
   const { results } = await db

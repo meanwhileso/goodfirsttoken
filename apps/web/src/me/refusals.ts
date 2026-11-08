@@ -29,3 +29,18 @@ const openPrRefusalWords: Partial<Record<RefusalCode, string>> = {
 export function openPrRefusalText(refusal: { code: RefusalCode }): string | undefined {
   return openPrRefusalWords[refusal.code];
 }
+
+// The words /me shows when a follow-through form is refused, by
+// set_follow_through's rules. Its own messages name tools and fields.
+
+const followRefusalWords: Partial<Record<RefusalCode, string>> = {
+  not_found: 'Good First Token has no record of that PR or wake now. Reload the page to see what you follow.',
+  not_claim_owner: 'Only the person who made the claim can change how its PR is followed.',
+  pr_closed: 'That PR merged or closed, so there is nothing to follow.',
+  rate_limited: 'You have as many wakes as one person keeps. Remove one first.',
+};
+
+/** The page's words for a follow-through refusal, or undefined for a code set_follow_through doesn't list. */
+export function followRefusalText(refusal: { code: RefusalCode }): string | undefined {
+  return followRefusalWords[refusal.code];
+}

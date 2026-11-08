@@ -4,7 +4,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { blockDonor, getProject, listProjectsAskingForHelp, startOfWeek, topMergers } from '../../src/db';
-import { SAMPLE_CANDIDATES, SAMPLE_CLAIMS, SAMPLE_HISTORY, SAMPLE_PEOPLE, SAMPLE_PROJECTS } from '../../src/dev/sample-work';
+import { SAMPLE_CANDIDATES, SAMPLE_CLAIMS, SAMPLE_FOLLOWED, SAMPLE_HISTORY, SAMPLE_PEOPLE, SAMPLE_PROJECTS } from '../../src/dev/sample-work';
+import { readFollowThrough } from '../../src/me/follow';
 import { fieldOf, light, squareFor } from '../../src/home/live';
 import { loadHome } from '../../src/home/load';
 import { homeFeed } from '../../src/rooms/feed';
@@ -192,7 +193,7 @@ describe('the dev-only seed', () => {
 
     const first = await seed();
     expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({ projects: 6, candidates: 1, requests: 2, claims: 10, lines: 10, merged: 5, history: 13 });
+    expect(await first.json()).toEqual({ projects: 6, candidates: 1, requests: 2, claims: 10, lines: 10, merged: 5, history: 13, followed: 2 });
     // One request for a listed project, and one for a repo that isn't listed.
     const requested = await env.DB.prepare('SELECT repo FROM repo_requests WHERE withdrawn_at IS NULL ORDER BY repo').all<{ repo: string }>();
     expect(requested.results.map((row) => row.repo)).toEqual(['meanwhileso/goodfirsttoken', 'sample-owner/sample-app']);
@@ -223,7 +224,27 @@ describe('the dev-only seed', () => {
     );
 
     const again = await seed();
-    expect(await again.json()).toMatchObject({ projects: 0, candidates: 0, requests: 0, claims: 0, merged: 0, history: 0 });
+    expect(await again.json()).toMatchObject({ projects: 0, candidates: 0, requests: 0, claims: 0, merged: 0, history: 0, followed: 0 });
+  });
+
+  test("gives arjun open PRs his agent follows, a stalled one first and one that waits for him, and a wake that stopped, once", async () => {
+    restore = runAsDevelopment();
+    startGitHub();
+
+    await seed();
+    await seed();
+
+    const follow = await readFollowThrough(env.DB, SAMPLE_PEOPLE.arjun.githubId, Date.now());
+    expect(follow.prs.map((pr) => [pr.pr.number, pr.state])).toEqual([
+      [294, 'stalled'],
+      [1312, 'waiting_donor'],
+    ]);
+    expect(follow.prs[1]?.questions.map((f) => f.question)).toHaveLength(1);
+    expect(follow.prs[1]?.latest.map((f) => f.outcome)).toEqual(['no_change', 'replied']);
+    expect(follow.wakes.map((wake) => [wake.harness, wake.stopped])).toEqual([
+      ['cursor-automations', true],
+      ['cursor-editor', false],
+    ]);
   });
 
   test("names only the GitHub fake's own sample people, and its made-up repos and their open issues", () => {
@@ -240,7 +261,7 @@ describe('the dev-only seed', () => {
         });
       }
     }
-    for (const claim of [...SAMPLE_CLAIMS, ...SAMPLE_HISTORY]) expect(repo(claim.project), claim.project).toBeDefined();
+    for (const claim of [...SAMPLE_CLAIMS, ...SAMPLE_HISTORY, ...SAMPLE_FOLLOWED]) expect(repo(claim.project), claim.project).toBeDefined();
     for (const candidate of SAMPLE_CANDIDATES) {
       expect(candidate.repo).toMatch(/^sample-owner\//);
       const found = repo(candidate.repo);

@@ -951,8 +951,10 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
 
 | File | What it does |
 |---|---|
-| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR, which clears the work to open as a PR and opens nothing on GitHub, and the interests |
-| `src/me/refusals.ts` | The page's words for each refusal `open_pr` lists, in one place |
+| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR, which clears the work to open as a PR and opens nothing on GitHub, the follow-through forms, and the interests |
+| `src/me/follow.ts` | `readFollowThrough`: the person's open PRs, each with its state, follow-ups, and next check, their mode, and their wakes, each marked when it stopped |
+| `src/me/follow-words.ts` | The words for modes, states, harnesses, levels, steps, and next checks that the page, its notices, and `/me.md` share, with no server imports, so the page can use them |
+| `src/me/refusals.ts` | The page's words for each refusal `open_pr` and `set_follow_through` list, in one place |
 | `src/me/data.ts` | `getMePage`, the server function the route's loader calls |
 | `src/me/paths.ts` | The page's path, with no imports, so pages can use it |
 | `src/routes/me.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler. `ClearedPr` links cleared work to GitHub's form from the queue item's `toOpen` |
@@ -967,7 +969,26 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   check the same things in the same order, from `workOn` on. The interests
   form checks `set_interests`' input schema from core with `validate`, and
   saves with `setInterests` in `src/db/people.ts`, as the tool does. The
-  description goes through `open_pr`'s input schema.
+  description goes through `open_pr`'s input schema. The follow-through
+  forms check `set_follow_through`'s input schema, and change through
+  `setFollowThroughAs` in `src/mcp/donor.ts`, which the tool wraps as its
+  answer, so its checks and `saveFollowThrough`'s one batch are the same
+  for both.
+- **Follow-through as the tools read it.** `readFollowThrough` in
+  `src/me/follow.ts` reads `listOpenPrsOf`, `listFollowFacts`, the modes,
+  `listWakes`, and `listStoppedWakes`, and runs core's `followThroughOf`
+  with no wake, as for a session the donor is in, so each PR's state and
+  next check are `start_session`'s. `listPrFollowUps` in
+  `src/db/follow-ups.ts` gives each PR's follow-ups that wait for the donor
+  and the latest three of the rest in one query, by `ROW_NUMBER()` over
+  each claim. The latest submit's summary, from `getSubmissions`, is the
+  last pushed round's summary. Good First Token keeps none for a round that
+  only replied, so the latest follow-ups and their outcomes stand in for
+  it. The PRs keep `followThroughOf`'s order within each place: stalled,
+  then those with a question for the donor, then the rest.
+- **Room for the trigger.** Each wake on the page has a marked place for
+  the form build step 9 of docs/specs/follow-through.md adds, which saves
+  the wake's trigger.
 - **The site's token.** Both run as a `Caller` from `siteCaller` in
   `src/auth/session.ts`, whose token is the one from the person's sign-in
   on the site, decrypted only when a call asks GitHub something. The MCP
@@ -985,7 +1006,9 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   that doesn't answer gives a notice and no `500`.
 - **The server function** runs `loadMePage`, which reads the session first
   and answers `signed_out` with nothing read. It reads the agents, the
-  queue, the person, and the notice at once. `readQueue` catches a failure
+  queue, the person, the follow-through, and the notice at once.
+  `readFollow` catches a failure of the follow-through alone, as
+  `readQueue` does for the queue. `readQueue` catches a failure
   of the queue alone, so a GitHub that doesn't answer leaves the agents and
   Disconnect on the page. A `401` there means GitHub no longer takes the
   site's token, and the page says to sign in again. Opening `/me` still
@@ -2047,7 +2070,7 @@ pruning after a sync, with no index of its own.
 | `prs_by_opened` | PRs opened in a time range, like this week |
 | `prs_by_closed` | PRs merged or closed in a time range, like this week, and the PRs closed in the last 14 days the PR job reads |
 | `prs_reread_due` | The issues of PRs closed without merging that wait for the PR job to read them again: those whose read never failed, oldest close first, then the rest, oldest failure first |
-| `wakes_by_person` | A donor's wakes, oldest first, for `set_follow_through`, and those that stopped, for `start_session` and `my_work` |
+| `wakes_by_person` | A donor's wakes, oldest first, for `set_follow_through` and `/me`, and those that stopped, for `start_session`, `my_work`, and `/me` |
 | `donor_sessions_by_person` | A donor's last session, and in migration `0010_follow_ups.sql`, whether a merged PR's donor started a session since it merged |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
@@ -4008,7 +4031,7 @@ end-to-end tests. The rules are in
 |---|---|
 | `src/routes/dev.seed.ts` | The route, which hands every method to `handleDevSeed` |
 | `src/dev/seed.ts` | `handleDevSeed`, and `seedSampleWork`, which writes the sample data |
-| `src/dev/sample-work.ts` | The sample people, projects, issues, and claims |
+| `src/dev/sample-work.ts` | The sample people, projects, issues, and claims, and a donor's followed PRs and wakes |
 | `apps/web/scripts/seed-local.mjs` | What `pnpm seed` runs to call the route |
 | `src/routes/dev.work.ts` | The route, which hands every method to `handleDevWork` |
 | `src/dev/work.ts` | `handleDevWork`, which works an issue as a sample person through its room |
@@ -4031,6 +4054,12 @@ end-to-end tests. The rules are in
   the feeds through the queue, and the claims reach D1 from the room. The
   PRs are recorded with `addPr` and `setPrState`, and the room is told each
   one closed.
+- **Followed PRs straight to D1.** `addFollowed` writes `arjun`'s two open
+  PRs as their claims, submissions, PRs, and follow-ups, then sorts the
+  follow-ups with `sortFollowUps`, as the PR job and his agent would have.
+  `addWakes` saves his wakes through `saveFollowThrough` a day before each
+  last ran, and records the run with `recordWakeRun`. Each is written once:
+  a claim by its ID, a wake by its harness.
 - **The GitHub fake's people.** The sample work names the fake's sample
   people, with their GitHub IDs, so signing in locally as one shows their
   work. A test checks that every person, repo, and issue `pnpm seed` uses

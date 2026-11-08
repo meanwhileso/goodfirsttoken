@@ -9,6 +9,7 @@ import {
   MIN_CLAIMS_PER_ISSUE,
   MIN_OPEN_PRS_PER_DONOR,
   type FeedEvent,
+  type FollowUpRecord,
   type OpenMaintainerPost,
 } from '@goodfirsttoken/core';
 import type { AdminPage } from '../admin/page';
@@ -31,6 +32,9 @@ import {
 import type { Board, LeaderboardPage } from '../leaderboard/load';
 import { formatRate, formatTokens } from '../leaderboard/format';
 import type { LivePage } from '../live/load';
+import { followUpSource } from '@goodfirsttoken/core/text';
+import type { FollowThroughShown } from '../me/follow';
+import { everyText, HARNESS_NAMES, kindText, MODE_NAMES, nextCheckText, standText, STATE_NAMES, stepFor, when } from '../me/follow-words';
 import type { MePage } from '../me/page';
 import type { PersonPage, WorkRow, WorkStatus } from '../person/load';
 import type { ListedProject, ProjectPage } from '../project/load';
@@ -532,7 +536,43 @@ function timeLeft(expiresAt: string, now: number): string {
   return 'under an hour left';
 }
 
-/** /me for the person signed in: their review queue, their agents, and their interests. Forms stay on the page. */
+/** The person's open PRs on /me.md, as the page shows them, or null with none. */
+function followedPrsMarkdown(follow: FollowThroughShown, now: number): string | null {
+  return list(
+    follow.prs.map((pr) => {
+      const step = stepFor(pr);
+      const next = nextCheckText(pr, now);
+      const about = (f: FollowUpRecord) => link(`${kindText(f)} by ${followUpSource(f)}`, f.url);
+      const questions = pr.questions.map((f) => `${text(f.question ?? '')} About the ${about(f)}, which says: "${text(f.body)}"`);
+      const latest = pr.latest.map((f) => `${about(f)}: ${text(standText(f))}`);
+      return [
+        `${link(`PR #${String(pr.pr.number)}`, pr.pr.url)} (${text(pr.issue)}): ${text(STATE_NAMES[pr.state])}, ${text(MODE_NAMES[pr.followMode])}${next === null ? '' : `, ${text(next)}`}.`,
+        step !== null && text(step),
+        pr.lastSubmit !== null && `Your agent's latest submit, ${when(pr.lastSubmit.at)}: ${text(pr.lastSubmit.summary)}`,
+        questions.length > 0 && `Your agent asks: ${questions.join(' ')}`,
+        latest.length > 0 && `Latest follow-ups: ${latest.join('; ')}.`,
+      ]
+        .filter((part) => part !== false)
+        .join(' ');
+    }),
+  );
+}
+
+/** The person's mode, wakes, and feed on /me.md, as blocks. */
+function followThroughMarkdown(origin: string, login: string, follow: FollowThroughShown): (string | null)[] {
+  return [
+    `Your PRs follow ${text(MODE_NAMES[follow.mode.mode])}.${follow.mode.chosen ? '' : " You haven't chosen, so this is the default."}`,
+    list(
+      follow.wakes.map(
+        (wake) =>
+          `${text(HARNESS_NAMES[wake.harness])}, ${text(wake.level)}, ${everyText(wake.intervalMinutes)}, ${wake.lastRunAt === null ? 'no run yet' : `last ran ${when(wake.lastRunAt)}`}${wake.stopped ? '. It stopped' : ''}`,
+      ),
+    ) ?? 'No wakes.',
+    `Your feed: ${link(`${origin}/@${login}/live.ndjson`, `${origin}/@${login}/live.ndjson`)}`,
+  ];
+}
+
+/** /me for the person signed in: their open PRs, their review queue, their follow-through, their agents, and their interests. Forms stay on the page. */
 export function meMarkdown(origin: string, page: MePage): string {
   const queue =
     page.queue.state === 'sign_in_again'
@@ -546,11 +586,18 @@ export function meMarkdown(origin: string, page: MePage): string {
             ),
           ) ?? 'Nothing waiting for you.');
   const interests = page.interests;
+  const follow = page.follow;
   return doc([
     '# Your queue',
     `Open a PR on ${link('this page', `${origin}/me`)} in a browser, or from your agent with ${code('open_pr')}.`,
+    follow !== null && follow.prs.length > 0 && '## Open PRs',
+    follow !== null && followedPrsMarkdown(follow, page.now),
     '## Submitted work',
     queue,
+    follow === null && "Your open PRs can't be read right now. Try again in a moment.",
+    ...(follow !== null && (follow.prs.length > 0 || follow.wakes.length > 0)
+      ? ['## Follow-through', ...followThroughMarkdown(origin, page.login, follow)]
+      : []),
     '## Connected agents',
     list(page.agents.map((agent) => `${text(agent.clientName)}, connected ${new Date(agent.connectedAt).toISOString().slice(0, 10)}`)) ??
       'No agents connected.',

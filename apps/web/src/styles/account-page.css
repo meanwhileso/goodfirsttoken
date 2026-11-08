@@ -54,3 +54,27 @@
 .account-input--mono { font-family: var(--font-mono); font-size: 14px; }
 .account-textarea { min-height: 160px; resize: vertical; }
 .account-input:focus, .account-textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+
+/* One of the person's open PRs, as their agent follows it, in rows like
+   the queue's. Its questions quote the reviewer, and its latest follow-ups
+   are one line each. */
+.follow-pr { display: flex; flex-direction: column; gap: 12px; padding-block: 28px; border-top: 1px solid var(--line-soft); }
+.follow-pr:first-child { padding-top: 0; border-top: 0; }
+.follow-pr .quote { font-size: 16px; overflow-wrap: anywhere; }
+.follow-pr__submit { --gap: 6px; }
+.follow-pr ul { display: flex; flex-direction: column; gap: 14px; }
+.follow-pr__question { display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+.follow-pr__latest-list { --gap: 8px; }
+.follow-pr__latest-list ul { gap: 10px; }
+.follow-pr__latest { display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.follow-pr__forms { --gap: 12px; }
+.follow-pr__mode { --gap: 8px; }
+.follow-pr__select { width: auto; height: 36px; padding-block: 4px; }
+
+/* The person's follow-through mode, their wakes, and their feed. */
+.follow-mode__choices { border: 0; padding: 0; margin: 0; --gap: 12px; }
+.follow-mode__choices legend { padding: 0; margin-bottom: 4px; }
+.follow-mode__choice { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.follow-mode__choice input { margin-top: 4px; accent-color: var(--accent); }
+.follow-wake__about { --gap: 4px; min-width: 0; flex: 1 1 14em; }
+.account__aside h3.marker { margin-top: 16px; }

@@ -11,12 +11,18 @@ import {
   getClaim,
   getLiveRequest,
   listIssueClaims,
+  listWakes,
   markEndedOffered,
+  recordWakeRun,
   rereadDone,
   saveClaim,
+  saveFollowThrough,
+  saveFollowUps,
   saveIssues,
   savePerson,
+  saveSubmission,
   setPrState,
+  sortFollowUps,
 } from '../db';
 import { readRepo } from '../projects/repo';
 import { issueRoom } from '../rooms/issue-room';
@@ -25,11 +31,14 @@ import {
   SAMPLE_BLOCKED,
   SAMPLE_CANDIDATES,
   SAMPLE_CLAIMS,
+  SAMPLE_FOLLOWED,
   SAMPLE_HISTORY,
   SAMPLE_PEOPLE,
   SAMPLE_PROJECTS,
   SAMPLE_REQUESTS,
+  SAMPLE_WAKES,
   type SampleClaim,
+  type SampleFollowed,
   type SampleHistory,
 } from './sample-work';
 
@@ -45,9 +54,11 @@ import {
 // being worked. PRs merge when they are first seeded, so they count as
 // merged in the week they were seeded.
 //
-// The earlier work for the leaderboard, and the block on a sample donor, go
-// to the database directly. Earlier work is done, so it has no room and no
-// line, and it is dated back from the first seed.
+// The earlier work for the leaderboard, the block on a sample donor, and a
+// sample donor's open PRs that their agent follows, with their follow-ups
+// and wakes, go to the database directly. Earlier work is done, so it has
+// no room and no line, and it is dated back from the first seed. So are
+// the followed PRs, which their claims' rooms never hear of.
 
 // A sample commit to start the work from.
 const START_COMMIT = '5a3e'.repeat(10);
@@ -86,6 +97,7 @@ export async function seedSampleWork(): Promise<{
   lines: number;
   merged: number;
   history: number;
+  followed: number;
 }> {
   const now = Date.now();
   for (const person of Object.values(SAMPLE_PEOPLE)) await savePerson(env.DB, person, now);
@@ -177,7 +189,10 @@ export async function seedSampleWork(): Promise<{
   }
   let history = 0;
   for (const sample of SAMPLE_HISTORY) history += (await addHistory(sample, now)) ? 1 : 0;
-  return { projects, candidates, requests, ...made, history };
+  let followed = 0;
+  for (const sample of SAMPLE_FOLLOWED) followed += (await addFollowed(sample, now)) ? 1 : 0;
+  await addWakes(now);
+  return { projects, candidates, requests, ...made, history, followed };
 }
 
 // Stores a claim whose PR opened and then merged or closed `daysAgo` days
@@ -217,6 +232,109 @@ async function addHistory(sample: SampleHistory, now: number): Promise<boolean> 
   await rereadDone(env.DB, claim.id);
   await markEndedOffered(env.DB, [claim.id], now);
   return true;
+}
+
+// Stores a claim whose PR is open, with its submitted work, what reviewers
+// wrote on it, and how the donor's agent sorted each, as the issue room,
+// the PR job, and the agent would have left them, once.
+async function addFollowed(sample: SampleFollowed, now: number): Promise<boolean> {
+  if ((await getClaim(env.DB, sample.id)) !== null) return false;
+  const opened = now - sample.openedDaysAgo * DAY_MS;
+  const pr = { repo: sample.project, number: sample.pr, url: prUrl(sample.project, sample.pr) };
+  let claim: ClaimRecord = {
+    id: sample.id,
+    issue: `${sample.project}#${String(sample.issue)}`,
+    project: sample.project,
+    githubId: sample.person.githubId,
+    login: sample.person.login,
+    agent: sample.agent,
+    ownProject: false,
+    startCommit: START_COMMIT,
+    tokenEstimate: null,
+    ...newClaim(opened - 2 * MINUTE_MS),
+  };
+  for (const [event, at] of [
+    [{ kind: 'submit' }, opened - MINUTE_MS],
+    [{ kind: 'open_pr', pr }, opened],
+  ] as const) {
+    const next = nextClaimState(claim, event, at);
+    if (!next.ok) throw new Error(next.refusal.message);
+    claim = next.claim;
+  }
+  await saveClaim(env.DB, claim, 1);
+  await saveSubmission(env.DB, {
+    claimId: claim.id,
+    source: 'branch',
+    repo: `${sample.person.login}/${sample.project.split('/')[1] ?? ''}`,
+    branch: `goodfirsttoken/issue-${String(sample.issue)}-${claim.id}`,
+    commit: 'd00d'.repeat(10),
+    base: START_COMMIT,
+    diffFrom: START_COMMIT,
+    paths: ['README.md'],
+    title: `Fix #${String(sample.issue)}`,
+    summary: 'A sample fix.',
+    checks: 'Ran the tests.',
+    agent: sample.agent,
+    model: 'sample-model',
+    additions: 12,
+    deletions: 3,
+    reviewReason: null,
+    submittedAt: now - sample.pushedHoursAgo * HOUR_MS,
+    clearance: null,
+  });
+  await addPr(env.DB, { claimId: claim.id, pr, openedAt: opened });
+  for (const followUp of sample.followUps) {
+    const at = now - followUp.hoursAgo * HOUR_MS;
+    await saveFollowUps(
+      env.DB,
+      claim.id,
+      [
+        {
+          commentId: followUp.id,
+          kind: followUp.kind,
+          reviewer: followUp.reviewer ?? null,
+          authorKind: followUp.authorKind ?? null,
+          body: followUp.body,
+          path: followUp.path ?? null,
+          url: followUp.kind === 'checks' ? `${pr.url}/checks` : `${pr.url}#${followUp.id}`,
+          writtenAt: at,
+        },
+      ],
+      at,
+    );
+    const sort = followUp.sort;
+    if (sort === undefined) continue;
+    await sortFollowUps(
+      env.DB,
+      claim.id,
+      [
+        sort.state === 'settled'
+          ? { followUpId: followUp.id, state: 'settled', outcome: sort.outcome, replyUrl: sort.reply === true ? `${pr.url}#reply-${followUp.id}` : undefined }
+          : sort.state === 'waiting_donor'
+            ? { followUpId: followUp.id, state: 'waiting_donor', question: sort.question }
+            : { followUpId: followUp.id, state: 'waiting_reviewer' },
+      ],
+      at + HOUR_MS,
+    );
+  }
+  return true;
+}
+
+// Saves each sample wake its donor doesn't have yet, by its harness, and
+// records its last run.
+async function addWakes(now: number): Promise<void> {
+  for (const sample of SAMPLE_WAKES) {
+    const had = await listWakes(env.DB, sample.person.githubId);
+    if (had.some((wake) => wake.harness === sample.harness)) continue;
+    const ran = now - sample.lastRunHoursAgo * HOUR_MS;
+    const { saved } = await saveFollowThrough(
+      env.DB,
+      sample.person.githubId,
+      { save: { harness: sample.harness, level: sample.level, intervalMinutes: sample.intervalMinutes } },
+      ran - DAY_MS,
+    );
+    if (saved !== null) await recordWakeRun(env.DB, sample.person.githubId, saved.id, ran);
+  }
 }
 
 // Claims the issue, posts the line, and for done work, submits it, opens

@@ -13,7 +13,10 @@ import { SITE } from './hosts';
 // in her review queue, and one of them asks her to write the PR
 // description. Signed in on the site, she clears the work from /me, which
 // links GitHub's form for its PR, opens one PR there with her own GitHub
-// token, records it through her agent, and disconnects the agent. The
+// token, records it through her agent, and disconnects the agent. arjun,
+// whose open PRs the sample work gives an agent that follows them, sees
+// where each stands on /me, and changes how one is followed. priya's agent
+// saves a wake for her open PR, and she sets her mode on /me. The
 // sample work gives the site its sample projects, and this opens a PR on
 // them, so it runs last, in the `me` project, once the other tests are
 // done. The projects, people, and files are made up.
@@ -336,6 +339,82 @@ test("a project's page shows priya her open PRs there against its cap, with thei
     expect(await scrollsSideways(page)).toBe(false);
     await testInfo.attach(`project page at ${String(width)}px`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
   }
+});
+
+/** One of the signed-in person's open PRs on /me, by its number. */
+function followedPr(page: Page, number: number) {
+  return page.locator('.follow-pr').filter({ hasText: `PR #${String(number)}` });
+}
+
+test("arjun's /me shows his stalled PR first with the step to take, the PR that waits for him with his agent's question, his wakes, and his feed, and fits the screen", async ({
+  page,
+}, testInfo) => {
+  await devSignIn(page, 'arjun');
+  const prs = page.locator('.follow-pr');
+  await expect(prs).toHaveCount(2);
+  await expect(prs.nth(0)).toContainText('PR #294');
+  await expect(prs.nth(0).locator('.chip')).toHaveText('stalled');
+  await expect(prs.nth(0)).toContainText('A follow-up has waited a day with no run to sort it.');
+  await expect(prs.nth(1)).toContainText('PR #1312');
+  await expect(prs.nth(1).locator('.chip')).toHaveText('waiting for you');
+  await expect(prs.nth(1)).toContainText('Could this also cover the greeter on the second monitor?');
+  await expect(prs.nth(1)).toContainText('Your agent asks: The issue names the lock screen only.');
+  await expect(prs.nth(1)).toContainText('checked again once you answer');
+  const follow = page.getByRole('region', { name: 'follow-through' });
+  const stopped = follow.locator('.follow-wake').filter({ hasText: 'Cursor Automations' });
+  await expect(stopped).toContainText('No run since');
+  await expect(follow.locator('.follow-wake').filter({ hasText: "Cursor's editor and CLI" })).not.toContainText('No run since');
+  await expect(follow.getByRole('link', { name: '/@arjun/live.ndjson' })).toHaveAttribute('href', '/@arjun/live.ndjson');
+  // The open PRs come before the review queue.
+  const open = await page.getByRole('heading', { name: /Open PRs/ }).boundingBox();
+  const queue = await page.getByRole('heading', { name: /Submitted work/ }).boundingBox();
+  expect(open?.y ?? Infinity).toBeLessThan(queue?.y ?? 0);
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await scrollsSideways(page), `${String(width)}px`).toBe(false);
+    await testInfo.attach(`follow-through on /me at ${String(width)}px`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+  }
+});
+
+test('arjun stops following a PR, and removes the wake that stopped, from /me', async ({ page }) => {
+  await devSignIn(page, 'arjun');
+  const pr = followedPr(page, 1312);
+  await pr.getByLabel('follow', { exact: true }).selectOption('off');
+  await pr.getByRole('button', { name: 'Save how PR #1312 is followed' }).click();
+
+  await expect(page.getByRole('status')).toContainText('Your agent stops following PR #1312.');
+  await expect(followedPr(page, 1312).locator('.chip')).toHaveText('not followed');
+  await expect(followedPr(page, 1312)).toContainText('You stopped following this PR.');
+  await expect(followedPr(page, 294).locator('.chip')).toHaveText('stalled');
+
+  await page.getByRole('button', { name: 'Remove the Cursor Automations wake' }).click();
+
+  await expect(page.getByRole('status')).toContainText('Removed the Cursor Automations wake. Turn its schedule off in the harness too.');
+  const follow = page.getByRole('region', { name: 'follow-through' });
+  await expect(follow.locator('.follow-wake')).toHaveCount(1);
+  await expect(follow.locator('.follow-wake')).toContainText("Cursor's editor and CLI");
+});
+
+test("priya's agent saves a wake for her open PR, /me shows it, and the mode she saves on /me is the one her agent's my_work gives", async ({
+  page,
+}) => {
+  const saved = await call('set_follow_through', { wake: { harness: 'claude-code-desktop', level: 'full', intervalMinutes: 15 } });
+  expect(saved.savedWake).toMatchObject({ harness: 'claude-code-desktop' });
+  await devSignIn(page, 'priya');
+  await expect(page.locator('.follow-pr')).toHaveCount(1);
+  await expect(page.locator('.follow-pr').locator('.chip')).toHaveText('waiting for a reviewer');
+  const follow = page.getByRole('region', { name: 'follow-through' });
+  await expect(follow.locator('.follow-wake')).toContainText('Claude Code desktop app');
+  await expect(follow.locator('.follow-wake')).toContainText('no run yet');
+  await expect(follow).toContainText("You haven't chosen, so your PRs follow go ahead.");
+
+  await follow.getByLabel(/^ask first/).check();
+  await follow.getByRole('button', { name: 'Save', exact: true }).click();
+
+  await expect(page.getByRole('status')).toContainText('Your PRs follow ask first now.');
+  const work = await call('my_work', {});
+  expect(work.followMode).toEqual({ mode: 'ask_first', chosen: true });
+  expect((work.openPrs as { followMode: string }[]).map((open) => open.followMode)).toEqual(['ask_first']);
 });
 
 test('Disconnect on /me cuts the agent off, and its next tool call fails', async ({ page }) => {

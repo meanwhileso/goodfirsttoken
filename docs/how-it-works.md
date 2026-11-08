@@ -3260,15 +3260,18 @@ tools do.
 
 ## Your queue on /me
 
-`/me` is the signed-in person's own page: their review queue, their
-connected agents, their interests, and sign-out. What it shows, and in what
-order, is in [brand/brief-website.md](../brand/brief-website.md).
+`/me` is the signed-in person's own page: their open PRs and how their
+agent follows each, their review queue, their follow-through mode, wakes,
+and feed, their connected agents, their interests, and sign-out. What it
+shows, and in what order, is in
+[brand/brief-website.md](../brand/brief-website.md).
 
 - Someone signed out is sent to `/sign-in`, under
   [Signing in](#signing-in). The page's data also loads from a server
   function at a URL of its own, under `/_serverFn/`, which anyone can call.
   It reads the session first, reads nothing for someone signed out, and
-  reads only the signed-in person's own agents, queue, and interests.
+  reads only the signed-in person's own agents, queue, open PRs, wakes,
+  and interests.
 - The agents, each with Disconnect, are under Connected agents on /me in
   [Connecting an agent](#connecting-an-agent).
 - Each part is read on its own. When GitHub no longer takes the token from
@@ -3334,6 +3337,63 @@ empty. It never holds the agent's summary.
 - When the work isn't cleared, the page doesn't keep the words, and the
   field starts empty again.
 
+**Open PRs** come first, above the review queue, when the person has any.
+Each is a PR `start_session` and `my_work` list under `openPrs`, under The
+donor's tools, and stands where `followThrough` says for a session the
+donor is in, from the same rules
+([docs/specs/follow-through.md](specs/follow-through.md), under Status).
+
+- Its state is `waiting for a reviewer`, `your agent is on it`, `waiting
+  for you`, `stalled`, or `not followed` once the person stopped following
+  it. Stalled PRs come first, as the tools list them, then PRs with a
+  question for the person, since a question stays first until they answer,
+  then the rest, each oldest first. A run holding a PR's lease shows as the
+  green chip of an agent at work. Otherwise the state shows in the chip of
+  an open PR, or in attention colors when it needs the person.
+- A stalled PR says a follow-up has waited a day with no run, and to start
+  a session or check that a wake still runs. A PR at a round limit says
+  which, and has Go on. One whose follow-ups wait for the person says to
+  answer in a session. One they stopped following says so.
+- Each follow-up that waits for the person shows the reviewer's words, who
+  wrote them, a link to them on GitHub, and the agent's question.
+- The summary of the agent's latest submit shows, with when it landed.
+  Each round that pushes submits with a summary of what it changed, so this
+  is the last such round's, or the PR's own work before any round. A round
+  that only replied has no summary, so the latest follow-ups stand in for
+  it.
+- Then come the latest three of the other follow-ups, newest first by when
+  each settled, or else was written, each with where it stands: not sorted
+  yet, waiting for the reviewer, or settled, with its outcome and the
+  reply's link. Follow-ups show only while the PR's project asks for help,
+  as for the tools.
+- It says how it is followed, the person's mode or its own, and when it is
+  checked next: the time, due at the agent's next run when a run has work
+  on it now, once the person answers, once they choose Go on, or no checks
+  after 30 days with no reviewer activity.
+- A form on each PR sets its mode, go ahead, ask first, or not followed,
+  and Go on lets a PR at a round limit go on.
+
+**Follow-through** is beside the queue, when the person has an open PR or
+a wake.
+
+- A form sets the person's mode for all their PRs, go ahead or ask first,
+  each said in plain words. Until they choose, it says their PRs follow go
+  ahead. Saving takes the place of each PR's own mode, but a PR they
+  stopped following stays stopped.
+- Each wake shows its harness, its level and what a run at that level does,
+  how often it runs, and when it last ran. A wake that stopped, by the rule
+  `start_session` uses, says when it last ran, and to check its schedule:
+  for a desktop app, that the app is open too. Remove removes it, and says to turn
+  its schedule off in the harness too, since nothing on the site can.
+- It links the person's feed, `/@<login>/live.ndjson`, under
+  [Text streams](#text-streams), which carries every event of their claims.
+- The forms are `set_follow_through`'s, under The donor's tools: its input
+  schema and its checks, through the same function. A claim that isn't the
+  person's, or a wake of someone else's, changes nothing. Each refusal
+  `set_follow_through` lists has words on the page for the person.
+- When the database can't answer, the page says the open PRs can't be read,
+  and the rest of the page shows.
+
 **Interests** show as the lists `set_interests` saves, under Sessions in
 [The donor's tools](#the-donors-tools), and a form changes them, with the
 items in each list separated by commas. The form is checked with
@@ -3342,8 +3402,8 @@ saved the same way, so the person's agent reads the same interests from
 `start_session`. A form that breaks the schema saves nothing, and says
 why.
 
-**Forms.** The Open PR and interests forms post to `/me`. Disconnect and
-sign-out post under `/auth`, under [Signing in](#signing-in).
+**Forms.** The Open PR, follow-through, and interests forms post to `/me`.
+Disconnect and sign-out post under `/auth`, under [Signing in](#signing-in).
 
 - A form to `/me` is checked as Disconnect is. It has to come from the site
   itself, by its `Origin`, and anything else is refused with `403`. Signed
@@ -5547,6 +5607,18 @@ GitHub fake's sample people and its made-up repos under `sample-owner`.
 - It has `sample-admin` block `rowan`, a sample donor with two PRs merged
   at the seed, so the leaderboard, the feeds, and the pages have a blocked
   donor to hide.
+- For [/me](#your-queue-on-me), it gives `arjun` two open PRs, in
+  `sample-owner/sample-app` and `sample-owner/sample-desktop`, that his
+  agent follows, straight to the
+  database, with their submitted work and follow-ups as the PR job and his
+  agent would have left them. One has failed checks and a review bot's
+  comment that no run sorted for a day, so it is stalled. The other has a
+  maintainer's question his agent asks him about, a reply, and a bot's
+  summary that needs no change. It saves two wakes for him: Cursor
+  Automations, which last ran two days before the seed, so it stopped, and
+  Cursor's editor, a session wake. The PRs opened more than a week before
+  the seed, so this week's leaderboard doesn't count them, and their
+  numbers are below the fake repos' own.
 - Seeding again adds only what is missing, and a new line on each claim
   still being worked, 10 seconds after the last. The earlier work keeps the
   dates of the first seed.
@@ -6050,10 +6122,14 @@ to, as `/start.md` names its server.
   its policy.
 - `/me.md` and `/admin.md` follow their pages: someone signed out is sent to
   sign in, with `307`, and `/admin.md` is `404` for someone who isn't an
-  admin. For the person signed in, `/me.md` lists their queue with its diff
+  admin. For the person signed in, `/me.md` lists their open PRs, each with
+  its state, mode, next check, step to take, the agent's questions with the
+  reviewers' words, the latest submit's summary, and latest follow-ups,
+  their queue with its diff
   links, time left, the donor's own PR when it is open and not recorded
   yet, and, for cleared work, the link to open its PR on
-  GitHub, their connected agents, and their interests, and
+  GitHub, their mode, wakes, and feed, their connected agents, and their
+  interests, and
   `/admin.md` lists what waits, by kind and repo, the projects listed from a
   policy, and the blocked donors. Their forms stay on the pages. Both are
   sent with `Cache-Control: no-store`.

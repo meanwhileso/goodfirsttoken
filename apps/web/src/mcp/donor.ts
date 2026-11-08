@@ -574,42 +574,47 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
   return answer(result);
 }
 
+/** What set_follow_through made of a change, or why it changed nothing. */
+export type FollowThroughSet = { ok: true; value: ToolOutput<'set_follow_through'> } | { ok: false; refusal: Refusal };
+
 /**
  * set_follow_through: saves the donor's mode for all their PRs or one,
  * saves or removes their wakes, and lets a PR go on past its round limits
  * once the donor says to. Every check comes first, and the change is made
  * in one batch, so a refusal changes nothing. A PR takes a mode, or goes
  * on, only while it is open, on the donor's own claim. A wake is removed
- * only when it is the donor's.
+ * only when it is the donor's. /me's forms make their changes through this
+ * too (src/me/page.ts). Another donor's claim throws PermissionRefused.
  */
-export async function setFollowThrough(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<Answer> {
+export async function setFollowThroughAs(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<FollowThroughSet> {
+  const refused = (why: Refusal): FollowThroughSet => ({ ok: false, refusal: why });
   if ((await getPerson(env.DB, caller.githubId)) === null) {
-    return refuse(refusal('not_found', 'Call start_session first, then save follow-through.'));
+    return refused(refusal('not_found', 'Call start_session first, then save follow-through.'));
   }
   if (input.claimId !== undefined) {
     const claim = await ownClaim(caller, input.claimId);
-    if (isRefusal(claim)) return refuse(claim);
+    if (isRefusal(claim)) return refused(claim);
     const pr = await getPr(env.DB, claim.id);
     if (pr === null) {
-      return refuse(
+      return refused(
         refusal('not_found', `Claim ${claim.id} has no PR recorded, so it has no PR to follow. Once its PR is open on GitHub, record it with record_pr. Nothing changed.`),
       );
     }
     if (pr.state !== 'open') {
       const ended = pr.state === 'merged' ? 'merged' : 'closed without merging';
-      return refuse(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so there is nothing to follow. Nothing changed.`));
+      return refused(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so there is nothing to follow. Nothing changed.`));
     }
   }
   const wakes = await listWakes(env.DB, caller.githubId);
   if (input.removeWake !== undefined && !wakes.some((wake) => wake.id === input.removeWake)) {
-    return refuse(refusal('not_found', `There is no wake ${input.removeWake} for you, so nothing changed.`));
+    return refused(refusal('not_found', `There is no wake ${input.removeWake} for you, so nothing changed.`));
   }
   const full = refusal(
     'rate_limited',
     `The donor has ${String(MAX_WAKES)} wakes, the most one donor keeps, so nothing changed. Remove one with removeWake in the same call.`,
   );
   const kept = wakes.length - (input.removeWake === undefined ? 0 : 1);
-  if (input.wake !== undefined && kept >= MAX_WAKES) return refuse(full);
+  if (input.wake !== undefined && kept >= MAX_WAKES) return refused(full);
   const changed = await saveFollowThrough(
     env.DB,
     caller.githubId,
@@ -622,7 +627,7 @@ export async function setFollowThrough(caller: Caller, input: ToolInput<'set_fol
     now,
   );
   // Another call saved a wake meanwhile and took the last place, so the batch changed nothing.
-  if (input.wake !== undefined && changed.saved === null) return refuse(full);
+  if (input.wake !== undefined && changed.saved === null) return refused(full);
   const modes = await followModesOf(caller.githubId);
   const prs = (await listOpenPrsOf(env.DB, caller.githubId)).map((open) => ({
     claimId: open.claimId,
@@ -631,16 +636,23 @@ export async function setFollowThrough(caller: Caller, input: ToolInput<'set_fol
     followMode: modes.of(open.claimId),
     own: modes.own.has(open.claimId),
   }));
-  return answer(
-    toolResult('set_follow_through', {
+  return {
+    ok: true,
+    value: {
       followMode: modes.choice,
       prs,
       savedWake: changed.saved === null ? null : wakeOut(changed.saved),
       removedWake: changed.removed ? (input.removeWake ?? null) : null,
       wentOn: changed.wentOn ? (input.claimId ?? null) : null,
       wakes: (await listWakes(env.DB, caller.githubId)).map(wakeOut),
-    }),
-  );
+    },
+  };
+}
+
+/** set_follow_through, as setFollowThroughAs makes the change. */
+export async function setFollowThrough(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<Answer> {
+  const set = await setFollowThroughAs(caller, input, now);
+  return set.ok ? answer(toolResult('set_follow_through', set.value)) : refuse(set.refusal);
 }
 
 /**
