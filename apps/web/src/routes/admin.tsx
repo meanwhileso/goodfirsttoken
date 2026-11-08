@@ -776,6 +776,11 @@ function Admin() {
                     <Candidate key={item.id} item={item} now={page.now} signInAgain={page.signInAgain} />
                   ))}
                 </SectionItems>
+                {page.heldFinds > 0 && (
+                  <p className="small muted">
+                    {`${page.heldFinds.toLocaleString('en-US')} ${page.heldFinds === 1 ? 'find is' : 'finds are'} held out of the queue for failing a check. The crawler checks each again 30 days after it was held. Ask your agent for admin_queue with held: true to see them.`}
+                  </p>
+                )}
               </section>
               <section className="stack" aria-label="registrations">
                 <div className="rail__head">

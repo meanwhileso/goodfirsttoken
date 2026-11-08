@@ -7,6 +7,7 @@ import { priorityEvidence } from '../priority-evidence';
 import { signNotice } from '../../src/auth/notice';
 import {
   addCandidate,
+  holdCandidate,
   addToDoNotList,
   askRemoval,
   closeRemoval,
@@ -213,6 +214,33 @@ describe('who sees /admin', () => {
     expect(html.indexOf('The paragraph starts earlier in the file.')).toBeLessThan(html.indexOf('Step 9 runs here.'));
     expect(html.indexOf('The paragraph goes on in the file.')).toBeGreaterThan(html.indexOf('Claude may help.'));
     expect(html).toContain(' more in the files. Read them there.');
+  });
+
+  test('a find held out of the queue leaves the page, which says how many are held', async () => {
+    const now = Date.now();
+    const find = (repo: string) =>
+      addCandidate(
+        env.DB,
+        {
+          repo,
+          facts: { stars: 12000, createdAt: now - 6 * 365 * 86_400_000, pushedAt: now - 7_200_000, ownerCreatedAt: now - 9 * 365 * 86_400_000 },
+          policy: { quote: 'AI tools are fine for questions.', url: `https://github.com/${repo}/blob/main/CONTRIBUTING.md`, tier: 'allows_with_conditions' },
+          settings: {},
+          suggestedTags: [],
+        },
+        now,
+      );
+    const held = await find(BUNDLER);
+    await find('sample-owner/sample-still-waiting');
+    if (!held) throw new Error('the find was not added');
+    await holdCandidate(env.DB, held.id, 'it has no tags', now);
+    const browser = await signedIn('sample-admin');
+
+    const html = await (await browser.fetch('/admin')).text();
+
+    expect(html).toContain('sample-owner/sample-still-waiting');
+    expect(html).not.toContain(BUNDLER);
+    expect(html).toContain('1 find is held out of the queue for failing a check.');
   });
 
   test("an admin sees the model reader's suggested tags on a find, with open counts, beside the rules'", async () => {

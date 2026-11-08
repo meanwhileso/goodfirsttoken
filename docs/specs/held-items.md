@@ -35,8 +35,11 @@ checks it again each month.
 
 **A policy change** is applied on its own when all of these hold:
 
-- The weekly read found a changed policy. A change for a ban a second
-  reading didn't confirm, or for docs the reader couldn't read, fails.
+- The weekly read found a changed policy. A change for docs the reader
+  couldn't read fails. A change for a ban a second reading didn't confirm
+  is neither applied nor held. It stays in the admin queue, since its
+  listing may now ban AI help, and a held change only changes when the
+  docs do.
 - The docs give a policy to list from.
 - The model made it, and its reading passes the same checks as a find's.
 - The repo had more than 100 stars when the crawler read it.
@@ -65,10 +68,12 @@ that wait and aren't held, oldest first.
 - **A held find** is dropped 30 days after it was held, and its repo goes
   back in the crawl queue. The crawler reads its facts, labels, and docs
   again, and a new find goes through the hourly approval. The model reads
-  the docs again only when they changed. A repo the crawler now leaves out,
+  the docs again only when they changed, and checks the labels each time.
+  While the model reads nothing, a held find stays held. A repo the crawler now leaves out,
   as archived, or docs that no longer welcome AI help, makes no new find.
 - **A held policy change** stops being held 30 days after it was held, and
-  the next hourly run checks it again. A weekly read that finds the docs
+  the next hourly run checks it again. Its facts and reading are the ones
+  the weekly read sent, so only a GitHub refusal that changed moves it. A weekly read that finds the docs
   changed replaces it, as it replaces any change that waits, and the new
   change is checked within the hour.
 
@@ -84,12 +89,11 @@ that wait and aren't held, oldest first.
 
 ## What stays
 
-- Registrations, requests to be removed, and pauses wait for an admin as
-  before. A ban the model reads, with a second reading that agrees, still
+- Registrations, requests to be removed, pauses, and policy changes for a
+  ban a second reading didn't confirm wait for an admin as before. A ban the model reads, with a second reading that agrees, still
   pauses the listing at once.
 - A listing whose policy change is held stays listed as it was, as it did
-  while the change waited in the queue. That includes a change for a ban a
-  second reading didn't confirm.
+  while the change waited in the queue.
 - No admin who has signed in means nothing is approved and nothing is held.
 
 ## Migration

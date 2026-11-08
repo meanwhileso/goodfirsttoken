@@ -52,7 +52,7 @@ export interface FillRun {
 }
 
 /** Puts the repos in the queue in messages of CRAWL_BATCH, marked as weekly reads or not. */
-async function sendRepos(deps: FillDeps, repos: readonly string[], reread: boolean): Promise<void> {
+export async function sendRepos(deps: FillDeps, repos: readonly string[], reread: boolean): Promise<void> {
   const messages: { body: CrawlMessage }[] = [];
   for (let start = 0; start < repos.length; start += CRAWL_BATCH) {
     const batch = repos.slice(start, start + CRAWL_BATCH);

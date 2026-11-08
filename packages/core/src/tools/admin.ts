@@ -3,6 +3,7 @@ import { crawlPriorityInputSchema, crawlPrioritySchema, crawlPriorityStatusSchem
 import {
   MAX_AI_PASSAGE,
   MAX_AI_SENTENCES,
+  MAX_HELD_WHY,
   MAX_CRAWL_REASON,
   aiSentenceSchema,
   banLineSchema,
@@ -234,6 +235,13 @@ const queueItemSchema = z.object({
    * verdict on three weekly reads in a row. Null for every other kind.
    */
   changeWhy: z.enum(policyChangeWhys).nullable().default(null),
+  /**
+   * For a crawler find or a policy change the crawler held out of the queue,
+   * because it failed a check for listing or applying it on its own: when,
+   * why, and when the crawler checks it again. Null for one that isn't held,
+   * and for every other kind.
+   */
+  held: z.object({ at: isoTime, why: trimmedText(MAX_HELD_WHY), checkAgainAt: isoTime }).nullable().default(null),
 });
 type QueueItem = z.infer<typeof queueItemSchema>;
 
@@ -517,6 +525,13 @@ function changeWhyNote(item: QueueItem): string | false {
 }
 
 /** A listing whose policy the crawler reads differently now, and how to decide it. */
+function heldNote(item: QueueItem): string | false {
+  return (
+    item.held !== null &&
+    `held out of the queue on ${when(item.held.at)}: ${item.held.why}. The crawler checks it again on ${when(item.held.checkAgainAt)}.`
+  );
+}
+
 function renderPolicyChange(item: QueueItem): string {
   const facts = item.facts;
   const listed = item.change?.listed ?? null;
@@ -524,6 +539,7 @@ function renderPolicyChange(item: QueueItem): string {
   return lines(
     `policy change · ${item.repo} · id ${item.id}`,
     `read on ${when(item.requestedAt)}, and ${item.change ? `the project is ${item.change.status}` : 'the project is listed'} while it waits`,
+    heldNote(item),
     facts &&
       `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`,
     delisted !== null && delistedNote(delisted),
@@ -555,6 +571,7 @@ function renderQueueItem(item: QueueItem): string {
     item.requestedBy
       ? `from @${item.requestedBy} on ${when(item.requestedAt)}`
       : `found on ${when(item.requestedAt)}`,
+    heldNote(item),
     facts
       ? `${facts.stars.toLocaleString('en-US')} stars · created ${facts.createdAt.slice(0, 10)} · last push ${facts.pushedAt.slice(0, 10)} · owner account since ${facts.ownerCreatedAt.slice(0, 10)}`
       : item.factsMissing === 'no_answer'
@@ -589,10 +606,14 @@ function renderQueueItem(item: QueueItem): string {
 export const adminQueue = defineTool({
   audience: 'admin',
   description:
-    "List maintainers' registrations, crawler finds, and maintainers' requests to be removed, waiting for an admin, with each repo's facts from GitHub, the projects Good First Token paused on its own, and the listings whose policy the crawler reads differently now. It shows the ones that have waited longest, a page at a time, and says how many more wait. Pass the answer's next value as after for the next page.",
+    "List maintainers' registrations, crawler finds, and maintainers' requests to be removed, waiting for an admin, with each repo's facts from GitHub, the projects Good First Token paused on its own, and the listings whose policy the crawler reads differently now. It shows the ones that have waited longest, a page at a time, and says how many more wait. Pass the answer's next value as after for the next page. The crawler lists a find, or applies a policy change, on its own when it passes every check, and holds the rest out of the queue, checking each again after 30 days. Pass held: true to list only the held finds and policy changes, with why each is held.",
   refusals: [],
   input: z.object({
     kind: z.enum(['all', ...queueItemKinds]).default('all'),
+    held: z
+      .boolean()
+      .default(false)
+      .describe('True to list only the crawler finds and policy changes the crawler held out of the queue. Leave it out for the queue.'),
     after: queuePlaceSchema
       .optional()
       .describe('The next value from the answer before, for the page after it. Leave it out for the first page.'),
@@ -603,16 +624,22 @@ export const adminQueue = defineTool({
     more: count.default(0),
     /** What to pass as `after` for the next page, or null when none waits. */
     next: queuePlaceSchema.nullable().default(null),
+    /** True when these are the finds and policy changes the crawler held out of the queue. */
+    held: z.boolean().default(false),
   }),
   text: (out) =>
     out.items.length === 0
-      ? 'Nothing waiting.'
+      ? out.held
+        ? 'Nothing held.'
+        : 'Nothing waiting.'
       : lines(
-          `${String(out.items.length)} waiting${out.more > 0 ? ` here, the longest first, and ${String(out.more)} more after them` : ''}:`,
+          `${String(out.items.length)} ${out.held ? 'held' : 'waiting'}${out.more > 0 ? ` here, the longest first, and ${String(out.more)} more after them` : ''}:`,
           numbered(out.items, renderQueueItem),
           out.more > 0 &&
             out.next !== null &&
-            `${String(out.more)} more wait. Read the next page with admin_queue, the same kind, and after: ${JSON.stringify(out.next)}.`,
+            (out.held
+              ? `${String(out.more)} more are held. Read the next page with admin_queue, the same kind, held: true, and after: ${JSON.stringify(out.next)}.`
+              : `${String(out.more)} more wait. Read the next page with admin_queue, the same kind, and after: ${JSON.stringify(out.next)}.`),
           out.items.some((item) => item.kind !== 'removal') &&
             'Decide each registration, crawler find, pause, and policy change with admin_decide. A rejection needs a reason, which a registering maintainer sees.',
           out.items.some((item) => item.kind === 'removal') &&
@@ -828,7 +855,7 @@ export const adminSeedRepo = defineTool({
       : '';
     const result = out.leftAlone === 'project' ? `${out.repo} is a project already, so a seed adds nothing. Nothing changed.`
       : out.leftAlone === 'proposed' ? (out.evidenceChanged || out.added
-        ? `${changed || `Added ${out.repo} as a handled seed.`} Its find keeps waiting in the admin queue. No policy read was queued.`
+        ? `${changed || `Added ${out.repo} as a handled seed.`} Its find still waits, in the admin queue or held out of it. No policy read was queued.`
         : `The crawler put ${out.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`)
       : out.added && out.rejectedBefore ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs.`
       : out.added ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`

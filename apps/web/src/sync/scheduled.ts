@@ -94,7 +94,7 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
         await runReader({ db: env.DB, now });
       } finally {
         // A failure above still fails the cron, and the waiting finds are approved anyway.
-        await approveStarredFinds({ db: env.DB, token, now });
+        await approveStarredFinds({ db: env.DB, token, queue: env.CRAWL_QUEUE, now });
       }
       return;
     default:

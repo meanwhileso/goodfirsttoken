@@ -101,6 +101,17 @@ export type CrawlReadTier = z.infer<typeof crawlTierSchema>;
 
 /** Who made a find or a policy change: the model policy reader, or before it read policies, the crawler's rules. */
 export const findMakers = z.enum(['rules', 'model']);
+
+/** The longest reason a find or a policy change is held out of the admin queue. */
+export const MAX_HELD_WHY = 500;
+/**
+ * When a waiting find or policy change was held out of the admin queue, and
+ * why, under docs/specs/held-items.md. Null while it isn't held.
+ */
+export const heldSchema = z.object({ at: epochMs, why: trimmedText(MAX_HELD_WHY) });
+export type Held = z.infer<typeof heldSchema>;
+/** How long a find or a policy change is held before the crawler checks it again. */
+export const HELD_CHECK_AGAIN_MS = 30 * 24 * 60 * 60 * 1000;
 export type FindMaker = z.infer<typeof findMakers>;
 
 /**
@@ -247,6 +258,8 @@ export const crawlCandidateSchema = z
     decidedAt: epochMs.nullable(),
     /** Why it was rejected, or for a find the crawler approved on its own, that it did. */
     reason: trimmedText(MAX_CRAWL_REASON).nullable(),
+    /** When the crawler held it out of the admin queue, and why, or null while it isn't held. */
+    held: heldSchema.nullable().default(null),
   })
   .superRefine((candidate, ctx) => {
     const problem = (field: string, message: string) => {
@@ -263,6 +276,7 @@ export const crawlCandidateSchema = z
     if (waiting && candidate.reason !== null) {
       problem('reason', 'must be null while the candidate waits');
     }
+    if (!waiting && candidate.held !== null) problem('held', 'must be null once it is decided');
   });
 export type CrawlCandidate = z.infer<typeof crawlCandidateSchema>;
 
@@ -419,8 +433,10 @@ export const policyChangeSchema = z
     status: candidateStatusSchema,
     decidedBy: githubId.nullable(),
     decidedAt: epochMs.nullable(),
-    /** Why the admin kept the listing as it was. */
+    /** Why the admin kept the listing as it was, or for a change the crawler applied on its own, that it did. */
     reason: trimmedText(MAX_CRAWL_REASON).nullable(),
+    /** When the crawler held it out of the admin queue, and why, or null while it isn't held. */
+    held: heldSchema.nullable().default(null),
   })
   .superRefine((change, ctx) => {
     const problem = (field: string, message: string) => {
@@ -432,8 +448,7 @@ export const policyChangeSchema = z
       if (!waiting && change[field] === null) problem(field, `is required once it is ${change.status}`);
     }
     if (change.status === 'rejected' && change.reason === null) problem('reason', 'is required to reject');
-    if (change.status !== 'rejected' && change.reason !== null) {
-      problem('reason', 'must be null unless the change was rejected');
-    }
+    if (waiting && change.reason !== null) problem('reason', 'must be null while the change waits');
+    if (!waiting && change.held !== null) problem('held', 'must be null once it is decided');
   });
 export type PolicyChange = z.infer<typeof policyChangeSchema>;

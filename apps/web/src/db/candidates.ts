@@ -2,6 +2,8 @@ import {
   candidateStatusSchema,
   crawlCandidateSchema,
   docsHashSchema,
+  heldSchema,
+  MAX_HELD_WHY,
   id,
   mustParse,
   policyFingerprintSchema,
@@ -45,6 +47,8 @@ interface CandidateRow {
   docs_hash: string | null;
   made_by: string;
   rules_tier: string | null;
+  held_at: number | null;
+  held_why: string | null;
 }
 
 function toCandidate(row: CandidateRow): CrawlCandidate {
@@ -73,6 +77,8 @@ function toCandidate(row: CandidateRow): CrawlCandidate {
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
       reason: row.reason,
+      // A decided row is never held, though a Worker from before holds kept no hold to clear.
+      held: row.status !== 'waiting' || row.held_at === null || row.held_why === null ? null : { at: row.held_at, why: row.held_why },
     },
     'candidate',
   );
@@ -303,15 +309,59 @@ export async function decideCandidate(
       decidedBy: decision.decidedBy,
       decidedAt: checkTime(now),
       reason: decision.reason,
+      held: null,
     },
     'candidate',
   );
   const result = await db
     .prepare(
-      `UPDATE crawl_candidates SET status = ?, decided_by = ?, decided_at = ?, reason = ?
+      `UPDATE crawl_candidates SET status = ?, decided_by = ?, decided_at = ?, reason = ?, held_at = NULL, held_why = NULL
        WHERE id = ? AND status = 'waiting'`,
     )
     .bind(decided.status, decided.decidedBy, decided.decidedAt, decided.reason, decided.id)
     .run();
   return result.meta.changes === 1 ? decided : null;
+}
+
+/**
+ * Holds a waiting find out of the admin queue at `now`, for `why`, under
+ * docs/specs/held-items.md. False when it no longer waits, or is held
+ * already.
+ */
+export async function holdCandidate(db: D1Database, candidateId: string, why: string, now: number): Promise<boolean> {
+  const held = mustParse(heldSchema, { at: checkTime(now), why: why.trim().slice(0, MAX_HELD_WHY) }, 'held');
+  const result = await db
+    .prepare("UPDATE crawl_candidates SET held_at = ?, held_why = ? WHERE id = ? AND status = 'waiting' AND held_at IS NULL")
+    .bind(held.at, held.why, mustParse(id, candidateId, 'candidateId'))
+    .run();
+  return result.meta.changes === 1;
+}
+
+/** The waiting finds held at or before `heldBy`, the longest held first, at most `limit`. */
+export async function listHeldCandidates(db: D1Database, heldBy: number, limit: number): Promise<CrawlCandidate[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM crawl_candidates WHERE status = 'waiting' AND held_at <= ? ORDER BY held_at, id LIMIT ?")
+    .bind(heldBy, limit)
+    .all<CandidateRow>();
+  return results.map(toCandidate);
+}
+
+/**
+ * Drops a held find, so the crawler can read its repo again and make a new
+ * one. False when it is no longer held, as when an admin decided it.
+ */
+export async function dropHeldCandidate(db: D1Database, candidateId: string): Promise<boolean> {
+  const result = await db
+    .prepare("DELETE FROM crawl_candidates WHERE id = ? AND status = 'waiting' AND held_at IS NOT NULL")
+    .bind(mustParse(id, candidateId, 'candidateId'))
+    .run();
+  return result.meta.changes === 1;
+}
+
+/** How many waiting finds are held out of the admin queue. */
+export async function countHeldCandidates(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM crawl_candidates WHERE status = 'waiting' AND held_at IS NOT NULL")
+    .first<{ n: number }>();
+  return row?.n ?? 0;
 }
