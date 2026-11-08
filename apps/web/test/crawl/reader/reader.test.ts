@@ -30,6 +30,7 @@ import {
   type Statement,
 } from '../../../src/crawl/reader';
 import { FINGERPRINT_VERSION } from '../../../src/crawl/fingerprint';
+import { MAX_CHECK_STEPS } from '../../../src/crawl/reader/statements';
 import type { PolicyFile } from '../../../src/crawl/rules';
 import { contributing, file } from '../corpus/cases';
 import { message, policyOutput, statement } from './recorded';
@@ -176,6 +177,191 @@ describe('the checks on a statement', () => {
     expect(failure(statement('AI_POLICY.md', 5, 7, skips, 'reservedLabel', { label: 'good first issue' }))).toBe('quote');
   });
 
+  // The cases below come from production readings that lost a true
+  // statement to the check, each line as its repo's file has it.
+
+  /** The check of a quote on lines of a one-file repo, as the sentences it kept or why it failed. */
+  const against = (doc: PolicyFile, startLine: number, endLine: number, quote: string, about = 'personInLoop', extra = {}) => {
+    const result = checkStatement(new Files([doc]), statement(doc.path, startLine, endLine, quote, about, extra) as Statement, 0);
+    return result.ok ? result.statement : result.failure;
+  };
+  const keeps = (doc: PolicyFile, startLine: number, endLine: number, quote: string) => typeof against(doc, startLine, endLine, quote) !== 'string';
+
+  test('a sentence that ends inside emphasis, inside closing quotes, or before a hard line break can be quoted alone', () => {
+    const doc = file(
+      'contributing',
+      [
+        "- **Review AI output carefully.** AI tools can produce plausible-looking code that is subtly wrong, insecure, or doesn't match the project's patterns.", // 1
+        '> **Policy:** We require a "human-in-the-loop." You are the author and are fully accountable for all submitted code.', // 2
+        'Yes, you can use AI to draft a PR description. BUT! You **MUST read it yourself and cut it down before you post it.** Unedited AI text is easy to spot.', // 3
+        'We appreciate your interest in this project.\\', // 4
+        'At this time, **we are not accepting external contributions** (including pull requests or new feature submissions).', // 5
+      ].join('\n'),
+    );
+
+    expect(keeps(doc, 1, 1, 'Review AI output carefully.')).toBe(true);
+    expect(keeps(doc, 2, 2, 'You are the author and are fully accountable for all submitted code.')).toBe(true);
+    expect(keeps(doc, 3, 3, 'You MUST read it yourself and cut it down before you post it.')).toBe(true);
+    expect(keeps(doc, 4, 4, 'We appreciate your interest in this project.')).toBe(true);
+    expect(keeps(doc, 5, 5, 'At this time, we are not accepting external contributions (including pull requests or new feature submissions).')).toBe(true);
+    // The quote is still whole sentences: the end inside the marks is a sentence end, not a place to cut from.
+    expect(against(doc, 2, 2, 'human-in-the-loop.')).toBe('sentences');
+  });
+
+  test('closing marks end a sentence only before one that starts anew, so a quoted welcome cannot be cut from the sentence that rejects it', () => {
+    const doc = file(
+      'contributing',
+      [
+        '"AI agents are welcome." is not our policy.', // 1
+        'Agents are welcome!" said nobody.', // 2
+        'We welcome AI-assisted pull requests (Copilot, Claude, etc.) only after a maintainer assigns the issue.', // 3
+        '**Agents may open pull requests.** but only on docs.', // 4
+        '"AI agents are welcome." *isn\'t* our policy.', // 5
+        '"AI agents are welcome." - said no maintainer here.', // 6
+        '"AI agents are welcome." [isn\'t true](https://x.example) here.', // 7
+        '"AI agents are welcome." 100% false.', // 8
+        'We welcome PRs from agents (Claude, Codex, etc.) GitHub Actions must pass first.', // 9
+      ].join('\n'),
+    );
+    for (const n of [5, 6, 7, 8]) expect(against(doc, n, n, '"AI agents are welcome."', 'welcomesAgents')).toBe('sentences');
+    expect(against(doc, 9, 9, 'We welcome PRs from agents (Claude, Codex, etc.)', 'welcomesAgents')).toBe('sentences');
+
+    expect(against(doc, 1, 1, '"AI agents are welcome."', 'welcomesAgents')).toBe('sentences');
+    expect(against(doc, 2, 2, 'Agents are welcome!"', 'welcomesAgents')).toBe('sentences');
+    expect(against(doc, 3, 3, 'We welcome AI-assisted pull requests (Copilot, Claude, etc.)', 'welcomesAi')).toBe('sentences');
+    expect(against(doc, 4, 4, 'Agents may open pull requests.', 'welcomesAgents')).toBe('sentences');
+  });
+
+  test('struck text is no sentence of its own, on its line or wrapped', () => {
+    const doc = file('contributing', '~~We accept AI-generated pull requests.~~ As of 2025 we no longer accept them.\n\n~~We accept AI-generated pull requests.~~\nWe no longer accept them.\n');
+
+    expect(against(doc, 1, 1, 'We accept AI-generated pull requests.', 'welcomesAi')).toBe('sentences');
+    expect(against(doc, 3, 4, 'We accept AI-generated pull requests.', 'welcomesAi')).toBe('sentences');
+  });
+
+  test('a Chinese or Japanese full stop inside closing brackets ends no sentence, as what follows the brackets may reject it', () => {
+    const doc = file('contributing', '「AIによる貢献を歓迎します。」とは言っていません。\n“欢迎AI贡献。”这句话不适用于本项目。\n');
+
+    expect(against(doc, 1, 1, '「AIによる貢献を歓迎します。」', 'welcomesAi')).toBe('sentences');
+    expect(against(doc, 2, 2, '“欢迎AI贡献。”', 'welcomesAi')).toBe('sentences');
+  });
+
+  test("an HTML comment's marks end a sentence only at the edge of a line, not in running text", () => {
+    const doc = file(
+      'contributing',
+      [
+        'AI-assisted pull requests are welcome <!-- see #12 --> only for documentation.', // 1
+        'Agents may open pull requests --> only on issues labeled agent-ok.', // 2
+        '', // 3
+        'AI-assisted pull requests are welcome', // 4
+        '<!-- see #12 -->', // 5
+        'only for documentation.', // 6
+        '', // 7
+        'Agents may open pull requests -->', // 8
+        'only on issues labeled agent-ok.', // 9
+      ].join('\n'),
+    );
+    // A comment, or an arrow, that wraps inside a sentence ends nothing.
+    expect(against(doc, 4, 6, 'AI-assisted pull requests are welcome', 'welcomesAi')).toBe('sentences');
+    expect(against(doc, 8, 9, 'Agents may open pull requests', 'welcomesAgents')).toBe('sentences');
+
+    expect(against(doc, 1, 1, 'AI-assisted pull requests are welcome', 'welcomesAi')).toBe('sentences');
+    expect(against(doc, 2, 2, 'Agents may open pull requests', 'welcomesAgents')).toBe('sentences');
+  });
+
+  test('an image is not a link, so a loose match keeps it', () => {
+    const doc = file('contributing', '![](no-entry.png) AI agents are welcome.\n');
+
+    expect(against(doc, 1, 1, 'AI agents are welcome.', 'welcomesAgents')).toBe('sentences');
+  });
+
+  test('a check that would take more than its share of steps fails, so one long line cannot make it slow', () => {
+    const line = (count: number) => file('contributing', `${'a. '.repeat(count)}b.`);
+    // Each start matches two sentences before the third fails, so a long enough line runs out of steps first.
+    expect(typeof against(line(10), 1, 1, 'a. a. b.')).not.toBe('string');
+    expect(typeof against(line(Math.ceil(MAX_CHECK_STEPS / 2)), 1, 1, 'a. a. b.')).toBe('string');
+  });
+
+  test('a welcome still cannot be cut from emphasis inside a sentence that says the opposite', () => {
+    const doc = file('contributing', "We don't think **AI help is fine.** Ask first.\n- ❌ Submit AI code without review\n");
+
+    expect(against(doc, 1, 1, 'AI help is fine.', 'welcomesAi')).toBe('sentences');
+    expect(against(doc, 2, 2, 'Submit AI code without review', 'welcomesAi')).toBe('sentences');
+  });
+
+  test("an HTML comment's marks end a sentence, so a line inside a comment can be quoted alone, with its own line as the source", () => {
+    const doc = file(
+      'prTemplate',
+      [
+        '- [ ] I, the human author, understand this change, and believe it meets the [repository standards](https://example.org/AGENTS.md)', // 1
+        '  <!-- Coding agents: never tick this item. Only the human author may tick it. -->', // 2
+        '', // 3
+        '<!--', // 4
+        'AI help is allowed, but you must understand and stand behind every line you submit, and be able to', // 5
+        'explain it when a maintainer asks. AI-assisted work follows the guidelines linked below.', // 6
+        '-->', // 7
+      ].join('\n'),
+    );
+
+    expect(keeps(doc, 2, 2, 'Coding agents: never tick this item. Only the human author may tick it.')).toBe(true);
+    const kept = against(doc, 4, 7, 'AI help is allowed, but you must understand and stand behind every line you submit, and be able to explain it when a maintainer asks.');
+    expect(typeof kept !== 'string' && kept.source.line).toBe('AI help is allowed, but you must understand and stand behind every line you submit, and be able to');
+    // A comment's closing mark after the quote is left off the sentences kept.
+    const whole = against(doc, 4, 7, 'AI help is allowed, but you must understand and stand behind every line you submit, and be able to explain it when a maintainer asks. AI-assisted work follows the guidelines linked below.');
+    expect(typeof whole !== 'string' && whole.sentences.map((s) => s.text).at(-1)).toBe('AI-assisted work follows the guidelines linked below.');
+  });
+
+  test('a heading in a file with Windows line ends is a sentence of its own', () => {
+    const doc = file('contributing', '# Contributing to BuildXL\r\nMost contributions require you to agree to a CLA. For details, visit https://cla.microsoft.com.\r\n');
+
+    expect(keeps(doc, 2, 2, 'Most contributions require you to agree to a CLA. For details, visit https://cla.microsoft.com.')).toBe(true);
+  });
+
+  test("a quote may give a link's text without its target, and leave out code marks and a checkbox", () => {
+    const doc = file(
+      'contributing',
+      [
+        '* Nobody likes CLAs, but you will need to sign [our CLA](./CLA.md) before your pull request can be merged.', // 1
+        'Your agent reads [`AGENTS.md`](AGENTS.md) in this repository, which points at', // 2
+        "the organization's [`AGENTS.md`](https://github.com/example/.github/blob/main/AGENTS.md).", // 3
+        '* [ ] Have you signed the [Contributor Agreement](https://cla-assistant.io/example/example)?', // 4
+        'You can find more details at [https://cla.example.org](https://cla.example.org).', // 5
+      ].join('\n'),
+    );
+
+    expect(keeps(doc, 1, 1, 'Nobody likes CLAs, but you will need to sign our CLA before your pull request can be merged.')).toBe(true);
+    expect(keeps(doc, 2, 3, "Your agent reads AGENTS.md in this repository, which points at the organization's AGENTS.md.")).toBe(true);
+    expect(keeps(doc, 4, 4, 'Have you signed the [Contributor Agreement](https://cla-assistant.io/example/example)?')).toBe(true);
+    expect(keeps(doc, 5, 5, 'You can find more details at https://cla.example.org.')).toBe(true);
+    // The link's text is still the file's: other words in it fail.
+    expect(against(doc, 1, 1, 'Nobody likes CLAs, but you will need to sign the CLA before your pull request can be merged.')).toBe('quote');
+  });
+
+  test('a check mark or a warning sign before a sentence may be left out', () => {
+    const doc = file('contributing', '- ✅ 仔细审查所有由生成式 AI 生成的内容\n<!-- ⚠️ If you used an LLM, please disclose which LLM you used. -->\n');
+
+    expect(keeps(doc, 1, 1, '仔细审查所有由生成式 AI 生成的内容')).toBe(true);
+    expect(keeps(doc, 2, 2, 'If you used an LLM, please disclose which LLM you used.')).toBe(true);
+  });
+
+  test('in Chinese, a sentence ends at its full stop, and a line break inside one folds to nothing', () => {
+    const doc = file(
+      'contributing',
+      [
+        '人类维护者负责最终审查、合并和发布。AI 编码智能体实质参与设计、实现时，按', // 1
+        '[`CONTRIBUTORS.md`](CONTRIBUTORS.md) 的规则添加 `Co-authored-by` trailer；', // 2
+        '不要虚构身份。', // 3
+        'See [the guide][guide] first.', // 4
+      ].join('\n'),
+    );
+    // Across a full stop, with no space between the sentences.
+    expect(keeps(doc, 1, 3, '人类维护者负责最终审查、合并和发布。AI 编码智能体实质参与设计、实现时，按 CONTRIBUTORS.md 的规则添加 Co-authored-by trailer；不要虚构身份。')).toBe(true);
+    // A reference link's text, without its name.
+    expect(keeps(doc, 4, 4, 'See the guide first.')).toBe(true);
+
+    expect(keeps(doc, 1, 3, 'AI 编码智能体实质参与设计、实现时，按 [`CONTRIBUTORS.md`](CONTRIBUTORS.md) 的规则添加 `Co-authored-by` trailer；不要虚构身份。')).toBe(true);
+  });
+
   test('a label must appear in the quote', () => {
     const line = 'Issues labeled `good first issue` are kept for people new to the project.';
     expect(failure(statement('AI_POLICY.md', 5, 5, line, 'reservedLabel', { label: 'Good First Issue' }))).toBeNull();
@@ -184,25 +370,103 @@ describe('the checks on a statement', () => {
     expect(failure(statement('AI_POLICY.md', 6, 6, 'Agents may only work on issues labeled `agent ready`.', 'onlyLabel', { label: 'agent-ready' }))).toBe('label');
   });
 
-  test('a trailer must appear in the quote followed by a colon, and is kept as the docs spell it', () => {
-    const line = 'Disclose AI help with an Assisted-by: trailer.';
-    const kept = checked(statement('AI_POLICY.md', 7, 7, line, 'disclosureTrailer', { value: 'assisted-by' }));
+  /** The value a statement keeps, or why it was dropped. */
+  const valueOf = (s: ReturnType<typeof statement>, files = FILES) => {
+    const result = checkStatement(new Files(files), s as Statement, 0);
+    return result.ok ? result.statement.value : result.failure;
+  };
 
-    expect(kept.ok && kept.statement.value).toBe('Assisted-by');
-    expect(failure(statement('AI_POLICY.md', 7, 7, line, 'disclosureTrailer', { value: 'Generated-by' }))).toBe('value');
-    expect(failure(statement('AI_POLICY.md', 7, 7, line, 'disclosureTrailer', { value: 'by' }))).toBe('value');
-    expect(failure(statement('AI_POLICY.md', 7, 7, line, 'disclosureTrailer', { value: 'Assisted-by:' }))).toBe('value');
-    expect(failure(statement('AI_POLICY.md', 3, 3, "We don't think AI contributions are welcome.", 'disclosureTrailer', { value: 'AI' }))).toBe('value');
+  test("a trailer's name is kept, as the docs spell it, when the quote gives it with a colon, in code, or as a trailer or tag", () => {
+    const line = 'Disclose AI help with an Assisted-by: trailer.';
+    expect(valueOf(statement('AI_POLICY.md', 7, 7, line, 'disclosureTrailer', { value: 'assisted-by' }))).toBe('Assisted-by');
+
+    const doc = file(
+      'agents',
+      [
+        'Add a `Co-authored-by` trailer to a commit when an AI coding agent wrote it.', // 1
+        'Contributions should include an Assisted-by tag in the commit message with the following format:', // 2
+        '', // 3
+        'Mark AI help with `Generated-by` in the commit message.', // 4
+        'Mark the AI lines in your PR.', // 5
+        'Run `make` before you push.', // 6
+        'Add the AI tag to your pull request.', // 7
+      ].join('\n'),
+    );
+    const at = (n: number, quote: string, value: string) => valueOf(statement('AGENTS.md', n, n, quote, 'disclosureTrailer', { value }), [doc]);
+    expect(at(1, 'Add a `Co-authored-by` trailer to a commit when an AI coding agent wrote it.', 'co-authored-by')).toBe('Co-authored-by');
+    expect(at(2, 'Contributions should include an Assisted-by tag in the commit message with the following format:', 'Assisted-by')).toBe('Assisted-by');
+    // A name in code, or a word before line, is no trailer.
+    expect(at(4, 'Mark AI help with `Generated-by` in the commit message.', 'Generated-by')).toBeNull();
+    expect(at(5, 'Mark the AI lines in your PR.', 'AI')).toBeNull();
+    expect(at(6, 'Run `make` before you push.', 'make')).toBeNull();
+    // Before trailer or tag, only a name with a hyphen is a trailer's.
+    expect(at(7, 'Add the AI tag to your pull request.', 'AI')).toBeNull();
   });
 
-  test('a CLA link must be an https link the quote holds, without the punctuation that closes the sentence', () => {
-    const line = 'Sign the CLA at https://cla.example.org/sign.';
-    const kept = checked(statement('AI_POLICY.md', 8, 8, line, 'cla', { value: 'https://cla.example.org/sign' }));
+  test("a trailer statement whose name doesn't check out is kept with no name, so the trailer setting takes nothing from it", () => {
+    const line = 'Disclose AI help with an Assisted-by: trailer.';
+    for (const value of ['Generated-by', 'by', 'Assisted-by:', null]) {
+      expect(valueOf(statement('AI_POLICY.md', 7, 7, line, 'disclosureTrailer', { value }))).toBeNull();
+    }
+    // A name outside the quote's marks for one, like a word in the sentence, isn't a trailer.
+    expect(valueOf(statement('AI_POLICY.md', 3, 3, "We don't think AI contributions are welcome.", 'disclosureTrailer', { value: 'AI' }))).toBeNull();
+    const tcgdex = file('agents', 'All commits must be marked with "Assisted by {agent name}" in the commit message.');
+    expect(valueOf(statement('AGENTS.md', 1, 1, 'All commits must be marked with "Assisted by {agent name}" in the commit message.', 'disclosureTrailer', { value: 'Assisted by' }), [tcgdex])).toBeNull();
+    // The lines still have to check out.
+    expect(valueOf(statement('AI_POLICY.md', 7, 7, 'Disclose AI help with a trailer.', 'disclosureTrailer', { value: 'Assisted-by' }))).toBe('quote');
+  });
 
-    expect(kept.ok && kept.statement.value).toBe('https://cla.example.org/sign');
-    expect(failure(statement('AI_POLICY.md', 8, 8, line, 'cla', { value: 'https://cla.example.org/sig' }))).toBe('value');
-    expect(failure(statement('AI_POLICY.md', 8, 8, line, 'cla', { value: 'http://cla.example.org/sign' }))).toBe('value');
-    expect(failure(statement('AI_POLICY.md', 8, 8, line, 'cla', { value: 'https://elsewhere.example.org/sign' }))).toBe('value');
+  test('a CLA link is kept when it is an https link in the same file, without the punctuation that closes the sentence', () => {
+    const line = 'Sign the CLA at https://cla.example.org/sign.';
+    expect(valueOf(statement('AI_POLICY.md', 8, 8, line, 'cla', { value: 'https://cla.example.org/sign' }))).toBe('https://cla.example.org/sign');
+
+    const doc = file('contributing', "Before we can accept patches, there's a quick web form you need to fill out.\nThe form is at https://cla.example.org/individual.\n");
+    expect(valueOf(statement('CONTRIBUTING.md', 1, 1, "Before we can accept patches, there's a quick web form you need to fill out.", 'cla', { value: 'https://cla.example.org/individual' }), [doc])).toBe(
+      'https://cla.example.org/individual',
+    );
+  });
+
+  test('a CLA statement whose link is not an https link in its file is kept with no link, so the CLA setting takes nothing from it', () => {
+    const line = 'Sign the CLA at https://cla.example.org/sign.';
+    for (const value of ['https://cla.example.org/sig', 'http://cla.example.org/sign', 'https://elsewhere.example.org/sign', null]) {
+      expect(valueOf(statement('AI_POLICY.md', 8, 8, line, 'cla', { value }))).toBeNull();
+    }
+    // The link in another file the Worker sent doesn't count.
+    expect(valueOf(statement('CONTRIBUTING.md', 3, 3, 'AI help is fine.', 'cla', { value: 'https://cla.example.org/sign' }))).toBeNull();
+    // Nor one in another paragraph of the file, or in an HTML comment.
+    const doc = file('contributing', 'You need to sign our CLA. <!-- https://cla.example.org/hidden -->\n\nSponsor us at https://sponsor.example.org.\n');
+    const at = (value: string) => valueOf(statement('CONTRIBUTING.md', 1, 1, 'You need to sign our CLA.', 'cla', { value }), [doc]);
+    expect(at('https://sponsor.example.org')).toBeNull();
+    expect(at('https://cla.example.org/hidden')).toBeNull();
+    // Nor one in a comment that opened in an earlier paragraph.
+    const hidden = file('contributing', 'Thanks.\n\n<!--\n\nSign the CLA at https://evil.example/cla.\n\n-->\n');
+    expect(valueOf(statement('CONTRIBUTING.md', 5, 5, 'Sign the CLA at https://evil.example/cla.', 'cla', { value: 'https://evil.example/cla' }), [hidden])).toBeNull();
+    // Nor a reference link's target defined inside a comment.
+    const defined = file('contributing', 'Sign the [CLA][cla] first.\n\n<!--\n[cla]: https://evil.example/cla\n-->\n');
+    expect(valueOf(statement('CONTRIBUTING.md', 1, 1, 'Sign the CLA first.', 'cla', { value: 'https://evil.example/cla' }), [defined])).toBeNull();
+  });
+
+  test('a CLA link may be in the paragraph after a lead-in that ends with a colon, or a reference link the paragraph uses', () => {
+    const doc = file(
+      'contributing',
+      [
+        "Before we can accept your pull requests you'll need to sign a CLA:", // 1
+        '', // 2
+        '- If you are an individual, sign an [individual CLA](https://cla.example.org/individual).', // 3
+        '', // 4
+        'You need to sign the [CLA][sign-cla] before we merge.', // 5
+        '', // 6
+        'Sponsor us at https://sponsor.example.org.', // 7
+        '', // 8
+        '[sign-cla]: https://cla.example.org/assistant', // 9
+      ].join('\n'),
+    );
+    const at = (n: number, quote: string, value: string) => valueOf(statement('CONTRIBUTING.md', n, n, quote, 'cla', { value }), [doc]);
+    expect(at(1, "Before we can accept your pull requests you'll need to sign a CLA:", 'https://cla.example.org/individual')).toBe('https://cla.example.org/individual');
+    expect(at(5, 'You need to sign the CLA before we merge.', 'https://cla.example.org/assistant')).toBe('https://cla.example.org/assistant');
+    // The paragraph after one with no colon, and a definition no link uses, don't count.
+    expect(at(5, 'You need to sign the CLA before we merge.', 'https://sponsor.example.org')).toBeNull();
+    expect(at(1, "Before we can accept your pull requests you'll need to sign a CLA:", 'https://cla.example.org/assistant')).toBeNull();
   });
 
   test('a canary must be in AGENTS.md or CLAUDE.md', () => {
@@ -337,6 +601,26 @@ describe('the steering lines', () => {
 });
 
 describe('the reading as a PolicyReading', () => {
+  test("the welcome and the fingerprint read the word list's sentences, so a finer split for the checks changes neither", () => {
+    // A paragraph too long to quote whole, whose welcome the checks split in two.
+    const filler = Array.from({ length: 120 }, (_, i) => `Step ${String(i)} runs the linter`).join(', ');
+    const welcome = file('contributing', `**Coding agents may open pull requests.** Read the guide first. ${filler}.\n`);
+    const welcomed = reading([statement('CONTRIBUTING.md', 1, 1, 'Coding agents may open pull requests. Read the guide first.', 'welcomesAgents')], 'invites_agents', [], [welcome]);
+    expect(toPolicyReading([welcome], welcomed).welcome).toMatchObject({
+      sentence: 'Coding agents may open pull requests. Read the guide first.',
+      quote: '**Coding agents may open pull requests.** Read the guide first.',
+    });
+
+    // A paragraph in AGENTS.md cut for the admin, with a statement whose
+    // sentence is too long to sit in the cut, but whose first piece would.
+    const tail = `${Array.from({ length: 200 }, () => 'word').join(' ')}.`;
+    const sentence = `**Keep each commit small.** Then ${tail}`;
+    const agents = file('agents', `Please contribute fixes. ${sentence}\n`);
+    const kept = reading([statement('AGENTS.md', 1, 1, 'Keep each commit small. Then ' + tail, 'personInLoop')], 'no_policy', [], [agents]);
+    expect(kept.dropped).toEqual([]);
+    expect(fingerprintContent([agents], kept, null).passages).toEqual([]);
+  });
+
   test('quotes the welcome from the file, by its paragraph, and takes source lines from the file', () => {
     const read = reading(
       [
@@ -469,6 +753,34 @@ describe('the settings a reading suggests', () => {
       { about: 'personWrittenDescription', path: 'CONTRIBUTING.md', line: 'Write the PR description yourself.' },
       { about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign the CLA at https://cla.example.org/sign.' },
     ]);
+  });
+
+  test('the trailer and the CLA come from the first statement that kept a name or a link, and the fingerprint names them', () => {
+    const files = [
+      file(
+        'contributing',
+        'Coding agents may open pull requests.\nSay so in the commit message.\nDisclose it with an Assisted-by: trailer.\nYou need to sign our CLA.\nSign it at https://cla.example.org/sign.\n',
+      ),
+    ];
+    const read = reading(
+      [
+        statement('CONTRIBUTING.md', 1, 1, 'Coding agents may open pull requests.', 'welcomesAgents'),
+        statement('CONTRIBUTING.md', 2, 2, 'Say so in the commit message.', 'disclosureTrailer', { value: 'Generated-by' }),
+        statement('CONTRIBUTING.md', 3, 3, 'Disclose it with an Assisted-by: trailer.', 'disclosureTrailer', { value: 'Assisted-by' }),
+        statement('CONTRIBUTING.md', 4, 4, 'You need to sign our CLA.', 'cla', { value: null }),
+        statement('CONTRIBUTING.md', 5, 5, 'Sign it at https://cla.example.org/sign.', 'cla', { value: 'https://cla.example.org/sign' }),
+      ],
+      'invites_agents',
+      [],
+      files,
+    );
+
+    expect(read.dropped).toEqual([]);
+    const { settings, sources } = readerSettings(read, [], null, null);
+    expect(settings).toMatchObject({ disclosure: { trailer: 'Assisted-by' }, claUrl: 'https://cla.example.org/sign' });
+    expect(sources).toContainEqual({ about: 'disclosure', path: 'CONTRIBUTING.md', line: 'Disclose it with an Assisted-by: trailer.' });
+    expect(sources).toContainEqual({ about: 'claUrl', path: 'CONTRIBUTING.md', line: 'Sign it at https://cla.example.org/sign.' });
+    expect(fingerprintContent(files, read, null)).toMatchObject({ trailer: 'Assisted-by', cla: 'https://cla.example.org/sign' });
   });
 
   test('a find whose tiers differ suggests reviewed pull requests', () => {
@@ -734,8 +1046,12 @@ describe('what the review found', () => {
     const files = new Files([file('contributing', 'Sign the CLA at https://cla.example.org/~legal/sign.')]);
     const at = (value: string) => checkStatement(files, statement('CONTRIBUTING.md', 1, 1, 'Sign the CLA at https://cla.example.org/~legal/sign.', 'cla', { value }) as Statement, 0);
 
-    expect(at('https://cla.example.org/~legal/sign').ok).toBe(true);
-    expect(at('https://cla.example.org/legal/sign')).toEqual({ ok: false, failure: 'value' });
+    const link = (value: string) => {
+      const result = at(value);
+      return result.ok ? result.statement.value : result.failure;
+    };
+    expect(link('https://cla.example.org/~legal/sign')).toBe('https://cla.example.org/~legal/sign');
+    expect(link('https://cla.example.org/legal/sign')).toBeNull();
   });
 
   test('the fingerprint reads the same for a build step in CLAUDE.md that names Claude, and changes when the welcome there changes', async () => {

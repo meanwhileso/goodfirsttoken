@@ -198,6 +198,25 @@ const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 // A sentence ends at the last of its closing marks, before a space. One
 // mark at a time, so a long run of them takes one step each.
 const SENTENCE_END = /[.!?](?=\s)/g;
+// The model reader's checks split finer, so a quote of a sentence the file
+// marks up still matches it whole. There a sentence also ends after the
+// marks that close it, like `.**`, `."`, or `.\` before a hard line break,
+// when the next sentence starts with a capital letter or a Chinese or
+// Japanese character, so `"AI is welcome." *isn't* our policy` stays whole.
+// Struck text, `~~`, and a closing parenthesis close nothing. A Chinese or
+// Japanese full stop, question mark, or exclamation mark ends one with no
+// space after it, unless a closing bracket or quote follows, since what
+// comes after the brackets may reject what is inside. An HTML comment's
+// opening mark at the start of a line, and its closing mark at the end of
+// one, stand alone, so a line inside a comment starts a sentence, unless
+// the text after the comment goes on in lower case, as a sentence the
+// comment interrupts does.
+const CHECK_CUTS = /[.!?]["'’”*_\\]*(?=\s)|[。！？](?![」』”’）)\]"'])|(?<=(?:^|\n)[ \t]*)<!--|--!?>(?=[ \t]*(?:\r?\n|$))/g;
+// After a sentence end with closing marks, the space and a letter that starts a sentence.
+const NEXT_START = /\s*[\p{Lu}\p{Lt}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/uy;
+const COMMENT_CLOSE = /--!?>/g;
+// After a comment's closing mark, text that goes on in lower case, past any marks.
+const GOES_ON = /\s*[*_~`"'([\-–]*\p{Ll}/uy;
 // The HTML tags that mark emphasis, as they are spelled. Nothing is taken
 // out of the text the admin sees: this is for matching alone.
 const EMPHASIS_TAGS = /<\/?(?:strong|em|b|i|u|s|del|ins|mark|strike)>/gi;
@@ -214,8 +233,15 @@ export function plain(text: string): string {
     .trim();
 }
 
-/** The file's paragraphs, runs of lines with no blank line between them, and its sentences. Exported for the model reader's checks. */
-export function scan(text: string): { paragraphs: { start: number; end: number }[]; sentences: Sentence[] } {
+/**
+ * The file's paragraphs, runs of lines with no blank line between them, and
+ * its sentences. Exported for the model reader's checks, which pass
+ * `checks` for the finer split CHECK_CUTS gives, with a heading found on a
+ * line that ends in a carriage return too. The paragraphs are the same
+ * either way. The word list keeps the split it has, so its passages and the
+ * reader's fingerprint read as they did.
+ */
+export function scan(text: string, { checks = false }: { checks?: boolean } = {}): { paragraphs: { start: number; end: number }[]; sentences: Sentence[] } {
   const paragraphs: { start: number; end: number }[] = [];
   const sentences: Sentence[] = [];
   const headings: { level: number; ai: boolean }[] = [];
@@ -241,10 +267,35 @@ export function scan(text: string): { paragraphs: { start: number; end: number }
     };
     // A numbered item's mark, like "1. ", isn't the end of a sentence.
     const mark = NUMBERED_MARK.exec(original)?.[0].length ?? 0;
-    for (const match of original.matchAll(SENTENCE_END)) {
+    // Where the next comment's closing mark ends, found once for every opening mark before it.
+    let closeAt = -2;
+    const goesOn = (at: number) => {
+      GOES_ON.lastIndex = at;
+      return GOES_ON.test(original);
+    };
+    for (const match of original.matchAll(checks ? CHECK_CUTS : SENTENCE_END)) {
       if (match.index < mark) continue;
-      add(match.index + match[0].length);
-      from = match.index + match[0].length;
+      const after = match.index + match[0].length;
+      if (checks && /^[.!?]./.test(match[0])) {
+        NEXT_START.lastIndex = after;
+        if (!NEXT_START.test(original)) continue;
+      }
+      if (checks && match[0].startsWith('<')) {
+        if (closeAt !== -1 && closeAt < match.index) {
+          COMMENT_CLOSE.lastIndex = match.index;
+          const close = COMMENT_CLOSE.exec(original);
+          closeAt = close === null ? -1 : close.index + close[0].length;
+        }
+        if (closeAt !== -1 && goesOn(closeAt)) continue;
+      }
+      if (checks && match[0].startsWith('-') && goesOn(after)) continue;
+      if (match[0].startsWith('<') || match[0].startsWith('-')) {
+        // A comment's mark is a piece of its own.
+        add(match.index);
+        from = match.index;
+      }
+      add(after);
+      from = after;
     }
     add(original.length);
   };
@@ -257,7 +308,7 @@ export function scan(text: string): { paragraphs: { start: number; end: number }
       if (paragraph) paragraphs.push(paragraph);
       paragraph = null;
     } else {
-      const heading = HEADING.exec(line);
+      const heading = HEADING.exec(checks ? line.replace(/\r$/, '') : line);
       if (BLOCK_START.test(line)) endBlock();
       if (block === null) block = { start: offset, end };
       else block.end = end;
@@ -276,6 +327,38 @@ export function scan(text: string): { paragraphs: { start: number; end: number }
   endBlock();
   if (paragraph) paragraphs.push(paragraph);
   return { paragraphs, sentences };
+}
+
+/** The word list's sentences of each file, found once. */
+const wordListSentences = new WeakMap<PolicyFile, Sentence[]>();
+
+/**
+ * The word list's sentences that hold the pieces the model reader's checks
+ * split finer, each once, in order, so what the admin sees and the reader's
+ * fingerprint read whole sentences as the word list splits them. Every
+ * piece is inside one, as the checks only split more. Exported for the
+ * model reader.
+ */
+export function holdingSentences(file: PolicyFile, pieces: readonly Sentence[]): Sentence[] {
+  let sentences = wordListSentences.get(file);
+  if (sentences === undefined) {
+    sentences = scan(file.text).sentences;
+    wordListSentences.set(file, sentences);
+  }
+  const held: Sentence[] = [];
+  for (const piece of pieces) {
+    let [low, high] = [0, sentences.length - 1];
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if ((sentences[middle]?.start ?? 0) <= piece.start) low = middle;
+      else high = middle - 1;
+    }
+    const found = sentences[low];
+    // A piece no sentence holds stands for itself, though none should.
+    const holder = found !== undefined && found.start <= piece.start && piece.end <= found.end ? found : piece;
+    if (held.at(-1) !== holder) held.push(holder);
+  }
+  return held;
 }
 
 /**

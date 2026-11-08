@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { Files } from '../../src/crawl/reader';
 import { aiPassages, bare, namesAiByWordList, quoteOf, scan, type PolicyFile } from '../../src/crawl/rules';
 import { MAX_DOC_BYTES } from '../../src/projects/docs';
 import { CASES, contributing, file } from './corpus';
@@ -264,6 +265,16 @@ describe('the sentences of a file', () => {
     expect(passages(long((i) => `${String(i + 1)}.`))).toEqual([false, true]);
   });
 
+  test("the word list keeps its own split, whatever the model reader's checks split finer", () => {
+    const sentences = (text: string) => scan(text).sentences.map((s) => s.text);
+    expect(sentences('**Review AI output.** AI tools err.\n')).toEqual(['Review AI output. AI tools err.']);
+    expect(sentences('We require a "human." You are the author.\n')).toEqual(['We require a "human." You are the author.']);
+    expect(sentences('We read it.\\\nThen we merge.\n')).toEqual(['We read it.\\ Then we merge.']);
+    expect(sentences('发布。AI 编码。\n')).toEqual(['发布。AI 编码。']);
+    expect(sentences('<!--\nAI help is allowed.\n-->\n')).toEqual(['<!-- AI help is allowed.', '-->']);
+    expect(sentences('# Heading\r\nAI help is fine.\r\n')).toEqual(['# Heading AI help is fine.']);
+  });
+
   test('a number that ends a sentence in running text still ends it', () => {
     expect(scan('We read PRs within 2. Agents are welcome.\n').sentences.map((s) => s.text)).toEqual(['We read PRs within 2.', 'Agents are welcome.']);
   });
@@ -304,7 +315,7 @@ describe('speed', () => {
   // alone. These files try every pattern at the size limit: runs of each
   // kind of space and mark, and each phrase a pattern starts with, over and
   // over, with a letter at the end that no pattern takes.
-  const runs = [' ', '\t', '\n', '\r\n', ' \t', '\n\n', '.', '. ', '!', '?', '-', '_', '*', '~', '`', '"', "'", '#', '|', '>', '[', ']', ':', ','];
+  const runs = [' ', '\t', '\n', '\r\n', ' \t', '\n\n', '.', '. ', '!', '?', '-', '_', '*', '~', '`', '"', "'", '#', '|', '>', '[', ']', ':', ',', '<!--', '-->', '。', '.** ', '[a](b). ', '✅ '];
   const phrases = [
     'not ', "n't ", 'no ', 'AI ', 'ai-', 'A.I. ', 'GPT-4', 'GPT-4.', 'agents ', 'agent ', 'Cursor ', 'vibe-cod', 'LLM ',
     'pull requests ', 'PRs ', 'do not open ', 'not accept ', 'not accept any ', 'no outside ', 'are not ', 'is not ',
@@ -335,7 +346,14 @@ describe('speed', () => {
       const files = (['aiPolicy', 'agents', 'prTemplate'] as const).map((kind) => file(kind, text));
       const started = performance.now();
       aiPassages(files);
-      for (const f of files) scan(f.text);
+      for (const f of files) {
+        scan(f.text);
+        scan(f.text, { checks: true });
+        // The model reader's checks of long quotes on the file's first line,
+        // which may be the whole file: one the line starts with, and one
+        // that matches it all but its last word.
+        for (const quote of [f.text.slice(0, 4000), `${f.text.slice(0, 30_000)} zz`]) new Files([f]).check({ path: f.path, startLine: 1, endLine: 1, quote });
+      }
       // Read in one pass, each takes tens of milliseconds at most. A pattern
       // that tries each start again took seconds on a file like these.
       expect(performance.now() - started).toBeLessThan(1500);

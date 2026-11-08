@@ -1,7 +1,7 @@
 import type { PolicyFingerprint } from '@goodfirsttoken/core';
 import { FINGERPRINT_VERSION, wordsOf } from '../fingerprint';
-import { forAgents, namesAiByWordList, type PolicyFile } from '../rules';
-import { toPolicyReading, type ModelReading, type PolicyReading } from './reading';
+import { forAgents, holdingSentences, namesAiByWordList, type PolicyFile } from '../rules';
+import { firstValue, toPolicyReading, type ModelReading, type PolicyReading } from './reading';
 
 // The fingerprint of what a model reading decided, so a later read can tell
 // whether the policy changed. The docs hash decides whether the model
@@ -39,14 +39,16 @@ function counts(passage: PolicyReading['aiSentences'][number], reading: ModelRea
   if (!forAgents(passage.file.kind)) return namesAiByWordList(passage.text);
   if (namesAiByWordList(passage.text, true)) return true;
   return reading.statements.some(
-    (s) => s.file.path === passage.file.path && s.sentences.some((sentence) => passage.text.includes(s.file.text.slice(sentence.start, sentence.end))),
+    (s) =>
+      s.file.path === passage.file.path &&
+      holdingSentences(s.file, s.sentences).some((sentence) => passage.text.includes(s.file.text.slice(sentence.start, sentence.end))),
   );
 }
 
 /** What the fingerprint covers, before it is hashed. Exported for the tests. */
 export function fingerprintContent(files: readonly PolicyFile[], reading: ModelReading, vouch: string | null) {
   const policy: PolicyReading = toPolicyReading(files, reading);
-  const value = (about: 'disclosureTrailer' | 'cla') => reading.statements.find((s) => s.about === about)?.value ?? null;
+  const value = (about: 'disclosureTrailer' | 'cla') => firstValue(reading, about)?.value ?? null;
   return {
     tier: policy.tier,
     noAutonomy: policy.noAutonomy !== null,
