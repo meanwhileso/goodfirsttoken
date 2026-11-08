@@ -3354,6 +3354,18 @@ sentences and paragraphs the Worker's checks use.
   a table row starts. It runs on over a line that is only wrapped. The
   period in a numbered item's mark, like `1. `, doesn't end one, so the
   number stays with its item, as a bullet's mark does.
+- The model reader's checks split finer. There, a sentence also ends after
+  the marks that close it, like `.**`, `."`, or a hard line break after
+  its period, when the next one starts with a capital letter or a Chinese
+  or Japanese character, so `"AI is welcome." *isn't* our policy` stays
+  whole. Struck text and a closing parenthesis close nothing. A Chinese or
+  Japanese full stop, question mark, or exclamation mark ends one, unless
+  a closing bracket or quote follows it. An HTML comment's opening mark at
+  the start of a line, and its closing mark at the end of one, stand
+  alone, unless the text after the comment goes on in lower case. A heading is found in a file with Windows
+  line ends. The word list keeps its own split. The welcome's quote and
+  the reader's fingerprint read the word list's sentences that hold what
+  the checks matched, so they read as before.
 - **A sentence names AI** when it has `AI` in capitals or `A.I.`, `ai-`
   before a word like generated, assisted, written, tools, or agents in any
   case, `LLM`, `language model`, `artificial intelligence`, `genAI`,
@@ -3403,8 +3415,14 @@ puts the repo in the admin queue with:
 - The suggested settings, from the statements that checked out:
   - PR mode `automatic` for invites agents, and `reviewed` otherwise.
   - The disclosure trailer, the person-written PR description, and the
-    CLA link. A trailer has to appear in its quote followed by a colon,
-    and a CLA link has to be an `https` link in its quote.
+    CLA link. A trailer's name has to appear in its quote followed by a
+    colon, or, for a name with a hyphen, followed by trailer, tag, or
+    footer. A CLA link has to be an `https` link in the paragraphs the
+    statement's lines are in, outside any HTML comment, or the target of a
+    reference link they use. When the last of them ends with a colon, the
+    paragraph after it counts too. A trailer or CLA statement whose name or
+    link doesn't check out is kept without it, and suggests no trailer or
+    CLA link.
   - Who can claim `vouched` when it has a vouch file.
   - Excluded tags: the repo's labels a `reservedLabel` statement keeps away
     from AI or for people.

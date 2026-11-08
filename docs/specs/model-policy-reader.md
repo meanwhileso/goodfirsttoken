@@ -302,12 +302,25 @@ admin sees.
    with both reduced the way the rules reduce text today: Markdown
    emphasis marks and HTML emphasis tags taken out, curly quotes
    straightened, and runs of space folded. The quote is one or more whole
-   sentences, as the rules' `scan` splits them, so "AI contributions are
-   welcome" can't be cut from "We don't think AI contributions are
-   welcome". A `reservedLabel` or `onlyLabel` label appears in the quote.
-   A `disclosureTrailer` value appears in the quote followed by a colon. A
-   `cla` value is an `https` link found in the quote. A statement that
-   fails any check is dropped, and the reading counts it. These checks
+   sentences, as the rules' `scan` splits them for the checks, so "AI
+   contributions are welcome" can't be cut from "We don't think AI
+   contributions are welcome". That split also ends a sentence after the
+   marks that close it, like `.**` or `."`, when the next sentence starts
+   with a capital letter, and at a Chinese or Japanese full stop that no
+   closing bracket follows. An HTML comment's marks stand alone at the
+   edge of a line, unless the text after the comment goes on in lower
+   case. The quote may give a link's text without its target,
+   and leave out code marks, a checkbox, and a check mark or warning sign
+   before a sentence. A `reservedLabel` or `onlyLabel` label appears in
+   the quote. A statement that fails any of these checks is dropped, and
+   the reading counts it. A `disclosureTrailer` value is kept when the
+   quote gives it followed by a colon, or, for a name with a hyphen,
+   followed by trailer, tag, or footer. A `cla` value is kept when it is an
+   `https` link in the paragraphs the statement's lines are in, outside an
+   HTML comment, or a reference link's target they use, with the
+   paragraph after a lead-in that ends with a colon. A trailer or CLA
+   statement whose value fails is kept without it, since its lines still
+   ask for a trailer or a CLA, and the settings take nothing from it. These checks
    prove a line is in the file. They don't prove what it means. The
    admin's read, the eval, and for a pause the second reading cover that.
 2. **What the admin sees comes from the files.** For each statement kept,

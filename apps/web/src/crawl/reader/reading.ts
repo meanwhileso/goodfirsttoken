@@ -1,6 +1,6 @@
 import { MAX_TAGS, defaultDisclosure, type CandidateSource, type ProjectSettingsPatch, type SuggestedTag } from '@goodfirsttoken/core';
 import { keptForPeople } from '../../projects/rules';
-import { aiPassages, quoteOf, scan, type AiPassages, type CrawlTier, type PolicyFile, type RepoLabel, type SourceLine } from '../rules';
+import { aiPassages, holdingSentences, quoteOf, scan, type AiPassages, type CrawlTier, type PolicyFile, type RepoLabel, type SourceLine } from '../rules';
 import type { LabelCheck } from './labels';
 import { parsePolicyOutput, type ModelTier, type PolicyOutput, type StatementKind } from './schemas';
 import { checkStatement, Files, type CheckedPointer, type CheckedStatement, type StatementFailure } from './statements';
@@ -144,6 +144,11 @@ function first(reading: ModelReading, kinds: readonly StatementKind[]): CheckedS
   return reading.statements.find((s) => kinds.includes(s.about)) ?? null;
 }
 
+/** The first statement of a kind that kept a value, a trailer name or a CLA link, whose line is kept as its source. Exported for the fingerprint. */
+export function firstValue(reading: ModelReading, kind: 'disclosureTrailer' | 'cla'): (CheckedStatement & { value: string }) | null {
+  return (reading.statements.find((s) => s.about === kind && s.value !== null) as (CheckedStatement & { value: string }) | undefined) ?? null;
+}
+
 const sourceOf = (statement: CheckedStatement | null): SourceLine | null => statement?.source ?? null;
 
 /** Label names, each once without case, with the first line that names them. */
@@ -182,7 +187,7 @@ export function toPolicyReading(files: readonly PolicyFile[], reading: ModelRead
   const net = aiPassages(files);
   const welcomed = first(reading, ['welcomesAgents']) ?? first(reading, ['welcomesAi']);
   let welcome: PolicyReading['welcome'] = null;
-  const sentence = welcomed?.sentences[0];
+  const sentence = welcomed === null ? undefined : holdingSentences(welcomed.file, welcomed.sentences.slice(0, 1))[0];
   if (welcomed !== null && sentence !== undefined && LISTING.includes(tier)) {
     const { paragraphs } = scan(welcomed.file.text);
     welcome = { file: welcomed.file, sentence: sentence.text, quote: quoteOf(welcomed.file.text, paragraphs, sentence) };
@@ -267,8 +272,8 @@ export function readerSettings(
     settings.whoCanClaim = 'vouched';
     sources.push({ about: 'whoCanClaim', path: vouch, line: null });
   }
-  const trailer = first(reading, ['disclosureTrailer']);
-  if (trailer?.value != null) {
+  const trailer = firstValue(reading, 'disclosureTrailer');
+  if (trailer !== null) {
     settings.disclosure = { ...defaultDisclosure, trailer: trailer.value };
     sources.push(source('disclosure', trailer.source));
   }
@@ -277,8 +282,8 @@ export function readerSettings(
     settings.personWrittenDescription = true;
     sources.push(source('personWrittenDescription', written.source));
   }
-  const cla = first(reading, ['cla']);
-  if (cla?.value != null) {
+  const cla = firstValue(reading, 'cla');
+  if (cla !== null) {
     settings.claUrl = cla.value;
     sources.push(source('claUrl', cla.source));
   }
