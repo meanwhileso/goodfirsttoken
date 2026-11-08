@@ -170,8 +170,10 @@ PR with GitHub reads, and records them. The last item removes the server's write
 The [add a repo spec](docs/specs/add-a-repo.md) lets a maintainer register from a form on
 `/maintainers` and manage the project from its settings page, and lets a donor ask for a repo from the
 homepage, from `/request`, or through their agent with `request_repo`. A request lists nothing. The
-crawler reads requested repos after the admins' seeds. A requested repo with 100 stars or more whose
-docs welcome AI help is listed without waiting for an admin, and an admin reviews it afterward.
+crawler reads requested repos after the admins' seeds. Its find goes through the hourly approval
+[#191](https://github.com/meanwhileso/goodfirsttoken/pull/191) added for every find: a repo with more
+than 100 stars whose docs welcome AI help, and whose reading has none of that approval's reasons to wait,
+is listed without waiting for an admin.
 
 | Issue | Item | Blocked by | Done in |
 |---|---|---|---|
@@ -187,7 +189,7 @@ docs welcome AI help is listed without waiting for an admin, and an admin review
 | [#162](https://github.com/meanwhileso/goodfirsttoken/issues/162) | Change a project's settings on the site | #152, #159 | |
 | [#163](https://github.com/meanwhileso/goodfirsttoken/issues/163) | Pause, resume, and read tagged issues now on the site | #162 | |
 | [#164](https://github.com/meanwhileso/goodfirsttoken/issues/164) | Ask to be removed on the site | #162 | |
-| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154, #176 | |
+| [#165](https://github.com/meanwhileso/goodfirsttoken/issues/165) | List a requested repo with 100 stars without waiting for an admin | #154, #176 | [#194](https://github.com/meanwhileso/goodfirsttoken/pull/194) |
 
 ## M11 Model policy reader
 
@@ -390,7 +392,7 @@ flowchart TD
   n162 --> n164
   n154 --> n165
   n176 --> n165
-  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173,n174,n175,n176,n177,n153,n154 done
+  class n3,n4,n18,n32,n39,n6,n7,n5,n8,n13,n33,n14,n9,n23,n25,n10,n35,n12,n11,n24,n15,n20,n65,n16,n30,n70,n31,n17,n80,n22,n27,n19,n91,n92,n93,n26,n21,n29,n28,n34,n171,n172,n173,n174,n175,n176,n177,n153,n154,n165 done
 ```
 
 ## Maintainer steps
