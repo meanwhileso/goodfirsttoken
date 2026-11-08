@@ -667,7 +667,7 @@ describe('the description a project asks the donor to write', () => {
     const body = (await clearance(claimId))?.body;
     const number = issue.slice(issue.indexOf('#') + 1);
     expect(body).toBe(
-      `Rewrites keep the *trailing* slash now.\n\nI read the diff <b>twice</b>, and ran the tests.\n\nCloses #${number}\n\nWritten with a coding agent through Good First Token.`,
+      `Rewrites keep the *trailing* slash now.\n\nI read the diff <b>twice</b>, and ran the tests.\n\nCloses #${number}\n\nWritten with a coding agent through [Good First Token](https://goodfirsttoken.org).`,
     );
     expect(body).not.toContain(NOTES.summary);
   });

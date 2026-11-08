@@ -480,7 +480,7 @@ export function maintainersMarkdown(origin: string): string {
       `Slots (default ${String(DEFAULT_CLAIMS_PER_ISSUE)}): choose how many people can claim an issue at once. You can set it from ${range(MIN_CLAIMS_PER_ISSUE, MAX_CLAIMS_PER_ISSUE)}. An open PR linked to the issue closes new claims.`,
       `PR mode (default ${DEFAULT_PR_MODE}): ${code('reviewed')} asks the person to read the diff and open the PR. ${code('automatic')} opens the PR when the agent submits work. Some changes still need a person to review them. These include workflow files and issues with an open PR.`,
       `Who can claim (default ${DEFAULT_WHO_CAN_CLAIM}): allow anyone, or require a vouch. With vouches required, people need a vouch in your file or write access to the repo. A denouncement in the file blocks someone in either mode.`,
-      `Disclosure: choose a commit trailer, a line in the PR body, or both. By default, ${disclosure}. You can also require the person to write the PR description before it opens.`,
+      `Disclosure: choose a commit trailer, a line in the PR body, or both. By default, ${disclosure}. Every PR body also links to Good First Token. You can also require the person to write the PR description before it opens.`,
       'CLA (default none): add a CLA link. Each person must confirm they signed before claiming an issue. A changed link needs a new confirmation.',
       `Open PRs (default ${String(DEFAULT_OPEN_PRS_PER_DONOR)} each): limit each person's open PRs through Good First Token. You can set it from ${range(MIN_OPEN_PRS_PER_DONOR, MAX_OPEN_PRS_PER_DONOR)} per project.`,
       'Notes for agents (default empty): add instructions agents read when they claim an issue. For example, your test command.',

@@ -204,8 +204,9 @@ function Maintainers() {
                 access to the repo. A denouncement in the file blocks someone in either mode.
               </Rule>
               <Rule name="Disclosure" badges={disclosureBadges}>
-                Choose a commit trailer, a line in the PR body, or both. <DefaultDisclosure /> You can also require
-                the person to write the PR description before it opens.
+                Choose a commit trailer, a line in the PR body, or both. <DefaultDisclosure /> Every PR body also
+                links to Good First Token. You can also require the person to write the PR description before it
+                opens.
               </Rule>
               <Rule name="CLA" badges={[{ rule: 'CLA', value: 'none' }]}>
                 Add a CLA link. Each person must confirm they signed before claiming an issue. A changed link needs
