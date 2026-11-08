@@ -637,7 +637,9 @@ export const adminQueue = defineTool({
           numbered(out.items, renderQueueItem),
           out.more > 0 &&
             out.next !== null &&
-            `${String(out.more)} more wait. Read the next page with admin_queue, the same kind, and after: ${JSON.stringify(out.next)}.`,
+            (out.held
+              ? `${String(out.more)} more are held. Read the next page with admin_queue, the same kind, held: true, and after: ${JSON.stringify(out.next)}.`
+              : `${String(out.more)} more wait. Read the next page with admin_queue, the same kind, and after: ${JSON.stringify(out.next)}.`),
           out.items.some((item) => item.kind !== 'removal') &&
             'Decide each registration, crawler find, pause, and policy change with admin_decide. A rejection needs a reason, which a registering maintainer sees.',
           out.items.some((item) => item.kind === 'removal') &&
@@ -853,7 +855,7 @@ export const adminSeedRepo = defineTool({
       : '';
     const result = out.leftAlone === 'project' ? `${out.repo} is a project already, so a seed adds nothing. Nothing changed.`
       : out.leftAlone === 'proposed' ? (out.evidenceChanged || out.added
-        ? `${changed || `Added ${out.repo} as a handled seed.`} Its find keeps waiting in the admin queue. No policy read was queued.`
+        ? `${changed || `Added ${out.repo} as a handled seed.`} Its find still waits, in the admin queue or held out of it. No policy read was queued.`
         : `The crawler put ${out.repo} in the admin queue before, so a seed adds nothing. Nothing changed.`)
       : out.added && out.rejectedBefore ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs.`
       : out.added ? `Added ${out.repo} to the crawler's seed list. Its next run reads the repo's docs, and puts it in the admin queue if they welcome AI help.`

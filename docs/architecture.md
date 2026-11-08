@@ -4801,9 +4801,9 @@ try to steer the reader.
   before anything is listed, which is no longer true. Changing it means a
   new run of the eval.
 - Anything that fails a check is held, and no admin is asked to read it.
-  A policy change sent for a ban a second reading didn't confirm is held
-  too, so its listing stays live until a weekly read confirms the ban or
-  an admin reads the change with `admin_queue` and `held: true`.
+  A policy change sent for a ban a second reading didn't confirm is the
+  exception. It stays in the admin queue, since its listing stays live
+  while it waits.
 - The find or change and the listing name an admin who didn't read it.
   The reason says it was approved, or applied, on its own.
 - A pause needs both tiers to read a ban, a ban line that checks out, a

@@ -13,17 +13,21 @@ import {
 import {
   addCandidate,
   addPolicyChange,
+  addSeed,
   addToDoNotList,
   createProject,
   decideCandidate,
   getCandidate,
   getPolicyChange,
   getProject,
+  getSeed,
+  holdCandidate,
   keepModelReading,
   savePerson,
 } from '../../src/db';
-import { startGitHub } from '../auth/helpers';
+import { setEnv, startGitHub } from '../auth/helpers';
 import { emptyDatabase } from '../db/helpers';
+import { fillCrawlQueue } from '../../src/crawl/producer';
 import { knowServiceToken } from '../sync/helpers';
 
 // Approving a crawler find on its own when its repo has more than 100
@@ -272,6 +276,34 @@ describe('approving a find on its own', () => {
     expect(await queued()).toEqual([`candidate ${waiting[AUTO_APPROVE_PER_RUN] ?? ''}`]);
   });
 
+  test('a find held before GitHub is asked is held even after the run used its tries', async () => {
+    // One more than the run tries, so the last of these waits for the next run, before the newest.
+    for (let i = 0; i <= AUTO_APPROVE_PER_RUN; i++) {
+      await find({ repo: `sample-owner/not-on-github-${String(i).padStart(2, '0')}`, foundAt: Date.now() - 7_200_000 + i });
+    }
+    const newest = await find({ settings: {}, foundAt: Date.now() - 60_000 });
+
+    await run();
+
+    expect(await heldWhy(newest.id)).toBe('it has no tags');
+  });
+
+  test('a reason longer than a hold keeps is cut to fit, so it never stops the run', async () => {
+    const candidate = await find();
+
+    expect(await holdCandidate(env.DB, candidate.id, 'x'.repeat(600), Date.now())).toBe(true);
+
+    expect((await getCandidate(env.DB, candidate.id))?.held?.why).toHaveLength(500);
+  });
+
+  test('a decided find whose hold an older Worker left behind still reads, as not held', async () => {
+    const candidate = await find();
+    await decideCandidate(env.DB, candidate.id, { status: 'rejected', decidedBy: ADMIN.githubId, reason: 'No.' }, Date.now());
+    await env.DB.prepare("UPDATE crawl_candidates SET held_at = 1, held_why = 'left' WHERE id = ?").bind(candidate.id).run();
+
+    expect(await getCandidate(env.DB, candidate.id)).toMatchObject({ status: 'rejected', held: null });
+  });
+
   test("a find held before GitHub is asked takes none of the run's tries, so it holds back no newer find", async () => {
     for (let i = 0; i < AUTO_APPROVE_PER_RUN; i++) {
       await find({ repo: `sample-owner/no-tags-${String(i).padStart(2, '0')}`, settings: {}, foundAt: Date.now() - 7_200_000 + i });
@@ -369,6 +401,37 @@ describe('checking a held find again each month', () => {
     expect(await queued(true)).toEqual([]);
   });
 
+  test('while the model reads nothing, a held find is kept, since a read now would make no new find', async () => {
+    const at = Date.now();
+    const candidate = await find({ settings: {} });
+    await run(at);
+    const restore = setEnv({ MODEL_DAILY_BUDGET_USD: '0' });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await run(at + CHECK_AGAIN_MS);
+
+      expect(result?.readAgain).toEqual([]);
+      expect(sent).toEqual([]);
+      expect(await getCandidate(env.DB, candidate.id)).toMatchObject({ status: 'waiting', held: { at } });
+    } finally {
+      restore();
+    }
+  });
+
+  test("a seed whose held find goes back to the crawler is marked handled, so the seed list doesn't queue it again", async () => {
+    const at = Date.now();
+    await addSeed(env.DB, { repo: BUNDLER, addedBy: ADMIN.githubId }, at - 40 * 86_400_000);
+    await find({ settings: {} });
+    await run(at);
+
+    await run(at + CHECK_AGAIN_MS);
+    sent.length = 0;
+    await fillCrawlQueue({ db: env.DB, queue, now: () => at + CHECK_AGAIN_MS + 3_600_000 });
+
+    expect(sent).toEqual([]);
+    expect(await getSeed(env.DB, BUNDLER)).toMatchObject({ outcome: 'queued', handledAt: at + CHECK_AGAIN_MS });
+  });
+
   test('a find an admin decided after it was held stays as they decided it', async () => {
     const at = Date.now();
     const candidate = await find({ settings: {} });
@@ -430,7 +493,6 @@ describe('applying a policy change on its own', () => {
   });
 
   test.each([
-    ['it was sent for a ban a second reading did not confirm', { why: 'ban_unconfirmed' as const }, 'a reading read a move into a ban that a second reading did not confirm'],
     ['the reader gave no verdict', { why: 'no_verdict' as const }, 'the reader gave no verdict on its docs'],
     ['its docs give no policy', { policy: null }, 'its docs give no policy to list it from'],
     ["the crawler's rules sent it", { madeBy: 'rules' as const }, "the crawler's rules sent it, before the model read policies"],
@@ -449,6 +511,37 @@ describe('applying a policy change on its own', () => {
     expect(await queued(true)).toEqual([`policy_change ${BUNDLER}`]);
   });
 
+  test('a change sent for a ban a second reading did not confirm stays in the admin queue, since the listing may now ban AI help', async () => {
+    const pending = await change({ why: 'ban_unconfirmed' });
+
+    const result = await run();
+
+    expect(result?.held).toEqual([]);
+    expect(result?.applied).toEqual([]);
+    expect(await getPolicyChange(env.DB, pending.id)).toMatchObject({ status: 'waiting', held: null });
+    expect(await queued()).toEqual([`policy_change ${BUNDLER}`]);
+  });
+
+  test("a change a weekly read replaces while the run reads GitHub isn't applied", async () => {
+    const pending = await change();
+    const fetchNow = globalThis.fetch;
+    let replaced = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (!replaced) {
+        replaced = true;
+        const facts = { stars: 1200, createdAt: Date.now() - 6 * 365 * 86_400_000, pushedAt: Date.now(), ownerCreatedAt: Date.now() - 9 * 365 * 86_400_000 };
+        await addPolicyChange(env.DB, { repo: BUNDLER, facts, policy: null, sources: [], aiSentences: [], moreAiSentences: 0, docsHash: DOCS_HASH, madeBy: 'model' }, Date.now());
+      }
+      return fetchNow(input, init);
+    });
+
+    const result = await run();
+
+    expect(result?.applied).toEqual([]);
+    expect(await getPolicyChange(env.DB, pending.id)).toBeNull();
+    expect(await getProject(env.DB, BUNDLER)).toMatchObject({ policy: POLICY });
+  });
+
   test('a change GitHub refuses, as for an archived repo, is held with the refusal as its reason', async () => {
     const pending = await change();
     const repo = github.state.repos[BUNDLER];
@@ -461,7 +554,7 @@ describe('applying a policy change on its own', () => {
     expect(await getProject(env.DB, BUNDLER)).toMatchObject({ policy: POLICY });
   });
 
-  test('30 days after it was held, a change is checked again, and applied once it passes', async () => {
+  test('30 days after it was held, a change is checked again, and with the same reading is held again', async () => {
     const at = Date.now();
     const pending = await change({ stars: 100 });
     await run(at);

@@ -19,9 +19,11 @@ import {
   listCandidates,
   listHeldCandidates,
   listPolicyChanges,
+  markSeedsHandled,
   releaseHeldPolicyChanges,
 } from '../db';
 import { GitHubError } from '../github';
+import { readerStatus } from './model';
 import { sendRepos } from './producer';
 
 // Deciding crawler finds and policy changes on their own
@@ -112,7 +114,6 @@ async function whyHoldFind(db: D1Database, find: CrawlCandidate): Promise<string
 
 /** Why a policy change is held before GitHub is asked, or null when it is checked there. */
 async function whyHoldChange(db: D1Database, change: PolicyChange): Promise<string | null> {
-  if (change.why === 'ban_unconfirmed') return 'a reading read a move into a ban that a second reading did not confirm';
   if (change.why === 'no_verdict') return 'the reader gave no verdict on its docs';
   if (change.policy === null) return 'its docs give no policy to list it from';
   if (change.madeBy !== 'model') return "the crawler's rules sent it, before the model read policies";
@@ -136,10 +137,15 @@ function stopsTheRun(error: unknown): boolean {
  */
 async function checkAgain(deps: AutoApproveDeps, run: AutoApproveRun): Promise<void> {
   const heldBy = deps.now() - CHECK_AGAIN_MS;
-  for (const find of await listHeldCandidates(deps.db, heldBy, CHECK_AGAIN_PER_RUN)) {
-    if (await dropHeldCandidate(deps.db, find.id)) run.readAgain.push(find.repo);
+  // Without the model, the crawler makes no find, so a find dropped now would be lost.
+  if ((await readerStatus(deps.db, deps.now())).reads) {
+    for (const find of await listHeldCandidates(deps.db, heldBy, CHECK_AGAIN_PER_RUN)) {
+      if (await dropHeldCandidate(deps.db, find.id)) run.readAgain.push(find.repo);
+    }
+    await sendRepos(deps, run.readAgain, false);
+    // A seed's own monthly read would read the repo again in the next hour. This read counts as it.
+    await markSeedsHandled(deps.db, run.readAgain.map((repo) => ({ repo, outcome: 'queued' as const })), deps.now());
   }
-  await sendRepos(deps, run.readAgain, false);
   run.released = await releaseHeldPolicyChanges(deps.db, heldBy);
 }
 
@@ -154,13 +160,16 @@ async function checkAgain(deps: AutoApproveDeps, run: AutoApproveRun): Promise<v
  *   canary, or a line that keeps agents from working on their own. So is a
  *   find with no tags, one for a repo that is a project already, and one
  *   the listing refuses, as for a repo GitHub now shows archived.
- * - A policy change is held when it was sent for a ban a second reading
- *   didn't confirm or for docs with no verdict, its docs give no policy,
+ * - A policy change is held when it was sent for docs with no verdict, its
+ *   docs give no policy,
  *   the crawler's rules sent it, its reading fails the same checks, its
- *   repo has 100 stars or fewer, or the listing refuses it.
+ *   repo has 100 stars or fewer, or the listing refuses it. One sent for a
+ *   ban a second reading didn't confirm stays in the admin queue, since the
+ *   listing may now ban AI help.
  *
  * A GitHub failure that is the token's, a rate limit, or GitHub's own error
- * holds nothing and stops the run, for the next hour to try again. First it
+ * holds nothing, and the run asks GitHub nothing more, for the next hour to
+ * try again. First it
  * checks again what was held 30 days or more. Returns null when no admin
  * has signed in, so there is no one to name, and nothing is held.
  */
@@ -203,13 +212,17 @@ export async function approveStarredFinds(deps: AutoApproveDeps): Promise<AutoAp
   };
 
   let tried = 0;
+  let stopped = false;
   for (const item of items) {
+    // A change sent for a ban a second reading didn't confirm waits for an admin, since the listing may now ban AI help.
+    if (item.kind === 'policy_change' && item.change.why === 'ban_unconfirmed') continue;
     const why = item.kind === 'candidate' ? await whyHoldFind(db, item.find) : await whyHoldChange(db, item.change);
     if (why !== null) {
       await hold(item, why);
       continue;
     }
-    if (tried === AUTO_APPROVE_PER_RUN) break;
+    // The rest wait for the next run, but the run still holds what fails before GitHub is asked.
+    if (tried === AUTO_APPROVE_PER_RUN || stopped) continue;
     tried += 1;
     const repo = item.kind === 'candidate' ? item.find.repo : item.change.repo;
     try {
@@ -226,8 +239,9 @@ export async function approveStarredFinds(deps: AutoApproveDeps): Promise<AutoAp
       else await hold(item, outcome.refusal.message);
     } catch (error) {
       if (stopsTheRun(error)) {
-        console.error(`Checking ${repo} on its own failed, and the run stopped. The next hourly run tries again.`, error);
-        break;
+        console.error(`Checking ${repo} on its own failed, and the run asks GitHub nothing more. The next hourly run tries again.`, error);
+        stopped = true;
+        continue;
       }
       await hold(item, `GitHub answered ${String((error as GitHubError).status)}`);
     }

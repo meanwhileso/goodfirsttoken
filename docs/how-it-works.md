@@ -1789,8 +1789,9 @@ of them but a request to be removed.
   it, under Checking on its own in
   [The policy crawler](#the-policy-crawler).
 - Approving a crawler find for a repo its maintainers registered is refused
-  with `already_registered`. Their settings and status stay, and the find
-  keeps waiting until an admin rejects it.
+  with `already_registered`. Their settings and status stay. The crawler
+  holds the find, as one for a repo that is a project already, until an
+  admin rejects it or the crawler drops it 30 days later.
 - Approving a pause resumes the project, putting back the status it had
   before the pause, as `admin_pause_project` does, named for the admin.
   When the pause took over one a maintainer or an admin made, approving
@@ -1952,7 +1953,7 @@ stars or last push.
   [Keeping listings current](#keeping-listings-current).
 - A repo on the do-not-list is refused with `repo_not_eligible`.
 - A repo that is a project already, whatever its status, or whose find
-  waits in the admin queue, isn't added. The crawler reads a listed project
+  waits in the admin queue or is held out of it, isn't added. The crawler reads a listed project
   each week. The answer says which, and that nothing changed.
 - It asks GitHub nothing. The crawler reads the repo when it queues it.
 
@@ -3469,8 +3470,9 @@ before. The run goes on even when the cron job's other steps failed.
 - A policy change is applied when the weekly read sent it because the
   policy changed, its docs give a policy, the model sent it, its reading
   passes the same checks, and its repo had more than 100 stars. A change
-  for a ban a second reading didn't confirm, or for docs with no verdict,
-  is held.
+  for docs with no verdict is held. A change for a ban a second reading
+  didn't confirm stays in the admin queue, since the listing may now ban
+  AI help, and an admin reads it.
 - It lists a find as an admin's `admin_decide` does, under
   [The admin queue](#the-admin-queue), with the tier and settings the
   crawler suggested. It applies a policy change as an admin's approval of
@@ -3494,9 +3496,10 @@ before. The run goes on even when the cron job's other steps failed.
   admin can decide it, under [The admin queue](#the-admin-queue). A listing
   whose change is held stays listed as it was.
 - One run checks at most 50 on GitHub, finds and changes together, each a
-  read or two. One held before GitHub is asked takes none of the 50. A
-  failure of the token, a rate limit, or GitHub being down holds nothing
-  and stops the run, and the next one tries again. Any other error GitHub
+  read or two. One held before GitHub is asked takes none of the 50, and
+  is held even after the 50. A failure of the token, a rate limit, or
+  GitHub being down holds nothing, and the run asks GitHub nothing more.
+  The next run tries again. Any other error GitHub
   gives for one repo holds that item, and the run goes on.
 - No admin reads the sentences that name AI first. The weekly read, under
   [Keeping listings current](#keeping-listings-current), is what catches a
@@ -3509,15 +3512,19 @@ before. The run goes on even when the cron job's other steps failed.
 30 days or more.
 
 - A held find is dropped, and its repo goes in the crawl queue, at most 50
-  a run. The crawler reads its facts, labels, and docs again, and a new
-  find goes through the next check. The model reads the docs again only
-  when they changed. A repo the crawler now leaves out, as archived, or
+  a run. A seed of the repo is marked handled, so the seed list doesn't
+  queue it again. The crawler reads its facts, labels, and docs again, and
+  a new find goes through the next check. The model reads the docs again
+  only when they changed, though it checks the labels each time. While the
+  model reads nothing, with no key or a budget of 0, a held find stays
+  held, since a read would make no new find. A repo the crawler now leaves out, as archived, or
   whose docs no longer welcome AI help, makes no new find. A find an admin
   decided stays as they decided it.
 - A held policy change stops being held, and the same run checks it again.
-  A weekly read that finds the docs changed replaces it sooner, as it
-  replaces any change that waits, and the new change is checked within
-  the hour.
+  Its facts and reading are the ones the weekly read sent, so it is held
+  again unless GitHub now refuses it for another reason. A weekly read that
+  finds the docs changed replaces it, as it replaces any change that
+  waits, and the new change is checked within the hour.
 
 **The queue.** The consumer takes up to 5 batches at a time, one run at a
 time, and first asks GitHub what is left of the budget.

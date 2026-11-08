@@ -685,6 +685,9 @@ describe('what each result says', () => {
       'held out of the queue on 2026-10-01 12:00 UTC: it has no tags. The crawler checks it again on 2026-10-31 12:00 UTC.',
     );
     expect(textOf(toolResult('admin_queue', { items: [], held: true }))).toBe('Nothing held.');
+    const next = `${candidate.requestedAt}~${candidate.repo}~${candidate.id}`;
+    const paged = textOf(toolResult('admin_queue', { items: [{ ...candidate, held }], held: true, more: 5, next }));
+    expect(paged).toContain(`5 more are held. Read the next page with admin_queue, the same kind, held: true, and after: ${JSON.stringify(next)}.`);
     expect(textOf(toolResult('admin_queue', { items: [] }))).toBe('Nothing waiting.');
     expect(textOf(toolResult('admin_queue', { items: [candidate] }))).not.toContain('held out of the queue');
   });

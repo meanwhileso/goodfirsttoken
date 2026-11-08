@@ -3,6 +3,7 @@ import {
   crawlCandidateSchema,
   docsHashSchema,
   heldSchema,
+  MAX_HELD_WHY,
   id,
   mustParse,
   policyFingerprintSchema,
@@ -76,7 +77,8 @@ function toCandidate(row: CandidateRow): CrawlCandidate {
       decidedBy: row.decided_by,
       decidedAt: row.decided_at,
       reason: row.reason,
-      held: row.held_at === null || row.held_why === null ? null : { at: row.held_at, why: row.held_why },
+      // A decided row is never held, though a Worker from before holds kept no hold to clear.
+      held: row.status !== 'waiting' || row.held_at === null || row.held_why === null ? null : { at: row.held_at, why: row.held_why },
     },
     'candidate',
   );
@@ -327,7 +329,7 @@ export async function decideCandidate(
  * already.
  */
 export async function holdCandidate(db: D1Database, candidateId: string, why: string, now: number): Promise<boolean> {
-  const held = mustParse(heldSchema, { at: checkTime(now), why }, 'held');
+  const held = mustParse(heldSchema, { at: checkTime(now), why: why.trim().slice(0, MAX_HELD_WHY) }, 'held');
   const result = await db
     .prepare("UPDATE crawl_candidates SET held_at = ?, held_why = ? WHERE id = ? AND status = 'waiting' AND held_at IS NULL")
     .bind(held.at, held.why, mustParse(id, candidateId, 'candidateId'))

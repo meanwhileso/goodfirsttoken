@@ -516,7 +516,8 @@ admin_seed_repo {"repo": "sample-owner/sample-cli"}
   Tell the admin it goes back in the queue only when its docs read
   differently from that find's.
 - With `leftAlone` `project`, the repo is a project already. With
-  `leftAlone` `proposed`, a find of it waits in the admin queue. An
+  `leftAlone` `proposed`, a find of it waits, in the admin queue or held
+  out of it. An
   ordinary call leaves both alone. An evidence call can
   update a find that still waits. Tell the admin whether `evidenceChanged`
   is true.
@@ -601,8 +602,8 @@ then:
   is on the do-not-list, so the crawler never reads it, and it stays off
   the seed list.
 - `already_registered`: Its maintainers registered the repo, and their
-  settings stay. A crawler find for it keeps waiting until an admin rejects
-  it, so propose to reject it with that reason.
+  settings stay. Propose to reject a crawler find for it with that reason.
+  Otherwise the crawler holds the find, and drops it 30 days later.
 - `project_not_open`: Only an approved project can be paused. A pending
   project waits in the queue, and a rejected one takes no pause.
 
