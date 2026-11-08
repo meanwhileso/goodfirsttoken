@@ -10,13 +10,14 @@ import {
   hasApprovedFind,
   keepModelRead,
   lastRejectedFind,
+  rejectedMove,
   setFindFingerprint,
 } from '../db';
 import { MODEL_BAN_REASON, pauseForCrawler } from './pause';
 import { findTier, readerFingerprint, readerSettings, readsBan, toPolicyReading, type LabelCheck, type ModelReading, type PolicyReading } from './reader';
 import { READER_FINGERPRINT_VERSION } from './reader/fingerprint';
 import { fileUrl } from './reads';
-import { compare } from './reread';
+import { compare, welcomeMoved } from './reread';
 import { aiPassages, type AiPassages, type PolicyFile, type RepoLabel } from './rules';
 
 // What the model policy reader decides (docs/specs/model-policy-reader.md,
@@ -135,6 +136,7 @@ async function sendChange(
   files: readonly PolicyFile[],
   reading: ModelReading | null,
   why: 'changed' | 'ban_unconfirmed' | 'no_verdict',
+  movedFrom: string | null = null,
 ): Promise<void> {
   const policyReading: PolicyReading | null = reading === null ? null : toPolicyReading(files, reading);
   // With no reading, the admin sees the sentences that name AI, from the word list.
@@ -157,6 +159,7 @@ async function sendChange(
       docsHash: docs.docsHash,
       madeBy: 'model',
       why,
+      movedFrom,
     },
     deps.now(),
   );
@@ -228,13 +231,14 @@ export async function decideReread(
   // Either tier reading a ban is a move into one, so a ban the two disagree on still reaches an admin.
   const banned = reading.tier === 'bans_or_restricts' || reading.modelTier === 'bans_or_restricts';
   const fromFind = last?.banned == null && project.source === 'policy' && (await hasApprovedFind(db, project.repo));
+  const moved = await movedFrom(db, project, docs, files, policyReading);
   const { changed, intoBan } = compare(
     project,
     last === null ? null : { fingerprint: last.fingerprint, banned: last.banned },
     policyReading,
     fingerprint,
     fromFind,
-    { sameVersion: readerComparable(last?.fingerprint ?? null), banned },
+    { sameVersion: readerComparable(last?.fingerprint ?? null), banned, welcomeMoved: moved !== null },
   );
   if (intoBan) {
     if (readsBan(reading)) return 'second';
@@ -246,9 +250,22 @@ export async function decideReread(
     await unconfirmedBan(deps, run, project, docs, files, reading, why);
     return 'kept';
   }
-  if (changed && project.source === 'policy') await sendChange(deps, run, docs, files, reading, 'changed');
+  if (changed && project.source === 'policy') await sendChange(deps, run, docs, files, reading, 'changed', moved);
   await keepModelRead(db, docs.repo, { docsHash: docs.docsHash, readerVersion: reading.readerVersion, fingerprint, banned: readsBan(reading), readIn: 'model' });
   return 'kept';
+}
+
+/**
+ * The link a listing had when its welcome moved to another file, as
+ * welcomeMoved says, or null when it didn't move. Null too when an admin
+ * rejected a change for the same move, from that link to the one the change
+ * would carry, and so kept the listing as it is.
+ */
+async function movedFrom(db: D1Database, project: ProjectRecord, docs: RereadDocs, files: readonly PolicyFile[], policy: PolicyReading): Promise<string | null> {
+  const welcome = policy.welcome;
+  if (project.policy === null || welcome === null || !welcomeMoved(project.policy, docs.repo, docs.branch, files, welcome.file.path)) return null;
+  const from = project.policy.url;
+  return (await rejectedMove(db, docs.repo, from, fileUrl(docs.repo, docs.branch, welcome.file.path))) ? null : from;
 }
 
 /**

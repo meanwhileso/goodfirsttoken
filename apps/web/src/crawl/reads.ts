@@ -543,6 +543,24 @@ export async function whyNotListable(github: ServiceGitHub, repo: string): Promi
   return 'failed' in facts ? facts.failed : whyNotEligible(facts, 'list');
 }
 
+/**
+ * Whether the crawler reads the file at a path whenever the repo has one, so
+ * a read without it means the repo has no such file: a contributing guide,
+ * an AI policy, or a text file with an AI word in its name, in the root,
+ * `.github/`, or `docs/`, and `AGENTS.md` or `CLAUDE.md` in the root. The
+ * templates and skills it reads from folder listings say no, as does any
+ * other file, like a README.
+ */
+export function readsPath(path: string): boolean {
+  const at = path.lastIndexOf('/');
+  const folder = at === -1 ? '' : path.slice(0, at);
+  const name = path.slice(at + 1);
+  const read = (kind: DocKind) => (DOC_FILES[kind].folders as readonly string[]).includes(folder) && DOC_FILES[kind].name.test(name);
+  if (read('contributing') || read('aiPolicy') || read('agents')) return true;
+  if ((DOC_FILES.aiPolicy.folders as readonly string[]).includes(folder) && AI_NAMED.test(name) && aiWordInName(name)) return true;
+  return folder === '' && CLAUDE_MD.test(name);
+}
+
 /** A file on github.com, on the repo's default branch, with the branch and each part of the path URL-encoded. */
 export function fileUrl(repo: string, branch: string, path: string): string {
   const encoded = (text: string) => text.split('/').map(encodeURIComponent).join('/');

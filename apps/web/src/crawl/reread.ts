@@ -10,7 +10,7 @@ import { pauseForCrawler } from './pause';
 import { readPolicyOutput, type PolicyReading } from './reader';
 import { docsHash } from './reader/docs';
 import type { CrawlDeps, CrawlProgress, CrawlRun } from './queue';
-import { readFiles, readLabels, readRepoFacts, readRepos, RepoFailed, type FoundRepo } from './reads';
+import { fileUrl, readFiles, readLabels, readRepoFacts, readRepos, readsPath, RepoFailed, type FoundRepo } from './reads';
 import type { PolicyFile } from './rules';
 
 // Keeping listings current (spec section 5): the crawl queue's consumer
@@ -102,6 +102,64 @@ function readsOtherwise(policy: Policy | null, reading: PolicyReading): boolean 
 }
 
 /**
+ * The path a policy links to among the repo's files on its default branch,
+ * without a line anchor or query, or null for a link elsewhere: a
+ * maintainer's post, another repo, another branch, or a commit. GitHub reads
+ * the owner and repo in a link without case, and the branch and path with it.
+ */
+function linkedPath(url: string, repo: string, branch: string): string | null {
+  const prefix = fileUrl(repo, branch, '');
+  const site = `https://github.com/${repo}/`.length;
+  const link = url.replace(/[?#].*$/s, '');
+  if (link.length <= prefix.length || link.slice(0, site).toLowerCase() !== prefix.slice(0, site).toLowerCase()) return null;
+  if (link.slice(site, prefix.length) !== prefix.slice(site)) return null;
+  try {
+    return link.slice(prefix.length).split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A text's words as a page shows them, more or less: an inline Markdown link
+ * or image as its text, and an HTML tag, one that starts with a letter after
+ * its <, left out.
+ */
+function shownWords(text: string): string {
+  return wordsOf(text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/<\/?[a-zA-Z][^<>]*>/g, ' '));
+}
+
+/**
+ * Whether a text holds the words of a quote, in order, as whole words: as
+ * written, so a quote taken from the file always matches it, or as shown, so
+ * a quote an admin copied from the rendered page mostly does.
+ */
+function holdsWords(text: string, quote: string): boolean {
+  const holds = (words: (text: string) => string) => ` ${words(text)} `.includes(` ${words(quote)} `);
+  return holds(wordsOf) || holds(shownWords);
+}
+
+/**
+ * Whether the welcome a listing was made from moved to another file: the
+ * file the listing links to no longer holds the quote's words, or is gone,
+ * and the reading's welcome is in another file. The fingerprint leaves out
+ * which file a welcome is in, so this is what sends the listing back to the
+ * queue for a new link. A linked file that still holds the words moved
+ * nothing, whichever copy of a welcome the model cites. A file the crawler
+ * doesn't read, like a README, is never gone, as readsPath says. Docs with
+ * no welcome now are the tier's to catch, and a link elsewhere, as
+ * linkedPath says, isn't checked. `welcomeFile` is the path of the
+ * reading's welcome, or null.
+ */
+export function welcomeMoved(policy: Policy | null, repo: string, branch: string, files: readonly PolicyFile[], welcomeFile: string | null): boolean {
+  if (policy === null || welcomeFile === null || shownWords(policy.quote) === '') return false;
+  const path = linkedPath(policy.url, repo, branch);
+  if (path === null || path === welcomeFile) return false;
+  const linked = files.find((file) => file.path === path);
+  return linked === undefined ? readsPath(path) : !holdsWords(linked.text, policy.quote);
+}
+
+/**
  * Whether anyone can open a pull request on the repo: `open` when anyone
  * can, the reason when they are turned off or only collaborators can open
  * them, and `unknown` when GitHub didn't say, which pauses nothing, since a
@@ -131,15 +189,18 @@ function pullRequestsFrom(facts: RepoFacts): 'open' | 'unknown' | { limited: str
  * - With a last read of this version, it changed when the hashes differ.
  * - With a last read of another version, as after a new reader version, it
  *   takes the new one and reads as no change, so a new reader sends nothing
- *   back to the queue.
+ *   back to the queue for what it read. A welcome that moved still counts,
+ *   since the linked file shows it.
  * - With no last read, a listing made from a policy compares with the policy
  *   it was listed from, and a registered project reads as no change.
  * - A listing made from a maintainer's post reads as no change at its first
  *   read while its docs name no AI at all, and a ban then is a move into
  *   one. Later reads compare hashes, as for any listing.
+ * - Whatever the hashes say, a listing whose welcome moved to another file
+ *   changed, as welcomeMoved says, since its link needs an admin.
  *
- * `read` says whether the last read is of the reader's version, and whether
- * either of the reading's tiers reads a ban.
+ * `read` says whether the last read is of the reader's version, whether
+ * either of the reading's tiers reads a ban, and whether the welcome moved.
  */
 export function compare(
   project: ProjectRecord,
@@ -147,7 +208,7 @@ export function compare(
   reading: PolicyReading,
   fingerprint: string,
   fromFind: boolean,
-  read: { sameVersion: boolean; banned: boolean },
+  read: { sameVersion: boolean; banned: boolean; welcomeMoved: boolean },
 ): { changed: boolean; intoBan: boolean } {
   // A listing made from a maintainer's post stood on docs that said nothing
   // about AI, so a ban at its first read is a move into one, as for a find.
@@ -159,10 +220,10 @@ export function compare(
     // Docs that name it, even to restrict agents without a ban, go to an
     // admin once, and later reads compare hashes as for any listing.
     if (fromPost && reading.tier === 'no_policy' && reading.aiSentences.length === 0) return { changed: false, intoBan };
-    return { changed: readsOtherwise(project.policy, reading), intoBan };
+    return { changed: readsOtherwise(project.policy, reading) || read.welcomeMoved, intoBan };
   }
-  if (!read.sameVersion) return { changed: false, intoBan };
-  return { changed: last.fingerprint !== fingerprint, intoBan };
+  if (!read.sameVersion) return { changed: read.welcomeMoved, intoBan };
+  return { changed: last.fingerprint !== fingerprint || read.welcomeMoved, intoBan };
 }
 
 /**

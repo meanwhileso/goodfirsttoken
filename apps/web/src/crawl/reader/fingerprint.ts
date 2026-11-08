@@ -23,8 +23,8 @@ import { toPolicyReading, type ModelReading, type PolicyReading } from './readin
 
 /**
  * One more than the rules' FINGERPRINT_VERSION, and one more with every
- * reader version after it, so no listing reads as changed for a new
- * reader, and a listing whose policy now reads as a ban is a move into one.
+ * reader version after it, so no listing's fingerprint reads as changed for
+ * a new reader, and a listing whose policy now reads as a ban is a move into one.
  * Reader p1 was one past the rules, and each prompt version after it one more, up to p7.
  */
 export const READER_FINGERPRINT_VERSION = FINGERPRINT_VERSION + 7;
