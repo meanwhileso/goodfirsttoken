@@ -13,14 +13,17 @@ import {
 import { checkTime, joinIssue, prFromColumns } from './shared';
 import { ASKING_FOR_HELP } from './waiting';
 
-// The follow_ups table: what reviewers wrote on each claim's open PR, as the
-// PR job read it, until the donor answers it with a submit. The rules are
-// in docs/how-it-works.md, under PRs and The donor's tools.
+// The follow_ups table: what maintainers and review bots wrote on each
+// claim's open PR, and its failed checks and conflicts, as the PR job read
+// them, until the donor answers them with a submit. The rules are in
+// docs/how-it-works.md, under PRs and The donor's tools.
 
 interface FollowUpRow {
   claim_id: string;
   comment_id: string;
-  reviewer: string;
+  kind: string;
+  reviewer: string | null;
+  author_kind: string | null;
   body: string;
   path: string | null;
   url: string;
@@ -36,7 +39,9 @@ function toFollowUp(row: FollowUpRow): FollowUpRecord {
     {
       claimId: row.claim_id,
       commentId: row.comment_id,
+      kind: row.kind,
       reviewer: row.reviewer,
+      authorKind: row.author_kind,
       body: row.body,
       path: row.path,
       url: row.url,
@@ -54,9 +59,12 @@ export type NewFollowUp = Omit<FollowUpRecord, 'claimId' | 'readAt' | 'shownAt' 
 
 /**
  * Stores what the PR job read on a claim's PR at `readAt`, in one
- * statement, in the order given. A review or comment read before, by its
- * comment ID, stays as it was first read, shown or answered. The claim must
- * be in the claims table. Returns how many are new.
+ * statement, in the order given. A follow-up read before, by its comment
+ * ID, stays as it was first read, shown or answered. So checks that fail
+ * again on the same head add none. A conflict adds none while another on
+ * the claim waits for a submit, since a base that moves on gives the same
+ * conflict a new ID. The claim must be in the claims table. Returns how
+ * many are new.
  */
 export async function saveFollowUps(
   db: D1Database,
@@ -69,13 +77,17 @@ export async function saveFollowUps(
   );
   if (rows.length === 0) return 0;
   // The rows go in as one JSON array, so any number of them takes one
-  // query. `WHERE true` lets SQLite read ON CONFLICT after a SELECT.
+  // query. A WHERE lets SQLite read ON CONFLICT after a SELECT.
   const result = await db
     .prepare(
-      `INSERT INTO follow_ups (claim_id, comment_id, reviewer, body, path, url, written_at, read_at, shown_at, answered_at)
-       SELECT ?1, json_extract(j.value, '$.commentId'), json_extract(j.value, '$.reviewer'), json_extract(j.value, '$.body'),
-         json_extract(j.value, '$.path'), json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'), ?2, NULL, NULL
-       FROM json_each(?3) j WHERE true ORDER BY j.key
+      `INSERT INTO follow_ups (claim_id, comment_id, kind, reviewer, author_kind, body, path, url, written_at, read_at, shown_at, answered_at)
+       SELECT ?1, json_extract(j.value, '$.commentId'), json_extract(j.value, '$.kind'), json_extract(j.value, '$.reviewer'),
+         json_extract(j.value, '$.authorKind'), json_extract(j.value, '$.body'), json_extract(j.value, '$.path'),
+         json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'), ?2, NULL, NULL
+       FROM json_each(?3) j
+       WHERE json_extract(j.value, '$.kind') <> 'conflict' OR NOT EXISTS
+         (SELECT 1 FROM follow_ups w WHERE w.claim_id = ?1 AND w.kind = 'conflict' AND w.answered_at IS NULL)
+       ORDER BY j.key
        ON CONFLICT (claim_id, comment_id) DO NOTHING`,
     )
     .bind(mustParse(id, claimId, 'claimId'), checkTime(readAt, 'readAt'), JSON.stringify(rows))
@@ -178,7 +190,7 @@ export async function listWaitingFollowUps(
   return { followUps, waiting: mustParse(count, results[0]?.waiting ?? 0, 'waiting') };
 }
 
-/** One of the donor's open PRs whose reviews the PR job read in part. */
+/** One of the donor's open PRs that the PR job read in part. */
 export interface ReadInPartPr {
   claimId: string;
   issue: string;
@@ -186,23 +198,26 @@ export interface ReadInPartPr {
   reviews: number;
   reviewsRead: number;
   commentsLeftOut: number;
+  conversation: number;
+  conversationRead: number;
 }
 
 /**
- * The donor's open PRs whose reviews the PR job's latest read took in
- * part, in the order they opened, when their follow-ups would show: more
- * reviews than the read took, or comments on lines of a maintainer's
- * review it left out.
+ * The donor's open PRs that the PR job's reads took in part, in the order
+ * they opened, when their follow-ups would show: more reviews than the
+ * reads took, comments on lines of a maintainer's or a bot's review they
+ * left out, or more comments in the conversation than they took.
  */
 export async function listReadInPart(db: D1Database, person: number): Promise<ReadInPartPr[]> {
   const { results } = await db
     .prepare(
       `SELECT c.id AS claim_id, c.issue_repo, c.issue_number, pr.repo AS pr_repo, pr.number AS pr_number,
-         pr.url AS pr_url, pr.reviews, pr.reviews_read, pr.comments_left_out
+         pr.url AS pr_url, pr.reviews, pr.reviews_read, pr.comments_left_out, pr.conversation, pr.conversation_read
        FROM claims c
        JOIN prs pr ON pr.claim_id = c.id
        JOIN projects p ON p.repo = c.project
-       WHERE c.github_id = ?1 AND (pr.reviews > pr.reviews_read OR pr.comments_left_out > 0) AND ${SHOWS}
+       WHERE c.github_id = ?1
+         AND (pr.reviews > pr.reviews_read OR pr.comments_left_out > 0 OR pr.conversation > pr.conversation_read) AND ${SHOWS}
        ORDER BY pr.opened_at, c.id`,
     )
     .bind(mustParse(githubId, person, 'githubId'))
@@ -216,6 +231,8 @@ export async function listReadInPart(db: D1Database, person: number): Promise<Re
       reviews: number;
       reviews_read: number;
       comments_left_out: number;
+      conversation: number;
+      conversation_read: number;
     }>();
   return results.map((row) => ({
     claimId: mustParse(id, row.claim_id, 'claimId'),
@@ -224,6 +241,8 @@ export async function listReadInPart(db: D1Database, person: number): Promise<Re
     reviews: mustParse(count, row.reviews, 'reviews'),
     reviewsRead: mustParse(count, row.reviews_read, 'reviewsRead'),
     commentsLeftOut: mustParse(count, row.comments_left_out, 'commentsLeftOut'),
+    conversation: mustParse(count, row.conversation, 'conversation'),
+    conversationRead: mustParse(count, row.conversation_read, 'conversationRead'),
   }));
 }
 

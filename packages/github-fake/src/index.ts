@@ -17,6 +17,8 @@ import { handleRest } from './rest.ts';
 import { own, setOwn } from './own.ts';
 import { sampleData as defaultSampleData, type SampleData } from './sample-data.ts';
 import {
+  addCheck,
+  addIssueComment,
   addReview,
   assignIssue,
   canPush,
@@ -41,15 +43,17 @@ import {
   roleOf,
   unlabelIssue,
   updatePullBranch,
+  type CheckRecord,
   type FakeState,
   type IssueRecord,
+  type MergeableState,
   type RepoRecord,
   type ReviewInput,
 } from './state.ts';
 import { handleWeb, revokeOverTheCap } from './web.ts';
 import type { FileMode } from './git.ts';
 
-export type { FakeState, ReviewInput } from './state.ts';
+export type { CheckConclusion, CheckRecord, FakeState, MergeableState, ReviewInput } from './state.ts';
 export type { FileMode } from './git.ts';
 export type { RateResource } from './rate-limit.ts';
 export type { SampleData } from './sample-data.ts';
@@ -115,6 +119,15 @@ export interface GitHubFake {
   reviewPullRequest: (repo: string, number: number, review: ReviewInput) => number;
   // A maintainer dismisses a submitted review.
   dismissReview: (repo: string, number: number, reviewId: number) => void;
+  // Comments in an issue's or a PR's conversation as `by`, a person or a
+  // bot, and returns the comment's ID.
+  commentOnIssue: (repo: string, number: number, comment: { by: string; body: string }) => number;
+  // Records a check on the PR's head, as a workflow run or a commit status
+  // would. One of the same name and type on that commit is replaced.
+  addCheck: (repo: string, number: number, check: CheckRecord) => void;
+  // Sets what GitHub gives as the PR's mergeable state, or with null, goes
+  // back to working it out from the branches.
+  setMergeable: (repo: string, number: number, mergeable: MergeableState | null) => void;
   // Commits these files, path to text, to the repo's default branch as
   // `by`, or to `branch`, and returns the commit's ID. A file given null is
   // deleted. A file is 100644 unless `modes` gives it another mode. For a
@@ -406,6 +419,16 @@ export function createGitHubFake(options: GitHubFakeOptions = {}): GitHubFake {
     reviewPullRequest: (repo, number, review) => addReview(state, repoNamed(repo), number, review, now().toISOString()).id,
     dismissReview: (repo, number, reviewId) => {
       dismissReview(repoNamed(repo), number, reviewId);
+    },
+    commentOnIssue: (repo, number, comment) =>
+      addIssueComment(state, issueNamed(repo, number), comment.by, comment.body, now().toISOString()).id,
+    addCheck: (repo, number, check) => {
+      addCheck(repoNamed(repo), number, check);
+    },
+    setMergeable: (repo, number, mergeable) => {
+      const { pull } = getPull(repoNamed(repo), number);
+      if (mergeable === null) delete pull.mergeable;
+      else pull.mergeable = mergeable;
     },
     commitFiles: (repo, files, by, options = {}) => {
       const record = repoNamed(repo);

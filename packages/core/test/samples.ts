@@ -38,7 +38,9 @@ const followUp = {
   issue: `${repo}#912`,
   title: 'Show each agent name in the live lanes',
   pr,
+  kind: 'line' as const,
   reviewer: 'octo-maintainer',
+  authorKind: 'maintainer' as const,
   comment: 'Can the formatter skip events with an empty text field?',
   path: 'apps/web/src/feed/format.ts',
   commentUrl: `${pr.url}#discussion_r1`,
@@ -46,7 +48,7 @@ const followUp = {
   branch: { repo: 'priya/goodfirsttoken', name: 'goodfirsttoken/issue-912-c_0' },
 };
 
-const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3 };
+const readInPart = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 12, reviewsRead: 10, commentsLeftOut: 3, conversation: 4, conversationRead: 4 };
 
 const openPr = { claimId: 'c_0', issue: `${repo}#912`, pr, reviews: 2 };
 
@@ -76,7 +78,7 @@ export const samples: Samples = {
       'claude plugin update goodfirsttoken@goodfirsttoken',
       '3 issues',
       'typescript',
-      '@octo-maintainer on the file "apps/web/src/feed/format.ts"',
+      'line: @octo-maintainer commented on the file "apps/web/src/feed/format.ts"',
       '> Can the formatter skip events with an empty text field?',
       'paused',
       '2 more follow-ups wait.',

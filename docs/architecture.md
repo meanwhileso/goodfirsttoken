@@ -1613,8 +1613,9 @@ in `people`.
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and since when, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
-| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews covered and when the last one saved was made, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
-| `follow_ups` | Review or comment on a line that a reviewer wrote on a claim's open PR, as the PR job read it: GitHub's ID for it, the reviewer, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
+| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
+| `follow_ups` | What the PR job read on a claim's open PR that a donor's agent answers: a maintainer's or a review bot's review, comment on a line, or comment in the conversation, or the PR's failed checks or conflict. Its kind, GitHub's ID for it, or the SHAs for checks and a conflict, the author and whether a maintainer or a bot, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
+| `repo_pushers` | Login whose review on a PR in a repo showed push access when the PR job read it, and when it last did. A comment in the conversation counts as a maintainer's by it, for 90 days | `repo`, `login` |
 | `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, `open_pr`'s clearance of pushed work, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
@@ -1735,6 +1736,19 @@ that break the rules, so it returns the problems for the caller to show.
   offered: the migration marks each PR offered that merged or closed
   before its donor's latest session started. The test of what it marks
   runs the migration's own `UPDATE` again, from `TEST_MIGRATIONS`.
+- **Migration `20261108191958_follow_up_kinds.sql`** makes `follow_ups`
+  again, with `kind`, `author_kind`, and a `reviewer` that takes null,
+  since SQLite can't drop a `NOT NULL`. It copies every row in its order
+  as a maintainer's `review`, or a `line` when it has a path, then drops
+  the old table and renames the new one. `CHECK`s keep checks and a
+  conflict, and only them, with no author, and a path on a `line` alone.
+  It makes `repo_pushers`, owned by `src/db/pushers.ts`, and adds
+  `conversation` and `conversation_read` to `prs`. Its test makes the old
+  table from `0010`'s own statement, stores rows the old way, and runs the
+  new migration's statements on `follow_ups` from `TEST_MIGRATIONS`. The
+  copy names the kind with `iif()`, since the statement splitter Wrangler
+  and the test pool share reads `CASE ... END` as a block and takes the
+  rest of the file into one statement.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -2958,11 +2972,12 @@ and count the hour's reads in one place. The rules are in
 |---|---|
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget, though no job searches now. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
-| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged. `checkClaimPrs` reads the PRs of the claims a check names the same way, a batch at a time |
+| `src/sync/prs.ts` | The PR job: each open PR's outcome and its follow-ups, from maintainers, review bots, and GitHub's checks and mergeable state, and whether a PR closed in the last 14 days opened again or merged. `checkClaimPrs` reads the PRs of the claims a check names the same way, a batch at a time |
 | `src/sync/pr-checker.ts` | `PrChecker`, the one Durable Object for the whole site that reads the PRs `check_pr` asks for. It holds the global limits: one read at a time, at most one every 2 seconds and 300 an hour, 30 checks an hour from one donor, with both counts in its own SQLite tables, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, a check of a PR being read joining that read, and `CHECK_ALLOWANCE`, which leaves a tenth more of the budget than the scheduled job in `ALLOWANCES` that leaves the most. `prs.reviews_read_at` keeps when the last saved read of a PR's reviews was made, so the PR job's read and a check's that land out of order never count the same reviews twice |
 | `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |
+| `src/db/pushers.ts` | The `repo_pushers` table: who showed push access to each repo in a review, for the PR job's reads of conversation comments |
 | `src/sync/scheduled.ts` | The crons, and the job each cron runs |
 | `src/sync/allowances.ts` | What each job that reads GitHub with the service token may spend, in `ALLOWANCES`, and the token itself |
 | `src/sync/read-now.ts` | The reads of one project outside the schedule: a maintainer's refresh, and the read an admin's approval starts |
@@ -3141,22 +3156,67 @@ and count the hour's reads in one place. The rules are in
   number, with one fragment for what it reads of each: the state and its
   times, the author, the 10 newest reviews that aren't pending or
   dismissed, by `reviews(last:, states:)`, and the first 10 comments on
-  lines of each, by `comments(first:)`, with each connection's
-  `totalCount`, and each review's `authorCanPushToRepository`, which are
-  fields and cost nothing. GitHub counts a query's points from
-  the connections it asks for, at their `first` or `last`: 50 for the
-  reviews and 500 for their comments, divided by 100, so about 6 points for
-  50 PRs, where the state alone cost one. Reading the reviews in the same
-  query makes no call of its own, so the job's cap on calls and its share
-  of the budget stay as they were. The author's `__typename` says whether a
-  reviewer is a bot. GitHub's docs don't say whether GraphQL gives a bot's
-  login with the `[bot]` that REST gives it, so the type or the suffix
-  marks one. The query asks for no `authorAssociation`, since GitHub gives
-  it for the reader, and a comment on a line needs no author of its own,
-  since a review's comments are its author's. Each run's log line counts
-  the reviews it left out for no push access, by `withoutPushOf`, since
-  whether GitHub gives the field for a private member to the service token
-  isn't checked.
+  lines of each, by `comments(first:)`, the 30 newest comments in the
+  conversation, by `comments(last:)`, and the head's checks, by
+  `commits(last: 1)` and its commit's `statusCheckRollup`, with the first
+  100 of its `contexts`. It reads each connection's `totalCount`, each
+  review's `authorCanPushToRepository`, and the PR's `headRefOid`,
+  `baseRefOid`, `baseRefName`, and `mergeable`, which are fields and cost
+  nothing. GitHub counts a query's points from the connections it asks
+  for, each times the `first` or `last` of the ones it sits in, divided by
+  100: 50 for the reviews, 500 for their comments, 50 for the
+  conversation, 50 for the commits, and 50 for the checks, so 700, or 7
+  points for 50 PRs, where the reviews alone cost 6 and the state alone
+  cost one. A connection's own `first` or `last` adds nothing, so reading
+  100 checks costs what reading 10 would. The nodes come to at most
+  12,050, inside GitHub's 500,000. Reading it all in the same query makes
+  no call of its own, so the job's cap on calls and its share of the
+  budget stay as they were.
+- **Who counts.** The author's `__typename` says whether a reviewer is a
+  bot: `Bot` is a GitHub App's account, and an app writes on a repo's PRs
+  only where it is installed, so it counts as the repo's review bot, with
+  no push access asked. GraphQL gives its login with no `[bot]`, as the
+  GitHub fake does, and the follow-up keeps it so, with `author_kind`
+  `bot`, and the tools add `[bot]`. A user account whose login ends in
+  `[bot]` counts for nothing, by `personOf`. The query asks for no
+  `authorAssociation`, since GitHub gives it for the reader, and a comment
+  on a line needs no author of its own, since a review's comments are its
+  author's. Each run's log line counts the reviews it left out for no push
+  access, by `withoutPushOf`, since whether GitHub gives the field for a
+  private member to the service token isn't checked.
+- **Conversation comments** show no push access. Once a batch's query
+  answers, and before it handles each PR, the job saves every person whose
+  review in the batch showed push access to the PR's repo to
+  `repo_pushers` with `savePushers`, which also drops what no read saw in
+  90 days, then reads the repos' logins with `listPushers`: two calls to
+  D1 a batch. A comment counts as a maintainer's when its author is there,
+  or owns the repo by the owner in its name. The log line counts the
+  comments it left out from people who aren't the PR's author or a bot, by
+  `conversationLeftOutOf`, as it counts reviews, each time a read takes
+  one.
+- **One conflict at a time.** The base's SHA is in a conflict's ID, and
+  the fake's `baseRefOid` follows the base branch, which GitHub's docs
+  don't settle. So `saveFollowUps` writes no conflict while another on the
+  claim waits for a submit, and a base that moves on adds none for the
+  same conflict.
+- **Checks and conflicts.** The head's checks come from the last of
+  `commits(last: 1)`, as GitHub's CLI reads them for `gh pr checks`, and
+  count only when that commit is `headRefOid`. A head whose `statusCheckRollup.state` is
+  `FAILURE` or `ERROR` is one `checks` follow-up, known by `headRefOid`.
+  Its text is the state and the names of up to 10 failing contexts, in
+  GitHub's order: a check run that ended `FAILURE`, `TIMED_OUT`,
+  `CANCELLED`, `STARTUP_FAILURE`, or `ACTION_REQUIRED`, and a status of
+  `FAILURE` or `ERROR`. Its link is the PR's checks for that head. A PR
+  `mergeable` gives as `CONFLICTING` is one `conflict` follow-up, known by
+  `headRefOid:baseRefOid`. Both take the read's time as when they were
+  written. `ON CONFLICT DO NOTHING` keeps a head's checks, and a head and
+  base's conflict, to one follow-up however often the read finds them. A
+  follow-up for an older head's checks, or for a conflict GitHub no longer
+  shows, still waits until a submit answers it: superseding them takes the
+  follow-up states in [the spec](specs/follow-through.md#follow-up-states),
+  which `githubFollowUpsOf` names. How GitHub shows a workflow run that
+  waits for a maintainer's approval isn't checked yet, and
+  `ACTION_REQUIRED` counts as failed until it is.
 - **PRs closed in the last 14 days.** `listClosedPrsSince` reads, through
   `prs_by_closed`, each PR recorded closed without merging in the last 14
   days, `REOPEN_WINDOW_MS`, and the job reads them in the same queries,
@@ -3767,8 +3827,9 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, and its weekly reads one REST call for
   each listed project a week, so they seldom draw on the same budget.
-  The PR job reads each open PR's reviews in its one query, and the state
-  of each PR closed in the last 14 days in the same queries, whose cost is
+  The PR job reads each open PR's reviews, conversation, and checks in
+  its one query, and the state of each PR closed in the last 14 days in
+  the same queries, whose cost is
   under The PR job in [The sync](#the-sync), and an issue again, a few
   REST calls, for each claim's PR that closed without merging. It leaves the
   least for the others, so it still reads after they stop.
@@ -3957,9 +4018,20 @@ and Playwright run it as a local HTTP server.
   request's state, its author, and its reviews with their comments on
   lines, oldest first, through `reviews` and `comments`, with `first` or
   `last`, each with its `authorAssociation`, and whether a review's author
-  can push to the repo, and `createCommitOnBranch`. A GitHub App's bot reviews and
+  can push to the repo, its conversation's comments through `comments`,
+  its head's checks through `commits` and `statusCheckRollup`, with check
+  runs and commit statuses, its `headRefOid` and `baseRefOid`, and its
+  `mergeable` state, and `createCommitOnBranch`. The fake works out
+  `mergeable` from the branches: a file the base and the head both changed
+  since they parted, to different contents, conflicts. A test can set it,
+  as `UNKNOWN` for one. Checks live on the base repo, by commit, so a new
+  head has none until a test adds them. A GitHub App's bot reviews and
   comments as a `Bot`, whose login the fake's GraphQL gives without the
-  `[bot]` its REST gives. GitHub's primary rate limits:
+  `[bot]` its REST gives. The sample PR `meanwhileso/goodfirsttoken#958`
+  has a bot's review, conversation comments from a bot, a maintainer, and
+  someone with no role on the repo, a failing check, and a conflict. The
+  fake serves it in `pnpm dev` too, but no claim in the dev seed follows
+  it, so the PR job reads it only for a claim that records it. GitHub's primary rate limits:
   each person's REST, GraphQL, and search budgets, whichever of their tokens
   made the calls, in the `x-ratelimit` headers of every answer, with a `403`,
   or a `RATE_LIMITED` GraphQL error, once one is spent. The OAuth web flow: the authorize page and the

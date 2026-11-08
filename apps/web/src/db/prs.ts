@@ -211,16 +211,21 @@ export async function listReopenedClaimPrs(
   }));
 }
 
-/** What one read of a claim's open PR's reviews covered. */
+/** What one read of a claim's open PR's reviews and conversation covered. */
 export interface ReviewsRead {
   claimId: string;
   /** Every review GitHub counts on the PR now, pending and dismissed ones left out. */
   reviews: number;
   /**
    * For each review the read took, newest first, how many comments on its
-   * lines the read left out: 0 for a review that isn't a maintainer's.
+   * lines the read left out: 0 for a review that is neither a maintainer's
+   * nor a bot's.
    */
   leftOut: number[];
+  /** Every comment GitHub counts in the PR's conversation now. Left out, the read counted none. */
+  conversation?: number;
+  /** How many of the newest of those the read took. */
+  conversationTook?: number;
   /** When the read was made, before its query went to GitHub. */
   readAt: number;
 }
@@ -233,7 +238,8 @@ export interface ReviewsRead {
  * left out. A new review the read didn't take is never read, since each
  * read takes the newest reviews. So `reviews_read` is how many of the PR's
  * reviews some read took, and `comments_left_out` how many comments on
- * lines of those no read took.
+ * lines of those no read took. The comments in the conversation count the
+ * same way, in `conversation` and `conversation_read`.
  */
 export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[]): Promise<void> {
   if (read.length === 0) return;
@@ -241,6 +247,8 @@ export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[
     claimId: mustParse(id, row.claimId, 'claimId'),
     reviews: mustParse(count, row.reviews, 'reviews'),
     leftOut: row.leftOut.map((n) => mustParse(count, n, 'leftOut')),
+    conversation: mustParse(count, row.conversation ?? 0, 'conversation'),
+    conversationTook: mustParse(count, row.conversationTook ?? 0, 'conversationTook'),
     readAt: checkTime(row.readAt, 'readAt'),
   }));
   // SET reads the row as it was, so prs.reviews is the last read's count.
@@ -253,9 +261,14 @@ export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[
          reviews_read = MIN(r.reviews, prs.reviews_read + MIN(r.took, MAX(0, r.reviews - prs.reviews))),
          comments_left_out = prs.comments_left_out
            + COALESCE((SELECT SUM(e.value) FROM json_each(r.left_out) e WHERE e.key < MAX(0, r.reviews - prs.reviews)), 0),
+         conversation = r.conversation,
+         conversation_read = MIN(r.conversation,
+           prs.conversation_read + MIN(r.conversation_took, MAX(0, r.conversation - prs.conversation))),
          reviews_read_at = r.read_at
        FROM (SELECT json_extract(j.value, '$.claimId') AS claim_id, json_extract(j.value, '$.reviews') AS reviews,
                json_array_length(j.value, '$.leftOut') AS took, json_extract(j.value, '$.leftOut') AS left_out,
+               json_extract(j.value, '$.conversation') AS conversation,
+               json_extract(j.value, '$.conversationTook') AS conversation_took,
                json_extract(j.value, '$.readAt') AS read_at
              FROM json_each(?) j) r
        WHERE prs.claim_id = r.claim_id AND (prs.reviews_read_at IS NULL OR prs.reviews_read_at <= r.read_at)`,

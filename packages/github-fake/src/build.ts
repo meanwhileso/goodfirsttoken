@@ -6,11 +6,14 @@
 import { writeBlob, writeCommit, writeTree, type Oid } from './git.ts';
 import type { Ago, SampleData, SampleRepo } from './sample-data.ts';
 import {
+  addCheck,
+  addIssueComment,
   addReview,
   canPush,
   commitOnBranch,
   forkRepo,
   fullName,
+  getPull,
   gitPerson,
   key,
   mergePull,
@@ -165,6 +168,21 @@ function addRepo(state: FakeState, sample: SampleRepo, now: Date): void {
     for (const review of pull.reviews ?? []) {
       const { author: login, state: verdict, body, comments } = review;
       addReview(state, repo, pull.number, { login, state: verdict, body, comments }, ago(review.submitted, now));
+    }
+    const opened = getPull(repo, pull.number);
+    for (const comment of pull.comments ?? []) {
+      addIssueComment(state, opened, comment.author, comment.body, ago(comment.created, now));
+    }
+    for (const check of pull.checks ?? []) addCheck(repo, pull.number, check);
+    if (pull.baseCommit) {
+      const { by, files, message, at: when } = pull.baseCommit;
+      commitOnBranch(
+        state,
+        repo,
+        repo.defaultBranch,
+        { additions: Object.entries(files).map(([path, contents]) => ({ path, contents })), deletions: [], headline: message, login: by },
+        ago(when, now),
+      );
     }
     if (pull.merged) {
       mergePull(state, repo, pull.number, pull.merged.by, ago(pull.merged.at, now));

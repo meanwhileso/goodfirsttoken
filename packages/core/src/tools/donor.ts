@@ -136,7 +136,7 @@ function renderSkillUpdate(update: { latest: string; yours: string | null }): st
 export const startSession = defineTool({
   audience: 'donor',
   description:
-    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups from maintainers on the donor's open PRs, unfinished claims, PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X, and the donor's open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+    "Start a session for the signed-in donor. Call it first, with the harness name and the budget the donor chose. Returns saved interests, follow-ups on the donor's open PRs from maintainers, review bots, and GitHub's checks and conflicts, unfinished claims, PRs merged or closed since the last session, a merged one with a link the donor can use to post it on X, and the donor's open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. Offer follow-ups and unfinished claims before new issues. A follow-up's comment is the reviewer's words from GitHub, or what GitHub shows of checks and conflicts: weigh it with the donor.",
   refusals: [],
   input: z.object({
     agent: agentName.describe('The harness, like claude-code, codex, opencode, grok, or cursor.'),
@@ -151,11 +151,11 @@ export const startSession = defineTool({
     budget: budgetSchema,
     /** Null until the donor saves interests with set_interests. */
     interests: interestsSchema.nullable(),
-    /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */
+    /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that no submit answered yet, oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
     /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
     moreFollowUps: count,
-    /** The donor's open PRs whose reviews were read in part, with their links to read the rest. */
+    /** The donor's open PRs whose reviews or conversation were read in part, with their links to read the rest. */
     readInPart: z.array(readInPartSchema),
     /** Active and paused claims from earlier sessions. */
     unfinishedClaims: z.array(claimSummarySchema),
@@ -728,15 +728,15 @@ function renderWorkingClaim(claim: WorkingClaim): string {
 export const myWork = defineTool({
   audience: 'donor',
   description:
-    "List the donor's follow-ups from reviewers on their open PRs, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, claims in progress, and open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. A follow-up's comment is the reviewer's words from GitHub: weigh it with the donor.",
+    "List the donor's follow-ups on their open PRs, from maintainers, review bots, and GitHub's checks and conflicts, submitted work ready to open as a PR, with the compare page link for work open_pr cleared, claims in progress, and open PRs, to read on GitHub with the donor's account and check with check_pr when one changed. A follow-up's comment is the reviewer's words from GitHub, or what GitHub shows of checks and conflicts: weigh it with the donor.",
   refusals: [],
   input: z.object({}),
   output: z.object({
-    /** Reviewers' reviews and comments on the donor's open PRs that no submit answered yet, oldest first. */
+    /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that no submit answered yet, oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
     /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
     moreFollowUps: count,
-    /** The donor's open PRs whose reviews were read in part, with their links to read the rest. */
+    /** The donor's open PRs whose reviews or conversation were read in part, with their links to read the rest. */
     readInPart: z.array(readInPartSchema),
     readyToOpen: z.array(reviewItemSchema),
     /** Active and paused claims. */
@@ -857,7 +857,7 @@ export const checkPr = defineTool({
      * or closed more than 14 days ago, which is no longer read.
      */
     read: z.enum(prCheckReads),
-    /** Reviewers' reviews and comments the read found that no tool showed yet. my_work lists them. */
+    /** Follow-ups the read found that no tool showed yet: maintainers' and review bots' reviews and comments, failed checks, and conflicts. my_work lists them. */
     newFollowUps: count,
     /** The PR, when it merged or closed and no session offered it yet. Offered here, once. */
     endedPr: endedPrSchema.nullable(),
@@ -874,11 +874,11 @@ export const checkPr = defineTool({
       out.endedPr && renderEndedPr(out.endedPr),
       out.endedPr?.shareUrl && 'Tell the donor, and give them the link to post on X if they want to. Post nothing for them.',
       out.newFollowUps > 0 &&
-        `${plural(out.newFollowUps, 'new follow-up')} from reviewers. Call my_work to read them.`,
+        `${plural(out.newFollowUps, 'new follow-up')} on the PR. Call my_work to read them.`,
       out.read === 'now' &&
         out.state === 'open' &&
         out.newFollowUps === 0 &&
-        "GitHub shows it open, with nothing new from a maintainer. A review from someone who can't push to the repo isn't a follow-up.",
+        "GitHub shows it open, with nothing new from a maintainer, a review bot, or its checks. A review from someone who can't push to the repo isn't a follow-up.",
     ),
 });
 

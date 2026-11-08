@@ -1,5 +1,5 @@
 import type { ToolOutput } from '@goodfirsttoken/core';
-import { plural } from '@goodfirsttoken/core/text';
+import { followUpWhat, plural, readInPartText, type FollowUpShape } from '@goodfirsttoken/core/text';
 import type { Host } from './bridge';
 import { h } from './dom';
 import { expires, isObject, issueHead, link, listOf, notice } from './parts';
@@ -135,22 +135,29 @@ function readyItem(host: Host, item: ReadyItem, told: string[]): HTMLElement {
   );
 }
 
-/** A review or a comment on a line, with the reviewer's words kept as text. */
+const KINDS = new Set(['review', 'line', 'conversation', 'checks', 'conflict']);
+
+/** A follow-up, with the reviewer's words, or what GitHub shows, kept as text. */
 function followUpItem(host: Host, followUp: Record<string, unknown>): HTMLElement {
   const pr = isObject(followUp.pr) ? followUp.pr : {};
   const ref = text(pr.repo) && typeof pr.number === 'number' ? `${String(pr.repo)}#${String(pr.number)}` : '';
-  const path = text(followUp.path);
+  const kind = text(followUp.kind);
+  // An answer from before follow-ups had kinds names none, and was a review or a comment on a line.
+  const shape = {
+    kind: KINDS.has(kind ?? '') ? kind : text(followUp.path) === null ? 'review' : 'line',
+    reviewer: text(followUp.reviewer),
+    authorKind: followUp.authorKind === 'bot' ? 'bot' : text(followUp.reviewer) === null ? null : 'maintainer',
+    path: text(followUp.path),
+  } as FollowUpShape;
+  const linkText = kind === 'checks' ? 'the checks on GitHub' : kind === 'conflict' ? 'the PR on GitHub' : 'the comment on GitHub';
   return h(
     'article',
     { class: 'view-item' },
     issueHead(text(followUp.issue) ?? '', text(followUp.title) ?? ''),
     h('p', { class: 'view-meta' }, 'PR ', link(host, pr.url, ref)),
-    h('p', { class: 'view-quiet' }, [
-      text(followUp.reviewer) && `@${String(followUp.reviewer)}`,
-      path === null ? 'reviewed the PR' : `commented on the file ${JSON.stringify(path)}`,
-    ].filter(Boolean).join(' ')),
+    h('p', { class: 'view-quiet' }, followUpWhat(shape)),
     text(followUp.comment) && h('blockquote', { class: 'quote view-summary view-quiet' }, followUp.comment as string),
-    text(followUp.commentUrl) && h('p', { class: 'view-links' }, link(host, followUp.commentUrl, 'the comment on GitHub')),
+    text(followUp.commentUrl) && h('p', { class: 'view-links' }, link(host, followUp.commentUrl, linkText)),
   );
 }
 
@@ -159,11 +166,7 @@ function readInPartItem(host: Host, item: ReadInPart): HTMLElement {
     'article',
     { class: 'view-item' },
     h('p', { class: 'view-meta' }, `${item.issue} · claim ${item.claimId} · PR ${item.pr.repo}#${String(item.pr.number)}`),
-    h('p', { class: 'view-quiet' },
-      `Good First Token read ${String(item.reviewsRead)} of the PR's ${plural(item.reviews, 'review')}${
-        item.commentsLeftOut > 0 ? ` and left out ${plural(item.commentsLeftOut, 'comment')} on lines` : ''
-      }.`,
-    ),
+    h('p', { class: 'view-quiet' }, readInPartText(item)),
     h('p', { class: 'view-links' }, link(host, item.pr.url, 'Read the rest on GitHub')),
   );
 }

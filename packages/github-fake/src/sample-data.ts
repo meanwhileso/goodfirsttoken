@@ -14,6 +14,7 @@
 // data stays recent whenever it is loaded.
 
 import { policyOrgs, policyRepos } from './policy-samples.ts';
+import type { CheckRecord } from './state.ts';
 
 export type Ago = `${number}${'m' | 'h' | 'd' | 'y'}`;
 
@@ -55,6 +56,13 @@ export interface SamplePull {
   created: Ago;
   merged?: { by: string; at: Ago };
   reviews?: SampleReview[];
+  // Comments in the PR's conversation, by people or bots.
+  comments?: { author: string; body: string; created: Ago }[];
+  // Checks on the PR's head.
+  checks?: CheckRecord[];
+  // A commit to the base branch after the PR opened, as when another PR
+  // merged first. One that changes a file the PR changes makes it conflict.
+  baseCommit?: { by: string; files: Record<string, string>; message: string; at: Ago };
 }
 
 export interface SampleRepo {
@@ -254,8 +262,38 @@ export const repos: SampleRepo[] = [
         body: 'Closes #925\n\nAssisted-by: Cursor',
         author: 'arjun',
         branch: 'cursor-tab',
-        files: { 'README.md': '# Good First Token\n\nSpend your spare tokens on open source. Works in Cursor.\n' },
+        files: {
+          'README.md': '# Good First Token\n\nSpend your spare tokens on open source. Works in Cursor.\n',
+          'apps/web/src/install/tabs.ts': "export const tabs = ['Claude Code', 'Codex', 'Cursor'];\n",
+        },
         created: '1h',
+        // A review bot, a maintainer, and someone with no role on the repo
+        // write on it. Its tests fail, and a change on main since it opened
+        // conflicts with it.
+        reviews: [
+          {
+            author: 'sample-ci[bot]',
+            state: 'COMMENTED',
+            body: 'Found one problem in 2 files.',
+            comments: [{ path: 'apps/web/src/install/tabs.ts', line: 1, body: 'This list has no tab for OpenCode.' }],
+            submitted: '50m',
+          },
+        ],
+        comments: [
+          { author: 'sample-ci[bot]', body: 'Coverage: 81% (no change).', created: '50m' },
+          { author: 'octo-maintainer', body: 'Thanks. Could the Cursor tab come after Codex?', created: '40m' },
+          { author: 'sam', body: 'Could this add a Zed tab too?', created: '30m' },
+        ],
+        checks: [
+          { type: 'CheckRun', name: 'test', conclusion: 'FAILURE' },
+          { type: 'CheckRun', name: 'lint', conclusion: 'SUCCESS' },
+        ],
+        baseCommit: {
+          by: 'octo-maintainer',
+          files: { 'apps/web/src/install/tabs.ts': "export const tabs = ['Claude Code', 'Codex', 'OpenCode'];\n" },
+          message: 'Add the OpenCode tab',
+          at: '20m',
+        },
       },
     ],
   },

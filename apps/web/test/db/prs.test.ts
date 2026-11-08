@@ -10,6 +10,7 @@ import {
   createSession,
   getPr,
   listOpenPrs,
+  listClaimFollowUps,
   listOpenPrsOf,
   saveClaim,
   setReviewsRead,
@@ -262,6 +263,36 @@ describe('merged and closed PRs offered to their donor', () => {
 
     expect(writes).toHaveLength(1);
     expect(await takeEndedToOffer(priya.githubId, t0 + 4 * DAY)).toMatchObject([{ claimId: 'c_3' }]);
+  });
+});
+
+describe('the migration that gave follow-ups their kinds', () => {
+  test("keeps every follow-up stored before, in its order, as a maintainer's review or comment on a line", async () => {
+    const { TEST_MIGRATIONS } = env as Env & { TEST_MIGRATIONS: D1Migration[] };
+    const queries = (name: string) => TEST_MIGRATIONS.find((m) => m.name === name)?.queries ?? [];
+    // The table as 0010 made it, with rows as they were stored then.
+    const before = queries('0010_follow_ups.sql').filter((query) => /CREATE TABLE follow_ups\b/.test(query));
+    // The new table, filled from the old one, then in its place.
+    const after = queries('20261108191958_follow_up_kinds.sql').filter((query) => /\bfollow_ups(_next)?\b/.test(query));
+    await db.prepare('DROP TABLE follow_ups').run();
+    for (const query of before) await db.prepare(query).run();
+    const insert = db.prepare(
+      `INSERT INTO follow_ups (claim_id, comment_id, reviewer, body, path, url, written_at, read_at, shown_at, answered_at)
+       VALUES (?, ?, 'octo-maintainer', ?, ?, 'https://github.com/a/b/pull/1', ?, ?, ?, NULL)`,
+    );
+    await db.batch([
+      insert.bind('c_1', 'PRR_b', 'Add a test.', null, t0, t0, t0 + HOUR),
+      insert.bind('c_1', 'PRRC_a', 'This drops the hash.', 'src/a.ts', t0, t0, null),
+    ]);
+
+    for (const query of after) await db.prepare(query).run();
+
+    expect(before).toHaveLength(1);
+    expect(after).toHaveLength(4);
+    expect((await listClaimFollowUps(db, 'c_1')).map((f) => [f.commentId, f.kind, f.reviewer, f.authorKind, f.path, f.shownAt])).toEqual([
+      ['PRR_b', 'review', 'octo-maintainer', 'maintainer', null, t0 + HOUR],
+      ['PRRC_a', 'line', 'octo-maintainer', 'maintainer', 'src/a.ts', null],
+    ]);
   });
 });
 

@@ -282,9 +282,9 @@ function compareVersions(a: string, b: string): number {
 }
 
 /**
- * What maintainers wrote on the donor's open PRs that no submit answered
- * yet, as start_session and my_work list them, and how many more wait.
- * `markShown` marks the ones listed shown, once the answer is made. A
+ * What maintainers and review bots wrote on the donor's open PRs, and their
+ * failed checks and conflicts, that no submit answered yet, as
+ * start_session and my_work list them, and how many more wait. `markShown` marks the ones listed shown, once the answer is made. A
  * submit to the claim answers the ones shown before it. Only a follow-up
  * submit_work could take a fix for shows: its PR open, its project asking
  * for help, and the donor not blocked.
@@ -308,7 +308,9 @@ async function followUpsFor(
     issue,
     title: titles.get(lower(issue)) ?? issue,
     pr,
+    kind: record.kind,
     reviewer: record.reviewer,
+    authorKind: record.authorKind,
     comment: record.body,
     path: record.path,
     commentUrl: record.url,

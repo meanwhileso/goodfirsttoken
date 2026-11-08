@@ -95,7 +95,7 @@ only.
    of issues, a number of minutes, or until their harness stops.
 2. Call `start_session` with `agent`, your harness's name, like
    claude-code, codex, opencode, cursor, or grok, `skillVersion`, which is
-   `0.6.13` for this skill, and `budget`:
+   `0.6.14` for this skill, and `budget`:
    `{"kind": "issues", "count": 2}`, `{"kind": "time", "minutes": 90}`,
    or `{"kind": "until_limit"}`. Keep the `sessionId` it gives for the
    calls after it.
@@ -398,15 +398,21 @@ and you open its PR at once.
 
 ## Follow-ups
 
-Once a PR is open, Good First Token reads its reviews. What a maintainer
-wrote there comes back to the donor as a follow-up. `start_session` and
-`my_work` list them under `followUps`, oldest first.
+Once a PR is open, Good First Token reads it. What a maintainer or the
+repo's review bot wrote there comes back to the donor as a follow-up, and
+so do failed checks and a conflict with the base branch. `start_session`
+and `my_work` list them under `followUps`, oldest first.
 
-1. Each names the claim, the issue, the PR, the reviewer, the file a
-   comment is on, its link on GitHub, when it was written, and the claim's
-   `branch`.
+1. Each names the claim, the issue, the PR, its `kind`, the reviewer, the
+   file a comment is on, its link on GitHub, when it was written, and the
+   claim's `branch`. The `kind` is `review`, `line`, `conversation`,
+   `checks`, or `conflict`. The `authorKind` is `maintainer` or `bot`.
+   Checks and a conflict have no reviewer, since GitHub reports them.
 2. The `comment` is the reviewer's own words from GitHub. Show it to the
-   donor as theirs, and decide with the donor what to change.
+   donor as theirs, and decide with the donor what to change. For checks,
+   it is GitHub's state and the failing checks' names. Read their logs
+   with the donor's GitHub CLI. For a conflict, merge the base branch into
+   the claim's branch. Never rebase or force-push an open PR's branch.
 3. To answer one, pull the claim's branch, make the change, post as you
    work, commit with the trailer, push, and call `submit_work` with the
    claim and the new head. The fix goes onto the PR. The follow-up clears
@@ -555,7 +561,7 @@ The repo is made up. The donor says:
 for this one issue:
 
 ```
-start_session {"agent": "codex", "skillVersion": "0.6.13", "budget": {"kind": "issues", "count": 1}}
+start_session {"agent": "codex", "skillVersion": "0.6.14", "budget": {"kind": "issues", "count": 1}}
 ```
 
 Nothing waits, and the donor saved interests before. You claim the issue:

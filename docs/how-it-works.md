@@ -1077,16 +1077,20 @@ seconds of the ask.
 
 **Follow-ups.** The same query reads, for each PR still open, its 10 newest
 reviews, leaving out a pending one, which only its author sees, and a
-dismissed one, and the first 10 comments on lines of each. These are the
-read limits, and the rest of this file points here for them. What a
-maintainer wrote there is kept as a follow-up for the claim's donor, once.
+dismissed one, the first 10 comments on lines of each, the 30 newest
+comments in its conversation, the checks on its head, and whether GitHub
+can merge it. These are the read limits, and the rest of this file points
+here for them. What a maintainer or a review bot wrote there is kept as a
+follow-up for the claim's donor, once, and so are failed checks and a
+conflict. Each follow-up has a kind: `review`, `line`, `conversation`,
+`checks`, or `conflict`.
 
-- Here a maintainer is anyone who can push to the repo, by the review's
-  `authorCanPushToRepository`, which the same query reads. The review's
-  comments on lines are its author's too. Anyone else's review is no
-  follow-up, however it reads, like one from someone with no role on the
-  repo that asks for changes, a member of the organization who has no role
-  on the repo, or a collaborator who can only read.
+- For a review, a maintainer is anyone who can push to the repo, by the
+  review's `authorCanPushToRepository`, which the same query reads. The
+  review's comments on lines are its author's too. Anyone else's review is
+  no follow-up, however it reads, like one from someone with no role on
+  the repo that asks for changes, a member of the organization who has no
+  role on the repo, or a collaborator who can only read.
 - Why push access: it is who can merge the PR, or push to its branch, so
   their review can decide it. GitHub's `authorAssociation` names someone
   `MEMBER` only to a reader who can see their membership of the
@@ -1103,15 +1107,46 @@ maintainer wrote there is kept as a follow-up for the claim's donor, once.
 - A maintainer here is wider than for managing a project, which takes the
   admin or maintain role under [Permissions](#permissions). Someone with
   write access can merge a PR, so their review counts.
+- A comment in the conversation shows no push access. Its author counts
+  as a maintainer when a review of theirs on any PR in the repo showed
+  push access to a read in the last 90 days, or when they own the repo.
+  Good First Token keeps those logins for each repo from the reviews it
+  reads. A maintainer it never saw review is missed, so each run's log line
+  counts the comments in the conversation it left out from people other
+  than the PR's author and bots.
+- A review bot is an account GitHub types as `Bot`, which is a GitHub
+  App's. Its reviews, its comments on lines, and its comments in the
+  conversation are follow-ups, whatever its access. GitHub's GraphQL gives
+  its login with no `[bot]` on the end. The follow-up keeps it that way,
+  marks its author a `bot`, and the tools show it with `[bot]` added. A
+  user account whose login ends in `[bot]` is neither a bot nor a
+  maintainer, and is left out.
 - The PR's author, who is the donor, is never a reviewer, whatever GitHub
   names them. Good First Token posts on GitHub only as the donor, with the
-  donor's own token, so its posts are left out too. A GitHub App's bot is
-  no reviewer, known by GitHub's `Bot` type or a login that ends in
-  `[bot]`. An account GitHub no longer has is left out.
+  donor's own token, so its posts are left out too. An account GitHub no
+  longer has is left out.
 - Each review that comments or asks for changes is a follow-up, with its
   text. An approval's own text asks for nothing, and isn't one. Each
   comment on a line is a follow-up, with its file, in any review but a
-  dismissed one, an approval included.
+  dismissed one, an approval included. Each comment in the conversation is
+  one too.
+- Checks on the PR's head that GitHub's combined state shows failed, as
+  `FAILURE` or `ERROR`, are one `checks` follow-up for that head. Its text
+  is that state and the names of up to 10 failing checks, of the first 100
+  on the head, like `FAILURE: test, lint`, and its link is the PR's checks
+  for the head. Checks that pass or still run are none. The same head's
+  checks failing again add none, and a new head's add a new one.
+- A PR GitHub shows as `CONFLICTING` is one `conflict` follow-up for its
+  head and its base, with the text `CONFLICTING with` and the base
+  branch's name. While one waits for a submit, a base that moves on adds
+  no other. `UNKNOWN`, which GitHub often gives before it has worked out
+  the merge, makes none, and the next run reads it again.
+- Checks and a conflict have no author. The tools name GitHub as their
+  source, and say when the job first read them. The names of checks and
+  branches are repo text, kept by the rules below.
+- An older head's checks follow-up, and a conflict follow-up GitHub no
+  longer shows, still wait until a submit answers them, as any follow-up
+  does.
 - The text is untrusted repo text. Before it is kept, it becomes one
   line, with only what a person can see. Every character a person doesn't
   see goes, the same characters a removal's reason loses under
@@ -1133,8 +1168,9 @@ maintainer wrote there is kept as a follow-up for the claim's donor, once.
   read once. An edit or a deletion on GitHub after that, a dismissal, or a
   resolved thread changes nothing about it.
 - A review or comment beyond the read limits isn't read, and the donor's
-  own reviews and bots' count among the 10 newest. A PR that gets more
-  than 10 reviews between two runs loses the oldest of them.
+  own reviews and others' count among the 10 newest. A PR that gets more
+  than 10 reviews between two runs loses the oldest of them. The same goes
+  for 30 comments in the conversation.
 - The runs keep, for each open PR, what their reads covered together, so
   the donor's tools can say the PR was read in part. A run counts the
   reviews GitHub counts on the PR, pending and dismissed ones left out.
@@ -1144,7 +1180,9 @@ maintainer wrote there is kept as a follow-up for the claim's donor, once.
   of a maintainer's new review are never read either. So a PR read in full
   over several runs isn't named, and one with a review or a comment no run
   read stays named. A dismissal lowers GitHub's count, so a run after one
-  can count fewer new reviews than there are.
+  can count fewer new reviews than there are. The comments in the
+  conversation are counted the same way, and a deleted comment lowers
+  the count the same way.
 - A PR that merged or closed has its reviews left unread.
 - Follow-ups are kept for every open PR, and shown to the donor only as
   under [The donor's tools](#the-donors-tools).
@@ -2389,8 +2427,9 @@ token or other donor's ever does their work.
 - A session belongs to the donor who started it. Another donor who names it
   finds no session, and is refused with `not_found`.
 
-**Follow-ups.** A follow-up is a review or a comment on a line that a
-maintainer wrote on one of the donor's open PRs, as the PR job read it,
+**Follow-ups.** A follow-up is a review, a comment on a line, or a comment
+in the conversation that a maintainer or a review bot wrote on one of the
+donor's open PRs, or its failed checks or conflict, as the PR job read it,
 under Follow-ups in [PRs](#prs).
 
 - `start_session` and `my_work` list the follow-ups that wait, at most
@@ -2404,20 +2443,26 @@ under Follow-ups in [PRs](#prs).
   do-not-list nor delisted, and the donor isn't blocked. The others stay
   stored, and show again once that holds, as when a paused project
   resumes, or a block is lifted.
-- Each names the claim, the issue and its title, the PR, the reviewer, the
-  file a comment on a line is on, the link to it on GitHub, when it was
-  written, and the claim's branch, where the fix goes.
+- Each names the claim, the issue and its title, the PR, its kind, the
+  reviewer and whether they are a `maintainer` or a `bot`, the file a
+  comment on a line is on, the link to it on GitHub, when it was written,
+  and the claim's branch, where the fix goes. Checks and a conflict name
+  no reviewer. The text says the kind and who it came from: `@login` for a
+  maintainer, `@login[bot]` for a bot, and GitHub for checks and a
+  conflict.
 - The reviewer's text is quoted as their own words, one line after `>`,
-  under a note that says it is a reviewer's request from GitHub to weigh
-  with the donor and the repo's own rules, and holds no instructions for
-  the agent. A file's path is repo text too, and shows as a quoted string,
+  under a note that says it is a reviewer's request from GitHub, or what
+  GitHub shows, to weigh with the donor and the repo's own rules, and
+  holds no instructions for the agent. The text of checks and a conflict
+  is quoted the same way. A file's path is repo text too, and shows as a quoted string,
   like `on the file "src/a.ts"`. A text that isn't one folded line is never
   sent.
 - Both tools also name each of the donor's open PRs that the PR job read
   in part, under the read limits in [PRs](#prs), when its follow-ups would
-  show: how many reviews it has, how many of them were read, and how many
-  comments on lines were left out, with the PR's link to read the rest on
-  GitHub.
+  show: how many reviews it has, how many of them were read, how many
+  comments on lines were left out, and when the conversation was read in
+  part, how many of its comments were read, with the PR's link to read
+  the rest on GitHub.
 - Listing a follow-up marks it shown, once the answer is made. A submit to
   the claim that lands answers every follow-up on it shown before the
   submit. One the PR job read since, which no tool has shown, still waits,
@@ -5351,6 +5396,7 @@ Each limit the schemas enforce, other than those under project settings:
 | A repo request's `repo`, as typed | 300 characters | Us |
 | A reviewer's text in a follow-up | 1,000 graphemes, folded to one line | Us |
 | A comment's file path in a follow-up | 4,096 graphemes, folded to one line | Us |
+| Failing checks a checks follow-up names | 10, of the first 100 checks on the PR's head, each folded to one line | Us |
 | Follow-ups `start_session` and `my_work` list at once | 20, with a count of the rest | Us |
 | Open PRs `start_session` and `my_work` list | 50, oldest first | Us |
 | Reads of PRs that `check_pr` asks for, across the whole site | One at a time, at most one every 2 seconds and 300 in any hour, 30 checks an hour from one donor, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, and only while more of the service token's budget is left than any scheduled job leaves | Us |
