@@ -221,8 +221,13 @@ const GOES_ON = /\s*[*_~`"'([\-–]*\p{Ll}/uy;
 // out of the text the admin sees: this is for matching alone.
 const EMPHASIS_TAGS = /<\/?(?:strong|em|b|i|u|s|del|ins|mark|strike)>/gi;
 
+/** A character plain changes, or space it folds or trims. */
+const PLAIN_CHANGES = /[<’‘“”*~_\s]/;
+
 /** Text for matching: emphasis gone, curly quotes straight, and space folded. Exported for the model reader's checks. */
 export function plain(text: string): string {
+  // Most short pieces have nothing to change, and a file can hold many.
+  if (!PLAIN_CHANGES.test(text)) return text;
   return text
     .replace(EMPHASIS_TAGS, ' ')
     .replace(/[’‘]/g, "'")

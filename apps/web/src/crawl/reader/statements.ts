@@ -49,7 +49,7 @@ interface Scanned {
 }
 
 /** The most sentences one claim's check adds to its runs. Exported for the tests. */
-export const MAX_CHECK_STEPS = 100_000;
+export const MAX_CHECK_STEPS = 20_000;
 
 /** Checks claims against the files the Worker sent. */
 export class Files {
@@ -142,14 +142,14 @@ export class Files {
     for (let first = 0; first < within.length && steps < MAX_CHECK_STEPS; first++) {
       if (scanned.bare[within[first] ?? 0] === '') continue;
       const exact = new Prefix(quote, () => ' ');
-      const looseMatch = new Prefix(loosely, (before, after) => (CJK_EDGE_END.test(before) || CJK_EDGE_START.test(after) ? '' : ' '));
+      const looseMatch = new Prefix(loosely, looseSeparator);
       const spelling = new Spelling(asWritten);
       for (let last = first; last < within.length; last++) {
         if (++steps > MAX_CHECK_STEPS) break;
         const at = within[last] ?? 0;
         exact.add(scanned.bare[at] ?? '');
         looseMatch.add(scanned.loose[at] ?? '');
-        spelling.add(sentences[at]?.text ?? '');
+        spelling.add(sentences[at]?.text ?? '', scanned.bare[at] ?? '');
         if (exact.whole() || looseMatch.whole() || spelling.whole()) {
           // A comment's mark at the end, matched as a sentence of no words, is left off.
           const kept = trimMarks(within.slice(first, last + 1).map((index) => sentences[index] as Sentence));
@@ -212,9 +212,11 @@ class Spelling {
     return this.#reach.size > 0;
   }
 
-  add(sentence: string): void {
-    const options = [...new Set([sentence, bare(sentence).trim()])].filter((form) => form !== '');
+  /** Adds a sentence, as the file has it and without its marks. */
+  add(sentence: string, bared: string): void {
     this.#added = true;
+    if (this.#reach.size === 0) return;
+    const options = [...new Set([sentence, bared])].filter((form) => form !== '');
     // A sentence that is only marks may be left out whole.
     if (options.length === 0) return;
     const next = new Set<number>();
@@ -272,6 +274,7 @@ const CJK_EDGE_START = new RegExp(String.raw`^[${CJK}]`, 'u');
  * can't change one.
  */
 function loosePiece(bared: string): string {
+  if (!LOOSE_CHANGES.test(bared)) return bared;
   return bared
     .replace(LEAD_MARKS, '')
     .replace(LINK, '$1')
@@ -283,15 +286,26 @@ function loosePiece(bared: string): string {
     .trim();
 }
 
-/** Two loose texts as one: a space between them, or none beside a Chinese or Japanese character. */
-function joinLoose(before: string, after: string): string {
-  if (before === '' || after === '') return before + after;
-  return CJK_EDGE_END.test(before) || CJK_EDGE_START.test(after) ? before + after : `${before} ${after}`;
+/** A character loosePiece changes, or space it takes out, folds, or trims. */
+const LOOSE_CHANGES = /[[`✅✔☑⚠ℹ\\\s]/u;
+
+/** What goes between two loose pieces: a space, or none beside a Chinese or Japanese character. */
+function looseSeparator(before: string, after: string): string {
+  return CJK_EDGE_END.test(before) || CJK_EDGE_START.test(after) ? '' : ' ';
 }
 
-/** Sentences as one loose text, as the checks read a quote. */
+/** Sentences as one loose text, as the checks read a quote, joined as Prefix joins them. */
 function loose(sentences: readonly { text: string }[]): string {
-  return sentences.map((s) => loosePiece(bare(s.text).trim())).reduce(joinLoose, '');
+  const parts: string[] = [];
+  let last = '';
+  for (const s of sentences) {
+    const piece = loosePiece(bare(s.text).trim());
+    if (piece === '') continue;
+    if (last !== '') parts.push(looseSeparator(last, piece));
+    parts.push(piece);
+    last = piece;
+  }
+  return parts.join('');
 }
 
 /** A trailer's name, like `Assisted-by`. */
