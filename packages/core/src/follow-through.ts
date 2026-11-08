@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { epochMs, githubId, id } from './primitives';
+import { count, epochMs, githubId, id } from './primitives';
+import { triggerOffReasonSchema } from './triggers';
 
 // Follow-through (docs/specs/follow-through.md): how the donor's agent
 // follows each PR to its end. The donor chooses a mode, and the follow
@@ -98,6 +99,28 @@ export const wakeRecordSchema = z.object({
   createdAt: epochMs,
   /** When a run last called my_work with the wake's ID, or null before the first. */
   lastRunAt: epochMs.nullable(),
+  /** The wake's trigger, never with its key, or null when the donor saved none. */
+  trigger: z
+    .object({
+      /** The host of its URL, the one part of it /me and the tools show. */
+      host: z.string().min(1),
+      /** True while the PR job calls it. */
+      on: z.boolean(),
+      /** Why Good First Token turned it off, or null while it is on. */
+      off: triggerOffReasonSchema.nullable(),
+      /** True while a key is kept for it. A key that was wrong, or a trigger that is gone, keeps none. */
+      hasKey: z.boolean(),
+      savedAt: epochMs,
+      /** When it was last called, or null before the first call. */
+      calledAt: epochMs.nullable(),
+      /** When a call last started a run, or null. */
+      firedAt: epochMs.nullable(),
+      /** Its failed calls in a row. */
+      failures: count,
+      /** Until when a 429 holds its calls, or null. */
+      heldUntil: epochMs.nullable(),
+    })
+    .nullable(),
 });
 export type WakeRecord = z.infer<typeof wakeRecordSchema>;
 

@@ -3,6 +3,7 @@ import {
   claimDeadlines,
   foldIssueTitle,
   followThroughOf,
+  takesTrigger,
   holdsSlot,
   MAX_FOLLOW_UPS,
   MAX_WAKES,
@@ -96,6 +97,7 @@ import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
 import { prChecker } from '../sync/pr-checker';
 import { isFollowed } from '../sync/prs';
+import { ME_PATH } from '../me/paths';
 import type { GitHubReader } from '../sync/github';
 import plugins from '../../../../skill-src/plugins.json';
 import { requestRepo as makeRequest } from '../requests/request';
@@ -255,8 +257,8 @@ export async function startSession(
   const open = await listOpenPrsOf(env.DB, caller.githubId);
   const followThrough = await followThroughFor(caller.githubId, modes, open, { level: null, newForWake: new Set() }, now);
   const openPrs = openPrsOf(open, modes, followThrough);
-  const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).map(wakeOut);
-  const wakes = (await listWakes(env.DB, caller.githubId)).map(wakeOut);
+  const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).map((each) => wakeOut(each, origin));
+  const wakes = (await listWakes(env.DB, caller.githubId)).map((each) => wakeOut(each, origin));
   const resultWith = (offered: readonly EndedToOffer[]) =>
     toolResult('start_session', {
       sessionId: session.id,
@@ -376,8 +378,29 @@ async function followThroughFor(
   };
 }
 
+/** Where on /me the donor saves a wake's trigger: the wake's own place on the page. */
+export function triggerSetUpUrl(origin: string, wakeId: string): string {
+  return `${origin}${ME_PATH}#wake-${wakeId}`;
+}
+
+/**
+ * A wake's trigger as the tools give it, never its key, or null for a wake
+ * whose harness takes none or that runs only in a session.
+ */
+function triggerOut(wake: WakeRecord, origin: string) {
+  if (!takesTrigger(wake.harness) || wake.level === 'session') return null;
+  const trigger = wake.trigger;
+  return {
+    state: trigger === null ? ('none' as const) : trigger.on ? ('on' as const) : ('off' as const),
+    host: trigger?.host ?? null,
+    lastFiredAt: iso(trigger?.firedAt ?? null),
+    off: trigger === null || trigger.on ? null : (trigger.off ?? 'failures'),
+    setUpAt: triggerSetUpUrl(origin, wake.id),
+  };
+}
+
 /** A wake as the tools give it. */
-function wakeOut(wake: WakeRecord) {
+function wakeOut(wake: WakeRecord, origin: string) {
   return {
     wakeId: wake.id,
     harness: wake.harness,
@@ -385,6 +408,7 @@ function wakeOut(wake: WakeRecord) {
     intervalMinutes: wake.intervalMinutes,
     createdAt: new Date(wake.createdAt).toISOString(),
     lastRunAt: iso(wake.lastRunAt),
+    trigger: triggerOut(wake, origin),
   };
 }
 
@@ -558,12 +582,12 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
     working,
     openPrs,
     followMode: modes.choice,
-    wake: wake === null ? null : wakeOut({ ...wake, lastRunAt: Math.max(wake.lastRunAt ?? now, now) }),
+    wake: wake === null ? null : wakeOut({ ...wake, lastRunAt: Math.max(wake.lastRunAt ?? now, now) }, origin),
     newForWake,
-    stoppedWakes: stoppedWakes.map(wakeOut),
+    stoppedWakes: stoppedWakes.map((each) => wakeOut(each, origin)),
     // The wake this run is shows the run, as recorded once the answer is made.
     wakes: (await listWakes(env.DB, caller.githubId)).map((each) =>
-      wakeOut(each.id === wake?.id ? { ...each, lastRunAt: Math.max(each.lastRunAt ?? now, now) } : each),
+      wakeOut(each.id === wake?.id ? { ...each, lastRunAt: Math.max(each.lastRunAt ?? now, now) } : each, origin),
     ),
     followThrough,
   });
@@ -586,7 +610,12 @@ export type FollowThroughSet = { ok: true; value: ToolOutput<'set_follow_through
  * only when it is the donor's. /me's forms make their changes through this
  * too (src/me/page.ts). Another donor's claim throws PermissionRefused.
  */
-export async function setFollowThroughAs(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<FollowThroughSet> {
+export async function setFollowThroughAs(
+  caller: Caller,
+  input: ToolInput<'set_follow_through'>,
+  now: number,
+  origin: string,
+): Promise<FollowThroughSet> {
   const refused = (why: Refusal): FollowThroughSet => ({ ok: false, refusal: why });
   if ((await getPerson(env.DB, caller.githubId)) === null) {
     return refused(refusal('not_found', 'Call start_session first, then save follow-through.'));
@@ -641,17 +670,22 @@ export async function setFollowThroughAs(caller: Caller, input: ToolInput<'set_f
     value: {
       followMode: modes.choice,
       prs,
-      savedWake: changed.saved === null ? null : wakeOut(changed.saved),
+      savedWake: changed.saved === null ? null : wakeOut(changed.saved, origin),
       removedWake: changed.removed ? (input.removeWake ?? null) : null,
       wentOn: changed.wentOn ? (input.claimId ?? null) : null,
-      wakes: (await listWakes(env.DB, caller.githubId)).map(wakeOut),
+      wakes: (await listWakes(env.DB, caller.githubId)).map((each) => wakeOut(each, origin)),
     },
   };
 }
 
 /** set_follow_through, as setFollowThroughAs makes the change. */
-export async function setFollowThrough(caller: Caller, input: ToolInput<'set_follow_through'>, now: number): Promise<Answer> {
-  const set = await setFollowThroughAs(caller, input, now);
+export async function setFollowThrough(
+  caller: Caller,
+  input: ToolInput<'set_follow_through'>,
+  origin: string,
+  now: number,
+): Promise<Answer> {
+  const set = await setFollowThroughAs(caller, input, now, origin);
   return set.ok ? answer(toolResult('set_follow_through', set.value)) : refuse(set.refusal);
 }
 

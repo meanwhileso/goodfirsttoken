@@ -75,6 +75,27 @@ const stoppedWake = {
   intervalMinutes: 15,
   createdAt: at,
   lastRunAt: at,
+  trigger: null,
+};
+
+/** Where a sample donor saves a wake's trigger. */
+const setUpAt = (wakeId: string) => `https://goodfirsttoken.test/me#wake-${wakeId}`;
+
+/** A Grok Bot wake just saved, with no trigger yet. */
+const grokWake = {
+  ...stoppedWake,
+  wakeId: 'w_new',
+  harness: 'grok-bot' as const,
+  lastRunAt: null,
+  trigger: { state: 'none' as const, host: null, lastFiredAt: null, off: null, setUpAt: setUpAt('w_new') },
+};
+
+/** A Cursor Automations wake whose trigger Good First Token turned off, since the key was wrong. */
+const triggerOffWake = {
+  ...stoppedWake,
+  wakeId: 'w_cursor',
+  harness: 'cursor-automations' as const,
+  trigger: { state: 'off' as const, host: 'api2.cursor.sh', lastFiredAt: at, off: 'key' as const, setUpAt: setUpAt('w_cursor') },
 };
 
 /** A PR a follow-up waited on for 24 hours with no run to sort it. */
@@ -309,10 +330,18 @@ export const samples: Samples = {
       openPrs: [openPr],
       login: 'priya',
       followMode: { mode: 'ask_first', chosen: true },
-      wake: { ...stoppedWake, wakeId: 'w_cloud', harness: 'claude-code-cloud', level: 'notify', intervalMinutes: 60, lastRunAt: later },
+      wake: {
+        ...stoppedWake,
+        wakeId: 'w_cloud',
+        harness: 'claude-code-cloud',
+        level: 'notify',
+        intervalMinutes: 60,
+        lastRunAt: later,
+        trigger: { state: 'on', host: 'api.anthropic.com', lastFiredAt: later, off: null, setUpAt: setUpAt('w_cloud') },
+      },
       newForWake: [{ claimId: 'c_0', followUpId: 'IC_kwDOAbc2' }],
       stoppedWakes: [stoppedWake],
-      wakes: [stoppedWake],
+      wakes: [stoppedWake, triggerOffWake],
       followThrough: { ...followThrough, prs: [{ ...stalledPr, reportOnly: true }, { ...heldPr, schedule: 'stopped' as const, nextCheckAt: null }] },
     },
     mentions: [
@@ -321,11 +350,14 @@ export const samples: Samples = {
       'claim c_0 · stalled · due to report',
       'no check scheduled',
       'No reviewer activity for 30 days, so it is checked on no schedule. Tell the donor once.',
-      'This run is wake w_cloud: claude-code-cloud, notify, every 60 minutes, last ran 2026-09-27 12:00 UTC.',
+      'This run is wake w_cloud: claude-code-cloud, notify, every 60 minutes, last ran 2026-09-27 12:00 UTC, trigger on at api.anthropic.com, last fired 2026-09-27 12:00 UTC.',
+      'Triggers that turned off (1). Their wakes still run on schedule.',
+      'Never ask for the key in the session',
+      'trigger off: the harness refused its key. Ask the donor to check the trigger in the harness, make a new key for it, and paste its URL and key at https://goodfirsttoken.test/me#wake-w_cursor',
       'this call marked no follow-up shown',
       'New for wake w_cloud (1): claim c_0 · follow-up IC_kwDOAbc2',
       'wake w_desktop: claude-code-desktop, full',
-      "The donor's wakes (1):",
+      "The donor's wakes (2):",
       '> Can the formatter skip events with an empty text field?',
       'claim c_0 · follow-up PRRC_kwDOAbc1 · PR',
       'claim c_0 · follow-up IC_kwDOAbc2 · PR',
@@ -423,10 +455,10 @@ export const samples: Samples = {
         { claimId: 'c_0', issue: `${repo}#912`, pr, followMode: 'off', own: true },
         { claimId: 'c_2', issue, pr: { ...pr, number: 958, url: `${pr.url.slice(0, -3)}958` }, followMode: 'go_ahead', own: false },
       ],
-      savedWake: { ...stoppedWake, wakeId: 'w_new', lastRunAt: null },
+      savedWake: grokWake,
       removedWake: 'w_old',
       wentOn: 'c_0',
-      wakes: [stoppedWake, { ...stoppedWake, wakeId: 'w_new', lastRunAt: null }],
+      wakes: [stoppedWake, grokWake],
     },
     mentions: [
       "Claim c_0's PR goes on: its rounds start again from 0, so it takes 3 more today and 10 more in all.",
@@ -435,8 +467,9 @@ export const samples: Samples = {
       'claim c_0 · off: the donor stopped following it, set for this PR',
       "claim c_2 · go_ahead, the donor's mode",
       'Removed wake w_old. Turn its schedule off in the harness too',
-      'Saved wake w_new: claude-code-desktop, full, every 15 minutes, no run yet.',
+      'Saved wake w_new: grok-bot, full, every 15 minutes, no run yet, no trigger, which the donor can set up at https://goodfirsttoken.test/me#wake-w_new.',
       "Put the ID w_new in the wake's prompt",
+      'This harness takes a trigger. Once the wake is made in the harness, ask the donor to make a trigger for it there and paste its URL and key at https://goodfirsttoken.test/me#wake-w_new. Never ask for the key in the session.',
       "The donor's wakes (2):",
     ],
   },

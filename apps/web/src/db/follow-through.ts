@@ -57,7 +57,7 @@ export async function listPrFollowModes(db: D1Database, person: number): Promise
   return new Map(results.map((row) => [row.claim_id, mustParse(prFollowModeSchema, row.mode, 'mode')]));
 }
 
-interface WakeRow {
+export interface WakeRow {
   id: string;
   github_id: number;
   harness: string;
@@ -65,9 +65,34 @@ interface WakeRow {
   interval_minutes: number;
   created_at: number;
   last_run_at: number | null;
+  trigger_url: string | null;
+  trigger_key: string | null;
+  trigger_on: number;
+  trigger_off: string | null;
+  trigger_saved_at: number | null;
+  trigger_called_at: number | null;
+  trigger_fired_at: number | null;
+  trigger_failures: number;
+  trigger_held_until: number | null;
 }
 
-function toWake(row: WakeRow): WakeRecord {
+/** The wake's trigger as the record gives it: its host and where it stands, never its key. */
+function triggerOf(row: WakeRow): WakeRecord['trigger'] {
+  if (row.trigger_url === null || row.trigger_saved_at === null) return null;
+  return {
+    host: new URL(row.trigger_url).hostname,
+    on: row.trigger_on === 1,
+    off: row.trigger_off,
+    hasKey: row.trigger_key !== null,
+    savedAt: row.trigger_saved_at,
+    calledAt: row.trigger_called_at,
+    firedAt: row.trigger_fired_at,
+    failures: row.trigger_failures,
+    heldUntil: row.trigger_held_until,
+  } as WakeRecord['trigger'];
+}
+
+export function toWake(row: WakeRow): WakeRecord {
   return mustParse(
     wakeRecordSchema,
     {
@@ -78,6 +103,7 @@ function toWake(row: WakeRow): WakeRecord {
       intervalMinutes: row.interval_minutes,
       createdAt: row.created_at,
       lastRunAt: row.last_run_at,
+      trigger: triggerOf(row),
     },
     'wake',
   );
@@ -165,6 +191,12 @@ export async function saveFollowThrough(
           `DELETE FROM wake_follow_ups WHERE wake_id = (SELECT id FROM wakes WHERE id = ?3 AND github_id = ?1) AND ${saved}`,
         ),
       ),
+      // The wake's trigger goes with its row, and the follow-ups it was called for with it.
+      bind(
+        db.prepare(
+          `DELETE FROM trigger_follow_ups WHERE wake_id = (SELECT id FROM wakes WHERE id = ?3 AND github_id = ?1) AND ${saved}`,
+        ),
+      ),
       bind(db.prepare(`DELETE FROM wakes WHERE id = ?3 AND github_id = ?1 AND ${saved} RETURNING id`)),
     );
   }
@@ -213,11 +245,8 @@ export async function saveFollowThrough(
   }
   if (statements.length === 0) return { removed: false, saved: null, wentOn: false };
   const results = await db.batch<{ id: string }>(statements);
-  const removedRows = removing === null ? [] : (results[change.save === undefined ? 1 : 2]?.results ?? []);
-  const wake =
-    wakeId === null
-      ? null
-      : await db.prepare('SELECT * FROM wakes WHERE id = ?').bind(wakeId).first<WakeRow>();
+  const removedRows = removing === null ? [] : (results[change.save === undefined ? 2 : 3]?.results ?? []);
+  const wake = wakeId === null ? null : await db.prepare('SELECT * FROM wakes WHERE id = ?').bind(wakeId).first<WakeRow>();
   // The go on is the batch's last statement when there is one.
   const wentOn = change.goOn !== undefined && (results[results.length - 1]?.results.length ?? 0) > 0;
   return { removed: removedRows.length > 0, saved: wake === null ? null : toWake(wake), wentOn };

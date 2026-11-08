@@ -8,6 +8,7 @@ import {
   MAX_OPEN_PRS_PER_DONOR,
   MIN_CLAIMS_PER_ISSUE,
   MIN_OPEN_PRS_PER_DONOR,
+  takesTrigger,
   type FeedEvent,
   type FollowUpRecord,
   type OpenMaintainerPost,
@@ -34,7 +35,18 @@ import { formatRate, formatTokens } from '../leaderboard/format';
 import type { LivePage } from '../live/load';
 import { followUpSource } from '@goodfirsttoken/core/text';
 import type { FollowThroughShown } from '../me/follow';
-import { everyText, HARNESS_NAMES, kindText, MODE_NAMES, nextCheckText, standText, STATE_NAMES, stepFor, when } from '../me/follow-words';
+import {
+  everyText,
+  HARNESS_NAMES,
+  kindText,
+  MODE_NAMES,
+  nextCheckText,
+  standText,
+  STATE_NAMES,
+  stepFor,
+  triggerText,
+  when,
+} from '../me/follow-words';
 import type { MePage } from '../me/page';
 import type { PersonPage, WorkRow, WorkStatus } from '../person/load';
 import type { ListedProject, ProjectPage } from '../project/load';
@@ -565,7 +577,7 @@ function followThroughMarkdown(origin: string, login: string, follow: FollowThro
     list(
       follow.wakes.map(
         (wake) =>
-          `${text(HARNESS_NAMES[wake.harness])}, ${text(wake.level)}, ${everyText(wake.intervalMinutes)}, ${wake.lastRunAt === null ? 'no run yet' : `last ran ${when(wake.lastRunAt)}`}${wake.stopped ? '. It stopped' : ''}`,
+          `${text(HARNESS_NAMES[wake.harness])}, ${text(wake.level)}, ${everyText(wake.intervalMinutes)}, ${wake.lastRunAt === null ? 'no run yet' : `last ran ${when(wake.lastRunAt)}`}${wake.stopped ? '. It stopped' : ''}${takesTrigger(wake.harness) && wake.level !== 'session' ? `. ${text(triggerText(wake.trigger, wake.harness))}` : ''}`,
       ),
     ) ?? 'No wakes.',
     `Your feed: ${link(`${origin}/@${login}/live.ndjson`, `${origin}/@${login}/live.ndjson`)}`,

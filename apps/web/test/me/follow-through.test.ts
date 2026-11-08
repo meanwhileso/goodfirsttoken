@@ -28,6 +28,7 @@ const DAY = 24 * HOUR;
 const NOTES = { summary: 'Keeps the trailing slash when a rewrite runs.', checks: 'pnpm test: 12 passing.' };
 const TRAILED = 'Keep the trailing slash in rewrites\n\nAssisted-by: claude-code (claude-opus-5-5)';
 const desktop = { harness: 'claude-code-desktop', level: 'full', intervalMinutes: 15 };
+const desktopWake = desktop;
 
 let github: GitHubFake;
 
@@ -528,5 +529,169 @@ describe("the donor's feed on /me", () => {
     expect(section).toContain('href="/@priya/live.ndjson"');
     expect(feed.status).toBe(200);
     expect(feed.headers.get('content-type')).toMatch(/^application\/x-ndjson/);
+  });
+});
+
+describe("a wake's trigger on /me", () => {
+  const CLOUD = { harness: 'claude-code-cloud', level: 'notify', intervalMinutes: 60 };
+  const URL_PASTED = 'https://api.anthropic.com/v1/claude_code/routines/trig_01SampleRoutine/fire';
+  const KEY = 'sk-ant-oat01-made-up-key-for-me-tests';
+
+  /** The page's part for the wake, by its ID. */
+  function wakePart(html: string, wakeId: string): string {
+    return html.split(`id="wake-${wakeId}"`)[1]?.split('</li>')[0] ?? '';
+  }
+
+  async function cloudWake(d: Donor): Promise<string> {
+    return ((await tool(d, 'set_follow_through', { wake: CLOUD })).structuredContent?.savedWake as { wakeId: string }).wakeId;
+  }
+
+  test('the donor pastes the URL and key, the page shows the trigger on with its host alone, and never shows the key again', async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const wakeId = await cloudWake(priya);
+    const browser = await site('priya');
+    const before = wakePart(await (await browser.fetch('/me')).text(), wakeId);
+
+    const answer = await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: URL_PASTED, key: `Bearer ${KEY}` });
+    const notice = location(answer).search;
+    const page = await back(browser, answer);
+
+    expect(before).toContain('set up a trigger');
+    expect(before).toMatch(/<input [^>]*type="password"[^>]*name="key"/);
+    expect(shown(page)).toContain('Saved the trigger for the Claude Code cloud scheduled tasks wake. Good First Token calls api.anthropic.com when a follow-up comes, at most once in 15 minutes.');
+    expect(wakePart(page, wakeId)).toContain('Trigger on, at api.anthropic.com. Not fired yet.');
+    for (const never of [KEY, 'trig_01SampleRoutine']) {
+      expect(page).not.toContain(never);
+      expect(decodeURIComponent(notice)).not.toContain(never);
+    }
+    const stored = await env.DB.prepare('SELECT trigger_key, trigger_url FROM wakes WHERE id = ?').bind(wakeId).first<{ trigger_key: string; trigger_url: string }>();
+    expect(stored?.trigger_url).toBe(URL_PASTED);
+    expect(stored?.trigger_key).not.toContain(KEY);
+    const markdown = await (await browser.fetch('/me.md')).text();
+    expect(markdown).toContain('Trigger on, at api.anthropic.com.');
+    expect(markdown).not.toContain(KEY);
+  });
+
+  test('the tools say a trigger is on and give its host and the page to set it up at, never its key or URL', async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const saved = await tool(priya, 'set_follow_through', { wake: CLOUD });
+    const wakeId = (saved.structuredContent?.savedWake as { wakeId: string }).wakeId;
+    const browser = await site('priya');
+    await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: URL_PASTED, key: KEY });
+
+    const work = await tool(priya, 'my_work', { wakeId });
+    const desktop = (await tool(priya, 'set_follow_through', { wake: desktopWake })).structuredContent?.savedWake as { trigger: unknown };
+
+    expect((saved.structuredContent?.savedWake as { trigger: unknown }).trigger).toEqual({
+      state: 'none',
+      host: null,
+      lastFiredAt: null,
+      off: null,
+      setUpAt: `${ORIGIN}/me#wake-${wakeId}`,
+    });
+    expect(textOf(saved)).toContain(`paste its URL and key at ${ORIGIN}/me#wake-${wakeId}`);
+    expect((work.structuredContent?.wake as { trigger: unknown }).trigger).toMatchObject({ state: 'on', host: 'api.anthropic.com' });
+    expect(desktop.trigger).toBeNull();
+    for (const answer of [work, saved]) {
+      expect(JSON.stringify(answer)).not.toContain(KEY);
+      expect(JSON.stringify(answer)).not.toContain('trig_01SampleRoutine');
+    }
+  });
+
+  test("a URL that isn't the harness's trigger, or over plain HTTP, or no key, saves nothing, and the page says what the URL looks like", async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const wakeId = await cloudWake(priya);
+    const browser = await site('priya');
+
+    const plain = await back(browser, await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: URL_PASTED.replace('https', 'http'), key: KEY }));
+    const elsewhere = await back(browser, await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: 'https://hooks.example.net/fire', key: KEY }));
+    const keyless = await back(browser, await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: URL_PASTED, key: '  ' }));
+
+    expect(shown(plain)).toContain('Nothing saved. The URL has to be the trigger&#x27;s own, like');
+    expect(shown(plain)).toContain('https://api.anthropic.com/v1/claude_code/routines/trig_.../fire');
+    expect(shown(elsewhere)).toBe(shown(plain));
+    expect(shown(keyless)).toContain('Nothing saved. Paste the trigger&#x27;s key as the harness shows it.');
+    expect(await env.DB.prepare('SELECT trigger_url FROM wakes WHERE id = ?').bind(wakeId).first('trigger_url')).toBeNull();
+  });
+
+  test("a wake in a harness that takes no trigger has no form, and another donor's wake changes nothing", async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const desktopId = ((await tool(priya, 'set_follow_through', { wake: desktopWake })).structuredContent?.savedWake as { wakeId: string }).wakeId;
+    const cloudId = await cloudWake(priya);
+    const browser = await site('priya');
+    const kenji = await site('kenji');
+
+    const desktopPart = wakePart(await (await browser.fetch('/me')).text(), desktopId);
+    const onDesktop = await back(browser, await browser.post('/me', { action: 'save_trigger', wake: desktopId, url: URL_PASTED, key: KEY }));
+    const theirs = await back(kenji, await kenji.post('/me', { action: 'save_trigger', wake: cloudId, url: URL_PASTED, key: KEY }));
+
+    expect(desktopPart).not.toContain('trigger');
+    expect(shown(onDesktop)).toContain('Nothing saved. A Claude Code desktop app wake can&#x27;t have a trigger.');
+    expect(shown(theirs)).toContain('Nothing changed. Good First Token has no record of that wake now.');
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM wakes WHERE trigger_url IS NOT NULL').first('n')).toBe(0);
+  });
+
+  test('a trigger form from another site, or with no Origin, is refused with 403 and saves nothing', async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const wakeId = await cloudWake(priya);
+    const browser = await site('priya');
+
+    const elsewhere = await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: URL_PASTED, key: KEY }, 'https://elsewhere.example');
+    const none = await browser.post('/me', { action: 'save_trigger', wake: wakeId, url: URL_PASTED, key: KEY }, null);
+
+    expect([elsewhere.status, none.status]).toEqual([403, 403]);
+    expect(await env.DB.prepare('SELECT trigger_url FROM wakes WHERE id = ?').bind(wakeId).first('trigger_url')).toBeNull();
+  });
+
+  test('Turn off removes the trigger and its key, and removing the wake removes its trigger', async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const first = await cloudWake(priya);
+    const second = await cloudWake(priya);
+    const browser = await site('priya');
+    await browser.post('/me', { action: 'save_trigger', wake: first, url: URL_PASTED, key: KEY });
+    await browser.post('/me', { action: 'save_trigger', wake: second, url: URL_PASTED, key: KEY });
+
+    const off = await back(browser, await browser.post('/me', { action: 'remove_trigger', wake: first }));
+    await browser.post('/me', { action: 'remove_wake', wake: second });
+
+    expect(shown(off)).toContain('Removed the trigger from the Claude Code cloud scheduled tasks wake. Revoke its key in the harness too.');
+    expect(wakePart(off, first)).toContain('No trigger.');
+    const { results } = await env.DB.prepare('SELECT id, trigger_url, trigger_key FROM wakes').all();
+    expect(results).toEqual([{ id: first, trigger_url: null, trigger_key: null }]);
+  });
+
+  test('a trigger Good First Token turned off shows with the step to fix it, on /me and in the next session, and one turned off by failures turns on again', async () => {
+    const priya = await donor('priya');
+    await openedPr(priya);
+    const wrongKey = await cloudWake(priya);
+    const failing = await cloudWake(priya);
+    const browser = await site('priya');
+    await browser.post('/me', { action: 'save_trigger', wake: wrongKey, url: URL_PASTED, key: KEY });
+    await browser.post('/me', { action: 'save_trigger', wake: failing, url: URL_PASTED, key: KEY });
+    await env.DB.prepare("UPDATE wakes SET trigger_on = 0, trigger_off = 'key', trigger_key = NULL WHERE id = ?").bind(wrongKey).run();
+    await env.DB.prepare("UPDATE wakes SET trigger_on = 0, trigger_off = 'failures', trigger_failures = 3 WHERE id = ?").bind(failing).run();
+
+    const page = await (await browser.fetch('/me')).text();
+    const session = await tool(priya, 'start_session', { agent: 'claude-code', budget: { kind: 'until_limit' } });
+    const again = await back(browser, await browser.post('/me', { action: 'trigger_on', wake: failing }));
+    const notAgain = await back(browser, await browser.post('/me', { action: 'trigger_on', wake: wrongKey }));
+
+    expect(wakePart(page, wrongKey)).toContain(
+      'Trigger off. Claude Code cloud scheduled tasks refused its key. Check the trigger in Claude Code cloud scheduled tasks, make a new key for it, and paste its URL and key here.',
+    );
+    expect(wakePart(page, wrongKey)).not.toContain('Turn on again');
+    expect(wakePart(page, failing)).toContain('Three calls in a row failed.');
+    expect(wakePart(page, failing)).toContain('Turn on again');
+    expect(textOf(session)).toContain('Triggers that turned off (2).');
+    expect(textOf(session)).toContain(`the harness refused its key. Ask the donor to check the trigger in the harness, make a new key for it, and paste its URL and key at ${ORIGIN}/me#wake-${wrongKey}`);
+    expect(shown(again)).toContain('The trigger for the Claude Code cloud scheduled tasks wake is on again.');
+    expect(wakePart(again, failing)).toContain('Trigger on, at api.anthropic.com.');
+    expect(shown(notAgain)).toContain('Nothing changed. Paste the trigger&#x27;s URL and key again for the Claude Code cloud scheduled tasks wake.');
   });
 });

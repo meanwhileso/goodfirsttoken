@@ -120,7 +120,7 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
     run(() => donor.sortFollowUps(caller, input, Date.now())),
   );
   server.registerTool('set_follow_through', specOf(tools.set_follow_through), (input) =>
-    run(() => donor.setFollowThrough(caller, input, Date.now())),
+    run(() => donor.setFollowThrough(caller, input, origin, Date.now())),
   );
   server.registerTool('request_repo', specOf(tools.request_repo), (input) =>
     run(() => donor.requestRepo(caller, input, origin, Date.now())),

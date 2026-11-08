@@ -77,4 +77,6 @@
 .follow-mode__choice { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .follow-mode__choice input { margin-top: 4px; accent-color: var(--accent); }
 .follow-wake__about { --gap: 4px; min-width: 0; flex: 1 1 14em; }
+.follow-trigger { --gap: 6px; margin-top: 4px; }
+.follow-trigger__buttons { --gap: 8px; }
 .account__aside h3.marker { margin-top: 16px; }

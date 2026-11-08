@@ -2,6 +2,8 @@ import {
   MAX_PR_DESCRIPTION,
   productName,
   REVIEW_WINDOW_MS,
+  takesTrigger,
+  TRIGGER_HARNESSES,
   type FollowUpRecord,
   type Interests,
   type PrFollowMode,
@@ -35,6 +37,7 @@ import {
   STATE_NAMES,
   stepFor,
   stoppedCheck,
+  triggerText,
   when,
 } from '../me/follow-words';
 import { answerMeForm } from '../me/page';
@@ -442,11 +445,79 @@ function OpenPrs({ follow, now }: { follow: FollowThroughShown; now: number }) {
   );
 }
 
+/**
+ * A wake's trigger: whether it is on, its host, and when it last fired,
+ * never its URL or key, with the form that saves one, and Turn off. The key
+ * goes from the harness to this form, never through the agent.
+ */
+function WakeTrigger({ wake }: { wake: WakeShown }) {
+  const id = useId();
+  if (!takesTrigger(wake.harness)) return null;
+  const harness = HARNESS_NAMES[wake.harness];
+  const trigger = wake.trigger;
+  const hidden = (action: string) => (
+    <>
+      <input type="hidden" name="action" value={action} />
+      <input type="hidden" name="wake" value={wake.id} />
+    </>
+  );
+  return (
+    <div className="stack follow-trigger">
+      <span className={trigger !== null && !trigger.on ? 'queue-item__warning' : 'small muted'}>{triggerText(trigger, wake.harness)}</span>
+      {trigger !== null && (
+        <div className="cluster follow-trigger__buttons">
+          {!trigger.on && trigger.off === 'failures' && trigger.hasKey && (
+            <form method="post" action={ME_PATH}>
+              {hidden('trigger_on')}
+              <Button type="submit" size="sm" aria-label={`Turn the ${harness} trigger on again`}>
+                Turn on again
+              </Button>
+            </form>
+          )}
+          <form method="post" action={ME_PATH}>
+            {hidden('remove_trigger')}
+            <Button type="submit" variant="danger" size="sm" aria-label={`Turn off the ${harness} trigger`}>
+              Turn off
+            </Button>
+          </form>
+        </div>
+      )}
+      <details className="account__edit">
+        <summary className="mono small">{trigger === null ? 'set up a trigger' : 'paste a new trigger'}</summary>
+        <form method="post" action={ME_PATH} className="account__form" autoComplete="off">
+          {hidden('save_trigger')}
+          <div className="account-field">
+            <label htmlFor={`${id}-url`}>the trigger&apos;s URL</label>
+            <input
+              id={`${id}-url`}
+              name="url"
+              type="url"
+              required
+              className="account-input account-input--mono"
+              placeholder={TRIGGER_HARNESSES[wake.harness].form}
+            />
+          </div>
+          <div className="account-field">
+            <label htmlFor={`${id}-key`}>its key</label>
+            <input id={`${id}-key`} name="key" type="password" required autoComplete="off" className="account-input account-input--mono" />
+          </div>
+          <Button type="submit" size="sm">
+            Save trigger
+          </Button>
+        </form>
+        <p className="small muted account__note">
+          {`With a trigger, a run starts soon after a follow-up comes, and the schedule stays. Make one for this wake in ${harness}, then paste its URL and key here. Keep the key out of your agent's session. It only starts a run in ${harness}. Good First Token calls it at most once in 15 minutes, and never shows the key again.`}
+        </p>
+      </details>
+    </div>
+  );
+}
+
 function WakeItem({ wake }: { wake: WakeShown }) {
   const harness = HARNESS_NAMES[wake.harness];
   return (
-    <li className="account__agent follow-wake">
-      <span className="stack follow-wake__about">
+    <li className="account__agent follow-wake" id={`wake-${wake.id}`}>
+      <div className="stack follow-wake__about">
         <span>
           <span className="strong">{harness}</span> <Chip variant="tint">{wake.level}</Chip>
         </span>
@@ -459,8 +530,8 @@ function WakeItem({ wake }: { wake: WakeShown }) {
             {`${wake.lastRunAt === null ? `No run since you saved it on ${when(wake.createdAt)}.` : `No run since ${when(wake.lastRunAt)}.`} ${stoppedCheck(wake.harness)}`}
           </span>
         )}
-        {/* Build step 9 of docs/specs/follow-through.md adds the form for this wake's trigger here. */}
-      </span>
+        {takesTrigger(wake.harness) && wake.level !== 'session' && <WakeTrigger wake={wake} />}
+      </div>
       <form method="post" action={ME_PATH}>
         <input type="hidden" name="action" value="remove_wake" />
         <input type="hidden" name="wake" value={wake.id} />

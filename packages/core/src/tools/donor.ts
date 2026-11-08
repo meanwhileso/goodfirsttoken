@@ -32,6 +32,7 @@ import {
   reviewReasonSchema,
   type ReviewReason,
 } from '../submissions';
+import { triggerOffReasonSchema, type TriggerOffReason } from '../triggers';
 import { defineTool } from './spec';
 import {
   checkScheduleSchema,
@@ -181,6 +182,25 @@ function unchosenText(choice: FollowModeChoice): string | false {
   );
 }
 
+/**
+ * A wake's trigger, which Good First Token calls to start a run when a
+ * follow-up comes. Never its key, which the donor pastes on /me and no
+ * tool takes or gives.
+ */
+const wakeTriggerSchema = z.object({
+  /** none: the donor saved no trigger. on: Good First Token calls it. off: Good First Token turned it off, for `off`. */
+  state: z.enum(['none', 'on', 'off']),
+  /** The host of its URL, or null with none saved. */
+  host: z.string().nullable(),
+  /** When a call last started a run, or null. */
+  lastFiredAt: isoTime.nullable(),
+  /** Why it turned off: key, the harness refused the key; gone, the trigger is gone; failures, three calls in a row failed. Null while on or with none. */
+  off: triggerOffReasonSchema.nullable(),
+  /** The page where the donor pastes the trigger's URL and key, to save or fix it. */
+  setUpAt: webUrl,
+});
+type WakeTrigger = z.infer<typeof wakeTriggerSchema>;
+
 /** A wake: what starts the donor's follow-through runs in one harness. */
 const wakeSchema = z.object({
   wakeId: id,
@@ -190,13 +210,40 @@ const wakeSchema = z.object({
   createdAt: isoTime,
   /** When a run last called my_work with the wake's ID, or null before the first. */
   lastRunAt: isoTime.nullable(),
+  /** Its trigger, for a wake in a harness that takes one and runs on its own, or null. */
+  trigger: wakeTriggerSchema.nullable(),
 });
 type Wake = z.infer<typeof wakeSchema>;
+
+/** What the donor does to fix a trigger that turned off, by why. */
+const TRIGGER_FIXES: Record<TriggerOffReason, string> = {
+  key: 'the harness refused its key. Ask the donor to check the trigger in the harness, make a new key for it, and paste its URL and key at',
+  gone: 'the harness said the trigger is gone. Ask the donor to make the trigger again in the harness, and paste its URL and key at',
+  failures: 'three calls in a row failed. Ask the donor to check that the trigger is on in the harness, then turn it on again, or paste a new one, at',
+};
+
+function renderTrigger(trigger: WakeTrigger): string {
+  if (trigger.state === 'none') return `no trigger, which the donor can set up at ${trigger.setUpAt}`;
+  if (trigger.state === 'off') return `trigger off: ${TRIGGER_FIXES[trigger.off ?? 'failures']} ${trigger.setUpAt}`;
+  return `trigger on at ${trigger.host ?? 'its host'}, ${trigger.lastFiredAt === null ? 'not fired yet' : `last fired ${when(trigger.lastFiredAt)}`}`;
+}
 
 function renderWake(wake: Wake): string {
   return `wake ${wake.wakeId}: ${wake.harness}, ${wake.level}, every ${plural(wake.intervalMinutes, 'minute')}, ${
     wake.lastRunAt === null ? 'no run yet' : `last ran ${when(wake.lastRunAt)}`
-  }`;
+  }${wake.trigger === null ? '' : `, ${renderTrigger(wake.trigger)}`}`;
+}
+
+/** What start_session and my_work say of triggers Good First Token turned off, or false with none. */
+function renderTriggersOff(wakes: readonly Wake[]): string | false {
+  const off = wakes.filter((wake) => wake.trigger?.state === 'off');
+  return (
+    off.length > 0 &&
+    lines(
+      `Triggers that turned off (${String(off.length)}). Their wakes still run on schedule. Tell the donor, with the step to fix each. Never ask for the key in the session:`,
+      indent(numbered(off, renderWake), 2),
+    )
+  );
 }
 
 /** What start_session and my_work say of wakes that stopped. */
@@ -430,6 +477,7 @@ export const startSession = defineTool({
       out.openPrs.length > 0 && renderOpenPrs(out.openPrs),
       out.openPrs.length > 0 && unchosenText(out.followMode),
       out.stoppedWakes.length > 0 && renderStoppedWakes(out.stoppedWakes),
+      renderTriggersOff(out.wakes),
       out.wakes.length > 0 && renderWakes(out.wakes),
       renderFollowThrough(out.followThrough),
       (out.followUps.length > 0 || out.unfinishedClaims.length > 0) &&
@@ -1048,6 +1096,7 @@ export const myWork = defineTool({
                   .join('; ')}`),
         ),
       out.stoppedWakes.length > 0 && renderStoppedWakes(out.stoppedWakes),
+      renderTriggersOff(out.wakes),
       out.wakes.length > 0 && renderWakes(out.wakes),
       renderStalled(out.followThrough),
       nothing
@@ -1366,7 +1415,7 @@ const prModeSchema = z.object({
 
 export const setFollowThrough = defineTool({
   audience: 'donor',
-  description: `Save how the donor's agent follows their PRs, and the wakes that start its runs. mode go_ahead or ask_first sets it for all the donor's PRs, in place of each PR's own, or with claimId for that claim's PR alone. off with claimId stops following that PR. goOn with claimId lets that PR go on past its round limits, once the donor says to. A donor who never chose follows go_ahead. wake saves a wake: its harness, the level a run there has, and how often it runs, and the answer gives the wake's ID for the wake's prompt. removeWake removes a wake by its ID. Call it only with the donor in the session, once they chose. A run a wake started never calls it. A donor keeps at most ${String(MAX_WAKES)} wakes.`,
+  description: `Save how the donor's agent follows their PRs, and the wakes that start its runs. mode go_ahead or ask_first sets it for all the donor's PRs, in place of each PR's own, or with claimId for that claim's PR alone. off with claimId stops following that PR. goOn with claimId lets that PR go on past its round limits, once the donor says to. A donor who never chose follows go_ahead. wake saves a wake: its harness, the level a run there has, and how often it runs, and the answer gives the wake's ID for the wake's prompt. removeWake removes a wake by its ID, and its trigger with it. A wake in claude-code-cloud, grok-bot, or cursor-automations can have a trigger, which Good First Token calls to start a run when a follow-up comes: the donor saves its URL and key on the page at the wake's trigger.setUpAt, never through the agent, and no tool takes or gives the key. Call it only with the donor in the session, once they chose. A run a wake started never calls it. A donor keeps at most ${String(MAX_WAKES)} wakes.`,
   refusals: ['not_found', 'not_claim_owner', 'pr_closed', 'rate_limited'],
   input: z
     .object({
@@ -1425,6 +1474,8 @@ export const setFollowThrough = defineTool({
       out.removedWake !== null && `Removed wake ${out.removedWake}. Turn its schedule off in the harness too, since my_work refuses its runs.`,
       out.savedWake !== null &&
         `Saved ${renderWake(out.savedWake)}. Put the ID ${out.savedWake.wakeId} in the wake's prompt, for each run to pass to my_work as wakeId.`,
+      out.savedWake?.trigger != null &&
+        `This harness takes a trigger. Once the wake is made in the harness, ask the donor to make a trigger for it there and paste its URL and key at ${out.savedWake.trigger.setUpAt}. Never ask for the key in the session.`,
       out.wakes.length > 0 ? renderWakes(out.wakes) : 'The donor has no wakes.',
     );
   },

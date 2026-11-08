@@ -986,9 +986,19 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   only replied, so the latest follow-ups and their outcomes stand in for
   it. The PRs keep `followThroughOf`'s order within each place: stalled,
   then those with a question for the donor, then the rest.
-- **Room for the trigger.** Each wake on the page has a marked place for
-  the form build step 9 of docs/specs/follow-through.md adds, which saves
-  the wake's trigger.
+- **The trigger forms.** A wake in Claude Code's cloud scheduled tasks,
+  Grok Bot, or Cursor Automations, at `full` or `notify`, has a form to
+  paste its trigger's URL and key, posted as `save_trigger`, and
+  `remove_trigger` and `trigger_on` beside it. They aren't
+  `set_follow_through`'s, since no tool takes the key: `triggerForm` in
+  `src/me/page.ts` reads the wake with `getWake`, checks the URL with
+  core's `checkTrigger` and the key with `triggerKeyOf`, seals the key
+  with `sealTriggerKey`, and saves with `saveTrigger`, whose `UPDATE` also
+  checks the wake is the person's, in that harness, at that level. The
+  page and `/me.md` show only that a trigger is on, its host, and when it
+  last fired, by `triggerText` in `src/me/follow-words.ts`, and no notice
+  says the URL or the key back. Each wake's item has the ID
+  `wake-<id>`, which the tools' `trigger.setUpAt` links to.
 - **The site's token.** Both run as a `Caller` from `siteCaller` in
   `src/auth/session.ts`, whose token is the one from the person's sign-in
   on the site, decrypted only when a call asks GitHub something. The MCP
@@ -1607,10 +1617,10 @@ it works, and tells the donor.
 |---|---|---|
 | Claude Code desktop app | How a scheduled task's run meets a permission prompt, and the push notification tool from a scheduled task | `notify` when a first run can't get its permissions. The run's session in the app carries the status |
 | Claude Code in a terminal | Nothing the skill relies on. `/loop` is Claude Code's own | `session` |
-| Claude Code cloud scheduled tasks | Good First Token's server as a claude.ai connector in a run | `notify`, its highest |
+| Claude Code cloud scheduled tasks | Good First Token's server as a claude.ai connector in a run, and a call of its API trigger | `notify`, its highest. With no trigger, its hourly schedule |
 | Codex in the ChatGPT desktop app | Good First Token's server in a scheduled task, and how a run there meets a permission prompt | `notify` |
-| Grok Bot | The GitHub CLI signed in as the donor on the Bot's computer, how a routine meets an approval card, and which channel its notice comes on | `notify` |
-| Cursor Automations | A donor token in Cursor's secrets as `GH_TOKEN`, and how a run meets a permission prompt | `notify` |
+| Grok Bot | The GitHub CLI signed in as the donor on the Bot's computer, how a routine meets an approval card, which channel its notice comes on, and its webhook's URL | `notify`. With no trigger, its schedule |
+| Cursor Automations | A donor token in Cursor's secrets as `GH_TOKEN`, how a run meets a permission prompt, and its webhook's URL | `notify`. With no trigger, its schedule |
 | ChatGPT on the web and phone | Good First Token's server in a scheduled task | `session` |
 | Grok's Automations | Good First Token's server in an automation | `session` |
 
@@ -1645,9 +1655,34 @@ it works, and tells the donor.
   one whose GitHub CLI isn't the donor only reports.
 - **Run IDs.** A run makes its ID from its wake's ID and the time, so two
   wakes that start in the same minute never share a lease.
-- **The trigger.** Step 5 of Setting the wake up, a trigger Good First
-  Token calls when a follow-up comes, waits for build step 9. The skill
-  skips it.
+- **The trigger.** Step 5 of Setting the wake up. The patterns are
+  `TRIGGER_HARNESSES` in `packages/core/src/triggers.ts`, HTTPS only, one
+  host and one path each, and none was tried in the product.
+  - Claude Code's cloud scheduled tasks:
+    `https://api.anthropic.com/v1/claude_code/routines/trig_<id>/fire`,
+    from the API reference for firing a routine. The key is the routine's
+    token, sent as `Authorization: Bearer`, with
+    `anthropic-version: 2023-06-01`, which the endpoint takes like any
+    later version. The body is `{"text": "Wake ID: <id>"}`, free text the
+    run gets beside its saved prompt. Its docs give `401` for a key that
+    doesn't match, `403` for an account with no access, `404` for a
+    routine that is gone, `400` for one paused, which counts as a failed
+    call, and `429` past 30 fires an hour for a routine or 100 for an
+    account. A `401` and a `403` both turn the trigger off as `key`, and
+    `/me` says to check the trigger and make a new key, which covers
+    either.
+  - Grok Bot and Cursor Automations:
+    `https://api2.cursor.sh/automations/webhook/<id>`. Their docs say to
+    copy the URL the app shows, with a key sent as
+    `Authorization: Bearer`, and give no pattern. This one comes from
+    people's reports of using them, and both products appear to share it.
+    The body is `{"wakeId": "<id>"}`. Grok Bot's docs say a run gets the
+    JSON body with its instruction, and Cursor's say nothing. Neither
+    lists the answers for a wrong key or a trigger that is gone, so the
+    call takes `401`, `403`, `404`, and `410` as those, as for Claude
+    Code. Grok Bot's routines run at most 200 times an hour each.
+  - When a pattern is wrong, `/me` refuses the URL the donor pastes, and
+    the wake runs on its schedule alone. The skill tells the donor so.
 
 ## Bindings
 
@@ -1741,8 +1776,9 @@ in `people`.
 | `repo_pushers` | Login whose review on a PR in a repo showed push access when the PR job read it, and when it last did. A comment in the conversation counts as a maintainer's by it, for 90 days | `repo`, `login` |
 | `follow_modes` | The follow-through mode a donor chose for all their PRs, `go_ahead` or `ask_first`, and when. A donor with no row follows `go_ahead` | `github_id` |
 | `pr_follow_modes` | The mode a donor chose for one claim's PR, `go_ahead`, `ask_first`, or `off`, and when | `claim_id` |
-| `wakes` | What starts a donor's follow-through runs: its harness, its level, how often it runs, when it was saved, and when a run last called `my_work` with its ID | `id` |
+| `wakes` | What starts a donor's follow-through runs: its harness, its level, how often it runs, when it was saved, and when a run last called `my_work` with its ID. Its trigger, when it has one: the URL, the key sealed with `AUTH_SECRET`, whether it is on and why it turned off, when it was saved, last called, and last fired, its failed calls in a row, until when a `429` holds it, and its calls on its last call's UTC day | `id` |
 | `wake_follow_ups` | The follow-ups `my_work` gave each wake as `newForWake`, and when | `wake_id`, `claim_id`, `comment_id` |
+| `trigger_follow_ups` | The follow-ups each wake's trigger was called for, and when, so each brings one call | `wake_id`, `claim_id`, `comment_id` |
 | `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, `open_pr`'s clearance of pushed work, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
@@ -1900,6 +1936,18 @@ that break the rules, so it returns the problems for the caller to show.
   activity get no column: `listFollowFacts` reads them from
   `submissions.submitted_at`, which each landed submit sets, and from the
   newest `follow_ups.written_at` with an author.
+- **Migration `20261108223440_wake_triggers.sql`** adds to `wakes`
+  `trigger_url`, `trigger_key`, `trigger_on`, `trigger_off`,
+  `trigger_saved_at`, `trigger_called_at`, `trigger_fired_at`,
+  `trigger_failures`, `trigger_held_until`, `trigger_day`, and
+  `trigger_calls_on_day`, and makes `trigger_follow_ups`, owned by
+  `src/db/triggers.ts`. A wake from before has no trigger, with
+  `trigger_on` 0. `trigger_off` is `key`, `gone`, or `failures`.
+  `trigger_day` is the UTC day as whole days since the epoch, as
+  `rounds_day` is. `ALTER TABLE` can't add a `CHECK` across columns, so
+  `saveTrigger`, `takeTriggerCall`, and `recordTriggerCall` keep a URL and
+  key on every trigger that is on. A wrong key or a trigger that is gone
+  drops the key, and three failures in a row keep it, for Turn on again.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -1972,7 +2020,10 @@ the donor's own tools show a follow-up's state, its `question`, which
 their agent wrote for them, and its `reply_url`, a link to a reply on
 GitHub. Only the donor's own tools show their follow-through modes and
 their wakes, with when each last ran, and their PRs' leases, with the run
-IDs their agents made up, and rounds.
+IDs their agents made up, and rounds. A wake's trigger shows only to its
+donor, on `/me` and in their tools, as whether it is on, its host, and
+when it last fired. No page or tool shows its URL past the host, or its
+key, which only the PR job's call opens.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -3136,6 +3187,8 @@ and count the hour's reads in one place. The rules are in
 | `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, what the donor's tools showed, and where each follow-up stands, as a submit, `sort_follow_ups`, or a read that superseded it left it |
 | `src/db/follow-prs.ts` | Follow-through's columns on `prs`: `takeLease`, `giveBackLease`, and `renewLease` for a run's lease, `countRound` for its rounds, and `listFollowFacts`, what `followThroughOf` reads of each open PR |
 | `src/db/follow-through.ts` | The `follow_modes`, `pr_follow_modes`, `wakes`, and `wake_follow_ups` tables: the donor's mode for all their PRs and for one, their wakes and when each last ran, what `my_work` gave each wake, and `listStoppedWakes`, the wakes with no run for 24 hours past their interval while a PR of the donor's is open, which `start_session` and `my_work` list and `/me` can |
+| `src/db/triggers.ts` | Each wake's trigger, in `wakes`, and `trigger_follow_ups`: `saveTrigger`, `removeTrigger`, and `turnTriggerOn` for `/me`, and for the PR job, `listTriggersDue`, the wakes to call and the follow-ups each is for, `takeTriggerCall`, which takes a call in one statement, and `recordTriggerCall`, its outcome |
+| `src/sync/triggers.ts` | The calls to the donors' triggers after each pass of the PR job, with `sealTriggerKey` and `openTriggerKey`, which seal a key with `AUTH_SECRET` |
 | `src/db/pushers.ts` | The `repo_pushers` table: who showed push access to each repo in a review, for the PR job's reads of conversation comments |
 | `src/sync/scheduled.ts` | The crons, and the job each cron runs |
 | `src/sync/allowances.ts` | What each job that reads GitHub with the service token may spend, in `ALLOWANCES`, and the token itself |
@@ -3403,6 +3456,29 @@ and count the hour's reads in one place. The rules are in
   after both, so it cuts those first, which takes thousands of PRs within
   the job's 100 calls. At 50 closes a day, the 700 PRs of the 14 days take
   14 queries, about 14 points, of the job's 100 calls.
+- **Calling triggers** is `callTriggersAfterPass` in
+  `src/sync/triggers.ts`, which runs on the PR job's cron after the job,
+  and before the job that records cleared PRs. It never throws, so a slow
+  or broken trigger can't stop the next job, and its log line gives counts
+  alone. `listTriggersDue` finds every wake to call in one D1 query, by
+  the rules under PRs in docs/how-it-works.md, those called longest ago
+  first, up to 51, so the log can say more wait. Each of the first 50 is
+  taken with `takeTriggerCall`, one `UPDATE ... RETURNING` that records
+  the call and counts it on the UTC day only while the trigger may be
+  called, so two passes at once never both call one. The call goes 10 at
+  a time, with `redirect: 'manual'` and a 5-second timeout, and
+  `recordTriggerCall` records its outcome on the trigger the call was
+  made for, by `trigger_saved_at`, so a trigger saved again meanwhile
+  keeps its own. A call D1 fails on is logged and counted as not
+  recorded, and the other calls go on. Its follow-ups go with a later
+  call. Saving a trigger again, or turning it on again, keeps a `429`'s
+  hold. The cost: no call to GitHub. One D1 query a pass, and
+  for each call, one `UPDATE`, one fetch to the donor's harness, and one
+  batch of two statements, so at most 50 fetches and about 150 D1 calls
+  a pass, which take at most about 25 seconds when every call waits its 5
+  seconds. A pass with no trigger due makes the one query. The run each
+  call starts spends the donor's tokens in their own harness, as any
+  scheduled run does.
 - **Recording cleared PRs** is `recordClearedPrs` in `src/sync/cleared.ts`,
   which runs on the PR job's cron right after it, with its own
   `ServiceGitHub` and `ALLOWANCES.cleared`, 100 calls. Each cleared claim

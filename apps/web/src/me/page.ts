@@ -1,4 +1,5 @@
 import {
+  checkTrigger,
   describeProblems,
   MAX_ROUNDS,
   ROUNDS_PER_DAY,
@@ -9,6 +10,8 @@ import {
   type Refusal,
   type ToolInput,
   type ToolOutput,
+  takesTrigger,
+  triggerKeyOf,
 } from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { failureReason } from '../auth/auth';
@@ -17,11 +20,12 @@ import type { NoticeParams } from '../auth/notice-params';
 import { PermissionRefused, type Caller } from '../auth/permissions';
 import { readSignedIn, siteCaller, type SignedIn } from '../auth/session';
 import { siteOrigin } from '../auth/settings';
-import { getPerson, listWakes, setInterests } from '../db';
+import { getPerson, getWake, listWakes, removeTrigger, saveTrigger, setInterests, turnTriggerOn } from '../db';
 import { GitHubError } from '../github';
 import { endLapsedConnections, listConnections, type Connection } from '../mcp/connections';
 import { setFollowThroughAs } from '../mcp/donor';
 import { openPrAs, readyToOpen, type Opened, type ReviewItem } from '../mcp/submit';
+import { sealTriggerKey } from '../sync/triggers';
 import { readFollowThrough, type FollowThroughShown } from './follow';
 import { HARNESS_NAMES, MODE_NAMES } from './follow-words';
 import { ME_PATH } from './paths';
@@ -35,7 +39,9 @@ import { followRefusalText, openPrRefusalText } from './refusals';
 // src/mcp/submit.ts, run with the GitHub token from the person's sign-in on
 // the site. The interests are set_interests' own schema and save. The
 // follow-through forms are set_follow_through's own schema and rules, from
-// src/mcp/donor.ts.
+// src/mcp/donor.ts. The trigger forms save, remove, and turn on a wake's
+// trigger, which no tool does, since its key goes from the harness to this
+// page and never through the agent. No page shows the key again.
 
 /** The donor's review queue, or why the page can't show it. */
 export type Queue =
@@ -253,7 +259,7 @@ function followText(input: ToolInput<'set_follow_through'>, set: ToolOutput<'set
  * going on past a round limit, or removing a wake. Another donor's claim
  * or wake changes nothing.
  */
-async function followForm(caller: Caller, form: FormData, now: number): Promise<string> {
+async function followForm(caller: Caller, form: FormData, now: number, origin: string): Promise<string> {
   const action = form.get('action');
   const claimId = field(form, 'claim');
   const mode = field(form, 'mode');
@@ -273,7 +279,7 @@ async function followForm(caller: Caller, form: FormData, now: number): Promise<
   const harness = wakes.find((wake) => wake.id === removeWake)?.harness;
   let set;
   try {
-    set = await setFollowThroughAs(caller, input.value, now);
+    set = await setFollowThroughAs(caller, input.value, now, origin);
   } catch (error) {
     if (error instanceof PermissionRefused) return `Nothing changed. ${followRefusalText(error) ?? error.message}`;
     throw error;
@@ -284,11 +290,51 @@ async function followForm(caller: Caller, form: FormData, now: number): Promise<
 
 const FOLLOW_ACTIONS = new Set(['follow_mode', 'pr_follow_mode', 'go_on', 'remove_wake']);
 
-async function runForm(caller: Caller, form: FormData, now: number): Promise<string> {
+const NO_WAKE = 'Nothing changed. Good First Token has no record of that wake now.';
+
+/**
+ * Saves, removes, or turns on again the trigger of one of the person's
+ * wakes. A trigger is saved only on a wake in a harness that takes one, at
+ * a level that runs on its own, with a URL that fits that harness's
+ * pattern (packages/core's checkTrigger) and a key, which is sealed before
+ * it is stored. No notice says the key or the URL back, only the URL's
+ * host. Another person's wake changes nothing.
+ */
+async function triggerForm(caller: Caller, form: FormData, now: number): Promise<string> {
+  const action = form.get('action');
+  const wakeId = field(form, 'wake') ?? '';
+  const wake = /^[A-Za-z0-9_-]{1,64}$/.test(wakeId) ? await getWake(env.DB, caller.githubId, wakeId) : null;
+  if (wake === null) return NO_WAKE;
+  const harness = HARNESS_NAMES[wake.harness];
+  if (action === 'remove_trigger') {
+    if (wake.trigger === null) return `Nothing changed. The ${harness} wake has no trigger.`;
+    await removeTrigger(env.DB, caller.githubId, wake.id);
+    return `Removed the trigger from the ${harness} wake. Revoke its key in the harness too.`;
+  }
+  if (action === 'trigger_on') {
+    const on = await turnTriggerOn(env.DB, caller.githubId, wake.id);
+    return on === null
+      ? `Nothing changed. Paste the trigger's URL and key again for the ${harness} wake.`
+      : `The trigger for the ${harness} wake is on again.`;
+  }
+  if (!takesTrigger(wake.harness) || wake.level === 'session') return `Nothing saved. A ${harness} wake can't have a trigger.`;
+  const url = checkTrigger(wake.harness, field(form, 'url') ?? '');
+  if (!url.ok) return `Nothing saved. ${url.problem}`;
+  const key = triggerKeyOf(field(form, 'key') ?? '');
+  if (key === null) return "Nothing saved. Paste the trigger's key as the harness shows it.";
+  const saved = await saveTrigger(env.DB, caller.githubId, wake.id, { harness: wake.harness, url: url.url, sealedKey: await sealTriggerKey(key) }, now);
+  if (saved === null) return NO_WAKE;
+  return `Saved the trigger for the ${harness} wake. Good First Token calls ${url.host} when a follow-up comes, at most once in 15 minutes.`;
+}
+
+const TRIGGER_ACTIONS = new Set(['save_trigger', 'remove_trigger', 'trigger_on']);
+
+async function runForm(caller: Caller, form: FormData, now: number, origin: string): Promise<string> {
   const action = form.get('action');
   if (action === 'open_pr') return openPrForm(caller, form, now);
   if (action === 'interests') return interestsForm(caller, form);
-  if (typeof action === 'string' && FOLLOW_ACTIONS.has(action)) return followForm(caller, form, now);
+  if (typeof action === 'string' && FOLLOW_ACTIONS.has(action)) return followForm(caller, form, now, origin);
+  if (typeof action === 'string' && TRIGGER_ACTIONS.has(action)) return triggerForm(caller, form, now);
   return 'Nothing changed. That form does nothing here.';
 }
 
@@ -304,6 +350,6 @@ export async function answerMeForm(request: Request): Promise<Response> {
   const { signedIn, setCookies } = await readSignedIn(request);
   if (!signedIn) return seeOther('/sign-in', setCookies);
   const form = await request.formData().catch(() => new FormData());
-  const notice = await runForm(siteCaller(signedIn, origin), form, Date.now());
+  const notice = await runForm(siteCaller(signedIn, origin), form, Date.now(), origin);
   return backWithNotice(ME_PATH, noticePurpose(signedIn), notice, setCookies);
 }

@@ -4,8 +4,10 @@ import {
   type FollowUpRecord,
   type PrFollowMode,
   type PrFollowState,
+  type TriggerOffReason,
   type WakeHarness,
   type WakeLevel,
+  type WakeRecord,
 } from '@goodfirsttoken/core';
 import type { FollowedPr } from './follow';
 
@@ -136,3 +138,25 @@ export function stoppedCheck(harness: WakeHarness): string {
 
 /** The harnesses whose wakes run only while an app on the donor's machine is open. */
 const LOCAL_HARNESSES: ReadonlySet<WakeHarness> = new Set(['claude-code-desktop', 'codex-desktop']);
+
+/** Where a wake's trigger stands, in the page's words, for a wake that can have one. */
+export function triggerText(trigger: WakeRecord['trigger'], harness: WakeHarness): string {
+  if (trigger === null) return 'No trigger.';
+  if (trigger.on) {
+    return `Trigger on, at ${trigger.host}. ${trigger.firedAt === null ? 'Not fired yet.' : `Last fired ${when(trigger.firedAt)}.`}`;
+  }
+  return `Trigger off. ${triggerFix(trigger.off ?? 'failures', harness)}`;
+}
+
+/** Why Good First Token turned a trigger off, with the step to fix it. */
+export function triggerFix(off: TriggerOffReason, harness: WakeHarness): string {
+  const name = HARNESS_NAMES[harness];
+  switch (off) {
+    case 'key':
+      return `${name} refused its key. Check the trigger in ${name}, make a new key for it, and paste its URL and key here.`;
+    case 'gone':
+      return `${name} said the trigger is gone. Make it again in ${name}, and paste its URL and key here.`;
+    case 'failures':
+      return `Three calls in a row failed. Check that the trigger is on in ${name}, then turn it on again, or paste a new one here.`;
+  }
+}

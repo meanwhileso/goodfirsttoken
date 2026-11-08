@@ -355,8 +355,19 @@ harness. A run a wake started never sets a wake up or changes one.
 
    The work folder's path stays on the donor's machine. Never send it to
    Good First Token, a feed, or GitHub.
-6. **A trigger.** Waking a run when a follow-up comes isn't built yet.
-   Skip this step.
+6. **A trigger**, in Claude Code cloud scheduled tasks, Grok Bot, and
+   Cursor Automations. Good First Token calls it when a follow-up comes,
+   so a run starts soon after a review instead of at the next scheduled
+   time. The schedule stays as it is. Ask the donor to make a trigger in
+   the harness for the wake you made, as Each harness says, then give
+   them the link in the wake's `trigger.setUpAt`, from `set_follow_through`
+   or `my_work`, to paste its URL and key there. The key goes from the
+   harness to that page and never through you: never ask for it, and if
+   the donor pastes it in the session, tell them to make a new one, since
+   this one is in the transcript. A call carries only the wake's ID, which
+   the wake's prompt already has, so a run takes nothing else from it.
+   When `wakes` shows `trigger.state` `off`, tell the donor what its `off`
+   says and give them the link to fix it.
 7. **Try it.** Where Each harness marks a step "Not tried", start one run
    now, the way the harness lets the donor, like its Run now button, and
    read what the run said. When the run shows the step fails, remove the
@@ -427,6 +438,10 @@ donor only reports.
   {{MCP_URL}}.
 - Its GitHub proxy blocks GraphQL and serves only the repos attached to
   the task, so a run there only reports.
+- Trigger: its API trigger. In the task on claude.ai, under Select a
+  trigger, choose Add another trigger, then API, then Generate token. The
+  donor pastes the URL and the token on Good First Token's page. The
+  token shows once.
 - Status: the task's list of runs.
 
 **Codex in the ChatGPT desktop app.** Level `full` once tried, harness
@@ -455,6 +470,10 @@ on the Bot's computer, else `notify`. Harness `grok-bot`.
   only after the donor reads A donor token in a cloud harness. Not tried
   (`notify`).
 - Status: its notice when a run is done. Not tried: which channel.
+- Trigger: the routine's webhook, in its Webhook section on the desktop
+  app, which shows the URL to POST to and the key. Not tried: the URL's
+  form. When the page refuses the URL, the wake runs on its schedule
+  alone. Tell the donor.
 
 **Cursor Automations.** Level `full` with a donor token, else `notify`.
 Harness `cursor-automations`.
@@ -469,6 +488,10 @@ Harness `cursor-automations`.
   token in a cloud harness. Not tried (`notify`).
 - Status: a Slack message, when the donor connected Slack. Never a comment
   on the PR.
+- Trigger: a webhook trigger on the same automation, beside its cron. Once
+  the automation is saved, Cursor makes its URL and key. Not tried: the
+  URL's form. When the page refuses the URL, the wake runs on its
+  schedule alone. Tell the donor.
 
 **Codex CLI, Cursor's editor and CLI, OpenCode, and Grok Build.** Level
 `session`. None has a wake built in. Follow-through happens in the

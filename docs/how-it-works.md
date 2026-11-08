@@ -1236,6 +1236,48 @@ when someone undoes a stale bot's close. A merged PR can't.
   was recorded with. A read of an issue gives a PR under its repo's name
   now, so after the repo is renamed, that read doesn't find the claim's PR.
 
+**Triggers.** After each run of the PR job, Good First Token calls the
+trigger of each wake that has one and has follow-ups it wasn't called
+for, so the donor's harness starts a run soon after a review instead of at
+the next scheduled time. It is Waking a run when a follow-up comes in
+[Follow each PR to its end](specs/follow-through.md). The trigger adds
+runs, and the wake's schedule stays as it was.
+
+- A wake can have a trigger in three harnesses: Claude Code's cloud
+  scheduled tasks, by its API trigger, and Grok Bot and Cursor
+  Automations, by a webhook. Only at `full` or `notify`. The donor saves
+  it on `/me`, under [Your queue on /me](#your-queue-on-me).
+- A `full` wake is called for an `open` follow-up on a `go_ahead` PR no
+  run holds the lease of. A `notify` wake, and any wake for an
+  `ask_first` PR, is called for an open follow-up, or one that waits for
+  the donor, that `my_work` didn't give the wake yet.
+- No call for a PR the donor stopped following, one with no `open`
+  follow-up, so all of its follow-ups wait for the donor or a reviewer, or
+  one at a round limit. A bot's follow-up on a PR past its 3 bot rounds
+  brings no call. The follow-ups only count on PRs a tool lists: open, in
+  a project asking for help, of a donor who isn't blocked.
+- Each follow-up brings one call to each wake. One left out for a lease,
+  or for the limits below, goes with a later run's call once they let it.
+- At most one call per wake in 15 minutes, and 12 in a UTC day. Each call
+  waits 5 seconds at most. A run makes at most 50 calls, those whose
+  wakes were called longest ago first, and the rest go with the next run.
+- The call is a `POST` with the key as a bearer token, and carries the
+  wake's ID and nothing else from Good First Token: no repo text, no PR
+  link, and no GitHub login. Claude Code's takes `{"text": "Wake ID: <id>"}`,
+  and Grok Bot's and Cursor's `{"wakeId": "<id>"}`. It follows no
+  redirect.
+- A `2xx` answer started a run. A timeout, no answer, a redirect, a `5xx`,
+  or any other answer counts as one failed call, and the next run tries
+  again. A `429` counts as one too, and holds the wake's calls for an
+  hour. A `401` or `403`, which refuse the key, or a `404` or `410`,
+  which say the trigger is gone, turn the trigger off and drop its key.
+  So do three failed calls in a row, which keep the key. A key that can't
+  be opened, as after `AUTH_SECRET` changed, turns it off as a refused key.
+  `/me` and the donor's next `start_session` and `my_work` say so, with
+  the step to fix it.
+- A slow or broken trigger can't stop the PR job or the job after it, and
+  the log line counts calls and outcomes and names no wake, URL, or donor.
+
 ## Projects
 
 - A project's status is `pending` while it waits for an admin, `approved`
@@ -2582,6 +2624,16 @@ and their agent saves wakes, which start its runs in a harness, under
 - `start_session` and `my_work` list every wake of the donor's under
   `wakes`, with its harness, so a session can tell whether its harness
   has one. `my_work` shows the run of the wake that called it.
+- Each wake in Claude Code's cloud scheduled tasks, Grok Bot, or Cursor
+  Automations, at `full` or `notify`, has a `trigger`: `none`, `on`, or
+  `off`, its URL's host, when a call last started a run, why it turned
+  off, `key`, `gone`, or `failures`, and `setUpAt`, the wake's place on
+  `/me`, where the donor pastes the trigger's URL and key. Other wakes
+  give `null`. No tool takes or gives the key, or the URL past its host.
+  `start_session` and `my_work` list each trigger that turned off, with
+  the step to fix it, and `set_follow_through` says to set one up when it
+  saves a wake that can have one. Removing a wake removes its trigger.
+  Under [PRs](#prs), Triggers says when Good First Token calls one.
 - A wake that stopped is one with no run for 24 hours past its interval,
   or none that long since it was saved, while one of the donor's PRs is
   open. The interval keeps a daily wake that runs a little late from
@@ -3385,6 +3437,18 @@ a wake.
   `start_session` uses, says when it last ran, and to check its schedule:
   for a desktop app, that the app is open too. Remove removes it, and says to turn
   its schedule off in the harness too, since nothing on the site can.
+- A wake in Claude Code's cloud scheduled tasks, Grok Bot, or Cursor
+  Automations, at `full` or `notify`, has a form to paste its trigger's
+  URL and key, under Triggers in [PRs](#prs). It saves only an HTTPS URL
+  whose host and path fit that harness's pattern, and a key a header can
+  carry. A key pasted with `Authorization:` or `Bearer` before it is taken
+  without them. The key is stored sealed with `AUTH_SECRET`, and no page
+  or tool shows it again. The wake shows only that a trigger is on, its
+  host, and when it last fired. Turn off removes the trigger and its key,
+  and says to revoke the key in the harness too. A trigger Good First
+  Token turned off says why, with the step to fix it, and one that three
+  failed calls turned off has Turn on again, with the key it kept.
+  Removing the wake removes its trigger.
 - It links the person's feed, `/@<login>/live.ndjson`, under
   [Text streams](#text-streams), which carries every event of their claims.
 - The forms are `set_follow_through`'s, under The donor's tools: its input
@@ -5686,6 +5750,10 @@ Each limit the schemas enforce, other than those under project settings:
 | An open follow-up no run sorted, before its PR is stalled | 24 hours | [Follow each PR to its end](specs/follow-through.md) |
 | Wakes one donor keeps | 10 | Us |
 | How often a wake runs | Every 1 to 1,440 minutes | Us |
+| Calls of one wake's trigger | One in 15 minutes and 12 a UTC day, each waiting 5 seconds at most, and none for an hour after a `429` | [Follow each PR to its end](specs/follow-through.md) |
+| Trigger calls in one run of the PR job | 50 | [Follow each PR to its end](specs/follow-through.md) |
+| Failed trigger calls in a row that turn it off | 3 | [Follow each PR to its end](specs/follow-through.md) |
+| A trigger's URL and key | 512 and 1,024 characters | Us |
 | A wake with no run that `start_session` and `my_work` say stopped | 24 hours past its interval, while one of the donor's PRs is open | [Follow each PR to its end](specs/follow-through.md), and us for the interval |
 | Reads of PRs that `check_pr` asks for, across the whole site | One at a time, at most one every 2 seconds and 300 in any hour, 30 checks an hour from one donor, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, and only while more of the service token's budget is left than any scheduled job leaves | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |
@@ -5937,8 +6005,11 @@ has an entry for each refusal those can give.
   the level and how to turn it off. One wake per harness: it removes
   another of the same harness that no longer runs, as a loop from an
   ended session. A session that finds no PR open turns the wake off and
-  removes it. The trigger, under Waking a run when a follow-up comes in
-  the spec, isn't built yet, so the skill skips that step.
+  removes it. In Claude Code's cloud scheduled tasks, Grok Bot, and
+  Cursor Automations, it asks the donor to make a trigger in the harness
+  for the wake, and gives them the wake's `trigger.setUpAt` on `/me` to
+  paste its URL and key, which never go through the agent. When a
+  trigger turned off, it tells the donor why, with the link to fix it.
 - Each harness gets its own steps and level:
   - The Claude Code desktop app: a scheduled task every 15 minutes,
     `full`.

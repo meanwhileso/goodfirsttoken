@@ -95,7 +95,7 @@ describe('wakes', () => {
     const kenjis = await recordWakeRun(db, kenji.githubId, saved.id, t0 + MINUTE);
     const ran = await recordWakeRun(db, priya.githubId, saved.id, t0 + 2 * MINUTE);
 
-    expect(saved).toEqual({ id: expect.stringMatching(/^w_/) as string, githubId: priya.githubId, ...desktop, createdAt: t0, lastRunAt: null });
+    expect(saved).toEqual({ id: expect.stringMatching(/^w_/) as string, githubId: priya.githubId, ...desktop, createdAt: t0, lastRunAt: null, trigger: null });
     expect(kenjis).toBeNull();
     expect(ran).toEqual({ ...saved, lastRunAt: t0 + 2 * MINUTE });
     expect(await listWakes(db, priya.githubId)).toEqual([ran]);
