@@ -115,6 +115,9 @@ async function buildServer(props: AgentProps, origin: string): Promise<McpServer
   server.registerTool('record_pr', specOf(tools.record_pr), (input) => run(() => recordPr(caller, input)));
   server.registerTool('my_work', specOf(tools.my_work), () => run(() => donor.myWork(caller, origin, Date.now())));
   server.registerTool('check_pr', specOf(tools.check_pr), (input) => run(() => donor.checkPr(caller, input)));
+  server.registerTool('sort_follow_ups', specOf(tools.sort_follow_ups), (input) =>
+    run(() => donor.sortFollowUps(caller, input, Date.now())),
+  );
   server.registerTool('request_repo', specOf(tools.request_repo), (input) =>
     run(() => donor.requestRepo(caller, input, origin, Date.now())),
   );

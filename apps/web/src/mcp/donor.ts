@@ -40,6 +40,7 @@ import {
   getPr,
   getProject,
   getSession,
+  listClaimFollowUps,
   listClaimsOn,
   listOpenPrLinksByProject,
   listEndedToOffer,
@@ -53,7 +54,9 @@ import {
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
+  sortFollowUps as sortStoredFollowUps,
   takeSessionIssue,
+  unknownFollowUps,
   type ClaimWithPr,
   type EndedToOffer,
   type WaitingIssue,
@@ -283,11 +286,12 @@ function compareVersions(a: string, b: string): number {
 
 /**
  * What maintainers and review bots wrote on the donor's open PRs, and their
- * failed checks and conflicts, that no submit answered yet, as
- * start_session and my_work list them, and how many more wait. `markShown` marks the ones listed shown, once the answer is made. A
- * submit to the claim answers the ones shown before it. Only a follow-up
- * submit_work could take a fix for shows: its PR open, its project asking
- * for help, and the donor not blocked.
+ * failed checks and conflicts, that are open or wait for the donor, as
+ * start_session and my_work list them, and how many more wait.
+ * `markShown` marks the ones listed shown, once the answer is made. A
+ * submit to the claim with no `answers` settles the ones shown before it.
+ * Only a follow-up submit_work could take a fix for shows: its PR open,
+ * its project asking for help, and the donor not blocked.
  */
 async function followUpsFor(
   person: number,
@@ -305,6 +309,7 @@ async function followUpsFor(
     );
   const followUps = waiting.map(({ record, issue, pr, branch }) => ({
     claimId: record.claimId,
+    followUpId: record.commentId,
     issue,
     title: titles.get(lower(issue)) ?? issue,
     pr,
@@ -316,6 +321,9 @@ async function followUpsFor(
     commentUrl: record.url,
     writtenAt: new Date(record.writtenAt).toISOString(),
     branch,
+    // Only open ones and those that wait for the donor list.
+    state: record.state === 'waiting_donor' ? ('waiting_donor' as const) : ('open' as const),
+    question: record.question,
   }));
   return { followUps, moreFollowUps: all - followUps.length, markShown };
 }
@@ -429,6 +437,54 @@ export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now:
     now(),
   );
   return answer(taken.size === ended.length ? answered : result([]));
+}
+
+/**
+ * sort_follow_ups: sets where the named follow-ups on the caller's claim
+ * stand, as the agent sorted them. Every ID must name a follow-up on the
+ * claim, or nothing changes. A follow-up a submit settled as fixed, or a
+ * read superseded, stays as it is. The claim's PR must be open, as it is
+ * for its follow-ups to list.
+ */
+export async function sortFollowUps(caller: Caller, input: ToolInput<'sort_follow_ups'>, now: number): Promise<Answer> {
+  const claim = await ownClaim(caller, input.claimId);
+  if (isRefusal(claim)) return refuse(claim);
+  const blocked = await blockedRefusal(env.DB, await donorOf(caller));
+  if (blocked) return refuse(blocked);
+  const pr = await getPr(env.DB, claim.id);
+  if (pr === null) {
+    return refuse(refusal('not_found', `Claim ${claim.id} has no PR recorded, so it has no follow-ups. Once its PR is open on GitHub, record it with record_pr.`));
+  }
+  if (pr.state !== 'open') {
+    const ended = pr.state === 'merged' ? 'merged' : 'closed without merging';
+    return refuse(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so its follow-ups need nothing more. Nothing changed.`));
+  }
+  const ids = input.followUps.map((sort) => sort.followUpId);
+  const unknown = await unknownFollowUps(env.DB, claim.id, ids);
+  if (unknown.length > 0) {
+    return refuse(
+      refusal('not_found', `Claim ${claim.id} has no follow-up ${unknown.join(', ')}, so nothing changed. Sort the follow-ups start_session or my_work lists, by their IDs.`),
+    );
+  }
+  const changed = await sortStoredFollowUps(env.DB, claim.id, input.followUps, now);
+  const byId = new Map((await listClaimFollowUps(env.DB, claim.id)).map((record) => [record.commentId, record]));
+  const followUps = ids.flatMap((key) => {
+    const record = byId.get(key);
+    return record === undefined
+      ? []
+      : [
+          {
+            followUpId: key,
+            kind: record.kind,
+            state: record.state,
+            outcome: record.outcome,
+            question: record.question,
+            replyUrl: record.replyUrl,
+            changed: changed.has(key),
+          },
+        ];
+  });
+  return answer(toolResult('sort_follow_ups', { claimId: claim.id, issue: claim.issue, pr: pr.pr, followUps }));
 }
 
 /**

@@ -19,6 +19,7 @@ import {
   releaseClaim,
   requestRepo,
   setInterests,
+  sortFollowUps,
   startSession,
   submitWork,
   suggestIssues,
@@ -38,6 +39,7 @@ export const tools = {
   open_pr: openPr,
   record_pr: recordPr,
   check_pr: checkPr,
+  sort_follow_ups: sortFollowUps,
   set_interests: setInterests,
   request_repo: requestRepo,
   register_project: registerProject,
@@ -116,7 +118,7 @@ export {
   removalWaitsNote,
   removalWithdrawnNote,
 } from './admin';
-export { MAX_PR_DESCRIPTION } from './donor';
+export { MAX_ANSWERS, MAX_PR_DESCRIPTION } from './donor';
 export type { Suggestion } from './donor';
 export type { QueuePlace } from './admin';
 export { claimStateLabel } from './shared';

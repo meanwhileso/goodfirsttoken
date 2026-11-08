@@ -13,7 +13,9 @@ import {
   listClaimFollowUps,
   listOpenPrsOf,
   saveClaim,
+  saveFollowUps,
   setReviewsRead,
+  supersedeFollowUps,
   listEndedToOffer,
   listReopenedClaimPrs,
   markEndedOffered,
@@ -286,12 +288,107 @@ describe('the migration that gave follow-ups their kinds', () => {
     ]);
 
     for (const query of after) await db.prepare(query).run();
+    // The table as the next migration makes it, which the reads below take.
+    for (const query of queries('20261108195209_follow_up_states.sql')) await db.prepare(query).run();
 
     expect(before).toHaveLength(1);
     expect(after).toHaveLength(4);
     expect((await listClaimFollowUps(db, 'c_1')).map((f) => [f.commentId, f.kind, f.reviewer, f.authorKind, f.path, f.shownAt])).toEqual([
       ['PRR_b', 'review', 'octo-maintainer', 'maintainer', null, t0 + HOUR],
       ['PRRC_a', 'line', 'octo-maintainer', 'maintainer', 'src/a.ts', null],
+    ]);
+  });
+});
+
+describe('the migration that gave follow-ups their states', () => {
+  test('settles as fixed each follow-up a submit answered, keeps the rest open, and keeps their order', async () => {
+    const { TEST_MIGRATIONS } = env as Env & { TEST_MIGRATIONS: D1Migration[] };
+    const queries = (name: string) => TEST_MIGRATIONS.find((m) => m.name === name)?.queries ?? [];
+    // The table as the migration before made it, with rows as they were stored then.
+    const before = queries('20261108191958_follow_up_kinds.sql').filter((query) => /CREATE TABLE follow_ups_next\b/.test(query));
+    await db.prepare('DROP TABLE follow_ups').run();
+    for (const query of before) await db.prepare(query.replace('follow_ups_next', 'follow_ups')).run();
+    const insert = db.prepare(
+      `INSERT INTO follow_ups (claim_id, comment_id, kind, reviewer, author_kind, body, path, url, written_at, read_at, shown_at, answered_at)
+       VALUES ('c_1', ?, ?, ?, ?, 'Add a test.', NULL, 'https://github.com/a/b/pull/1', ?, ?, ?, ?)`,
+    );
+    await db.batch([
+      insert.bind('PRR_b', 'review', 'octo-maintainer', 'maintainer', t0 + HOUR, t0 + HOUR, t0 + HOUR, t0 + 2 * HOUR),
+      insert.bind('abc', 'checks', null, null, t0, t0, null, null),
+      insert.bind('IC_a', 'conversation', 'octo-bot', 'bot', t0, t0, t0 + HOUR, null),
+    ]);
+
+    for (const query of queries('20261108195209_follow_up_states.sql')) await db.prepare(query).run();
+
+    expect(before).toHaveLength(1);
+    expect((await listClaimFollowUps(db, 'c_1')).map((f) => [f.commentId, f.state, f.outcome, f.answeredAt, f.question, f.replyUrl])).toEqual([
+      ['abc', 'open', null, null, null, null],
+      ['IC_a', 'open', null, null, null, null],
+      ['PRR_b', 'settled', 'fixed', t0 + 2 * HOUR, null, null],
+    ]);
+    // A settled follow-up has an outcome and a time, and only one that waits for the donor has a question.
+    const bad = (state: string, outcome: string | null, answeredAt: number | null, question: string | null) =>
+      db
+        .prepare(
+          `INSERT INTO follow_ups (claim_id, comment_id, kind, reviewer, author_kind, body, path, url, written_at, read_at, state, outcome, answered_at, question)
+           VALUES ('c_1', 'X', 'review', 'octo', 'maintainer', 'b', NULL, 'https://github.com/a/b/pull/1', 1, 1, ?, ?, ?, ?)`,
+        )
+        .bind(state, outcome, answeredAt, question)
+        .run();
+    await expect(bad('settled', null, t0, null)).rejects.toThrow();
+    await expect(bad('settled', 'fixed', null, null)).rejects.toThrow();
+    await expect(bad('open', 'fixed', t0, null)).rejects.toThrow();
+    await expect(bad('waiting_donor', null, null, null)).rejects.toThrow();
+    await expect(bad('open', null, null, 'Why?')).rejects.toThrow();
+    await expect(bad('settled', 'superseded', t0, null)).rejects.toThrow();
+    await expect(bad('settled', 'replied', t0, null)).rejects.toThrow();
+  });
+});
+
+describe('superseding checks and conflicts', () => {
+  const checks = (head: string) => ({
+    commentId: head,
+    kind: 'checks' as const,
+    reviewer: null,
+    authorKind: null,
+    body: 'FAILURE: test',
+    path: null,
+    url: `https://github.com/${repo}/pull/57/checks?sha=${head}`,
+    writtenAt: t0,
+  });
+  const conflict = (head: string, base: string) => ({ ...checks(head), commentId: `${head}:${base}`, kind: 'conflict' as const, body: 'CONFLICTING with main', url: prRef(57).url });
+  const states = async () => (await listClaimFollowUps(db, 'c_1')).map((f) => [f.commentId, f.state, f.outcome]);
+
+  test('a read made before another, that lands after it, supersedes nothing the other stored', async () => {
+    const [old, next] = ['a'.repeat(40), 'b'.repeat(40)];
+    await saveFollowUps(db, 'c_1', [checks(old), conflict(old, 'c'.repeat(40))], t0);
+    // The newer read, at t0 + 2 hours, finds a new head that fails and conflicts.
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: next, mergeable: 'CONFLICTING', readAt: t0 + 2 * HOUR }], t0 + 2 * HOUR);
+    await saveFollowUps(db, 'c_1', [checks(next), conflict(next, 'c'.repeat(40))], t0 + 2 * HOUR);
+
+    // The older read, made at t0 + 1 hour, lands now, and found the old head mergeable.
+    const superseded = await supersedeFollowUps(db, [{ claimId: 'c_1', head: old, mergeable: 'MERGEABLE', readAt: t0 + HOUR }], t0 + 3 * HOUR);
+
+    expect(superseded).toBe(0);
+    expect(await states()).toEqual([
+      [old, 'settled', 'superseded'],
+      [`${old}:${'c'.repeat(40)}`, 'settled', 'superseded'],
+      [next, 'open', null],
+      [`${next}:${'c'.repeat(40)}`, 'open', null],
+    ]);
+  });
+
+  test("UNKNOWN supersedes no conflict, even on a new head, and a settled follow-up stays as it settled", async () => {
+    const [head, next] = ['a'.repeat(40), 'e'.repeat(40)];
+    await saveFollowUps(db, 'c_1', [conflict(head, 'c'.repeat(40)), checks('d'.repeat(40))], t0);
+    await db.prepare("UPDATE follow_ups SET state = 'settled', outcome = 'no_change', answered_at = ?1 WHERE kind = 'checks'").bind(t0).run();
+
+    const superseded = await supersedeFollowUps(db, [{ claimId: 'c_1', head: next, mergeable: 'UNKNOWN', readAt: t0 + HOUR }], t0 + HOUR);
+
+    expect(superseded).toBe(0);
+    expect(await states()).toEqual([
+      [`${head}:${'c'.repeat(40)}`, 'open', null],
+      ['d'.repeat(40), 'settled', 'no_change'],
     ]);
   });
 });

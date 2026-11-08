@@ -150,13 +150,19 @@ function followUpItem(host: Host, followUp: Record<string, unknown>): HTMLElemen
     path: text(followUp.path),
   } as FollowUpShape;
   const linkText = kind === 'checks' ? 'the checks on GitHub' : kind === 'conflict' ? 'the PR on GitHub' : 'the comment on GitHub';
+  // The claim and the follow-up's ID, which sort_follow_ups and submit_work's answers take.
+  const ids = [text(followUp.claimId) && `claim ${String(followUp.claimId)}`, text(followUp.followUpId) && `follow-up ${String(followUp.followUpId)}`]
+    .filter(Boolean)
+    .join(' · ');
+  const question = followUp.state === 'waiting_donor' ? text(followUp.question) : null;
   return h(
     'article',
     { class: 'view-item' },
     issueHead(text(followUp.issue) ?? '', text(followUp.title) ?? ''),
-    h('p', { class: 'view-meta' }, 'PR ', link(host, pr.url, ref)),
+    h('p', { class: 'view-meta' }, 'PR ', link(host, pr.url, ref), ids && ` · ${ids}`),
     h('p', { class: 'view-quiet' }, followUpWhat(shape)),
     text(followUp.comment) && h('blockquote', { class: 'quote view-summary view-quiet' }, followUp.comment as string),
+    question && notice(`Waiting for you. Your agent asked: ${question}`, 'note'),
     text(followUp.commentUrl) && h('p', { class: 'view-links' }, link(host, followUp.commentUrl, linkText)),
   );
 }
@@ -195,7 +201,7 @@ export function renderReview(host: Host, data: Record<string, unknown>, answerTe
   const told: string[] = [];
   return [
     section(`Follow-ups (${String(followUps.length)})`, followUps.map((f) => followUpItem(host, f))),
-    more > 0 ? h('p', { class: 'view-quiet view-item' }, `${plural(more, 'more follow-up')} wait. They list here as submits answer the ones above.`) : null,
+    more > 0 ? h('p', { class: 'view-quiet view-item' }, `${plural(more, 'more follow-up')} wait. They list here as the ones above settle or wait for a reviewer.`) : null,
     section(`PRs read in part (${String(readInPart.length)})`, readInPart.map((item) => readInPartItem(host, item))),
     ready.length === 0
       ? h('p', { class: 'view-quiet view-item' }, 'No work waits to open as a PR.')

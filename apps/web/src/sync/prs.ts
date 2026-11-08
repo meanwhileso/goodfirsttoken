@@ -19,8 +19,10 @@ import {
   rereadFailed,
   saveFollowUps,
   savePushers,
+  supersedeFollowUps,
   setPrState,
   setReviewsRead,
+  type HeadRead,
   type NewFollowUp,
   type ReviewsRead,
 } from '../db';
@@ -61,6 +63,8 @@ export interface PrRun {
   closed: number;
   /** Follow-ups read for the first time: reviews, comments, failed checks, and conflicts. */
   followUps: number;
+  /** Checks for an older head, and conflicts GitHub no longer shows, settled as superseded. */
+  superseded: number;
   /** Reviews by a person other than the PR's author that GitHub says can't push to the repo, which are no follow-ups. */
   withoutPush: number;
   /**
@@ -342,11 +346,9 @@ function failingChecksOf(contexts: readonly (CheckContext | null)[]): string[] {
  * PR GitHub says is `CONFLICTING` is one, known by the head's and the
  * base's SHAs. `UNKNOWN`, which GitHub often gives before it has worked out
  * the merge, makes none, and the next read tries again. Both are known by
- * the time the job first saw them.
- *
- * The follow-ups an older head's checks or a conflict that GitHub no longer
- * shows still wait, until a submit answers them: superseding them takes
- * follow-up states, under Follow-up states in docs/specs/follow-through.md.
+ * the time the job first saw them. headReadOf gives what the same read
+ * shows of the head and the merge, by which supersedeFollowUps settles an
+ * older head's checks, and a conflict GitHub no longer shows.
  */
 function githubFollowUpsOf(pull: PullState, prUrl: string, readAt: number): NewFollowUp[] {
   const head = pull.headRefOid;
@@ -386,6 +388,25 @@ function githubFollowUpsOf(pull: PullState, prUrl: string, readAt: number): NewF
   return found;
 }
 
+/** A follow-up as the PR job reads it, before it is stored with where it stands. */
+const NEW_FOLLOW_UP = followUpRecordSchema.omit({
+  claimId: true,
+  readAt: true,
+  shownAt: true,
+  answeredAt: true,
+  state: true,
+  outcome: true,
+  question: true,
+  replyUrl: true,
+});
+
+/** What a read of an open PR showed of its head and whether it can merge, or null when GitHub gave no head. */
+function headReadOf(claimId: string, pull: PullState, readAt: number): HeadRead | null {
+  const head = pull.headRefOid;
+  if (typeof head !== 'string' || head === '') return null;
+  return { claimId, head, mergeable: typeof pull.mergeable === 'string' ? pull.mergeable : null, readAt };
+}
+
 /**
  * What maintainers and review bots wrote on an open PR, and what GitHub
  * shows of its checks and whether it can merge, as follow-ups: the text of
@@ -400,7 +421,7 @@ function followUpsOf(pull: PullState, prUrl: string, maintainers: Maintainers, r
   if (typeof prAuthor !== 'string') return [];
   const found: NewFollowUp[] = [];
   const add = (followUp: NewFollowUp) => {
-    const checked = followUpRecordSchema.omit({ claimId: true, readAt: true, shownAt: true, answeredAt: true }).safeParse({
+    const checked = NEW_FOLLOW_UP.safeParse({
       ...followUp,
       body: foldUntrusted(followUp.body, MAX_FOLLOW_UP_TEXT),
       path: followUp.path === null ? null : foldUntrusted(followUp.path, MAX_FOLLOW_UP_PATH),
@@ -523,6 +544,7 @@ function newPrRun(): PrRun {
     merged: 0,
     closed: 0,
     followUps: 0,
+    superseded: 0,
     withoutPush: 0,
     conversationLeftOut: 0,
     reread: 0,
@@ -554,6 +576,14 @@ async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun):
   const repos = [...new Set(batch.filter(({ open }) => open).map(({ record }) => record.pr.repo))];
   if (repos.length > 0) await savePushers(deps.db, seen, readAt);
   const pushers = await listPushers(deps.db, repos, readAt);
+  // What each open PR's head and merge are now settles the checks and
+  // conflicts they replaced, before the new ones are stored.
+  const heads = batch.flatMap(({ record, open }, i) => {
+    const pull = pulls[`p${String(i)}`]?.pullRequest;
+    const head = open && pull != null && outcomeOf(pull, readAt) === null ? headReadOf(record.claimId, pull, readAt) : null;
+    return head === null ? [] : [head];
+  });
+  run.superseded += await supersedeFollowUps(deps.db, heads, deps.now());
   for (const [i, { record, open: followed }] of batch.entries()) {
     const pull = pulls[`p${String(i)}`]?.pullRequest;
     if (pull == null) continue;
@@ -644,7 +674,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
   }
   run.calls = deps.github.calls;
   console.log(
-    `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, PRs closed in the last 14 days: ${String(run.closedChecked)} of ${String(closed.length)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, issues read again: ${String(run.reread)}, new follow-ups: ${String(run.followUps)}, reviews left out for no push access: ${String(run.withoutPush)}, conversation comments left out from people who are no maintainer: ${String(run.conversationLeftOut)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, PRs closed in the last 14 days: ${String(run.closedChecked)} of ${String(closed.length)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, issues read again: ${String(run.reread)}, new follow-ups: ${String(run.followUps)}, superseded: ${String(run.superseded)}, reviews left out for no push access: ${String(run.withoutPush)}, conversation comments left out from people who are no maintainer: ${String(run.conversationLeftOut)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }
@@ -675,7 +705,7 @@ export async function checkClaimPrs(deps: PrJobDeps, records: readonly PrRecord[
   }
   run.calls = deps.github.calls;
   console.log(
-    `A check of PRs asked for ${String(records.length)}, read ${String(read.size)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, new follow-ups: ${String(run.followUps)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `A check of PRs asked for ${String(records.length)}, read ${String(read.size)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, new follow-ups: ${String(run.followUps)}, superseded: ${String(run.superseded)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return { read, run };
 }

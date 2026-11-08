@@ -10,6 +10,10 @@ offers another project. Then:
   one with `start_session`. For an issue, pick another with
   `suggest_issues`. From `set_interests`, Good First Token has no record of
   the donor yet: call `start_session` first, then save the interests again.
+  From `submit_work` or `sort_follow_ups`, a follow-up ID isn't one of the
+  claim's, so nothing was taken or changed. Use the IDs `my_work` lists for
+  that claim, and call again. From `sort_follow_ups`, the claim has no PR
+  recorded yet, so it has no follow-ups.
 - `not_claim_owner`: The claim is someone else's. Use only the donor's own
   claims, from `start_session` or `my_work`.
 - `donor_blocked`: Good First Token's admins blocked the donor, so they get

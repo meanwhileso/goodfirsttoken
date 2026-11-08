@@ -33,7 +33,16 @@ import {
   type ReviewReason,
 } from '../submissions';
 import { defineTool } from './spec';
-import { MAX_FOLLOW_UPS } from '../follow-ups';
+import {
+  followUpId,
+  followUpKindSchema,
+  followUpOutcomeSchema,
+  followUpQuestion,
+  followUpStateSchema,
+  MAX_FOLLOW_UPS,
+  sortedOutcomeSchema,
+  sortedStateSchema,
+} from '../follow-ups';
 import {
   claimantSchema,
   claimSummarySchema,
@@ -151,9 +160,9 @@ export const startSession = defineTool({
     budget: budgetSchema,
     /** Null until the donor saves interests with set_interests. */
     interests: interestsSchema.nullable(),
-    /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that no submit answered yet, oldest first. */
+    /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that are open or wait for the donor, those that wait for the donor first, then oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
-    /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
+    /** Follow-ups that wait beyond the ones listed. They list as these settle or wait for a reviewer. */
     moreFollowUps: count,
     /** The donor's open PRs whose reviews or conversation were read in part, with their links to read the rest. */
     readInPart: z.array(readInPartSchema),
@@ -523,13 +532,16 @@ function nextStep(reason: ReviewReason): string {
   }
 }
 
+/** The most follow-ups one submit_work names as answered, or one sort_follow_ups sorts. */
+export const MAX_ANSWERS = 100;
+
 /** The summary's and the checks note's limit, as the agent reads it, like 1,000. */
 const NOTES_LIMIT = MAX_SUBMIT_NOTES.toLocaleString('en-US');
 
 export const submitWork = defineTool({
   audience: 'donor',
   description:
-    `Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The summary and the checks note are each at most ${NOTES_LIMIT} characters. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open.`,
+    `Submit the finished work, with a summary, what you checked, and the agent and model used. Send branch: commit on the claim's branch from the start commit, with the project's trailer on each commit, push it to the code repo or the donor's fork, and name its repo, name, and head. The summary and the checks note are each at most ${NOTES_LIMIT} characters. The server checks the branch on GitHub and puts the work in the donor's review queue. Submitting again with a new head records the new commits, and the fixes on a PR once one is open. With a fix on an open PR, send answers, the IDs of the follow-ups it answers.`,
   // not_found, not_claim_owner, and the claim's own refusals come from the
   // claims table, the permission, or the claim's room.
   refusals: [
@@ -576,10 +588,20 @@ export const submitWork = defineTool({
         .describe(
           'Tokens spent on this claim since its last submit, or since it was made, when the harness can estimate them. The server adds up the estimates of every submit.',
         ),
+      answers: z
+        .array(followUpId)
+        .max(MAX_ANSWERS)
+        .optional()
+        .describe(
+          "The IDs of the claim's follow-ups this fix answers, as start_session and my_work list them. They settle as fixed once the submit lands, and no others do. Leave it out to settle every follow-up on the claim that a tool showed before this submit.",
+        ),
     })
     .superRefine((input, ctx) => {
       if (input.branch === undefined && input.files === undefined) {
         ctx.addIssue({ code: 'custom', path: ['branch'], message: "must name the claim's branch as you pushed it" });
+      }
+      if (input.answers !== undefined && new Set(input.answers).size !== input.answers.length) {
+        ctx.addIssue({ code: 'custom', path: ['answers'], message: 'must name each follow-up once' });
       }
     }),
   output: z.object({
@@ -732,9 +754,9 @@ export const myWork = defineTool({
   refusals: [],
   input: z.object({}),
   output: z.object({
-    /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that no submit answered yet, oldest first. */
+    /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that are open or wait for the donor, those that wait for the donor first, then oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
-    /** Follow-ups that wait beyond the ones listed. They list once a submit answers these. */
+    /** Follow-ups that wait beyond the ones listed. They list as these settle or wait for a reviewer. */
     moreFollowUps: count,
     /** The donor's open PRs whose reviews or conversation were read in part, with their links to read the rest. */
     readInPart: z.array(readInPartSchema),
@@ -879,6 +901,103 @@ export const checkPr = defineTool({
         out.state === 'open' &&
         out.newFollowUps === 0 &&
         "GitHub shows it open, with nothing new from a maintainer, a review bot, or its checks. A review from someone who can't push to the repo isn't a follow-up.",
+    ),
+});
+
+/** How sort_follow_ups sets one follow-up. */
+const followUpSort = z
+  .object({
+    followUpId: followUpId.describe('The follow-up, as start_session and my_work list it.'),
+    state: sortedStateSchema.describe(
+      'waiting_reviewer once you replied or pushed and wait for the reviewer, waiting_donor once you asked the donor, or settled when nothing more is needed.',
+    ),
+    outcome: sortedOutcomeSchema
+      .optional()
+      .describe(
+        "With settled alone: replied when your reply needs no answer, no_change when it needs nothing, or resolved when its reviewer resolved the thread on GitHub.",
+      ),
+    question: followUpQuestion
+      .optional()
+      .describe('With waiting_donor alone: your question for the donor, as you asked it. It lists with the follow-up until they answer.'),
+    replyUrl: webUrl
+      .optional()
+      .describe('Your reply on GitHub. Needed with replied, and taken with waiting_reviewer.'),
+  })
+  .superRefine((sort, ctx) => {
+    const issue = (path: string, message: string) => {
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    };
+    if (sort.state === 'settled' && sort.outcome === undefined) issue('outcome', 'must say why it settled: replied, no_change, or resolved');
+    if (sort.state !== 'settled' && sort.outcome !== undefined) issue('outcome', 'goes with settled alone');
+    if (sort.state === 'waiting_donor' && sort.question === undefined) issue('question', 'must give the question you asked the donor');
+    if (sort.state !== 'waiting_donor' && sort.question !== undefined) issue('question', 'goes with waiting_donor alone');
+    if (sort.outcome === 'replied' && sort.replyUrl === undefined) issue('replyUrl', "must give your reply's link on GitHub");
+    if (sort.replyUrl !== undefined && sort.outcome !== 'replied' && sort.state !== 'waiting_reviewer') {
+      issue('replyUrl', 'goes with waiting_reviewer, or settled as replied');
+    }
+  });
+
+/** A follow-up as sort_follow_ups left it. */
+const sortedFollowUpSchema = z.object({
+  followUpId,
+  kind: followUpKindSchema,
+  state: followUpStateSchema,
+  /** Why it settled, or null while it is not settled. */
+  outcome: followUpOutcomeSchema.nullable(),
+  /** The question for the donor while it waits for them, or null. */
+  question: followUpQuestion.nullable(),
+  /** The reply on GitHub the agent recorded, or null. */
+  replyUrl: webUrl.nullable(),
+  /**
+   * False when the call left it as it was: a submit settled it as fixed,
+   * or a new read superseded it.
+   */
+  changed: z.boolean(),
+});
+type SortedFollowUp = z.infer<typeof sortedFollowUpSchema>;
+
+function renderSorted(sorted: SortedFollowUp): string {
+  const where = {
+    open: 'open',
+    waiting_reviewer: 'waits for the reviewer',
+    waiting_donor: 'waits for the donor',
+    settled: `settled, ${sorted.outcome ?? ''}`,
+  }[sorted.state];
+  const left = sorted.changed ? '' : `, left as it was, since ${sorted.outcome === 'superseded' ? 'a new read superseded it' : 'a submit settled it'}`;
+  return lines(`follow-up ${sorted.followUpId} (${sorted.kind}): ${where}${left}`, sorted.replyUrl !== null && `reply: ${sorted.replyUrl}`);
+}
+
+export const sortFollowUps = defineTool({
+  audience: 'donor',
+  description:
+    "Record where follow-ups on a claim's open PR stand when no fix answers them: waiting_reviewer once you replied or pushed and wait for the reviewer, waiting_donor with your question for the donor, or settled with replied and the reply's link, no_change, or resolved. A follow-up a fix answers settles through submit_work's answers instead. Only follow-ups that are open or wait for the donor list in start_session and my_work. A follow-up read after this call lists as any new one does. One a submit settled as fixed, or a new read superseded, stays as it is.",
+  refusals: ['not_found', 'not_claim_owner', 'donor_blocked', 'pr_closed'],
+  input: z
+    .object({
+      claimId: id,
+      followUps: z
+        .array(followUpSort)
+        .min(1, 'must name at least one follow-up')
+        .max(MAX_ANSWERS, `must name at most ${String(MAX_ANSWERS)} follow-ups`)
+        .describe("The claim's follow-ups to sort, each with its new state."),
+    })
+    .superRefine((input, ctx) => {
+      const ids = input.followUps.map((sort) => sort.followUpId);
+      if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['followUps'], message: 'must name each follow-up once' });
+    }),
+  output: z.object({
+    claimId: id,
+    issue: issueRef,
+    pr: prRefSchema,
+    /** Each follow-up the call named, in its order, as the call left it. */
+    followUps: z.array(sortedFollowUpSchema).max(MAX_ANSWERS),
+  }),
+  text: (out) =>
+    lines(
+      `Sorted ${plural(out.followUps.length, 'follow-up')} on PR #${String(out.pr.number)} for ${out.issue}, claim ${out.claimId}:`,
+      indent(numbered(out.followUps, renderSorted), 2),
+      out.followUps.some((sorted) => sorted.state === 'waiting_donor') &&
+        'Tell the donor each question. It lists with its follow-up in start_session and my_work until you sort it again.',
     ),
 });
 

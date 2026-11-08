@@ -1138,15 +1138,21 @@ conflict. Each follow-up has a kind: `review`, `line`, `conversation`,
   checks failing again add none, and a new head's add a new one.
 - A PR GitHub shows as `CONFLICTING` is one `conflict` follow-up for its
   head and its base, with the text `CONFLICTING with` and the base
-  branch's name. While one waits for a submit, a base that moves on adds
-  no other. `UNKNOWN`, which GitHub often gives before it has worked out
+  branch's name. While one on the claim isn't settled, a base that moves on
+  under the same head adds no other, and the one there keeps its state. `UNKNOWN`, which GitHub often gives before it has worked out
   the merge, makes none, and the next run reads it again.
 - Checks and a conflict have no author. The tools name GitHub as their
   source, and say when the job first read them. The names of checks and
   branches are repo text, kept by the rules below.
-- An older head's checks follow-up, and a conflict follow-up GitHub no
-  longer shows, still wait until a submit answers them, as any follow-up
-  does.
+- A read settles as `superseded` the checks follow-up for any head but
+  the one it read, so a push to a new head supersedes the old head's. It
+  settles every conflict follow-up when GitHub shows the PR `MERGEABLE`,
+  and one for another head when it shows `CONFLICTING`, so a push that
+  still conflicts supersedes the old head's conflict with the new one.
+  `UNKNOWN` supersedes no conflict. A read supersedes only what was stored
+  by the time it was made, so a check and a run that read the same PR at
+  once never supersede the newer read's follow-ups. A follow-up already
+  settled stays as it settled.
 - The text is untrusted repo text. Before it is kept, it becomes one
   line, with only what a person can see. Every character a person doesn't
   see goes, the same characters a removal's reason loses under
@@ -2362,10 +2368,10 @@ the first question included.
 
 ## The donor's tools
 
-A donor's agent works through twelve tools: `start_session`,
+A donor's agent works through thirteen tools: `start_session`,
 `set_interests`, `suggest_issues`, `claim_issue`, `post_update`,
 `submit_work`, `release_claim`, `my_work`, `open_pr`, `record_pr`,
-`check_pr`, and `request_repo`, which asks for a repo that isn't listed,
+`check_pr`, `sort_follow_ups`, and `request_repo`, which asks for a repo that isn't listed,
 under [Requesting a repo](#requesting-a-repo). Each acts as the caller
 alone, and reads and writes GitHub with the caller's own token, for their
 own claim only. `request_repo` only reads, for the caller's own request.
@@ -2432,21 +2438,38 @@ in the conversation that a maintainer or a review bot wrote on one of the
 donor's open PRs, or its failed checks or conflict, as the PR job read it,
 under Follow-ups in [PRs](#prs).
 
-- `start_session` and `my_work` list the follow-ups that wait, at most
-  20, taken in turn from each claim, its oldest first: the oldest of each
-  claim's, then the next of each, and so on. So a PR with many follow-ups
-  hides no other PR's. The ones listed come oldest first, and the answer
-  says how many more wait. A follow-up waits until a submit to its claim
-  answers it.
+- Each follow-up has a state. It is `open` until the donor's agent sorts
+  it. It is `waiting_reviewer` once the agent replied or pushed and waits
+  for the reviewer, and `waiting_donor` once the agent asked the donor,
+  with the agent's question, until the donor answers. It is `settled` once
+  nothing more is needed, with an outcome: `fixed` by a submit, `replied`
+  with the link of the agent's reply, `no_change`, `resolved` for a thread
+  its reviewer resolved, or `superseded` for checks or a conflict a new
+  read replaced, under Follow-ups in [PRs](#prs). A follow-up records when
+  it settled.
+- `start_session` and `my_work` list the follow-ups that are `open` or
+  `waiting_donor`, at most 20: every one that waits for the donor first,
+  then the rest taken in turn from each claim, its oldest first: the
+  oldest of each claim's, then the next of each, and so on. So a question
+  for the donor is never left out, and a PR with many follow-ups hides no
+  other PR's. The ones listed come the same way, those that wait for the
+  donor first, then oldest first, and the answer says how many more wait. One that waits for
+  its reviewer, or settled, lists no more. A reviewer's answer to the
+  agent's reply is a new comment, and comes back as a new follow-up.
 - A follow-up shows only while `submit_work` could take a fix for it: its
   PR is open in the PRs table, its project is approved and neither on the
   do-not-list nor delisted, and the donor isn't blocked. The others stay
   stored, and show again once that holds, as when a paused project
   resumes, or a block is lifted.
-- Each names the claim, the issue and its title, the PR, its kind, the
-  reviewer and whether they are a `maintainer` or a `bot`, the file a
-  comment on a line is on, the link to it on GitHub, when it was written,
-  and the claim's branch, where the fix goes. Checks and a conflict name
+- Each names the claim, its ID as `followUpId`, which `submit_work` and
+  `sort_follow_ups` take with the claim, the issue and its title, the PR,
+  its kind, the reviewer and whether they are a `maintainer` or a `bot`,
+  the file a comment on a line is on, the link to it on GitHub, when it
+  was written, the claim's branch, where the fix goes, its state, and for
+  one that waits for the donor, the agent's question, folded to one line.
+  The ID is GitHub's ID for the review or comment, the head's SHA for
+  checks, or the head's and the base's SHAs for a conflict, and the text
+  names it on the line with the claim's. Checks and a conflict name
   no reviewer. The text says the kind and who it came from: `@login` for a
   maintainer, `@login[bot]` for a bot, and GitHub for checks and a
   conflict.
@@ -2464,9 +2487,29 @@ under Follow-ups in [PRs](#prs).
   part, how many of its comments were read, with the PR's link to read
   the rest on GitHub.
 - Listing a follow-up marks it shown, once the answer is made. A submit to
-  the claim that lands answers every follow-up on it shown before the
-  submit. One the PR job read since, which no tool has shown, still waits,
-  so a donor always sees a review before a submit answers it.
+  the claim that lands with `answers`, the IDs of the follow-ups its fix
+  answers, settles only those as `fixed`, and an empty list settles none.
+  A submit with no `answers` settles as `fixed` every follow-up on it that
+  isn't settled and was shown before the submit, as skills before
+  `answers` expect. One the PR job read since, which no tool has shown,
+  stays as it is, so a donor always sees a review before a submit settles
+  it. An ID in `answers` that names no follow-up on the claim refuses the
+  submit with `not_found`, before anything is read on GitHub, and nothing
+  is taken. One that settled already stays as it settled.
+- `sort_follow_ups` sets the state of follow-ups on one claim with no fix:
+  `waiting_reviewer`, with the reply's link when there is one,
+  `waiting_donor` with the question, or `settled` with `replied` and the
+  reply's link, `no_change`, or `resolved`. Only a submit settles one as
+  `fixed`, only a read as `superseded`, and only a read makes one `open`.
+  A follow-up settled as `fixed` or `superseded` stays as it is, and the
+  answer says so. Each other one takes its new state, and a sort again
+  changes it again. The answer gives each one named, as the call left it.
+- Only the claim's donor can change its follow-ups. `sort_follow_ups`
+  refuses another donor's claim with `not_claim_owner`, a blocked donor
+  with `donor_blocked`, a claim with no PR recorded, or an ID that names
+  no follow-up on the claim, with `not_found`, and a PR that merged or
+  closed with `pr_closed`. A refusal changes nothing. A follow-up the PR
+  job reads after a sort is a new one, and lists as any new one does.
 - A fix goes onto the claim's branch, and so onto its PR: the agent pulls
   the branch, commits the fix with the project's trailer, pushes it, and
   submits the new head with `submit_work`, under Submitting below.
@@ -2812,8 +2855,8 @@ a donor's work.
   the PR's own change: the start commit until main is merged into the
   branch, as by Update branch, and main's head after.
 - A claim whose PR is open takes the fix on that PR's branch. The submit
-  answers the claim's follow-ups a tool showed before it, under Follow-ups
-  above.
+  settles the follow-ups named in `answers`, or with no `answers`, the
+  claim's follow-ups a tool showed before it, under Follow-ups above.
 - Otherwise the work is cleared to open by itself, under Clearing the work
   below, when the project's PR mode is `automatic`, no other PR is open on
   the issue, no path the branch changes is under `.github/workflows/`,
@@ -4417,8 +4460,9 @@ Apps shows each tool's text, as a terminal harness does.
   the agent records the PR. When the host won't tell the agent, the item
   asks the donor to.
 - Each follow-up pairs the issue's reference with its title and names the
-  PR separately. It shows the reviewer and their text, with a link to the
-  comment on GitHub. A review says "reviewed the PR". A comment on a line
+  PR separately, with the claim's ID and the follow-up's. It shows the
+  reviewer and their text, with a link to the comment on GitHub. One that
+  waits for the donor shows the agent's question. A review says "reviewed the PR". A comment on a line
   says "commented on the file" with the quoted file path. A review that only
   comments is a follow-up too.
 - The queue says how many more follow-ups wait beyond the 20 listed. It
@@ -5398,6 +5442,8 @@ Each limit the schemas enforce, other than those under project settings:
 | A comment's file path in a follow-up | 4,096 graphemes, folded to one line | Us |
 | Failing checks a checks follow-up names | 10, of the first 100 checks on the PR's head, each folded to one line | Us |
 | Follow-ups `start_session` and `my_work` list at once | 20, with a count of the rest | Us |
+| Follow-ups one submit's `answers`, or one `sort_follow_ups`, names | 100 | Us |
+| A question for the donor on a follow-up | 2,000 characters once folded to one line, and 8,000 before | Us |
 | Open PRs `start_session` and `my_work` list | 50, oldest first | Us |
 | Reads of PRs that `check_pr` asks for, across the whole site | One at a time, at most one every 2 seconds and 300 in any hour, 30 checks an hour from one donor, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, and only while more of the service token's budget is left than any scheduled job leaves | Us |
 | Session budget | 1 to 100 issues, or 1 to 1,440 minutes | Us |

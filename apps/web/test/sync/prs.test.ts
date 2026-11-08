@@ -821,6 +821,25 @@ describe('checks and conflicts', () => {
     expect(await listClaimFollowUps(db, claim.id)).toMatchObject([{ kind: 'conflict' }]);
   });
 
+  test("a push to a new head that still conflicts supersedes the old head's conflict, and the new one is open", async () => {
+    const { claim, pr } = await claimWithPr();
+    const branch = github.state.repos[APP.toLowerCase()]?.issues[String(pr.number)]?.pull?.head.ref ?? '';
+    github.commitFiles(APP, { [`changes/${branch}.md`]: 'Something else.\n' }, BY);
+    await follow();
+    const old = headOf(pr.number);
+    github.commitFiles('priya/sample-app', { 'src/rewrite.ts': 'export const keepHash = true;\n' }, 'priya', { branch });
+    later();
+
+    const run = await follow();
+
+    const base = github.state.repos[APP.toLowerCase()]?.branches.main ?? '';
+    expect(run).toMatchObject({ followUps: 1, superseded: 1 });
+    expect((await listClaimFollowUps(db, claim.id)).map((f) => [f.commentId, f.state, f.outcome])).toEqual([
+      [`${old}:${base}`, 'settled', 'superseded'],
+      [`${headOf(pr.number)}:${base}`, 'open', null],
+    ]);
+  });
+
   test('a PR that can merge is no follow-up', async () => {
     const { claim } = await claimWithPr();
 

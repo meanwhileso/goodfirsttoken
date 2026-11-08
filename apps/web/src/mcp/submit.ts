@@ -22,6 +22,7 @@ import type { Caller } from '../auth/permissions';
 import {
   addPr,
   answerFollowUps,
+  answerFollowUpsById,
   countOpenPrsByProject,
   getIssue,
   getPr,
@@ -32,6 +33,7 @@ import {
   listPersonClaims,
   saveSubmission,
   setClearance,
+  unknownFollowUps,
 } from '../db';
 import { checkIssueFacts, linkedPrs, readIssue, readRepoFacts, type GitHubIssue, type IssueRules, type RepoFacts } from '../donor/github';
 import { GitHubError, gitHubUrls } from '../github';
@@ -183,6 +185,13 @@ export async function submitWork(
   const earlier = await getSubmission(env.DB, claim.id);
   // Nothing an older skill sent with files is read, and nothing reaches GitHub.
   if (input.files !== undefined || input.branch === undefined) return refuse(skillOutdated(earlier?.branch ?? branchFor(claim)));
+  // Each follow-up the fix answers must be the claim's, before anything is read.
+  const unknown = await unknownFollowUps(env.DB, claim.id, input.answers ?? []);
+  if (unknown.length > 0) {
+    return refuse(
+      refusal('not_found', `Claim ${claim.id} has no follow-up ${unknown.join(', ')}, so nothing was taken. Name in answers the follow-ups start_session or my_work lists for the claim, by their IDs, and submit again.`),
+    );
+  }
   const reads = new BranchReader(await tokenOf(caller));
   const facts = await codeRepo(reads, project);
   if (isRefusal(facts)) return refuse(facts);
@@ -379,10 +388,12 @@ async function submitPushed(
         toOpen,
       }),
     );
-  // A claim whose PR is open takes the fixes on that PR's branch, which
-  // answers the follow-ups on it a tool showed before this submit.
+  // A claim whose PR is open takes the fixes on that PR's branch. The
+  // follow-ups named in answers settle as fixed, or with no answers, every
+  // one on it a tool showed before this submit.
   if (recorded.claim.state === 'pr_opened') {
-    await answerFollowUps(env.DB, claim.id, now);
+    if (input.answers === undefined) await answerFollowUps(env.DB, claim.id, now);
+    else await answerFollowUpsById(env.DB, claim.id, input.answers, now);
     return result('pr_opened', recorded.claim.pr, null);
   }
   return result(recorded.claim.state, null, reason);
