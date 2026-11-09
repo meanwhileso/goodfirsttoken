@@ -14,6 +14,57 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 }
 
+/** What a follow-up is, by the fields the tools give, which the tools and the review queue view both say. */
+export interface FollowUpShape {
+  kind: 'review' | 'line' | 'conversation' | 'checks' | 'conflict';
+  reviewer: string | null;
+  authorKind: 'maintainer' | 'bot' | null;
+  path: string | null;
+}
+
+/** Who a follow-up comes from: `@login` for a maintainer, `@login[bot]` for a bot, as GitHub shows it, or GitHub for checks and a conflict. */
+export function followUpSource(followUp: Pick<FollowUpShape, 'reviewer' | 'authorKind'>): string {
+  if (followUp.reviewer === null || followUp.authorKind === null) return 'GitHub';
+  return followUp.authorKind === 'bot' ? `@${followUp.reviewer}[bot]` : `@${followUp.reviewer}`;
+}
+
+/** A follow-up's kind, who it comes from, and where, like `line: @octocat commented on the file "src/a.ts"`. */
+export function followUpWhat(followUp: FollowUpShape): string {
+  const from = followUpSource(followUp);
+  switch (followUp.kind) {
+    case 'review':
+      return `review: ${from} reviewed the PR`;
+    case 'line':
+      // A path is repo text, so it shows as a quoted string.
+      return `line: ${from} commented on the file ${JSON.stringify(followUp.path ?? '')}`;
+    case 'conversation':
+      return `conversation: ${from} commented on the PR`;
+    case 'checks':
+      return `checks: ${from} shows checks failed on the PR's head`;
+    case 'conflict':
+      return `conflict: ${from} shows the PR conflicts with its base branch`;
+  }
+}
+
+/** What the PR job read of a PR it read in part, naming only what it read in part. */
+export function readInPartText(item: {
+  reviews: number;
+  reviewsRead: number;
+  commentsLeftOut: number;
+  conversation: number;
+  conversationRead: number;
+}): string {
+  const read = [
+    (item.reviews > item.reviewsRead || item.commentsLeftOut > 0) &&
+      `${String(item.reviewsRead)} of the PR's ${plural(item.reviews, 'review')}${
+        item.commentsLeftOut > 0 ? ` and left out ${plural(item.commentsLeftOut, 'comment')} on lines` : ''
+      }`,
+    item.conversation > item.conversationRead &&
+      `${String(item.conversationRead)} of the PR's ${plural(item.conversation, 'conversation comment')}`,
+  ].filter((part) => typeof part === 'string');
+  return read.map((part, i) => `${i === 0 ? 'Good First Token read' : 'It read'} ${part}.`).join(' ');
+}
+
 export function listOrNone(items: readonly string[]): string {
   return items.length > 0 ? items.join(', ') : 'none';
 }

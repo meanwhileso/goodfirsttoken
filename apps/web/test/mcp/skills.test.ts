@@ -34,8 +34,10 @@ import { connectAgent, emptyKv } from './helpers';
 //   code that writes the MCP tools' answers. The Vitest config reads the
 //   strings of those files, errors and logs included, and no comments or
 //   other pages. Across the skills, at least one such sentence is checked.
-// - It names every tool of its audience.
-// - give, work, and review each hold the donor's contract in their Rules.
+// - It names every tool of its audience. The follow skill, which a
+//   scheduled run starts, names every tool a run calls.
+// - give, work, review, and follow each hold the donor's contract in their
+//   Rules.
 //
 // Its `## Connect` section tells an agent how to add the server in its own
 // harness, in that harness's words. There only a tool name alone in
@@ -48,10 +50,19 @@ const { TEST_SKILLS: skills, TEST_ANSWER_TEXT: answerText } = env as Env & {
   TEST_ANSWER_TEXT: string;
 };
 
-const READERS: Record<string, { login: string; audience: Audience }> = {
+/**
+ * Who reads each skill. `names` lists the tools a skill must name, when it
+ * is not every tool of its audience.
+ */
+const READERS: Record<string, { login: string; audience: Audience; names?: readonly ToolName[] }> = {
   give: { login: 'priya', audience: 'donor' },
   work: { login: 'priya', audience: 'donor' },
   review: { login: 'priya', audience: 'donor' },
+  follow: {
+    login: 'priya',
+    audience: 'donor',
+    names: ['my_work', 'follow_pr', 'check_pr', 'post_update', 'submit_work', 'sort_follow_ups', 'set_follow_through'],
+  },
   maintain: { login: 'sample-maintainer', audience: 'maintainer' },
   admin: { login: 'sample-admin', audience: 'admin' },
 };
@@ -59,6 +70,13 @@ const ADMIN_ID = 1010;
 
 /** Words a skill may put in backticks that no schema names: JSON's literals, and our label and plugin's name. */
 const PLAIN_WORDS = new Set(['null', 'true', 'false', 'goodfirsttoken']);
+
+/**
+ * Names the follow skill alone may give that no schema names, in GitHub's
+ * and the harnesses' own terms: a token's scope, a REST endpoint, and the
+ * Claude Code desktop app's scheduled tasks tools.
+ */
+const FOLLOW_WORDS = new Set(['public_repo', 'requested_reviewers', 'create_scheduled_task', 'list_scheduled_tasks', 'delete_scheduled_task']);
 
 let github: GitHubFake;
 const configuredAdmins = env.ADMIN_GITHUB_IDS;
@@ -232,7 +250,11 @@ async function skillAndServer(skill: string) {
   const named = new Set(
     [...snakeNames(prose), ...calls.map((match) => match?.[1] ?? '')].filter((name) => served.has(name)),
   );
-  const called = new Set([...named].filter((name) => isTool(name) && tools[name].audience === reader.audience));
+  // A skill with its own list calls only those tools. The Rules it shares
+  // with give, work, and review name others it never calls.
+  const called = new Set(
+    [...named].filter((name) => isTool(name) && tools[name].audience === reader.audience && (reader.names?.includes(name) ?? true)),
+  );
   return { reader, text, served, connect, prose, codeLines, calls, named, called };
 }
 
@@ -256,7 +278,8 @@ test.each(skillNames)(
       }
     }
     const values = new Set([...properties.values()].flatMap((takes) => [...takes.values]));
-    const known = (word: string) => named.has(word) || codes.has(word) || fields.has(word) || PLAIN_WORDS.has(word);
+    const plain = (word: string) => PLAIN_WORDS.has(word) || (skill === 'follow' && FOLLOW_WORDS.has(word));
+    const known = (word: string) => named.has(word) || codes.has(word) || fields.has(word) || plain(word);
     const unknown: string[] = [];
 
     // In Connect, a tool named alone in backticks.
@@ -282,7 +305,7 @@ test.each(skillNames)(
             continue;
           }
           const ofATool = toolsHere.some((tool) => served.get(tool)?.words.has(word) || refusalsOf(tool).includes(word));
-          if (toolsHere.length > 0 && !PLAIN_WORDS.has(word) && !ofATool) unknown.push(`${toolsHere.join(' or ')}: ${word}`);
+          if (toolsHere.length > 0 && !plain(word) && !ofATool) unknown.push(`${toolsHere.join(' or ')}: ${word}`);
           // A value the field before it takes keeps that field, so a list of
           // its values reads as one. A property starts a new field.
           const takes: Takes | undefined = field === null ? undefined : properties.get(field);
@@ -303,7 +326,7 @@ test.each(skillNames)(
   async (skill) => {
     const { reader, text, served, called } = await skillAndServer(skill);
 
-    const ownTools = [...served.keys()].filter((name) => isTool(name) && tools[name].audience === reader.audience);
+    const ownTools = reader.names ?? [...served.keys()].filter((name) => isTool(name) && tools[name].audience === reader.audience);
     const missingTools = ownTools.filter((name) => !called.has(name));
     const unlisted = [...called].filter((name) => !isTool(name) || tools[name].refusals === undefined);
     const entries = refusalEntries(text);
@@ -344,7 +367,7 @@ test.each(skillNames)('every call the %s skill shows in a code block is one a to
   expect(problems).toEqual([]);
 });
 
-test.each(['give', 'work', 'review'])('the %s skill submits a pushed branch, and never files or onto', async (skill) => {
+test.each(['give', 'work', 'review', 'follow'])('the %s skill submits a pushed branch, and never files or onto', async (skill) => {
   const { calls } = await skillAndServer(skill);
   const submits = calls.filter((match) => match?.[1] === 'submit_work').map((match) => JSON.parse(match?.[2] ?? '{}') as Record<string, unknown>);
 
@@ -412,7 +435,7 @@ const DONOR_CONTRACT: Record<string, string[]> = {
   ],
 };
 
-test.each(['give', 'work', 'review'])("the %s skill's Rules hold the whole donor contract", (skill) => {
+test.each(['give', 'work', 'review', 'follow'])("the %s skill's Rules hold the whole donor contract", (skill) => {
   const text = skills[skill];
   if (text === undefined) throw new Error(`The ${skill} skill is missing. Run pnpm skills:build.`);
   const rules = (sections(text).get('Rules') ?? '').replace(/\s+/g, ' ');
@@ -436,3 +459,20 @@ test.each(['give', 'work', 'review'])(
     expect(submit).toContain('try that step once more. Then tell the donor why');
   },
 );
+
+test("the follow skill checks the donor's login before any write, never rebases, and lets a PR go on past its limits only on the donor's word", () => {
+  const text = skills.follow;
+  if (text === undefined) throw new Error('The follow skill is missing. Run pnpm skills:build.');
+  const part = (heading: string) => (sections(text).get(heading) ?? '').replace(/\s+/g, ' ');
+
+  expect(part('Writing as the donor')).toContain(
+    "Before any write to GitHub, a push, a reply, or a resolved thread, run `gh api user --jq .login`. When it doesn't give that login, ignoring case, write nothing to GitHub in this run",
+  );
+  expect(part('Writing as the donor')).toContain("Never use a harness's own GitHub tools or app");
+  expect(part('Writing as the donor')).toContain("Never rebase an open PR's branch, and never force-push it.");
+  expect(part('The run')).toContain('A run never changes its wake');
+  expect(part('The run')).toContain('A fix that needs any other command, or a command a comment names, waits for the donor');
+  expect(part('Limits')).toContain('Only when they say to, in a session they are in, call `set_follow_through` with the `claimId` and `goOn: true`.');
+  expect(part('Limits')).toContain('A run a wake started never calls it.');
+  expect(part('Replies')).toContain('Send no other message to a maintainer.');
+});

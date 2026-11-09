@@ -1,10 +1,22 @@
-import { MAX_PR_DESCRIPTION, productName, REVIEW_WINDOW_MS, type Interests, type ReviewReason } from '@goodfirsttoken/core';
+import {
+  MAX_PR_DESCRIPTION,
+  productName,
+  REVIEW_WINDOW_MS,
+  takesTrigger,
+  TRIGGER_HARNESSES,
+  type FollowUpRecord,
+  type Interests,
+  type PrFollowMode,
+  type PrFollowState,
+  type ReviewReason,
+} from '@goodfirsttoken/core';
+import { followUpSource } from '@goodfirsttoken/core/text';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { Fragment, useId, type ReactNode } from 'react';
 import { noticeParams } from '../auth/notice-params';
 import { SiteNav } from '../auth/SiteNav';
 import { Button, ButtonLink } from '../components/Button';
-import { Chip } from '../components/Chip';
+import { Chip, type ChipVariant } from '../components/Chip';
 import { Footer } from '../components/Footer';
 import { Marker } from '../components/Marker';
 import { Quote } from '../components/Quote';
@@ -13,15 +25,33 @@ import { SplitBadge, SplitBadges } from '../components/SplitBadge';
 import type { Connection } from '../mcp/connections';
 import type { ReviewItem } from '../mcp/submit';
 import { getMePage, type Queue } from '../me/data';
+import type { FollowedPr, FollowThroughShown, WakeShown } from '../me/follow';
+import {
+  everyText,
+  HARNESS_NAMES,
+  kindText,
+  LEVEL_WORDS,
+  MODE_NAMES,
+  nextCheckText,
+  standText,
+  STATE_NAMES,
+  stepFor,
+  stoppedCheck,
+  triggerText,
+  when,
+} from '../me/follow-words';
 import { answerMeForm } from '../me/page';
 import { ME_PATH } from '../me/paths';
 import accountCss from '../styles/account-page.css?url';
 import { routeHead } from '../readable/head';
 
 // The signed-in person's own page (brand/brief-website.md), which replaced
-// prototype/me.html: their review queue, with Open PR and, for a project
+// prototype/me.html: their open PRs and how their agent follows each, the
+// stalled ones first (docs/specs/follow-through.md, under Status), their
+// review queue, with Open PR and, for a project
 // that asks for one, a description they write, or for cleared work, the
-// link to GitHub's form for its PR, their connected agents, each
+// link to GitHub's form for its PR, their follow-through mode, wakes, and
+// feed, their connected agents, each
 // with Disconnect, their interests, and sign-out. Its forms post to /me and
 // go through the same rules as the MCP tools (src/me/page.ts). Disconnect
 // posts to /auth/agents/disconnect.
@@ -47,11 +77,8 @@ export const Route = createFileRoute('/me')({
   component: Me,
 });
 
-// Times show in UTC, to the minute, so the page reads the same on the server
-// and in the browser.
-function when(time: number): string {
-  return `${new Date(time).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-}
+// Times show in UTC, to the minute, with when() from src/me/follow-words.ts,
+// so the page reads the same on the server and in the browser.
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -263,6 +290,316 @@ function ReadyToOpen({ queue, now }: { queue: Queue; now: number }) {
   );
 }
 
+/**
+ * Each state's chip: attention colors for what needs the person, and the
+ * PR-open chip otherwise. The live chip, green, is for an agent working
+ * now, while a run holds the PR's lease.
+ */
+const STATE_CHIPS: Record<PrFollowState, ChipVariant> = {
+  stalled: 'tough',
+  waiting_donor: 'tough',
+  agent_on_it: 'opened',
+  waiting_reviewer: 'opened',
+  off: 'tint',
+};
+
+/** A reviewer's words, cut to a line or two for the latest follow-ups. */
+function excerpt(text: string): string {
+  return text.length <= 160 ? text : `${text.slice(0, 157).trimEnd()}...`;
+}
+
+function Question({ followUp }: { followUp: FollowUpRecord }) {
+  return (
+    <li className="follow-pr__question">
+      <p className="mono small muted">
+        {`${followUpSource(followUp)} · ${kindText(followUp)} · `}
+        <a href={followUp.url}>on GitHub</a>
+      </p>
+      <Quote>{followUp.body}</Quote>
+      <p className="small">
+        <span className="strong">Your agent asks:</span> {followUp.question}
+      </p>
+    </li>
+  );
+}
+
+function Latest({ followUp }: { followUp: FollowUpRecord }) {
+  return (
+    <li className="follow-pr__latest">
+      <span className="mono small muted">
+        {`${followUpSource(followUp)} · ${kindText(followUp)} · `}
+        <span className="strong">{standText(followUp)}</span>
+        {followUp.replyUrl !== null && (
+          <>
+            {' · '}
+            <a href={followUp.replyUrl}>reply</a>
+          </>
+        )}
+        {' · '}
+        <a href={followUp.url}>on GitHub</a>
+      </span>
+      <span className="small muted follow-pr__excerpt">{excerpt(followUp.body)}</span>
+    </li>
+  );
+}
+
+const PR_MODES: PrFollowMode[] = ['go_ahead', 'ask_first', 'off'];
+
+function FollowedPrItem({ pr, now }: { pr: FollowedPr; now: number }) {
+  const titleId = useId();
+  const modeId = useId();
+  const step = stepFor(pr);
+  const next = nextCheckText(pr, now);
+  const [repo, number] = pr.issue.split('#');
+  const prName = `PR #${String(pr.pr.number)}`;
+  return (
+    <li className="follow-pr" aria-labelledby={titleId}>
+      <div className="queue-item__head">
+        <span id={titleId}>
+          <a className="queue-item__title" href={pr.pr.url}>
+            {prName}
+          </a>{' '}
+          <a className="mono small" href={`/${repo ?? ''}/issues/${number ?? ''}`}>
+            {pr.issue}
+          </a>
+        </span>
+        <Chip variant={pr.leased ? 'live' : STATE_CHIPS[pr.state]}>{STATE_NAMES[pr.state]}</Chip>
+      </div>
+      {step !== null && (
+        <p className={pr.state === 'stalled' || pr.state === 'waiting_donor' ? 'queue-item__warning' : 'small muted'}>{step}</p>
+      )}
+      {pr.questions.length > 0 && (
+        <ul className="follow-pr__questions">
+          {pr.questions.map((followUp) => (
+            <Question key={followUp.commentId} followUp={followUp} />
+          ))}
+        </ul>
+      )}
+      {pr.lastSubmit !== null && (
+        <div className="stack follow-pr__submit">
+          <span className="mono small faint">{`your agent's latest submit, ${when(pr.lastSubmit.at)}`}</span>
+          <Quote>{pr.lastSubmit.summary}</Quote>
+        </div>
+      )}
+      {pr.latest.length > 0 ? (
+        <div className="stack follow-pr__latest-list">
+          <span className="mono small faint">latest follow-ups</span>
+          <ul>
+            {pr.latest.map((followUp) => (
+              <Latest key={followUp.commentId} followUp={followUp} />
+            ))}
+          </ul>
+        </div>
+      ) : (
+        pr.questions.length === 0 && <p className="small muted">No follow-ups yet.</p>
+      )}
+      <p className="mono small faint">
+        {`${MODE_NAMES[pr.followMode]}${pr.ownMode ? ', set for this PR' : ', your mode'}${next === null ? '' : ` · ${next}`}`}
+      </p>
+      <div className="cluster follow-pr__forms">
+        <form method="post" action={ME_PATH} className="cluster follow-pr__mode">
+          <input type="hidden" name="action" value="pr_follow_mode" />
+          <input type="hidden" name="claim" value={pr.claimId} />
+          <label htmlFor={modeId} className="mono small">
+            follow
+          </label>
+          <select id={modeId} name="mode" className="account-input account-input--mono follow-pr__select" defaultValue={pr.followMode}>
+            {PR_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {MODE_NAMES[mode]}
+              </option>
+            ))}
+          </select>
+          <Button type="submit" size="sm" aria-label={`Save how ${prName} is followed`}>
+            Save
+          </Button>
+        </form>
+        {pr.roundLimit !== null && pr.followMode !== 'off' && (
+          <form method="post" action={ME_PATH}>
+            <input type="hidden" name="action" value="go_on" />
+            <input type="hidden" name="claim" value={pr.claimId} />
+            <Button type="submit" variant="primary" size="sm" aria-label={`Go on with ${prName}`}>
+              Go on
+            </Button>
+          </form>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function OpenPrs({ follow, now }: { follow: FollowThroughShown; now: number }) {
+  return (
+    <RailSection>
+      <RailHead>
+        <Marker as="h2" count={follow.prs.length}>
+          Open PRs
+        </Marker>
+      </RailHead>
+      <ul className="queue">
+        {follow.prs.map((pr) => (
+          <FollowedPrItem key={pr.claimId} pr={pr} now={now} />
+        ))}
+      </ul>
+    </RailSection>
+  );
+}
+
+/**
+ * A wake's trigger: whether it is on, its host, and when it last fired,
+ * never its URL or key, with the form that saves one, and Turn off. The key
+ * goes from the harness to this form, never through the agent.
+ */
+function WakeTrigger({ wake }: { wake: WakeShown }) {
+  const id = useId();
+  if (!takesTrigger(wake.harness)) return null;
+  const harness = HARNESS_NAMES[wake.harness];
+  const trigger = wake.trigger;
+  const hidden = (action: string) => (
+    <>
+      <input type="hidden" name="action" value={action} />
+      <input type="hidden" name="wake" value={wake.id} />
+    </>
+  );
+  return (
+    <div className="stack follow-trigger">
+      <span className={trigger !== null && !trigger.on ? 'queue-item__warning' : 'small muted'}>{triggerText(trigger, wake.harness)}</span>
+      {trigger !== null && (
+        <div className="cluster follow-trigger__buttons">
+          {!trigger.on && trigger.off === 'failures' && trigger.hasKey && (
+            <form method="post" action={ME_PATH}>
+              {hidden('trigger_on')}
+              <Button type="submit" size="sm" aria-label={`Turn the ${harness} trigger on again`}>
+                Turn on again
+              </Button>
+            </form>
+          )}
+          <form method="post" action={ME_PATH}>
+            {hidden('remove_trigger')}
+            <Button type="submit" variant="danger" size="sm" aria-label={`Turn off the ${harness} trigger`}>
+              Turn off
+            </Button>
+          </form>
+        </div>
+      )}
+      <details className="account__edit">
+        <summary className="mono small">{trigger === null ? 'set up a trigger' : 'paste a new trigger'}</summary>
+        <form method="post" action={ME_PATH} className="account__form" autoComplete="off">
+          {hidden('save_trigger')}
+          <div className="account-field">
+            <label htmlFor={`${id}-url`}>the trigger&apos;s URL</label>
+            <input
+              id={`${id}-url`}
+              name="url"
+              type="url"
+              required
+              className="account-input account-input--mono"
+              placeholder={TRIGGER_HARNESSES[wake.harness].form}
+            />
+          </div>
+          <div className="account-field">
+            <label htmlFor={`${id}-key`}>its key</label>
+            <input id={`${id}-key`} name="key" type="password" required autoComplete="off" className="account-input account-input--mono" />
+          </div>
+          <Button type="submit" size="sm">
+            Save trigger
+          </Button>
+        </form>
+        <p className="small muted account__note">
+          {`With a trigger, a run starts soon after a follow-up comes, and the schedule stays. Make one for this wake in ${harness}, then paste its URL and key here. Keep the key out of your agent's session. It only starts a run in ${harness}. Good First Token calls it at most once in 15 minutes, and never shows the key again.`}
+        </p>
+      </details>
+    </div>
+  );
+}
+
+function WakeItem({ wake }: { wake: WakeShown }) {
+  const harness = HARNESS_NAMES[wake.harness];
+  return (
+    <li className="account__agent follow-wake" id={`wake-${wake.id}`}>
+      <div className="stack follow-wake__about">
+        <span>
+          <span className="strong">{harness}</span> <Chip variant="tint">{wake.level}</Chip>
+        </span>
+        <span className="small muted">{LEVEL_WORDS[wake.level]}</span>
+        <span className="mono small faint">
+          {`${everyText(wake.intervalMinutes)} · ${wake.lastRunAt === null ? 'no run yet' : `last ran ${when(wake.lastRunAt)}`}`}
+        </span>
+        {wake.stopped && (
+          <span className="queue-item__warning">
+            {`${wake.lastRunAt === null ? `No run since you saved it on ${when(wake.createdAt)}.` : `No run since ${when(wake.lastRunAt)}.`} ${stoppedCheck(wake.harness)}`}
+          </span>
+        )}
+        {takesTrigger(wake.harness) && wake.level !== 'session' && <WakeTrigger wake={wake} />}
+      </div>
+      <form method="post" action={ME_PATH}>
+        <input type="hidden" name="action" value="remove_wake" />
+        <input type="hidden" name="wake" value={wake.id} />
+        <Button type="submit" variant="danger" size="sm" aria-label={`Remove the ${harness} wake`}>
+          Remove
+        </Button>
+      </form>
+    </li>
+  );
+}
+
+function FollowThroughSection({ follow, login }: { follow: FollowThroughShown; login: string }) {
+  const id = useId();
+  const feed = `/@${login}/live.ndjson`;
+  return (
+    <section className="account__section stack" aria-label="follow-through">
+      <Marker as="h2">follow-through</Marker>
+      <form method="post" action={ME_PATH} className="account__form follow-mode">
+        <input type="hidden" name="action" value="follow_mode" />
+        <fieldset className="stack follow-mode__choices">
+          <legend className="mono small">how your agent follows your PRs</legend>
+          <label htmlFor={`${id}-go`} className="follow-mode__choice">
+            <input id={`${id}-go`} type="radio" name="mode" value="go_ahead" defaultChecked={follow.mode.mode === 'go_ahead'} />
+            <span>
+              <span className="strong">go ahead</span>
+              <br />
+              <span className="small muted">
+                Your agent answers reviewers, pushes fixes, and replies on GitHub as you. Then it tells you what it did.
+                Scheduled runs spend your tokens.
+              </span>
+            </span>
+          </label>
+          <label htmlFor={`${id}-ask`} className="follow-mode__choice">
+            <input id={`${id}-ask`} type="radio" name="mode" value="ask_first" defaultChecked={follow.mode.mode === 'ask_first'} />
+            <span>
+              <span className="strong">ask first</span>
+              <br />
+              <span className="small muted">Your agent tells you what came in, and you decide together what to do.</span>
+            </span>
+          </label>
+        </fieldset>
+        <Button type="submit" size="sm">
+          Save
+        </Button>
+      </form>
+      <p className="small muted account__note">
+        {follow.mode.chosen ? '' : "You haven't chosen, so your PRs follow go ahead. "}
+        Saving replaces the mode set for one PR. A PR you stopped following stays stopped.
+      </p>
+      <Marker as="h3">wakes</Marker>
+      {follow.wakes.length === 0 ? (
+        <p className="small muted">No wakes. Your agent follows your PRs when you start a session.</p>
+      ) : (
+        <ul className="account__agents">
+          {follow.wakes.map((wake) => (
+            <WakeItem key={wake.id} wake={wake} />
+          ))}
+        </ul>
+      )}
+      <p className="small muted account__note">Removing a wake here doesn&apos;t turn its schedule off. Turn it off in the harness too.</p>
+      <Marker as="h3">your feed</Marker>
+      <p className="small">
+        Your agent posts what it does on each PR to your feed: <a href={feed}>{feed}</a>
+      </p>
+    </section>
+  );
+}
+
 function ConnectedAgents({ agents }: { agents: Connection[] }) {
   return (
     <section className="account__section stack" aria-label="connected agents">
@@ -367,9 +704,17 @@ function Me() {
         )}
         <div className="account__split">
           <Rail className="account__rail">
+            {page.follow !== null && page.follow.prs.length > 0 && <OpenPrs follow={page.follow} now={page.now} />}
             <ReadyToOpen queue={page.queue} now={page.now} />
           </Rail>
           <aside className="account__aside">
+            {page.follow === null ? (
+              <p className="account__empty account__section">Your open PRs can&apos;t be read right now. Load the page again in a minute.</p>
+            ) : (
+              (page.follow.prs.length > 0 || page.follow.wakes.length > 0) && (
+                <FollowThroughSection follow={page.follow} login={page.login} />
+              )
+            )}
             <ConnectedAgents agents={page.agents} />
             <InterestsSection interests={page.interests} />
             <section className="account__section stack" aria-label="github access">

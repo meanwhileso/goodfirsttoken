@@ -91,6 +91,38 @@ export interface ReviewCommentRecord {
   createdAt: string;
 }
 
+// A comment in a PR's conversation, or an issue's. GitHub calls both an
+// issue comment.
+export interface IssueCommentRecord {
+  id: number;
+  user: string;
+  body: string;
+  createdAt: string;
+}
+
+// What a check run ends in, as GitHub's GraphQL names it. Null while it
+// runs.
+export type CheckConclusion =
+  | 'ACTION_REQUIRED'
+  | 'CANCELLED'
+  | 'FAILURE'
+  | 'NEUTRAL'
+  | 'SKIPPED'
+  | 'STALE'
+  | 'STARTUP_FAILURE'
+  | 'SUCCESS'
+  | 'TIMED_OUT';
+
+// A check on a commit: a check run, as GitHub Actions and other apps make,
+// or a commit status, the older kind, with its own states.
+export type CheckRecord =
+  | { type: 'CheckRun'; name: string; conclusion: CheckConclusion | null }
+  | { type: 'StatusContext'; name: string; state: 'ERROR' | 'EXPECTED' | 'FAILURE' | 'PENDING' | 'SUCCESS' };
+
+// Whether GitHub can merge a PR's base into it without a conflict.
+// UNKNOWN is what GitHub gives before it has worked that out.
+export type MergeableState = 'CONFLICTING' | 'MERGEABLE' | 'UNKNOWN';
+
 export interface PullData {
   id: number;
   head: { repo: string | null; ref: string; sha: Oid; owner: string };
@@ -102,6 +134,10 @@ export interface PullData {
   maintainerCanModify: boolean;
   reviews: ReviewRecord[];
   reviewComments: ReviewCommentRecord[];
+  // What a test or the sample data says GitHub gives, in place of the state
+  // the fake works out from the branches. State saved before the fake kept
+  // it has none.
+  mergeable?: MergeableState;
 }
 
 export interface IssueRecord {
@@ -119,6 +155,9 @@ export interface IssueRecord {
   closedAt: string | null;
   closedBy: string | null;
   comments: number;
+  // The comments in its conversation, oldest first. State saved before the
+  // fake kept them has none.
+  issueComments?: IssueCommentRecord[];
   timeline: TimelineEvent[];
   pull: PullData | null;
 }
@@ -157,6 +196,10 @@ export interface RepoRecord {
   branches: Record<string, Oid>;
   labels: LabelRecord[];
   issues: Record<string, IssueRecord>;
+  // The checks on each commit, by its ID, oldest first. Checks on a PR's
+  // head show on the base repo, where its workflows run. State saved
+  // before the fake kept them has none.
+  checks?: Record<Oid, CheckRecord[]>;
   nextNumber: number;
 }
 
@@ -982,4 +1025,64 @@ export function addReview(state: FakeState, repo: RepoRecord, number: number, in
     });
   }
   return review;
+}
+
+// A comment in an issue's or a PR's conversation, as `login`.
+export function addIssueComment(state: FakeState, issue: IssueRecord, login: string, body: string, now: string): IssueCommentRecord {
+  const comment: IssueCommentRecord = { id: newId(state), user: getAccount(state, login).login, body, createdAt: now };
+  (issue.issueComments ??= []).push(comment);
+  issue.comments += 1;
+  issue.updatedAt = now;
+  return comment;
+}
+
+// Records a check on the PR's head, in the base repo. A check of the same
+// name and type on that commit is replaced, as a run that runs again is.
+export function addCheck(repo: RepoRecord, number: number, check: CheckRecord): void {
+  const { sha } = getPull(repo, number).pull.head;
+  const checks = (repo.checks ??= {});
+  const kept = (own(checks, sha) ?? []).filter((c) => c.type !== check.type || c.name !== check.name);
+  setOwn(checks, sha, [...kept, check]);
+}
+
+const FAILED_RUN: ReadonlySet<CheckConclusion> = new Set(['ACTION_REQUIRED', 'CANCELLED', 'FAILURE', 'STARTUP_FAILURE', 'TIMED_OUT']);
+
+// Whether a check failed, by its conclusion or its state.
+export function checkFailed(check: CheckRecord): boolean {
+  return check.type === 'CheckRun'
+    ? check.conclusion !== null && FAILED_RUN.has(check.conclusion)
+    : check.state === 'FAILURE' || check.state === 'ERROR';
+}
+
+// The combined state of a commit's checks, as GitHub's statusCheckRollup
+// gives it: FAILURE when any failed, PENDING when any still runs or waits,
+// and SUCCESS when all passed. Null for a commit with no checks, as on
+// GitHub.
+export function rollupState(checks: readonly CheckRecord[]): 'FAILURE' | 'PENDING' | 'SUCCESS' | null {
+  if (checks.length === 0) return null;
+  if (checks.some(checkFailed)) return 'FAILURE';
+  const pending = checks.some((c) => (c.type === 'CheckRun' ? c.conclusion === null : c.state === 'PENDING' || c.state === 'EXPECTED'));
+  return pending ? 'PENDING' : 'SUCCESS';
+}
+
+// Whether the PR's base branch merges into its head without a conflict: a
+// file both changed since they parted, to different contents, conflicts.
+// A test or the sample data can set what GitHub gives instead.
+export function mergeableOf(state: FakeState, repo: RepoRecord, pull: PullData): MergeableState {
+  if (pull.mergeable !== undefined) return pull.mergeable;
+  const baseHead = own(repo.branches, pull.base.ref);
+  if (baseHead === undefined) return 'UNKNOWN';
+  const store = state.objects;
+  const since = mergeBase(store, pull.head.sha, baseHead);
+  const before = since ? listEntries(store, readObject(store, since, 'commit').tree) : new Map<string, FileEntry>();
+  const ours = listEntries(store, readObject(store, baseHead, 'commit').tree);
+  const theirs = listEntries(store, readObject(store, pull.head.sha, 'commit').tree);
+  const same = (a: FileEntry | undefined, b: FileEntry | undefined) => a?.oid === b?.oid && a?.mode === b?.mode;
+  for (const path of new Set([...ours.keys(), ...theirs.keys()])) {
+    const was = before.get(path);
+    const base = ours.get(path);
+    const head = theirs.get(path);
+    if (!same(base, was) && !same(head, was) && !same(base, head)) return 'CONFLICTING';
+  }
+  return 'MERGEABLE';
 }

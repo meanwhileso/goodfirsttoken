@@ -2,8 +2,11 @@ import {
   budgetLeft,
   claimDeadlines,
   foldIssueTitle,
+  followThroughOf,
+  takesTrigger,
   holdsSlot,
   MAX_FOLLOW_UPS,
+  MAX_WAKES,
   nextClaimState,
   shareOnXUrl,
   toolRefusal,
@@ -11,9 +14,11 @@ import {
   type ClaimRecord,
   type ClaimState,
   type ClaimSummary,
+  type FollowMode,
   type FollowUp,
   type Interests,
   type ProjectRecord,
+  type RunContext,
   type Refusal,
   type RefusalCode,
   type SessionRecord,
@@ -22,12 +27,14 @@ import {
   type ToolOutput,
   type ToolRefusal,
   type ToolResult,
+  type WakeRecord,
 } from '@goodfirsttoken/core';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { env } from 'cloudflare:workers';
 import { requirePermission, type Caller } from '../auth/permissions';
 import {
   blockedAmong,
+  countRound,
   countUnshownFollowUps,
   countOpenPrsByProject,
   createSession,
@@ -35,27 +42,44 @@ import {
   doNotListedProjects,
   editSessionQueue,
   getClaim,
+  getFollowMode,
+  getWake,
   getIssue,
+  giveBackLease,
   getPerson,
   getPr,
   getProject,
   getSession,
+  giveToWake,
+  listClaimFollowUps,
   listClaimsOn,
   listOpenPrLinksByProject,
   listEndedToOffer,
+  listFollowFacts,
   listOpenPrsOf,
   listPersonClaims,
+  listPrFollowModes,
   listReadInPart,
+  listStoppedWakes,
   listWaitingFollowUps,
   listWaitingIssues,
+  listWakes,
   markEndedOffered,
   markFollowUpsShown,
+  noteFollowThrough,
+  recordWakeRun,
+  renewLease,
+  saveFollowThrough,
   returnSessionIssue,
   savePerson,
   setInterests as saveInterests,
+  sortFollowUps as sortStoredFollowUps,
+  takeLease,
   takeSessionIssue,
+  unknownFollowUps,
   type ClaimWithPr,
   type EndedToOffer,
+  type OpenPrOf,
   type WaitingIssue,
 } from '../db';
 import {
@@ -74,13 +98,15 @@ import { findIssue, followedCopy, type JudgedCopy } from '../issue/find';
 import { issueRoom } from '../rooms/issue-room';
 import { prChecker } from '../sync/pr-checker';
 import { isFollowed } from '../sync/prs';
+import { ME_PATH } from '../me/paths';
 import type { GitHubReader } from '../sync/github';
 import plugins from '../../../../skill-src/plugins.json';
 import { requestRepo as makeRequest } from '../requests/request';
 import { readyToOpen } from './submit';
 
 // The donor's tools: start_session, set_interests, suggest_issues,
-// claim_issue, post_update, release_claim, and my_work. submit_work and
+// claim_issue, post_update, release_claim, my_work, check_pr,
+// follow_pr, sort_follow_ups, set_follow_through, and request_repo. submit_work and
 // open_pr are in ./submit.ts. Each acts only as the caller, and reads GitHub
 // only with the caller's own token. Claims go through the issue's room,
 // which holds them and is the lock for the cap. The rules are in
@@ -222,16 +248,18 @@ export async function startSession(
   origin: string,
   now: number,
 ): Promise<Answer> {
-  const token = await tokenOf(caller);
-  const profile = await gitHubRest<{ id: number; login: string }>(token, 'GET', '/user');
-  if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
-  const person = await savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, now);
+  const person = await signedIn(caller, now);
   const session = await createSession(env.DB, { githubId: caller.githubId, agent: input.agent, budget: input.budget }, now);
   const followUps = await followUpsFor(caller.githubId);
   const readInPart = await listReadInPart(env.DB, caller.githubId);
   const unfinishedClaims = await offeredToResume(caller.githubId, origin, now);
   const ended = await listEndedToOffer(env.DB, caller.githubId);
-  const openPrs = await listOpenPrsOf(env.DB, caller.githubId);
+  const modes = await followModesOf(caller.githubId);
+  const open = await listOpenPrsOf(env.DB, caller.githubId);
+  const followThrough = await followThroughFor(caller.githubId, modes, open, { level: null, newForWake: new Set() }, now);
+  const openPrs = openPrsOf(open, modes, followThrough);
+  const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).map((each) => wakeOut(each, origin));
+  const wakes = (await listWakes(env.DB, caller.githubId)).map((each) => wakeOut(each, origin));
   const resultWith = (offered: readonly EndedToOffer[]) =>
     toolResult('start_session', {
       sessionId: session.id,
@@ -244,6 +272,10 @@ export async function startSession(
       unfinishedClaims,
       endedPrs: offered.map(endedPrOf),
       openPrs,
+      followMode: modes.choice,
+      stoppedWakes,
+      wakes,
+      followThrough,
       skillUpdate: skillUpdateFor(input.skillVersion),
     });
   const result = resultWith(ended);
@@ -258,6 +290,130 @@ export async function startSession(
   );
   // A session that started at the same moment marked the others first, and offers them.
   return answer(taken.size === ended.length ? result : resultWith(ended.filter((pr) => taken.has(pr.claimId))));
+}
+
+/** The caller as GitHub gives them now, with their own token, recorded under People. */
+async function signedIn(caller: Caller, now: number) {
+  const profile = await gitHubRest<{ id: number; login: string }>(await tokenOf(caller), 'GET', '/user');
+  if (profile.id !== caller.githubId) throw new Error("GitHub says the grant's token is someone else's.");
+  return savePerson(env.DB, { githubId: caller.githubId, login: profile.login }, now);
+}
+
+/** The donor's mode for all their PRs, and the mode of each PR that has its own. */
+interface FollowModes {
+  choice: { mode: FollowMode; chosen: boolean };
+  own: Map<string, 'go_ahead' | 'ask_first' | 'off'>;
+  /** How the claim's PR is followed: its own mode, or else the donor's. */
+  of: (claimId: string) => 'go_ahead' | 'ask_first' | 'off';
+}
+
+async function followModesOf(person: number): Promise<FollowModes> {
+  const [choice, own] = await Promise.all([getFollowMode(env.DB, person), listPrFollowModes(env.DB, person)]);
+  return { choice, own, of: (claimId) => own.get(claimId) ?? choice.mode };
+}
+
+/**
+ * The donor's open PRs, as start_session and my_work list them, each with
+ * how it is followed: the stalled ones first, then oldest first.
+ */
+function openPrsOf(open: readonly OpenPrOf[], modes: FollowModes, followThrough: FollowThroughOut) {
+  const stalled = new Set(followThrough.prs.filter((pr) => pr.state === 'stalled').map((pr) => pr.claimId));
+  const listed = open.map((pr) => ({ ...pr, followMode: modes.of(pr.claimId) }));
+  return [...listed.filter((pr) => stalled.has(pr.claimId)), ...listed.filter((pr) => !stalled.has(pr.claimId))];
+}
+
+type FollowThroughOut = ToolOutput<'my_work'>['followThrough'];
+
+/**
+ * Follow-through across the donor's open PRs, as listOpenPrsOf lists
+ * them, for the run asking at `now`, by the rules in packages/core's
+ * followThroughOf.
+ */
+async function followThroughFor(
+  person: number,
+  modes: FollowModes,
+  open: readonly OpenPrOf[],
+  run: RunContext,
+  now: number,
+): Promise<FollowThroughOut> {
+  const facts = new Map((await listFollowFacts(env.DB, person)).map((pr) => [pr.claimId, pr]));
+  const listed = open.flatMap((pr) => {
+    const found = facts.get(pr.claimId);
+    return found === undefined ? [] : [{ pr, facts: found }];
+  });
+  const byClaim = new Map(listed.map((one) => [one.pr.claimId, one]));
+  const ft = followThroughOf(
+    listed.map((one) => ({ ...one.facts, mode: modes.of(one.pr.claimId) })),
+    run,
+    now,
+  );
+  return {
+    dueNow: ft.dueNow,
+    nextCheckAt: iso(ft.nextCheckAt),
+    prs: ft.prs.flatMap((pr) => {
+      const one = byClaim.get(pr.claimId);
+      if (one === undefined) return [];
+      return [
+        {
+          claimId: pr.claimId,
+          issue: one.pr.issue,
+          pr: one.pr.pr,
+          followMode: modes.of(pr.claimId),
+          state: pr.state,
+          due: pr.due,
+          reportOnly: pr.reportOnly,
+          open: one.facts.open,
+          waitingDonor: one.facts.waitingDonor,
+          lease: pr.lease === null ? null : { runId: pr.lease.runId, until: new Date(pr.lease.until).toISOString() },
+          rounds: pr.rounds,
+          roundLimit: pr.roundLimit,
+          botLimit: pr.botLimit,
+          lastPushAt: iso(one.facts.lastPushAt),
+          lastReviewerActivityAt: iso(one.facts.lastReviewerAt),
+          nextCheckAt: iso(pr.nextCheckAt),
+          schedule: pr.schedule,
+          stalledSince: iso(pr.stalledSince),
+          tellDonorWaiting: pr.tellDonorWaiting,
+          waitingToldAt: iso(pr.waitingToldAt),
+          reviewAskedAt: iso(pr.reviewAskedAt),
+        },
+      ];
+    }),
+  };
+}
+
+/** Where on /me the donor saves a wake's trigger: the wake's own place on the page. */
+export function triggerSetUpUrl(origin: string, wakeId: string): string {
+  return `${origin}${ME_PATH}#wake-${wakeId}`;
+}
+
+/**
+ * A wake's trigger as the tools give it, never its key, or null for a wake
+ * whose harness takes none or that runs only in a session.
+ */
+function triggerOut(wake: WakeRecord, origin: string) {
+  if (!takesTrigger(wake.harness) || wake.level === 'session') return null;
+  const trigger = wake.trigger;
+  return {
+    state: trigger === null ? ('none' as const) : trigger.on ? ('on' as const) : ('off' as const),
+    host: trigger?.host ?? null,
+    lastFiredAt: iso(trigger?.firedAt ?? null),
+    off: trigger === null || trigger.on ? null : (trigger.off ?? 'failures'),
+    setUpAt: triggerSetUpUrl(origin, wake.id),
+  };
+}
+
+/** A wake as the tools give it. */
+function wakeOut(wake: WakeRecord, origin: string) {
+  return {
+    wakeId: wake.id,
+    harness: wake.harness,
+    level: wake.level,
+    intervalMinutes: wake.intervalMinutes,
+    createdAt: new Date(wake.createdAt).toISOString(),
+    lastRunAt: iso(wake.lastRunAt),
+    trigger: triggerOut(wake, origin),
+  };
 }
 
 /**
@@ -282,38 +438,50 @@ function compareVersions(a: string, b: string): number {
 }
 
 /**
- * What maintainers wrote on the donor's open PRs that no submit answered
- * yet, as start_session and my_work list them, and how many more wait.
- * `markShown` marks the ones listed shown, once the answer is made. A
- * submit to the claim answers the ones shown before it. Only a follow-up
- * submit_work could take a fix for shows: its PR open, its project asking
- * for help, and the donor not blocked.
+ * What maintainers and review bots wrote on the donor's open PRs, and their
+ * failed checks and conflicts, that are open or wait for the donor, as
+ * start_session and my_work list them, and how many more wait.
+ * `markShown` marks the ones listed shown, once the answer is made, or
+ * only those on the claims `onClaim` names. A submit to the claim with no
+ * `answers` settles the ones shown before it.
+ * Only a follow-up submit_work could take a fix for shows: its PR open,
+ * its project asking for help, and the donor not blocked.
  */
 async function followUpsFor(
   person: number,
-): Promise<{ followUps: FollowUp[]; moreFollowUps: number; markShown: (now: number) => Promise<void> }> {
+): Promise<{
+  followUps: FollowUp[];
+  moreFollowUps: number;
+  markShown: (now: number, onClaim?: (claimId: string) => boolean) => Promise<void>;
+}> {
   const { followUps: waiting, waiting: all } = await listWaitingFollowUps(env.DB, person, MAX_FOLLOW_UPS);
   const titles = new Map<string, string>();
   for (const { project, issue } of waiting) {
     if (!titles.has(lower(issue))) titles.set(lower(issue), (await getIssue(env.DB, project, issue))?.title ?? issue);
   }
-  const markShown = (now: number) =>
+  const markShown = (now: number, onClaim: (claimId: string) => boolean = () => true) =>
     markFollowUpsShown(
       env.DB,
-      waiting.map(({ record }) => ({ claimId: record.claimId, commentId: record.commentId })),
+      waiting.flatMap(({ record }) => (onClaim(record.claimId) ? [{ claimId: record.claimId, commentId: record.commentId }] : [])),
       now,
     );
   const followUps = waiting.map(({ record, issue, pr, branch }) => ({
     claimId: record.claimId,
+    followUpId: record.commentId,
     issue,
     title: titles.get(lower(issue)) ?? issue,
     pr,
+    kind: record.kind,
     reviewer: record.reviewer,
+    authorKind: record.authorKind,
     comment: record.body,
     path: record.path,
     commentUrl: record.url,
     writtenAt: new Date(record.writtenAt).toISOString(),
     branch,
+    // Only open ones and those that wait for the donor list.
+    state: record.state === 'waiting_donor' ? ('waiting_donor' as const) : ('open' as const),
+    question: record.question,
   }));
   return { followUps, moreFollowUps: all - followUps.length, markShown };
 }
@@ -348,7 +516,29 @@ export async function setInterests(caller: Caller, input: ToolInput<'set_interes
   return answer(toolResult('set_interests', { interests: person.interests ?? input }));
 }
 
-export async function myWork(caller: Caller, origin: string, now: number): Promise<Answer> {
+/**
+ * my_work. A call with a wake's ID gives the wake the follow-ups it lists
+ * that the wake wasn't given, on PRs the donor still follows, and records
+ * the wake's run once the answer is made, so a run that fails leaves the
+ * wake to show as stopped. A run that only reports marks no follow-up
+ * shown, so a submit with no answers can't settle one the donor never saw:
+ * a notify wake marks none, and a full or session wake marks only those
+ * on PRs that follow go_ahead. A call with no wake ID is a session the
+ * donor is in, and marks every one it lists.
+ */
+export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin: string, now: number): Promise<Answer> {
+  const wake = input.wakeId === undefined ? null : await getWake(env.DB, caller.githubId, input.wakeId);
+  if (input.wakeId !== undefined && wake === null) {
+    return refuse(
+      refusal(
+        'not_found',
+        `There is no wake ${input.wakeId} for you, so nothing is listed. It may have been removed. Tell the donor to turn its schedule off in the harness.`,
+      ),
+    );
+  }
+  // The login as the donor's last sign-in or session recorded it, so a run
+  // reads GitHub no more than before. A run checks it against gh api user.
+  const { login } = await donorOf(caller);
   // Every unfinished claim is the donor's own record, so each is listed, and
   // one on a project on the do-not-list says to release it.
   const claims = await unfinishedClaims(caller.githubId, now);
@@ -368,16 +558,144 @@ export async function myWork(caller: Caller, origin: string, now: number): Promi
     }),
   );
   const followUps = await followUpsFor(caller.githubId);
+  const modes = await followModesOf(caller.githubId);
+  const readInPart = await listReadInPart(env.DB, caller.githubId);
+  const ready = await readyToOpen(caller, origin, now);
+  const open = await listOpenPrsOf(env.DB, caller.githubId);
+  // This run is the wake's latest, so the wake isn't among those that stopped.
+  const stoppedWakes = (await listStoppedWakes(env.DB, caller.githubId, now)).filter((stoppedWake) => stoppedWake.id !== wake?.id);
+  const followed = followUps.followUps
+    .filter((followUp) => modes.of(followUp.claimId) !== 'off')
+    .map((followUp) => ({ claimId: followUp.claimId, followUpId: followUp.followUpId }));
+  // Given in one statement, so two runs of the wake at once don't both
+  // report one. The same run's next call is given its own again.
+  // A run with no ID yet gets one no other run has, so two runs of a wake
+  // that start at once never share a lease or newForWake.
+  const runId = input.runId ?? `run-${crypto.randomUUID()}`;
+  const newForWake = wake === null ? null : await giveToWake(env.DB, wake.id, followed, now, runId);
+  const followThrough = await followThroughFor(
+    caller.githubId,
+    modes,
+    open,
+    { level: wake?.level ?? null, newForWake: new Set((newForWake ?? []).map((given) => given.claimId)) },
+    now,
+  );
+  const openPrs = openPrsOf(open, modes, followThrough);
   const result = toolResult('my_work', {
+    login,
+    runId,
     followUps: followUps.followUps,
     moreFollowUps: followUps.moreFollowUps,
-    readInPart: await listReadInPart(env.DB, caller.githubId),
-    readyToOpen: await readyToOpen(caller, origin, now),
+    readInPart,
+    readyToOpen: ready,
     working,
-    openPrs: await listOpenPrsOf(env.DB, caller.githubId),
+    openPrs,
+    followMode: modes.choice,
+    wake: wake === null ? null : wakeOut({ ...wake, lastRunAt: Math.max(wake.lastRunAt ?? now, now) }, origin),
+    newForWake,
+    stoppedWakes: stoppedWakes.map((each) => wakeOut(each, origin)),
+    // The wake this run is shows the run, as recorded once the answer is made.
+    wakes: (await listWakes(env.DB, caller.githubId)).map((each) =>
+      wakeOut(each.id === wake?.id ? { ...each, lastRunAt: Math.max(each.lastRunAt ?? now, now) } : each, origin),
+    ),
+    followThrough,
   });
-  await followUps.markShown(now);
+  // Marked, and the run recorded, only once the answer is made.
+  if (wake === null) await followUps.markShown(now);
+  else if (wake.level !== 'notify') await followUps.markShown(now, (claimId) => modes.of(claimId) === 'go_ahead');
+  if (wake !== null) await recordWakeRun(env.DB, caller.githubId, wake.id, now);
   return answer(result);
+}
+
+/** What set_follow_through made of a change, or why it changed nothing. */
+export type FollowThroughSet = { ok: true; value: ToolOutput<'set_follow_through'> } | { ok: false; refusal: Refusal };
+
+/**
+ * set_follow_through: saves the donor's mode for all their PRs or one,
+ * saves or removes their wakes, and lets a PR go on past its round limits
+ * once the donor says to. Every check comes first, and the change is made
+ * in one batch, so a refusal changes nothing. A PR takes a mode, or goes
+ * on, only while it is open, on the donor's own claim. A wake is removed
+ * only when it is the donor's. /me's forms make their changes through this
+ * too (src/me/page.ts). Another donor's claim throws PermissionRefused.
+ */
+export async function setFollowThroughAs(
+  caller: Caller,
+  input: ToolInput<'set_follow_through'>,
+  now: number,
+  origin: string,
+): Promise<FollowThroughSet> {
+  const refused = (why: Refusal): FollowThroughSet => ({ ok: false, refusal: why });
+  if ((await getPerson(env.DB, caller.githubId)) === null) {
+    return refused(refusal('not_found', 'Call start_session first, then save follow-through.'));
+  }
+  if (input.claimId !== undefined) {
+    const claim = await ownClaim(caller, input.claimId);
+    if (isRefusal(claim)) return refused(claim);
+    const pr = await getPr(env.DB, claim.id);
+    if (pr === null) {
+      return refused(
+        refusal('not_found', `Claim ${claim.id} has no PR recorded, so it has no PR to follow. Once its PR is open on GitHub, record it with record_pr. Nothing changed.`),
+      );
+    }
+    if (pr.state !== 'open') {
+      const ended = pr.state === 'merged' ? 'merged' : 'closed without merging';
+      return refused(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so there is nothing to follow. Nothing changed.`));
+    }
+  }
+  const wakes = await listWakes(env.DB, caller.githubId);
+  if (input.removeWake !== undefined && !wakes.some((wake) => wake.id === input.removeWake)) {
+    return refused(refusal('not_found', `There is no wake ${input.removeWake} for you, so nothing changed.`));
+  }
+  const full = refusal(
+    'rate_limited',
+    `The donor has ${String(MAX_WAKES)} wakes, the most one donor keeps, so nothing changed. Remove one with removeWake in the same call.`,
+  );
+  const kept = wakes.length - (input.removeWake === undefined ? 0 : 1);
+  if (input.wake !== undefined && kept >= MAX_WAKES) return refused(full);
+  const changed = await saveFollowThrough(
+    env.DB,
+    caller.githubId,
+    {
+      mode: input.mode === undefined ? undefined : { mode: input.mode, claimId: input.claimId },
+      remove: input.removeWake,
+      save: input.wake,
+      goOn: input.goOn === undefined ? undefined : input.claimId,
+    },
+    now,
+  );
+  // Another call saved a wake meanwhile and took the last place, so the batch changed nothing.
+  if (input.wake !== undefined && changed.saved === null) return refused(full);
+  const modes = await followModesOf(caller.githubId);
+  const prs = (await listOpenPrsOf(env.DB, caller.githubId)).map((open) => ({
+    claimId: open.claimId,
+    issue: open.issue,
+    pr: open.pr,
+    followMode: modes.of(open.claimId),
+    own: modes.own.has(open.claimId),
+  }));
+  return {
+    ok: true,
+    value: {
+      followMode: modes.choice,
+      prs,
+      savedWake: changed.saved === null ? null : wakeOut(changed.saved, origin),
+      removedWake: changed.removed ? (input.removeWake ?? null) : null,
+      wentOn: changed.wentOn ? (input.claimId ?? null) : null,
+      wakes: (await listWakes(env.DB, caller.githubId)).map((each) => wakeOut(each, origin)),
+    },
+  };
+}
+
+/** set_follow_through, as setFollowThroughAs makes the change. */
+export async function setFollowThrough(
+  caller: Caller,
+  input: ToolInput<'set_follow_through'>,
+  origin: string,
+  now: number,
+): Promise<Answer> {
+  const set = await setFollowThroughAs(caller, input, now, origin);
+  return set.ok ? answer(toolResult('set_follow_through', set.value)) : refuse(set.refusal);
 }
 
 /**
@@ -402,12 +720,21 @@ export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now:
       refusal('not_found', `Claim ${claim.id} has no PR recorded. Once its PR is open on GitHub, record it with record_pr.`),
     );
   }
+  // The run's own lease is renewed, and this call is its check.
+  if (input.runId !== undefined) await renewLease(env.DB, claim.id, input.runId, now(), true);
   // A merged PR never changes, and one closed more than 14 days ago is no
   // longer read, so neither is read now.
   const read = isFollowed(before, now()) ? await prChecker(env.PR_CHECKER).check(claim.id, caller.githubId) : 'final';
   const after = (await getPr(env.DB, claim.id)) ?? before;
   const newFollowUps = await countUnshownFollowUps(env.DB, claim.id);
   const ended = after.state === 'open' ? [] : (await listEndedToOffer(env.DB, caller.githubId)).filter((pr) => pr.claimId === claim.id);
+  const followThrough = await followThroughFor(
+    caller.githubId,
+    await followModesOf(caller.githubId),
+    await listOpenPrsOf(env.DB, caller.githubId),
+    { level: null, runId: input.runId, newForWake: new Set() },
+    now(),
+  );
   const result = (offered: readonly EndedToOffer[]) =>
     toolResult('check_pr', {
       claimId: claim.id,
@@ -417,6 +744,7 @@ export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now:
       read,
       newFollowUps,
       endedPr: offered.length > 0 ? endedPrOf(offered[0] as EndedToOffer) : null,
+      followThrough,
     });
   const answered = result(ended);
   // Marked once the answer is made, as start_session marks them. A session
@@ -427,6 +755,126 @@ export async function checkPr(caller: Caller, input: ToolInput<'check_pr'>, now:
     now(),
   );
   return answer(taken.size === ended.length ? answered : result([]));
+}
+
+/**
+ * sort_follow_ups: sets where the named follow-ups on the caller's claim
+ * stand, as the agent sorted them. Every ID must name a follow-up on the
+ * claim, or nothing changes. A follow-up a submit settled as fixed, or a
+ * read superseded, stays as it is. The claim's PR must be open, as it is
+ * for its follow-ups to list.
+ */
+export async function sortFollowUps(caller: Caller, input: ToolInput<'sort_follow_ups'>, now: number): Promise<Answer> {
+  const claim = await ownClaim(caller, input.claimId);
+  if (isRefusal(claim)) return refuse(claim);
+  const blocked = await blockedRefusal(env.DB, await donorOf(caller));
+  if (blocked) return refuse(blocked);
+  const pr = await getPr(env.DB, claim.id);
+  if (pr === null) {
+    return refuse(refusal('not_found', `Claim ${claim.id} has no PR recorded, so it has no follow-ups. Once its PR is open on GitHub, record it with record_pr.`));
+  }
+  if (pr.state !== 'open') {
+    const ended = pr.state === 'merged' ? 'merged' : 'closed without merging';
+    return refuse(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so its follow-ups need nothing more. Nothing changed.`));
+  }
+  const ids = input.followUps.map((sort) => sort.followUpId);
+  const unknown = await unknownFollowUps(env.DB, claim.id, ids);
+  if (unknown.length > 0) {
+    return refuse(
+      refusal('not_found', `Claim ${claim.id} has no follow-up ${unknown.join(', ')}, so nothing changed. Sort the follow-ups start_session or my_work lists, by their IDs.`),
+    );
+  }
+  const before = new Map((await listClaimFollowUps(env.DB, claim.id)).map((record) => [record.commentId, record]));
+  const changed = await sortStoredFollowUps(env.DB, claim.id, input.followUps, now);
+  const byId = new Map((await listClaimFollowUps(env.DB, claim.id)).map((record) => [record.commentId, record]));
+  // A sort that records a new reply's link, whatever its state, is a reply
+  // in its run's round, when the run names itself and holds the PR's live
+  // lease. A sort with no link, or the link recorded before, is no reply.
+  const replies = input.followUps.flatMap((sort) => {
+    const record = byId.get(sort.followUpId);
+    const was = before.get(sort.followUpId);
+    const fresh = sort.replyUrl !== undefined && changed.has(sort.followUpId) && was?.replyUrl !== sort.replyUrl;
+    return fresh && record !== undefined ? [record] : [];
+  });
+  if (replies.length > 0 && input.runId !== undefined) {
+    await countRound(env.DB, claim.id, input.runId, { push: false, bot: replies.some((record) => record.authorKind === 'bot') }, now);
+  }
+  const followUps = ids.flatMap((key) => {
+    const record = byId.get(key);
+    return record === undefined
+      ? []
+      : [
+          {
+            followUpId: key,
+            kind: record.kind,
+            state: record.state,
+            outcome: record.outcome,
+            question: record.question,
+            replyUrl: record.replyUrl,
+            changed: changed.has(key),
+          },
+        ];
+  });
+  return answer(toolResult('sort_follow_ups', { claimId: claim.id, issue: claim.issue, pr: pr.pr, followUps }));
+}
+
+/**
+ * follow_pr: takes or gives back the lease on the caller's claim's open PR
+ * for the run that names itself, so one agent follows a PR at a time. A
+ * lease another run holds stays, and the answer says until when. The
+ * lease is taken in one statement, so two runs at once never both hold it.
+ */
+export async function followPr(caller: Caller, input: ToolInput<'follow_pr'>, now: number): Promise<Answer> {
+  const claim = await ownClaim(caller, input.claimId);
+  if (isRefusal(claim)) return refuse(claim);
+  const blocked = await blockedRefusal(env.DB, await donorOf(caller));
+  if (blocked) return refuse(blocked);
+  const pr = await getPr(env.DB, claim.id);
+  if (pr === null) {
+    return refuse(refusal('not_found', `Claim ${claim.id} has no PR recorded, so it has no lease. Once its PR is open on GitHub, record it with record_pr.`));
+  }
+  const closed = refusal(
+    'pr_closed',
+    `Claim ${claim.id}'s PR, ${pr.pr.url}, ${pr.state === 'merged' ? 'merged' : 'closed without merging'}, so there is nothing to follow. No lease was taken.`,
+  );
+  let lease: 'held' | 'following' | 'given_back';
+  let until: number | null;
+  if (input.action === 'take') {
+    if (pr.state !== 'open') return refuse(closed);
+    const took = await takeLease(env.DB, claim.id, input.runId, now);
+    // The PR merged or closed since it was read.
+    if (took === null) {
+      const ended = (await getPr(env.DB, claim.id))?.state === 'merged' ? 'merged' : 'closed without merging';
+      return refuse(refusal('pr_closed', `Claim ${claim.id}'s PR, ${pr.pr.url}, ${ended}, so there is nothing to follow. No lease was taken.`));
+    }
+    lease = took.taken ? 'held' : 'following';
+    until = took.lease?.until ?? null;
+  } else {
+    // What the run did once is recorded whether or not it still held the lease.
+    await noteFollowThrough(env.DB, claim.id, input.noted ?? [], now);
+    const back = await giveBackLease(env.DB, claim.id, input.runId);
+    const other = back.lease !== null && back.lease.until > now ? back.lease : null;
+    lease = other === null ? 'given_back' : 'following';
+    until = other?.until ?? null;
+  }
+  const followThrough = await followThroughFor(
+    caller.githubId,
+    await followModesOf(caller.githubId),
+    await listOpenPrsOf(env.DB, caller.githubId),
+    { level: null, runId: input.runId, newForWake: new Set() },
+    now,
+  );
+  return answer(
+    toolResult('follow_pr', {
+      claimId: claim.id,
+      issue: claim.issue,
+      pr: pr.pr,
+      runId: input.runId,
+      lease,
+      until: iso(until),
+      followThrough: followThrough.prs.find((one) => one.claimId === claim.id) ?? null,
+    }),
+  );
 }
 
 /**
@@ -447,7 +895,7 @@ export async function ownClaim(caller: Caller, claimId: string): Promise<ClaimRe
   return claim;
 }
 
-export async function postUpdate(caller: Caller, input: ToolInput<'post_update'>): Promise<Answer> {
+export async function postUpdate(caller: Caller, input: ToolInput<'post_update'>, now: number = Date.now()): Promise<Answer> {
   const claim = await ownClaim(caller, input.claimId);
   if (isRefusal(claim)) return refuse(claim);
   const result = await issueRoom(env.ISSUE_ROOM, claim.issue).postUpdate({
@@ -457,6 +905,8 @@ export async function postUpdate(caller: Caller, input: ToolInput<'post_update'>
     job: input.job ?? null,
   });
   if (!result.ok) return refuse(result.refusal);
+  // The run's own lease on the claim's PR is renewed.
+  if (input.runId !== undefined) await renewLease(env.DB, claim.id, input.runId, now, false);
   // The result drops the room's ok, which the tool's schema doesn't list.
   return answer(toolResult('post_update', result));
 }

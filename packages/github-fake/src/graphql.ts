@@ -19,6 +19,10 @@
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreview
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreviewcomment
+// https://docs.github.com/en/graphql/reference/issues#object-issuecomment
+// https://docs.github.com/en/graphql/reference/checks#object-statuscheckrollup
+// https://docs.github.com/en/graphql/reference/checks#object-checkrun
+// https://docs.github.com/en/graphql/reference/commits#object-statuscontext
 // https://docs.github.com/en/graphql/reference/users#interface-actor
 // https://docs.github.com/en/graphql/reference/users#object-bot
 
@@ -41,13 +45,16 @@ import {
   fullName,
   gitReady,
   key,
+  mergeableOf,
   requireGit,
   roleOf,
+  rollupState,
   workflowRefusal,
   type IssueRecord,
   type LabelRecord,
   type PullData,
   type RepoRecord,
+  type CheckRecord,
   reviewVisible,
   type ReviewRecord,
 } from './state.ts';
@@ -92,6 +99,41 @@ const schema = buildSchema(/* GraphQL */ `
     MEMBER
     NONE
     OWNER
+  }
+
+  enum MergeableState {
+    CONFLICTING
+    MERGEABLE
+    UNKNOWN
+  }
+
+  enum StatusState {
+    ERROR
+    EXPECTED
+    FAILURE
+    PENDING
+    SUCCESS
+  }
+
+  enum CheckStatusState {
+    COMPLETED
+    IN_PROGRESS
+    PENDING
+    QUEUED
+    REQUESTED
+    WAITING
+  }
+
+  enum CheckConclusionState {
+    ACTION_REQUIRED
+    CANCELLED
+    FAILURE
+    NEUTRAL
+    SKIPPED
+    STALE
+    STARTUP_FAILURE
+    SUCCESS
+    TIMED_OUT
   }
 
   enum PullRequestReviewState {
@@ -236,8 +278,14 @@ const schema = buildSchema(/* GraphQL */ `
     closedAt: DateTime
     createdAt: DateTime!
     baseRefName: String!
+    baseRefOid: GitObjectID!
+    headRefName: String!
+    headRefOid: GitObjectID!
+    mergeable: MergeableState!
     repository: Repository!
     author: Actor
+    comments(after: String, before: String, first: Int, last: Int): IssueCommentConnection!
+    commits(after: String, before: String, first: Int, last: Int): PullRequestCommitConnection!
     reviews(
       after: String
       before: String
@@ -282,6 +330,61 @@ const schema = buildSchema(/* GraphQL */ `
     totalCount: Int!
     nodes: [PullRequestReviewComment]
     pageInfo: PageInfo!
+  }
+
+  type IssueComment implements Node {
+    id: ID!
+    databaseId: Int
+    author: Actor
+    authorAssociation: CommentAuthorAssociation!
+    body: String!
+    url: URI!
+    createdAt: DateTime!
+  }
+
+  type IssueCommentConnection {
+    totalCount: Int!
+    nodes: [IssueComment]
+    pageInfo: PageInfo!
+  }
+
+  type PullRequestCommit implements Node {
+    id: ID!
+    commit: Commit!
+    url: URI!
+  }
+
+  type PullRequestCommitConnection {
+    totalCount: Int!
+    nodes: [PullRequestCommit]
+    pageInfo: PageInfo!
+  }
+
+  type CheckRun implements Node {
+    id: ID!
+    name: String!
+    status: CheckStatusState!
+    conclusion: CheckConclusionState
+  }
+
+  type StatusContext implements Node {
+    id: ID!
+    context: String!
+    state: StatusState!
+  }
+
+  union StatusCheckRollupContext = CheckRun | StatusContext
+
+  type StatusCheckRollupContextConnection {
+    totalCount: Int!
+    nodes: [StatusCheckRollupContext]
+    pageInfo: PageInfo!
+  }
+
+  type StatusCheckRollup implements Node {
+    id: ID!
+    state: StatusState!
+    contexts(after: String, before: String, first: Int, last: Int): StatusCheckRollupContextConnection!
   }
 
   type PullRequestConnection {
@@ -386,6 +489,7 @@ const schema = buildSchema(/* GraphQL */ `
     author: GitActor
     committer: GitActor
     signature: GitSignature
+    statusCheckRollup: StatusCheckRollup
     tree: Tree!
     parents(first: Int, after: String, last: Int, before: String): CommitConnection!
   }
@@ -652,8 +756,47 @@ function pullRequestNode(ctx: Ctx, repo: RepoRecord, issue: IssueRecord & { pull
     closedAt: issue.closedAt,
     createdAt: issue.createdAt,
     baseRefName: issue.pull.base.ref,
+    // GitHub's docs don't say whether baseRefOid follows the base branch as
+    // it moves. The fake gives the branch's tip, while it has one.
+    baseRefOid: own(repo.branches, issue.pull.base.ref) ?? issue.pull.base.sha,
+    headRefName: issue.pull.head.ref,
+    headRefOid: issue.pull.head.sha,
+    mergeable: () => (issue.state === 'open' ? mergeableOf(ctx.state, repo, issue.pull) : 'UNKNOWN'),
     repository: () => repositoryNode(ctx, repo),
     author: () => actorNode(ctx, issue.user),
+    // The conversation's comments, oldest first, as GitHub gives them.
+    comments: (args: PageArgs) => {
+      const url = `${ctx.webUrl}/${fullName(repo)}/pull/${String(issue.number)}`;
+      return pageOf(
+        (issue.issueComments ?? []).map((comment) => ({
+          __typename: 'IssueComment',
+          id: nodeId('IC', comment.id),
+          databaseId: comment.id,
+          author: () => actorNode(ctx, comment.user),
+          authorAssociation: authorAssociation(ctx.state, repo, comment.user, ctx.viewer),
+          body: comment.body,
+          url: `${url}#issuecomment-${String(comment.id)}`,
+          createdAt: comment.createdAt,
+        })),
+        args,
+        'comments',
+      );
+    },
+    // The fake keeps no list of a PR's commits, so it gives the head alone.
+    // Its checks are the base repo's, where the PR's workflows run.
+    commits: (args: PageArgs) =>
+      pageOf(
+        [
+          {
+            __typename: 'PullRequestCommit',
+            id: nodeId('PURC', issue.pull.id, issue.pull.head.sha),
+            commit: () => objectNode(ctx, repo, issue.pull.head.sha, ''),
+            url: `${ctx.webUrl}/${fullName(repo)}/pull/${String(issue.number)}/commits/${issue.pull.head.sha}`,
+          },
+        ],
+        args,
+        'commits',
+      ),
     // Oldest first, as GitHub gives them. A pending review shows only to
     // its author.
     reviews: (args: PageArgs & { states?: string[] | null }) => {
@@ -818,6 +961,7 @@ function objectNode(ctx: Ctx, repo: RepoRecord, oid: Oid | null, path: string): 
               wasSignedByGitHub: true,
             }
           : null,
+        statusCheckRollup: () => rollupNode(repo, oid),
         tree: () => objectNode(ctx, repo, object.tree, ''),
         parents: ({ first }: { first?: number }) => ({
           totalCount: object.parents.length,
@@ -826,6 +970,31 @@ function objectNode(ctx: Ctx, repo: RepoRecord, oid: Oid | null, path: string): 
       };
     }
   }
+}
+
+// The checks on a commit in a repo, together, or null when it has none.
+function rollupNode(repo: RepoRecord, oid: Oid) {
+  const checks = own(repo.checks ?? {}, oid) ?? [];
+  const state = rollupState(checks);
+  if (state === null) return null;
+  return {
+    __typename: 'StatusCheckRollup',
+    id: nodeId('SCR', repo.id, oid),
+    state,
+    contexts: (args: PageArgs) => pageOf(checks.map((check, i) => contextNode(repo, oid, check, i)), args, 'contexts'),
+  };
+}
+
+function contextNode(repo: RepoRecord, oid: Oid, check: CheckRecord, i: number) {
+  const id = nodeId(check.type === 'CheckRun' ? 'CR' : 'SC', repo.id, `${oid}:${String(i)}`);
+  if (check.type === 'StatusContext') return { __typename: 'StatusContext', id, context: check.name, state: check.state };
+  return {
+    __typename: 'CheckRun',
+    id,
+    name: check.name,
+    status: check.conclusion === null ? 'IN_PROGRESS' : 'COMPLETED',
+    conclusion: check.conclusion,
+  };
 }
 
 // The repo and branch a CommittableBranch names, by node ID or by name.

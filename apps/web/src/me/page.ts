@@ -1,4 +1,18 @@
-import { describeProblems, tools, validate, type FieldProblem, type Interests, type Refusal } from '@goodfirsttoken/core';
+import {
+  checkTrigger,
+  describeProblems,
+  MAX_ROUNDS,
+  ROUNDS_PER_DAY,
+  tools,
+  validate,
+  type FieldProblem,
+  type Interests,
+  type Refusal,
+  type ToolInput,
+  type ToolOutput,
+  takesTrigger,
+  triggerKeyOf,
+} from '@goodfirsttoken/core';
 import { env } from 'cloudflare:workers';
 import { failureReason } from '../auth/auth';
 import { backWithNotice, verifiedNotice } from '../auth/notice';
@@ -6,12 +20,16 @@ import type { NoticeParams } from '../auth/notice-params';
 import { PermissionRefused, type Caller } from '../auth/permissions';
 import { readSignedIn, siteCaller, type SignedIn } from '../auth/session';
 import { siteOrigin } from '../auth/settings';
-import { getPerson, setInterests } from '../db';
+import { getPerson, getWake, listWakes, removeTrigger, saveTrigger, setInterests, turnTriggerOn } from '../db';
 import { GitHubError } from '../github';
 import { endLapsedConnections, listConnections, type Connection } from '../mcp/connections';
+import { setFollowThroughAs } from '../mcp/donor';
 import { openPrAs, readyToOpen, type Opened, type ReviewItem } from '../mcp/submit';
+import { sealTriggerKey } from '../sync/triggers';
+import { readFollowThrough, type FollowThroughShown } from './follow';
+import { HARNESS_NAMES, MODE_NAMES } from './follow-words';
 import { ME_PATH } from './paths';
-import { openPrRefusalText } from './refusals';
+import { followRefusalText, openPrRefusalText } from './refusals';
 
 // /me on the server: what the page reads, and the answer to its forms. The
 // page's data and its forms both start from the signed-in person's web
@@ -19,7 +37,11 @@ import { openPrRefusalText } from './refusals';
 // can each be called on their own, and each acts as that person alone. The
 // review queue and Open PR are my_work's and open_pr's own, from
 // src/mcp/submit.ts, run with the GitHub token from the person's sign-in on
-// the site. The interests are set_interests' own schema and save.
+// the site. The interests are set_interests' own schema and save. The
+// follow-through forms are set_follow_through's own schema and rules, from
+// src/mcp/donor.ts. The trigger forms save, remove, and turn on a wake's
+// trigger, which no tool does, since its key goes from the harness to this
+// page and never through the agent. No page shows the key again.
 
 /** The donor's review queue, or why the page can't show it. */
 export type Queue =
@@ -32,6 +54,13 @@ export type Queue =
 export interface MePage {
   /** When the page was read, for how long work has left. */
   now: number;
+  /** The person's login now, for their feed's link. */
+  login: string;
+  /**
+   * Their open PRs, mode, and wakes, or null when the database couldn't
+   * answer. A person with no open PR and no wake has nothing to follow.
+   */
+  follow: FollowThroughShown | null;
   agents: Connection[];
   queue: Queue;
   /** Null until the person saves some, here or with set_interests. */
@@ -75,9 +104,19 @@ async function readQueue(caller: Caller, origin: string, now: number): Promise<Q
   }
 }
 
+/** The person's follow-through, or null when it couldn't be read. */
+async function readFollow(person: number, now: number): Promise<FollowThroughShown | null> {
+  try {
+    return await readFollowThrough(env.DB, person, now);
+  } catch (error) {
+    console.error(`Follow-through on /me wasn't read: ${failureReason(error)}`);
+    return null;
+  }
+}
+
 /**
  * What /me shows the signed-in person: their connected agents, their review
- * queue, and their interests. Anyone else is sent to sign in, with nothing
+ * queue, their open PRs and how each is followed, and their interests. Anyone else is sent to sign in, with nothing
  * read. Each part is read on its own, so a queue GitHub can't answer for
  * still leaves Disconnect on the page.
  */
@@ -89,13 +128,15 @@ export async function loadMePage(
   if (!signedIn) return { result: { state: 'signed_out' }, setCookies };
   const origin = siteOrigin(request);
   const now = Date.now();
-  const [agents, queue, person, notice] = await Promise.all([
+  const [agents, queue, person, follow, notice] = await Promise.all([
     readAgents(origin, signedIn.githubId, now),
     readQueue(siteCaller(signedIn, origin), origin, now),
     getPerson(env.DB, signedIn.githubId),
+    readFollow(signedIn.githubId, now),
     verifiedNotice(noticePurpose(signedIn), params),
   ]);
-  return { result: { state: 'ready', page: { now, agents, queue, interests: person?.interests ?? null, notice } }, setCookies };
+  const page = { now, login: signedIn.login, agents, queue, follow, interests: person?.interests ?? null, notice };
+  return { result: { state: 'ready', page }, setCookies };
 }
 
 function text(status: number, body: string): Response {
@@ -181,10 +222,119 @@ async function interestsForm(caller: Caller, form: FormData): Promise<string> {
   return saved === null ? 'Nothing saved. Sign out and in again.' : 'Saved your interests.';
 }
 
-async function runForm(caller: Caller, form: FormData, now: number): Promise<string> {
+/** A form field's text, or undefined when the form has none. */
+function field(form: FormData, name: string): string | undefined {
+  const value = form.get(name);
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** The PR a claim has, by its number, in what set_follow_through gave back, or the claim's ID. */
+function prName(set: ToolOutput<'set_follow_through'>, claimId: string | undefined): string {
+  const pr = set.prs.find((one) => one.claimId === claimId);
+  return pr === undefined ? 'The PR' : `PR #${String(pr.pr.number)}`;
+}
+
+/** What a follow-through form changed, in the page's words. */
+function followText(input: ToolInput<'set_follow_through'>, set: ToolOutput<'set_follow_through'>, removed: string | null): string {
+  if (input.goOn !== undefined) {
+    return set.wentOn === null
+      ? 'Nothing changed. The PR is no longer open.'
+      : `${prName(set, input.claimId)} goes on. Your agent can take ${String(ROUNDS_PER_DAY)} more rounds on it today, and ${String(MAX_ROUNDS)} more in all.`;
+  }
+  if (input.removeWake !== undefined) {
+    return set.removedWake === null
+      ? 'Nothing changed. That wake was already removed.'
+      : `Removed the ${removed ?? 'harness'} wake. Turn its schedule off in the harness too.`;
+  }
+  if (input.mode === 'off') return `Your agent stops following ${prName(set, input.claimId)}.`;
+  if (input.mode !== undefined && input.claimId !== undefined) {
+    return `${prName(set, input.claimId)} follows ${MODE_NAMES[input.mode]} now.`;
+  }
+  return `Your PRs follow ${MODE_NAMES[set.followMode.mode]} now.`;
+}
+
+/**
+ * Changes how the person's PRs are followed, by set_follow_through's
+ * schema and rules: their mode for all their PRs, one PR's mode or off,
+ * going on past a round limit, or removing a wake. Another donor's claim
+ * or wake changes nothing.
+ */
+async function followForm(caller: Caller, form: FormData, now: number, origin: string): Promise<string> {
+  const action = form.get('action');
+  const claimId = field(form, 'claim');
+  const mode = field(form, 'mode');
+  const removeWake = field(form, 'wake');
+  const raw =
+    action === 'follow_mode'
+      ? { mode }
+      : action === 'pr_follow_mode'
+        ? { mode, claimId }
+        : action === 'go_on'
+          ? { claimId, goOn: true }
+          : { removeWake };
+  const input = validate(tools.set_follow_through.input, raw);
+  if (!input.ok) return `Nothing changed. ${problemsText(input.problems)}`;
+  // The wake's harness, named in the notice once it is gone.
+  const wakes = removeWake === undefined ? [] : await listWakes(env.DB, caller.githubId);
+  const harness = wakes.find((wake) => wake.id === removeWake)?.harness;
+  let set;
+  try {
+    set = await setFollowThroughAs(caller, input.value, now, origin);
+  } catch (error) {
+    if (error instanceof PermissionRefused) return `Nothing changed. ${followRefusalText(error) ?? error.message}`;
+    throw error;
+  }
+  if (!set.ok) return `Nothing changed. ${followRefusalText(set.refusal) ?? set.refusal.message}`;
+  return followText(input.value, set.value, harness === undefined ? null : HARNESS_NAMES[harness]);
+}
+
+const FOLLOW_ACTIONS = new Set(['follow_mode', 'pr_follow_mode', 'go_on', 'remove_wake']);
+
+const NO_WAKE = 'Nothing changed. Good First Token has no record of that wake now.';
+
+/**
+ * Saves, removes, or turns on again the trigger of one of the person's
+ * wakes. A trigger is saved only on a wake in a harness that takes one, at
+ * a level that runs on its own, with a URL that fits that harness's
+ * pattern (packages/core's checkTrigger) and a key, which is sealed before
+ * it is stored. No notice says the key or the URL back, only the URL's
+ * host. Another person's wake changes nothing.
+ */
+async function triggerForm(caller: Caller, form: FormData, now: number): Promise<string> {
+  const action = form.get('action');
+  const wakeId = field(form, 'wake') ?? '';
+  const wake = /^[A-Za-z0-9_-]{1,64}$/.test(wakeId) ? await getWake(env.DB, caller.githubId, wakeId) : null;
+  if (wake === null) return NO_WAKE;
+  const harness = HARNESS_NAMES[wake.harness];
+  if (action === 'remove_trigger') {
+    if (wake.trigger === null) return `Nothing changed. The ${harness} wake has no trigger.`;
+    await removeTrigger(env.DB, caller.githubId, wake.id);
+    return `Removed the trigger from the ${harness} wake. Revoke its key in the harness too.`;
+  }
+  if (action === 'trigger_on') {
+    const on = await turnTriggerOn(env.DB, caller.githubId, wake.id);
+    return on === null
+      ? `Nothing changed. Paste the trigger's URL and key again for the ${harness} wake.`
+      : `The trigger for the ${harness} wake is on again.`;
+  }
+  if (!takesTrigger(wake.harness) || wake.level === 'session') return `Nothing saved. A ${harness} wake can't have a trigger.`;
+  const url = checkTrigger(wake.harness, field(form, 'url') ?? '');
+  if (!url.ok) return `Nothing saved. ${url.problem}`;
+  const key = triggerKeyOf(field(form, 'key') ?? '');
+  if (key === null) return "Nothing saved. Paste the trigger's key as the harness shows it.";
+  const saved = await saveTrigger(env.DB, caller.githubId, wake.id, { harness: wake.harness, url: url.url, sealedKey: await sealTriggerKey(key) }, now);
+  if (saved === null) return NO_WAKE;
+  return `Saved the trigger for the ${harness} wake. Good First Token calls ${url.host} when a follow-up comes, at most once in 15 minutes.`;
+}
+
+const TRIGGER_ACTIONS = new Set(['save_trigger', 'remove_trigger', 'trigger_on']);
+
+async function runForm(caller: Caller, form: FormData, now: number, origin: string): Promise<string> {
   const action = form.get('action');
   if (action === 'open_pr') return openPrForm(caller, form, now);
   if (action === 'interests') return interestsForm(caller, form);
+  if (typeof action === 'string' && FOLLOW_ACTIONS.has(action)) return followForm(caller, form, now, origin);
+  if (typeof action === 'string' && TRIGGER_ACTIONS.has(action)) return triggerForm(caller, form, now);
   return 'Nothing changed. That form does nothing here.';
 }
 
@@ -200,6 +350,6 @@ export async function answerMeForm(request: Request): Promise<Response> {
   const { signedIn, setCookies } = await readSignedIn(request);
   if (!signedIn) return seeOther('/sign-in', setCookies);
   const form = await request.formData().catch(() => new FormData());
-  const notice = await runForm(siteCaller(signedIn, origin), form, Date.now());
+  const notice = await runForm(siteCaller(signedIn, origin), form, Date.now(), origin);
   return backWithNotice(ME_PATH, noticePurpose(signedIn), notice, setCookies);
 }

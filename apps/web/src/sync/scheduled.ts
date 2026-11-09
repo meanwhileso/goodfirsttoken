@@ -8,6 +8,7 @@ import { ServiceGitHub } from './github';
 import { syncTaggedIssues } from './issues';
 import { recordClearedPrs } from './cleared';
 import { followPrs } from './prs';
+import { callTriggersAfterPass } from './triggers';
 
 // The jobs that read GitHub with the read-only service token on the
 // Worker's cron triggers. What each may spend is in src/sync/allowances.ts,
@@ -21,7 +22,9 @@ import { followPrs } from './prs';
 export const ISSUE_SYNC_CRON = '*/15 * * * *';
 /**
  * Twice an hour, apart from the sync: the PR job (src/sync/prs.ts), then
- * the job that records cleared PRs nobody recorded (src/sync/cleared.ts).
+ * the calls to the donors' triggers for the follow-ups it read
+ * (src/sync/triggers.ts), then the job that records cleared PRs nobody
+ * recorded (src/sync/cleared.ts).
  */
 export const PR_JOB_CRON = '7,37 * * * *';
 /**
@@ -86,6 +89,8 @@ export async function runScheduled(cron: string, env: Env): Promise<void> {
       return;
     case PR_JOB_CRON:
       await followPrs({ db: env.DB, rooms: env.ISSUE_ROOM, github: new ServiceGitHub(token, ALLOWANCES.prs), now });
+      // Never throws, so a slow or broken trigger can't stop the job after it.
+      await callTriggersAfterPass({ db: env.DB, fetch: (url, init) => fetch(url, init), now });
       await recordClearedPrs({ db: env.DB, github: new ServiceGitHub(token, ALLOWANCES.cleared), now });
       return;
     case CRAWL_CRON:

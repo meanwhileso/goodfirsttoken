@@ -1,5 +1,6 @@
 import {
   agentName,
+  commitSha,
   count,
   githubId,
   githubLogin,
@@ -211,16 +212,21 @@ export async function listReopenedClaimPrs(
   }));
 }
 
-/** What one read of a claim's open PR's reviews covered. */
+/** What one read of a claim's open PR's reviews and conversation covered. */
 export interface ReviewsRead {
   claimId: string;
   /** Every review GitHub counts on the PR now, pending and dismissed ones left out. */
   reviews: number;
   /**
    * For each review the read took, newest first, how many comments on its
-   * lines the read left out: 0 for a review that isn't a maintainer's.
+   * lines the read left out: 0 for a review that is neither a maintainer's
+   * nor a bot's.
    */
   leftOut: number[];
+  /** Every comment GitHub counts in the PR's conversation now. Left out, the read counted none. */
+  conversation?: number;
+  /** How many of the newest of those the read took. */
+  conversationTook?: number;
   /** When the read was made, before its query went to GitHub. */
   readAt: number;
 }
@@ -233,7 +239,8 @@ export interface ReviewsRead {
  * left out. A new review the read didn't take is never read, since each
  * read takes the newest reviews. So `reviews_read` is how many of the PR's
  * reviews some read took, and `comments_left_out` how many comments on
- * lines of those no read took.
+ * lines of those no read took. The comments in the conversation count the
+ * same way, in `conversation` and `conversation_read`.
  */
 export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[]): Promise<void> {
   if (read.length === 0) return;
@@ -241,6 +248,8 @@ export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[
     claimId: mustParse(id, row.claimId, 'claimId'),
     reviews: mustParse(count, row.reviews, 'reviews'),
     leftOut: row.leftOut.map((n) => mustParse(count, n, 'leftOut')),
+    conversation: mustParse(count, row.conversation ?? 0, 'conversation'),
+    conversationTook: mustParse(count, row.conversationTook ?? 0, 'conversationTook'),
     readAt: checkTime(row.readAt, 'readAt'),
   }));
   // SET reads the row as it was, so prs.reviews is the last read's count.
@@ -253,9 +262,14 @@ export async function setReviewsRead(db: D1Database, read: readonly ReviewsRead[
          reviews_read = MIN(r.reviews, prs.reviews_read + MIN(r.took, MAX(0, r.reviews - prs.reviews))),
          comments_left_out = prs.comments_left_out
            + COALESCE((SELECT SUM(e.value) FROM json_each(r.left_out) e WHERE e.key < MAX(0, r.reviews - prs.reviews)), 0),
+         conversation = r.conversation,
+         conversation_read = MIN(r.conversation,
+           prs.conversation_read + MIN(r.conversation_took, MAX(0, r.conversation - prs.conversation))),
          reviews_read_at = r.read_at
        FROM (SELECT json_extract(j.value, '$.claimId') AS claim_id, json_extract(j.value, '$.reviews') AS reviews,
                json_array_length(j.value, '$.leftOut') AS took, json_extract(j.value, '$.leftOut') AS left_out,
+               json_extract(j.value, '$.conversation') AS conversation,
+               json_extract(j.value, '$.conversationTook') AS conversation_took,
                json_extract(j.value, '$.readAt') AS read_at
              FROM json_each(?) j) r
        WHERE prs.claim_id = r.claim_id AND (prs.reviews_read_at IS NULL OR prs.reviews_read_at <= r.read_at)`,
@@ -331,6 +345,18 @@ export interface OpenPrOf {
   pr: PrRef;
   /** The reviews GitHub counted on the PR at the last read, pending and dismissed ones left out. */
   reviews: number;
+  /** The comments GitHub counted in the PR's conversation at the last read, anyone's. */
+  conversation: number;
+  /** The head of the claim's newest checks follow-up, in any state, or null. */
+  failedChecksHead: string | null;
+  /** The head of the claim's newest conflict follow-up, in any state, or null. */
+  conflictHead: string | null;
+}
+
+/** A head's SHA as a follow-up's ID gives it, or null for one that isn't. */
+function headOf(value: string | null): string | null {
+  const parsed = commitSha.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -343,19 +369,37 @@ export interface OpenPrOf {
 export async function listOpenPrsOf(db: D1Database, person: number): Promise<OpenPrOf[]> {
   const { results } = await db
     .prepare(
-      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews
+      `SELECT p.claim_id, c.issue_repo, c.issue_number, p.repo, p.number, p.url, p.reviews, p.conversation,
+         (SELECT f.comment_id FROM follow_ups f WHERE f.claim_id = p.claim_id AND f.kind = 'checks'
+           ORDER BY f.read_at DESC, f.rowid DESC LIMIT 1) AS checks_head,
+         (SELECT substr(f.comment_id, 1, instr(f.comment_id, ':') - 1) FROM follow_ups f WHERE f.claim_id = p.claim_id
+           AND f.kind = 'conflict' ORDER BY f.read_at DESC, f.rowid DESC LIMIT 1) AS conflict_head
        FROM prs p JOIN claims c ON c.id = p.claim_id
        WHERE c.github_id = ? AND p.state = 'open' AND ${SHOWN}
          AND NOT EXISTS (SELECT 1 FROM issue_syncs u WHERE u.project = c.project AND u.delisted IS NOT NULL)
        ORDER BY p.opened_at, p.claim_id LIMIT ?`,
     )
     .bind(mustParse(githubId, person, 'githubId'), OPEN_PRS_LISTED)
-    .all<{ claim_id: string; issue_repo: string; issue_number: number; repo: string; number: number; url: string; reviews: number }>();
+    .all<{
+      claim_id: string;
+      issue_repo: string;
+      issue_number: number;
+      repo: string;
+      number: number;
+      url: string;
+      reviews: number;
+      conversation: number;
+      checks_head: string | null;
+      conflict_head: string | null;
+    }>();
   return results.map((row) => ({
     claimId: mustParse(id, row.claim_id, 'claimId'),
     issue: mustParse(issueRef, joinIssue(row.issue_repo, row.issue_number), 'issue'),
     pr: mustParse(prRefSchema, prFromColumns(row.repo, row.number, row.url), 'pr'),
     reviews: mustParse(count, row.reviews, 'reviews'),
+    conversation: mustParse(count, row.conversation, 'conversation'),
+    failedChecksHead: headOf(row.checks_head),
+    conflictHead: headOf(row.conflict_head),
   }));
 }
 

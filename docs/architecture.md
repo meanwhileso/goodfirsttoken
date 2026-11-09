@@ -541,7 +541,7 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
 
 | File | What it does |
 |---|---|
-| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, and `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list |
+| `src/mcp/donor.ts` | `start_session`, `set_interests`, `suggest_issues`, `claim_issue`, `post_update`, `release_claim`, `my_work`, `check_pr`, which asks `PrChecker` in `src/sync/pr-checker.ts` for a read and offers a PR that ended, once, `follow_pr`, `sort_follow_ups`, `set_follow_through`, and `request_repo`. `listOpenPrsOf` in `src/db/prs.ts` gives the `openPrs` `start_session` and `my_work` list, with the head of each claim's newest checks and conflict follow-up in any state, by a subquery each, and `followModesOf` adds each one's mode from `src/db/follow-through.ts`. `followThroughFor` joins them with `listFollowFacts` from `src/db/follow-prs.ts` and gives them to `followThroughOf` in `packages/core` for `followThrough` |
 | `src/mcp/submit.ts` | `submit_work`, `open_pr`, and `record_pr`, and the review queue that `my_work` lists, with cleared work's compare page link from `prToOpen`, which leaves the body out past `MAX_COMPARE_URL`. `clearedToOpen` reads the branch's head and keeps the donor's own PR apart from the others on the issue. `openPrAs` and `readyToOpen` serve `/me` too, under [/me](#me) |
 | `src/issue/find.ts` | `followedCopy`, which project's copy a claim goes to, for the issue page and `claim_issue` |
 | `src/donor/rules.ts` | The donor's own rules: blocked, the open-PR cap, the CLA, and the vouch file, for `suggest_issues` and `claim_issue` alike, and whether a claim's project still takes work, for `submit_work` and `open_pr` |
@@ -674,10 +674,58 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   claim with `ROW_NUMBER() OVER (PARTITION BY claim_id)`, counts them all
   with `COUNT(*) OVER ()`, and gives the ones it took oldest first.
   `listReadInPart` reads the counts the PR job kept on `prs` by the same
-  `SHOWS`. `markFollowUpsShown` marks what a tool listed in one statement,
-  once the tool's answer is made, and `answerFollowUps`, which
-  `submit_work` calls once the room records a submit to a claim with its
-  PR open, answers what was shown by then. `listEndedToOffer` in
+  `SHOWS`. It lists only follow-ups whose `state` is `open` or
+  `waiting_donor`, by `LISTED`, and takes and gives those that wait for
+  the donor first, ahead of the turns. `markFollowUpsShown` marks
+  what a tool listed in one statement, once the tool's answer is made.
+  Once the room records a submit to a claim with its PR open,
+  `submit_work` settles as fixed what was shown by then with
+  `answerFollowUps`, or with `answers`, only those IDs with
+  `answerFollowUpsById`. Before it reads GitHub, `unknownFollowUps` checks
+  that each ID in `answers` is the claim's. `sort_follow_ups` checks its
+  IDs the same way, then sets them all in one `UPDATE ... FROM json_each
+  ... RETURNING` with `sortFollowUps`, which leaves a follow-up settled as
+  `fixed` or `superseded` as it is and gives the IDs it changed.
+  `my_work` with a wake's ID gives the wake what it lists with
+  `giveToWake`, one `INSERT ... ON CONFLICT DO UPDATE ... WHERE ...
+  RETURNING`, which keeps the run's ID on each row. A row given before
+  comes back only when its `run_id` is the caller's, so a run that calls
+  `my_work` again gets its own follow-ups again, and two runs of one wake
+  at once never both get one. A call with no run ID matches no row, since
+  `NULL` equals nothing. A call with no run ID gets a new one,
+  `run-` and a random UUID, so two runs of a wake that start in the same
+  minute never share an ID. The server can't refuse an ID another run of
+  the wake made up, since nothing tells two runs with one ID apart, so
+  the skill takes its ID from `my_work`. The server keeps the run's
+  follow-ups, so a skill
+  that calls `my_work` twice in a run needs nothing of its own to carry
+  them. Once the answer is
+  made, `markFollowUpsShown` marks only what the wake's level lets it:
+  none for `notify`, and only follow-ups on PRs that follow `go_ahead` for
+  `full` and `session`, and `recordWakeRun` records the run, keeping the
+  later of two times. `set_follow_through` makes its checks, then
+  `saveFollowThrough` makes the whole change in one batch: the new wake
+  first, saved only while the donor keeps fewer than 10, and each other
+  statement only once the new wake is there, so a wake past the limit
+  changes nothing. With `goOn`, one more statement in the batch sets the
+  claim's open PR's `rounds` and `rounds_on_day` to 0, only on the
+  donor's own claim, and leaves `bot_rounds` and `rounds_day`. `follow_pr` takes a lease with `takeLease`, one
+  `UPDATE ... RETURNING` whose `WHERE` takes it only when no run holds it,
+  the run holds it, or its time passed, so two runs at once never both
+  hold it. `countRound` counts a round in one `UPDATE`, whose every `SET`
+  reads the row before it, only while the caller's run holds a live
+  lease: its `WHERE` matches `lease_run` to the run's ID. `submit_work`
+  calls it once a submit with a `runId` lands on an open PR, after
+  `answersBot` says whether the submit settles a bot's follow-up, and
+  `sort_follow_ups` with a `runId` once it records a reply's link that
+  wasn't recorded before, whatever the state. A call with no `runId`, or
+  another run's, counts none. `follow_pr` with `give_back` and `noted`
+  sets `waiting_told_at` or `review_asked_at` with `noteFollowThrough`,
+  whether or not the run still held the lease, and `listFollowFacts` reads
+  them for `tellDonorWaiting`. `listFollowFacts` reads each open PR's facts in one
+  query, with a subquery each over `follow_ups`, by the filter
+  `listOpenPrsOf` uses, and counts follow-ups only while the project asks
+  for help, by `ASKING_FOR_HELP`. `listEndedToOffer` in
   `src/db/prs.ts` reads the donor's merged and closed PRs no session
   offered, by `SHOWN`, the rule for the merged PRs the site shows, and
   once `start_session`'s answer is made, `markEndedOffered` marks them in
@@ -920,8 +968,10 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
 
 | File | What it does |
 |---|---|
-| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR, which clears the work to open as a PR and opens nothing on GitHub, and the interests |
-| `src/me/refusals.ts` | The page's words for each refusal `open_pr` lists, in one place |
+| `src/me/page.ts` | What `/me` reads, and the answer to its forms: Open PR, which clears the work to open as a PR and opens nothing on GitHub, the follow-through forms, and the interests |
+| `src/me/follow.ts` | `readFollowThrough`: the person's open PRs, each with its state, follow-ups, and next check, their mode, and their wakes, each marked when it stopped |
+| `src/me/follow-words.ts` | The words for modes, states, harnesses, levels, steps, and next checks that the page, its notices, and `/me.md` share, with no server imports, so the page can use them |
+| `src/me/refusals.ts` | The page's words for each refusal `open_pr` and `set_follow_through` list, in one place |
 | `src/me/data.ts` | `getMePage`, the server function the route's loader calls |
 | `src/me/paths.ts` | The page's path, with no imports, so pages can use it |
 | `src/routes/me.tsx` | The page, built from the components in `src/components/`, and the route's `POST` handler. `ClearedPr` links cleared work to GitHub's form from the queue item's `toOpen` |
@@ -936,7 +986,36 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   check the same things in the same order, from `workOn` on. The interests
   form checks `set_interests`' input schema from core with `validate`, and
   saves with `setInterests` in `src/db/people.ts`, as the tool does. The
-  description goes through `open_pr`'s input schema.
+  description goes through `open_pr`'s input schema. The follow-through
+  forms check `set_follow_through`'s input schema, and change through
+  `setFollowThroughAs` in `src/mcp/donor.ts`, which the tool wraps as its
+  answer, so its checks and `saveFollowThrough`'s one batch are the same
+  for both.
+- **Follow-through as the tools read it.** `readFollowThrough` in
+  `src/me/follow.ts` reads `listOpenPrsOf`, `listFollowFacts`, the modes,
+  `listWakes`, and `listStoppedWakes`, and runs core's `followThroughOf`
+  with no wake, as for a session the donor is in, so each PR's state and
+  next check are `start_session`'s. `listPrFollowUps` in
+  `src/db/follow-ups.ts` gives each PR's follow-ups that wait for the donor
+  and the latest three of the rest in one query, by `ROW_NUMBER()` over
+  each claim. The latest submit's summary, from `getSubmissions`, is the
+  last pushed round's summary. Good First Token keeps none for a round that
+  only replied, so the latest follow-ups and their outcomes stand in for
+  it. The PRs keep `followThroughOf`'s order within each place: stalled,
+  then those with a question for the donor, then the rest.
+- **The trigger forms.** A wake in Claude Code's cloud scheduled tasks,
+  Grok Bot, or Cursor Automations, at `full` or `notify`, has a form to
+  paste its trigger's URL and key, posted as `save_trigger`, and
+  `remove_trigger` and `trigger_on` beside it. They aren't
+  `set_follow_through`'s, since no tool takes the key: `triggerForm` in
+  `src/me/page.ts` reads the wake with `getWake`, checks the URL with
+  core's `checkTrigger` and the key with `triggerKeyOf`, seals the key
+  with `sealTriggerKey`, and saves with `saveTrigger`, whose `UPDATE` also
+  checks the wake is the person's, in that harness, at that level. The
+  page and `/me.md` show only that a trigger is on, its host, and when it
+  last fired, by `triggerText` in `src/me/follow-words.ts`, and no notice
+  says the URL or the key back. Each wake's item has the ID
+  `wake-<id>`, which the tools' `trigger.setUpAt` links to.
 - **The site's token.** Both run as a `Caller` from `siteCaller` in
   `src/auth/session.ts`, whose token is the one from the person's sign-in
   on the site, decrypted only when a call asks GitHub something. The MCP
@@ -954,7 +1033,9 @@ The rules are in [how-it-works.md](how-it-works.md#your-queue-on-me).
   that doesn't answer gives a notice and no `500`.
 - **The server function** runs `loadMePage`, which reads the session first
   and answers `signed_out` with nothing read. It reads the agents, the
-  queue, the person, and the notice at once. `readQueue` catches a failure
+  queue, the person, the follow-through, and the notice at once.
+  `readFollow` catches a failure of the follow-through alone, as
+  `readQueue` does for the queue. `readQueue` catches a failure
   of the queue alone, so a GitHub that doesn't answer leaves the agents and
   Disconnect on the page. A `401` there means GitHub no longer takes the
   site's token, and the page says to sign in again. Opening `/me` still
@@ -1190,7 +1271,11 @@ that is taken and against a site that never answers.
   interests, and blocks, `sessions.ts` donor sessions and budgets,
   `characters.ts` the characters that could break a line or change what a
   terminal shows, and the ones a reader can't see, `follow-ups.ts` what
-  reviewers wrote on a donor's PR and how it is folded, `removals.ts`
+  reviewers wrote on a donor's PR and how it is folded, `follow-through.ts`
+  the donor's modes and wakes, and `followThroughOf` and `nextCheck`, which
+  say when each PR is due, its next check, its round limits, and when it
+  is stalled, from facts and a time the caller passes, so its tests run
+  on a fake clock, `removals.ts`
   maintainers' requests to be removed, `crawl.ts` crawl candidates and
   the do-not-list, `feed.ts` feed events, `refusals.ts` the refusal codes,
   `secrets.ts` the check that replaces keys and tokens in posted text, and
@@ -1238,7 +1323,8 @@ its version did not go up.
   OpenCode, Cursor, Grok Bot, and any other harness, which every skill
   shows, the Claude Code step that installs the `goodfirsttoken` plugin,
   which every skill but admin shows, and the donor's rules, steps, and
-  refusals, which give, work, and review share. A line of its own,
+  refusals, which give, work, and review share, and follow takes the
+  rules and the steps to check open PRs. A line of its own,
   `{{include <part>}}`, in a skill's body becomes the part's text, before
   `{{MCP_URL}}` is filled in. A part can't include another. A missing part,
   a name that isn't a part's, or an include inside other text fails the
@@ -1290,7 +1376,7 @@ together.
   reads in Node from `plugins/*/skills/` and passes in as `TEST_SKILLS`.
   `pnpm skills:check` fails when those differ from what `skill-src/`
   builds. It connects the agent of the person the skill is for, a sample
-  donor for give, work, and review, a maintainer with no admin role for
+  donor for give, work, review, and follow, a maintainer with no admin role for
   maintain, and the sample admin for admin, and lists that
   agent's tools from the server with their schemas. The tools a skill calls
   are the ones of its own audience, from their specs in `packages/core`.
@@ -1337,8 +1423,16 @@ together.
     checked. At least one sentence
     across the skills has to be checked, so the test can't pass on none.
   - The skill calls every tool of its audience, and each tool it calls has
-    a `refusals` list.
-  - give, work, and review each carry the donor's contract in their
+    a `refusals` list. The follow skill calls the tools a run calls
+    instead: `my_work`, `follow_pr`, `check_pr`, `post_update`,
+    `submit_work`, `sort_follow_ups`, and `set_follow_through`. Its
+    Refusals section answers for those alone, since the Rules it shares
+    name others it never calls.
+  - In the follow skill alone, a few names in GitHub's and the
+    harnesses' own terms, which no schema has, may appear: the
+    `public_repo` scope, the `requested_reviewers` endpoint, and the
+    Claude Code desktop app's scheduled tasks tools.
+  - give, work, review, and follow each carry the donor's contract in their
     `## Rules` section, each rule in its own words, so a skill that drops
     the shared rules, or a rule dropped from them, fails.
 - **Every tool call in the MCP tests** goes through `mcpClient` in
@@ -1526,6 +1620,92 @@ was tried in a live harness from this repo.
   dynamically. Whether Grok Bot completes the flow stays open until someone
   tries it.
 
+### The follow skill in each harness
+
+`skill-src/follow.md` sets a wake up in each harness the spec's table
+names, under Harnesses in
+[Follow each PR to its end](specs/follow-through.md). The spec marks
+what each product's docs don't say as "Check", and asks the builder to try
+each one in the harness. None of them was tried in the product yet. The
+skill tries each one when it sets a wake up, uses the lower level until
+it works, and tells the donor.
+
+| Harness | What wasn't tried | Until it is |
+|---|---|---|
+| Claude Code desktop app | How a scheduled task's run meets a permission prompt, and the push notification tool from a scheduled task | `notify` when a first run can't get its permissions. The run's session in the app carries the status |
+| Claude Code in a terminal | Nothing the skill relies on. `/loop` is Claude Code's own | `session` |
+| Claude Code cloud scheduled tasks | Good First Token's server as a claude.ai connector in a run, and a call of its API trigger | `notify`, its highest. With no trigger, its hourly schedule |
+| Codex in the ChatGPT desktop app | Good First Token's server in a scheduled task, and how a run there meets a permission prompt | `notify` |
+| Grok Bot | The GitHub CLI signed in as the donor on the Bot's computer, how a routine meets an approval card, which channel its notice comes on, and its webhook's URL | `notify`. With no trigger, its schedule |
+| Cursor Automations | A donor token in Cursor's secrets as `GH_TOKEN`, how a run meets a permission prompt, and its webhook's URL | `notify`. With no trigger, its schedule |
+| ChatGPT on the web and phone | Good First Token's server in a scheduled task | `session` |
+| Grok's Automations | Good First Token's server in an automation | `session` |
+
+- **The Claude Code desktop app's tools.** The skill names the app's
+  scheduled tasks tools, `create_scheduled_task`, `list_scheduled_tasks`,
+  and `delete_scheduled_task`, from their own descriptions in a desktop
+  session. Those say a task runs while the app is open, runs on the next
+  launch when the app was closed at its time, takes a cron expression in
+  local time, and saves in the session's permission mode when that is
+  Auto or Bypass. A run of one wasn't tried.
+- **How a skill is started.** `/goodfirsttoken:follow` is the plugin's
+  form in Claude Code, as for the other skills. `$goodfirsttoken-follow`
+  in Codex and `/goodfirsttoken-follow` elsewhere are the standalone
+  skill's name in each harness's form, from the spec, and weren't tried
+  in a scheduled run.
+- **GitHub.** Whether GitHub lets the author of a PR from a fork ask a
+  maintainer to review again, and how a workflow run that waits for a
+  maintainer's approval shows, weren't tried. The skill asks, and says
+  the changes are in when GitHub refuses. It takes a run that ran no step
+  and says it waits for approval as one that needs no fix. A `checks`
+  follow-up it sorts that way is known by its head, so a failure on the
+  same head after the approval brings no new follow-up.
+- **Cost.** The spec asks for the tokens a run that ends at step 1 and a
+  typical round spend. Neither was measured, so the skill says what a run
+  calls and gives no number.
+- **Trying a "Check".** The skill saves the wake at the harness's level,
+  then starts one run where the harness lets the donor, and reads what it
+  said. When a step failed, it removes the wake, saves it again at the
+  lower level, and puts the new ID in the harness's wake. When no run can
+  start then, the donor's next session does this after the first run.
+  Each run also checks itself: one with no tools ends and says so, and
+  one whose GitHub CLI isn't the donor only reports.
+- **Run IDs.** A run makes its ID from its wake's ID and the time, so two
+  wakes that start in the same minute never share a lease.
+- **The trigger.** Step 5 of Setting the wake up. The patterns are
+  `TRIGGER_HARNESSES` in `packages/core/src/triggers.ts`, HTTPS only, one
+  host and one path each, and none was tried in the product.
+  - Claude Code's cloud scheduled tasks:
+    `https://api.anthropic.com/v1/claude_code/routines/trig_<id>/fire`,
+    from the API reference for firing a routine. The key is the routine's
+    token, sent as `Authorization: Bearer`, with
+    `anthropic-version: 2023-06-01`, which the endpoint takes like any
+    later version. The body is `{"text": "Wake ID: <id>"}`, free text the
+    run gets beside its saved prompt. Its docs give `401` for a key that
+    doesn't match, `403` for an account with no access, `404` for a
+    routine that is gone, `400` for one paused, which counts as a failed
+    call, and `429` past 30 fires an hour for a routine or 100 for an
+    account. A `401` and a `403` both turn the trigger off as `key`, and
+    `/me` says to check the trigger and make a new key, which covers
+    either.
+  - Grok Bot and Cursor Automations:
+    `https://api2.cursor.sh/automations/webhook/<id>`. Their docs say to
+    copy the URL the app shows, with a key sent as
+    `Authorization: Bearer`, and give no pattern. This one comes from
+    people's reports of using Cursor Automations. Grok Bot's pattern is
+    the same host and path, and that is plausible but unconfirmed: its
+    routines docs are on cursor.com, at cursor.com/help/grok-bot/routines,
+    and refer to the Cursor account that owns the Bot, but no one has seen
+    a Grok Bot routine's webhook URL. When it is wrong, `/me` refuses the
+    URL, as below.
+    The body is `{"wakeId": "<id>"}`. Grok Bot's docs say a run gets the
+    JSON body with its instruction, and Cursor's say nothing. Neither
+    lists the answers for a wrong key or a trigger that is gone, so the
+    call takes `401`, `403`, `404`, and `410` as those, as for Claude
+    Code. Grok Bot's routines run at most 200 times an hour each.
+  - When a pattern is wrong, `/me` refuses the URL the donor pastes, and
+    the wake runs on its schedule alone. The skill tells the donor so.
+
 ## Bindings
 
 `apps/web/wrangler.jsonc` is the config for local development. It declares
@@ -1613,8 +1793,14 @@ in `people`.
 | `tagged_issues` | Project's copy of an open tagged issue, as the last sync read it: title, labels, linked open PR with the ways the sync found it, and sync time | `project`, `issue_repo`, `number` |
 | `issue_syncs` | Project the sync has started on: when its pass in progress started, when its last whole pass finished, when a maintainer last refreshed it, until when a run holds it, its code repo's main language, why GitHub delists it, if it does, and since when, and when the sync last read its repos | `project` |
 | `claims` | Claim, mirrored from its issue room: issue, project, claimant, login when they claimed, agent, own-project flag, start commit, token estimate, state, times, release reason, PR, and the room's revision | `id` |
-| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews covered and when the last one saved was made, and whether its issue waits to be read again, and when that read last failed | `claim_id` |
-| `follow_ups` | Review or comment on a line that a reviewer wrote on a claim's open PR, as the PR job read it: GitHub's ID for it, the reviewer, the text folded and cut, the file, the link, when it was written and read, and when a tool showed it and a submit answered it | `claim_id`, `comment_id` |
+| `prs` | PR opened for a claim: repo, number, link, state, when it opened, merged, and closed, when a session told its donor it ended, what the reads of its reviews and its conversation covered and when the last one saved was made, whether its issue waits to be read again, and when that read last failed, and for follow-through, when a run last checked it, the run that holds its lease and until when, what that run's round did, and its rounds in all, on the UTC day of the last one, and that answered bots, when the newest read of its head was made, and when a run told the donor it waited 14 days and asked a maintainer to review again | `claim_id` |
+| `follow_ups` | What the PR job read on a claim's open PR that a donor's agent answers: a maintainer's or a review bot's review, comment on a line, or comment in the conversation, or the PR's failed checks or conflict. Its kind, GitHub's ID for it, or the SHAs for checks and a conflict, the author and whether a maintainer or a bot, the text folded and cut, the file, the link, when it was written and read, when a tool showed it and when it settled, its state and outcome, the agent's question for the donor, and the link of the agent's reply | `claim_id`, `comment_id` |
+| `repo_pushers` | Login whose review on a PR in a repo showed push access when the PR job read it, and when it last did. A comment in the conversation counts as a maintainer's by it, for 90 days | `repo`, `login` |
+| `follow_modes` | The follow-through mode a donor chose for all their PRs, `go_ahead` or `ask_first`, and when. A donor with no row follows `go_ahead` | `github_id` |
+| `pr_follow_modes` | The mode a donor chose for one claim's PR, `go_ahead`, `ask_first`, or `off`, and when | `claim_id` |
+| `wakes` | What starts a donor's follow-through runs: its harness, its level, how often it runs, when it was saved, and when a run last called `my_work` with its ID. Its trigger, when it has one: the URL, the key sealed with `AUTH_SECRET`, whether it is on and why it turned off, when it was saved, last called, and last fired, its failed calls in a row, until when a `429` holds it, and its calls on its last call's UTC day | `id` |
+| `wake_follow_ups` | The follow-ups `my_work` gave each wake as `newForWake`, when, and to which run | `wake_id`, `claim_id`, `comment_id` |
+| `trigger_follow_ups` | The follow-ups each wake's trigger was called for, and when, so each brings one call | `wake_id`, `claim_id`, `comment_id` |
 | `submissions` | Claim's submitted work: how it reached the branch, `files` or `branch`, `open_pr`'s clearance of pushed work, the repo and branch it is on, the latest submit's commit, paths, title, summary, notes on what was checked, agent, model, lines added and removed, why it waits for the donor, and when | `claim_id` |
 | `donor_sessions` | Donor session: harness, budget, start time, issues claimed, and the queue of picks | `id` |
 | `donor_blocks` | Blocked donor: reason, admin, and time | `github_id` |
@@ -1735,6 +1921,63 @@ that break the rules, so it returns the problems for the caller to show.
   offered: the migration marks each PR offered that merged or closed
   before its donor's latest session started. The test of what it marks
   runs the migration's own `UPDATE` again, from `TEST_MIGRATIONS`.
+- **Migration `20261108191958_follow_up_kinds.sql`** makes `follow_ups`
+  again, with `kind`, `author_kind`, and a `reviewer` that takes null,
+  since SQLite can't drop a `NOT NULL`. It copies every row in its order
+  as a maintainer's `review`, or a `line` when it has a path, then drops
+  the old table and renames the new one. `CHECK`s keep checks and a
+  conflict, and only them, with no author, and a path on a `line` alone.
+  It makes `repo_pushers`, owned by `src/db/pushers.ts`, and adds
+  `conversation` and `conversation_read` to `prs`. Its test makes the old
+  table from `0010`'s own statement, stores rows the old way, and runs the
+  new migration's statements on `follow_ups` from `TEST_MIGRATIONS`. The
+  copy names the kind with `iif()`, since the statement splitter Wrangler
+  and the test pool share reads `CASE ... END` as a block and takes the
+  rest of the file into one statement.
+- **Migration `20261108195209_follow_up_states.sql`** makes `follow_ups`
+  again, with `state`, `outcome`, `question`, and `reply_url`, since
+  `ALTER TABLE` can't add a `CHECK` across columns. It copies every row in
+  its order, settled as `fixed` when `answered_at` is set and `open`
+  otherwise. `CHECK`s keep an outcome and `answered_at` on a settled
+  follow-up alone, a question on one that waits for the donor alone, a
+  link on each `replied`, and `superseded` on checks and a conflict alone.
+  Its test makes the table as the migration before made it, stores rows
+  that way, and runs the new migration from `TEST_MIGRATIONS`.
+- **Migration `20261108202229_follow_through.sql`** makes `follow_modes`,
+  `pr_follow_modes`, `wakes`, and `wake_follow_ups`, owned by
+  `src/db/follow-through.ts`. `CHECK`s keep each mode, harness, and level
+  to the names `packages/core/src/follow-through.ts` gives, and a wake's
+  interval from 1 to 1,440 minutes. `wake_follow_ups` names a follow-up by
+  its claim and ID with no foreign key to `follow_ups`, which migrations
+  make again.
+- **Migration `20261108205250_pr_leases.sql`** adds to `prs`
+  `checked_at`, `lease_run`, `lease_until`, `lease_round`, `lease_pushed`,
+  `lease_bot`, `rounds`, `rounds_day`, `rounds_on_day`, and `bot_rounds`,
+  owned by `src/db/follow-prs.ts`. `rounds_day` is the UTC day as whole
+  days since the epoch. The agent's last push and the last reviewer
+  activity get no column: `listFollowFacts` reads them from
+  `submissions.submitted_at`, which each landed submit sets, and from the
+  newest `follow_ups.written_at` with an author.
+- **Migration `20261108223440_wake_triggers.sql`** adds to `wakes`
+  `trigger_url`, `trigger_key`, `trigger_on`, `trigger_off`,
+  `trigger_saved_at`, `trigger_called_at`, `trigger_fired_at`,
+  `trigger_failures`, `trigger_held_until`, `trigger_day`, and
+  `trigger_calls_on_day`, and makes `trigger_follow_ups`, owned by
+  `src/db/triggers.ts`. A wake from before has no trigger, with
+  `trigger_on` 0. `trigger_off` is `key`, `gone`, or `failures`.
+  `trigger_day` is the UTC day as whole days since the epoch, as
+  `rounds_day` is. `ALTER TABLE` can't add a `CHECK` across columns, so
+  `saveTrigger`, `takeTriggerCall`, and `recordTriggerCall` keep a URL and
+  key on every trigger that is on. A wrong key or a trigger that is gone
+  drops the key, and three failures in a row keep it, for Turn on again.
+- **Migration `20261108232556_follow_through_fixes.sql`** adds
+  `wake_follow_ups.run_id`, the run each follow-up was given to, null for
+  a run that named no ID, and to `prs` `head_read_at`, the time of the
+  newest read of the PR's head and merge, and `waiting_told_at` and
+  `review_asked_at`, when a run told the donor the PR waited 14 days and
+  when one asked a maintainer to review it again. Each is null on a row
+  from before, which reads as nothing given to a run, no read of the head
+  yet, and nothing told or asked.
 - **Migration `0011_policy_rereads.sql`** makes `policy_reads` and
   `policy_changes`, owned by `src/db/rereads.ts`, and adds
   `crawl_candidates.fingerprint`, null for a find stored before.
@@ -1801,8 +2044,16 @@ donor's `my_work` shows them.
 
 A follow-up's text is public on GitHub, where the reviewer wrote it, and
 only its donor's `start_session` and `my_work` show it. `prs.offered_at`,
-`follow_ups.shown_at`, and `follow_ups.answered_at` say what the donor's
-agent was shown and did, and nothing shows them.
+`follow_ups.shown_at`, `follow_ups.answered_at`, `follow_ups.state`, and
+`follow_ups.outcome` say what the donor's agent was shown and did. Only
+the donor's own tools show a follow-up's state, its `question`, which
+their agent wrote for them, and its `reply_url`, a link to a reply on
+GitHub. Only the donor's own tools show their follow-through modes and
+their wakes, with when each last ran, and their PRs' leases, with the run
+IDs their agents made up, and rounds. A wake's trigger shows only to its
+donor, on `/me` and in their tools, as whether it is on, its host, and
+when it last fired. No page or tool shows its URL past the host, or its
+key, which only the PR job's call opens.
 
 Better Auth's tables are for signing in, and no page shows them. The
 `session.user_agent` column keeps the browser's user agent string, as Better
@@ -1900,6 +2151,7 @@ pruning after a sync, with no index of its own.
 | `prs_by_opened` | PRs opened in a time range, like this week |
 | `prs_by_closed` | PRs merged or closed in a time range, like this week, and the PRs closed in the last 14 days the PR job reads |
 | `prs_reread_due` | The issues of PRs closed without merging that wait for the PR job to read them again: those whose read never failed, oldest close first, then the rest, oldest failure first |
+| `wakes_by_person` | A donor's wakes, oldest first, for `set_follow_through` and `/me`, and those that stopped, for `start_session`, `my_work`, and `/me` |
 | `donor_sessions_by_person` | A donor's last session, and in migration `0010_follow_ups.sql`, whether a merged PR's donor started a session since it merged |
 | `crawl_candidates_waiting` | One waiting candidate per repo |
 | `crawl_candidates_by_status` | The admin queue's crawler finds, oldest first |
@@ -2958,11 +3210,16 @@ and count the hour's reads in one place. The rules are in
 |---|---|
 | `src/sync/github.ts` | `ServiceGitHub`, which makes a job's calls with the service token, asks GitHub what is left of the budget first, counts the calls, reads the rate limit after each, and stops the run. A search counts against the search budget, though no job searches now. A stop for the budget carries when the budget starts over, which the crawler's consumer waits for |
 | `src/sync/issues.ts` | The tagged-issue sync: one project's pass, the checks of the repos of the projects it reads no issues for, and the scheduled run over them all |
-| `src/sync/prs.ts` | The PR job: each open PR's outcome and its reviewers' follow-ups, and whether a PR closed in the last 14 days opened again or merged. `checkClaimPrs` reads the PRs of the claims a check names the same way, a batch at a time |
+| `src/sync/prs.ts` | The PR job: each open PR's outcome and its follow-ups, from maintainers, review bots, and GitHub's checks and mergeable state, and whether a PR closed in the last 14 days opened again or merged. `checkClaimPrs` reads the PRs of the claims a check names the same way, a batch at a time |
 | `src/sync/pr-checker.ts` | `PrChecker`, the one Durable Object for the whole site that reads the PRs `check_pr` asks for. It holds the global limits: one read at a time, at most one every 2 seconds and 300 an hour, 30 checks an hour from one donor, with both counts in its own SQLite tables, up to 50 PRs a read, 200 waiting, a PR at most once in 30 seconds, a check of a PR being read joining that read, and `CHECK_ALLOWANCE`, which leaves a tenth more of the budget than the scheduled job in `ALLOWANCES` that leaves the most. `prs.reviews_read_at` keeps when the last saved read of a PR's reviews was made, so the PR job's read and a check's that land out of order never count the same reviews twice |
 | `src/sync/cleared.ts` | The job that records cleared PRs nobody recorded: each cleared claim's PRs, listed by its branch, checked as `record_pr` checks them |
 | `src/sync/reopen.ts` | `reopenClaimPr`, the one way the PR job and the sync record a claim's closed PR open again |
-| `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, and what the donor's tools showed and a submit answered |
+| `src/db/follow-ups.ts` | The `follow_ups` table: what the PR job read, what the donor's tools showed, and where each follow-up stands, as a submit, `sort_follow_ups`, or a read that superseded it left it |
+| `src/db/follow-prs.ts` | Follow-through's columns on `prs`: `takeLease`, `giveBackLease`, and `renewLease` for a run's lease, `countRound` for its rounds, and `listFollowFacts`, what `followThroughOf` reads of each open PR |
+| `src/db/follow-through.ts` | The `follow_modes`, `pr_follow_modes`, `wakes`, and `wake_follow_ups` tables: the donor's mode for all their PRs and for one, their wakes and when each last ran, what `my_work` gave each wake, and `listStoppedWakes`, the wakes with no run for 24 hours past their interval while a PR of the donor's is open, which `start_session` and `my_work` list and `/me` can |
+| `src/db/triggers.ts` | Each wake's trigger, in `wakes`, and `trigger_follow_ups`: `saveTrigger`, `removeTrigger`, and `turnTriggerOn` for `/me`, and for the PR job, `listTriggersDue`, the wakes to call and the follow-ups each is for, `takeTriggerCall`, which takes a call in one statement, and `recordTriggerCall`, its outcome |
+| `src/sync/triggers.ts` | The calls to the donors' triggers after each pass of the PR job, with `sealTriggerKey` and `openTriggerKey`, which seal a key with `AUTH_SECRET` |
+| `src/db/pushers.ts` | The `repo_pushers` table: who showed push access to each repo in a review, for the PR job's reads of conversation comments |
 | `src/sync/scheduled.ts` | The crons, and the job each cron runs |
 | `src/sync/allowances.ts` | What each job that reads GitHub with the service token may spend, in `ALLOWANCES`, and the token itself |
 | `src/sync/read-now.ts` | The reads of one project outside the schedule: a maintainer's refresh, and the read an admin's approval starts |
@@ -3141,22 +3398,96 @@ and count the hour's reads in one place. The rules are in
   number, with one fragment for what it reads of each: the state and its
   times, the author, the 10 newest reviews that aren't pending or
   dismissed, by `reviews(last:, states:)`, and the first 10 comments on
-  lines of each, by `comments(first:)`, with each connection's
-  `totalCount`, and each review's `authorCanPushToRepository`, which are
-  fields and cost nothing. GitHub counts a query's points from
-  the connections it asks for, at their `first` or `last`: 50 for the
-  reviews and 500 for their comments, divided by 100, so about 6 points for
-  50 PRs, where the state alone cost one. Reading the reviews in the same
-  query makes no call of its own, so the job's cap on calls and its share
-  of the budget stay as they were. The author's `__typename` says whether a
-  reviewer is a bot. GitHub's docs don't say whether GraphQL gives a bot's
-  login with the `[bot]` that REST gives it, so the type or the suffix
-  marks one. The query asks for no `authorAssociation`, since GitHub gives
-  it for the reader, and a comment on a line needs no author of its own,
-  since a review's comments are its author's. Each run's log line counts
-  the reviews it left out for no push access, by `withoutPushOf`, since
-  whether GitHub gives the field for a private member to the service token
-  isn't checked.
+  lines of each, by `comments(first:)`, the 30 newest comments in the
+  conversation, by `comments(last:)`, and the head's checks, by
+  `commits(last: 1)` and its commit's `statusCheckRollup`, with the first
+  100 of its `contexts`. It reads each connection's `totalCount`, each
+  review's `authorCanPushToRepository`, and the PR's `headRefOid`,
+  `baseRefOid`, `baseRefName`, and `mergeable`, which are fields and cost
+  nothing. GitHub counts a query's points from the connections it asks
+  for, each times the `first` or `last` of the ones it sits in, divided by
+  100: 50 for the reviews, 500 for their comments, 50 for the
+  conversation, 50 for the commits, and 50 for the checks, so 700, or 7
+  points for 50 PRs, where the reviews alone cost 6 and the state alone
+  cost one. A connection's own `first` or `last` adds nothing, so reading
+  100 checks costs what reading 10 would. The nodes come to at most
+  12,050, inside GitHub's 500,000. Reading it all in the same query makes
+  no call of its own, so the job's cap on calls and its share of the
+  budget stay as they were.
+- **Who counts.** The author's `__typename` says whether a reviewer is a
+  bot: `Bot` is a GitHub App's account, and an app writes on a repo's PRs
+  only where it is installed, so it counts as the repo's review bot, with
+  no push access asked. GraphQL gives its login with no `[bot]`, as the
+  GitHub fake does, and the follow-up keeps it so, with `author_kind`
+  `bot`, and the tools add `[bot]`. A user account whose login ends in
+  `[bot]` counts for nothing, by `personOf`. The query asks for no
+  `authorAssociation`, since GitHub gives it for the reader, and a comment
+  on a line needs no author of its own, since a review's comments are its
+  author's. Each run's log line counts the reviews it left out for no push
+  access, by `withoutPushOf`, since whether GitHub gives the field for a
+  private member to the service token isn't checked.
+- **Conversation comments** show no push access. Once a batch's query
+  answers, and before it handles each PR, the job saves every person whose
+  review in the batch showed push access to the PR's repo to
+  `repo_pushers` with `savePushers`, which also drops what no read saw in
+  90 days, then reads the repos' logins with `listPushers`: two calls to
+  D1 a batch. A comment counts as a maintainer's when its author is there,
+  or owns the repo by the owner in its name. The log line counts the
+  comments it left out from people who aren't the PR's author or a bot, by
+  `conversationLeftOutOf`, as it counts reviews, each time a read takes
+  one.
+- **One conflict at a time.** The base's SHA is in a conflict's ID, and
+  the fake's `baseRefOid` follows the base branch, which GitHub's docs
+  don't settle. So `saveFollowUps` writes no conflict while another on the
+  claim isn't settled, and a base that moves on under the same head adds
+  none for the same conflict, and keeps the one there, with its state.
+- **Checks and a conflict that come back.** The ID of checks is the head,
+  so a branch that goes back to an earlier head reads the same ID again.
+  `saveFollowUps` is an `INSERT ... ON CONFLICT DO UPDATE` whose `WHERE`
+  takes only checks or a conflict settled as `superseded`: they open again
+  with the new read's text and times, shown to no one. In the same batch it
+  deletes their rows in `wake_follow_ups` and `trigger_follow_ups` given or
+  called before the read, so each wake reports them, and each trigger is
+  called for them, as new. One a run sorted, or a submit settled, stays as
+  it is.
+- **Reads out of order.** `supersedeFollowUps` also sets `prs.head_read_at`
+  to the newest read's time it was given, in the same batch. `saveFollowUps`
+  takes the time the read was made, and writes no checks or conflict when
+  `head_read_at` is later, so an older read that lands after a newer one
+  can't add checks or a conflict as open that the newer read found gone.
+  Checks and a conflict store that time as `read_at`, where reviews store
+  the save's, so a read that saves after a newer read started, and before
+  the newer one supersedes, is still taken by it: both compare when their
+  reads were made. A
+  review or a comment it read is still saved, by its ID.
+- **Superseding.** Once a batch's query answers, and before it saves any
+  follow-up, `supersedeFollowUps` settles as `superseded` what the batch's
+  reads replaced, in one `UPDATE ... FROM json_each` for the whole batch:
+  one call to D1 a batch. For each open PR the read gave a head, by
+  `headReadOf`, it takes the checks for any other head, every conflict
+  when `mergeable` is `MERGEABLE`, and a conflict for another head when it
+  is `CONFLICTING`. `UNKNOWN` takes no conflict. It takes only follow-ups
+  that aren't settled and whose `read_at` is at or before the read, so a
+  check and the PR job that read the same PR at once, landing out of
+  order, never supersede what the newer read stored. The log line counts
+  them as `superseded`. The batch's second statement records each read's
+  time in `prs.head_read_at`, keeping the later one.
+- **Checks and conflicts.** The head's checks come from the last of
+  `commits(last: 1)`, as GitHub's CLI reads them for `gh pr checks`, and
+  count only when that commit is `headRefOid`. A head whose `statusCheckRollup.state` is
+  `FAILURE` or `ERROR` is one `checks` follow-up, known by `headRefOid`.
+  Its text is the state and the names of up to 10 failing contexts, in
+  GitHub's order: a check run that ended `FAILURE`, `TIMED_OUT`,
+  `CANCELLED`, `STARTUP_FAILURE`, or `ACTION_REQUIRED`, and a status of
+  `FAILURE` or `ERROR`. Its link is the PR's checks for that head. A PR
+  `mergeable` gives as `CONFLICTING` is one `conflict` follow-up, known by
+  `headRefOid:baseRefOid`. Both take the read's time as when they were
+  written. `ON CONFLICT DO NOTHING` keeps a head's checks, and a head and
+  base's conflict, to one follow-up however often the read finds them. A
+  follow-up for an older head's checks, or for a conflict GitHub no longer
+  shows, settles as superseded, under Superseding above. How GitHub shows a workflow run that
+  waits for a maintainer's approval isn't checked yet, and
+  `ACTION_REQUIRED` counts as failed until it is.
 - **PRs closed in the last 14 days.** `listClosedPrsSince` reads, through
   `prs_by_closed`, each PR recorded closed without merging in the last 14
   days, `REOPEN_WINDOW_MS`, and the job reads them in the same queries,
@@ -3175,6 +3506,36 @@ and count the hour's reads in one place. The rules are in
   after both, so it cuts those first, which takes thousands of PRs within
   the job's 100 calls. At 50 closes a day, the 700 PRs of the 14 days take
   14 queries, about 14 points, of the job's 100 calls.
+- **Calling triggers** is `callTriggersAfterPass` in
+  `src/sync/triggers.ts`, which runs on the PR job's cron after the job,
+  and before the job that records cleared PRs. It never throws, so a slow
+  or broken trigger can't stop the next job, and its log line gives counts
+  alone. `listTriggersDue` finds every wake to call in one D1 query, by
+  the rules under PRs in docs/how-it-works.md, those called longest ago
+  first, up to 51, so the log can say more wait. Each of the first 50 is
+  taken with `takeTriggerCall`, one `UPDATE ... RETURNING` that records
+  the call and counts it on the UTC day only while the trigger may be
+  called, so two passes at once never both call one. The call goes 10 at
+  a time, with `redirect: 'manual'` and a 5-second timeout, to the stored
+  URL only once `checkTrigger` passes it again for its harness. A URL that
+  no longer fits, as one saved before a pattern changed, isn't called, and
+  turns the trigger off as `gone`. `recordTriggerCall` records the outcome
+  on the trigger the call was made for, by `trigger_saved_at`, so a
+  trigger saved again meanwhile keeps its own. A call that times out
+  counts a failure, and also records its follow-ups in
+  `trigger_follow_ups`, as one that started a run does. The harness may
+  have started the run before the 5 seconds ran out, and Claude Code's
+  routines API takes no idempotency key, so calling again could start a
+  second run. A follow-up that comes after it brings the next call. A call D1 fails on is logged and counted as not
+  recorded, and the other calls go on. Its follow-ups go with a later
+  call. Saving a trigger again, or turning it on again, keeps a `429`'s
+  hold. The cost: no call to GitHub. One D1 query a pass, and
+  for each call, one `UPDATE`, one fetch to the donor's harness, and one
+  batch of two statements, so at most 50 fetches and about 150 D1 calls
+  a pass, which take at most about 25 seconds when every call waits its 5
+  seconds. A pass with no trigger due makes the one query. The run each
+  call starts spends the donor's tokens in their own harness, as any
+  scheduled run does.
 - **Recording cleared PRs** is `recordClearedPrs` in `src/sync/cleared.ts`,
   which runs on the PR job's cron right after it, with its own
   `ServiceGitHub` and `ALLOWANCES.cleared`, 100 calls. Each cleared claim
@@ -3767,8 +4128,9 @@ docs and the GitHub fake. Neither number is measured on GitHub yet.
   run with its first question, about 400 an hour, all inside its own cap.
   The crawl spends mostly GraphQL, and its weekly reads one REST call for
   each listed project a week, so they seldom draw on the same budget.
-  The PR job reads each open PR's reviews in its one query, and the state
-  of each PR closed in the last 14 days in the same queries, whose cost is
+  The PR job reads each open PR's reviews, conversation, and checks in
+  its one query, and the state of each PR closed in the last 14 days in
+  the same queries, whose cost is
   under The PR job in [The sync](#the-sync), and an issue again, a few
   REST calls, for each claim's PR that closed without merging. It leaves the
   least for the others, so it still reads after they stop.
@@ -3802,7 +4164,7 @@ end-to-end tests. The rules are in
 |---|---|
 | `src/routes/dev.seed.ts` | The route, which hands every method to `handleDevSeed` |
 | `src/dev/seed.ts` | `handleDevSeed`, and `seedSampleWork`, which writes the sample data |
-| `src/dev/sample-work.ts` | The sample people, projects, issues, and claims |
+| `src/dev/sample-work.ts` | The sample people, projects, issues, and claims, and a donor's followed PRs and wakes |
 | `apps/web/scripts/seed-local.mjs` | What `pnpm seed` runs to call the route |
 | `src/routes/dev.work.ts` | The route, which hands every method to `handleDevWork` |
 | `src/dev/work.ts` | `handleDevWork`, which works an issue as a sample person through its room |
@@ -3825,6 +4187,12 @@ end-to-end tests. The rules are in
   the feeds through the queue, and the claims reach D1 from the room. The
   PRs are recorded with `addPr` and `setPrState`, and the room is told each
   one closed.
+- **Followed PRs straight to D1.** `addFollowed` writes `arjun`'s two open
+  PRs as their claims, submissions, PRs, and follow-ups, then sorts the
+  follow-ups with `sortFollowUps`, as the PR job and his agent would have.
+  `addWakes` saves his wakes through `saveFollowThrough` a day before each
+  last ran, and records the run with `recordWakeRun`. Each is written once:
+  a claim by its ID, a wake by its harness.
 - **The GitHub fake's people.** The sample work names the fake's sample
   people, with their GitHub IDs, so signing in locally as one shows their
   work. A test checks that every person, repo, and issue `pnpm seed` uses
@@ -3957,9 +4325,20 @@ and Playwright run it as a local HTTP server.
   request's state, its author, and its reviews with their comments on
   lines, oldest first, through `reviews` and `comments`, with `first` or
   `last`, each with its `authorAssociation`, and whether a review's author
-  can push to the repo, and `createCommitOnBranch`. A GitHub App's bot reviews and
+  can push to the repo, its conversation's comments through `comments`,
+  its head's checks through `commits` and `statusCheckRollup`, with check
+  runs and commit statuses, its `headRefOid` and `baseRefOid`, and its
+  `mergeable` state, and `createCommitOnBranch`. The fake works out
+  `mergeable` from the branches: a file the base and the head both changed
+  since they parted, to different contents, conflicts. A test can set it,
+  as `UNKNOWN` for one. Checks live on the base repo, by commit, so a new
+  head has none until a test adds them. A GitHub App's bot reviews and
   comments as a `Bot`, whose login the fake's GraphQL gives without the
-  `[bot]` its REST gives. GitHub's primary rate limits:
+  `[bot]` its REST gives. The sample PR `meanwhileso/goodfirsttoken#958`
+  has a bot's review, conversation comments from a bot, a maintainer, and
+  someone with no role on the repo, a failing check, and a conflict. The
+  fake serves it in `pnpm dev` too, but no claim in the dev seed follows
+  it, so the PR job reads it only for a claim that records it. GitHub's primary rate limits:
   each person's REST, GraphQL, and search budgets, whichever of their tokens
   made the calls, in the `x-ratelimit` headers of every answer, with a `403`,
   or a `RATE_LIMITED` GraphQL error, once one is spent. The OAuth web flow: the authorize page and the

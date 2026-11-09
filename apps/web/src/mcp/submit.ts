@@ -22,7 +22,11 @@ import type { Caller } from '../auth/permissions';
 import {
   addPr,
   answerFollowUps,
+  answerFollowUpsById,
+  answersBot,
+  countRound,
   countOpenPrsByProject,
+  getFollowMode,
   getIssue,
   getPr,
   getProject,
@@ -32,6 +36,8 @@ import {
   listPersonClaims,
   saveSubmission,
   setClearance,
+  renewLease,
+  unknownFollowUps,
 } from '../db';
 import { checkIssueFacts, linkedPrs, readIssue, readRepoFacts, type GitHubIssue, type IssueRules, type RepoFacts } from '../donor/github';
 import { GitHubError, gitHubUrls } from '../github';
@@ -180,9 +186,18 @@ export async function submitWork(
   const work = await workOn(caller, input.claimId, { kind: 'submit' }, now);
   if (isRefusal(work)) return refuse(work);
   const { claim, project, donor } = work;
+  // The run's own lease on the claim's PR is renewed.
+  if (input.runId !== undefined) await renewLease(env.DB, claim.id, input.runId, now, false);
   const earlier = await getSubmission(env.DB, claim.id);
   // Nothing an older skill sent with files is read, and nothing reaches GitHub.
   if (input.files !== undefined || input.branch === undefined) return refuse(skillOutdated(earlier?.branch ?? branchFor(claim)));
+  // Each follow-up the fix answers must be the claim's, before anything is read.
+  const unknown = await unknownFollowUps(env.DB, claim.id, input.answers ?? []);
+  if (unknown.length > 0) {
+    return refuse(
+      refusal('not_found', `Claim ${claim.id} has no follow-up ${unknown.join(', ')}, so nothing was taken. Name in answers the follow-ups start_session or my_work lists for the claim, by their IDs, and submit again.`),
+    );
+  }
   const reads = new BranchReader(await tokenOf(caller));
   const facts = await codeRepo(reads, project);
   if (isRefusal(facts)) return refuse(facts);
@@ -379,10 +394,16 @@ async function submitPushed(
         toOpen,
       }),
     );
-  // A claim whose PR is open takes the fixes on that PR's branch, which
-  // answers the follow-ups on it a tool showed before this submit.
+  // A claim whose PR is open takes the fixes on that PR's branch. The
+  // follow-ups named in answers settle as fixed, or with no answers, every
+  // one on it a tool showed before this submit.
+  // The push is its run's round, when the run names itself and holds the
+  // PR's live lease, which answered a bot when it settles a bot's follow-up.
   if (recorded.claim.state === 'pr_opened') {
-    await answerFollowUps(env.DB, claim.id, now);
+    const bot = await answersBot(env.DB, claim.id, input.answers, now);
+    if (input.answers === undefined) await answerFollowUps(env.DB, claim.id, now);
+    else await answerFollowUpsById(env.DB, claim.id, input.answers, now);
+    if (input.runId !== undefined) await countRound(env.DB, claim.id, input.runId, { push: true, bot }, now);
     return result('pr_opened', recorded.claim.pr, null);
   }
   return result(recorded.claim.state, null, reason);
@@ -609,8 +630,11 @@ export async function recordPr(caller: Caller, input: ToolInput<'record_pr'>): P
   const project = await getProject(env.DB, found.project);
   if (project === null) return refuse(refusal('not_found', `${found.project} is no longer a project.`));
   const claim = (await issueRoom(env.ISSUE_ROOM, found.issue).snapshot()).claims.find((held) => held.id === found.id) ?? found;
+  // The PR follows the donor's mode, which the answer gives, so the skill
+  // can ask a donor who never chose.
+  const followMode = await getFollowMode(env.DB, caller.githubId);
   const result = (recorded: { claim: ClaimRecord; pr: PrRef }) =>
-    answer(toolResult('record_pr', { claimId: claim.id, issue: claim.issue, state: recorded.claim.state, pr: recorded.pr }));
+    answer(toolResult('record_pr', { claimId: claim.id, issue: claim.issue, state: recorded.claim.state, pr: recorded.pr, followMode }));
   const named = pullOf(input.pr);
   if (named === null) {
     return refuse(refusal('pr_mismatch', `${input.pr} isn't a link to a PR on GitHub, so nothing was recorded. Send the PR's link, like ${gitHubUrls().web}/owner/repo/pull/12.`));

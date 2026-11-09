@@ -1,8 +1,11 @@
 import {
+  CONVERSATION_READ,
   foldUntrusted,
   followUpRecordSchema,
+  MAX_FAILING_CHECKS,
   MAX_FOLLOW_UP_PATH,
   MAX_FOLLOW_UP_TEXT,
+  type FollowUpAuthorKind,
   type PrRecord,
   type PrState,
 } from '@goodfirsttoken/core';
@@ -10,12 +13,16 @@ import {
   getClaim,
   listClosedPrsSince,
   listOpenPrs,
+  listPushers,
   listRereadsDue,
   rereadDone,
   rereadFailed,
   saveFollowUps,
+  savePushers,
+  supersedeFollowUps,
   setPrState,
   setReviewsRead,
+  type HeadRead,
   type NewFollowUp,
   type ReviewsRead,
 } from '../db';
@@ -27,8 +34,9 @@ import { reopenClaimPr } from './reopen';
 
 // The PR job (spec section 7). It follows each PR opened for a claim until
 // it merges or closes, reading GitHub with the read-only service token.
-// While a PR is open, it keeps what reviewers wrote on it, for the donor's
-// next session to bring back as follow-ups. When one has merged or closed,
+// While a PR is open, it keeps what maintainers and review bots wrote on it,
+// and its failed checks and conflicts, for the donor's next session to
+// bring back as follow-ups (docs/specs/follow-through.md). When one has merged or closed,
 // it tells the claim's issue room, which announces it and takes claims
 // again once no PR is open on the issue, then records the outcome in the
 // prs table. A PR closed without merging has its issue read again, by the
@@ -53,10 +61,18 @@ export interface PrRun {
   reopened: number;
   merged: number;
   closed: number;
-  /** Reviews and review comments read for the first time. */
+  /** Follow-ups read for the first time: reviews, comments, failed checks, and conflicts. */
   followUps: number;
+  /** Checks for an older head, and conflicts GitHub no longer shows, settled as superseded. */
+  superseded: number;
   /** Reviews by a person other than the PR's author that GitHub says can't push to the repo, which are no follow-ups. */
   withoutPush: number;
+  /**
+   * Comments in a PR's conversation by a person other than the PR's author
+   * whom no read saw push to the repo in the last 90 days, and who doesn't
+   * own it, which are no follow-ups.
+   */
+  conversationLeftOut: number;
   /** Issues of PRs closed without merging that were read again, this run's and earlier runs'. */
   reread: number;
   calls: number;
@@ -71,10 +87,14 @@ export const REOPEN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 export const REVIEWS_READ = 10;
 /** The comments read on each of those reviews. */
 export const COMMENTS_READ = 10;
+/** The checks read on the PR's head, to find the failing ones among them. */
+export const CHECKS_READ = 100;
 
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequest
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreview
 // https://docs.github.com/en/graphql/reference/pulls#object-pullrequestreviewcomment
+// https://docs.github.com/en/graphql/reference/issues#object-issuecomment
+// https://docs.github.com/en/graphql/reference/checks#object-statuscheckrollup
 interface Actor {
   __typename?: string;
   login?: string;
@@ -100,20 +120,50 @@ interface Review {
   comments: { totalCount?: number; nodes: (ReviewComment | null)[] | null } | null;
 }
 
+/** A comment in the PR's conversation. */
+interface IssueComment {
+  id: string;
+  body: string;
+  url: string;
+  createdAt: string;
+  author: Actor | null;
+}
+
+/** One check on a commit: a check run, or a commit status. */
+type CheckContext =
+  | { __typename: 'CheckRun'; name: string; conclusion: string | null }
+  | { __typename: 'StatusContext'; context: string; state: string };
+
 interface PullState {
   state: string;
   mergedAt: string | null;
   closedAt: string | null;
+  headRefOid?: string;
+  baseRefOid?: string;
+  baseRefName?: string;
+  mergeable?: string;
   author?: Actor | null;
   reviews?: { totalCount?: number; nodes: (Review | null)[] | null } | null;
+  comments?: { totalCount?: number; nodes: (IssueComment | null)[] | null } | null;
+  commits?: {
+    nodes:
+      | ({
+          commit: {
+            oid: string;
+            statusCheckRollup: { state: string; contexts: { nodes: (CheckContext | null)[] | null } | null } | null;
+          } | null;
+        } | null)[]
+      | null;
+  } | null;
 }
 
 type Pulls = Record<string, { pullRequest: PullState | null } | null>;
 
 // A pending review is its author's alone, and a dismissed one no longer
-// asks for anything, so the query leaves both out.
+// asks for anything, so the query leaves both out. The head's checks come
+// from its one commit in `commits(last: 1)`.
 const PULL = `fragment Pull on PullRequest {
-  state mergedAt closedAt
+  state mergedAt closedAt headRefOid baseRefOid baseRefName mergeable
   author { __typename login }
   reviews(last: ${String(REVIEWS_READ)}, states: [COMMENTED, CHANGES_REQUESTED, APPROVED]) {
     totalCount
@@ -121,6 +171,20 @@ const PULL = `fragment Pull on PullRequest {
       id state body url submittedAt authorCanPushToRepository
       author { __typename login }
       comments(first: ${String(COMMENTS_READ)}) { totalCount nodes { id body path url createdAt } }
+    }
+  }
+  comments(last: ${String(CONVERSATION_READ)}) { totalCount nodes { id body url createdAt author { __typename login } } }
+  commits(last: 1) {
+    nodes {
+      commit {
+        oid
+        statusCheckRollup {
+          state
+          contexts(first: ${String(CHECKS_READ)}) {
+            nodes { __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } }
+          }
+        }
+      }
     }
   }
 }`;
@@ -164,54 +228,200 @@ function outcomeOf(pull: PullState, now: number): { state: PrState; at: number }
 }
 
 /**
- * The login of the person who wrote a review, when they are neither the
- * PR's author, who is the donor, nor a GitHub App's bot. Good First Token
+ * The login of the person who wrote a review or a comment, when they are
+ * neither the PR's author, who is the donor, nor a bot. Good First Token
  * posts on GitHub only as the donor, with the donor's token, so leaving out
- * the PR's author leaves out its posts too. Null for anyone else, and for an
- * account GitHub no longer has.
+ * the PR's author leaves out its posts too. A user account whose login ends
+ * in `[bot]` is left out with the bots, and is no review bot either. Null
+ * for anyone else, and for an account GitHub no longer has.
  */
-function personOf(review: Review, prAuthor: string): string | null {
-  const login = review.author?.login;
-  if (typeof login !== 'string' || review.author?.__typename === 'Bot' || /\[bot\]$/i.test(login)) return null;
+function personOf(author: Actor | null, prAuthor: string): string | null {
+  const login = author?.login;
+  if (typeof login !== 'string' || author?.__typename === 'Bot' || /\[bot\]$/i.test(login)) return null;
   return login.toLowerCase() === prAuthor.toLowerCase() ? null : login;
 }
 
 /**
- * The login of the maintainer who wrote a review: a person, by personOf,
- * whom GitHub says can push to the repo, by the review's
- * `authorCanPushToRepository`. GitHub's docs describe it as the author's
- * push access, with nothing about who reads it, where `authorAssociation`
- * hides a private member of the organization from a token outside it.
- * That isn't checked on GitHub, so the run counts the reviews it leaves out
- * for no push access, by withoutPushOf. The review's comments on lines are
- * its author's too.
+ * The login of a review bot: an account GitHub types `Bot`, which is a
+ * GitHub App's. GraphQL gives its login with no `[bot]` on the end, and the
+ * follow-up keeps it so. Null for anyone else.
  */
-function reviewerOf(review: Review, prAuthor: string): string | null {
-  const login = personOf(review, prAuthor);
-  return login !== null && review.authorCanPushToRepository === true ? login : null;
+function botOf(author: Actor | null): string | null {
+  const login = author?.login;
+  if (author?.__typename !== 'Bot' || typeof login !== 'string') return null;
+  return login.replace(/\[bot\]$/i, '');
+}
+
+/** Who wrote a follow-up, and whether they are a maintainer or a bot. */
+interface Author {
+  login: string;
+  kind: FollowUpAuthorKind;
+}
+
+/**
+ * Who wrote a review whose words count as a follow-up: a review bot, by
+ * botOf, or a maintainer, a person, by personOf, whom GitHub says can push
+ * to the repo, by the review's `authorCanPushToRepository`. GitHub's docs
+ * describe it as the author's push access, with nothing about who reads it,
+ * where `authorAssociation` hides a private member of the organization from
+ * a token outside it. That isn't checked on GitHub, so the run counts the
+ * reviews it leaves out for no push access, by withoutPushOf. The review's
+ * comments on lines are its author's too.
+ */
+function reviewerOf(review: Review, prAuthor: string): Author | null {
+  const bot = botOf(review.author);
+  if (bot !== null) return { login: bot, kind: 'bot' };
+  const login = personOf(review.author, prAuthor);
+  return login !== null && review.authorCanPushToRepository === true ? { login, kind: 'maintainer' } : null;
+}
+
+/** The people whose reviews on an open PR the read took showed push access to the repo, the PR's author too. */
+function pushersOf(pull: PullState): string[] {
+  return (pull.reviews?.nodes ?? []).flatMap((review) => {
+    const login = review?.author?.login;
+    if (review === null || review.authorCanPushToRepository !== true || typeof login !== 'string') return [];
+    return personOf(review.author, '') === null ? [] : [login];
+  });
 }
 
 /** How many of an open PR's reviews the read took are a person's, by personOf, whom GitHub says can't push to the repo. */
 function withoutPushOf(pull: PullState): number {
   const prAuthor = pull.author?.login ?? '';
   return (pull.reviews?.nodes ?? []).filter(
-    (review) => review !== null && personOf(review, prAuthor) !== null && review.authorCanPushToRepository !== true,
+    (review) => review !== null && personOf(review.author, prAuthor) !== null && review.authorCanPushToRepository !== true,
   ).length;
 }
 
 /**
- * What reviewers wrote on an open PR, as follow-ups: the text of each
- * review that comments or asks for changes, and each comment on a line, in
- * any review but a dismissed one. An approval's own text asks for nothing.
- * Each text, and each file's path, is folded to one line and cut. Empty
- * text, and anything GitHub gives in another form, is left out.
+ * Who counts as a maintainer for a comment in a PR's conversation, which
+ * shows no push access: someone a read saw push to the repo in a review in
+ * the last 90 days, kept in repo_pushers, and the repo's owner. Both in
+ * lower case.
  */
-function followUpsOf(pull: PullState): NewFollowUp[] {
+interface Maintainers {
+  pushers: ReadonlySet<string>;
+  owner: string;
+}
+
+/**
+ * Who wrote a comment in the conversation whose words count as a
+ * follow-up: a review bot, or a maintainer by `maintainers`. Null for
+ * anyone else.
+ */
+function commenterOf(comment: IssueComment, prAuthor: string, maintainers: Maintainers): Author | null {
+  const bot = botOf(comment.author);
+  if (bot !== null) return { login: bot, kind: 'bot' };
+  const login = personOf(comment.author, prAuthor);
+  if (login === null) return null;
+  const key = login.toLowerCase();
+  return maintainers.pushers.has(key) || key === maintainers.owner ? { login, kind: 'maintainer' } : null;
+}
+
+/** How many of the conversation's comments the read took are a person's, by personOf, who counts as no maintainer. */
+function conversationLeftOutOf(pull: PullState, maintainers: Maintainers): number {
+  const prAuthor = pull.author?.login ?? '';
+  return (pull.comments?.nodes ?? []).filter(
+    (comment) => comment !== null && personOf(comment.author, prAuthor) !== null && commenterOf(comment, prAuthor, maintainers) === null,
+  ).length;
+}
+
+/** What a check run's conclusion or a commit status's state says failed. */
+const FAILED_RUN = new Set(['ACTION_REQUIRED', 'CANCELLED', 'FAILURE', 'STARTUP_FAILURE', 'TIMED_OUT']);
+const FAILED_STATUS = new Set(['ERROR', 'FAILURE']);
+
+/** The names of the head's checks that failed, of those the read took, in GitHub's order. */
+function failingChecksOf(contexts: readonly (CheckContext | null)[]): string[] {
+  return contexts.flatMap((check) => {
+    if (check?.__typename === 'CheckRun') return check.conclusion !== null && FAILED_RUN.has(check.conclusion) ? [check.name] : [];
+    if (check?.__typename === 'StatusContext') return FAILED_STATUS.has(check.state) ? [check.context] : [];
+    return [];
+  });
+}
+
+/**
+ * The PR's checks and conflict as follow-ups from GitHub, with no author.
+ * Checks on the head that GitHub's combined state says failed are one, known
+ * by the head's SHA, so one follow-up stands for one head. Its text is that
+ * state and the names of up to 10 failing checks, which are repo text. A
+ * PR GitHub says is `CONFLICTING` is one, known by the head's and the
+ * base's SHAs. `UNKNOWN`, which GitHub often gives before it has worked out
+ * the merge, makes none, and the next read tries again. Both are known by
+ * the time the job first saw them. headReadOf gives what the same read
+ * shows of the head and the merge, by which supersedeFollowUps settles an
+ * older head's checks, and a conflict GitHub no longer shows.
+ */
+function githubFollowUpsOf(pull: PullState, prUrl: string, readAt: number): NewFollowUp[] {
+  const head = pull.headRefOid;
+  if (typeof head !== 'string' || head === '') return [];
+  const found: NewFollowUp[] = [];
+  const commit = pull.commits?.nodes?.at(-1)?.commit;
+  const rollup = commit?.oid === head ? commit.statusCheckRollup : null;
+  if (rollup && FAILED_STATUS.has(rollup.state)) {
+    const names = failingChecksOf(rollup.contexts?.nodes ?? [])
+      .map((name) => foldUntrusted(name, MAX_FOLLOW_UP_PATH))
+      .filter((name) => name !== '')
+      .slice(0, MAX_FAILING_CHECKS);
+    found.push({
+      commentId: head,
+      kind: 'checks',
+      reviewer: null,
+      authorKind: null,
+      body: names.length === 0 ? rollup.state : `${rollup.state}: ${names.join(', ')}`,
+      path: null,
+      url: `${prUrl}/checks?sha=${encodeURIComponent(head)}`,
+      writtenAt: readAt,
+    });
+  }
+  const base = pull.baseRefOid;
+  if (pull.mergeable === 'CONFLICTING' && typeof base === 'string' && base !== '') {
+    found.push({
+      commentId: `${head}:${base}`,
+      kind: 'conflict',
+      reviewer: null,
+      authorKind: null,
+      body: `CONFLICTING with ${pull.baseRefName ?? 'its base branch'}`,
+      path: null,
+      url: prUrl,
+      writtenAt: readAt,
+    });
+  }
+  return found;
+}
+
+/** A follow-up as the PR job reads it, before it is stored with where it stands. */
+const NEW_FOLLOW_UP = followUpRecordSchema.omit({
+  claimId: true,
+  readAt: true,
+  shownAt: true,
+  answeredAt: true,
+  state: true,
+  outcome: true,
+  question: true,
+  replyUrl: true,
+});
+
+/** What a read of an open PR showed of its head and whether it can merge, or null when GitHub gave no head. */
+function headReadOf(claimId: string, pull: PullState, readAt: number): HeadRead | null {
+  const head = pull.headRefOid;
+  if (typeof head !== 'string' || head === '') return null;
+  return { claimId, head, mergeable: typeof pull.mergeable === 'string' ? pull.mergeable : null, readAt };
+}
+
+/**
+ * What maintainers and review bots wrote on an open PR, and what GitHub
+ * shows of its checks and whether it can merge, as follow-ups: the text of
+ * each review that comments or asks for changes, each comment on a line, in
+ * any review but a dismissed one, each comment in the conversation, failed
+ * checks, and a conflict. An approval's own text asks for nothing. Each
+ * text, and each file's path, is folded to one line and cut. Empty text,
+ * and anything GitHub gives in another form, is left out.
+ */
+function followUpsOf(pull: PullState, prUrl: string, maintainers: Maintainers, readAt: number): NewFollowUp[] {
   const prAuthor = pull.author?.login;
   if (typeof prAuthor !== 'string') return [];
   const found: NewFollowUp[] = [];
   const add = (followUp: NewFollowUp) => {
-    const checked = followUpRecordSchema.omit({ claimId: true, readAt: true, shownAt: true, answeredAt: true }).safeParse({
+    const checked = NEW_FOLLOW_UP.safeParse({
       ...followUp,
       body: foldUntrusted(followUp.body, MAX_FOLLOW_UP_TEXT),
       path: followUp.path === null ? null : foldUntrusted(followUp.path, MAX_FOLLOW_UP_PATH),
@@ -220,12 +430,14 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
   };
   for (const review of pull.reviews?.nodes ?? []) {
     if (review === null || !['COMMENTED', 'CHANGES_REQUESTED', 'APPROVED'].includes(review.state)) continue;
-    const reviewer = reviewerOf(review, prAuthor);
-    if (reviewer === null) continue;
+    const author = reviewerOf(review, prAuthor);
+    if (author === null) continue;
     if (review.state !== 'APPROVED') {
       add({
         commentId: review.id,
-        reviewer,
+        kind: 'review',
+        reviewer: author.login,
+        authorKind: author.kind,
         body: review.body,
         path: null,
         url: review.url,
@@ -236,7 +448,9 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
       if (comment === null) continue;
       add({
         commentId: comment.id,
-        reviewer,
+        kind: 'line',
+        reviewer: author.login,
+        authorKind: author.kind,
         body: comment.body,
         path: comment.path,
         url: comment.url,
@@ -244,14 +458,32 @@ function followUpsOf(pull: PullState): NewFollowUp[] {
       });
     }
   }
+  for (const comment of pull.comments?.nodes ?? []) {
+    if (comment === null) continue;
+    const author = commenterOf(comment, prAuthor, maintainers);
+    if (author === null) continue;
+    add({
+      commentId: comment.id,
+      kind: 'conversation',
+      reviewer: author.login,
+      authorKind: author.kind,
+      body: comment.body,
+      path: null,
+      url: comment.url,
+      writtenAt: Date.parse(comment.createdAt),
+    });
+  }
+  for (const followUp of githubFollowUpsOf(pull, prUrl, readAt)) add(followUp);
   return found;
 }
 
 /**
- * What the read covered of an open PR's reviews: every review GitHub counts,
- * pending and dismissed ones left out, and for each review it took, newest
- * first, the comments on lines of a maintainer's review it left out.
- * setReviewsRead adds it to what earlier reads covered.
+ * What the read covered of an open PR's reviews and conversation: every
+ * review GitHub counts, pending and dismissed ones left out, and for each
+ * review it took, newest first, the comments on lines of a maintainer's or
+ * a bot's review it left out, then every comment GitHub counts in the
+ * conversation, and how many of the newest it took. setReviewsRead adds it
+ * to what earlier reads covered.
  */
 function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId' | 'readAt'> {
   const read = (pull.reviews?.nodes ?? []).filter((review) => review !== null);
@@ -261,7 +493,13 @@ function reviewsReadOf(pull: PullState): Omit<ReviewsRead, 'claimId' | 'readAt'>
       reviewerOf(review, prAuthor) === null ? 0 : Math.max(0, (review.comments?.totalCount ?? 0) - (review.comments?.nodes?.length ?? 0)),
     )
     .reverse();
-  return { reviews: Math.max(pull.reviews?.totalCount ?? 0, read.length), leftOut };
+  const took = (pull.comments?.nodes ?? []).length;
+  return {
+    reviews: Math.max(pull.reviews?.totalCount ?? 0, read.length),
+    leftOut,
+    conversation: Math.max(pull.comments?.totalCount ?? 0, took),
+    conversationTook: took,
+  };
 }
 
 /**
@@ -306,7 +544,9 @@ function newPrRun(): PrRun {
     merged: 0,
     closed: 0,
     followUps: 0,
+    superseded: 0,
     withoutPush: 0,
+    conversationLeftOut: 0,
     reread: 0,
     calls: 0,
     stopped: null,
@@ -325,6 +565,25 @@ async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun):
   const pulls = await readStates(deps.github, batch);
   const read = new Set<string>();
   const covered: ReviewsRead[] = [];
+  // Who can push to each repo, from every review this batch read first, so
+  // a maintainer's review on one PR counts for their comments on another.
+  const seen = batch.flatMap(({ record, open }, i) => {
+    const pull = pulls[`p${String(i)}`]?.pullRequest;
+    return open && pull != null && outcomeOf(pull, readAt) === null
+      ? pushersOf(pull).map((login) => ({ repo: record.pr.repo, login }))
+      : [];
+  });
+  const repos = [...new Set(batch.filter(({ open }) => open).map(({ record }) => record.pr.repo))];
+  if (repos.length > 0) await savePushers(deps.db, seen, readAt);
+  const pushers = await listPushers(deps.db, repos, readAt);
+  // What each open PR's head and merge are now settles the checks and
+  // conflicts they replaced, before the new ones are stored.
+  const heads = batch.flatMap(({ record, open }, i) => {
+    const pull = pulls[`p${String(i)}`]?.pullRequest;
+    const head = open && pull != null && outcomeOf(pull, readAt) === null ? headReadOf(record.claimId, pull, readAt) : null;
+    return head === null ? [] : [head];
+  });
+  run.superseded += await supersedeFollowUps(deps.db, heads, deps.now());
   for (const [i, { record, open: followed }] of batch.entries()) {
     const pull = pulls[`p${String(i)}`]?.pullRequest;
     if (pull == null) continue;
@@ -341,8 +600,20 @@ async function followBatch(deps: PrJobDeps, batch: readonly Read[], run: PrRun):
     }
     run.checked += 1;
     if (outcome === null) {
-      run.followUps += await saveFollowUps(deps.db, record.claimId, followUpsOf(pull), deps.now());
+      const maintainers: Maintainers = {
+        pushers: pushers.get(record.pr.repo.toLowerCase()) ?? new Set(),
+        owner: (record.pr.repo.split('/')[0] ?? '').toLowerCase(),
+      };
+      // A newer read that reached supersedeFollowUps first leaves this one's checks and conflict out.
+      run.followUps += await saveFollowUps(
+        deps.db,
+        record.claimId,
+        followUpsOf(pull, record.pr.url, maintainers, readAt),
+        deps.now(),
+        readAt,
+      );
       run.withoutPush += withoutPushOf(pull);
+      run.conversationLeftOut += conversationLeftOutOf(pull, maintainers);
       covered.push({ claimId: record.claimId, ...reviewsReadOf(pull), readAt });
       continue;
     }
@@ -410,7 +681,7 @@ export async function followPrs(deps: PrJobDeps): Promise<PrRun> {
   }
   run.calls = deps.github.calls;
   console.log(
-    `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, PRs closed in the last 14 days: ${String(run.closedChecked)} of ${String(closed.length)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, issues read again: ${String(run.reread)}, new follow-ups: ${String(run.followUps)}, reviews left out for no push access: ${String(run.withoutPush)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `The PR job read open PRs: ${String(run.checked)} of ${String(open.length)}, PRs closed in the last 14 days: ${String(run.closedChecked)} of ${String(closed.length)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, issues read again: ${String(run.reread)}, new follow-ups: ${String(run.followUps)}, superseded: ${String(run.superseded)}, reviews left out for no push access: ${String(run.withoutPush)}, conversation comments left out from people who are no maintainer: ${String(run.conversationLeftOut)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return run;
 }
@@ -441,7 +712,7 @@ export async function checkClaimPrs(deps: PrJobDeps, records: readonly PrRecord[
   }
   run.calls = deps.github.calls;
   console.log(
-    `A check of PRs asked for ${String(records.length)}, read ${String(read.size)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, new follow-ups: ${String(run.followUps)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
+    `A check of PRs asked for ${String(records.length)}, read ${String(read.size)}, open again: ${String(run.reopened)}, merged: ${String(run.merged)}, closed: ${String(run.closed)}, new follow-ups: ${String(run.followUps)}, superseded: ${String(run.superseded)}, calls to GitHub: ${String(run.calls)}. Left: ${JSON.stringify(deps.github.left())}.${run.stopped === null ? '' : ` Stopped: ${run.stopped}.`}`,
   );
   return { read, run };
 }

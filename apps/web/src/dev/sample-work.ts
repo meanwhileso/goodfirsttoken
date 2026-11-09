@@ -304,3 +304,126 @@ export const SAMPLE_REQUESTS: { person: SamplePerson; repo: string }[] = [
 
 /** The donor the sample work has sample-admin block. */
 export const SAMPLE_BLOCKED: SamplePerson = SAMPLE_PEOPLE.rowan;
+
+/**
+ * A sample donor's open PRs that their agent follows, with what reviewers
+ * wrote on each and where each follow-up stands, so /me shows
+ * follow-through when arjun signs in. The seed writes them to the database
+ * directly, as the PR job and the donor's agent would have left them. One
+ * PR has an open follow-up no run sorted for a day, so it is stalled. The
+ * other waits for arjun to answer his agent's question. They are in two
+ * projects, so neither is at its cap of open PRs for him. Their issue and
+ * PR numbers are below the fake repos' own, and they opened more than a
+ * week before the seed, so this week's leaderboard doesn't count them.
+ */
+export interface SampleFollowUp {
+  id: string;
+  kind: 'review' | 'line' | 'conversation' | 'checks';
+  /** Who wrote it, a bot's login with no [bot], or none for checks. */
+  reviewer?: string;
+  authorKind?: 'maintainer' | 'bot';
+  body: string;
+  path?: string;
+  /** How many hours before the seed it was written, and when the PR job read it. */
+  hoursAgo: number;
+  /** How the donor's agent sorted it. Left out, it is open. */
+  sort?:
+    | { state: 'waiting_reviewer' }
+    | { state: 'waiting_donor'; question: string }
+    | { state: 'settled'; outcome: 'replied' | 'no_change' | 'resolved'; reply?: boolean };
+}
+
+export interface SampleFollowed {
+  /** The claim's ID, which marks it as seeded. */
+  id: string;
+  person: SamplePerson;
+  agent: string;
+  project: string;
+  issue: number;
+  pr: number;
+  /** How many days before the seed the PR opened. */
+  openedDaysAgo: number;
+  /** How many hours before the seed the agent last pushed to it. */
+  pushedHoursAgo: number;
+  followUps: SampleFollowUp[];
+}
+
+export const SAMPLE_FOLLOWED: SampleFollowed[] = [
+  {
+    id: 'c_samplefollow01',
+    person: SAMPLE_PEOPLE.arjun,
+    agent: 'cursor',
+    project: APP,
+    issue: 293,
+    pr: 294,
+    openedDaysAgo: 9,
+    pushedHoursAgo: 40,
+    followUps: [
+      { id: 'c4ec'.repeat(10), kind: 'checks', body: 'FAILURE: test', hoursAgo: 30 },
+      {
+        id: 'sample-follow-line-294',
+        kind: 'line',
+        reviewer: 'sample-ci',
+        authorKind: 'bot',
+        body: 'This rewrite drops the query string when the path ends in a slash.',
+        path: 'src/rewrite.ts',
+        hoursAgo: 30,
+      },
+    ],
+  },
+  {
+    id: 'c_samplefollow02',
+    person: SAMPLE_PEOPLE.arjun,
+    agent: 'cursor',
+    project: DESKTOP,
+    issue: 1311,
+    pr: 1312,
+    openedDaysAgo: 8,
+    pushedHoursAgo: 5,
+    followUps: [
+      {
+        id: 'sample-follow-review-1312',
+        kind: 'review',
+        reviewer: 'sample-maintainer',
+        authorKind: 'maintainer',
+        body: 'Why does the lock screen read the layout before the session restores it?',
+        hoursAgo: 20,
+        sort: { state: 'settled', outcome: 'replied', reply: true },
+      },
+      {
+        id: 'sample-follow-bot-1312',
+        kind: 'review',
+        reviewer: 'sample-ci',
+        authorKind: 'bot',
+        body: 'Coverage: 81% (no change).',
+        hoursAgo: 19,
+        sort: { state: 'settled', outcome: 'no_change' },
+      },
+      {
+        id: 'sample-follow-ask-1312',
+        kind: 'conversation',
+        reviewer: 'sample-maintainer',
+        authorKind: 'maintainer',
+        body: 'Could this also cover the greeter on the second monitor?',
+        hoursAgo: 4,
+        sort: {
+          state: 'waiting_donor',
+          question: 'The issue names the lock screen only. Should the PR cover the greeter too, or should that be its own issue?',
+        },
+      },
+    ],
+  },
+];
+
+/** The wakes the sample donor's agent saved, and how many hours before the seed each last ran. */
+export const SAMPLE_WAKES: {
+  person: SamplePerson;
+  harness: 'cursor-automations' | 'cursor-editor';
+  level: 'full' | 'session';
+  intervalMinutes: number;
+  lastRunHoursAgo: number;
+}[] = [
+  // It stopped: no run for more than a day past its interval.
+  { person: SAMPLE_PEOPLE.arjun, harness: 'cursor-automations', level: 'full', intervalMinutes: 60, lastRunHoursAgo: 50 },
+  { person: SAMPLE_PEOPLE.arjun, harness: 'cursor-editor', level: 'session', intervalMinutes: 15, lastRunHoursAgo: 3 },
+];

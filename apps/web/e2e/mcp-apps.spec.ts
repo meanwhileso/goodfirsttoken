@@ -643,7 +643,7 @@ test("when the host won't start the view, it says so", async ({ page }) => {
 });
 
 const followUp = {
-  claimId: 'c_e2efollowup', issue: ISSUE, title: TITLE,
+  claimId: 'c_e2efollowup', followUpId: 'PRR_e2e1', state: 'open', question: null, issue: ISSUE, title: TITLE,
   pr: { repo: 'sample-owner/sample-app', number: 41, url: 'https://github.example/sample-owner/sample-app/pull/41' },
   reviewer: 'kenji', comment: `Thanks for explaining the <b>parser</b>. https://example.test/${'x'.repeat(250)}`, path: null,
   commentUrl: 'https://github.example/sample-owner/sample-app/pull/41#review-1',
@@ -659,6 +659,7 @@ for (const width of [390, 1280]) {
     const followUps = Array.from({ length: 20 }, (_, i) => ({
       ...followUp,
       ...(i === 1 ? { reviewer: 'priya', path, comment: 'Please check <em>empty input</em>.', commentUrl: `${followUp.pr.url}#discussion-2` } : {}),
+      ...(i === 2 ? { followUpId: 'IC_e2e3', state: 'waiting_donor', question: 'Cover the <b>admin</b> feed too?' } : {}),
     }));
     const view = await openView(page, views['review-queue'], {
       input: {}, result: { content: text('Follow-ups wait.'), structuredContent: {
@@ -676,6 +677,9 @@ for (const width of [390, 1280]) {
     expect(await quote.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expect(items.nth(1)).toContainText(`@priya commented on the file ${JSON.stringify(path)}`);
     await expect(items.nth(1)).toContainText('Please check <em>empty input</em>.');
+    await expect(items.first()).toContainText(`claim ${followUp.claimId} · follow-up PRR_e2e1`);
+    await expect(items.first()).not.toContainText('Your agent asked');
+    await expect(items.nth(2)).toContainText('Waiting for you. Your agent asked: Cover the <b>admin</b> feed too?');
     await expect(view.frame.locator('.view')).not.toContainText('asked for changes');
     await expect(view.frame.locator('.view')).toContainText('4 more follow-ups wait.');
     await expect(view.frame.locator('.view')).toContainText("Good First Token read 10 of the PR's 15 reviews and left out 3 comments on lines.");
