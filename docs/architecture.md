@@ -692,7 +692,12 @@ The rules are in [how-it-works.md](how-it-works.md#the-donors-tools).
   comes back only when its `run_id` is the caller's, so a run that calls
   `my_work` again gets its own follow-ups again, and two runs of one wake
   at once never both get one. A call with no run ID matches no row, since
-  `NULL` equals nothing. The server keeps the run's follow-ups, so a skill
+  `NULL` equals nothing. A call with no run ID gets a new one,
+  `run-` and a random UUID, so two runs of a wake that start in the same
+  minute never share an ID. The server can't refuse an ID another run of
+  the wake made up, since nothing tells two runs with one ID apart, so
+  the skill takes its ID from `my_work`. The server keeps the run's
+  follow-ups, so a skill
   that calls `my_work` twice in a run needs nothing of its own to carry
   them. Once the answer is
   made, `markFollowUpsShown` marks only what the wake's level lets it:
@@ -3449,7 +3454,11 @@ and count the hour's reads in one place. The rules are in
   to the newest read's time it was given, in the same batch. `saveFollowUps`
   takes the time the read was made, and writes no checks or conflict when
   `head_read_at` is later, so an older read that lands after a newer one
-  can't add checks or a conflict as open that the newer read found gone. A
+  can't add checks or a conflict as open that the newer read found gone.
+  Checks and a conflict store that time as `read_at`, where reviews store
+  the save's, so a read that saves after a newer read started, and before
+  the newer one supersedes, is still taken by it: both compare when their
+  reads were made. A
   review or a comment it read is still saved, by its ID.
 - **Superseding.** Once a batch's query answers, and before it saves any
   follow-up, `supersedeFollowUps` settles as `superseded` what the batch's

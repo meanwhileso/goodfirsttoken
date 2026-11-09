@@ -342,6 +342,7 @@ export const samples: Samples = {
       working: [{ ...claim, resumable: true, reason: null }],
       openPrs: [openPr],
       login: 'priya',
+      runId: 'run-w_example1-2026-11-08T12-00-07-k3x9',
       followMode: { mode: 'ask_first', chosen: true },
       wake: {
         ...stoppedWake,

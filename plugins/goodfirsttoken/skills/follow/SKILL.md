@@ -113,17 +113,17 @@ donor sets the wake up again in a session.
 
 ## The run
 
-Make up a run ID when the run starts, from the wake's ID and the time,
-like `run-w_example1-2026-11-08T12-00`, or `run-session-2026-11-08T12-00`
-in a session. Two wakes that start at once then never share one. Pass it
-as `runId` to every call below that takes one: `my_work`, `follow_pr`,
+The run's first `my_work`, with no `runId`, answers with a new `runId`
+that no other run has, so a scheduled run and a run a trigger started in
+the same minute never share one. Pass it as `runId` to every call after
+that takes one: `my_work`, `follow_pr`,
 `check_pr`, `post_update`, `submit_work`, and `sort_follow_ups`. A push or
 a reply counts in the PR's rounds only with the `runId` of the run that
 holds its lease.
 
-1. Call `my_work` with the `runId`, and with `wakeId` set to the wake's ID
-   when a wake started the run. Read `login`, `followUps`, `openPrs`, and
-   `followThrough`. When `followThrough` says `dueNow` is false, read each
+1. Call `my_work`, with `wakeId` set to the wake's ID when a wake started
+   the run, and no `runId`. Keep the `runId` it answers with. Read
+   `login`, `followUps`, `openPrs`, and `followThrough`. When `followThrough` says `dueNow` is false, read each
    PR in `openPrs` on GitHub as in Check open PRs. When none changed, end
    the run and say nothing. Most runs end here. When one changed, call
    `check_pr` for it as Check open PRs says, then call `my_work` again,
@@ -176,8 +176,8 @@ one set of replies.
 
 **A PR in its first 2 hours.** When `nextCheckAt` comes within 15 minutes
 and the harness can wait in this session, as in a session the donor is
-in or a loop, keep the leases, wait until then, and run again from step 1
-with the same run ID. Renew each lease with `follow_pr` and
+in or a loop, keep the leases, wait until then, and run again from step 1,
+passing the same `runId` to `my_work`. Renew each lease with `follow_pr` and
 `action: "take"` at each check. End the run when nothing is due within
 the hour. A scheduled run that can't wait ends, and its wake comes back.
 
@@ -763,16 +763,17 @@ The repo is made up. A scheduled task in the Claude Code desktop app
 starts the run, with wake `w_example1` in its prompt. You list the work:
 
 ```
-my_work {"wakeId": "w_example1", "runId": "run-w_example1-2026-11-08T12-00"}
+my_work {"wakeId": "w_example1"}
 ```
 
-`dueNow` is true on sample-owner/sample-router#57's PR. A maintainer's
+It answers with `runId` `run-example-k3x9`, which
+goes in each call after. `dueNow` is true on sample-owner/sample-router#57's PR. A maintainer's
 review asks for a test of the root path, Greptile's comment on a line
 says an import is unused, and the maintainer asks in the conversation
 whether nested base paths work too. You take the PR's lease:
 
 ```
-follow_pr {"claimId": "c_example3", "runId": "run-w_example1-2026-11-08T12-00", "action": "take"}
+follow_pr {"claimId": "c_example3", "runId": "run-example-k3x9", "action": "take"}
 ```
 
 `gh api user --jq .login` gives the donor's login. The review and
@@ -781,8 +782,8 @@ both, post, commit with the trailer, run the tests, push once, and submit
 with both answered:
 
 ```
-post_update {"claimId": "c_example3", "text": "added a test for the root base path (test/router.test.ts)", "runId": "run-w_example1-2026-11-08T12-00"}
-submit_work {"claimId": "c_example3", "branch": {"repo": "priya/sample-router", "name": "goodfirsttoken/issue-57-c_example3", "head": "5a6f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f"}, "summary": "Stops the redirect loop when the base path is the root, with a test for it.", "checks": "npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5", "answers": ["PRR_kwDOexample1", "PRRC_kwDOexample2"], "runId": "run-w_example1-2026-11-08T12-00"}
+post_update {"claimId": "c_example3", "text": "added a test for the root base path (test/router.test.ts)", "runId": "run-example-k3x9"}
+submit_work {"claimId": "c_example3", "branch": {"repo": "priya/sample-router", "name": "goodfirsttoken/issue-57-c_example3", "head": "5a6f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f"}, "summary": "Stops the redirect loop when the base path is the root, with a test for it.", "checks": "npm test passes.", "agent": "claude-code", "model": "claude-opus-5-5", "answers": ["PRR_kwDOexample1", "PRRC_kwDOexample2"], "runId": "run-example-k3x9"}
 ```
 
 You resolve Greptile's thread, with no reply. You post one comment in the
@@ -793,8 +794,8 @@ maintainer, give the lease back, and tell the donor what you did, with
 the link:
 
 ```
-sort_follow_ups {"claimId": "c_example3", "runId": "run-w_example1-2026-11-08T12-00", "followUps": [{"followUpId": "IC_kwDOexample3", "state": "waiting_reviewer", "replyUrl": "https://github.com/sample-owner/sample-router/pull/58#issuecomment-1001"}]}
-follow_pr {"claimId": "c_example3", "runId": "run-w_example1-2026-11-08T12-00", "action": "give_back"}
+sort_follow_ups {"claimId": "c_example3", "runId": "run-example-k3x9", "followUps": [{"followUpId": "IC_kwDOexample3", "state": "waiting_reviewer", "replyUrl": "https://github.com/sample-owner/sample-router/pull/58#issuecomment-1001"}]}
+follow_pr {"claimId": "c_example3", "runId": "run-example-k3x9", "action": "give_back"}
 ```
 
 In a later session the donor sets the wake up in the desktop app. You save

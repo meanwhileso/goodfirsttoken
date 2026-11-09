@@ -1164,8 +1164,10 @@ conflict. Each follow-up has a kind: `review`, `line`, `conversation`,
   still conflicts supersedes the old head's conflict with the new one.
   `UNKNOWN` supersedes no conflict. A read supersedes only what was stored
   by the time it was made, so a check and a run that read the same PR at
-  once never supersede the newer read's follow-ups. A read made before a
-  newer one that already superseded adds no checks or conflict, so it
+  once never supersede the newer read's follow-ups. Checks and a conflict
+  keep when their read was made, so a newer read supersedes them even when
+  the older read saved them after the newer one started. A read made
+  before a newer one that already superseded adds no checks or conflict, so it
   can't bring back as open what the newer read found gone. It still adds
   the reviews and comments it read. A follow-up already settled stays as
   it settled, but for checks or a conflict a read superseded.
@@ -2628,6 +2630,9 @@ and their agent saves wakes, which start its runs in a harness, under
   the change is made in one batch, so a refusal changes nothing.
 - `my_work` names the donor's GitHub login as their last sign-in or
   `start_session` recorded it, which reads it from GitHub.
+- `my_work` answers with `runId`: the one the call gave, or a new one no
+  other run has, which the run passes to every call after. So two runs of
+  one wake that start at once never share a run ID.
 - A run a wake started passes the wake's ID and its run ID to `my_work`,
   which lists `newForWake`: the follow-ups it lists that the wake wasn't
   given before, on PRs the donor still follows, and those it gave the
@@ -5971,8 +5976,8 @@ has an entry for each refusal those can give.
   PR's branch, and spends their tokens on scheduled runs. It asks with
   `go_ahead` first, after the first `record_pr` and in the next session
   of a donor with PRs open. Nothing acts as the donor before that.
-- A run makes up a run ID, and passes it to every call that takes one,
-  `my_work` and `sort_follow_ups` too. It calls `my_work`, with the wake's
+- A run's first `my_work` gives it a run ID, and the run passes it to
+  every call after that takes one, `my_work` and `sort_follow_ups` too. It calls `my_work`, with the wake's
   ID when a wake started it, and reads each open PR with the donor's
   GitHub CLI.
   When `dueNow` is false and GitHub shows nothing new, it ends and says

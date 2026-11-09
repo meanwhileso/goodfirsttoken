@@ -1057,6 +1057,30 @@ describe('follow-through', () => {
     expect(ftDue(next, claimId)).toBe(false);
   });
 
+  test("my_work with no run ID gives a new one each call, so two runs of a wake that start at once never share one, and the one it gave keeps the run's follow-ups", async () => {
+    await project();
+    const priya = await donor('priya');
+    const { claimId, pr } = await openedPr(priya);
+    const wake = await wakeOf(priya, chatgpt);
+    github.reviewPullRequest(APP, pr.number, { login: BY, state: 'COMMENTED', body: 'Please add a test.' });
+    await runPrJob();
+
+    const scheduled = await call(priya, 'my_work', { wakeId: wake });
+    const triggered = await call(priya, 'my_work', { wakeId: wake });
+    const runId = scheduled.structuredContent?.runId;
+    const again = await call(priya, 'my_work', { wakeId: wake, runId });
+    const own = await call(priya, 'my_work', { wakeId: wake, runId: 'run-mine-1' });
+
+    expect(runId).toEqual(expect.stringMatching(/^run-[A-Za-z0-9_-]+$/));
+    expect(triggered.structuredContent?.runId).not.toBe(runId);
+    expect(textOf(scheduled)).toContain(`Your run ID is ${String(runId)}.`);
+    expect((scheduled.structuredContent?.newForWake as unknown[]).length).toBe(1);
+    expect(triggered.structuredContent?.newForWake).toEqual([]);
+    expect(again.structuredContent?.newForWake).toEqual(scheduled.structuredContent?.newForWake);
+    expect(own.structuredContent?.runId).toBe('run-mine-1');
+    expect(ftDue(again, claimId)).toBe(true);
+  });
+
   test('a notify wake marks no follow-up shown, so a submit with no answers settles none, and a full wake marks them shown', async () => {
     await project();
     const priya = await donor('priya');

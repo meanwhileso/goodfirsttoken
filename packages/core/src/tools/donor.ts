@@ -1064,7 +1064,7 @@ export const myWork = defineTool({
     runId: runIdSchema
       .optional()
       .describe(
-        "The ID your run made up when it started, with wakeId. Each my_work of the same run lists the follow-ups this run was given under newForWake again. my_work takes no lease.",
+        "Your run's ID, as the run's first my_work gave it. Leave it out on the run's first call, and my_work gives a new one. Each my_work of the same run lists the follow-ups this run was given under newForWake again. my_work takes no lease.",
       ),
   }),
   output: z.object({
@@ -1074,6 +1074,8 @@ export const myWork = defineTool({
      * old one after the donor renamed their account, until their next session.
      */
     login: githubLogin,
+    /** The run's ID: the one the call gave, or a new one no other run has, for every call of the run after. */
+    runId: runIdSchema,
     /** Maintainers' and review bots' reviews and comments, failed checks, and conflicts on the donor's open PRs that are open or wait for the donor, those that wait for the donor first, then oldest first. */
     followUps: z.array(followUpSchema).max(MAX_FOLLOW_UPS),
     /** Follow-ups that wait beyond the ones listed. They list as these settle or wait for a reviewer. */
@@ -1108,6 +1110,7 @@ export const myWork = defineTool({
       out.followUps.length + out.readInPart.length + out.readyToOpen.length + out.working.length + out.openPrs.length === 0;
     return lines(
       `Signed in as @${out.login}.`,
+      `Your run ID is ${out.runId}. Pass it as runId to every call of this run that takes one, my_work too.`,
       out.wake !== null &&
         lines(
           `This run is ${renderWake(out.wake)}.`,

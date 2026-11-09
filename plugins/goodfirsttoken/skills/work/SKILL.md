@@ -467,8 +467,9 @@ first, then the rest, oldest first.
    conflict, merge the base branch into the claim's branch. Never rebase
    or force-push an open PR's branch.
 3. Before you change or reply on a PR, take its lease, so only one agent
-   follows it at a time. Make up a `runId` for this session, like
-   `run-session-2026-11-08T12-00`, and call `follow_pr` with the claim, the
+   follows it at a time. Make up a `runId` for this session, from the
+   time to the second and a random suffix, like
+   `run-session-2026-11-08T12-00-07-k3x9`, and call `follow_pr` with the claim, the
    `runId`, and `action: "take"`. When its `lease` is `following`, another
    run follows the PR until the time it gives: leave that PR. Pass the same
    `runId` to `check_pr`, `post_update`, and `submit_work` on the claim,

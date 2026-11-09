@@ -415,6 +415,23 @@ describe('superseding checks and conflicts', () => {
     expect(await states()).toEqual([[head, 'settled', 'no_change']]);
   });
 
+  test("a read that saves after a newer read started, before the newer one supersedes, is superseded by it, so only the newer head's checks stay open", async () => {
+    const [a, b] = ['a'.repeat(40), 'b'.repeat(40)];
+    await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });
+    const [startX, startY, saveX, saveY] = [t0 + HOUR, t0 + HOUR + MINUTE, t0 + HOUR + 2 * MINUTE, t0 + HOUR + 3 * MINUTE];
+    // Read X starts first and finds head A failing. Read Y starts next and finds head B failing.
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: a, mergeable: 'MERGEABLE', readAt: startX }], saveX);
+    await saveFollowUps(db, 'c_1', [checks(a)], saveX, startX);
+    await supersedeFollowUps(db, [{ claimId: 'c_1', head: b, mergeable: 'MERGEABLE', readAt: startY }], saveY);
+    await saveFollowUps(db, 'c_1', [checks(b)], saveY, startY);
+
+    expect(await states()).toEqual([
+      [a, 'settled', 'superseded'],
+      [b, 'open', null],
+    ]);
+    expect((await listOpenPrsOf(db, priya.githubId))[0]?.failedChecksHead).toBe(b);
+  });
+
   test("a read made before another, that lands after it, adds no checks or conflict, and still adds its reviews", async () => {
     const [old, next] = ['a'.repeat(40), 'b'.repeat(40)];
     await addPr(db, { claimId: 'c_1', pr: prRef(57), openedAt: t0 });

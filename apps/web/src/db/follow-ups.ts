@@ -90,7 +90,9 @@ const NEW_STATE = { shownAt: null, answeredAt: null, state: 'open', outcome: nul
  * Checks and conflicts come only from the newest read of the PR's head:
  * when a read made after `madeAt`, the time this read was made, already
  * reached supersedeFollowUps, they add none, as supersedeFollowUps takes
- * nothing a newer read stored. The claim must be in the claims table.
+ * nothing a newer read stored. Their `read_at` is `madeAt`, so a newer
+ * read that reaches supersedeFollowUps after this one saves still takes
+ * them, by when each read was made. The claim must be in the claims table.
  * Returns how many are new or open again.
  */
 export async function saveFollowUps(
@@ -107,6 +109,7 @@ export async function saveFollowUps(
   const claim = mustParse(id, claimId, 'claimId');
   const at = checkTime(readAt, 'readAt');
   const json = JSON.stringify(rows);
+  const made = checkTime(madeAt, 'madeAt');
   // The rows go in as one JSON array, so any number of them takes one
   // query. A WHERE lets SQLite read ON CONFLICT after a SELECT.
   const [saved] = await db.batch([
@@ -116,7 +119,8 @@ export async function saveFollowUps(
            answered_at, state, outcome, question, reply_url)
          SELECT ?1, json_extract(j.value, '$.commentId'), json_extract(j.value, '$.kind'), json_extract(j.value, '$.reviewer'),
            json_extract(j.value, '$.authorKind'), json_extract(j.value, '$.body'), json_extract(j.value, '$.path'),
-           json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'), ?2, NULL, NULL, 'open', NULL, NULL, NULL
+           json_extract(j.value, '$.url'), json_extract(j.value, '$.writtenAt'),
+           iif(json_extract(j.value, '$.kind') IN ('checks', 'conflict'), ?4, ?2), NULL, NULL, 'open', NULL, NULL, NULL
          FROM json_each(?3) j
          WHERE (json_extract(j.value, '$.kind') NOT IN ('checks', 'conflict') OR NOT EXISTS
              (SELECT 1 FROM prs WHERE prs.claim_id = ?1 AND prs.head_read_at > ?4))
@@ -128,17 +132,17 @@ export async function saveFollowUps(
            reply_url = NULL
          WHERE follow_ups.kind IN ('checks', 'conflict') AND follow_ups.outcome IS 'superseded'`,
       )
-      .bind(claim, at, json, checkTime(madeAt, 'madeAt')),
+      .bind(claim, at, json, made),
     // A wake or a trigger that had one before it opened again has it as new.
     ...['wake_follow_ups', 'trigger_follow_ups'].map((table) =>
       db
         .prepare(
           `DELETE FROM ${table} WHERE claim_id = ?1 AND comment_id IN
              (SELECT f.comment_id FROM follow_ups f JOIN json_each(?3) j ON f.comment_id = json_extract(j.value, '$.commentId')
-              WHERE f.claim_id = ?1 AND f.kind IN ('checks', 'conflict') AND f.state = 'open' AND f.read_at = ?2)
+              WHERE f.claim_id = ?1 AND f.kind IN ('checks', 'conflict') AND f.state = 'open' AND f.read_at = ?4)
              AND ${table === 'wake_follow_ups' ? 'given_at' : 'called_at'} < ?2`,
         )
-        .bind(claim, at, json),
+        .bind(claim, at, json, made),
     ),
   ]);
   return saved?.meta.changes ?? 0;

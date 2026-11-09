@@ -569,7 +569,10 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
     .map((followUp) => ({ claimId: followUp.claimId, followUpId: followUp.followUpId }));
   // Given in one statement, so two runs of the wake at once don't both
   // report one. The same run's next call is given its own again.
-  const newForWake = wake === null ? null : await giveToWake(env.DB, wake.id, followed, now, input.runId);
+  // A run with no ID yet gets one no other run has, so two runs of a wake
+  // that start at once never share a lease or newForWake.
+  const runId = input.runId ?? `run-${crypto.randomUUID()}`;
+  const newForWake = wake === null ? null : await giveToWake(env.DB, wake.id, followed, now, runId);
   const followThrough = await followThroughFor(
     caller.githubId,
     modes,
@@ -580,6 +583,7 @@ export async function myWork(caller: Caller, input: ToolInput<'my_work'>, origin
   const openPrs = openPrsOf(open, modes, followThrough);
   const result = toolResult('my_work', {
     login,
+    runId,
     followUps: followUps.followUps,
     moreFollowUps: followUps.moreFollowUps,
     readInPart,
